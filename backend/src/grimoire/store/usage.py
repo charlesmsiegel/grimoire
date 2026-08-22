@@ -22,7 +22,7 @@ and buckets in memory. A heavy day is a few hundred rows; a heavy year is tens
 of thousands, which is milliseconds to parse and keeps the store what the rest
 of grimoire promises — files a human can open and read.
 
-Pricing has two sources, and the difference between them is the point:
+Pricing has three sources, and the difference between them is the point:
 
 - ``cost_usd`` with ``cost_basis: "billed"`` is money an account was charged,
   reported by the provider (OpenRouter returns ``usage.cost`` in credits, which
@@ -37,10 +37,16 @@ Pricing has two sources, and the difference between them is the point:
   ``estimated_usd`` (equivalent only).
 - Neither, when a provider reports no price at all — every ``openai_compatible``
   endpoint today, and any OpenRouter reply whose usage block came without a
-  cost. The field is then **absent**, not zero, so a re-pricing pass over the
-  ledger (#158's per-model override, or the catalog rate) can tell "free" from
-  "unknown"; ``unpriced_calls`` is what makes that visible in a rollup rather
-  than quietly understating the total.
+  cost. The field is then **absent**, not zero, which is what lets a re-pricing
+  pass over the ledger tell "free" from "unknown".
+
+  ``store.pricing`` (#158) is that pass. Where the user has typed a per-token
+  rate for the model, a rollup prices those rows at it and reports the figure
+  as ``modelled_usd`` — a third column, never added to the other two, because
+  it is arithmetic this side did rather than a number a provider sent.
+  ``unpriced_calls`` then counts only what is left: calls with no reported
+  price and no rate to model one, which is what makes a total's incompleteness
+  visible rather than quietly understated.
 
 The token counts follow the same absent-not-zero rule, so a row never claims a
 call used no tokens when nobody counted them. A bucket's token total is
@@ -74,7 +80,7 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import atomic, paths
+from . import atomic, paths, pricing
 
 #: The row kinds this ledger holds. ``llm`` is the only one written today;
 #: the field exists from the first row so image generation (#159) can share the
@@ -89,7 +95,7 @@ KIND_LLM = "llm"
 #: they rewrite a JSON file under the campaign lock, and rewriting a month file
 #: would race the unlocked `O_APPEND` writes that are the whole reason `record`
 #: never blocks a turn. So the rename is APPENDED like everything else, and the
-#: read side walks the trail (`_aliases`) instead. That also keeps the file what
+#: read side walks the trail (`_scene_now`) instead. That also keeps the file what
 #: it claims to be: a log of what happened, in the order it happened, that
 #: nothing rewrites after the fact.
 KIND_RENAME = "rename"
@@ -115,10 +121,25 @@ _SESSION_START = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 #:
 #: `cache_read_tokens`/`cache_write_tokens` are inside `prompt_tokens` and so
 #: are deliberately absent from `total_tokens` -- see `_add`.
+#:
+#: **Three money columns, and no two of them may ever be added.** `cost_usd` is
+#: what an account was charged. `estimated_usd` is what a subscription-billed
+#: call would have cost at the provider's own API rates and did not
+#: (`cost_basis: "equivalent"`). `modelled_usd` is this side's arithmetic over
+#: rates the *user* typed (`store.pricing`, #158), for the calls whose provider
+#: named no price at all -- the weakest of the three, and the only one grimoire
+#: computes rather than receives. Each carries its own call count so a view can
+#: say how much of a total is which, and `unpriced_calls` keeps counting only
+#: what none of them covers -- and `unmetered_calls` is the slice of THAT which
+#: no rate could ever cover, because the provider reported no token counts
+#: either. The split exists so a view can tell a reader whether typing a rate
+#: would help: for an unmetered call it would not, and sending them to do it is
+#: sending them to an action that cannot resolve the warning.
 _ZERO = {"calls": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
          "total_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
-         "cost_usd": 0.0, "estimated_usd": 0.0,
-         "priced_calls": 0, "unpriced_calls": 0, "duration_ms": 0}
+         "cost_usd": 0.0, "estimated_usd": 0.0, "modelled_usd": 0.0,
+         "priced_calls": 0, "unpriced_calls": 0, "subscription_calls": 0,
+         "modelled_calls": 0, "unmetered_calls": 0, "duration_ms": 0}
 
 #: Cents-of-a-cent. Provider costs run to eight decimal places on a cheap model,
 #: and summing raw floats surfaces as `0.30000000000000004` in a UI that renders
@@ -169,7 +190,8 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
            cache_read_tokens: int | None = None, cache_write_tokens: int | None = None,
            cost_usd: float | None = None, cost_basis: str = "",
            duration_ms: int = 0, status: str = "ok", error: str = "",
-           attempts: int = 1, ts: str | None = None) -> dict | None:
+           attempts: int = 1, post: int | None = None,
+           ts: str | None = None) -> dict | None:
     """Append one call to the ledger. Returns the row, or None if nothing was
     written.
 
@@ -193,7 +215,10 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
     # nothing it does can fail the turn it is accounting for. Building the row
     # above the `try` left precisely that hole.
     try:
-        row = {"ts": ts, "kind": kind, "task": task}
+        # Annotated, so the numeric fields below are not checked against a
+        # `dict[str, str]` inferred from these three string values -- a row is
+        # mixed by construction, and the alternative is five type: ignores.
+        row: dict = {"ts": ts, "kind": kind, "task": task}
         # Optional identity fields are omitted rather than written empty: a
         # tagline has no campaign and no scene, and `"campaign": ""` in the file
         # reads as a campaign whose id is the empty string.
@@ -224,6 +249,27 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
             # is a cheaper price than that rule.
             row["cost_usd"] = float(cost_usd)
             row["cost_basis"] = cost_basis or "billed"
+        # Which player post this generation was answering (#153): the index of
+        # the last user-role message in the transcript when the turn was
+        # claimed. Only the turn-producing routes pass one -- an absorb or a
+        # rolling summary belongs to the scene, not to a post -- so an absent
+        # field means "not attributable", never "post 0".
+        #
+        # An INDEX, and so only as stable as indices are: a cut or a retcon
+        # renumbers what follows it, and the ledger is append-only and cannot
+        # follow. The rows either dangle past the end of a shortened transcript
+        # (invisible, which is the honest outcome for a turn that no longer
+        # exists) or, after a retcon that removed a middle post, name the post
+        # that took the index. That is the same trade `KIND_RENAME` makes for
+        # scene ids, without a rename row to make it recoverable -- so the
+        # per-post figure is documented as what the scene's OWN totals are not:
+        # a breakdown, correct while the transcript only grows.
+        # Tested rather than coerced: `int("x")` raises, and this whole body is
+        # inside the guard that keeps a bookkeeping failure from costing a turn
+        # -- so an `int()` here would answer a bad index by dropping the entire
+        # row. A field that will not serialize is worth less than the call.
+        if isinstance(post, int) and not isinstance(post, bool) and post >= 0:
+            row["post"] = post
         row["duration_ms"] = int(duration_ms or 0)
         row["status"] = status
         if error:
@@ -303,12 +349,13 @@ class Meter:
     """
 
     def __init__(self, task: str, *, kind: str = KIND_LLM, campaign: str = "",
-                 scene: str = "", model: str = ""):
+                 scene: str = "", model: str = "", post: int | None = None):
         self.task = task
         self.kind = kind
         self.campaign = campaign
         self.scene = scene
         self.model = model
+        self.post = post
         self.usage: dict = {}
         self.row: dict | None = None
         self._done = False
@@ -374,15 +421,20 @@ class Meter:
             cache_write_tokens=self.usage.get("cache_write_tokens"),
             cost_usd=cost, cost_basis=self.usage.get("cost_basis", ""),
             duration_ms=int((time.monotonic() - self._t0) * 1000),
-            status=status, error=error, attempts=self.usage.get("attempts", 1))
+            status=status, error=error, attempts=self.usage.get("attempts", 1),
+            post=self.post)
         return self.row
 
 
 def meter(task: str, *, kind: str = KIND_LLM, campaign: str = "", scene: str = "",
-          model: str = "") -> Meter:
+          model: str = "", post: int | None = None) -> Meter:
     """A `Meter` for one call. `model` is only a fallback: the facade stamps the
-    model the request actually ran on, which differs after a fallback route."""
-    return Meter(task, kind=kind, campaign=campaign, scene=scene, model=model)
+    model the request actually ran on, which differs after a fallback route.
+
+    `post` is the transcript index of the player post this call is answering,
+    and is passed only by the routes that answer one — see `record`."""
+    return Meter(task, kind=kind, campaign=campaign, scene=scene, model=model,
+                 post=post)
 
 
 # ---- rollups ----
@@ -455,10 +507,88 @@ def _is_call(row: dict) -> bool:
     return row.get("kind") != KIND_RENAME
 
 
-def _add(bucket: dict, row: dict) -> None:
+class Rates:
+    """The user's rate table (#158), resolved once per model instead of per row.
+
+    A rollup asks "what would this have cost?" for every unpriced row it walks,
+    and `pricing.rate_for` scans the wildcard entries each time it is asked. A
+    heavy month is tens of thousands of rows across a handful of models, so the
+    answer is memoized per model id and the table is read once, at construction.
+
+    Read once also means a rollup is drawn against ONE table: the file could
+    otherwise be saved mid-scan and half a report would be priced at the old
+    rates and half at the new, with nothing saying so.
+
+    `off()` is the no-estimates table, and it is not the same thing as an empty
+    one: a caller that must not model anything (the budget, which measures money
+    actually owed) says so rather than relying on the user's file being empty.
+    """
+
+    def __init__(self, table: dict[str, dict] | None):
+        self.table = table or {}
+        self._seen: dict[str, dict | None] = {}
+
+    @classmethod
+    def current(cls) -> Rates:
+        """The table as it is on disk right now. Never raises — `read_pricing`
+        fail-softs to `{}`, so a broken file costs the estimates and not the
+        report they were going to sit beside."""
+        return cls(pricing.read_pricing())
+
+    @classmethod
+    def off(cls) -> Rates:
+        return cls(None)
+
+    def entry(self, model: object) -> dict | None:
+        if not self.table:
+            return None
+        key = model if isinstance(model, str) else ""
+        if key not in self._seen:
+            self._seen[key] = pricing.rate_for(self.table, key)
+        return self._seen[key]
+
+    def estimate(self, row: dict) -> float | None:
+        """What this row would have cost at the user's rates, or None.
+
+        None for a row nothing prices AND for a row nobody counted — see
+        `pricing.estimate`, which is where that second case is decided. The
+        counts are read raw rather than through `_int` on purpose: `_int` turns
+        an absent count into 0, and 0 is exactly the value that must stay
+        distinguishable from "not counted" here.
+        """
+        entry = self.entry(row.get("model"))
+        if entry is None:
+            return None
+        return pricing.estimate(
+            entry,
+            prompt_tokens=_count(row.get("prompt_tokens")),
+            completion_tokens=_count(row.get("completion_tokens")),
+            cache_read_tokens=_count(row.get("cache_read_tokens")),
+            cache_write_tokens=_count(row.get("cache_write_tokens")))
+
+
+def _count(value: object) -> int | None:
+    """A token count as the estimator needs it: the number, or None when the
+    field was absent or unusable. Deliberately not `_int`, which floors both of
+    those to 0 — a rollup adding zero is harmless, but pricing zero tokens
+    produces `$0.00` for a call nobody measured."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return max(0, value)
+
+
+def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
     """Fold one row into a bucket. Reads defensively — a row is a line from a
     file a human can edit, so a string where a number belongs must cost that
-    field rather than the whole report."""
+    field rather than the whole report.
+
+    `rates` is the user's per-token table (#158). It only ever touches the rows
+    that arrived with no price at all: a modelled figure lands in `modelled_usd`
+    and its own count, and the row stops being `unpriced` — it is now priced by
+    an estimate, which is a different and weaker claim, made in a different
+    column. `None` (the default) models nothing, which is what a caller
+    measuring money actually owed passes.
+    """
     bucket["calls"] += 1
     # Only `error`, not "anything that is not ok". A cancelled turn is recorded
     # as `aborted` -- the player pressed Cancel or navigated away -- and folding
@@ -483,10 +613,23 @@ def _add(bucket: dict, row: dict) -> None:
     bucket["duration_ms"] += _int(row.get("duration_ms"))
     cost = _float(row.get("cost_usd"))
     if cost is None:
-        bucket["unpriced_calls"] += 1
+        modelled = rates.estimate(row) if rates is not None else None
+        if modelled is None:
+            bucket["unpriced_calls"] += 1
+            # Counted whether or not a rate exists, and read straight off the
+            # row rather than from the estimator's verdict: the question is
+            # "could ANY rate have priced this", and the answer is no whenever
+            # a count is missing -- see `pricing.estimate`, which requires both.
+            if _count(row.get("prompt_tokens")) is None \
+                    or _count(row.get("completion_tokens")) is None:
+                bucket["unmetered_calls"] += 1
+        else:
+            bucket["modelled_calls"] += 1
+            bucket["modelled_usd"] += modelled
         return
     bucket["priced_calls"] += 1
     if row.get("cost_basis") == "equivalent":
+        bucket["subscription_calls"] += 1
         bucket["estimated_usd"] += cost
     else:
         bucket["cost_usd"] += cost
@@ -512,9 +655,25 @@ def _float(value: object) -> float | None:
     return float(value) if value == value and abs(value) != float("inf") else None
 
 
+def _money(value: float) -> float:
+    """One money column, rounded — but never rounded THROUGH zero.
+
+    `_CENTS` puts the floor at $0.0000005, and a real figure can sit under it:
+    twenty tokens at $0.00002/1k is 4e-7. Rounded that becomes `0.0` while the
+    call count beside it stays positive, and every cost surface then renders a
+    priced call as `$0.00` — the one claim this module exists to prevent, made
+    by the rounding rather than by the ledger. A positive value that would
+    round away keeps its own precision instead; the views already have a
+    `<$0.0001` rendering for figures that small.
+    """
+    rounded = round(value, _CENTS)
+    return value if rounded == 0.0 and value > 0.0 else rounded
+
+
 def _rounded(bucket: dict) -> dict:
-    return {**bucket, "cost_usd": round(bucket["cost_usd"], _CENTS),
-            "estimated_usd": round(bucket["estimated_usd"], _CENTS)}
+    return {**bucket, "cost_usd": _money(bucket["cost_usd"]),
+            "estimated_usd": _money(bucket["estimated_usd"]),
+            "modelled_usd": _money(bucket["modelled_usd"])}
 
 
 def _ranked(buckets: dict[str, dict]) -> list[dict]:
@@ -556,21 +715,22 @@ def summary(days: int = 30, campaign: str = "") -> dict:
     by_model: dict[str, dict] = {}
     by_task: dict[str, dict] = {}
     by_campaign: dict[str, dict] = {}
+    rates = Rates.current()
 
     for row in _read_rows(since, until):
         if not _is_call(row) or (campaign and row.get("campaign") != campaign):
             continue
-        _add(totals, row)
+        _add(totals, row, rates)
         ts = row["ts"]
         if ts >= _SESSION_START:
-            _add(session, row)
+            _add(session, row, rates)
         if ts[:10] == until:
-            _add(today, row)
-        _add(by_day.setdefault(ts[:10], dict(_ZERO)), row)
-        _add(by_model.setdefault(_label(row.get("model")), dict(_ZERO)), row)
-        _add(by_task.setdefault(_label(row.get("task")), dict(_ZERO)), row)
+            _add(today, row, rates)
+        _add(by_day.setdefault(ts[:10], dict(_ZERO)), row, rates)
+        _add(by_model.setdefault(_label(row.get("model")), dict(_ZERO)), row, rates)
+        _add(by_task.setdefault(_label(row.get("task")), dict(_ZERO)), row, rates)
         if isinstance(row.get("campaign"), str) and row["campaign"]:
-            _add(by_campaign.setdefault(row["campaign"], dict(_ZERO)), row)
+            _add(by_campaign.setdefault(row["campaign"], dict(_ZERO)), row, rates)
 
     return {
         "days": days, "since": since, "until": until, "campaign": campaign,
@@ -599,6 +759,19 @@ def _label(value: object) -> str:
 #: list is short. `truncated` says when that happened, because a list that
 #: silently stops is a list somebody reads as complete.
 SCENE_TURNS = 200
+
+#: The tasks that re-answer a post somebody has already had an answer to. Not
+#: "everything after the first call": a roll's `continuation` is the second half
+#: of ONE answer, and counting it as a reroll would tell a player they had
+#: rerolled a turn they never touched. Named here rather than in the view
+#: because it is a fact about the task labels this module writes.
+#:
+#: `replay` IS one. A retcon replays the turns after a post -- the post itself
+#: stands, so the replayed generation answers the same text a previous one
+#: already answered, and the earlier take was cut. That is what a reroll is, and
+#: leaving it out hid exactly the discarded generation this count exists to
+#: show.
+REROLL_TASKS = ("retry", "regenerate", "replay")
 
 
 def _valid_day(text: object) -> str:
@@ -645,7 +818,7 @@ def _scan_since(since: object, until: str) -> str:
     return min(max(day, floor), until)
 
 
-def _turn(row: dict) -> dict:
+def _turn(row: dict, rates: Rates | None = None) -> dict:
     """One ledger row as the per-turn view sees it.
 
     Projected, never passed through. A row is a line in a file a human can edit,
@@ -673,71 +846,99 @@ def _turn(row: dict) -> dict:
         "cache_write_tokens": _int(row.get("cache_write_tokens")),
         "cost_usd": _float(row.get("cost_usd")),
         "cost_basis": _label(row.get("cost_basis")) if row.get("cost_basis") else "",
+        # What the user's own rates (#158) say this would have cost, for a turn
+        # the provider priced at nothing. Beside `cost_usd` and never instead of
+        # it: a turn with a real price keeps it, and a turn with neither stays
+        # `null` in both columns so the view can still say "unpriced".
+        "modelled_usd": None if _float(row.get("cost_usd")) is not None
+                        else (rates.estimate(row) if rates is not None else None),
+        "post": _post(row),
         "duration_ms": _int(row.get("duration_ms")),
     }
 
 
-#: How far `_aliases` will follow a rename trail before giving up. A scene is
+def _post(row: dict) -> int | None:
+    """The player post this row was answering, or None when it names none.
+    `_int` is deliberately not used: it floors an absent field to 0, and 0 is a
+    real post index."""
+    post = row.get("post")
+    if isinstance(post, bool) or not isinstance(post, int) or post < 0:
+        return None
+    return post
+
+
+#: How far `_scene_now` will follow a rename trail before giving up. A scene is
 #: renamed once or twice in its life (the first date set, an edited title), so
 #: any real chain is short -- and this is a file a human can edit, where
 #: ``a -> b -> a`` is one typo away from looping forever inside a report.
 _MAX_RENAMES = 64
 
 
-def _aliases(campaign: str, scene: str, since: str, until: str) -> dict[str, str]:
-    """Every id this scene's rows can be filed under, mapped to the stamp after
-    which that id stopped being this scene's. `scene` itself maps to ``""``,
-    meaning no cutoff.
+def _rename_trail(campaign: str, since: str,
+                  until: str) -> dict[str, list[tuple[str, str]]]:
+    """Every hop this campaign's scenes made in the window, as
+    ``old -> [(when, new), ...]`` oldest first.
 
-    A scene's id is its filename stem, so setting a date on it renames it
-    (`scenes.moment`) -- and that happens to most scenes, usually a turn or two
-    in. The rows already written carry the id the scene had then. Without this,
-    the panel that asks what a scene cost would answer with the spend since its
-    last rename and call it the scene's, which is the quiet kind of wrong this
-    whole module is trying not to be.
+    A LIST per id, not one hop, and that is the whole point of the shape. An id
+    a scene is renamed off is free for the next scene to take (`paths.uniquify`
+    checks only what exists now), and that scene can be renamed too -- so ``a``
+    can genuinely hop to ``b`` and, later and as a different scene, to ``c``.
+    Keeping only the last of those sent every row ever filed under ``a`` to
+    ``c``, including the ones written before ``b`` existed.
 
-    **The cutoff is not decoration.** `paths.uniquify` checks only what exists
-    *now*, so the moment a scene is renamed off ``001--x`` that id is free for
-    the next scene to take -- and its rows would then be charged to the scene
-    that used to hold it. An alias is only an alias for the rows written before
-    the rename that gave it up.
-
-    A second pass over the window rather than a bigger first one: renames are
-    rare, so this collects only `KIND_RENAME` rows and stays constant-memory,
-    where folding it into the main scan would mean holding every row of the
-    campaign to find out which ones belonged.
+    Sorted by stamp so `_scene_now` can take the FIRST hop at or after a row's
+    own stamp, which is the one that was in force when the row was written.
     """
-    forward: dict[str, tuple[str, str]] = {}
+    trail: dict[str, list[tuple[str, str]]] = {}
     for row in _read_rows(since, until):
         if row.get("kind") != KIND_RENAME or row.get("campaign") != campaign:
             continue
-        old, new, ts = row.get("was"), row.get("scene"), row.get("ts")
-        if not (isinstance(old, str) and isinstance(new, str) and isinstance(ts, str)):
+        was, now, ts = row.get("was"), row.get("scene"), row.get("ts")
+        if not (isinstance(was, str) and isinstance(now, str) and isinstance(ts, str)):
             continue
-        if old and new and old != new:
-            # Last row wins: a `was` seen twice means the scene was renamed back
-            # to it and away again, and the later hop is the one still true.
-            forward[old] = (new, ts)
-    ids = {scene: ""}
-    for old, (_, ts) in forward.items():
-        # The scene's CURRENT id never takes a cutoff, whatever the trail says.
-        # A title renamed and renamed back (a -> b -> a, one typo and its fix)
-        # walks a chain that returns to where it started, and letting that write
-        # a cutoff onto the live id would drop every row this scene has filed
-        # since -- the trail silencing the very scene it exists to follow.
-        if old == scene:
-            continue
-        cursor, seen = old, 0
-        while cursor in forward and seen < _MAX_RENAMES:
-            cursor = forward[cursor][0]
-            seen += 1
-            if cursor == scene:
-                # The cutoff is THIS id's own rename, not the end of the chain:
-                # `a` stopped being this scene the moment a->b happened, whatever
-                # b did later.
-                ids[old] = ts
-                break
-    return ids
+        if was and now and was != now:
+            trail.setdefault(was, []).append((ts, now))
+    for hops in trail.values():
+        hops.sort()
+    return trail
+
+
+def _scene_now(scene: object, ts: str, trail: dict[str, list[tuple[str, str]]]) -> str:
+    """Which scene a row filed under `scene` at `ts` belongs to today.
+
+    The one resolver both cost views ask, replacing the alias-and-cutoff pair
+    this module used to keep for the per-scene read. That pair could express
+    "``a`` stopped being this scene at T" but not "``a`` WAS this scene only
+    between T1 and T2", which is exactly what a recycled id produces -- so the
+    question is now asked per row, where it has a single right answer.
+
+    The hop taken is the first at or after the stamp the walk currently holds:
+    a rename only carries the rows written before it, and a row stamped after
+    every hop off an id belongs to whatever holds that id now, which is the id
+    itself. That stamp starts as the row's own and moves forward with each hop
+    -- see the loop for why comparing every hop against the row's original
+    stamp follows renames from another scene's tenancy of the same id.
+
+    Bounded by `_MAX_RENAMES`: this file is hand-editable and ``a -> b -> a`` is
+    one typo away from a loop inside a report.
+    """
+    if not isinstance(scene, str) or not scene:
+        return NO_SCENE
+    cursor, at, seen = scene, ts, 0
+    while seen < _MAX_RENAMES:
+        hop = next(((when, nxt) for when, nxt in trail.get(cursor, ()) if at <= when), None)
+        if hop is None:
+            return cursor
+        # The clock ADVANCES to the hop just taken, and this is the subtle half.
+        # An id can be renamed away from and later handed to a different scene,
+        # so `b`'s own hops include ones that happened BEFORE this row's scene
+        # ever became `b`. Comparing them against the row's original stamp
+        # follows a rename belonging to somebody else's tenancy of that id --
+        # `b -> c` at T1 then `a -> b` at T2 sent a row written before T1 all
+        # the way to `c`, when it should stop at `b`.
+        at, cursor = hop
+        seen += 1
+    return cursor
 
 
 def scene_usage(campaign: str, scene: str, *, since: str = "",
@@ -753,27 +954,53 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
 
     ``turns`` is newest first and capped at ``limit``; ``totals`` and ``by_task``
     are summed over the whole window regardless, so the numbers do not change
-    when the list is cut. A campaign or scene id that never appears answers with
+    when the list is cut.
+
+    ``clamped`` says the window starts later than ``since`` asked for, which
+    `_scan_since` does for a scene older than `MAX_DAYS`. Everything in this
+    payload is then a floor -- including ``by_post``, whose older posts have no
+    bucket at all rather than an empty one, so a view that did not know would
+    render them as posts that cost nothing. A campaign or scene id that never appears answers with
     zeroes — a scene that has generated nothing has spent nothing, which is an
     answer, and the route above is what distinguishes it from a typo.
     """
     until = _today()
     start = _scan_since(since, until)
-    ids = _aliases(campaign, scene, start, until)
+    # Whether the scan starts LATER than the scene did. `_scan_since` floors a
+    # long-lived scene's window at `MAX_DAYS`, so a scene played across more
+    # than a year is scanned from part-way through its own life -- and the
+    # per-post breakdown then simply has no bucket for its older posts, which
+    # in a transcript is indistinguishable from a post that cost nothing. The
+    # flag is what lets the view say "this breakdown does not reach that far"
+    # instead of implying it is complete.
+    clamped = bool(_valid_day(since)) and start > _valid_day(since)
+    trail = _rename_trail(campaign, start, until)
+    rates = Rates.current()
     totals = dict(_ZERO)
     by_task: dict[str, dict] = {}
+    by_post: dict[int, dict] = {}
+    rerolls: dict[int, int] = {}
     turns: list[dict] = []
     for row in _read_rows(start, until):
         if not _is_call(row) or row.get("campaign") != campaign:
             continue
-        cutoff = ids.get(row.get("scene"))
-        # `None` is "not this scene's id at all"; a cutoff is "not any more,
-        # after this stamp" -- see `_aliases` for why an id can change hands.
-        if cutoff is None or (cutoff and row["ts"] > cutoff):
+        # Asked per row rather than resolved to a set of ids up front: an id can
+        # belong to this scene for a stretch and to another scene before and
+        # after it, which no per-id answer can express. See `_scene_now`.
+        if _scene_now(row.get("scene"), row["ts"], trail) != scene:
             continue
-        _add(totals, row)
-        _add(by_task.setdefault(_label(row.get("task")), dict(_ZERO)), row)
-        turns.append(_turn(row))
+        _add(totals, row, rates)
+        _add(by_task.setdefault(_label(row.get("task")), dict(_ZERO)), row, rates)
+        post = _post(row)
+        if post is not None:
+            bucket = by_post.setdefault(post, dict(_ZERO))
+            _add(bucket, row, rates)
+            # Counted here rather than derived from `calls` in the view: a post
+            # answered once and then continued past a roll has two calls and no
+            # rerolls, and `calls - 1` would report one.
+            if row.get("task") in REROLL_TASKS:
+                rerolls[post] = rerolls.get(post, 0) + 1
+        turns.append(_turn(row, rates))
     # Sorted, not reversed. Rows are appended in completion order and two
     # concurrent calls interleave, so file order is *nearly* chronological and
     # reversing it would put a slow turn that finished late above a fast one
@@ -782,10 +1009,136 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
     turns.sort(key=lambda turn: turn["ts"], reverse=True)
     limit = max(0, int(limit))
     return {"campaign": campaign, "scene": scene, "since": start, "until": until,
+            "clamped": clamped,
             "generated_at": _now(), "totals": _rounded(totals),
             "by_task": _ranked(by_task),
+            # Keyed by transcript index, ascending, so a view can walk it beside
+            # the messages it is rendering. Every reroll of a post lands in that
+            # post's bucket, which is the whole question this answers: what did
+            # getting THIS reply, over however many attempts, actually cost.
+            # `rerolls` is how many of those calls were re-answers rather than
+            # parts of the first answer -- see `REROLL_TASKS`.
+            "by_post": [{"post": i, "rerolls": rerolls.get(i, 0),
+                         **_rounded(by_post[i])} for i in sorted(by_post)],
             "turns": turns[:limit], "listed": min(len(turns), limit),
             "truncated": len(turns) > limit}
+
+
+# ---- one campaign's scenes, over the whole ledger ----
+#: How many scene buckets `campaign_scenes` returns. The cap is on the RESPONSE
+#: like `SCENE_TURNS`: totals are summed over every row scanned, so a campaign
+#: with a thousand scenes still reports its true all-time cost and only its list
+#: is cut. The list is ordered by spend, so what is cut is the cheapest tail.
+CAMPAIGN_SCENES = 500
+
+#: The bucket key for calls that belong to the campaign but to no scene — a
+#: cast suggestion, an intent classification, a voice anchor. They are in the
+#: list rather than dropped from it, so the rows sum to the total printed above
+#: them; a list that quietly excluded them would be a breakdown that does not
+#: add up.
+NO_SCENE = ""
+
+#: How `campaign_scenes` may order its buckets, and what each orders BY. The
+#: order has to be applied to the whole set before the cap is, or the cap
+#: silently turns every other ordering into "these orderings, of the most
+#: expensive N" -- a recent cheap scene missing from "most recent" while the
+#: view claims to be showing it.
+SCENE_ORDERS = ("cost", "recent", "turns")
+
+
+def _sort_scenes(scenes: list[dict], order: str) -> None:
+    """Order `scenes` in place by one of `SCENE_ORDERS`, ties on the scene id.
+
+    TWO PASSES, and that is the trick rather than an inefficiency: every
+    ordering here is descending, the tie-break is ascending, and `reverse=True`
+    on one key tuple would flip the tie-break too. Python's sort is stable, so
+    sorting by the id first and then by the real key leaves equal rows in id
+    order -- one rule, three orderings, and no wrapper class whose only job is
+    to compare backwards.
+    """
+    scenes.sort(key=lambda b: b["scene"])
+    if order == "recent":
+        scenes.sort(key=lambda b: b["last_ts"], reverse=True)
+    elif order == "turns":
+        scenes.sort(key=lambda b: b["calls"], reverse=True)
+    else:
+        scenes.sort(key=lambda b: (b["cost_usd"], b["modelled_usd"],
+                                   b["estimated_usd"], b["calls"]), reverse=True)
+
+
+def lifetime_since() -> str:
+    """The first day the ledger could hold a row for, as ``YYYY-MM-DD``.
+
+    Derived from the month files that EXIST, not from a fixed window: "what has
+    this campaign cost over all time" is a question with a real answer, and
+    `MAX_DAYS` would silently turn it into "over the last year". A library with
+    no ledger at all answers today, which scans one absent file.
+
+    This is the one read here whose cost grows with the library's age, and it is
+    deliberate — it backs the all-time view and nothing on the play path. Every
+    other rollup keeps its bounded window.
+    """
+    root = ledger_dir()
+    try:
+        entries = [path.stem for path in root.iterdir() if path.suffix == ".jsonl"]
+    except OSError:
+        return _today()
+    # Parsed as a real date, not merely matched against `_MONTH`. The regex
+    # accepts `2026-00`, which sorts before every real month and which
+    # `date.fromisoformat` then raises on inside `_window_files` -- turning one
+    # stray filename (a hand edit, or a row whose `ts` came in through the
+    # facade) into a 500 on every request to this endpoint. A name that is not
+    # a month names no window, so it is skipped like an unparseable row.
+    days = [day for day in (_valid_day(f"{stem}-01") for stem in entries) if day]
+    return min(days) if days else _today()
+
+
+def campaign_scenes(campaign: str, *, since: str = "", order: str = "cost",
+                    limit: int = CAMPAIGN_SCENES) -> dict:
+    """What each of a campaign's scenes has cost, and what the campaign has.
+
+    The scene-by-scene half of #153's cost view, over the ledger's whole history
+    by default (`since=""` means `lifetime_since`). Renamed scenes are folded
+    into the id they carry today (`_scene_now`), so a scene that was renamed the
+    moment its first date was set reports what it cost from its first turn
+    rather than from the rename — the same correction `scene_usage` makes for
+    one scene, applied to all of them at once.
+
+    `order` is one of `SCENE_ORDERS`, applied to the WHOLE set before `limit`
+    cuts it -- which is why it is a parameter here rather than a re-sort on the
+    client. A campaign with more buckets than the cap would otherwise have
+    every alternative ordering silently mean "of the most expensive N", so a
+    recent cheap scene would be missing from a list headed "most recent". An
+    unknown order falls back to `cost`, the default this view opens on. Ties
+    break on the id so two reads of the same data agree.
+    """
+    until = _today()
+    start = min(_valid_day(since) or lifetime_since(), until)
+    forward = _rename_trail(campaign, start, until)
+    rates = Rates.current()
+    totals = dict(_ZERO)
+    buckets: dict[str, dict] = {}
+    seen: dict[str, list[str]] = {}
+    for row in _read_rows(start, until):
+        if not _is_call(row) or row.get("campaign") != campaign:
+            continue
+        _add(totals, row, rates)
+        scene = row.get("scene")
+        sid = _scene_now(scene, row["ts"], forward) if isinstance(scene, str) and scene \
+            else NO_SCENE
+        _add(buckets.setdefault(sid, dict(_ZERO)), row, rates)
+        stamps = seen.setdefault(sid, [row["ts"], row["ts"]])
+        stamps[0] = min(stamps[0], row["ts"])
+        stamps[1] = max(stamps[1], row["ts"])
+    scenes = [{"scene": sid, "first_ts": seen[sid][0], "last_ts": seen[sid][1],
+               **_rounded(bucket)} for sid, bucket in buckets.items()]
+    order = order if order in SCENE_ORDERS else SCENE_ORDERS[0]
+    _sort_scenes(scenes, order)
+    limit = max(0, int(limit))
+    return {"campaign": campaign, "since": start, "until": until,
+            "generated_at": _now(), "totals": _rounded(totals), "order": order,
+            "scenes": scenes[:limit], "listed": min(len(scenes), limit),
+            "truncated": len(scenes) > limit}
 
 
 # ---- budgets ----
@@ -891,10 +1244,16 @@ def budget(campaign: str, limit_usd: object, period: object = "") -> dict:
                 "warn_fraction": WARN_FRACTION}
     since, until = period_window(period)
     totals = dict(_ZERO)
+    # `Rates.off()`, said out loud rather than left to the default: a budget
+    # measures money owed, and an estimate over rates the user typed is not
+    # that. Charging a cap for a modelled figure would have somebody hit their
+    # limit on arithmetic nobody was invoiced for. `unpriced_calls` still says
+    # the figure is a floor, which is the honest version of the same warning.
+    rates = Rates.off()
     for row in _read_rows(since, until):
         if not _is_call(row) or row.get("campaign") != campaign:
             continue
-        _add(totals, row)
+        _add(totals, row, rates)
     spent = round(totals["cost_usd"], _CENTS)
     fraction = spent / limit
     level = OVER if spent >= limit else WARN if fraction >= WARN_FRACTION else OK

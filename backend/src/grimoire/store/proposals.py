@@ -114,16 +114,32 @@ def _write(cid: str, data: dict) -> None:
     atomic.write_text(_path(cid), json.dumps(data, indent=2) + "\n")
 
 
-def new(cid: str, sid: str, payload: dict) -> dict:
+def new(cid: str, sid: str, payload: dict, post: int | None = None) -> dict:
     """Create a fresh pending proposal for the scene, superseding whatever
     non-terminal record (if any) was already there — a new send always
     retires the old one. Heals first: the record about to be overwritten is
-    the only recovery handle for its own projection (see ``heal``)."""
+    the only recovery handle for its own projection (see ``heal``).
+
+    ``post`` is the transcript index the originating turn was answering
+    (`store.usage`, #153), carried on the RECORD rather than in ``payload``:
+    the payload is projected to the client and this is bookkeeping, not part
+    of the roll. The continuation that resolves this proposal reads it back
+    instead of re-deriving one — a director turn answers no post, and a
+    continuation deriving its own would charge the last visible post for
+    narration generated from an ephemeral note nobody can see. ``None`` is a
+    real answer here and is stored as an absent key, the ledger's own
+    absent-not-zero rule.
+    """
     with locks.campaign_lock(cid):
         heal(cid, sid)
         data = _read(cid)
-        rec = {"id": f"pr-{uuid.uuid4().hex}", "status": "pending",
-               "payload": payload, "created": now_iso(), "resolution": None}
+        # Annotated, so the int below is not checked against a value type
+        # inferred from these string fields -- the record is mixed by
+        # construction, like the ledger row `store.usage.record` builds.
+        rec: dict = {"id": f"pr-{uuid.uuid4().hex}", "status": "pending",
+                     "payload": payload, "created": now_iso(), "resolution": None}
+        if isinstance(post, int) and not isinstance(post, bool) and post >= 0:
+            rec["post"] = post
         data[sid] = rec
         _write(cid, data)
         return rec

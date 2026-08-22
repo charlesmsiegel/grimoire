@@ -14,6 +14,7 @@ import CampaignsView from "./routes/CampaignsView";
 import CampaignWizard from "./routes/CampaignWizard";
 import OpenScene from "./routes/OpenScene";
 import CampaignView from "./routes/CampaignView";
+import CostsView from "./routes/CostsView";
 import LedgerView from "./routes/LedgerView";
 import TimelineView from "./routes/TimelineView";
 import LibraryView from "./routes/LibraryView";
@@ -108,6 +109,7 @@ function Shell(
             table read top to bottom, and the supersession chains it exists to
             show do not fit in a panel wedged above the scene. */}
         <Route path="/campaigns/:cid/ledger" element={<LedgerView />} />
+        <Route path="/campaigns/:cid/costs" element={<CostsView />} />
         {/* The timeline is the ledger's other half and a room for the same
             reason (#198): the ledger says what is still open, this says what
             happened, and a play history read end to end is not a drawer over

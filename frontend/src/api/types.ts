@@ -713,8 +713,21 @@ export type UsageBucket = {
   calls: number; errors: number;
   prompt_tokens: number; completion_tokens: number; total_tokens: number;
   cache_read_tokens: number; cache_write_tokens: number;
-  cost_usd: number; estimated_usd: number;
-  priced_calls: number; unpriced_calls: number; duration_ms: number;
+  /** The three money columns, and **no two of them may be added**. `cost_usd`
+   *  is what a provider charged. `estimated_usd` is what a subscription-billed
+   *  call would have cost at API rates and did not. `modelled_usd` is what the
+   *  user's own per-token table (#158) says the calls nobody priced would have
+   *  cost — the weakest of the three, and the only one grimoire computed. Each
+   *  has its own call count so a view can say how much of a total is which. */
+  cost_usd: number; estimated_usd: number; modelled_usd: number;
+  priced_calls: number; unpriced_calls: number;
+  subscription_calls: number; modelled_calls: number;
+  /** The slice of `unpriced_calls` that NO rate could ever price, because the
+   *  provider reported no token counts either. The split is what lets a view
+   *  tell a reader whether typing a rate would help — for these it would not,
+   *  and saying so anyway sends them to an action that cannot succeed. */
+  unmetered_calls: number;
+  duration_ms: number;
 };
 /** A bucket with the thing it buckets — a task name, a model, a day. */
 export type UsageBreakdown = UsageBucket & { key: string };
@@ -726,14 +739,69 @@ export type UsageTurn = {
   status: string; error: string; attempts: number;
   prompt_tokens: number; completion_tokens: number; total_tokens: number;
   cache_read_tokens: number; cache_write_tokens: number;
-  cost_usd: number | null; cost_basis: string; duration_ms: number;
+  cost_usd: number | null; cost_basis: string;
+  /** What the user's rate table says this cost, for a turn `cost_usd` is null
+   *  for. Null when it is priced already, and null when nothing can price it —
+   *  the two are told apart by `cost_usd`, not by this. */
+  modelled_usd: number | null;
+  /** The transcript index of the player post this turn was answering, or null
+   *  when it answered none (an absorb, a summary, an opener). */
+  post: number | null;
+  duration_ms: number;
+};
+/** One player post's spend: every call made answering it, the first reply and
+ *  each reroll of it. Keyed by transcript index.
+ *
+ *  `rerolls` counts the calls that RE-answered the post, which is not
+ *  `calls - 1`: a turn continued past a dice roll is two calls and one answer. */
+export type UsagePostBucket = UsageBucket & { post: number; rerolls: number };
+/** One scene's all-time spend as the campaign list sees it, with the scene
+ *  named from its own file. `missing` marks a bucket whose scene has been
+ *  deleted — its spend is still in the list, because it is still in the total. */
+export type SceneCostRow = UsageBucket & {
+  scene: string; title: string; created: string; updated: string;
+  first_ts: string; last_ts: string; missing: boolean;
+};
+/** What a campaign has cost, scene by scene, over the ledger's whole history.
+ *  `since`/`until` is the window that could actually be scanned — a library
+ *  whose oldest month file was deleted by hand cannot reach past what is left. */
+export type CampaignSceneCosts = {
+  campaign: string; since: string; until: string; generated_at: string;
+  /** The order the server applied before capping the list — echoed back, so a
+   *  view can tell an answer to the sort it asked for from a stale one. */
+  order: string;
+  totals: UsageBucket; scenes: SceneCostRow[];
+  listed: number; truncated: boolean;
+};
+/** One model's per-token rates (#158), in dollars per 1,000 tokens. The cache
+ *  pair is optional, and its absence is not zero: cache counts are slices of
+ *  the prompt, so a table naming no cache rate has already priced them at the
+ *  prompt rate. */
+export type PricingEntry = {
+  prompt_usd_per_1k?: number; completion_usd_per_1k?: number;
+  cache_read_usd_per_1k?: number; cache_write_usd_per_1k?: number;
+};
+export type PricingTable = {
+  rates: Record<string, PricingEntry>;
+  /** The file is there and could not be parsed. Carried as a 200 flag rather
+   *  than an error status because the two mean opposite things to an editor:
+   *  no rates is a form to fill in, unreadable is a form that must not be
+   *  offered — saving it would replace the real file with nothing. */
+  unreadable?: boolean;
+  detail?: string;
+  fields: string[]; default_key: string; max_entries: number;
 };
 /** What one scene's turns cost. `since`/`until` is the window actually scanned
  *  — the scene's own lifetime, clamped by the server — and `truncated` says the
  *  `turns` list was cut, which never moves `totals`. */
 export type SceneUsage = {
   campaign: string; scene: string; since: string; until: string; generated_at: string;
-  totals: UsageBucket; by_task: UsageBreakdown[];
+  /** The scan could not reach back to the scene's start — a scene played over
+   *  more than a year. Every figure is a floor, and `by_post` is missing
+   *  buckets entirely for the older posts, which in a transcript is
+   *  indistinguishable from a post that cost nothing. */
+  clamped: boolean;
+  totals: UsageBucket; by_task: UsageBreakdown[]; by_post: UsagePostBucket[];
   turns: UsageTurn[]; listed: number; truncated: boolean;
 };
 /** Where a campaign stands against its budget (#153). `level: "off"` is a

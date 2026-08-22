@@ -14,7 +14,8 @@ vi.mock("../api/client", async () => {
 const ZERO = {
   calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
   cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
-  priced_calls: 0, unpriced_calls: 0, duration_ms: 0,
+  modelled_usd: 0, priced_calls: 0, unpriced_calls: 0,
+  subscription_calls: 0, modelled_calls: 0, unmetered_calls: 0, duration_ms: 0,
 };
 
 const TURN = {
@@ -22,15 +23,18 @@ const TURN = {
   status: "ok", error: "", attempts: 1,
   prompt_tokens: 900, completion_tokens: 40, total_tokens: 940,
   cache_read_tokens: 0, cache_write_tokens: 0,
-  cost_usd: 0.0042, cost_basis: "billed", duration_ms: 4210,
+  cost_usd: 0.0042, cost_basis: "billed", modelled_usd: null, post: 0,
+  duration_ms: 4210,
 };
 
 const USAGE = {
   campaign: "c", scene: "s", since: "2026-08-01", until: "2026-08-14",
-  generated_at: "2026-08-14T12:00:00Z",
+  clamped: false, generated_at: "2026-08-14T12:00:00Z",
   totals: { ...ZERO, calls: 2, prompt_tokens: 1800, completion_tokens: 80,
             total_tokens: 1880, cost_usd: 0.0084, priced_calls: 2 },
   by_task: [{ key: "chat", ...ZERO, calls: 2, cost_usd: 0.0084 }],
+  by_post: [{ post: 0, rerolls: 1, ...ZERO, calls: 2, cost_usd: 0.0084,
+              priced_calls: 2 }],
   turns: [TURN, { ...TURN, ts: "2026-08-14T09:00:00Z", task: "retry" }],
   listed: 2, truncated: false,
 };
@@ -73,12 +77,34 @@ test("a turn the provider never priced says so rather than showing $0.00", async
 
 test("subscription-billed dollars are reported apart from the spend", async () => {
   vi.mocked(api.getSceneUsage).mockResolvedValue({
-    ...USAGE, totals: { ...ZERO, calls: 1, estimated_usd: 0.5 },
+    ...USAGE,
+    totals: { ...ZERO, calls: 1, priced_calls: 1, subscription_calls: 1,
+              estimated_usd: 0.5 },
   } as never);
   render(<CostPanel cid="c" sid="s" />);
 
-  expect(await screen.findByText(/\$0\.50 billed to a subscription, not charged/))
+  // The parenthetical is the point: a subscription call is not spend, and the
+  // figure beside it is what it WOULD have cost per token.
+  expect(await screen.findByText(
+    /1 call billed to a subscription, not charged \(≈ \$0\.50 at the provider's per-token rates\)/))
     .toBeInTheDocument();
+});
+
+test("a call nobody priced is estimated from the user's own rates, marked", async () => {
+  vi.mocked(api.getSceneUsage).mockResolvedValue({
+    ...USAGE,
+    totals: { ...ZERO, calls: 1, modelled_calls: 1, modelled_usd: 0.25 },
+    by_task: [{ key: "chat", ...ZERO, calls: 1, modelled_calls: 1, modelled_usd: 0.25 }],
+    turns: [{ ...TURN, cost_usd: null, modelled_usd: 0.25 }], listed: 1,
+  });
+  render(<CostPanel cid="c" sid="s" />);
+
+  expect(await screen.findByText(
+    /1 call the provider did not price \(≈ \$0\.25 at your per-token rates\)/))
+    .toBeInTheDocument();
+  // Headline and turn row both read as an estimate, never as a bill.
+  expect(await screen.findByText(/^≈ \$0\.25 · 1 turn/)).toBeInTheDocument();
+  expect(screen.queryByText("unpriced")).not.toBeInTheDocument();
 });
 
 test("says when the turn list was cut and the totals were not", async () => {

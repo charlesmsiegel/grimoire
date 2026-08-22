@@ -401,9 +401,68 @@ lock indefinitely.
 """
 
 
+#: The one `_chat_stream` task whose turn answers no player post -- an
+#: ephemeral director note, which is never written to the transcript.
+DIRECTOR = "director"
+
+
+def _continuation_post(cid: str, sid: str, pid: str) -> int | None:
+    """Which player post a continuation of proposal `pid` is answering.
+
+    Read off the proposal record rather than re-derived from the transcript,
+    and the difference is not academic: a continuation is the second half of a
+    turn that already decided this question, and asking it again from here gets
+    a DIFFERENT answer for the case the first half got right. A director turn
+    is recorded against no post -- its note is ephemeral and never reaches the
+    transcript -- but by the time its roll is accepted the last user message is
+    some earlier, visible post, which a fresh derivation would charge for
+    narration the player never asked for.
+
+    A record that names no post therefore answers None, and so does a record
+    that is gone or belongs to a different proposal. That is the honest
+    fallback: the cost stays in the scene's totals either way, and a missing
+    attribution is a smaller error than a wrong one.
+    """
+    try:
+        rec = store.proposals.get(cid, sid)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict) or rec.get("id") != pid:
+        return None
+    post = rec.get("post")
+    if isinstance(post, bool) or not isinstance(post, int) or post < 0:
+        return None
+    return post
+
+
+def _answering_post(messages: list[dict]) -> int | None:
+    """The index of the player post a turn generated against this transcript is
+    answering, or None when there is not one.
+
+    The last user-role message, which is what every producing route is replying
+    to: a send appends it and streams, a retry and a regenerate re-answer the
+    one already sitting there, and a replay re-runs the turn that followed it.
+    A scene whose transcript is all narration -- an opener, a director-driven
+    scene before the player has said anything -- has no such post, and gets no
+    attribution rather than a wrong one.
+
+    Reads the message list defensively because it is the one thing here that
+    came off disk: a `messages` that is not a list of dicts must cost the
+    attribution, never the turn it is being attributed to.
+    """
+    if not isinstance(messages, list):
+        return None
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, dict) and message.get("role") == "user":
+            return index
+    return None
+
+
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                   client: LLMClient, finalize, on_error=None, on_abort=None,
-                  task: str = "chat", outcome: StreamOutcome | None = None):
+                  task: str = "chat", outcome: StreamOutcome | None = None,
+                  post: int | None = None):
     """Stream one persisted turn while watching for a ```roll fence.
 
     Deltas are routed through a FenceWatcher, so an opener (even split across
@@ -418,6 +477,14 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     opened here rather than at each caller because this is the one place that
     sees every way a stream can end, and all three have to be recorded: a
     completed turn, a provider failure, and a client that walked away.
+
+    `post` is the transcript index of the player post this turn is answering
+    (#153), stamped on the row so a reader can ask what one post cost across
+    every reroll of it. Passed by the caller rather than derived here, because
+    the answer has to be read UNDER THE LOCK the caller already holds to claim
+    the turn -- read from inside this generator it would be read after the claim
+    and could see a transcript another writer had moved on. `None` for a turn
+    that answers no post at all.
 
     `on_abort(watcher)` is the same decision for a *disconnect* — the client
     cancelled, or the connection died — which arrives as cancellation rather
@@ -435,7 +502,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
         watcher = store.fence.FenceWatcher()
         # Opened before the request goes out, so `duration_ms` measures what the
         # user waited rather than what was left after the last delta.
-        meter = store.usage.meter(task, campaign=cid, scene=sid)
+        meter = store.usage.meter(task, campaign=cid, scene=sid, post=post)
         # Display only, and deliberately downstream of the watcher rather than
         # inside it: the tracker block is stripped from the transcript by
         # `_persist_reply`, but by then the deltas carrying it have already been
@@ -635,7 +702,19 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
     # makes its own steps indivisible if the writer it races takes it too.
     with store.locks.campaign_lock(cid):
         turn_token = _claim_turn(cid, sid)
-        owned_tail = len(store.scenes.read_scene(cid, sid)["messages"])
+        owned = store.scenes.read_scene(cid, sid)["messages"]
+        owned_tail = len(owned)
+        # Which player post this turn is answering (#153), read from the same
+        # transcript snapshot the tail came from. `chat` has just appended it,
+        # `retry` and `regenerate` are re-answering the one already there, and
+        # all three land on the same index -- which is the point: a post and its
+        # rerolls have to bucket together or the per-post figure would show only
+        # the attempt still on screen.
+        # Not a director turn: the player typed a note that is never written to
+        # the transcript, so the generation answers no post of theirs. Charged
+        # to the last one anyway it would inflate a post the player can see
+        # with the cost of a turn they did not send.
+        post = None if task == DIRECTOR else _answering_post(owned)
 
     def finalize(watcher) -> list[str]:
         # The WHOLE of it under one acquisition, which the identity fence
@@ -662,7 +741,11 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         if watcher.complete or watcher.truncated:
             with store.locks.campaign_lock(cid):
                 payload = _make_proposal(cid, sid, watcher)
-                rec = store.proposals.new(cid, sid, payload)  # heals before replacing
+                # `post` travels onto the record so the continuation that
+                # resolves this roll is charged where this turn was -- see
+                # `store.proposals.new`. A director turn passes None, and the
+                # continuation inherits that rather than inventing one.
+                rec = store.proposals.new(cid, sid, payload, post)  # heals before replacing
             _persist_reply(cid, sid, watcher.narration)
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         elif _persist_reply(cid, sid, watcher.narration):
@@ -829,7 +912,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             return finalize(watcher)
 
     return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort,
-                         task=task, outcome=box)
+                         task=task, outcome=box, post=post)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
@@ -846,6 +929,9 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     too, so an adjudicated roll survives a locked phone -- which is exactly
     when a player looks away."""
     box = outcome if outcome is not None else StreamOutcome()
+    # Inherited from the proposal, never re-derived -- see `_continuation_post`.
+    post = _continuation_post(cid, sid, pid)
+
     def finalize(watcher) -> list[str]:
         # Under one acquisition with the fence, like `_chat_stream`'s: the
         # commit below is a terminal write and the check that guards it cannot
@@ -881,8 +967,12 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
                 if store.proposals.commit_narration(cid, sid, pid, persist):
                     payload = _make_proposal(cid, sid, watcher)
                     # new() heals the record it is about to erase; the lock is
-                    # reentrant, so that projection is safe under ours
-                    rec = store.proposals.new(cid, sid, payload)
+                    # reentrant, so that projection is safe under ours.
+                    # `post` carries forward: a follow-up roll inside the same
+                    # turn is still answering whatever the first half was, and
+                    # re-deriving it here has the failure `_continuation_post`
+                    # exists to prevent, one hop further along.
+                    rec = store.proposals.new(cid, sid, payload, post)
                     frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         else:
             store.proposals.commit_narration(cid, sid, pid, persist)
@@ -896,7 +986,7 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     # committed outside `commit_narration` is narration a supersede can no
     # longer displace.
     return _fence_stream(cid, sid, messages, conn, client, finalize,
-                         task="continuation", outcome=box)
+                         task="continuation", outcome=box, post=post)
 
 
 def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient,

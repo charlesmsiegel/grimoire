@@ -2891,6 +2891,60 @@ a.column-back { text-decoration: none; }
   font-family: var(--fb); font-weight: 300; font-size: 13px; line-height: 1.55;
 }
 
+/* ---- the cost report (#153) ---------------------------------------------
+   The scene table borrows the ledger's table wholesale — same rules, same
+   rhythm — and only overrides what a money column needs that a prose one does
+   not. `table-layout: fixed` with no <colgroup> would split five columns
+   evenly and give SCENE the same width as TURNS, so this one sizes itself. */
+.cost-table { table-layout: auto; }
+/* Tabular figures, right-aligned: a column of prices that do not line up at
+   the decimal point is a column you cannot compare down. */
+.cost-cell {
+  font-family: var(--fm); font-size: 12px; text-align: right;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.cost-cell .field-hint { text-align: right; }
+/* The all-time figure in the column. Sized as a headline because it is the one
+   number this whole page exists to print. */
+.cost-headline {
+  font-family: var(--fb); font-weight: 300; font-size: 26px; line-height: 1.1;
+  color: var(--ink); margin: 0 0 6px; font-variant-numeric: tabular-nums;
+}
+
+/* What a player post cost to answer, in the transcript beside it. Deliberately
+   quiet: it sits inside prose being read, so it is a monospace whisper at the
+   top of the post rather than a badge competing with the words under it. */
+.post-cost {
+  display: inline-block; margin-bottom: 6px;
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em;
+  color: var(--subtle); font-variant-numeric: tabular-nums;
+}
+/* The half the transcript cannot show: the takes that were paid for and
+   discarded. Marked out from the figure so it reads as an annotation on it. */
+.post-cost-rerolls { color: var(--muted); }
+
+/* ---- the per-model rate table (#158) ---- */
+.pricing-row {
+  padding: 12px 0; border-bottom: 1px solid var(--rule-soft);
+}
+.pricing-row:last-of-type { border-bottom: 0; }
+.pricing-model { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.pricing-model input { flex: 1; min-width: 0; font-family: var(--fm); font-size: 12px; }
+/* Four rates that wrap rather than scroll: at phone width they stack two by
+   two, which keeps each one beside the label that names it. */
+.pricing-rates { display: flex; flex-wrap: wrap; gap: 10px; }
+.pricing-rate { display: flex; flex-direction: column; gap: 2px; min-width: 108px; flex: 1; }
+.pricing-rate input { width: 100%; font-family: var(--fm); font-size: 12px; }
+.pricing-rate-label {
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--muted);
+}
+/* The same rate as a price sheet quotes it. This is the line that stops a rate
+   being typed a thousandfold off, so it is under the box, not in a tooltip. */
+.pricing-rate-hint {
+  font-family: var(--fm); font-size: 9.5px; color: var(--subtle);
+}
+
 /* Phone: the four columns still hold, and the wrap scrolls them. */
 @media (max-width: 720px) {
   .ledger-table { min-width: 520px; }
