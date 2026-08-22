@@ -2335,7 +2335,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           if (runRef.current?.attempt === attempt) runRef.current.id = e.run.id;
           registry.attach(cid, id, e.run.id);
         } else if (e.error) {
-          fail(e.error, !(rerolling && acc.trim().length > 0));
+          fail(e.error, !ephemeral && !(rerolling && acc.trim().length > 0));
           errored = true;
           // The post is gone from the transcript, so the composer has to give
           // the player their words back. Otherwise a failed send destroys what
@@ -2374,7 +2374,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // `fail`, not `setError`: a failure carries whether GENERATING is the
       // recovery it wants, and a reroll that already landed a partial does not
       // want one — Retry would append past the reply it just parked.
-      if (!isAbortError(err)) fail(err, !(rerolling && acc.trim().length > 0));
+      // `!ephemeral`, for the reason the other `retryable: false` sites give
+      // (Codex review, round 3): the banner's Retry GENERATES, down `/retry`,
+      // which regenerates from the stored transcript. A director note is in no
+      // transcript, so Retry would quietly produce an undirected continuation
+      // — or, in a scene with nothing else, fail with "nothing to retry". The
+      // note is back in the composer by then, and Send is its retry.
+      if (!isAbortError(err)) fail(err, !ephemeral && !(rerolling && acc.trim().length > 0));
       // Nothing reached the server, so nothing was stored — the same position
       // the player is in after a rollback, and the same remedy. Review caught
       // that Stop pressed during connection setup, or a server that is simply
@@ -2735,7 +2741,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // it and every successful director turn hands its note back afterwards.
     // In-session recovery can tell those apart; the durable one cannot.
     if (directing || !content) {
-      if (directing) setDirectorNote(content ? { cid, sid: id, text: content } : null);
+      // Identity is the ownership token (Codex review, round 3). `runStream`
+      // unlocks the composer before it returns -- the flush poll it awaits runs
+      // after `setBusy(false)` -- so a SECOND Direct turn can be under way while
+      // this `send` is still awaiting. An unconditional clear in the finally
+      // below then wipes that turn's note off the screen for the rest of its
+      // generation. Cleared only if the note on screen is still this one.
+      const note = content ? { cid, sid: id, text: content } : null;
+      if (directing) setDirectorNote(note);
       try {
         const landed = await runStream(id,
           (onEvent, signal, attempt, onIndex) =>
@@ -2747,7 +2760,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           false, "", true);
         if (landed) setPendingResponse(null);
       } finally {
-        setDirectorNote(null);
+        if (directing) setDirectorNote((cur) => (cur === note ? null : cur));
       }
       return;
     }
