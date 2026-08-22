@@ -69,6 +69,17 @@ test("a record identical to the library says so instead of showing a button", as
   expect(screen.queryByRole("button")).toBeNull();
 });
 
+test("a diverged record that cannot be pushed is not called in sync", async () => {
+  // an actor this campaign has rewritten IS diverged; it simply cannot be
+  // saved back (#53 option B). Saying "in sync with the library" is a claim
+  // about two records, and a false one.
+  show({ in_library: true, diverged: true, can_promote: false, can_push: false });
+
+  expect(await screen.findByText(/this campaign's own version/)).toBeTruthy();
+  expect(screen.queryByText("in sync with the library")).toBeNull();
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
 test("a record the campaign only inherits shows nothing at all", async () => {
   const { container } = show(STATUS.inherited);
   await waitFor(() => expect(api.libraryStatus).toHaveBeenCalled());

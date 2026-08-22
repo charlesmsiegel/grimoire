@@ -192,6 +192,45 @@ def test_an_interrupted_actor_promotion_retries_instead_of_conflicting(monkeypat
     assert sync.incoming(cid) == []
 
 
+def test_an_interrupted_actor_promotion_does_not_adopt_the_dead_actors_face(
+        monkeypatch, tmp_path):
+    """A meta-less actor directory is residue in full, not just its version
+    files. `_copy_sidecars`/`_copy_tree` only overwrite slots the campaign
+    supplies, so anything left in an empty slot becomes the promoted actor's --
+    and through the overlay, every campaign of this world sees it (#225)."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, _vid = overlay.create_character(cid, "Winifred")
+    residue = worlds.world_root(wid) / "characters" / aid
+    (residue / "assets" / "default").mkdir(parents=True)
+    (residue / "assets" / "default" / "avatar.png").write_bytes(b"the dead actor's face")
+    (residue / "tagline.md").write_text("the dead actor's tagline", encoding="utf-8")
+
+    sync.promote(cid, "characters", aid)
+
+    landed = worlds.world_root(wid) / "characters" / aid
+    assert not (landed / "assets" / "default" / "avatar.png").exists()
+    assert not (landed / "tagline.md").exists()
+
+
+def test_a_demoted_greeting_keeps_its_edges_in_the_campaigns_that_kept_it(
+        monkeypatch, tmp_path):
+    """The edges live in the plot map, and `delete_greeting` strips them from
+    the world's. A campaign still inheriting that map would watch the record it
+    was just handed lose its prerequisites and unlock itself."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Winifred")
+    gid = greetings.create_greeting(wroot, "At the gate", aid, vid, "She waits.")
+    first = greetings.create_greeting(wroot, "Before", aid, vid, "Earlier.")
+    greetings.set_edges(wroot, first, leads_to=[gid])
+
+    sync.demote(wid, "greetings", gid, copy_down=True)
+
+    kept = overlay.read_plotmap(cid)
+    assert gid in json.dumps(kept)                  # its edges survived campaign-side
+    assert greetings.predecessors_of(kept, gid) == [first]
+
+
 def test_a_failed_promotion_leaves_a_detached_record_detached(monkeypatch, tmp_path):
     """Undetaching has to come off before the copy, but an exception can unwind
     where a crash cannot: left attached to a world record that was never
@@ -413,6 +452,39 @@ def test_pushing_a_record_that_already_matches_and_is_in_sync_is_refused(
 
     with pytest.raises(sync.NotDivergedError):
         sync.push(cid, "locations", "saltmarch")
+
+
+def test_push_revalidates_a_greetings_cast(monkeypatch, tmp_path):
+    """A campaign can edit an inherited greeting's cast to name an emergent
+    character. Pushing those bytes unchecked publishes a greeting every sibling
+    inherits and none of them can start."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Winifred")
+    gid = greetings.create_greeting(wroot, "At the gate", aid, vid, "She waits.")
+    local, _ = overlay.create_character(cid, "Mara")
+    overlay.update_greeting(cid, gid, present=[local])   # materializes + diverges
+
+    with pytest.raises(sync.DanglingReferenceError):
+        sync.push(cid, "greetings", gid)
+
+    assert local not in greetings.read_greeting(wroot, gid)["meta"]["present"]
+
+
+def test_promote_refuses_a_greeting_pinned_to_a_campaign_only_version(monkeypatch, tmp_path):
+    """`start_from_greeting` seats the owner at the greeting's `version`, so a
+    version the library does not have raises in every sibling campaign."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    overlay.materialize_actor(cid, "characters", aid)
+    croot = campaigns.campaign_root(cid)
+    mine = characters.create_version(croot, aid, "Later", characters.blank_card("Winifred"))
+    gid = overlay.create_greeting(cid, "At the gate", aid, mine, "She waits.")
+
+    with pytest.raises(sync.DanglingReferenceError):
+        sync.promote(cid, "greetings", gid)
+
 
 
 def test_push_refuses_a_record_the_campaign_only_inherits(monkeypatch, tmp_path):
