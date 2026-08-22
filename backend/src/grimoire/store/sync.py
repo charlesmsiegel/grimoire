@@ -704,6 +704,13 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
     and the library record still standing, which is the state before the call.
     Deleting first and copying after would lose the record outright for every
     campaign the copy never reached.
+
+    `target` narrows who gets the copy — it does NOT narrow the delete, which
+    is the whole operation. Every other dependent loses the record exactly as
+    `copy_down=False` would have them lose it. That is destructive by request
+    rather than by accident (a target naming no dependent is refused below),
+    and the app's own demote UI does not offer it: `DemotePanel` always demotes
+    to every dependent.
     """
     wroot = _require_world_record(wid, kind, eid)
     deps = dependents(wid, kind, eid)

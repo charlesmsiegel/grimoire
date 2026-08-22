@@ -49,7 +49,12 @@ export function DemotePanel({ wid, kind, id, onDemoted }: {
     <div className="side-section">
       <h4>Library</h4>
       {!open ? (
-        <button className="subtle" onClick={() => setOpen(true)}>Remove from library…</button>
+        // Re-read on the way in, not only on mount: the list is the whole
+        // point of the confirmation step, and a campaign created since this
+        // editor opened is exactly the one nobody remembered to think about.
+        <button className="subtle" onClick={() => { setOpen(true); load(); }}>
+          Remove from library…
+        </button>
       ) : (
         <>
           <div className="field-hint">
