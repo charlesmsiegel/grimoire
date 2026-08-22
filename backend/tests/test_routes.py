@@ -4355,6 +4355,9 @@ def test_an_override_naming_no_connection_is_a_400_and_touches_nothing(client):
                     json={"connection_id": "no-such-connection"})
 
     assert r.status_code == 400
+    # `errorText` renders `detail` verbatim into the banner, so it is written
+    # for the reader and names their next move rather than the failure.
+    assert "no longer exists" in r.json()["detail"]
     assert fake.calls == 0
     assert [m["content"] for m in client.get(
         f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == ["hi", "old reply"]
@@ -4376,6 +4379,10 @@ def test_an_override_that_cannot_send_is_refused_rather_than_quietly_rerouted(cl
 
     assert r.status_code == 409
     assert r.json()["kind"] == "missing_key"
+    # NAMED: the reader picked this connection for one reroll, and a bare
+    # "Endpoint base URL not set" reads as though the one they have been
+    # playing on has broken.
+    assert r.json()["detail"] == "Half-set: Endpoint base URL not set"
     assert fake.calls == 0
 
 

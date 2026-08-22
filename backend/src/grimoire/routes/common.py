@@ -786,7 +786,7 @@ def _override_connection(body) -> dict | None:
 
         override = _override_connection(body)
         routed = override is not None
-        conn = override if routed else _require_connection()
+        conn = override if override is not None else _require_connection()
 
     and gets the standing configuration by doing nothing — while `routed` is
     the one honest answer to "did the caller choose a route", which the stamps
@@ -845,11 +845,24 @@ def _override_connection(body) -> dict | None:
         try:
             conn = store.llm_connections.read_connection_raw(conn_id)
         except store.llm_connections.ConnectionNotFound as exc:
-            raise HTTPException(status_code=400, detail="unknown connection") from exc
+            # Written for the banner it lands in, not for a log. `errorText`
+            # renders `detail` verbatim, and the reader's next move is the one
+            # worth naming: the connection they picked is gone (deleted in
+            # another tab, most likely), and the reroll is still available.
+            raise HTTPException(
+                status_code=400,
+                detail="That connection no longer exists — pick another, "
+                       "or reroll on the campaign's.") from exc
         problem = _connection_problem(conn)
         if problem is not None:
-            raise HTTPException(status_code=409,
-                                detail={"detail": problem, "kind": "missing_key"})
+            # NAMED, unlike `_require_connection`'s copy of this. There the
+            # connection is the one the whole app is using and needs no
+            # introduction; here it is one the reader picked for a single
+            # reroll, and the bare "OpenRouter key not set" reads as though
+            # the connection they have been playing on has broken.
+            raise HTTPException(
+                status_code=409,
+                detail={"detail": f"{conn['name']}: {problem}", "kind": "missing_key"})
     # Last, so it applies to the active connection and to a named one alike.
     # A copy, never a mutation: `conn` is the dict the store handed back, and
     # writing through it would be a per-call override editing shared state.
