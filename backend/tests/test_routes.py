@@ -6967,21 +6967,44 @@ def test_a_voice_drift_row_naming_an_unknown_character_is_rejected(client):
     assert not (croot / "characters" / "never-existed").exists()
 
 
-def test_clearing_a_flag_on_a_deleted_character_still_works(client):
+def test_clearing_a_flag_on_a_character_that_does_not_exist_still_works(client):
     """The asymmetry again: a clear writes nothing and creates no directory, so
-    refusing it would block exactly the cleanup the existence check argues for."""
+    refusing it would block exactly the cleanup the existence check argues for.
+
+    The flag is written for an id no character claims, which is the state that
+    cleanup is FOR. It used to be built by deleting the character instead —
+    which never deleted anything, because no campaign-scoped character delete
+    route existed and the request fell through to the generic entity handler
+    and 404'd. Now that one does exist (#60) that spelling would remove the
+    actor directory the flag lives in, leaving nothing to clear and testing
+    the opposite of what this is about.
+    """
     cid, sid = _voice_scene(client)
     croot = store.campaigns.campaign_root(cid)
-    store.voice_drift.write(croot, "aese", "She hedged.")
-    client.delete(f"/api/campaigns/{cid}/characters/aese")
+    store.voice_drift.write(croot, "no-such-character", "She hedged.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
-                         "edits": [{"id": "voice_drift:aese", "kind": "voice_drift",
-                                    "target": {"kind": "characters", "id": "aese"},
+                         "edits": [{"id": "voice_drift:no-such-character", "kind": "voice_drift",
+                                    "target": {"kind": "characters", "id": "no-such-character"},
                                     "label": "l", "field": "voice_drift",
                                     "before": "She hedged.", "after": "", "authored": False}]})
-    assert r.status_code == 200 and "voice_drift:aese" in r.json()["applied"]
+    assert r.status_code == 200 and "voice_drift:no-such-character" in r.json()["applied"]
+    assert store.voice_drift.read(croot, "no-such-character") == ""
+
+
+def test_deleting_a_campaign_character_takes_its_voice_flag_with_it(client):
+    """And the state the rewrite above gave up: a real campaign-side delete
+    removes the actor directory, so the flag filed inside it goes too. That is
+    `delete_entity`'s rule for a record's sidecars, and #225's reason for it --
+    an id outlives the record it named, and the next create gets it back."""
+    cid, _sid = _voice_scene(client)
+    croot = store.campaigns.campaign_root(cid)
+    store.voice_drift.write(croot, "aese", "She hedged.")
+
+    assert client.delete(f"/api/campaigns/{cid}/characters/aese").status_code == 200
+
     assert store.voice_drift.read(croot, "aese") == ""
+    assert client.get(f"/api/campaigns/{cid}/characters/aese").status_code == 404
 
 
 def test_a_voice_drift_row_with_an_escaping_id_is_reported_not_written(client):

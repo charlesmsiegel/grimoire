@@ -666,7 +666,7 @@ test("a card's Delete button deletes the character", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
-  await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith("w", "seraphine"));
+  await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine"));
 });
 
 test("bumping resetSignal returns from the editor to the grid", async () => {
@@ -1957,7 +1957,7 @@ it("shows a wizard trigger when the module has a characters sheet type", async (
   await screen.findByText("+ New character with sheet…");
 });
 
-it("wires the wizard's deleteRecord to api.deleteCharacter (always wid-scoped) so a failed sheet write rolls back", async () => {
+it("wires the wizard's deleteRecord to api.deleteCharacter (world scope only) so a failed sheet write rolls back", async () => {
   (api.listCharacters as any).mockResolvedValue([]);
   const module = {
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
@@ -1975,7 +1975,7 @@ it("wires the wizard's deleteRecord to api.deleteCharacter (always wid-scoped) s
   fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
   fireEvent.click(screen.getByText("Create"));
 
-  await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith("w1", "rook"));
+  await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith({ kind: "world", id: "w1" }, "rook"));
 });
 
 it("a wizard opened at world scope closes (not just its trigger) when the same instance's scope changes to campaign", async () => {
@@ -2699,4 +2699,19 @@ test("an open describe queue does not follow the page to another scope", async (
   expect(await screen.findByText(/Describing 1 \/ 1 — Whoever other means/))
     .toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue("");
+});
+
+
+test("campaign scope offers a delete, and says which library it removes from (#60)", async () => {
+  // creating an emergent NPC with no way to remove it is not a finished
+  // feature: the Delete controls used to be world-scope only
+  (api.listAppearances as any).mockResolvedValue([]);   // nobody has appeared yet
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: "All (1)" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+  expect(confirm).toHaveBeenCalledWith("Delete character 'Seraphine' from this campaign?");
+  await waitFor(() => expect(api.deleteCharacter)
+    .toHaveBeenCalledWith({ kind: "campaign", id: "run" }, "seraphine"));
 });

@@ -157,6 +157,40 @@ to nothing — the delete runs regardless of `target`, so a typo otherwise meant
 "copy this down nowhere, then take it away from every campaign", the most
 destructive reading of the request, chosen silently.
 
+## Locking, and the one gap left open
+
+`demote` mutates several campaigns, so it takes `locks.hold_all` over the whole
+dependent set — the only sanctioned way to hold more than one campaign lock, and
+the one that sorts (#267). `promote` and `push` take `campaign_lock(cid)`,
+because `sync.md` is rewritten whole and two moves on one campaign would
+otherwise each read it and each publish it back, the later dropping the other's
+ref.
+
+What that does **not** close: two *different* campaigns pushing the same world
+record hold different locks, so nothing excludes them from each other. The
+conflict check is re-taken immediately before the write, which narrows the
+window to the gap between the two, and the remaining race is documented here
+rather than fixed. Closing it needs a world-scoped lock, and this store has
+none for anything — world create, rename and delete are all unserialized today
+— so introducing one for a single call site would add a second lock domain and
+a new ordering pair to deadlock on.
+
+`worlds.touch` sidesteps the same problem differently: it re-reads before
+writing and skips if the file moved, because it only carries a sort key and
+losing one is cheaper than reverting somebody's rename.
+
+## Deleting what a campaign created
+
+`POST /campaigns/{cid}/characters` needed a matching delete, and there wasn't
+one — the world side had always had it, and version-delete refuses the last
+version, so an NPC invented by mistake could not be removed at all.
+`overlay.delete_actor` is the actor twin of `delete_entity` and makes the same
+three distinctions: an inherited actor is tombstoned, a campaign copy is
+dropped and tombstoned, and an emergent one is simply removed with no tombstone
+because there is nothing to hide. The appearance record goes with it either
+way — it holds a version lock and a per-version base, and `_actor_incoming`
+prefers it to `sync.md`.
+
 ## Not in scope
 
 - Pushing a version-locked actor (#53 Option B) — refused explicitly.

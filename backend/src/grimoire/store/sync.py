@@ -426,7 +426,10 @@ def _copy_extras(what: str, copy) -> None:
     """
     try:
         copy()
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
+        # ValueError covers UnicodeDecodeError: a sidecar this store never wrote
+        # (hand-placed, or written in another encoding) would otherwise escape a
+        # handler that exists precisely so a committed promotion is not reported
         log.warning("promoted the record but could not copy its %s (%s) -- "
                     "the promotion stands; the files are still campaign-side", what, exc)
 
@@ -563,8 +566,13 @@ def _require_world_character(cid: str, wroot: Path, text: str, gid: str) -> None
     # name there publishes a greeting that raises the moment anyone starts it
     # -- in a sibling campaign, where nothing explains why (Codex review).
     for name in str(meta.get("present", "")).split(","):
-        if name.strip():
-            _require_world_actor(wroot, detached_here, name.strip(), gid, "opens with")
+        if not name:
+            continue
+        # `name`, not `name.strip()`. `greetings._tags_list` does not strip, so
+        # a hand-edited `present: mara, winifred` is read as the literal id
+        # " winifred" -- validating the stripped form passes a greeting that
+        # then fails to seat its cast in every campaign (Codex review).
+        _require_world_actor(wroot, detached_here, name, gid, "opens with")
 
 
 def _require_world_actor(wroot: Path, detached_here: set[str], char: str,
@@ -609,9 +617,41 @@ def _promote_actor(cid: str, kind: str, aid: str, wroot: Path) -> None:
             if name != meta_name:
                 atomic.write_text(dst / name, text)
         atomic.write_text(dst / meta_name, dict(files)[meta_name])
+    _advance_appearance_base(cid, kind, aid, wroot)
     src_dir = overlay.record_dir(cid, kind, aid)
     _copy_extras("sidecars", lambda: _copy_sidecars(src_dir, dst))
     _copy_extras("images", lambda: _copy_tree(src_dir / "assets", dst / "assets"))
+
+
+def _advance_appearance_base(cid: str, kind: str, aid: str, wroot: Path) -> None:
+    """Point a locked actor's appearance base at the world version just written.
+
+    The flagship #60 case runs straight through this: an NPC who walks on
+    mid-scene is created campaign-local and then CAST, and casting locks a
+    version in appearances.json with an empty base -- there was no world actor
+    to hash. `_actor_incoming` reads that record in preference to sync.md, so
+    without this the promotion that just succeeded reports itself as a
+    *conflict* to the very campaign that made it (Codex review).
+
+    The manifest ref `recorded_base` wrote stays and is inert: the unpicked
+    pass skips any ref that also appears in `locked`.
+
+    Best-effort, and loudly so. The actor is already in the library by now, so
+    raising would report a failed promotion for one that landed and send the
+    retry into a collision. A stale base here is visible and recoverable --
+    it surfaces as a conflict the user can reject, which advances it.
+    """
+    rec = appearances_paths.record(cid).get(_ref_str(kind, aid))
+    if rec is None:
+        return          # not locked: sync.md's whole-actor base is the only one
+    try:
+        world_h = appearances_versions.actor_hash(wroot, kind, aid, rec["version"])
+        if world_h is not None:
+            appearances_versions.set_base(cid, kind, aid, world_h)
+    except (OSError, ValueError) as exc:
+        log.warning("promoted %s/%s but could not advance its appearance base (%s) -- "
+                    "the campaign will offer it as a conflict until that is rejected",
+                    kind, aid, exc)
 
 
 def _copy_sidecars(src_dir: Path, dst: Path) -> None:
@@ -739,7 +779,12 @@ def _push_locked(cid: str, kind: str, eid: str, wroot: Path, *, force: bool) -> 
     text = overlay.record_text(cid, kind, eid)
     if text is None:
         raise NotDivergedError(f"{ref} is still inherited from the library — there is nothing to save")
-    if not _world_holds_flat(wroot, kind, eid):
+    # The record FILE, not `_world_holds_flat`'s wider "is this id claimed?".
+    # Directory occupancy is right for blocking a promote -- a leftover assets
+    # directory is content a promotion would adopt -- but for push it would
+    # report a record whose world file is gone as a conflict, and the forced
+    # retry then recreates it around the dead record's images (Codex review).
+    if not _world_file(wroot, kind, eid).exists():
         raise NotInLibraryError(f"{ref} is campaign-local; promote it into the library instead")
     if ref in overlay.detached(cid):
         # Its world original was deleted and something else took the slug. The
@@ -783,6 +828,17 @@ def _push_locked(cid: str, kind: str, eid: str, wroot: Path, *, force: bool) -> 
     # advances the base and clears it. The other order records a base for
     # content the world does not have, and sync then offers to overwrite this
     # campaign's edit with the library's older text.
+    # Re-read immediately before publishing. Two campaigns pushing the same
+    # world record hold DIFFERENT campaign locks, so nothing above excludes
+    # them from each other and the later write would silently replace a push
+    # that had already returned success (Codex review). This narrows that to
+    # the gap between the check and the write rather than closing it: closing
+    # it needs a world-scoped lock, and this store has none for anything --
+    # world create, rename and delete are all unserialized today, so inventing
+    # one here would add a second lock domain, and a new ordering pair to
+    # deadlock on, for one call site. Named in the design doc as a known gap.
+    if not force and entities.entity_hash(wroot, kind, eid) != world_h:
+        raise PushConflictError(f"{ref} changed in the library while this save was being made")
     atomic.write_text(_world_file(wroot, kind, eid), text)
     _put_base(cid, ref, mine)   # the bytes we wrote, not a re-read of where they went
     _touch_world(wroot)

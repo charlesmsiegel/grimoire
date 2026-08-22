@@ -1668,6 +1668,37 @@ def put_campaign_character(cid: str, char: str, body: DefaultVersion):
     return {"ok": True}
 
 
+@router.delete("/campaigns/{cid}/characters/{char}")
+def delete_campaign_character(cid: str, char: str):
+    """Remove a character from this campaign (#60).
+
+    The counterpart to the create route above, and it had been missing: the
+    world side has had a delete all along, version-delete refuses the last
+    version, and so an NPC invented by mistake could not be removed at all
+    (Codex review). `overlay.delete_actor` decides what the delete MEANS here
+    — tombstone an inherited actor, drop a campaign copy, or remove an
+    emergent one outright.
+    """
+    _campaign_root_or_404(cid)
+    try:
+        store.overlay.delete_actor(cid, "characters", char)
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/pcs/{pid}")
+def delete_campaign_pc(cid: str, pid: str):
+    """The same, for a campaign-scoped PC — `POST /campaigns/{cid}/pcs` has
+    existed longer than the character one and had no delete either."""
+    _campaign_root_or_404(cid)
+    try:
+        store.overlay.delete_actor(cid, "pcs", pid)
+    except store.pcs.PCNotFound as exc:
+        raise HTTPException(status_code=404, detail="pc not found") from exc
+    return {"ok": True}
+
+
 @router.put("/campaigns/{cid}/characters/{char}/name")
 def put_campaign_character_name(cid: str, char: str, body: NameBody):
     """This campaign's own name for the character (#13). Materializes the actor

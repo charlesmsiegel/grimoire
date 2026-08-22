@@ -228,7 +228,7 @@ it("world scope: wires the wizard's deleteRecord to api.deletePC so a failed she
   fireEvent.click(screen.getByText("Next"));
   fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
   fireEvent.click(screen.getByText("Create"));
-  await waitFor(() => expect(api.deletePC).toHaveBeenCalledWith("w1", "elara"));
+  await waitFor(() => expect(api.deletePC).toHaveBeenCalledWith({ kind: "world", id: "w1" }, "elara"));
 });
 
 it("campaign scope: hides the sheet-creation wizard trigger (no campaign-scoped PC-delete API exists to roll back a failed write) but keeps plain + New PC", async () => {

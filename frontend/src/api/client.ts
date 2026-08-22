@@ -779,8 +779,12 @@ export const api = {
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}/name`, { name }),
   setCharacterBirthdate: (wid: string, cid: string, birthdate: string) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/birthdate`, { birthdate }),
-  deleteCharacter: (wid: string, cid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}`),
+  // Both scopes since #60: campaign scope removes the character from THIS
+  // campaign -- an emergent NPC outright, an inherited one by tombstone --
+  // and leaves the library's alone. Creating one you cannot delete was the
+  // gap this closes.
+  deleteCharacter: (scope: EntityScope, cid: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/characters/${cid}`),
   getCharacterTagline: (wid: string, cid: string) =>
     request<{ tagline: string }>("GET", `/api/worlds/${wid}/characters/${cid}/tagline`),
   setCharacterTagline: (wid: string, cid: string, tagline: string) =>
@@ -932,7 +936,8 @@ export const api = {
   readPC: (scope: EntityScope, pid: string) => request<PCDetail>("GET", `${entityBase(scope)}/pcs/${pid}`),
   updatePC: (scope: EntityScope, pid: string, patch: { default_version?: string; tags?: string[] }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/pcs/${pid}`, patch),
-  deletePC: (wid: string, pid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/pcs/${pid}`),
+  deletePC: (scope: EntityScope, pid: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/pcs/${pid}`),
   createPCVersion: (scope: EntityScope, pid: string, body: { name: string; persona: Persona }) =>
     request<{ version: string }>("POST", `${entityBase(scope)}/pcs/${pid}/versions`, body),
   updatePCVersion: (scope: EntityScope, pid: string, vid: string, persona: Persona) =>
