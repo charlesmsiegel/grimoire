@@ -203,3 +203,44 @@ test("a settled section carries no status chip at all", () => {
   })} />);
   expect(screen.queryByText("unchanged")).toBeNull();
 });
+
+test("a snapshot with no task or timestamp is named by its id, not left blank", () => {
+  // Both fields are only required to be strings. A heading reading " · " over
+  // a real comparison is worse than one naming the turn by its number.
+  render(<ContextDiff diff={diff({ base: side({ id: "000007", task: "", ts: "" }) })} />);
+  screen.getByText(/000007/);
+});
+
+test("a pin taking effect is explained, not just counted", () => {
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed",
+                         base: facts({ pinned: false }), head: facts({ pinned: true }) })],
+  })} />);
+  screen.getByText(/Pinned, so the packer left it alone/);
+});
+
+test("a pin coming off is explained too", () => {
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed",
+                         base: facts({ pinned: true }), head: facts({ pinned: false }) })],
+  })} />);
+  screen.getByText(/No longer pinned/);
+});
+
+test("history trimmed off the front reports both counts", () => {
+  // The one flag whose value is a number rather than a state: "4 messages were
+  // cut" is the answer, and "trimmed changed" is not.
+  render(<ContextDiff diff={diff({
+    sections: [section({ id: "history", label: "Conversation history", status: "changed",
+                         base: facts({ trimmed: 0 }), head: facts({ trimmed: 4 }) })],
+  })} />);
+  screen.getByText(/History trimmed: 0 → 4 messages cut from the front/);
+});
+
+test("a section the packer kept this time says the packer had dropped it", () => {
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed",
+                         base: facts({ dropped: true }), head: facts({ dropped: false }) })],
+  })} />);
+  screen.getByText(/Kept this time; the budget packer had dropped it/);
+});

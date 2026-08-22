@@ -316,6 +316,32 @@ def test_both_sides_report_the_budget_they_were_packed_to(client):
                              "dropped_tokens", "budget_tokens"}
 
 
+def test_every_section_row_carries_the_shape_the_panel_types_declare(client):
+    """The contract between this route and `api/types.ts`, pinned where nothing
+    else pins it: the frontend suites mock `api`, so a field renamed here would
+    break the panel with every test on both sides still green."""
+    cid, sid = _scene(client)
+    _chat(client, cid, sid)
+    eid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"][0]["id"]
+
+    body = _diff(client, cid, sid, eid).json()
+    assert set(body) == {"base", "head", "sections"}
+    assert body["sections"]
+    for row in body["sections"]:
+        assert set(row) == {"id", "label", "status", "moved", "base", "head", "diff"}
+        assert row["status"] in {"added", "removed", "changed", "unchanged"}
+        assert isinstance(row["moved"], bool)
+        for side in (row["base"], row["head"]):
+            if side is not None:
+                assert set(side) == {"label", "tokens", "dropped", "trimmed", "pinned"}
+        for line in row["diff"]:
+            assert line["op"] in {"equal", "insert", "delete", "skip"}
+            # `text` on every row including `skip`, so a reader written against
+            # the record-diff shape meets an op it does not know rather than a
+            # row with no content field at all.
+            assert isinstance(line["text"], str)
+
+
 def test_the_against_entry_is_scoped_to_the_scene_too(client):
     """The guard the detail route makes on one entry, made on both: ids are
     campaign-wide, so an unscoped `against` would diff this scene's prompt
