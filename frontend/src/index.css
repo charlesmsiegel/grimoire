@@ -3305,6 +3305,15 @@ a.column-back { text-decoration: none; }
    widening the page — a traceback holds absolute paths that are wider than any
    column, and the rule everywhere else here is that wide content scrolls
    itself. */
+/* The day a block of rows belongs to. Rows are ordered by full timestamp and
+   show only a clock, so without this a window spanning several days reads as
+   though it were out of order. */
+.stats-log-day {
+  margin-top: 14px; padding: 4px 0; border-bottom: 1px solid var(--rule);
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.16em;
+  color: var(--accent);
+}
+.stats-log-day:first-child { margin-top: 0; }
 .stats-log-trace { margin-top: 4px; }
 .stats-log-trace summary {
   cursor: pointer; color: var(--muted); font-size: 10px; letter-spacing: 0.1em;

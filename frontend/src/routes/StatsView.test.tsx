@@ -204,6 +204,9 @@ it("reads the log only once its section is opened", async () => {
   view();
   await screen.findByRole("heading", { name: "Performance" });
   expect(api.getLogs).not.toHaveBeenCalled();
+  // ...and says nothing about its size rather than showing the dash that means
+  // "still reading", which would claim a read nobody started.
+  expect(screen.getByRole("button", { name: /Debug log/ })).not.toHaveTextContent("—");
 
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
 
@@ -236,6 +239,29 @@ it("re-reads with the filters a user picked", async () => {
 
   await waitFor(() => expect(api.getLogs).toHaveBeenLastCalledWith(
     expect.objectContaining({ level: "warning", module: "runner", q: "turn" })));
+});
+
+it("heads each day's rows with its date", async () => {
+  // Rows are ordered by full timestamp but show only a clock, so a window
+  // spanning two days reads as scrambled without this: 09:17 today sits above
+  // 14:22 yesterday and looks misplaced.
+  vi.mocked(api.getLogs).mockResolvedValue({
+    ...structuredClone(PAGE),
+    rows: [
+      { ts: "2026-08-21T09:17:00.000Z", level: "info", module: "runner", message: "today" },
+      { ts: "2026-08-20T14:22:01.900Z", level: "info", module: "runner", message: "yesterday" },
+    ],
+  } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+
+  const rows = (await screen.findByText("today")).closest("ol")!;
+  const text = within(rows).getAllByRole("listitem").map((li) => li.textContent);
+  expect(text[0]).toBe("2026-08-21");
+  expect(text[1]).toContain("today");
+  expect(text[2]).toBe("2026-08-20");
+  expect(text[3]).toContain("yesterday");
 });
 
 it("shows the traceback the bridge captured, collapsed", async () => {
@@ -344,7 +370,9 @@ it("appends tailed rows newest first, like the page they sit above", async () =>
   fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
 
   const live = (await screen.findByText("Live", { selector: "h2" })).parentElement!;
-  const rows = within(live).getAllByRole("listitem").map((li) => li.textContent);
+  // Skipping the day heading the list puts at the top of each day's block.
+  const rows = within(live).getAllByRole("listitem")
+    .map((li) => li.textContent ?? "").filter((t) => !/^\d{4}-\d{2}-\d{2}$/.test(t));
   expect(rows[0]).toContain("newer");
   expect(rows[1]).toContain("older");
 });

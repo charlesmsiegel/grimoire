@@ -352,6 +352,42 @@ def test_a_row_stamped_later_in_the_until_day_is_still_inside_the_window(home):
     assert [r["message"] for r in out["rows"]] == ["late"]
 
 
+def test_rows_are_ordered_by_their_timestamp_not_by_their_place_in_the_file(home):
+    """Usually the same thing -- rows are appended as they happen -- and the
+    version that assumed it rendered 08-21, 08-18, 08-19, 08-20 while calling
+    itself newest-first. Two writers on a synced store with skewed clocks do
+    this, and so does a hand-edited file."""
+    for day in ("2026-08-21", "2026-08-18", "2026-08-19", "2026-08-20"):
+        logs.record("info", "runner", day, ts=f"{day}T10:00:00.000Z")
+
+    out = logs.read(since="2026-08-01", until="2026-08-31")
+    assert [r["message"] for r in out["rows"]] == [
+        "2026-08-21", "2026-08-20", "2026-08-19", "2026-08-18"]
+
+
+def test_the_page_is_the_newest_rows_even_when_the_file_is_out_of_order(home):
+    """The cap has to pick by timestamp too. Taking "the last `limit` the file
+    yielded" would hand back the oldest three here and call them the newest."""
+    for day in ("2026-08-21", "2026-08-18", "2026-08-19", "2026-08-20"):
+        logs.record("info", "runner", day, ts=f"{day}T10:00:00.000Z")
+
+    out = logs.read(since="2026-08-01", until="2026-08-31", limit=2)
+    assert [r["message"] for r in out["rows"]] == ["2026-08-21", "2026-08-20"]
+    assert out["truncated"] is True
+    assert out["total"] == 4          # ...and the count still saw all of them
+
+
+def test_rows_sharing_a_millisecond_do_not_make_the_page_raise(home):
+    """`heapq` falls through to comparing the row dicts on a tie, which
+    raises. Rows are stamped to the millisecond and a burst produces several
+    inside one, so the tie is the normal case, not the exotic one."""
+    for i in range(5):
+        logs.record("info", "runner", f"row {i}", ts="2026-08-21T10:00:00.000Z")
+
+    out = logs.read(since="2026-08-01", until="2026-08-31", limit=3)
+    assert len(out["rows"]) == 3
+
+
 def test_a_torn_line_costs_that_line_and_not_the_view(home):
     logs.record("info", "runner", "good", ts="2026-08-12T01:00:00.000Z")
     with (home / "logs" / "2026-08.jsonl").open("a", encoding="utf-8") as fh:
