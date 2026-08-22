@@ -305,6 +305,32 @@ test.each([["history", "Conversation history"], ["lore", "World lore"]])(
     expect(screen.queryByText(/grouped into a different number of messages/)).toBeNull();
   });
 
+test("a one-sided section says it was pinned", () => {
+  // A pinned section the other composition does not have at all: the pin is
+  // why the packer could not cut it, and the early return used to keep only
+  // `dropped` and `trimmed` out of the three facts a side carries.
+  render(<ContextDiff diff={diff({
+    sections: [section({ id: "lore", label: "World lore", status: "added",
+                         base: null, head: facts({ pinned: true }),
+                         diff: [{ op: "insert", text: "the marsh road floods" }] })],
+  })} />);
+  screen.getByText(/Pinned, so the packer left it alone/);
+});
+
+test("a one-sided section reports every fact it carries, not the first one", () => {
+  // Dropped AND trimmed AND pinned on the same side. `pinned` cannot really
+  // coexist with `dropped` (the packer skips pinned sections outright), but the
+  // panel renders what a snapshot says rather than what it should say.
+  render(<ContextDiff diff={diff({
+    sections: [section({ id: "history", label: "Conversation history", status: "removed",
+                         base: facts({ dropped: true, pinned: true, trimmed: 3 }),
+                         head: null, diff: [{ op: "delete", text: "**Mara:** north, then" }] })],
+  })} />);
+  screen.getByText(/the model did not see this/);
+  screen.getByText(/Pinned, so the packer left it alone/);
+  screen.getByText(/3 messages cut from the front/);
+});
+
 test("a one-sided history section still reports its trimming", () => {
   // An opener against a later turn: history exists on one side only, and its
   // inserted lines read as the whole conversation unless the cut is named. The

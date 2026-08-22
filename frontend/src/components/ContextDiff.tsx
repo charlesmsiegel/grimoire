@@ -185,6 +185,10 @@ function DiffRow({ line }: { line: ContextDiffLine }) {
 }
 
 const DROPPED = "Dropped by the budget packer — the model did not see this.";
+/** Shared by both branches below on purpose: a pin means the same thing whether
+ *  one side has the section or both, and two copies of the sentence would agree
+ *  right up until one of them was reworded. */
+const PINNED = "Pinned, so the packer left it alone.";
 
 /** The packer's verdict on a section, in words, for the cases the lines cannot
  *  carry: a drop, a pin, and history trimmed off the front.
@@ -205,8 +209,16 @@ function flagNotes(section: PromptDiffSection): string[] {
     // its inserted lines then read as the whole of the conversation when
     // earlier messages were cut from the front. The side-level dropped-token
     // total cannot stand in for that: it is a weight, not a message count.
+    // Dropped, pinned, trimmed — the order `ContextBreakdown` shows its chips
+    // in, since this is the same three facts about the same section.
     const solo: string[] = [];
     if (only?.dropped) solo.push(DROPPED);
+    // The pin was the third fact this branch dropped on the floor, and the one
+    // that answers a question the reader is actually holding: a section the
+    // other composition does not have at all, present here and immune to the
+    // packer. Stated as the fact it is — a pin is why the packer COULD not cut
+    // it, which is not the same as why the section exists.
+    if (only?.pinned) solo.push(PINNED);
     if (only?.trimmed)
       solo.push(`History trimmed: ${only.trimmed} messages cut from the front,`
                 + " so these lines are not the whole of it.");
@@ -229,7 +241,7 @@ function flagNotes(section: PromptDiffSection): string[] {
     notes.push(`Packing tier: ${base.tier} → ${head.tier}. The packer drops from`
                + " the bottom of a tier, so this section's priority moved.");
   if (base.pinned !== head.pinned)
-    notes.push(head.pinned ? "Pinned, so the packer left it alone." : "No longer pinned.");
+    notes.push(head.pinned ? PINNED : "No longer pinned.");
   if (base.trimmed !== head.trimmed)
     notes.push(`History trimmed: ${base.trimmed} → ${head.trimmed} messages`
                + " cut from the front.");
