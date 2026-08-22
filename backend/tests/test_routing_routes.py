@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -408,6 +409,21 @@ def test_a_campaign_route_is_never_written_into_the_world(client):
     after = {p: p.read_bytes() for p in sorted(world_root.rglob("*")) if p.is_file()}
     assert after == before
     assert "route_scene" in store.campaigns.read_campaign(cid)["meta"]
+
+
+def test_the_bundle_carries_no_key_material(client):
+    """The picker needs names and models to render its options; it does not need
+    credentials, and a settings payload that carries them is a leak waiting for
+    a screenshot in a bug report."""
+    _wid, cid, _sid = _seed(client)
+    client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Secretive", "api_key": "sk-do-not-leak-me"})
+
+    for path in ("/api/routing", f"/api/campaigns/{cid}/routing"):
+        body = client.get(path).json()
+        assert "sk-do-not-leak-me" not in json.dumps(body), path
+        assert all(set(c) == {"id", "name", "kind", "model"}
+                   for c in body["connections"]), path
 
 
 def test_routing_a_campaign_that_does_not_exist_is_a_404(client):

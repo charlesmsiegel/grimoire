@@ -97,6 +97,12 @@ key that names the deleted connection and gains the ten route keys, but it
 cannot reach into every campaign's frontmatter — so a campaign override left
 dangling by a delete has to degrade to the next scope rather than fail a turn.
 
+The same rule is what makes a campaign survive travelling: a campaign exported
+from one library and imported into another carries its `route_*` keys in
+`campaign.md`, and the connection ids they name are that library's, not this
+one's. Walking past them lands the campaign on the new library's active
+connection, which is the only answer that exists.
+
 A routed connection that exists but **cannot send** (an OpenRouter connection
 with no key, a custom endpoint with no base URL) is the opposite case and is
 *not* walked past: `_require_connection` answers 409 as it already does for the
