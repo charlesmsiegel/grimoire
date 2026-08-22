@@ -104,8 +104,21 @@ test("a speaker who names nobody here is named, and does not block the import", 
   await waitFor(() => expect(api.sceneImport).toHaveBeenCalled());
 });
 
+test("a transcript with player posts cannot be imported as offscreen", async () => {
+  // `post_chat` never stores a user turn for a pcless scene, so importing one
+  // would create a scene the play loop could not have produced -- with the
+  // player's own posts attributed to nobody, since the seat is stripped too.
+  render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
+  readFile();
+  await screen.findByDisplayValue("The Long Quay");     // DRAFT has a role:"user" post
+  expect(screen.getByLabelText("Offscreen scene")).toBeDisabled();
+  expect(screen.getByText(/this transcript has player posts/i)).toBeInTheDocument();
+});
+
 test("a player cannot be seated once the scene is marked offscreen", async () => {
   (api.sceneImportParse as any).mockResolvedValue(draft({
+    // No player posts, so the offscreen box is available to tick at all.
+    messages: [{ role: "assistant", speaker: "Seraphine", content: "She waits." }],
     cast: [{ label: "Seraphine", kind: "pcs", id: "seraphine", name: "Seraphine", role: "player" }],
   }));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
@@ -122,12 +135,36 @@ test("a player cannot be seated once the scene is marked offscreen", async () =>
   expect((api.sceneImport as any).mock.calls[0][1].cast).toEqual([]);
 });
 
-test("a location the campaign no longer has is not pre-selected", async () => {
+test("a location the campaign no longer has never reaches the commit", async () => {
+  // Asserting the <select>'s value would prove nothing: a select whose value
+  // matches no option reports "" whatever the state behind it says, so that
+  // assertion passes just as happily while the bad id is still on its way to
+  // the server. The committed body is the thing under test.
   (api.listEntities as any).mockResolvedValue([]);
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
   readFile();
   await screen.findByDisplayValue("The Long Quay");
-  expect(screen.getByLabelText("Location")).toHaveValue("");
+  await screen.findByText(/no location .the-quay./i);   // and the reviewer is told
+
+  fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
+  await waitFor(() => expect(api.sceneImport).toHaveBeenCalled());
+  expect((api.sceneImport as any).mock.calls[0][1].location).toBe("");
+});
+
+test("the import pane is usable again after a successful import", async () => {
+  // `busy` and the orchestrator's gate move together. Left apart, the success
+  // path cleared one and not the other, and the pane stayed fully disabled --
+  // masked today only because the chooser unmounts it in the same batch.
+  const onWriting = vi.fn();
+  render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}}
+                      onImported={() => {}} onWriting={onWriting} />);
+  readFile();
+  await screen.findByDisplayValue("The Long Quay");
+  fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
+
+  await waitFor(() => expect(onWriting).toHaveBeenLastCalledWith(false));
+  expect(screen.getByRole("button", { name: /import scene/i })).toBeEnabled();
+  expect(screen.getByLabelText("Title")).toBeEnabled();
 });
 
 test("a parse failure keeps the file picker and says why", async () => {
@@ -138,9 +175,38 @@ test("a parse failure keeps the file picker and says why", async () => {
   expect(screen.getByLabelText(/transcript file/i)).toBeInTheDocument();
 });
 
+test("a connection that failed mid-import does not offer a blind retry", async () => {
+  // The scene may be written and only the reply lost. `commit` is
+  // all-or-nothing against failures it can see; it cannot undo a reply that
+  // never arrived, and retrying a long transcript would make a second copy.
+  (api.sceneImport as any).mockRejectedValue(new TypeError("Failed to fetch"));
+  render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
+  readFile();
+  await screen.findByDisplayValue("The Long Quay");
+  fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
+
+  await screen.findByText(/may have landed/i);
+  expect(screen.getByRole("button", { name: /import scene/i })).toBeDisabled();
+});
+
+test("a server refusal keeps the retry available", async () => {
+  // The other half: an answered request means nothing landed, so the reviewer
+  // can fix the draft and press Import again.
+  (api.sceneImport as any).mockRejectedValue(
+    Object.assign(new Error("actor not found"), { status: 404, detail: "actor not found" }));
+  render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
+  readFile();
+  await screen.findByDisplayValue("The Long Quay");
+  fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
+
+  await screen.findByText(/actor not found/i);
+  expect(screen.getByRole("button", { name: /import scene/i })).toBeEnabled();
+});
+
 test("a failed import says why and does not report a scene", async () => {
   const onImported = vi.fn();
-  (api.sceneImport as any).mockRejectedValue({ detail: "actor not found" });
+  (api.sceneImport as any).mockRejectedValue(
+    Object.assign(new Error("actor not found"), { status: 404, detail: "actor not found" }));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={onImported} />);
   readFile();
   await screen.findByDisplayValue("The Long Quay");

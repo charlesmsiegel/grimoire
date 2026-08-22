@@ -3,6 +3,13 @@ import { api, type EntitySummary, type SceneImportDraft } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errorText } from "../api/errors";
 
+/** Mirrors `store.scene_import.MAX_BYTES` / `MAX_MESSAGES`. Duplicated rather
+ *  than fetched because it is only used to fail EARLY and locally: the server
+ *  checks both again, and a copy that drifts high just restores the old
+ *  behaviour of finding out from a 413 after the upload. */
+const MAX_IMPORT_BYTES = 16 * 1024 * 1024;
+const MAX_IMPORT_MESSAGES = 5000;
+
 /** Import an existing grimoire transcript as a scene (#92).
  *
  *  Read → review → import. Reading parses the file server-side and writes
@@ -42,6 +49,9 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
   // must not reach the import before this settles -- and a draft read while it
   // was still in flight would otherwise lose its place silently.
   const [locationsLoading, setLocationsLoading] = useState(true);
+  const [locationNotice, setLocationNotice] = useState<string | null>(null);
+  /** set when a commit's outcome could not be observed — see `commit`'s catch */
+  const [unknown, setUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -67,19 +77,38 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
       .catch(() => { setLocations([]); setLocationsLoading(false); });
   }, [cid]);
 
-  // A pre-filled location this campaign turns out not to have is dropped once
-  // the list is known, rather than sitting in state as a value the reviewer was
-  // never shown and the commit would then be refused for.
+  // A pre-filled location this campaign turns out not to have is dropped, and
+  // the reviewer is told. `draft` is in the deps and that is the whole point:
+  // in the ordinary ordering the list settles BEFORE the file is read, so an
+  // effect keyed only on the list never re-runs after `read()` sets the
+  // location and never validates it at all. The value then sits in state that
+  // the `<select>` cannot display — a select whose value matches no option
+  // renders blank — so the reviewer sees "no location" while the commit sends
+  // the id anyway, placing the scene somewhere they were shown as unplaced.
   useEffect(() => {
-    if (locationsLoading) return;
-    setLocation((prev) => (prev && !locations.some((l) => l.id === prev)) ? "" : prev);
-  }, [locationsLoading, locations]);
+    if (locationsLoading || !draft) return;
+    setLocation((prev) => {
+      if (!prev || locations.some((l) => l.id === prev)) return prev;
+      setLocationNotice(`This campaign has no location “${prev}” — the imported `
+                        + `location was cleared.`);
+      return "";
+    });
+  }, [locationsLoading, locations, draft]);
 
   async function read() {
     const file = fileRef.current?.files?.[0];
     if (!file) return;
+    // The browser knows the size; uploading 200 MB to be told 413 helps nobody.
+    // The server checks again — this is convenience, not the bound.
+    if (file.size > MAX_IMPORT_BYTES) {
+      setError(`That file is ${Math.round(file.size / 1024 / 1024)} MB — a transcript `
+               + `has to be under ${MAX_IMPORT_BYTES / 1024 / 1024} MB.`);
+      return;
+    }
     setBusy(true);
     setError(null);
+    setLocationNotice(null);
+    setUnknown(false);
     try {
       const d = await api.sceneImportParse(cid, file);
       if (!live.current) return;
@@ -98,10 +127,21 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
     }
   }
 
+  /** `busy` and the orchestrator's `writing` gate move together — separately is
+   *  how one of them gets left behind. See `SceneConfirmForm.setWriting`. */
+  function setWriting(active: boolean) {
+    setBusy(active);
+    onWriting?.(active);
+  }
+
   async function commit() {
     if (!draft) return;
-    setBusy(true);
-    onWriting?.(true);
+    if (draft.messages.length > MAX_IMPORT_MESSAGES) {
+      setError(`That transcript is ${draft.messages.length} posts — one scene holds `
+               + `${MAX_IMPORT_MESSAGES}. Split the log into scenes and import them one by one.`);
+      return;
+    }
+    setWriting(true);
     setError(null);
     try {
       const { id } = await api.sceneImport(cid, {
@@ -112,13 +152,29 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
         // reroll on an imported scene take one generation off instead of the
         // whole trailing model run.
         turn_sizes: draft.turn_sizes,
-        cast: chosen().map((c) => ({ kind: c.kind, id: c.id, role: c.role })),
+        cast: seats.map((c) => ({ kind: c.kind, id: c.id, role: c.role })),
       });
       if (!live.current) return;   // switched campaigns mid-import: the scene is
-      onWriting?.(false);          // real, but this is no longer its campaign
+      setWriting(false);           // real, but this is no longer its campaign
       onImported(id);
     } catch (err) {
-      if (live.current) { setError(errorText(err)); setBusy(false); onWriting?.(false); }
+      if (!live.current) return;
+      // A server ANSWER (any status) means the import did not land: `commit` is
+      // all-or-nothing and removes what it wrote, so retrying is safe and the
+      // button stays live. A rejection with no status is the connection
+      // failing, and the outcome is genuinely unknown — the scene may be
+      // written and only the reply lost. Retrying THAT makes a second copy of
+      // a long transcript, so it is not offered: the reviewer is told to look
+      // before importing again. (`streamPost`'s attempt header is the real
+      // idempotency key; plain `request` has none, and inventing one for this
+      // route is a protocol change, not a fix.)
+      const answered = typeof (err as { status?: unknown })?.status === "number";
+      setError(answered ? errorText(err)
+                        : `The connection failed before the import reported back. It may `
+                          + `have landed — check the campaign's scenes before importing `
+                          + `this file again.`);
+      setUnknown(!answered);
+      setWriting(false);
     }
   }
 
@@ -129,6 +185,10 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
     return (draft?.cast ?? []).filter(
       (c) => seated.includes(`${c.kind}/${c.id}`) && !(pcless && c.role === "player"));
   }
+
+  // Computed once, above the early return, so the checkbox list and the commit
+  // read the SAME answer rather than each calling `chosen()` for their own.
+  const seats = chosen();
 
   function toggle(ref: string) {
     setSeated((cur) => cur.includes(ref) ? cur.filter((r) => r !== ref) : [...cur, ref]);
@@ -159,13 +219,12 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
   }
 
   const posts = draft.messages.length;
-  // Computed once, not per row: the checkbox list and the commit have to agree
-  // about which seats are actually being asked for.
-  const seats = chosen();
   const opening = draft.messages[0];
+  const hasPlayerPosts = draft.messages.some((m) => m.role === "user");
   return (
     <>
       {error && <div className="banner">{error}</div>}
+      {locationNotice && <div className="banner">{locationNotice}</div>}
       {draft.warnings.map((w) => <div className="banner" key={w}>{w}</div>)}
 
       <label className="role" htmlFor="import-title">Title</label>
@@ -192,7 +251,7 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
         const blocked = pcless && c.role === "player";
         return (
           <label className="radio-row" key={ref}>
-            <input type="checkbox" checked={seats.some((x) => `${x.kind}/${x.id}` === ref)}
+            <input type="checkbox" checked={seated.includes(ref) && !blocked}
                    disabled={busy || blocked} onChange={() => toggle(ref)}
                    aria-label={`Seat ${c.name}`} />
             {c.name}
@@ -209,10 +268,18 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
         </div>
       )}
 
+      {/* An offscreen scene is one the player is not in, and `post_chat` never
+          stores a user turn for one. A transcript that already contains player
+          posts therefore cannot be imported as offscreen without creating a
+          scene the play loop could not have produced — so the box is refused
+          rather than the contradiction being written. */}
       <label className="radio-row">
-        <input type="checkbox" checked={pcless} disabled={busy}
+        <input type="checkbox" checked={pcless} disabled={busy || hasPlayerPosts}
                onChange={(e) => setPcless(e.target.checked)} aria-label="Offscreen scene" />
         Offscreen scene (no player character)
+        {hasPlayerPosts && (
+          <span className="field-hint"> — this transcript has player posts in it</span>
+        )}
       </label>
 
       <div className="field-hint">
@@ -242,7 +309,8 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
       <div className="form-actions">
         <button className="subtle" disabled={busy} onClick={() => setDraft(null)}>← Back</button>
         <button className="subtle" disabled={busy} onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={busy || locationsLoading} onClick={() => void commit()}>
+        <button className="primary" disabled={busy || locationsLoading || unknown}
+                onClick={() => void commit()}>
           {busy ? "…" : "Import scene"}
         </button>
       </div>
