@@ -2227,7 +2227,14 @@ def _under_review_lock(cid: str, sid: str, run, write) -> None:
     for attempt in range(_PERSIST_ATTEMPTS):
         try:
             with store.locks.campaign_lock(cid):
-                if run.review_cancelled:
+                # BOTH flags, exactly as `_review_abandoned` reads both. They
+                # are different intents that want the same answer: a Discard of
+                # the review (`DELETE .../pending-review`) and a Stop on the run
+                # (`POST .../runs/{id}/cancel`). Reading only the first left the
+                # second able to stop the generating and then publish anyway,
+                # because a cancelled scope does not reach into a threadpool
+                # worker that has already started this write.
+                if run.review_cancelled or run.cancel_requested:
                     raise _ReviewCancelledError
                 if streaming._scene_moved(cid, sid, run.scene_identity):
                     raise _SceneMovedError

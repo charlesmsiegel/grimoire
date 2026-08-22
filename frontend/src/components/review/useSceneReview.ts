@@ -281,12 +281,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         return;
       }
       if (pending.stale) {
-        // A review that is there and unusable. Its GENERATION is still worth
-        // holding: the record is on disk, and Discard is how the reader gets
-        // rid of it without spending another absorb.
+        // A review that is there and unusable, and nothing more is recorded
+        // about it. Holding its generation would be state nothing reads: there
+        // is no panel here, so no Cancel to name it with, and End scene does
+        // not delete on the way in -- a fresh absorb replaces the record. What
+        // the reader needs is the notice, which is what this is.
         setStaleReview(pending.stale);
-        setAbsorbSid(sid);
-        setGeneration(pending.generation);
         return;
       }
       let live;
