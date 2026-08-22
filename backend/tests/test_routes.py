@@ -5049,9 +5049,14 @@ def test_greeting_location_roundtrips_and_seeds_the_scene(client):
                        json={"name": "Aftermath", "character": "mara", "version": "default",
                              "body": "Later.", "location": loc}).json()["id"]
     assert client.get(f"/api/campaigns/{cid}/greetings/{cgid}").json()["meta"]["location"] == loc
+    # "the-quay" is deliberately a location this world does not have: the write
+    # side does not validate the reference, exactly as it does not for `present`
+    # or `requires_tags`. An id that no longer resolves is a READ-side concern --
+    # `available_greetings` blanks it, and the editor labels it "(missing)" --
+    # so do not "fix" this into a real location id.
     crev = client.get(f"/api/campaigns/{cid}/greetings/{cgid}").json()["rev"]
-    client.put(f"/api/campaigns/{cid}/greetings/{cgid}",
-               json={"location": "the-quay", "rev": crev})
+    assert client.put(f"/api/campaigns/{cid}/greetings/{cgid}",
+                      json={"location": "the-quay", "rev": crev}).status_code == 200
     assert client.get(f"/api/campaigns/{cid}/greetings/{cgid}").json()["meta"]["location"] == "the-quay"
 
 
