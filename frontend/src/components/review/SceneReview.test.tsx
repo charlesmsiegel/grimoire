@@ -2453,12 +2453,11 @@ test("a review the scene has moved past is reported rather than shown", async ()
 
 test("a review still being generated is adopted and waited out", async () => {
   withScene();
-  (api.pendingReview as any)
-    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
-    .mockResolvedValue({ review: STORED_REVIEW, generation: "gen-live", stale: null });
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-live", stale: null });
   (api.liveReview as any).mockResolvedValue(
     { id: "r9", attempt_id: null, state: "running", next_index: 0,
-      cls: "review", review_generation: "gen-live" });
+      cls: "review", kind: "absorb", review_generation: "gen-live" });
   let land: (v: unknown) => void = () => {};
   (api.awaitRun as any).mockReturnValue(new Promise((r) => { land = r; }));
   renderCampaign();
@@ -2756,12 +2755,11 @@ test("an adopted absorb whose run was reaped is read off the store", async () =>
   // such run" over a scene whose finished review is sitting in its sidecar is
   // the loss this whole feature exists to prevent.
   withScene();
-  (api.pendingReview as any)
-    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
-    .mockResolvedValue({ review: STORED_REVIEW, generation: "gen-live", stale: null });
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-live", stale: null });
   (api.liveReview as any).mockResolvedValue(
     { id: "r9", attempt_id: null, state: "running", next_index: 0,
-      cls: "review", review_generation: "gen-live" });
+      cls: "review", kind: "absorb", review_generation: "gen-live" });
   (api.awaitRun as any).mockRejectedValue(
     Object.assign(new Error("no such run for this scene"), { kind: "run_gone" }));
   renderCampaign();
@@ -3011,31 +3009,33 @@ test("a Discard settling elsewhere does not reopen End scene inside the abort wi
   expect(screen.getByRole("button", { name: /^End scene$/ })).toBeDisabled();
 });
 
-test("a review that lands between the two discovery reads is still found", async () => {
-  // "No live run" is not "no review". The absorb can land between the store
-  // read and the run read: the store said nothing was ready, and by the time
-  // discovery asked, the run had finished and was filtered out for being
-  // terminal. Returning there left a completed review invisible for as long as
-  // the scene stayed selected, with End scene enabled to run the whole absorb
-  // again and replace it.
+test("the run is asked about before the store, so a landing review is not missed", async () => {
+  // A run that lands between the two reads is caught by whichever is SECOND,
+  // which is why the store has to be the second one: read first, it says
+  // nothing is ready, and by the time discovery asks, the run has finished and
+  // is filtered out for being terminal. That left a completed review invisible
+  // for as long as the scene stayed selected, with End scene enabled to run
+  // the whole absorb again and replace it.
   withScene();
-  (api.pendingReview as any)
-    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
-    .mockResolvedValue({ review: STORED_REVIEW, generation: "gen-landed", stale: null });
-  (api.liveReview as any).mockResolvedValue(null);   // it landed a moment ago
+  const order: string[] = [];
+  (api.liveReview as any).mockImplementation(async () => { order.push("run"); return null; });
+  (api.pendingReview as any).mockImplementation(async () => {
+    order.push("store");
+    return { review: STORED_REVIEW, generation: "gen-landed", stale: null };
+  });
   renderCampaign();
 
   expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  expect(order).toEqual(["run", "store"]);
 });
 
 test("a scene that has moved on is reported even when its run has already gone", async () => {
   // Same second read, the other answer: the run landed and the transcript has
   // since moved, so what the store has is a stale notice rather than a review.
   withScene();
-  (api.pendingReview as any)
-    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
-    .mockResolvedValue({ review: null, generation: "gen-landed",
-                         stale: { prepared_posts: 4, current_posts: 7 } });
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: "gen-landed",
+      stale: { prepared_posts: 4, current_posts: 7 } });
   (api.liveReview as any).mockResolvedValue(null);
   renderCampaign();
 
@@ -3263,32 +3263,71 @@ test("a retry already running when the panel opens is waited out, not ignored", 
   // nobody waiting to refresh it. Once the run releases the scene, saving
   // commits those stale rows and clears the record the retry landed in.
   withScene();
-  (api.pendingReview as any)
-    .mockResolvedValueOnce({ review: STORED_REVIEW, generation: "gen1", stale: null })
-    .mockResolvedValue({ review: { ...STORED_REVIEW, summary: "What the retry made." },
-                         generation: "gen1", stale: null });
+  // The store answers with the PRE-RETRY payload until the run lands, which is
+  // exactly what is on disk while a retry is merging into it. Keyed on the run
+  // rather than on call count, so the test cannot pass by reading the store at
+  // the wrong moment and happening to get the right answer.
+  let landed = false;
+  (api.pendingReview as any).mockImplementation(async () => ({
+    review: landed
+      ? { ...STORED_REVIEW, summary: "What the retry made." }
+      : STORED_REVIEW,
+    generation: "gen1", stale: null }));
   (api.liveReview as any).mockResolvedValue(
     { id: "r2", attempt_id: null, state: "running", next_index: 0,
       cls: "review", kind: "audit", review_generation: "gen1" });
-  (api.awaitRun as any).mockResolvedValue({ id: "r2", state: "landed" });
+  (api.awaitRun as any).mockImplementation(async () => {
+    landed = true;
+    return { id: "r2", state: "landed" };
+  });
   renderCampaign();
 
   expect(await screen.findByDisplayValue("What the retry made.")).toBeInTheDocument();
+  // ...and the phase it was replacing was never put on screen to be typed into.
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
 });
 
-test("a live ABSORB under a stored review is not mistaken for a retry", async () => {
-  // The two share the `review` class. An absorb running while a review is
-  // stored is a FRESH one replacing it, and waiting it out here would rebuild
-  // the panel from a record that belongs to a different generation.
+test("a fresh absorb replacing a stored review is adopted, not read around", async () => {
+  // The rule is one sentence — a stored payload is final only when nothing can
+  // still change it — and a fresh absorb from another tab is one of the three
+  // things that can. It leaves the old record in place until its terminal
+  // publish, so reading the store first showed that old review (or its stale
+  // notice) as the final state, with no latch and no Stop for a run that is
+  // holding this scene.
   withScene();
   (api.pendingReview as any).mockResolvedValue(
-    { review: STORED_REVIEW, generation: "gen1", stale: null });
+    { review: { ...STORED_REVIEW, summary: "What the new absorb made." },
+      generation: "gen2", stale: null });
   (api.liveReview as any).mockResolvedValue(
     { id: "r3", attempt_id: null, state: "running", next_index: 0,
       cls: "review", kind: "absorb", review_generation: "gen2" });
+  let land: (v: unknown) => void = () => {};
+  (api.awaitRun as any).mockReturnValue(new Promise((r) => { land = r; }));
   renderCampaign();
 
-  await screen.findByDisplayValue("A stored summary.");
+  // Held and stoppable while it runs, rather than silently replaced later.
+  expect(await screen.findByRole("button", { name: /Ending…/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Stop$/ })).toBeInTheDocument();
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+
+  await act(async () => { land({ id: "r3", state: "landed" }); });
+  expect(await screen.findByDisplayValue("What the new absorb made.")).toBeInTheDocument();
+});
+
+test("a discovery that failed is not read as nothing running", async () => {
+  // This is the question the adoption pass asks FIRST, and a rejection is not
+  // an answer of "nothing is running": read as one, it opens a stored payload a
+  // live retry is about to replace, and the reviewer's approvals are then saved
+  // over the retry that landed underneath them. Nothing is installed; the next
+  // mount asks again.
+  withScene();
+  (api.liveReview as any).mockRejectedValue(new Error("the run list would not load"));
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen1", stale: null });
+  renderCampaign();
+
+  await screen.findByText("hi");
   await act(async () => { await Promise.resolve(); });
-  expect(api.awaitRun).not.toHaveBeenCalled();
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+  expect(api.pendingReview).not.toHaveBeenCalled();
 });

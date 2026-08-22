@@ -1712,8 +1712,22 @@ export const api = {
    *  newest run on a scene is as likely to be a chat turn, and adopting one of
    *  those as a review would leave End Scene spinning over a reply. */
   liveReview: async (cid: string, sid: string) => {
-    const found = (await api.findRun(cid, sid)).run;
-    return found && found.state === "running" && found.cls === "review" ? found : null;
+    // RETRIED, for `pendingReview`'s reason and with more riding on it. This is
+    // the question the adoption pass asks FIRST, and a rejection is not an
+    // answer of "nothing is running": read as one, it opens a stored payload a
+    // live retry is about to replace, and the reviewer's approvals are then
+    // saved over the retry that landed underneath them.
+    for (let asked = 0; ; asked++) {
+      try {
+        const found = (await api.findRun(cid, sid)).run;
+        return found && found.state === "running" && found.cls === "review"
+          ? found : null;
+      } catch (err) {
+        const transient = !(err instanceof ApiError) || err.kind === "busy";
+        if (!transient || isAbortError(err) || asked >= READ_RETRIES) throw err;
+        await sleepUnlessAborted(RUN_POLL_MS);
+      }
+    }
   },
 
   /** This scene's stored end-of-scene review, if one is waiting to be saved.
