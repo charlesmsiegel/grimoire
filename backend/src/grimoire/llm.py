@@ -134,6 +134,20 @@ TEXT_ONLY_KINDS = frozenset({"claude"})
 #: of a transport error from a URL that was never going to exist.
 LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible"})
 
+#: Key under which `_stamp` records the connection the *current* attempt is
+#: running on, in the usage holder the caller already threads down.
+#:
+#: For the one caller that has to file an outcome this facade cannot see — a
+#: route whose ceiling cancels the call (`routes.common._noting`). Without it
+#: that route can only name the connection it *started* with, and a generation
+#: that failed over to the fallback and then overran would be recorded against
+#: the primary, overwriting the primary's real failure with a timeout it did
+#: not cause and leaving the fallback's health untouched.
+#:
+#: Safe to put here because `store.usage.Meter` copies named keys out of the
+#: holder rather than dumping it, so this never reaches a ledger row.
+ATTEMPTED = "_attempted_conn"
+
 
 def _carries_parts(messages: list[dict]) -> bool:
     """Does any message hold content PARTS rather than a plain string?"""
@@ -343,7 +357,10 @@ def _stamp(usage: dict | None, conn: dict, attempts: int) -> None:
         return
     usage.clear()
     usage.update({"model": effective_model(conn), "connection": _label(conn),
-                  "provider": conn.get("kind", "openrouter"), "attempts": attempts})
+                  "provider": conn.get("kind", "openrouter"), "attempts": attempts,
+                  # Which connection is live, for the route that may have to
+                  # report an outcome this facade never sees. See `ATTEMPTED`.
+                  ATTEMPTED: conn})
 
 
 def _observe(observer, conn: dict, error: LLMError | None) -> None:

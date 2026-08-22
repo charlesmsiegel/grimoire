@@ -345,6 +345,73 @@ test("a catalog for a revision the connection has moved past is discarded", asyn
   expect(screen.queryByText("old-endpoint/model")).toBeNull();
 });
 
+test("a health verdict for a revision the reader saved past is discarded", async () => {
+  // The server already refuses to hand that verdict back (it files them under
+  // the revision they describe); this panel must not be where it survives.
+  let landCheck: (v: any) => void;
+  (api.checkConnection as any).mockReturnValue(new Promise((res) => { landCheck = res; }));
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  fireEvent.click(await screen.findByRole("button", { name: /test connection/i }));
+
+  (api.readConnection as any).mockResolvedValue({
+    ...CUSTOM, rev: "r3", models: [], fetched_at: "", health: UNCHECKED });
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  await waitFor(() => expect(api.readConnection).toHaveBeenCalledTimes(2));
+  landCheck!({ ok: false, kind: "auth", detail: "the old key was rejected",
+               checked_at: "2026-08-21T09:00:00Z" });
+
+  expect(await screen.findByText("Not checked yet.")).toBeInTheDocument();
+  expect(screen.queryByText(/the old key was rejected/)).toBeNull();
+});
+
+test("a preview for a draft the reader has since edited is discarded", async () => {
+  // An unsaved form has no revision, and its fields ARE its identity: the
+  // catalog that lands describes the endpoint that was typed before, and the
+  // reader could pick a model from it and save it against the new one.
+  let landPreview: (v: any) => void;
+  (api.previewModels as any).mockResolvedValueOnce({ models: [] })   // the mount fetch
+    .mockReturnValueOnce(new Promise((res) => { landPreview = res; }));
+  render(<ConnectionEditor />);
+  await waitFor(() => screen.getByText("+ New connection"));
+  fireEvent.click(screen.getByText("+ New connection"));
+  fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "openai_compatible" } });
+  fireEvent.change(await screen.findByLabelText("Base URL"), { target: { value: "http://old/v1" } });
+  fireEvent.click(screen.getByRole("button", { name: /fetch models/i }));
+
+  fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "http://new/v1" } });
+  landPreview!({ models: [{ id: "old-endpoint/model", name: "Old", context: null, prompt: null, completion: null }] });
+
+  // Wait for the response to have been *processed* before asserting it was
+  // dropped: the button reverting from "Fetching…" is that signal. Asserting
+  // the absence first would pass on a page the answer had not reached yet,
+  // which is a test that cannot fail.
+  await screen.findByRole("button", { name: /fetch models/i });
+  // The model field is the page's only combobox; its input carries no label of
+  // its own, so it is reached through the wrapper the component gives it.
+  fireEvent.focus(document.querySelector(".combobox input") as HTMLElement);
+  expect(screen.queryByText("old-endpoint/model")).toBeNull();
+});
+
+test("an OpenRouter connection edited elsewhere fetches again when reopened", async () => {
+  // The suppression is per revision, not per id: an edit from another tab
+  // bumps the rev and clears the cached sidecar, and a connection whose picker
+  // really is empty must not be skipped because an older revision was fetched.
+  (api.refreshConnectionModels as any).mockResolvedValue({
+    models: [], fetched_at: "2026-08-21", rev: "r1" });
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("OpenRouter"));
+  await waitFor(() => expect(api.refreshConnectionModels).toHaveBeenCalledTimes(1));
+
+  (api.readConnection as any).mockResolvedValue({
+    ...OPENROUTER, rev: "r9", models: [], fetched_at: "", health: UNCHECKED });
+  fireEvent.click(await within(rail).findByText("OpenRouter"));
+
+  await waitFor(() => expect(api.refreshConnectionModels).toHaveBeenCalledTimes(2));
+});
+
 test("a stored failure is shown when the connection is opened, not only after a click", async () => {
   (api.readConnection as any).mockResolvedValue({
     ...CUSTOM, models: [], fetched_at: "",

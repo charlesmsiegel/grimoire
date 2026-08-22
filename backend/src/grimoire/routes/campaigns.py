@@ -1650,7 +1650,7 @@ async def post_campaign_voice_anchor_generate(cid: str, char: str,
         with store.usage.meter("voice-anchor", campaign=cid) as m:
             text = await _bounded_call(client.complete(
                 store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}),
-                conn, m.usage), on_timeout=_noting(client, conn))
+                conn, m.usage), on_timeout=_noting(client, conn, m.usage))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     return {"voice_anchor": store.voice_anchors.parse_output(text)}

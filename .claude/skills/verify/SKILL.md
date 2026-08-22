@@ -23,9 +23,9 @@ those ports and never let a verification backend default to `~/.grimoire`.
    catalog the pickers list (#149) and `KEY_URL` is what "Test connection"
    asks (#146). All three are module globals read at call time, so patch each
    — leave one and the launcher reaches the real openrouter.ai the moment
-   somebody opens the Connections page. `{"data": [...]}` answers the first
-   (entries want `id`, and may carry `name`, `context_length`, `pricing`) and
-   any 200 answers the second; a 401 from it is how you drive the failing
+   somebody opens the Connections page. `MODELS_URL` answers `{"data": [...]}`
+   (entries want `id`, and may carry `name`, `context_length`, `pricing`);
+   `KEY_URL` answers any 200, and a 401 from it is how you drive the failing
    half of the status dot.
 
    **Take the reply bodies from the test cassette**, don't invent new ones:

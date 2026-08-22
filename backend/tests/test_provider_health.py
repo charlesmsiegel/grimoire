@@ -8,7 +8,6 @@ structure and needs no app; the observer is a facade concern and needs a real
 neither, because by the time they run the verdict is already a dict.
 """
 
-import asyncio
 import importlib
 
 import pytest
@@ -19,7 +18,12 @@ from grimoire import health, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
-from tests.llm_fakes import FakeCatalog
+from tests.llm_fakes import (
+    FakeCatalog,
+    FlakyProvider,
+    ScriptedProvider,
+    StallingGateway,
+)
 
 
 @pytest.fixture
@@ -141,18 +145,6 @@ def test_a_returned_status_cannot_be_edited_from_outside():
 
 
 # ---- the passive half: the facade reports what generation actually did ----
-class _Provider:
-    """Streams a word, or fails, depending on how it was built."""
-
-    def __init__(self, error=None):
-        self.error = error
-
-    async def stream(self, messages, *args, **kwargs):
-        yield "hi"
-        if self.error is not None:
-            raise self.error
-
-
 def _client(provider, observer, **kwargs):
     return LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                      observer=observer, retries=0, **kwargs)
@@ -160,7 +152,7 @@ def _client(provider, observer, **kwargs):
 
 async def test_a_finished_generation_reports_success():
     seen = []
-    client = _client(_Provider(), lambda conn, err: seen.append((conn["id"], err)))
+    client = _client(ScriptedProvider(), lambda conn, err: seen.append((conn["id"], err)))
 
     assert [c async for c in client.stream([], _conn())] == ["hi"]
     assert seen == [("openrouter", None)]
@@ -169,7 +161,7 @@ async def test_a_finished_generation_reports_success():
 async def test_a_failed_generation_reports_the_error_it_failed_with():
     seen = []
     boom = LLMError("auth", "bad key")
-    client = _client(_Provider(boom), lambda conn, err: seen.append((conn["id"], err)))
+    client = _client(ScriptedProvider(error=boom), lambda conn, err: seen.append((conn["id"], err)))
 
     with pytest.raises(LLMError):
         [c async for c in client.stream([], _conn())]
@@ -182,18 +174,12 @@ async def test_a_fallback_is_reported_under_its_own_connection():
     page shows each beside the connection it belongs to."""
     seen = []
     fallback = _conn(id="local", kind="openai_compatible")
-    calls = {"n": 0}
+    # One instance across all three kinds, so "the first attempt" is the
+    # primary's and "the second" is the fallback's however they dispatch.
+    provider = FlakyProvider(LLMError("network", "connection refused"))
 
-    class _FirstFails:
-        async def stream(self, messages, *args, **kwargs):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise LLMError("network", "connection refused")
-                yield  # pragma: no cover - unreachable, makes this a generator
-            yield "hi"
-
-    client = LLMClient(openrouter=_FirstFails(), claude=_FirstFails(),
-                       openai_compatible=_FirstFails(), retries=0,
+    client = LLMClient(openrouter=provider, claude=provider,
+                       openai_compatible=provider, retries=0,
                        fallback=lambda: fallback,
                        observer=lambda conn, err: seen.append(
                            (conn["id"], err.kind if err else None)))
@@ -207,7 +193,7 @@ async def test_an_observer_that_raises_cannot_fail_a_working_generation():
     def explode(conn, err):
         raise RuntimeError("registry is on fire")
 
-    client = _client(_Provider(), explode)
+    client = _client(ScriptedProvider(), explode)
     assert [c async for c in client.stream([], _conn())] == ["hi"]
 
 
@@ -215,7 +201,7 @@ async def test_an_observer_that_raises_cannot_replace_a_providers_error():
     def explode(conn, err):
         raise RuntimeError("registry is on fire")
 
-    client = _client(_Provider(LLMError("rate_limit", "slow down")), explode)
+    client = _client(ScriptedProvider(error=LLMError("rate_limit", "slow down")), explode)
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _conn())]
     assert exc.value.kind == "rate_limit"
@@ -226,7 +212,7 @@ async def test_a_generation_the_caller_walks_away_from_reports_nothing():
     provider, and recording "ok" for a turn that was abandoned mid-stream
     would be a claim the stream never made."""
     seen = []
-    client = _client(_Provider(), lambda conn, err: seen.append(err))
+    client = _client(ScriptedProvider(), lambda conn, err: seen.append(err))
 
     agen = client.stream([], _conn())
     assert await agen.__anext__() == "hi"
@@ -287,13 +273,9 @@ def test_a_check_that_never_answers_becomes_a_verdict_rather_than_a_held_request
     `0` that means "no ceiling at all". That is a reasonable thing to ask of a
     slow local model and an unreasonable thing to ask of a button, so this
     route carries a bound nobody can switch off."""
-    class _NeverAnswers(FakeCatalog):
-        async def check(self, conn):
-            await asyncio.sleep(30)      # bounded, so a regression fails fast
-
     store.write_config(llm_call_budget="0")
     monkeypatch.setattr(routes.config, "HEALTH_CHECK_CEILING", 0.05)
-    stalled = _NeverAnswers()
+    stalled = StallingGateway(where="check")
     client.app.dependency_overrides[routes.get_llm] = lambda: stalled
 
     r = client.post("/api/llm-connections/claude/health")
@@ -306,12 +288,8 @@ def test_a_generation_cut_off_by_its_ceiling_is_recorded_against_its_connection(
     from outside, so `_resilient` unwinds through `GeneratorExit` rather than
     its `except LLMError` and the attempt that held the request past its budget
     would be the one nobody hears about — a 504 under a green dot."""
-    class _Stalls(FakeCatalog):
-        async def complete(self, messages, conn, usage=None):
-            await asyncio.sleep(30)
-
     store.write_config(llm_call_budget="0.05")
-    stalled = _Stalls()
+    stalled = StallingGateway(where="complete")
     client.app.dependency_overrides[routes.get_llm] = lambda: stalled
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]

@@ -292,7 +292,7 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
     try:
         with store.usage.meter("suggestions", campaign=cid) as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn))
+                                       on_timeout=_noting(client, conn, m.usage))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
@@ -324,7 +324,7 @@ async def post_scene_intent(cid: str, body: SceneIntent,
     try:
         with store.usage.meter("intent", campaign=cid) as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn))
+                                       on_timeout=_noting(client, conn, m.usage))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     got = store.suggest.parse_intent(text, cid, offscreen=body.offscreen)
@@ -1467,7 +1467,7 @@ class _Budget:
         left = self.remaining()
         return left is not None and left <= 0
 
-    async def run(self, coro, on_start=None):
+    async def run(self, coro, on_start=None, on_timeout=None):
         """Await `coro` under the remaining budget, reporting an overrun as the
         same LLMError kind an upstream stall raises — so every caller's existing
         LLM failure handling covers it with no new branch.
@@ -1476,6 +1476,9 @@ class _Budget:
         says it did not. Both exist because this is the only place that can
         decide it: a caller's own `spent()` check is already stale by the time
         the deadline is read below, however few statements sit in between.
+
+        `on_timeout` fires for a call that went out and was then cut off here,
+        so the connection it was running on can be told (`common._noting`).
 
         wait_for waits for the cancellation it requests to complete, so the
         real ceiling is the budget plus however long the call takes to unwind;
@@ -1505,7 +1508,21 @@ class _Budget:
             # this also catches one raised *inside* the call. Only blame the
             # budget when the budget is actually gone.
             detail = BUDGET_EXHAUSTED if self.spent() else (str(exc) or "the call timed out")
-            raise LLMError("timeout", detail) from exc
+            overrun = LLMError("timeout", detail)
+            # This ceiling has the same blind spot `routes.common._bounded_call`
+            # does, and for the same reason (#146): `wait_for` cancels the call
+            # from outside the facade, so `_resilient` unwinds through
+            # `GeneratorExit` rather than its `except LLMError` and the attempt
+            # nobody got an answer from is the one the health registry never
+            # hears about. An absorb phase stopped this way would leave the
+            # connection reading green.
+            #
+            # Only here, not on the `BudgetRefused` path above: a step that was
+            # never issued is a statement about this absorb's clock, not about
+            # the provider.
+            if on_timeout is not None:
+                on_timeout(overrun)
+            raise overrun from exc
 
 
 def _budget_overrun(exc: BaseException) -> bool:
@@ -1588,7 +1605,8 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
         with store.usage.meter("audit", campaign=cid, scene=sid) as m:
             text = await _watched(
                 budget.run(client.complete(messages, conn, m.usage),
-                           lambda: mech.__setitem__("attempted", True)), abandoned)
+                           lambda: mech.__setitem__("attempted", True),
+                           on_timeout=_noting(client, conn, m.usage)), abandoned)
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
     except Abandoned:
@@ -1706,7 +1724,8 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             with store.usage.meter("dossier", campaign=cid, scene=sid) as m:
                 d_text = await _watched(
                     budget.run(client.complete(msgs, conn, m.usage),
-                               lambda: out.__setitem__("attempted", True)), abandoned)
+                               lambda: out.__setitem__("attempted", True),
+                               on_timeout=_noting(client, conn, m.usage)), abandoned)
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
             # reply; only the first is a success. Left conflated, a model that
@@ -1910,7 +1929,8 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # by `run`, which alone can decide it atomically with the deadline.
             with store.usage.meter("voice-drift", campaign=cid, scene=sid) as m:
                 text = await budget.run(client.complete(msgs, conn, m.usage),
-                                        lambda: out.__setitem__("attempted", True))
+                                        lambda: out.__setitem__("attempted", True),
+                                        on_timeout=_noting(client, conn, m.usage))
             finding = store.voice_drift.parse_output(text)
             # An unreadable verdict is a FAILED call, not a quiet pass. Left
             # conflated with "in voice" it would stage a default-approved clear
@@ -2094,7 +2114,8 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # left queued.
     with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
         results = await _gather_phases(
-            budget.run(client.complete(messages, conn, m.usage)),
+            budget.run(client.complete(messages, conn, m.usage),
+                       on_timeout=_noting(client, conn, m.usage)),
             _stage_dossiers(cid, sid, transcript, client, conn, budget),
             _stage_voice_drift(cid, sid, transcript, client, conn, budget),
             _run_audit(cid, sid, client, conn, budget),
