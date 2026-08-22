@@ -187,6 +187,15 @@ def _reconstruct(ops):
                  *[f"e{n}" for n in range(1200)], "Z"]),
      "\n".join(["B", *[f"e{n}" for n in range(1200)], "s",
                  *[f"e{n}" for n in range(1200)], "Y"])),
+    # a run anchoring as (length, line): the whole middle is one token
+    ("\n".join(["x", *["- item"] * 3000, "y"]),
+     "\n".join(["p", *["- item"] * 3000, "q"])),
+    # ...and the same run with its LENGTH moved, which cannot anchor
+    ("\n".join(["x", *["- item"] * 3000, "y"]),
+     "\n".join(["p", *["- item"] * 2999, "q"])),
+    # two runs of the same line, so neither is unique and neither anchors
+    ("\n".join(["x", *["d"] * 1500, "s", *["d"] * 1500, "y"]),
+     "\n".join(["p", *["d"] * 1500, "s", *["d"] * 1500, "q"])),
 ])
 def test_the_diff_always_reconstructs_both_sides(before, after):
     """The invariant a hand-rolled diff lives or dies by, and the one thing the
@@ -289,21 +298,43 @@ def test_a_long_distinct_middle_still_diffs_precisely():
     assert sum(1 for o in ops if o["op"] == "insert") == 2
 
 
-def test_a_duplicate_dominated_middle_over_the_limit_degrades():
-    """The bound's one real cost, pinned so it is a known limit rather than a
-    surprise (raised in review).
+def test_a_repeated_block_between_two_edits_anchors_on_the_block():
+    """The shape that used to be this bound's one real cost, and is not any
+    more (raised in review twice).
 
-    With both ends edited around a long run of IDENTICAL lines, nothing in the
-    middle can anchor once the heuristic is back on, and the whole span is
-    reported replaced. Under the limit the same shape is exact, which is what
-    makes this the bound talking rather than the diff being wrong.
+    Both ends edited around a long run of IDENTICAL lines: no LINE in the middle
+    is unique on either side, so the line measure found no anchor at all and the
+    whole span was reported replaced -- 4,002 deletions and 4,002 insertions
+    hiding two edits. The run of identical lines is one token by the run
+    measure, unique on both sides, and anchors. Paired with the same shape under
+    the limit, which never had the problem, so a regression in either shows up
+    as the two disagreeing.
+    """
+    for n in (changes.EXACT_DIFF_LIMIT * 4, changes.EXACT_DIFF_LIMIT // 2):
+        ops = changes.line_diff("\n".join(["x", *["- item"] * n, "y"]),
+                                "\n".join(["p", *["- item"] * n, "q"]))
+        assert sum(1 for o in ops if o["op"] == "delete") == 2, n
+        assert sum(1 for o in ops if o["op"] == "insert") == 2, n
+        assert sum(1 for o in ops if o["op"] == "equal") == n, n
+
+
+def test_a_repeated_block_whose_length_moved_still_degrades():
+    """The bound's remaining cost, pinned so it is a known limit rather than a
+    surprise.
+
+    A run only anchors as (length, line), so a block that GREW or SHRANK is a
+    different token on each side and the span has nothing to align on. Reported
+    as a full replacement, in linear time. Under the limit the same shape is
+    exact, which is what makes this the bound talking rather than the diff being
+    wrong.
     """
     n = changes.EXACT_DIFF_LIMIT * 4
     ops = changes.line_diff("\n".join(["x", *["- item"] * n, "y"]),
-                            "\n".join(["p", *["- item"] * n, "q"]))
+                            "\n".join(["p", *["- item"] * (n - 1), "q"]))
     assert sum(1 for o in ops if o["op"] == "delete") == n + 2
+    assert sum(1 for o in ops if o["op"] == "equal") == 0
 
     small = changes.EXACT_DIFF_LIMIT // 2
     ops = changes.line_diff("\n".join(["x", *["- item"] * small, "y"]),
-                            "\n".join(["p", *["- item"] * small, "q"]))
-    assert sum(1 for o in ops if o["op"] == "delete") == 2
+                            "\n".join(["p", *["- item"] * (small - 1), "q"]))
+    assert sum(1 for o in ops if o["op"] == "delete") == 3
