@@ -37,6 +37,11 @@ const TAIL_KEEP = 500;
  *  rather than one per letter. */
 const QUERY_SETTLE_MS = 250;
 
+/** How long to wait before reopening a live tail whose stream ended. Long
+ *  enough not to hammer a backend that is restarting, short enough that a
+ *  dropped connection is not noticed. */
+const TAIL_REOPEN_MS = 1500;
+
 /** ms as something a human reads at a glance. Sub-second stays in
  *  milliseconds, because that is the resolution the number has; past a second
  *  the digits stop meaning anything and one decimal of seconds is the honest
@@ -235,8 +240,22 @@ function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
 export default function StatsView() {
   const [section, setSection] = useState<SectionKey>("performance");
   const [days, setDays] = useState(30);
+  // Bumped to re-read everything. A scene turn is detached and deliberately
+  // survives navigation (CLAUDE.md), so a player can arrive here while one is
+  // still running: the meter writes its row AFTER this page has read, and
+  // nothing would bring it in until the window changed or the route
+  // remounted.
+  const [reading, setReading] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [failed, setFailed] = useState("");
+  // One banner per SECTION. A single string meant a successful `/stats` read
+  // could clear a banner about a failed `/errors` refresh -- leaving stale
+  // numbers on screen with nothing to say they were stale -- and the reverse
+  // ordering put a performance failure over a healthy Debug log.
+  const [failures, setFailures] = useState<Partial<Record<SectionKey, string>>>({});
+  const setFailure = useCallback((key: SectionKey, message: string) => {
+    setFailures((all) => (all[key] === message ? all : { ...all, [key]: message }));
+  }, []);
+  const failed = failures[section] ?? "";
 
   // ---- the log's own filters ----
   const [errorModule, setErrorModule] = useState("");
@@ -254,10 +273,10 @@ export default function StatsView() {
     let alive = true;
     setStats(null);
     api.getStats(days)
-      .then((s) => { if (alive) { setStats(s); setFailed(""); } })
-      .catch((e) => { if (alive) setFailed(errorText(e)); });
+      .then((s) => { if (alive) { setStats(s); setFailure("performance", ""); } })
+      .catch((e) => { if (alive) setFailure("performance", errorText(e)); });
     return () => { alive = false; };
-  }, [days]);
+  }, [days, reading, setFailure]);
 
   // The errors section reads `/api/errors` rather than leaning on the copy
   // `/api/stats` already carries. The embedded one is #154's headline count
@@ -272,10 +291,10 @@ export default function StatsView() {
     // page stating something that has stopped being true.
     setErrorSummary(null);
     api.getErrorSummary(days, { module: errorModule })
-      .then((e) => { if (alive) { setErrorSummary(e); setFailed(""); } })
-      .catch((e) => { if (alive) setFailed(errorText(e)); });
+      .then((e) => { if (alive) { setErrorSummary(e); setFailure("errors", ""); } })
+      .catch((e) => { if (alive) setFailure("errors", errorText(e)); });
     return () => { alive = false; };
-  }, [section, days, errorModule]);
+  }, [section, days, errorModule, reading, setFailure]);
 
   // The WINDOW changing drops the page; a filter changing does not. Rows from
   // the old window under the new window's heading is the page describing
@@ -283,6 +302,14 @@ export default function StatsView() {
   // `modules` with it, and the module dropdown would empty itself on each
   // keystroke, which is how the control loses the option you are choosing.
   useEffect(() => { setPage(null); }, [days]);
+
+  // Coming back to the tab is the moment a stale reading is most likely and
+  // most noticed: the turn finished while this page was in the background.
+  useEffect(() => {
+    const onFocus = () => setReading((n) => n + 1);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   // `query` settled. The page read alone would not need this -- it is a local
   // file behind a local server, and 200 rows cost nothing -- but the live tail
@@ -302,10 +329,10 @@ export default function StatsView() {
     if (section !== "log") return;
     let alive = true;
     api.getLogs({ days, level, module, q: settled, limit: LOG_LIMIT })
-      .then((p) => { if (alive) { setPage(p); setFailed(""); } })
-      .catch((e) => { if (alive) setFailed(errorText(e)); });
+      .then((p) => { if (alive) { setPage(p); setFailure("log", ""); } })
+      .catch((e) => { if (alive) setFailure("log", errorText(e)); });
     return () => { alive = false; };
-  }, [section, days, level, module, settled]);
+  }, [section, days, level, module, settled, reading, setFailure]);
 
   useEffect(() => {
     let alive = true;
@@ -319,35 +346,64 @@ export default function StatsView() {
   // filter mid-tail reopens the stream against the new one rather than
   // quietly continuing to receive rows the page is no longer showing.
   const tailRows = useRef<LogRow[]>([]);
+  // The newest cursor the server has sent, kept across reconnects. The whole
+  // point of the byte-cursor protocol is that a stream which ends can be
+  // resumed without missing a row -- and the client was throwing every cursor
+  // away, so a dropped connection (a backend restart, a sleeping laptop) lost
+  // everything written during the gap even after the user toggled Live again.
+  const tailCursor = useRef<string>("");
+  // Bumped to reopen the stream after it ends while Live is still on.
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!live || section !== "log") return;
     const abort = new AbortController();
-    tailRows.current = [];
-    setTailed([]);
-    api.streamLogTail({ level, module, q: settled }, (event) => {
-      if (event.error) {
-        // The stream is still open -- the server keeps polling -- so this is
-        // reported without tearing the tail down.
-        setFailed(event.error.detail);
-        return;
-      }
-      // Any frame that is not an error means the read is working again --
-      // including the bare cursor frame the server sends on recovery, which is
-      // the only thing a quiet log emits once it comes back.
-      setFailed("");
-      if (!event.rows?.length) return;
-      // Newest first, matching the page above it -- the two lists are read as
-      // one, and a live half that grew downward while the page grew upward
-      // would be two lists pretending to be one.
-      tailRows.current = [...event.rows].reverse()
-        .concat(tailRows.current).slice(0, TAIL_KEEP);
-      setTailed(tailRows.current);
-    }, abort.signal).catch((e) => {
+    let reopen: ReturnType<typeof setTimeout> | undefined;
+    // Only the FIRST attempt starts clean; a reconnect keeps what is on screen
+    // and resumes from where the last frame left off.
+    if (attempt === 0) {
+      tailRows.current = [];
+      tailCursor.current = "";
+      setTailed([]);
+    }
+    const again = () => {
+      if (abort.signal.aborted) return;
+      reopen = setTimeout(() => setAttempt((n) => n + 1), TAIL_REOPEN_MS);
+    };
+    api.streamLogTail(
+      { cursor: tailCursor.current, level, module, q: settled },
+      (event) => {
+        if (event.cursor) tailCursor.current = event.cursor;
+        if (event.error) {
+          // The stream is still open -- the server keeps polling -- so this is
+          // reported without tearing the tail down.
+          setFailure("log", event.error.detail);
+          return;
+        }
+        // Any frame that is not an error means the read is working again --
+        // including the bare cursor frame the server sends on recovery, which
+        // is the only thing a quiet log emits once it comes back.
+        setFailure("log", "");
+        if (!event.rows?.length) return;
+        // Newest first, matching the page above it -- the two lists are read as
+        // one, and a live half that grew downward while the page grew upward
+        // would be two lists pretending to be one.
+        tailRows.current = [...event.rows].reverse()
+          .concat(tailRows.current).slice(0, TAIL_KEEP);
+        setTailed(tailRows.current);
+      },
+      abort.signal,
+    ).then(again, (e) => {
       // An abort is this effect cleaning up, not a failure to report.
-      if (!abort.signal.aborted) setFailed(errorText(e));
+      if (abort.signal.aborted) return;
+      setFailure("log", errorText(e));
+      again();
     });
-    return () => abort.abort();
-  }, [live, section, level, module, settled]);
+    return () => { abort.abort(); clearTimeout(reopen); };
+  }, [live, section, level, module, settled, attempt, setFailure]);
+
+  // A filter change restarts the tail from scratch rather than resuming: the
+  // cursor belongs to the old query's position in the file.
+  useEffect(() => { setAttempt(0); }, [live, section, level, module, settled]);
 
   const paletteSource = useCallback((): PaletteItem[] =>
     SECTIONS.map((s) => ({
@@ -410,15 +466,24 @@ export default function StatsView() {
   );
 
   const footer = (
-    <label className="stats-window">
-      <span className="section-label">Window</span>
-      <select value={days} onChange={(e) => setDays(Number(e.target.value))}
-              aria-label="How many days to report on">
-        {WINDOWS.map((d) => (
-          <option key={d} value={d}>{d === 1 ? "Today" : `Last ${d} days`}</option>
-        ))}
-      </select>
-    </label>
+    <div className="stats-footer">
+      <label className="stats-window">
+        <span className="section-label">Window</span>
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+                aria-label="How many days to report on">
+          {WINDOWS.map((d) => (
+            <option key={d} value={d}>{d === 1 ? "Today" : `Last ${d} days`}</option>
+          ))}
+        </select>
+      </label>
+      {/* Every reading here is a snapshot of files that keep being written --
+          by a detached turn that outlived the navigation to this page, most of
+          all. This is the way to ask again without changing what you asked. */}
+      <button type="button" className="chip stats-refresh"
+              onClick={() => setReading((n) => n + 1)}>
+        Refresh
+      </button>
+    </div>
   );
 
   return (

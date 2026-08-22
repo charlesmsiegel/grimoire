@@ -527,6 +527,64 @@ it("does not report the abort it caused by switching Live off", async () => {
   expect(screen.queryByText(/aborted/)).not.toBeInTheDocument();
 });
 
+it("resumes the live tail from its last cursor when the stream ends", async () => {
+  // The byte-cursor protocol exists so a dropped stream misses nothing. The
+  // client was discarding every cursor, so a backend restart lost whatever was
+  // written during the gap even after toggling Live off and on.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    let ends: () => void = () => {};
+    vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown,
+                                                      onEvent: (e: unknown) => void) => {
+      onEvent({ cursor: "2026-08.jsonl:4096" });
+      return new Promise<void>((res) => { ends = res; });
+    }) as never);
+    view();
+    await screen.findByRole("heading", { name: "Performance" });
+    fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+    await screen.findByLabelText("Module to show");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+    await waitFor(() => expect(api.streamLogTail).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.streamLogTail).mock.calls[0][0]).toMatchObject({ cursor: "" });
+
+    ends();                                    // the connection drops
+    await vi.advanceTimersByTimeAsync(3000);   // async: the .then is a microtask
+
+    await waitFor(() => expect(api.streamLogTail).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.streamLogTail).mock.calls[1][0])
+      .toMatchObject({ cursor: "2026-08.jsonl:4096" });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps each section's failure to itself", async () => {
+  // A successful /stats read used to clear a banner about a failed /errors
+  // refresh, leaving stale numbers with nothing to say they were stale.
+  vi.mocked(api.getErrorSummary).mockRejectedValue(new Error("errors unreadable"));
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  expect(await screen.findByText("Error: errors unreadable")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Performance/ }));
+
+  // Performance read fine; its section says nothing about the errors failure.
+  expect(screen.queryByText("Error: errors unreadable")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  expect(await screen.findByText("Error: errors unreadable")).toBeInTheDocument();
+});
+
+it("re-reads on demand, for the turn that finished after the page did", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  await waitFor(() => expect(api.getStats).toHaveBeenCalledTimes(1));
+
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+  await waitFor(() => expect(api.getStats).toHaveBeenCalledTimes(2));
+});
+
 // ---- failure ----
 it("reports a stats read that failed instead of spinning forever", async () => {
   vi.mocked(api.getStats).mockRejectedValue(new Error("the ledger is unreadable"));

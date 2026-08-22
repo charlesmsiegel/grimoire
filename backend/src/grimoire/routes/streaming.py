@@ -540,7 +540,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             flushed = redactor.feed(watcher.finish()) + redactor.finish()
             if flushed:
                 yield _sse({"delta": flushed})
-            meter.done("error", exc.kind)
+            meter.done("error", exc.kind, detail=exc.detail)
             note: dict = {}
             if on_error is not None:
                 try:
@@ -1006,7 +1006,7 @@ def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient,
             meter.done()
             yield f"data: {json.dumps({'done': True})}\n\n"
         except LLMError as exc:
-            meter.done("error", exc.kind)
+            meter.done("error", exc.kind, detail=exc.detail)
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
         except BaseException:
             # The disconnect path. No frame can be emitted into a generator that
