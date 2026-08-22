@@ -148,7 +148,7 @@ def set_chub_source(root: Path, cid: str, vid: str, full_path: str) -> None:
 
 def clear_chub_source(root: Path, cid: str, vid: str) -> None:
     card = read_card(root, cid, vid)
-    ext = (card.get("data") or {}).get("extensions") or {}
+    ext = cards.card_data(card).get("extensions") or {}
     if "chub_source" in ext:
         del ext["chub_source"]
         update_version(root, cid, vid, card)
@@ -184,12 +184,12 @@ def read_card(root: Path, cid: str, vid: str) -> dict:
 def _version_label(card: dict, vid: str) -> str:
     """Display label for a version: an explicit grimoire_label override (kept in
     extensions so it never leaks into {{char}}), else the card's own name."""
-    data = card.get("data", {})
+    data = cards.card_data(card)
     return (data.get("extensions") or {}).get("grimoire_label") or data.get("name", vid)
 
 
 def _version_chub_source(card: dict) -> str:
-    return (card.get("data", {}).get("extensions") or {}).get("chub_source", "")
+    return (cards.card_data(card).get("extensions") or {}).get("chub_source", "")
 
 
 def _importable_lore(card: dict) -> int:
@@ -199,7 +199,7 @@ def _importable_lore(card: dict) -> int:
     raw `entries` list: normalization drops disabled and blank-content entries,
     so a UI counting the raw list offers to import entries that never arrive --
     and cards from ST routinely carry disabled ones (#16)."""
-    return lorebook.importable_count(card.get("data", {}).get("character_book"))
+    return lorebook.importable_count(cards.card_data(card).get("character_book"))
 
 
 def _addressable_default(stored: str, version_ids: list[str]) -> str:
@@ -282,7 +282,7 @@ def _card_summary(root: Path, cid: str, vid: str) -> dict:
     def compute() -> dict:
         card = json.loads(p.read_text(encoding="utf-8"))
         return {"label": _version_label(card, vid),
-                "greeting_count": _greeting_count(card.get("data", {})),
+                "greeting_count": _greeting_count(cards.card_data(card)),
                 "chub_source": _version_chub_source(card)}
 
     return statcache.memo("card_summary", sig, compute)
@@ -469,7 +469,7 @@ _AVATAR_TYPES = ("icon", "avatar")
 def _avatar_candidates(card: dict) -> list[str]:
     """Every place a card might carry an avatar: V3 `assets`, a top-level `avatar`
     string, and either relocated into `extensions` by the V2->V3 upconvert."""
-    data = card.get("data", {})
+    data = cards.card_data(card)
     ext = data.get("extensions") or {}
     out: list[str] = []
     for assets_src in (data.get("assets"), ext.get("assets")):
@@ -558,7 +558,7 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
     review.) A card that already listed that exact URI therefore keeps its own
     entry, and comes back from a round trip as the character it started as.
     """
-    data = card.get("data") if isinstance(card.get("data"), dict) else {}
+    data = cards.card_data(card)
     extensions = data.get("extensions") if isinstance(data.get("extensions"), dict) else {}
     for holder in (data, extensions):
         entries = holder.get("assets")
@@ -608,7 +608,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
             cid, vid = create_character(root, cname, "default", card)
         else:
             cid = into_cid
-            vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
+            vid = create_version(root, into_cid,
+                                 cards.card_data(card).get("character_version") or cname, card)
     if avatar is None and fmt == "png":
         avatar = (data, "png", "")  # the PNG file itself is the avatar
     if avatar:
@@ -860,7 +861,7 @@ def _export_filename(root: Path, cid: str, vid: str, card: dict, fmt: str) -> st
     common case is just the character's name; a card whose name slugifies to
     nothing falls back to the character id, which is a slug by construction.
     """
-    stem = slugify((card.get("data") or {}).get("name") or "")
+    stem = slugify(cards.card_data(card).get("name") or "")
     if stem == "untitled":  # slugify's sentinel: the name held nothing usable
         stem = cid
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))

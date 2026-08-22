@@ -836,6 +836,23 @@ test("a failed roster reload still reports what the run wrote", async () => {
   await screen.findByText(/Derived 1 tagline/);
 });
 
+test("the report does not follow the editor into another world", async () => {
+  // "Derived 2 taglines" is a claim about one library. Left standing across a
+  // scope change it becomes a claim about whichever one is showing now.
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred"]));
+  derives([
+    { total: 2 },
+    { done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." },
+    { done: 2, character: "winifred", name: "Winifred", tagline: "A locksmith who never sleeps." },
+    { summary: { total: 2, written: 2, skipped: 0, stopped: false } },
+  ]);
+  const view = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(2\)/ }));
+  await screen.findByText("Derived 2 taglines");
+  view.rerender(<CharacterEditor scope={{ kind: "world", id: "w2" }} wid="w2" />);
+  await waitFor(() => expect(screen.queryByText("Derived 2 taglines")).toBeNull());
+});
+
 test("a refusal before the stream starts is an error banner, not a report", async () => {
   (api.listCharacters as any).mockResolvedValue(roster(["mara"]));
   (api.generateWorldTaglines as any).mockRejectedValue(new ApiError(409, "no connection configured"));

@@ -433,3 +433,22 @@ def test_a_failed_write_becomes_an_error_frame_rather_than_a_dead_stream(client,
     assert resp.status_code == 200
     assert frames[-2]["error"] == {"detail": "read-only file system", "kind": "tagline"}
     assert frames[-1]["summary"] == {"total": 2, "written": 0, "skipped": 0, "stopped": True}
+
+
+def test_a_hand_edited_card_is_derived_from_rather_than_500ing(client):
+    """The roster scan runs before a single frame goes out, so a card it cannot
+    read is a 500 with no stream at all — the one failure this route's
+    skip-and-continue contract cannot express. `cards.card_data` is what keeps
+    the scan on its feet; here it is end to end."""
+    wid = _world(client)
+    cid = _character(client, wid, "Mara")
+    root = store.worlds.world_root(wid)
+    (root / "characters" / cid / "main.json").write_text('{"data": ["speech"]}', encoding="utf-8")
+    fake = _answers(client, ["A courier with cold hands."])
+
+    resp, frames = _derive(client, wid)
+
+    assert resp.status_code == 200
+    assert fake.calls == 1
+    assert _tagline(client, wid, cid) == "A courier with cold hands."
+    assert frames[-1]["summary"] == {"total": 1, "written": 1, "skipped": 0, "stopped": False}

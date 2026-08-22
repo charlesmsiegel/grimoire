@@ -1505,3 +1505,23 @@ def test_per_image_token_names_the_file_the_server_actually_serves(tmp_path, ext
     served_v = _stale_sibling(tmp_path, cid, vid, ext)
     version = ch.read_character(tmp_path, cid)["versions"][0]
     assert version["image_v"]["avatar"] == served_v
+
+
+def test_a_hand_edited_non_object_data_does_not_take_out_the_roster(tmp_path):
+    """The store is user-editable markdown and JSON by design, so a card whose
+    `data` is a list is something a text editor can produce — and every read of
+    it used to raise one attribute access in, taking `list_characters` (and with
+    it the whole roster grid) down over a single odd card.
+
+    The write path stays strict: version PUT never stores one. This is only
+    about surviving what is already on disk.
+    """
+    cid, vid = ch.create_character(tmp_path, "Mara", "main")
+    (tmp_path / "characters" / cid / f"{vid}.json").write_text(
+        '{"data": ["speech"]}', encoding="utf-8")
+
+    rows = ch.list_characters(tmp_path)
+
+    assert [r["id"] for r in rows] == [cid]
+    assert rows[0]["greeting_count"] == 0
+    assert ch.read_character(tmp_path, cid)["meta"]["id"] == cid
