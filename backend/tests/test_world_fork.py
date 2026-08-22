@@ -29,7 +29,15 @@ import shutil
 
 import pytest
 
-from grimoire.store import atomic, characters, entities, greetings, taglines, worlds
+from grimoire.store import (
+    atomic,
+    characters,
+    entities,
+    greetings,
+    pcs,
+    taglines,
+    worlds,
+)
 from grimoire.store.worlds import staging
 
 from .world_fixtures import PNG, seed_world, tree
@@ -210,6 +218,19 @@ def test_fork_carries_an_entitys_own_gallery_and_repoints_its_sidecar(
     assert (gallery / "avatar.png").read_bytes() == PNG
     assert _repointed(entities.read_entity(root, "locations", lid)["body"], wid, new)
     assert _repointed((gallery / "descriptions.json").read_text(encoding="utf-8"), wid, new)
+
+
+def test_fork_repoints_a_pc_personas_url_too(monkeypatch, tmp_path):
+    """The third URL shape `store/localize.py` and a hand-editing author can
+    produce. It travels because the substitution is on the `/api/worlds/{wid}/`
+    PREFIX rather than a per-kind list -- which is a reason to prove it on a
+    third kind, not a reason to assume it."""
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    root = worlds.world_root(new)
+    pid = pcs.list_pcs(root)[0]["id"]
+    assert _repointed(pcs.read_persona(root, pid, "default")["description"], wid, new)
 
 
 def test_fork_leaves_an_id_only_sidecar_byte_identical(monkeypatch, tmp_path):
