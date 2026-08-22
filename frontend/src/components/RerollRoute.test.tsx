@@ -47,12 +47,51 @@ test("the default option is offered, with the active connection on hover", async
   // bare model id cannot express.
   expect(screen.getByRole("option", { name: "Local" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "Claude" })).toBeInTheDocument();
-  // and the active one is not offered twice — "Default" already is it.
-  expect(screen.queryByRole("option", { name: "OpenRouter" })).toBeNull();
-  expect(screen.getAllByRole("option")).toHaveLength(3);
-  // The name is not lost, only moved off a control it does not fit.
+  // The active connection is offered too, and means something different from
+  // Default: it PINS that connection, where Default follows whatever is active
+  // when the reroll is sent.
+  expect(screen.getByRole("option", { name: "OpenRouter" })).toBeInTheDocument();
+  expect(screen.getAllByRole("option")).toHaveLength(4);
   expect(screen.getByRole("option", { name: "Default" }))
-    .toHaveAttribute("title", "Default: OpenRouter");
+    .toHaveAttribute("title", expect.stringContaining("OpenRouter now"));
+});
+
+test("the config read is not served from the cache another tab left behind", async () => {
+  // `getConfig` answers from a module cache keyed to this tab's own writes, so
+  // an uncached read here would show the connection this tab last saw rather
+  // than the one that is active.
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
+
+  await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
+});
+
+test("choosing a model under Default pins the connection it was chosen against", async () => {
+  // The placeholder and the catalog both describe whichever connection is
+  // active right now; leaving the route dynamic would apply a model chosen
+  // against that one to whatever is active by the time Reroll is clicked.
+  const onChange = vi.fn();
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={onChange} />);
+  await screen.findByRole("option", { name: "Local" });
+
+  fireEvent.change(screen.getByLabelText("Reroll model"), { target: { value: "vendor/big" } });
+
+  expect(onChange).toHaveBeenCalledWith({ connection_id: "openrouter", model: "vendor/big" });
+});
+
+test("the pin stays once set, and the select says so", async () => {
+  // Nothing distinguishes a pin the reader made by choosing a model from one
+  // they made by choosing the row, so clearing the model does not release it —
+  // and that is visible rather than hidden: the `<select>` reads "OpenRouter"
+  // from that moment on, and Default is one click away.
+  const onChange = vi.fn();
+  render(<RerollRoutePicker value={{ connection_id: "openrouter", model: "vendor/big" }}
+                            onChange={onChange} />);
+  const select = await screen.findByLabelText<HTMLSelectElement>("Reroll connection");
+  expect(select.value).toBe("openrouter");
+
+  fireEvent.change(screen.getByLabelText("Reroll model"), { target: { value: "" } });
+
+  expect(onChange).toHaveBeenCalledWith({ connection_id: "openrouter", model: "" });
 });
 
 test("the model box shows what leaving it blank would run", async () => {

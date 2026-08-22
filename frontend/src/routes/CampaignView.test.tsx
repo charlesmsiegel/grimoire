@@ -3041,9 +3041,13 @@ test("a reroll may name a model without leaving the campaign's connection", asyn
   fireEvent.change(box, { target: { value: "vendor/bigger" } });
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
 
+  // The connection rides along even though the reader never touched that
+  // control: choosing a model PINS the connection the box was describing, so
+  // the model cannot land on a different provider that became active in
+  // between (Codex review).
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
     "run", "s1", expect.any(Function),
-    { guidance: "", connection_id: "", model: "vendor/bigger" },
+    { guidance: "", connection_id: "openrouter", model: "vendor/bigger" },
     expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
@@ -3137,7 +3141,7 @@ test("Enter commits the reroll from the model box, not just the guidance", async
 
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
     "run", "s1", expect.any(Function),
-    { guidance: "", connection_id: "", model: "vendor/bigger" },
+    { guidance: "", connection_id: "openrouter", model: "vendor/bigger" },
     expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
