@@ -6,6 +6,7 @@ import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
+import { LibraryPanel } from "./LibraryPanel";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
@@ -380,6 +381,16 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
               <div className="form-actions">
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>
+              {/* A campaign can already create a PC of its own, and `promote`
+                  carries pcs — without this the only way to publish one was a
+                  hand-built API call (Codex review). Promote is the only move
+                  that applies to an actor, and `libraryStatus` says so, so this
+                  renders nothing for a PC the campaign merely inherits. */}
+              {!worldScope && detail && (
+                <LibraryPanel key={`${scope.id}:pcs:${detail.meta.id}`}
+                              cid={scope.id} kind="pcs" id={detail.meta.id}
+                              onMoved={() => { void reload(); }} />
+              )}
               {!worldScope && (
                 <div className="side-section">
                   <h4>Version</h4>
