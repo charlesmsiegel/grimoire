@@ -1447,6 +1447,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                     {taskLabel(t.task) + " · " + whenLabel(t.ts)}
                   </option>
                 ))}
+                {/* The comparison on screen outliving its row in the rail: a
+                    turn-against-turn diff is frozen at both ends and so is not
+                    re-read, but the retention window can still evict the entry
+                    it names. Without an option for it the browser falls back to
+                    the first one and the picker starts contradicting the panel
+                    below it. Clearing instead would throw away a comparison the
+                    reader is in the middle of. */}
+                {compare && compare !== LIVE_SIDE
+                  && !shownTurns.some((t) => t.id === compare) && (
+                  <option value={compare}>Turn {compare} · aged out of the log</option>
+                )}
               </select>
             </label>
             <button className="ctx-frozen-back"

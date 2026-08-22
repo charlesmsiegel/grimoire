@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from grimoire.store import changes
 
 
@@ -156,6 +158,63 @@ def test_one_edit_in_a_huge_repetitive_body_is_one_edit():
     assert [o for o in ops if o["op"] == "insert"] == [{"op": "insert",
                                                        "text": "- item CHANGED"}]
     assert len(ops) == len(lines) + 1          # every other line still reported
+
+
+def _reconstruct(ops):
+    """`(before, after)` rebuilt from a tagged diff. `equal` belongs to both,
+    `delete` to the left only, `insert` to the right only."""
+    left = [o["text"] for o in ops if o["op"] in ("equal", "delete")]
+    right = [o["text"] for o in ops if o["op"] in ("equal", "insert")]
+    return left, right
+
+
+@pytest.mark.parametrize("before,after", [
+    ("", ""),
+    ("a", ""),
+    ("", "a"),
+    ("a\nb\nc", "a\nb\nc"),
+    ("a\nb\nc", "c\nb\na"),
+    ("\n".join(str(n) for n in range(3000)),
+     "\n".join(str(n) for n in range(2999, -1, -1))),
+    # over the limit, and every shape the bound routes differently
+    ("\n".join(f"l{n}" for n in range(3000)),
+     "\n".join(f"l{n}" for n in [*range(1500, 3000), *range(1500)])),
+    ("\n".join(["dup"] * 3000), "\n".join(["dup"] * 2999 + ["other"])),
+    ("\n".join(f"l{n}" for n in range(3000)), "\n".join(["dup"] * 3000)),
+])
+def test_the_diff_always_reconstructs_both_sides(before, after):
+    """The invariant a hand-rolled diff lives or dies by, and the one thing the
+    per-shape tests below cannot check between them: whatever route the bound
+    sends a span down -- trimmed, anchored, exact, or coarse -- the `equal` plus
+    `delete` rows must still be exactly the left side and the `equal` plus
+    `insert` rows exactly the right one. An anchor emitted twice, or a gap
+    dropped between two of them, shows up here and nowhere else.
+    """
+    left, right = _reconstruct(changes.line_diff(before, after))
+    assert left == before.splitlines()
+    assert right == after.splitlines()
+
+
+def test_a_reordered_distinct_span_is_bounded_and_still_exact():
+    """The case that showed the size cap was never a bound (raised in review):
+    `autojunk` only discards POPULAR lines, so all-distinct input leaves every
+    line eligible and difflib goes quadratic anyway -- 8,000 lines reordered in
+    adjacent pairs measured 4.5s, scaling 4x per doubling.
+
+    Anchoring on lines unique to both sides answers it in milliseconds AND
+    exactly: every pair really did swap, so 4,000 of each is the right answer,
+    not a coarse one.
+    """
+    n = 8_000
+    a = [f"line {k}" for k in range(n)]
+    b = [line for k in range(0, n, 2) for line in (a[k + 1], a[k])]
+
+    started = time.perf_counter()
+    ops = changes.line_diff("\n".join(a), "\n".join(b))
+    assert time.perf_counter() - started < 10.0
+
+    assert sum(1 for o in ops if o["op"] == "delete") == n // 2
+    assert sum(1 for o in ops if o["op"] == "insert") == n // 2
 
 
 def test_a_long_differing_middle_stays_bounded():
