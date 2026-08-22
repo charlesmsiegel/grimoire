@@ -23,16 +23,22 @@ from .paths import FILE_KINDS, SheetConflict, SheetError
 from .schema import MUTABLE_TYPES
 
 
-def _validate_write_target(mid: str, file_kind: str, eid: str, sheet_type: str) -> dict:
+def _validate_write_target(mid: str, file_kind: str, eid: str, sheet_type: str,
+                           pack: dict | None = None) -> dict:
     """Shared prelude for every checked sheet write: validates file_kind/eid/
-    sheet_type and returns the resolved sheets definition. Raises SheetError."""
+    sheet_type and returns the resolved sheets definition. Raises SheetError.
+
+    ``pack`` is the caller's already-loaded pack for ``mid`` -- see
+    ``reader._read_path``, which takes one for the same reason. A bulk create
+    writing N sheets under one lock hold would otherwise re-read and revalidate
+    the whole pack from disk N times, inside the hold an in-flight turn needs."""
     if file_kind not in FILE_KINDS:
         raise SheetError(f"unknown sheet kind {file_kind!r}")
     if not safe_id(eid):
         raise SheetError(f"bad entity id {eid!r}")
     if not isinstance(sheet_type, str) or not sheet_type:
         raise SheetError("sheet_type must be a non-empty string")
-    sheets_def = modules_pack.load_pack(mid)["sheets"]
+    sheets_def = (pack or modules_pack.load_pack(mid))["sheets"]
     st = sheets_def.get("sheet_types", {}).get(sheet_type)
     if not isinstance(st, dict):
         raise SheetError(f"unknown sheet type {sheet_type!r}")
@@ -44,8 +50,9 @@ def _validate_write_target(mid: str, file_kind: str, eid: str, sheet_type: str) 
 
 
 def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
-                   sheet_type: str, fields: dict | None) -> None:
-    sheets_def = _validate_write_target(mid, file_kind, eid, sheet_type)
+                   sheet_type: str, fields: dict | None,
+                   pack: dict | None = None) -> None:
+    sheets_def = _validate_write_target(mid, file_kind, eid, sheet_type, pack)
     if fields is None:
         fields = schema.default_fields(sheets_def, sheet_type)
     else:
@@ -111,9 +118,7 @@ def write(cid: str, kind: str, eid: str, sheet_type: str,
         mid = modules_binding.resolve(cid)
         if mid is None:
             raise SheetError("no module resolved for this campaign")
-        path = paths._campaign_path(cid, kind, eid)
-        _check_expected(path, expected)
-        _checked_write(path, mid, kind, eid, sheet_type, fields)
+        write_locked(mid, cid, kind, eid, sheet_type, fields, expected=expected)
     # Sheets live outside campaign.md and outside every scene, so the campaign's
 
 
@@ -143,6 +148,19 @@ def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
     path = paths._world_path(wid, mid, kind, eid)
     _check_expected(path, expected)
     _checked_write(path, mid, kind, eid, sheet_type, fields)
+
+
+def write_locked(mid: str, cid: str, kind: str, eid: str, sheet_type: str,
+                 fields: dict | None = None, *, expected: dict | None,
+                 pack: dict | None = None) -> None:
+    """Body of ``write``; caller holds ``locks.campaign_lock(cid)`` and resolved
+    ``mid`` once -- the same split ``set_field_locked`` has, and for the same
+    reason. A sweep passes its ``pack`` too, so writing N sheets costs one pack
+    parse rather than 2N (``resolve`` loads it, and so does the validation)
+    inside a hold that an in-flight turn's ``append_reply`` is waiting on."""
+    path = paths._campaign_path(cid, kind, eid)
+    _check_expected(path, expected)
+    _checked_write(path, mid, kind, eid, sheet_type, fields, pack)
 
 
 # ---- set_field (mechanics Phase 5, Task 5): per-field strict-CAS apply ----

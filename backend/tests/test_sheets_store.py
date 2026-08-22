@@ -1508,6 +1508,22 @@ def _sweep_pack_loads(monkeypatch, cid, sheeted: list[str], gaps: list[str]) -> 
     return len(loads)
 
 
+def test_create_missing_parses_the_pack_once_for_the_writes_too(monkeypatch, tmp_path):
+    """The whole sweep, not just its scan. `writer.write` re-resolves and
+    reloads per sheet -- two full pack parses each -- and it does it INSIDE the
+    hold an in-flight turn's `append_reply` is waiting on, which is the part
+    that matters. `write_locked` takes the module and pack the sweep already
+    has."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    for name in ("Mara", "Winifred", "Seraphine", "Ilse", "Cressida"):
+        characters.create_character(worlds.world_root(wid), name)
+    loads = _pack_loads(monkeypatch, lambda: sheets.create_missing(
+        cid, {"characters": "medium", "pcs": "medium"}))
+    # resolve + the sweep's own, and nothing per sheet
+    assert loads == 2
+    assert sheets.coverage(cid)["characters"]["sheeted"] == 5
+
+
 def test_create_missing_costs_what_it_creates_not_what_it_reads(monkeypatch, tmp_path):
     """The gap scan is one directory glob, not a `read` per cast member.
 

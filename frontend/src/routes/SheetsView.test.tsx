@@ -347,6 +347,59 @@ test("a failed reload does not leave the stale cast and a live button on screen"
   expect(column().queryByRole("button", { name: /Winifred/ })).toBeNull();
 });
 
+test("a failed press does not leave the previous press's report up", async () => {
+  (api.createMissingSheets as any).mockResolvedValue({
+    created: [{ kind: "characters", id: "winifred", name: "Winifred",
+                sheet_type: "medium", creation_pending: [] }],
+    skipped: [], failed: [],
+  });
+  renderSheets();
+  await screen.findByText("Sheet coverage");
+  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  await screen.findByText("1 sheet created.");
+
+  (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
+  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  await screen.findByText("no module resolved");
+  // The old report beside the error reads as a create that half-worked.
+  expect(screen.queryByText("1 sheet created.")).toBeNull();
+});
+
+test("a report and a roster read from another campaign never land on this one", async () => {
+  // Both settle after the switch. `result` is cid-tagged for the same reason
+  // `loaded` is, and every reload supersedes the one before it -- without that
+  // a late `{cid: A}` roster leaves this page stuck on "Reading the cast…".
+  let releaseCreate: (r: unknown) => void = () => {};
+  let releaseRoster: (r: unknown) => void = () => {};
+  (api.createMissingSheets as any).mockReturnValue(
+    new Promise((resolve) => { releaseCreate = resolve; }));
+  const { rerender } = renderSheets();
+  await screen.findByText("Sheet coverage");
+  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+
+  (api.getCampaignSheetRoster as any).mockReturnValue(
+    new Promise((resolve) => { releaseRoster = resolve; }));
+  rerender(
+    <MemoryRouter initialEntries={["/campaigns/other/sheets"]}>
+      <PaletteProvider>
+        <Routes>
+          <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
+        </Routes>
+      </PaletteProvider>
+    </MemoryRouter>,
+  );
+  await screen.findByText("Sheet coverage");
+
+  releaseCreate({ created: [], skipped: [{ kind: "characters", reason: "stale" }],
+                  failed: [] });
+  releaseRoster({ roster: ROSTER });
+  await screen.findByRole("table");
+  // campaign A's report must not be on campaign B's page...
+  expect(screen.queryByText("Last create")).toBeNull();
+  // ...and B's own roster still landed, rather than being stranded by A's
+  expect(screen.queryByText("Reading the cast…")).toBeNull();
+});
+
 test("a failed create surfaces the reason rather than a silent no-op", async () => {
   (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
   renderSheets();

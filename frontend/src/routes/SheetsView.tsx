@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api, type ModuleDetail, type SheetBulkResult, type SheetRoster, type SheetRosterRow,
@@ -101,7 +101,11 @@ export default function SheetsView() {
   const [bound, setBound] = useState<Bound | null>(null);
   const [selected, setSelected] = useState<{ kind: string; id: string } | null>(null);
   const [types, setTypes] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<SheetBulkResult | null>(null);
+  // Held with its campaign, like `loaded` and `bound`: a create can settle
+  // after the reader has moved to another campaign's sheets page, and a report
+  // about campaign A rendered under campaign B's name is the exact thing the
+  // cid-change effect below exists to prevent.
+  const [result, setResult] = useState<{ cid: string; data: SheetBulkResult } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,8 +147,17 @@ export default function SheetsView() {
     return () => { live = false; };
   }, [cid]);
 
+  // Every reload supersedes the one before it. Three callers start one
+  // imperatively -- the create's `finally`, `SheetPanel`'s `onChanged`, and
+  // Try again -- and all three discard the cancel closure, so without this a
+  // reload begun on campaign A could settle after the switch to B and commit
+  // `{cid: A}`. `roster` then reads null, nothing re-fetches, and the page sits
+  // on "Reading the cast…" until you navigate away and back.
+  const cancelReload = useRef<() => void>(() => {});
   const reload = useCallback(() => {
+    cancelReload.current();
     let live = true;
+    cancelReload.current = () => { live = false; };
     setRosterError(null);
     api.getCampaignSheetRoster(cid)
       .then((r) => { if (live) setLoaded({ cid, roster: r.roster }); })
@@ -213,11 +226,14 @@ export default function SheetsView() {
   async function createMissing() {
     setBusy(true);
     setError(null);
+    // The previous press's report is not an answer to this one: leaving it up
+    // beside a failure reads as a create that half-worked.
+    setResult(null);
     // Back to the overview first: the report is the answer to this press, and
     // it renders there, not under whichever member happened to be open.
     setSelected(null);
     try {
-      setResult(await api.createMissingSheets(cid, types));
+      setResult({ cid, data: await api.createMissingSheets(cid, types) });
     } catch (e) {
       // `ApiError` extends Error with the server's `detail` as its message, so
       // this reads the same sentence the route wrote without importing it.
@@ -277,27 +293,28 @@ export default function SheetsView() {
    *  inside the table's branch: the reload that follows a create can empty the
    *  roster or fail, and the answer to a button the reader just pressed must
    *  not vanish with it. */
-  const report = result && (
+  const shown = result && result.cid === cid ? result.data : null;
+  const report = shown && (
     <div className="side-section">
       <h4>Last create</h4>
       <p className="field-hint">
-        {result.created.length} sheet{result.created.length === 1 ? "" : "s"} created.
+        {shown.created.length} sheet{shown.created.length === 1 ? "" : "s"} created.
       </p>
       {/* Named, not counted: a sheet written from schema defaults has not been
           through the module's creation step, and a bulk create that reported
           only a total would be the silent skip #201 rules out wearing a
           different hat. */}
-      {result.created.filter((c) => c.creation_pending.length > 0).map((c) => (
+      {shown.created.filter((c) => c.creation_pending.length > 0).map((c) => (
         <p className="field-hint" key={`${c.kind}/${c.id}`}>
           {c.name}: created from defaults — {andList(c.creation_pending)} not chosen yet.
         </p>
       ))}
-      {result.skipped.map((s) => (
+      {shown.skipped.map((s) => (
         <p className="field-hint" key={s.kind}>
           {sheetKindLabel(s.kind)} skipped — {s.reason}
         </p>
       ))}
-      {result.failed.map((f) => (
+      {shown.failed.map((f) => (
         <p className="field-hint" key={`${f.kind}/${f.id}`}>
           {sheetKindLabel(f.kind)} {f.id} failed — {f.detail}
         </p>
