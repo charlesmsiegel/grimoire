@@ -14,6 +14,7 @@ from grimoire.store import (
     appearances,
     campaigns,
     characters,
+    clock,
     entities,
     overlay,
     pcs,
@@ -27,6 +28,16 @@ def _campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     return wid, campaigns.create_campaign("Saltmarch", wid)
+
+
+def _anchored(cid: str, native: str = "2026-01-01") -> None:
+    """Give the campaign a moment to read a friendly date NEAR.
+
+    `calendars.resolve` scans a window rather than parsing, so a campaign with
+    no clock and no dated scene cannot invert "2 January 2026" at all. Every
+    campaign an export is re-imported into has one; a brand-new empty one does
+    not, and `test_a_friendly_date_needs_a_window` pins that limit."""
+    clock.advance(cid, to=native, reason="test")
 
 
 def _character(wid: str, name: str) -> str:
@@ -122,18 +133,18 @@ def test_parse_reads_a_bundle_chapter(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
     overlay.create_entity(cid, "locations", "The Quay")
     _character(wid, "Mara")
+    _anchored(cid)
 
     draft = scene_import.parse(cid, CHAPTER.encode())
 
     assert draft["title"] == "The Long Quay"        # the chapter number is not a title
     assert draft["location"] == "the-quay"
     assert len(draft["messages"]) == 2
-    # A chapter carries the calendar's *friendly* rendering ("2 January 2026"),
-    # which no provider in the store reads back -- `friendly` has no inverse. So
-    # the date is the one header field an import cannot recover: it is named in
-    # a warning, verbatim, for the reviewer to set.
-    assert draft["date"] == ""
-    assert any("2 January 2026" in w for w in draft["warnings"])
+    # The friendly rendering the exporter writes, read back: `calendars.resolve`
+    # accepts any form THIS calendar renders, which is what makes export →
+    # re-import keep its date instead of losing it on every chapter.
+    assert draft["date"] == "2026-01-02"
+    assert draft["warnings"] == []
 
 
 def test_a_cast_header_line_is_not_a_speaker(monkeypatch, tmp_path):
@@ -157,13 +168,31 @@ def test_an_epigraph_is_not_transcript(monkeypatch, tmp_path):
     assert not any("tide turned" in m["content"] for m in draft["messages"])
 
 
-def test_a_single_header_bit_is_reported_rather_than_guessed(monkeypatch, tmp_path):
+def test_a_lone_header_bit_is_placed_by_whichever_authority_claims_it(monkeypatch, tmp_path):
     """`_header_lines` drops whichever of date/location the scene lacked, so one
-    bit could be either. Guessing puts a location in the date field."""
+    bit could be either — but that is answerable rather than a guess: the
+    calendar knows whether a string is a date it could have written, and the
+    roster knows whether it is a place."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
-    draft = scene_import.parse(cid, b"# 1. Somewhere\n\n*The Quay*\n\n**You:** hello\n")
+    overlay.create_entity(cid, "locations", "The Quay")
+
+    _anchored(cid)
+    lone_date = scene_import.parse(cid, b"# 1. S\n\n*2 January 2026*\n\n**You:** hello\n")
+    assert lone_date["date"] == "2026-01-02" and lone_date["location"] == ""
+
+    lone_place = scene_import.parse(cid, b"# 1. S\n\n*The Quay*\n\n**You:** hello\n")
+    assert lone_place["location"] == "the-quay" and lone_place["date"] == ""
+
+    assert lone_date["warnings"] == [] and lone_place["warnings"] == []
+
+
+def test_a_lone_header_bit_neither_authority_claims_is_reported(monkeypatch, tmp_path):
+    """The honest remainder: not a date this calendar reads, not a place this
+    campaign has."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    draft = scene_import.parse(cid, b"# 1. S\n\n*Somewhere Else*\n\n**You:** hello\n")
     assert draft["date"] == "" and draft["location"] == ""
-    assert any("either the date or the location" in w for w in draft["warnings"])
+    assert any("neither a date" in w for w in draft["warnings"])
 
 
 def test_a_scene_that_moved_says_what_is_not_carried(monkeypatch, tmp_path):
@@ -192,7 +221,8 @@ def test_an_unknown_location_is_reported_not_invented(monkeypatch, tmp_path):
 
 def test_an_unreadable_date_is_dropped_with_a_warning(monkeypatch, tmp_path):
     """The draft's date has to be one the commit can actually set -- a date the
-    provider rejects would fail deep inside `fill`, after the scene exists."""
+    provider rejects would fail deep inside `commit`, after the scene exists.
+    A Hebrew date is not one a gregorian campaign can read in any form."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
     draft = scene_import.parse(
         cid, b"# 1. Somewhere\n\n*25 Kislev 5786 \xe2\x80\x94 The Quay*\n\n**You:** hello\n")
@@ -294,8 +324,102 @@ def test_synthetic_speakers_are_never_offered_as_cast(monkeypatch, tmp_path):
             f"**{scenes.ROLL_SPEAKER}:** Athletics: 3 successes\n").encode()
     draft = scene_import.parse(cid, body)
     assert draft["cast"] == [] and draft["unmatched"] == []
-    assert [m["speaker"] for m in draft["messages"]] == [scenes.TRANSITION_SPEAKER,
-                                                         scenes.ROLL_SPEAKER]
+    # The transition tag rides along -- it is drift metadata and promises
+    # nothing. The roll tag does not: see the test below.
+    assert draft["messages"][0]["speaker"] == scenes.TRANSITION_SPEAKER
+
+
+def test_an_imported_roll_line_does_not_keep_a_promise_it_cannot_hold(monkeypatch, tmp_path):
+    """The `⁣Roll` tag makes `edit_message` refuse the message outright and
+    reroll refuse to step past it, both on the ground that the line stays in
+    lockstep with `rolls.json`. An import writes no roll entry, so importing
+    the tag would freeze that message forever over a roll that does not
+    exist."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    body = f"**You:** I swing.\n\n**{scenes.ROLL_SPEAKER}:** Athletics: 3 successes\n"
+
+    draft = scene_import.parse(cid, body.encode())
+    assert "speaker" not in draft["messages"][1]              # imports as ordinary text
+    assert any("dice-roll" in w for w in draft["warnings"])   # and says so
+
+    sid = scenes.create_scene(cid, "Rolled")
+    out = scene_import.commit(cid, sid, draft["messages"])
+    scenes.edit_message(cid, out["id"], 1, "Athletics: 4 successes")   # no longer frozen
+    assert scenes.read_scene(cid, out["id"])["messages"][1]["content"] == "Athletics: 4 successes"
+
+
+def test_a_failed_import_takes_its_seats_back(monkeypatch, tmp_path):
+    """Scene ids are recycled -- `_numbering` reads the files on disk -- so
+    retrying a failed import of the same file lands on the same id. With the
+    appearance records left behind, the retry's brand-new scene opens with the
+    failed run's cast already on stage."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    _character(wid, "Mara")
+    sid = scenes.create_scene(cid, "The Long Quay")
+
+    with pytest.raises(appearances.AppearError):
+        scene_import.commit(cid, sid, [{"role": "user", "content": "hi"}], cast=[
+            {"kind": "characters", "id": "mara", "version": "main", "role": "npc"},
+            {"kind": "characters", "id": "ghost", "version": "main", "role": "npc"}])
+
+    assert scenes.list_scenes(cid) == []
+    retry = scenes.create_scene(cid, "The Long Quay")
+    assert retry == sid                                       # the id really is recycled
+    assert appearances.scene_cast(cid, retry) == []
+
+
+def test_the_source_reply_boundaries_come_with(monkeypatch, tmp_path):
+    """`turn_sizes` is what tells a reroll how many blocks the last generation
+    had. Dropped, the first reroll takes the untracked branch and removes the
+    whole trailing model run -- so a scene ending in a three-speaker reply
+    loses all three."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    _character(wid, "Mara")
+    body = ("---\ntitle: T\nturn_sizes: '2'\n---\n\n"
+            "**You:** go on\n\n**Mara:** one\n\n**Mara:** two\n")
+
+    draft = scene_import.parse(cid, body.encode())
+    assert draft["turn_sizes"] == [2]
+
+    sid = scenes.create_scene(cid, "Tracked")
+    out = scene_import.commit(cid, sid, draft["messages"], turn_sizes=draft["turn_sizes"])
+    assert scenes.get_turn_sizes(cid, out["id"]) == [2]
+
+
+def test_boundaries_that_no_longer_fit_are_dropped_rather_than_guessed(monkeypatch, tmp_path):
+    """A list that does not describe the transcript is worse than none --
+    `TurnSizesDesynced` exists to say so."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    draft = scene_import.parse(
+        cid, b"---\ntitle: T\nturn_sizes: '9'\n---\n\n**You:** hi\n\n**Grimoire:** there\n")
+    assert draft["turn_sizes"] is None
+
+
+def test_a_macro_is_resolved_once_at_import(monkeypatch, tmp_path):
+    """#137 through a third door: both other paths that persist authored text
+    expand at persist time, or a `{{roll:1d20}}` sitting in the transcript
+    rolls a different number into the prompt on every later context build."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    # `random` with one distinct choice, so the assertion is about WHEN it was
+    # resolved rather than about what it rolled.
+    draft = scene_import.parse(cid, b"**You:** The room feels {{random:calm,calm}} tonight.\n")
+
+    sid = scenes.create_scene(cid, "Macros")
+    out = scene_import.commit(cid, sid, draft["messages"])
+
+    content = scenes.read_scene(cid, out["id"])["messages"][0]["content"]
+    assert content == "The room feels calm tonight."   # resolved, and stored resolved
+
+
+def test_a_cast_name_containing_the_separator_survives(monkeypatch, tmp_path):
+    """`export._header_lines` joins the cast with ", " and escapes nothing, so
+    a name with a comma in it is written into the middle of the list."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    _character(wid, "Winifred, the Grey")
+    draft = scene_import.parse(
+        cid, b"# 1. Somewhere\n\n**Cast:** Winifred, the Grey\n\n**You:** hello\n")
+    assert [c["id"] for c in draft["cast"]] == ["winifred-the-grey"]
+    assert draft["unmatched"] == []
 
 
 def test_a_sub_speaker_label_resolves_to_its_base(monkeypatch, tmp_path):
@@ -386,6 +510,18 @@ def test_commit_removes_the_scene_it_could_not_finish(monkeypatch, tmp_path):
     assert scenes.list_scenes(cid) == []
 
 
+def test_a_friendly_date_needs_a_window(monkeypatch, tmp_path):
+    """The honest limit of reading a rendered date back: `resolve` scans around
+    an anchor rather than parsing, so a campaign with no clock and no dated
+    scene cannot tell which year "2 January" belongs to. Reported, not guessed
+    — and it is the first import into an empty campaign, where there is
+    nothing to be inconsistent with anyway."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)          # no clock, no scenes
+    draft = scene_import.parse(cid, b"# 1. S\n\n*2 January 2026*\n\n**You:** hello\n")
+    assert draft["date"] == ""
+    assert any("neither a date" in w for w in draft["warnings"])
+
+
 def test_a_bundle_chapter_round_trips_through_the_exporter(monkeypatch, tmp_path):
     """The one claim that covers the whole format at once: export a scene, feed
     the chapter file back in, and get the same transcript."""
@@ -398,6 +534,7 @@ def test_a_bundle_chapter_round_trips_through_the_exporter(monkeypatch, tmp_path
     scenes.append_message(cid, sid, "user", "I walk the quay looking for Mara.")
     scenes.append_message(cid, sid, "assistant", '"You found me."', speaker="Mara")
 
+    _anchored(cid)
     data = export.collect(cid)
     chapter = "\n\n".join([f"# {export.toc_label(data['chapters'][0])}",
                            *export._header_lines(data["chapters"][0]),

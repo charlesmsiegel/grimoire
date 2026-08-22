@@ -97,6 +97,43 @@ def append_message(cid: str, sid: str, role: str, content: str,
 
 
 @locking._serialized
+def append_messages(cid: str, sid: str, messages: list[dict],
+                    turn_sizes: list[int] | None = None) -> int:
+    """Append MANY messages in one read-modify-write; returns the first index.
+
+    `append_message` in a loop is one lock acquisition, one whole-file read and
+    one whole-file write per message, so writing n messages costs O(n²) bytes
+    and holds the campaign lock n times. That is invisible for the one-message
+    appends the play loop makes and ruinous for the only caller that appends a
+    whole transcript at once: importing a 3200-post log took 27 seconds of
+    continuous acquire/release, starving every other writer in that campaign
+    (#92). This is the same shape `append_reply` already uses for a multi-block
+    reply, generalized to messages that are not one generation.
+
+    `turn_sizes` is staged into the SAME write, never a second one, for the
+    reason `turns._set_turn_sizes` gives: a crash between the transcript write
+    and the boundary write leaves the boundaries describing a transcript that
+    does not exist, and the next reroll trusts them. Callers pass it only when
+    it actually describes these messages -- `turns._tracked_suffix_fits` is the
+    check -- and otherwise leave it None, which keeps the scene untracked
+    rather than mistracked.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    index = len(serialize._markers(body))
+    for m in messages:
+        body = serialize._append_block(
+            body, serialize._block(m["role"], m.get("speaker"), m["content"]))
+    if turn_sizes is not None:
+        turns._set_turn_sizes(meta, turn_sizes)
+    meta["updated"] = now_iso()
+    atomic.write_text(p, dump_frontmatter(meta, body))
+    return index
+
+
+@locking._serialized
 def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     """Persist ONE model generation as per-speaker posts, recording its block
     count as a turn boundary.

@@ -108,6 +108,10 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
         title: title.trim() || draft.title,
         date, location, pcless,
         messages: draft.messages,
+        // Carried, not shown: the source's reply boundaries are what let a
+        // reroll on an imported scene take one generation off instead of the
+        // whole trailing model run.
+        turn_sizes: draft.turn_sizes,
         cast: chosen().map((c) => ({ kind: c.kind, id: c.id, role: c.role })),
       });
       if (!live.current) return;   // switched campaigns mid-import: the scene is

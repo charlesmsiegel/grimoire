@@ -163,6 +163,33 @@ def test_a_role_the_transcript_cannot_hold_is_refused_at_the_boundary(client):
     assert client.get(f"/api/campaigns/{cid}/scenes").json() == []
 
 
+def test_a_transcript_too_long_for_one_scene_is_refused(client):
+    """The parse route bounds its upload; the commit body is plain JSON and had
+    no bound at all, so one request could hold the campaign lock for minutes."""
+    _wid, cid = _campaign(client)
+    many = [{"role": "user", "content": "x"}] * (store.scene_import.MAX_MESSAGES + 1)
+    r = client.post(f"/api/campaigns/{cid}/scenes/import", json={"title": "Huge", "messages": many})
+    assert r.status_code == 413
+    assert client.get(f"/api/campaigns/{cid}/scenes").json() == []
+
+
+def test_a_long_import_does_not_hold_the_campaign_lock_per_post(client):
+    """`append_message` per message is a whole-file read and write each, so the
+    commit was quadratic: 3200 posts took ~27s of continuous acquire/release.
+    One batched write is the fix; this pins that it stays one."""
+    import time
+    _wid, cid = _campaign(client)
+    msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"post {i}"}
+            for i in range(1200)]
+    started = time.monotonic()
+    r = client.post(f"/api/campaigns/{cid}/scenes/import", json={"title": "Long", "messages": msgs})
+    assert r.status_code == 200 and r.json()["messages"] == 1200
+    # Deliberately loose -- this is a shape check, not a benchmark. The
+    # quadratic version took several seconds for this length on an idle box.
+    assert time.monotonic() - started < 5, "the transcript is not being written in one pass"
+    assert len(client.get(f"/api/campaigns/{cid}/scenes/{r.json()['id']}").json()["messages"]) == 1200
+
+
 def test_commit_404s_for_an_unknown_campaign(client):
     r = client.post("/api/campaigns/nope/scenes/import",
                     json={"title": "T", "messages": [{"role": "user", "content": "hi"}]})
