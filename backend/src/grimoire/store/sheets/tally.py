@@ -15,6 +15,7 @@ from .. import atomic, characters, entities, locks, overlay, pcs
 from ..campaigns import read as campaigns_read
 from ..modules import binding as modules_binding
 from ..modules import pack as modules_pack
+from ..paths import safe_id
 from ..worlds import paths as worlds_paths
 from . import paths, schema, writer
 
@@ -84,6 +85,22 @@ def _kind_types(sheets_def: dict, kind: str) -> list[str]:
                   if isinstance(st, dict) and st.get("kind") == want)
 
 
+def _sweep_reader(pack: dict, mid: str, path_of):
+    """A one-sheet reader for a sweep, bound to an already-loaded pack.
+
+    Deliberately NOT ``reader.read``/``read_world``: each of those resolves the
+    module and loads the pack per call, and ``resolve`` loads it again -- so a
+    sweep over a cast pays two full pack parses per member for an answer that
+    is the same every time. The ``safe_id`` guard is the one thing those do
+    that still has to happen per entity.
+    """
+    def read_one(kind: str, eid: str) -> dict | None:
+        if kind not in FILE_KINDS or not safe_id(eid):
+            return None
+        return sheet_reader._read_path(path_of(kind, eid), kind, mid, pack=pack)
+    return read_one
+
+
 def _tally(ids: list[str], reader) -> dict:
     sheeted = invalid = 0
     for eid in ids:
@@ -100,10 +117,12 @@ def coverage(cid: str) -> dict:
     mid = modules_binding.resolve(cid)
     if mid is None:
         return {}
+    pack = modules_pack.load_pack(mid)
+    read_one = _sweep_reader(pack, mid, lambda k, e: paths._campaign_path(cid, k, e))
     out: dict = {}
-    for kind in _sheetable_kinds(modules_pack.load_pack(mid)):
+    for kind in _sheetable_kinds(pack):
         ids = [e["id"] for e in _cast(cid, kind)]
-        out[kind] = _tally(ids, lambda eid, k=kind: sheet_reader.read(cid, k, eid))
+        out[kind] = _tally(ids, lambda eid, k=kind: read_one(k, eid))
     return out
 
 
@@ -116,6 +135,9 @@ def world_coverage(wid: str, mid: str) -> dict:
     if pack["errors"]:
         return {}
     root = worlds_paths.world_root(wid)
+    if not safe_id(mid):
+        return {}
+    read_one = _sweep_reader(pack, mid, lambda k, e: paths._world_path(wid, mid, k, e))
     out: dict = {}
     for kind in _sheetable_kinds(pack):
         if kind == "characters":
@@ -124,7 +146,7 @@ def world_coverage(wid: str, mid: str) -> dict:
             ids = [p["id"] for p in pcs.list_pcs(root)]
         else:
             ids = [e["id"] for e in entities.list_entities(root, kind)]
-        out[kind] = _tally(ids, lambda eid, k=kind: sheet_reader.read_world(wid, mid, k, eid))
+        out[kind] = _tally(ids, lambda eid, k=kind: read_one(k, eid))
     return out
 
 
@@ -147,6 +169,7 @@ def roster(cid: str) -> dict[str, list[dict]]:
         return {}
     pack = modules_pack.load_pack(mid)
     sheets_def = pack["sheets"] if isinstance(pack.get("sheets"), dict) else {}
+    read_one = _sweep_reader(pack, mid, lambda k, e: paths._campaign_path(cid, k, e))
     out: dict[str, list[dict]] = {}
     for kind in _sheetable_kinds(pack):
         rows: list[dict] = []
@@ -154,7 +177,7 @@ def roster(cid: str) -> dict[str, list[dict]]:
             eid = member["id"]
             row: dict = {"id": eid, "name": member.get("name") or eid, "sheeted": False,
                          "sheet_type": None, "errors": [], "unspent": {}}
-            sheet = sheet_reader.read(cid, kind, eid)
+            sheet = read_one(kind, eid)
             if sheet is not None:
                 row["sheeted"] = True
                 row["sheet_type"] = sheet["sheet_type"]

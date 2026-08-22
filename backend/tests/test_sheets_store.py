@@ -1467,6 +1467,71 @@ def test_create_missing_costs_what_it_creates_not_what_it_reads(monkeypatch, tmp
     assert fat == lean
 
 
+def _pack_loads(monkeypatch, call) -> int:
+    loads = []
+    real_load = modules_pack.load_pack
+    with monkeypatch.context() as m:
+        m.setattr(modules_pack, "load_pack",
+                  lambda mid: (loads.append(mid), real_load(mid))[1])
+        call()
+    return len(loads)
+
+
+def test_a_coverage_sweep_parses_the_pack_once_not_once_per_member(monkeypatch, tmp_path):
+    """`reader.read` costs TWO full pack parses per sheet -- one of its own and
+    one inside `modules_binding.resolve` -- and `load_pack` has no memo, so a
+    sweep built on it re-reads and re-validates `sheets.json` twice per cast
+    member. `coverage` runs on every open of the play view's mechanics panel
+    and `roster` on every open of the sheets room, so the cost is paid for
+    reading, not writing. Both now read against the pack they already hold."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    for name in ("Mara", "Winifred", "Seraphine", "Ilse"):
+        characters.create_character(worlds.world_root(wid), name)
+        sheets.write(cid, "characters", name.lower(), "medium", None, expected=None)
+
+    assert _pack_loads(monkeypatch, lambda: sheets.coverage(cid)) \
+        == _pack_loads(monkeypatch, lambda: sheets.roster(cid)) == 2  # resolve + the sweep's
+
+    # ...and it stays 2 as the cast grows, which is the actual invariant
+    for name in ("Cressida", "Winnifred II", "Tamsin"):
+        characters.create_character(worlds.world_root(wid), name)
+    assert _pack_loads(monkeypatch, lambda: sheets.roster(cid)) == 2
+
+
+def test_the_roster_still_judges_a_sheet_exactly_as_a_single_read_does(monkeypatch, tmp_path):
+    """The sweep reader bypasses `reader.read`, so the two could drift on what
+    counts as an error or a derived value. They are the same file's judgment or
+    the room shows something the sheet's own page does not."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    sheets.write(cid, "characters", "mara", "medium",
+                 {"vigor": 2, "wits": 4, "occult": 2}, expected=None)
+    modules.set_campaign_module(cid, "d20-basic")     # `medium` is now unknown
+
+    row = sheets.roster(cid)["characters"][0]
+    direct = sheets.read(cid, "characters", "mara")
+    assert row["errors"] == direct["errors"] != []
+    assert row["sheet_type"] == direct["sheet_type"]
+
+    modules.set_campaign_module(cid, "pool-basic")
+    row = sheets.roster(cid)["characters"][0]
+    direct = sheets.read(cid, "characters", "mara")
+    assert row["errors"] == direct["errors"] == []
+    assert direct["derived"]["sight_pool"] == 6       # the read still computes them
+
+
+def test_the_sweep_reader_refuses_an_unsafe_id_like_a_single_read(monkeypatch, tmp_path):
+    """The one per-entity check `reader.read` does that the sweep still has to:
+    a cast listing only yields safe ids, but the sweep reader is a public-ish
+    seam and a path built from an unchecked id is how a traversal starts."""
+    _, cid = _campaign(monkeypatch, tmp_path)
+    pack = modules.load_pack("pool-basic")
+    read_one = sheets.tally._sweep_reader(
+        pack, "pool-basic", lambda k, e: sheets._campaign_path(cid, k, e))
+    assert read_one("characters", "../../escape") is None
+    assert read_one("nonsense", "mara") is None
+
+
 def test_the_roster_flags_what_a_bulk_create_left_incomplete(monkeypatch, tmp_path):
     """The loop the whole issue is about, end to end: create the missing
     sheets, then ask who has one -- and get back that they all do and that
