@@ -208,13 +208,20 @@ class OpenAICompatibleClient:
                           else http.get(url, headers=headers))
             if resp.status_code >= 400:
                 raise OpenAICompatibleError(_status_kind(resp.status_code), _extract_error(resp.text))
-            data = resp.json().get("data", [])
+            body = resp.json()
         except OpenAICompatibleError:
             raise
         except httpx.HTTPError as exc:
             raise OpenAICompatibleError("network", str(exc)) from exc
         except Exception as exc:
             raise OpenAICompatibleError("network", str(exc)) from exc
+        # A 200 whose body is JSON but not a catalog — `{"data": null}` from a
+        # server with nothing loaded, a bare array, a gateway's status document.
+        # Outside the funnel above deliberately: `except Exception` there would
+        # relabel this as `network`, which is the one thing it is not.
+        data = catalog.rows(body)
+        if data is None:
+            raise OpenAICompatibleError("bad_response", "model list was not a catalog")
         return catalog.entries(data)
 
     async def probe(self, base_url: str, key: str) -> None:

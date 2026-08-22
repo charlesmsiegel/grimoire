@@ -431,6 +431,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // sentence out of nothing that failed, and set `text` alone.
   const [error, setError] =
     useState<{ text: string; retryable: boolean; from?: string; err?: unknown } | null>(null);
+  /** Whether the dot has been told this connection is failing, so that the
+   *  next turn which works can tell it otherwise. Recovery is only visible if
+   *  something announces it, and the shell has no other way to hear. */
+  const sawProviderFailure = useRef(false);
   const fail = (e: any, retryable = true, from?: string) => {
     setError({ text: errorText(e), retryable, from, err: e });
     // A turn that failed is the freshest thing anyone knows about that
@@ -439,6 +443,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // every other provider call (#146). Without this the status dot keeps
     // yesterday's verdict until the reader navigates.
     if (isProviderFailure(e)) {
+      sawProviderFailure.current = true;
       invalidateConfigCache();
       configChanged();
     }
@@ -2295,6 +2300,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           setProposalNow({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
         } else if (e.done) {
           finished = true;
+          // A turn that worked is as much news about the connection as one
+          // that failed, and only in one direction does the shell find out on
+          // its own: `fail` announces, so a Retry that succeeds without leaving
+          // the page would otherwise leave the dot red until an unrelated
+          // navigation. Gated on having reported a provider failure, so an
+          // ordinary turn does not re-read the config every time (#146).
+          if (sawProviderFailure.current) {
+            sawProviderFailure.current = false;
+            invalidateConfigCache();
+            configChanged();
+          }
         }
       }, controller.signal, attempt, (index) => {
         // The WIRE index, so a resume asks for one past what was really read.

@@ -643,6 +643,25 @@ class LLMClient:
                        usage: dict | None = None) -> str:
         return "".join([chunk async for chunk in self.stream(messages, conn, usage)])
 
+    def note_outcome(self, conn: dict, error: LLMError | None) -> None:
+        """File an outcome this facade did not itself observe (#146).
+
+        There is exactly one such outcome, and it is the reason this is public.
+        A one-shot generation runs under a total-duration ceiling imposed by the
+        route (`routes.common._bounded_call`), and an overrun *cancels* the
+        stream from outside — so `_resilient` unwinds through `GeneratorExit`
+        rather than through its `except LLMError`, and the attempt that
+        provoked the ceiling would be the one failure the registry never hears
+        about. The reader would then be shown a 504 and a green dot.
+
+        Cancellation cannot be read as a failure from inside `_resilient`,
+        which is why it is not: a caller walking away (an SSE client
+        disconnecting) unwinds identically and is nobody's fault. Only the
+        holder of the ceiling knows which of the two just happened, so only it
+        can say.
+        """
+        _observe(self._observer, conn, error)
+
     async def list_models(self, conn: dict) -> list[dict]:
         """The catalog `conn`'s provider offers, normalized (#149).
 

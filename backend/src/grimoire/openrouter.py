@@ -199,9 +199,17 @@ class OpenRouterClient:
         """
         resp = await self._get(MODELS_URL, key)
         try:
-            data = resp.json().get("data", [])
+            body = resp.json()
         except ValueError as exc:
             raise OpenRouterError("bad_response", f"model list was not JSON: {exc}") from exc
+        # A 200 whose body is JSON but not a catalog — `{"data": null}`, a bare
+        # array, a proxy's status document — is the provider misbehaving, which
+        # is what `bad_response` is for. Reaching the normalizer with it raises
+        # a TypeError from inside a route instead, i.e. a 500 for somebody
+        # else's malformed reply.
+        data = catalog.rows(body)
+        if data is None:
+            raise OpenRouterError("bad_response", "model list was not a catalog")
         return catalog.entries(data)
 
     async def probe(self, key: str) -> None:

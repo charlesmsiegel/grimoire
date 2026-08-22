@@ -357,6 +357,33 @@ async def test_list_models_rejects_a_body_that_is_not_json():
     assert exc.value.kind == "bad_response"
 
 
+@pytest.mark.parametrize("body", [
+    {"data": None},          # a 200 from a server with nothing loaded
+    ["a/b"],                 # a bare array — off-spec, and it used to crash
+    {"error": "nope"},       # a gateway's status document
+    "not even an object",
+])
+async def test_a_body_that_is_json_but_not_a_catalog_is_a_bad_response(body):
+    """These reach the normalizer as `None`/a string and raise out of the route
+    as a 500 — somebody else's malformed reply reported as our bug — unless the
+    envelope is checked first."""
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(OpenRouterError) as exc:
+        await make_client(handler).list_models("sk-or-x")
+    assert exc.value.kind == "bad_response"
+
+
+async def test_an_empty_catalog_is_not_a_malformed_one():
+    """`{"data": []}` is a provider that legitimately serves no models, and
+    telling that reader to check their URL would be a lie."""
+    def handler(request):
+        return httpx.Response(200, json={"data": []})
+
+    assert await make_client(handler).list_models("sk-or-x") == []
+
+
 async def test_probe_asks_the_authenticated_endpoint_not_the_public_catalog():
     """`/models` answers 200 for a revoked key, so a check built on it would
     report a dead connection healthy — the exact complaint #146 opens with."""

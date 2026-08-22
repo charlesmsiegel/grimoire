@@ -55,6 +55,10 @@ export function ConnectionEditor() {
   // that started it, and a reader who moves to another connection meanwhile
   // would otherwise get the first one's models in the second one's picker.
   const openId = useRef<string | null>(null);
+  // ...and which revision of it. A connection can be edited and reselected
+  // while a catalog fetch for the previous revision is still out, and that
+  // response describes an endpoint this connection no longer points at.
+  const openRev = useRef<string>("");
 
   const reload = useCallback(() => api.listConnections().then(setConnections), []);
   useEffect(() => { reload(); }, [reload]);
@@ -82,6 +86,7 @@ export function ConnectionEditor() {
 
   function resetForm() {
     openId.current = null;
+    openRev.current = "";
     setId(null);
     setDetail(null);
     setForm(BLANK_CONNECTION);
@@ -98,6 +103,7 @@ export function ConnectionEditor() {
     openId.current = cid;
     const d = await api.readConnection(cid);
     if (openId.current !== cid) return;   // moved on while this read was out
+    openRev.current = d.rev;
     setId(cid);
     setDetail(d);
     setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process });
@@ -187,7 +193,17 @@ export function ConnectionEditor() {
       // same stale-async-response guard used elsewhere in this codebase
       // (ModelCombobox/StyleGuideEditor's `alive` pattern), keyed here on
       // the connection's rev instead of a mount flag.
-      if (openId.current === forId) setModels(result.models);
+      //
+      // BOTH halves check both things. The id alone is not enough: a refresh
+      // for revision r1 that lands after the reader has saved and reselected
+      // the same connection is a catalog for an endpoint that connection no
+      // longer points at, and it would sit in the picker until something else
+      // replaced it. A refresh does not itself bump the rev — the sidecar is
+      // tagged with the one it was fetched for — so this rejects nothing it
+      // should keep.
+      if (openId.current === forId && openRev.current === result.rev) {
+        setModels(result.models);
+      }
       setDetail((d) => (d && d.id === forId && d.rev === result.rev
         ? { ...d, models: result.models, fetched_at: result.fetched_at }
         : d));

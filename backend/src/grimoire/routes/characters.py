@@ -19,6 +19,7 @@ from .common import (
     _display_name_or_400,
     _draft_description,
     _llm_http_error,
+    _noting,
     _require_connection,
     _serve_image,
     _upload_image_ext,
@@ -247,7 +248,8 @@ async def post_character_tagline_generate(wid: str, cid: str,
     messages = store.taglines.build_prompt(_card_data(card))
     try:
         with store.usage.meter("tagline") as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage))
+            text = await _bounded_call(client.complete(messages, conn, m.usage),
+                                       on_timeout=_noting(client, conn))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
@@ -493,7 +495,8 @@ async def post_character_voice_anchor_generate(wid: str, cid: str,
     messages = store.voice_anchors.build_prompt(_card_data(card))
     try:
         with store.usage.meter("voice-anchor") as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage))
+            text = await _bounded_call(client.complete(messages, conn, m.usage),
+                                       on_timeout=_noting(client, conn))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     # Preview only, like tagline/generate — the caller persists via PUT on Save,

@@ -22,6 +22,7 @@ from .common import (
     _campaign_root_or_404,
     _dump,
     _llm_http_error,
+    _noting,
     _override_connection,
     _page_of,
     _page_window,
@@ -290,7 +291,8 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
                                           candidates, offscreen=offscreen, direction=direction)
     try:
         with store.usage.meter("suggestions", campaign=cid) as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage))
+            text = await _bounded_call(client.complete(messages, conn, m.usage),
+                                       on_timeout=_noting(client, conn))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
@@ -321,7 +323,8 @@ async def post_scene_intent(cid: str, body: SceneIntent,
     messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
     try:
         with store.usage.meter("intent", campaign=cid) as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage))
+            text = await _bounded_call(client.complete(messages, conn, m.usage),
+                                       on_timeout=_noting(client, conn))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     got = store.suggest.parse_intent(text, cid, offscreen=body.offscreen)

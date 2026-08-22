@@ -1220,8 +1220,18 @@ export const api = {
       invalidateConfigCache();
       return notifyConfig(r);
     }),
+  /** Re-fetch a saved connection's catalog from its provider and cache it
+   *  server-side (#149).
+   *
+   *  Announces, like the other connection mutators: this one does not change
+   *  the config, but `models.ts` holds a page-load copy of the ACTIVE
+   *  connection's catalog and that signal is what drops it. Without this, a
+   *  refresh on the Connections page updates the store and the editor while
+   *  every scene inspector goes on sizing prompts against the list this
+   *  request replaced. */
   refreshConnectionModels: (id: string) =>
-    request<ModelsRefreshResult>("POST", `/api/llm-connections/${id}/models/refresh`),
+    request<ModelsRefreshResult>("POST", `/api/llm-connections/${id}/models/refresh`)
+      .then(notifyConfig),
   /** The catalog for a connection that has been described but not saved (#149)
    *  — the New-connection form and the setup wizard, where there is no id to
    *  refresh yet. Nothing is cached server-side and nothing is stored. */

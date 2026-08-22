@@ -373,7 +373,7 @@ def _abandon(task: asyncio.Task) -> None:
     task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
 
 
-async def _bounded_call(coro):
+async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
     """Await one non-streaming generation under a total-duration ceiling (#272).
 
     The facade's own bound is an *idle* one -- the gap between deltas -- which is
@@ -395,6 +395,14 @@ async def _bounded_call(coro):
     no new branch -- and it reaches the client as the 504 that kind maps to
     (#213), which is what it is. `llm_call_budget <= 0` disables the ceiling.
 
+    `ceiling` overrides that setting for a caller whose wait is not a
+    generation and must not inherit the "no ceiling at all" escape hatch --
+    the health check (#146), which is a button somebody is watching rather
+    than a model they are waiting on.
+
+    `on_timeout` is called with the overrun error before it is raised, for the
+    caller that knows which connection was being held. `_noting` builds one.
+
     `asyncio.wait_for` is deliberately NOT used, for the reason `llm._settle`
     spells out: it cancels the call and then waits for that cancellation to
     finish, so the ceiling is only as hard as the unwinding underneath it. Here
@@ -405,7 +413,7 @@ async def _bounded_call(coro):
     therefore capped here and the cancelled call is left to unwind on its own.
     A detached task is a leak we can live with; a wedged request is not.
     """
-    seconds = store.config.llm_call_budget()
+    seconds = store.config.llm_call_budget() if ceiling is None else ceiling
     if seconds <= 0:
         return await coro
     task = asyncio.ensure_future(coro)
@@ -419,8 +427,17 @@ async def _bounded_call(coro):
         raise
     if not done:
         _abandon(task)
-        raise LLMError(
+        overrun = LLMError(
             "timeout", f"the reply did not finish within {seconds:g}s — giving up")
+        # The one failure the facade cannot see for itself: cancelling the call
+        # unwinds `_resilient` through `GeneratorExit`, not through its
+        # `except LLMError`, so without this the connection that just held a
+        # request past its ceiling keeps whatever verdict it had — a green dot
+        # over a 504 (#146). Only the holder of the ceiling can tell this from
+        # a caller who simply walked away, which is why the facade does not try.
+        if on_timeout is not None:
+            on_timeout(overrun)
+        raise overrun
     try:
         return task.result()
     except TimeoutError as exc:
@@ -429,6 +446,18 @@ async def _bounded_call(coro):
         # expired ceiling. It keeps its own message: blaming a setting that had
         # nothing to do with it would send the user to tune the wrong knob.
         raise LLMError("timeout", str(exc) or "the call timed out") from exc
+
+
+def _noting(client: LLMClient, conn: dict):
+    """`on_timeout` for a bounded generation: file the overrun against the
+    connection it was imposed on (#146).
+
+    A function rather than a lambda at each of the six call sites, because the
+    thing worth reading at those sites is the generation, not the bookkeeping —
+    `_bounded_call(client.complete(...), on_timeout=_noting(client, conn))`
+    says which connection is being watched and stops there.
+    """
+    return lambda exc: client.note_outcome(conn, exc)
 
 
 def get_llm(request: Request) -> LLMClient:
@@ -498,7 +527,8 @@ async def _draft_description(client, path, subject: str) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         with store.usage.meter("image-description") as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage))
+            text = await _bounded_call(client.complete(messages, conn, m.usage),
+                                       on_timeout=_noting(client, conn))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     return {"description": store.image_drafts.parse_output(text)}
