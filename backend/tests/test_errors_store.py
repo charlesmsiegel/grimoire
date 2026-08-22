@@ -333,6 +333,22 @@ def test_an_exception_that_was_never_raised_still_records(home):
     assert row is not None and "trace" not in row
 
 
+def test_a_finished_meter_does_not_stamp_an_exception_it_never_recorded(home):
+    """The mark says "a row exists for this". Applying it from `__exit__`
+    instead of from the code that writes the row meant a meter already closed
+    stamped the exception anyway -- so the call site catching it next stayed
+    quiet about a failure nothing had written down."""
+    with pytest.raises(RuntimeError), usage.meter("dossier") as m:
+        m.usage.update({"model": "realm/opus"})
+        m.done()                                   # closed clean; no error row
+        raise RuntimeError("and then this, outside the call")
+
+    # The outer handler is now the only recorder, and it must not be silenced.
+    assert errors.summary(30)["total"] == 0
+    exc = RuntimeError("and then this, outside the call")
+    assert errors.record_exception(exc, "dossier") is not None
+
+
 def test_a_successful_call_records_no_error(home):
     with usage.meter("chat") as m:
         m.usage.update({"model": "realm/opus", "prompt_tokens": 5})

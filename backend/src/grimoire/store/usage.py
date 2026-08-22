@@ -408,20 +408,16 @@ class Meter:
         elif isinstance(exc, Exception):
             # `kind` is the LLMError taxonomy the frontend already branches on;
             # anything else is recorded by its type name, which is the only
-            # label a non-LLM failure has.
+            # label a non-LLM failure has. `exc` is handed down so the mark is
+            # applied by whatever actually wrote the row -- see `done`.
             self.done("error", getattr(exc, "kind", None) or type(exc).__name__,
-                      detail=str(exc).strip())
-            # `done` has written the error row. Marking the exception stops the
-            # call site that catches it next -- absorb's phase handlers turn
-            # one into a status -- from recording the same failure again and
-            # doubling it in every per-kind count (`errors.record_exception`).
-            errors.mark_recorded(exc)
+                      detail=str(exc).strip(), exc=exc)
         else:
             self.done("aborted")
         return False
 
     def done(self, status: str = "ok", error: str = "",
-             detail: str = "") -> dict | None:
+             detail: str = "", exc: BaseException | None = None) -> dict | None:
         """File the row. A second call is a no-op — see the class docstring.
 
         **A request that never went out is not a row.** `llm._stamp` fills the
@@ -460,6 +456,13 @@ class Meter:
             # what they would say was broken.
             errors.record(self.task, error or "unspecified", detail or error,
                           campaign=self.campaign, scene=self.scene, task=self.task)
+            if exc is not None:
+                # Marked HERE, by the code that wrote the row, and only when it
+                # wrote one. Marking from `__exit__` instead meant a meter
+                # already finished (`self._done`) still stamped the exception
+                # as recorded, so the call site catching it next stayed silent
+                # about a failure nothing had written down.
+                errors.mark_recorded(exc)
         if not self.usage:
             return None
         cost = self.usage.get("cost_usd")

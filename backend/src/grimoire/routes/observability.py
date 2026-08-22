@@ -160,6 +160,7 @@ def get_logs_tail(request: Request, cursor: str = Query(""),
         # fast-drain branch below deliberately does not, so a busy log emitted
         # a keep-alive every fifteen LOOPS instead of every fifteen seconds.
         last_sent = time.monotonic()
+        failing = False
         while True:
             if await request.is_disconnected():
                 return
@@ -169,6 +170,7 @@ def get_logs_tail(request: Request, cursor: str = Query(""),
                 # scene turn.
                 out = await asyncio.to_thread(store.logs.tail, position, **filters)
             except OSError as exc:
+                failing = True
                 # The log is a directory a user can move, sync or delete under
                 # us. An exception here would end the generator mid-stream and
                 # the browser would see a connection that simply stopped --
@@ -181,6 +183,14 @@ def get_logs_tail(request: Request, cursor: str = Query(""),
                 await asyncio.sleep(TAIL_INTERVAL)
                 continue
             position = out["cursor"]
+            if failing:
+                # A quiet log that has RECOVERED sends nothing otherwise --
+                # rows only arrive when there are rows, and a keep-alive is a
+                # comment frame the client never sees -- so the failure banner
+                # would stand until something happened to log. One frame that
+                # says the read worked again is what takes it down.
+                failing = False
+                yield _sse({"cursor": position})
             if out["rows"]:
                 last_sent = time.monotonic()
                 yield _sse({"rows": out["rows"], "cursor": position})
