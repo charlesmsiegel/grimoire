@@ -288,3 +288,16 @@ test("a section with lines to show is not given the counted-differently note", (
   })} />);
   expect(screen.queryByText(/counted differently/)).toBeNull();
 });
+
+test("a non-history section is not told a story about the transcript", () => {
+  // The grouping explanation is specific to Conversation history. Any other
+  // section reaching the same condition — a trailing newline `splitlines`
+  // cannot see, a tokenizer rounding boundary — gets the honest answer instead.
+  render(<ContextDiff diff={diff({
+    sections: [section({ id: "lore", label: "World lore", status: "changed",
+                         base: facts({ tokens: 40 }), head: facts({ tokens: 41 }),
+                         diff: [] })],
+  })} />);
+  screen.getByText(/what moved is the measurement, not the words/);
+  expect(screen.queryByText(/grouped into a different number of messages/)).toBeNull();
+});

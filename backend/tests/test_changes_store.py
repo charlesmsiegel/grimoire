@@ -181,6 +181,12 @@ def _reconstruct(ops):
      "\n".join(f"l{n}" for n in [*range(1500, 3000), *range(1500)])),
     ("\n".join(["dup"] * 3000), "\n".join(["dup"] * 2999 + ["other"])),
     ("\n".join(f"l{n}" for n in range(3000)), "\n".join(["dup"] * 3000)),
+    # a block repeating either side of a separator: unique nowhere globally,
+    # unique everywhere once the separator has split it
+    ("\n".join(["A", *[f"e{n}" for n in range(1200)], "s",
+                 *[f"e{n}" for n in range(1200)], "Z"]),
+     "\n".join(["B", *[f"e{n}" for n in range(1200)], "s",
+                 *[f"e{n}" for n in range(1200)], "Y"])),
 ])
 def test_the_diff_always_reconstructs_both_sides(before, after):
     """The invariant a hand-rolled diff lives or dies by, and the one thing the
@@ -215,6 +221,33 @@ def test_a_reordered_distinct_span_is_bounded_and_still_exact():
 
     assert sum(1 for o in ops if o["op"] == "delete") == n // 2
     assert sum(1 for o in ops if o["op"] == "insert") == n // 2
+
+
+def test_a_block_repeating_around_a_separator_still_aligns():
+    """Anchors are counted WITHIN a span, so the same block on either side of a
+    separator is unique nowhere -- every line occurs twice -- until the
+    separator has split it, and then unique everywhere.
+
+    Diffing the gaps directly instead of re-anchoring them reported 2,402
+    deletions and 2,402 insertions for these two edits (raised in review). It is
+    why gaps go back through the same treatment rather than straight to the
+    coarse answer, and why the walk is an explicit stack: how deep the splitting
+    goes is a property of the input.
+    """
+    block = [f"entry {k}" for k in range(1200)]
+    ops = changes.line_diff("\n".join(["first A", *block, "-- sep --", *block, "last A"]),
+                            "\n".join(["first B", *block, "-- sep --", *block, "last B"]))
+    assert sum(1 for o in ops if o["op"] == "delete") == 2
+    assert sum(1 for o in ops if o["op"] == "insert") == 2
+
+
+def test_the_same_block_repeated_three_times_still_aligns():
+    """The trick nested: one pass of splitting is not enough either."""
+    block = [f"e{k}" for k in range(800)]
+    ops = changes.line_diff("\n".join(["A", *block, "s1", *block, "s2", *block, "Z"]),
+                            "\n".join(["B", *block, "s1", *block, "s2", *block, "Y"]))
+    assert sum(1 for o in ops if o["op"] == "delete") == 2
+    assert sum(1 for o in ops if o["op"] == "insert") == 2
 
 
 def test_a_long_differing_middle_stays_bounded():

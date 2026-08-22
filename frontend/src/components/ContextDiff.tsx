@@ -210,16 +210,21 @@ function flagNotes(section: PromptDiffSection): string[] {
     notes.push(`History trimmed: ${base.trimmed} → ${head.trimmed} messages`
                + " cut from the front.");
   // Identical words, different cost, and nothing above accounted for it. The
-  // case that produces this is Conversation history: its tokens are counted per
-  // MESSAGE, so a change in how the transcript groups into messages moves the
-  // total while the joined text stays byte-identical. Renaming a PC does
-  // exactly that — her old blocks stop matching the player list and reparse
-  // from `user` to `assistant`, which merges runs that used to alternate.
-  // Without this note the row is a bare token delta with no visible cause.
+  // note says only what is known, which review caught the first version getting
+  // wrong: it named message regrouping for EVERY section, and that cause is
+  // specific to Conversation history — whose tokens are counted per message, so
+  // a PC rename reparsing her blocks from `user` to `assistant` merges runs that
+  // used to alternate. Any other section reaching this line got told a story
+  // about a transcript it is not part of; there the honest answer is that the
+  // measurement moved and the words did not (a trailing newline `splitlines`
+  // cannot see, a tokenizer rounding boundary).
   if (section.diff.length === 0 && base.tokens !== head.tokens && !notes.length)
-    notes.push("Identical text, counted differently — the transcript grouped into"
-               + " a different number of messages, and each one carries its own"
-               + " framing allowance.");
+    notes.push(section.id === "history"
+      ? "Identical text, counted differently — the transcript grouped into a"
+        + " different number of messages, and each one carries its own framing"
+        + " allowance."
+      : "Identical text, counted differently — what moved is the measurement,"
+        + " not the words.");
   return notes;
 }
 

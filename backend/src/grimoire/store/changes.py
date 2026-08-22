@@ -62,13 +62,26 @@ def line_diff(before: str, after: str) -> list[dict]:
     So: match the common prefix and suffix off directly, then split what is left
     on lines that occur exactly ONCE on each side and agree in order. Those are
     unambiguous alignment points -- the patience-diff idea -- and finding them
-    is a sort rather than a search. Only the gaps between them reach difflib,
-    each bounded by `EXACT_DIFF_LIMIT`. A span with no such anchors at all is
+    is a sort rather than a search. Each gap between two anchors goes through
+    the same treatment again, which review showed is not optional: uniqueness is
+    measured within a span, so a block that repeats on either side of a
+    separator is unique nowhere until that separator has split it, and diffing
+    the gaps directly reported 2,402 deletions for two edits. Only a span that
+    is small enough reaches difflib; a span with no anchors at all is
     duplicate-dominated by definition, and there the honest answer is the coarse
-    one: the whole span replaced, in linear time.
+    one -- the whole span replaced, in linear time.
     """
     out: list[dict] = []
-    _diff_span(before.splitlines(), after.splitlines(), out)
+    # An explicit stack rather than recursion: a span splits into gaps that are
+    # each re-anchored, and how deep that goes is a property of the INPUT. Rows
+    # ride the same stack so everything lands in order.
+    stack: list[tuple[str, list, list]] = [("span", before.splitlines(), after.splitlines())]
+    while stack:
+        kind, left, right = stack.pop()
+        if kind == "rows":
+            out += left
+        else:
+            stack += reversed(_split(left, right))
     return out
 
 
@@ -76,8 +89,17 @@ def _tagged(op: str, lines: list[str]) -> list[dict]:
     return [{"op": op, "text": line} for line in lines]
 
 
-def _diff_span(a: list[str], b: list[str], out: list[dict]) -> None:
-    """Trim the shared ends of one span, then diff what is between them."""
+def _rows(rows: list[dict]) -> tuple[str, list, list]:
+    return ("rows", rows, [])
+
+
+def _split(a: list[str], b: list[str]) -> list[tuple[str, list, list]]:
+    """One span, decomposed into finished rows and the sub-spans still to do.
+
+    Shared ends come off first -- cheap, and it is what makes an appended
+    exchange or a trimmed front almost free. What is left is either small
+    enough for difflib, or gets anchored and split again.
+    """
     head = 0
     while head < len(a) and head < len(b) and a[head] == b[head]:
         head += 1
@@ -85,44 +107,43 @@ def _diff_span(a: list[str], b: list[str], out: list[dict]) -> None:
     while (tail < len(a) - head and tail < len(b) - head
            and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]):
         tail += 1
-    out += _tagged("equal", a[:head])
-    _diff_middle(a[head:len(a) - tail], b[head:len(b) - tail], out)
-    out += _tagged("equal", a[len(a) - tail:])
+    mid_a, mid_b = a[head:len(a) - tail], b[head:len(b) - tail]
+
+    parts: list[tuple[str, list, list]] = []
+    if head:
+        parts.append(_rows(_tagged("equal", a[:head])))
+    parts += _split_middle(mid_a, mid_b)
+    if tail:
+        parts.append(_rows(_tagged("equal", a[len(a) - tail:])))
+    return parts
 
 
-def _diff_middle(a: list[str], b: list[str], out: list[dict]) -> None:
-    """A span with nothing shared at either end: anchor it, or diff it whole."""
+def _split_middle(a: list[str], b: list[str]) -> list[tuple[str, list, list]]:
+    """A span sharing neither end: difflib it, or anchor it and split again."""
     if not a or not b:
-        out += _tagged("delete", a) + _tagged("insert", b)
-        return
+        return [_rows(_tagged("delete", a) + _tagged("insert", b))]
     if max(len(a), len(b)) <= EXACT_DIFF_LIMIT:
-        out += _exact(a, b)
-        return
+        return [_rows(_exact(a, b))]
     anchors = _anchors(a, b)
     if not anchors:
-        out += _tagged("delete", a) + _tagged("insert", b)
-        return
+        # No line is unique to both sides anywhere in this span, so nothing can
+        # be placed without searching, which is the cost this bounds. The whole
+        # span replaced, in linear time.
+        return [_rows(_tagged("delete", a) + _tagged("insert", b))]
+
+    # Each gap goes back on the stack as a SPAN, not straight to difflib, and
+    # review is why: uniqueness was measured across the whole span, so a block
+    # repeating on either side of a separator is unique NOWHERE globally and
+    # unique EVERYWHERE once the separator has split it. Coarsening the gaps
+    # here reported 2,402 deletions and 2,402 insertions for two edits.
+    parts: list[tuple[str, list, list]] = []
     i = j = 0
     for ai, bj in anchors:
-        _diff_gap(a[i:ai], b[j:bj], out)
-        out.append({"op": "equal", "text": a[ai]})
+        parts.append(("span", a[i:ai], b[j:bj]))
+        parts.append(_rows([{"op": "equal", "text": a[ai]}]))
         i, j = ai + 1, bj + 1
-    _diff_gap(a[i:], b[j:], out)
-
-
-def _diff_gap(a: list[str], b: list[str], out: list[dict]) -> None:
-    """What lies between two anchors. One level, deliberately: anchoring again
-    here would make the recursion depth a property of the input, and the gap
-    between two lines that are each unique across both sides is small in every
-    shape this has been measured on. A gap that is somehow still over the limit
-    takes the coarse answer rather than the unbounded one."""
-    if not a or not b:
-        out += _tagged("delete", a) + _tagged("insert", b)
-        return
-    if max(len(a), len(b)) <= EXACT_DIFF_LIMIT:
-        out += _exact(a, b)
-    else:
-        out += _tagged("delete", a) + _tagged("insert", b)
+    parts.append(("span", a[i:], b[j:]))
+    return parts
 
 
 def _exact(a: list[str], b: list[str]) -> list[dict]:
