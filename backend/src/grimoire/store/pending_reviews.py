@@ -13,7 +13,7 @@ At most one review per scene, in a sidecar beside the transcript
 takes its review with it, and the id-recycling hazard both files share is
 handled in one place (`scenes.paths._sid_taken`).
 
-Three things ride with the payload, and none of them is decoration:
+Two things ride with the payload, and both are load-bearing:
 
 * **the generation** -- which absorb run produced this review. Cancel
   (`DELETE .../pending-review`) names it, so a Cancel that races a finishing
@@ -26,9 +26,13 @@ Three things ride with the payload, and none of them is decoration:
   lands -- appending turns, cutting posts, retconning -- advances nothing, and
   the review's token would still pass every check while summarising a
   transcript that has moved. See `watermark`.
-* **the sid** -- what it was prepared for. Belt and braces after a repoint:
-  the file moves with its scene, and a record that disagrees with its own path
-  is one nobody should act on.
+
+A third field, `sid`, is written and deliberately **never compared**. It says
+which id the review was prepared under, which is worth having in front of
+whoever opens an orphaned file by hand -- but a rename moves the record by
+copying its bytes (`repoint_scenes`, so that an undecodable sidecar cannot
+strand a rename), which leaves the stored id behind while the path moves on.
+Checking it would refuse exactly the reviews a rename was supposed to carry.
 
 `merge_audit` / `merge_dossiers` are here rather than in the routes because
 they are what the *stored* review means: a retry of one phase replaces that
@@ -164,6 +168,9 @@ def publish(cid: str, sid: str, generation: str, review: dict,
     (see `routes.scenes`), which is what stops a Cancel that landed a moment
     ago from being undone by the run it was cancelling.
     """
+    # `sid` is provenance, not a key -- see the module docstring. A rename
+    # carries the record by copying its bytes, so this holds the id it was
+    # prepared under and the path holds the id it lives at.
     record = {"v": SCHEMA, "sid": sid, "generation": generation,
               "watermark": mark, "created": now_iso(), "review": review}
     with locks.campaign_lock(cid):
