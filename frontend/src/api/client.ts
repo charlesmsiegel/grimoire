@@ -1,5 +1,5 @@
-import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent,
-  type RunHandle, type TaglineBatchEvent } from "./stream";
+import { isAbortError, parseSSEChunk, type ChatEvent, type ChubGalleryEvent,
+  type LocalizeEvent, type RunHandle, type TaglineBatchEvent, } from "./stream";
 import { campaignsChanged, configChanged } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
@@ -184,6 +184,11 @@ function request<T>(method: string, path: string, body?: unknown,
 export const RUN_POLL_MS = 1000;
 export const RUN_POLL_QUICK = 10;
 export const RUN_POLL_SLOW_MS = 5000;
+/** How many consecutive polls may fail before the wait gives up. Generous,
+ *  because the failures this rides out are exactly the ones the feature is
+ *  about, and cheap, because a run that is really gone answers the same 404
+ *  each time and the store is asked next. */
+export const RUN_POLL_MISSES = 5;
 
 /** Wait for a detached run to stop running, and answer with what it became.
  *
@@ -204,12 +209,32 @@ export const RUN_POLL_SLOW_MS = 5000;
 async function awaitRun(cid: string, sid: string, started: RunHandle,
                         signal?: AbortSignal): Promise<RunHandle> {
   let run = started;
+  let missed = 0;
   for (let asked = 0; run.state === "running"; asked++) {
     await sleepUnlessAborted(
       asked < RUN_POLL_QUICK ? RUN_POLL_MS : RUN_POLL_SLOW_MS, signal);
-    run = (await request<{ run: RunHandle }>(
-      "GET", `/api/campaigns/${cid}/scenes/${sid}/runs/${run.id}`,
-      undefined, { fresh: true })).run;
+    try {
+      run = (await request<{ run: RunHandle }>(
+        "GET", `/api/campaigns/${cid}/scenes/${sid}/runs/${run.id}`,
+        undefined, { fresh: true })).run;
+      missed = 0;
+    } catch (err) {
+      // A FAILED POLL IS NOT A FAILED RUN. The conditions this feature exists
+      // for -- a backgrounded WebView, a suspended tab resuming into a dead
+      // socket, a dropped localhost fetch -- all show up here, and ending the
+      // wait for one of them reports a failure for a run that is still
+      // generating: the reader gets a banner, the composer unlocks over a
+      // scene the server is still holding, and nothing opens the review when
+      // it does land.
+      //
+      // Three things are not transient and are not retried: an abort (the
+      // caller saying stop), a 404 (the run is gone -- reaped, or never this
+      // scene's -- which is decisive and sends the caller to the store, where
+      // the answer actually lives), and running out of patience. Everything
+      // else is asked again.
+      if (isAbortError(err) || (err instanceof ApiError && err.status === 404)
+          || ++missed > RUN_POLL_MISSES) throw err;
+    }
   }
   if (run.state === "landed") return run;
   const error = run.error ?? undefined;

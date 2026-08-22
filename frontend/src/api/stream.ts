@@ -34,7 +34,12 @@ export function newAttemptId(): string {
 // it, to poll it, or to re-attach and finish reading the reply.
 export type RunHandle = {
   id: string;
-  attempt_id: string;
+  /** `null` for a `review` run: an absorb carries no player text, so there is
+   *  nothing for idempotency to protect and `reserve_review` mints none. Typed
+   *  honestly rather than as `string`, because the next caller to key a Map on
+   *  a DISCOVERED run's attempt id would otherwise get a runtime failure the
+   *  compiler had promised could not happen. */
+  attempt_id: string | null;
   state: "running" | "landed" | "failed" | "cancelled";
   next_index: number;
   /** What KIND of work this is, and it is not decoration: a `turn` produces

@@ -100,12 +100,42 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // unbounded budget, and Cancel is the only way out of a request that may
   // never answer.
   const discardRef = useRef<Promise<unknown> | null>(null);
+  // ...and which scene it is freeing, as STATE rather than a ref, because the
+  // page renders on it: until that DELETE answers the runs it flagged are
+  // still holding the scene, so a composer unlocked in the meantime offers a
+  // send the server refuses.
+  const [settlingSid, setSettlingSid] = useState<string | null>(null);
 
-  function noteDiscard(p: Promise<unknown>) {
+  function noteDiscard(p: Promise<unknown>, sid: string | null) {
     discardRef.current = p;
+    setSettlingSid(sid);
     void p.catch(() => {}).then(() => {
-      if (discardRef.current === p) discardRef.current = null;
+      if (discardRef.current === p) {
+        discardRef.current = null;
+        setSettlingSid((s) => (s === sid ? null : s));
+      }
     });
+  }
+
+  /** Whether a review run is holding this scene against play.
+   *
+   *  One question, asked in one place, because there are four ways to be
+   *  holding it and the page needs the answer rather than the enumeration: an
+   *  absorb this browser started, one it merely found and is waiting out, a
+   *  scoped retry, and a Discard whose DELETE has not yet answered. All four
+   *  are `review` runs on the server, sharing one exclusion key with `turn` --
+   *  so a send during any of them is refused with `run_in_flight`, and a
+   *  rename or a roll with `scene_busy`.
+   *
+   *  Scoped to the scene the review belongs to. A review outlives a scene
+   *  switch, so work still running for scene A must not lock scene B: the
+   *  server would allow a turn there, and the reader is entitled to play it.
+   */
+  function holdsScene(sid: string | null): boolean {
+    if (!sid) return false;
+    if (settlingSid === sid) return true;
+    const busy = absorbing || adopting || retryingAudit || retryingDossiers;
+    return busy && (absorbSid ?? sid) === sid;
   }
   // …and which retry, within one review. `openReviewRef` cannot separate two
   // retries of the SAME review: both capture the same token, so both pass that
@@ -318,6 +348,19 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       } catch (err: unknown) {
         if (dropped || campaignRef.current !== cid
             || absorbStopRef.current !== stopGen) return;
+        // THE STORE IS THE ANSWER, not the run record -- `api.absorbScene`
+        // documents why and this path needs it more, not less: it is the
+        // locked-phone case itself, so the wait it is recovering from is the
+        // one most likely to have outlived the run's retention window. Without
+        // this the reader is told "no such run" over a scene whose finished
+        // review is sitting in its sidecar.
+        const landed = await api.pendingReview(cid, sid).catch(() => null);
+        if (dropped || campaignRef.current !== cid || hasReviewRef.current
+            || absorbStopRef.current !== stopGen) return;
+        if (landed?.review) {
+          openReview(landed.review, sid, landed.generation);
+          return;
+        }
         // `false`, for the scoped retries' reason: the banner's Retry runs the
         // CHAT retry, so offering it here would answer a failed absorb by
         // generating one more reply into the scene being finished.
@@ -386,7 +429,24 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // The generation, minutes before the review. It is what `stopAbsorb`
       // names, and without it a reader watching "Ending…" has no way to stop a
       // run that is holding their scene against play.
-      const hold = (g: string) => { if (absorbStopRef.current === stopGen) setGeneration(g); };
+      // A Stop can land BEFORE the POST answers: `setAbsorbing(true)` is
+      // synchronous, so the button renders while the request is still doing
+      // its campaign-lock snapshot and building the prompt. `stopAbsorb` has
+      // no generation to name then and sends nothing -- so without this the
+      // absorb runs to completion holding the scene's exclusion key, with no
+      // Stop button left (absorbing is false) and End scene answering
+      // `run_in_flight`: a scene that is neither playable nor stoppable.
+      //
+      // So the Stop is honoured HERE instead, the moment the review has a name
+      // -- the same precancel the backend keeps for a turn stopped before its
+      // run was reserved (`runs.cancel_or_precancel`).
+      const hold = (g: string) => {
+        if (absorbStopRef.current === stopGen) {
+          setGeneration(g);
+          return;
+        }
+        noteDiscard(api.discardReview(cid, activeId, g).catch(() => {}), activeId);
+      };
       let a;
       try {
         a = await api.absorbScene(cid, activeId, false, hold);
@@ -523,7 +583,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setGeneration(null);
     if (!sid || !gen) return;
     const stopping = api.discardReview(cid, sid, gen);
-    noteDiscard(stopping);
+    noteDiscard(stopping, sid);
     try {
       await stopping;
     } catch (err: unknown) {
@@ -548,7 +608,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // nothing else can do now that closing the connection is not a cancel.
     const sid = absorbSid ?? activeId;
     const gen = generationRef.current;
-    if (sid && gen) noteDiscard(api.discardReview(cid, sid, gen).catch(() => {}));
+    if (sid && gen) noteDiscard(api.discardReview(cid, sid, gen).catch(() => {}), sid);
     setAbsorb(null);
     setAbsorbSid(null);
     setGeneration(null);
@@ -680,15 +740,30 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
               attempted: res.mechanics.attempted,
               budget_exhausted: res.mechanics.budget_exhausted }
           : p)) } : a));
-      setEditRows((rows) => [
-        ...rows.filter((r) => r.kind !== "sheet"),
-        ...res.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })),
-      ]);
-      // Conflicts are bound to row numbers, and this rebuilds the array — so
-      // any that survived a refusal would now point at whichever row inherited
-      // their index. Sheet edits never conflict, so there is nothing to carry
-      // over; the next save re-reports whatever is still drifted.
-      setConflicts([]);
+      // A retry that FAILED replaces nothing. `_run_audit` reports a failure as
+      // a status rather than raising, so a wedged call, a budget refusal and an
+      // unparseable verdict all arrive here as `edits: []` — and dropping the
+      // sheet rows for that deletes every proposal the absorb made and puts
+      // nothing in their place, recoverable only by re-running the whole
+      // absorb. `retryDossiers` has always been careful about this for its own
+      // rows; this is the same loss. The stored fold agrees
+      // (`pending_reviews.merge_audit`), so a reload shows what the screen did.
+      //
+      // An audit that RAN and found nothing does replace them: "nothing is
+      // wrong with the sheets" is this run's answer, and the reviewer is
+      // entitled to see it rather than the last run's proposals.
+      const said = res.mechanics.status !== "failed" && res.mechanics.status !== "skipped";
+      if (said) {
+        setEditRows((rows) => [
+          ...rows.filter((r) => r.kind !== "sheet"),
+          ...res.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })),
+        ]);
+        // Conflicts are bound to row numbers, and this rebuilds the array — so
+        // any that survived a refusal would now point at whichever row inherited
+        // their index. Sheet edits never conflict, so there is nothing to carry
+        // over; the next save re-reports whatever is still drifted.
+        setConflicts([]);
+      }
     } catch (err: any) {
       // The same two guards the success path takes, for the same reason: an
       // answer -- failure included -- that belongs to a superseded retry or a
@@ -880,7 +955,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   const openDrawer = (key: string) => setReviewSection(key);
 
   return {
-    absorb, absorbSid, generation, staleReview,
+    absorb, absorbSid, generation, staleReview, holdsScene,
+    /** A Discard whose DELETE has not answered. The play controls treat it as
+     *  the scene being held, because it is; End scene does not, because End
+     *  scene is the one operation that WAITS for it rather than being refused
+     *  by it -- the same reason Cancel is not disabled by `reviewBusy`. */
+    settling: settlingSid !== null,
     dismissStale: () => setStaleReview(null),
     editRows, reviewQuote, setReviewQuote,
     editChronicle, openSection, openDrawer,

@@ -2695,3 +2695,77 @@ test("Stop on an absorb this browser only found does not blame the reader", asyn
   });
   expect(screen.queryByText(/closed before it finished/)).toBeNull();
 });
+
+test("the scene stays held until the Discard that frees it answers", async () => {
+  // `DELETE .../pending-review` answers only once the runs it flagged have
+  // really stopped, so the moment the panel closes the scene is still held --
+  // and a composer, a rename or a roll offered in that window is one the
+  // server refuses. End scene is the exception: it waits the Discard out
+  // rather than being refused by it, which is why it stays live.
+  withScene();
+  await openAbsorb();
+  let stopped: (v: unknown) => void = () => {};
+  (api.discardReview as any).mockReturnValue(new Promise((r) => { stopped = r; }));
+
+  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+
+  expect(screen.getByRole("button", { name: "Rename scene" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /^End scene$/ })).toBeEnabled();
+
+  await act(async () => { stopped({ removed: true, stopped: 1 }); await Promise.resolve(); });
+  expect(screen.getByRole("button", { name: "Rename scene" })).toBeEnabled();
+});
+
+test("a Stop that beats the absorb's own answer still stops it", async () => {
+  // `setAbsorbing(true)` is synchronous, so the Stop button renders while the
+  // POST is still taking its snapshot and building the prompt. With no
+  // generation to name, `stopAbsorb` sends nothing -- and without honouring
+  // the Stop when the name arrives the absorb runs to completion holding the
+  // scene, with no Stop button left and End scene answering `run_in_flight`.
+  withScene();
+  let answer: (v: unknown) => void = () => {};
+  let named: (g: string) => void = () => {};
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      named = onStarted;
+      return new Promise((r) => { answer = r; });
+    });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+
+  // Stop first, THEN the server names the review it started.
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  expect(api.discardReview).not.toHaveBeenCalled();
+  await act(async () => { named("gen-late"); await Promise.resolve(); });
+
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-late"));
+  // ...and the review it goes on to produce is not opened over the Stop.
+  await act(async () => {
+    answer(reviewResult(STORED_REVIEW, "gen-late"));
+    await Promise.resolve();
+  });
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+});
+
+test("an adopted absorb whose run was reaped is read off the store", async () => {
+  // The locked-phone case itself, so the wait it is recovering from is the one
+  // most likely to have outlived the run's retention window. Reporting "no
+  // such run" over a scene whose finished review is sitting in its sidecar is
+  // the loss this whole feature exists to prevent.
+  withScene();
+  (api.pendingReview as any)
+    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
+    .mockResolvedValue({ review: STORED_REVIEW, generation: "gen-live", stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r9", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", review_generation: "gen-live" });
+  (api.awaitRun as any).mockRejectedValue(
+    Object.assign(new Error("no such run for this scene"), { kind: "run_gone" }));
+  renderCampaign();
+
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  expect(screen.queryByText(/no such run/)).toBeNull();
+});

@@ -351,3 +351,33 @@ def test_a_review_that_cannot_be_written_keeps_its_source(scene):
     store.scenes._review_path(cid, "0002--moved").mkdir()
     store.pending_reviews.repoint_scenes(cid, {sid: "0002--moved"})
     assert store.pending_reviews.read(cid, sid)["review"]["one_line"] == "kept"
+
+
+def test_an_audit_retry_that_failed_replaces_no_sheet_rows():
+    """`_run_audit` reports a failure as a status rather than raising, so a
+    wedged call, a budget refusal and an unparseable verdict all arrive as
+    `edits == []`. Dropping the stored rows for that deletes every sheet
+    proposal the absorb made and puts nothing in their place -- the loss
+    `merge_dossiers` is written to prevent for its own rows."""
+    review = _review(edits=_rows(), phases=_phases(), mechanics={"status": "ok"})
+    for status in ("failed", "skipped"):
+        merged = store.pending_reviews.merge_audit(review, {
+            "mechanics": {"status": status, "reason": "the audit never ran",
+                          "attempted": False, "budget_exhausted": True},
+            "edits": []})
+        assert [e["id"] for e in merged["edits"]] == [e["id"] for e in _rows()], status
+        # ...and the phase report still moves, so the panel says what happened.
+        row = next(p for p in merged["phases"] if p["name"] == "audit")
+        assert row["status"] == status and merged["mechanics"]["status"] == status
+
+
+def test_an_audit_retry_that_ran_and_found_nothing_does_replace_them():
+    """The counterweight, and the difference is the point: "nothing is wrong
+    with the sheets" is a real answer this run gave, and the reviewer is
+    entitled to see it rather than last run's proposals."""
+    review = _review(edits=_rows(), phases=_phases(), mechanics={"status": "failed"})
+    merged = store.pending_reviews.merge_audit(review, {
+        "mechanics": {"status": "ok", "reason": None,
+                      "attempted": True, "budget_exhausted": False},
+        "edits": []})
+    assert [e["id"] for e in merged["edits"]] == ["prose:1", "dossier:mara", "dossier:winifred"]
