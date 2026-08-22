@@ -445,7 +445,13 @@ def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
         if target.exists():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(p, target)
+        # Through the helper, not `shutil.copy2`, for the reason
+        # `sheets/tally.py` gives at the identical world->campaign copy: a
+        # partial copy must never appear under a real name. Here that name is
+        # an image slot the overlay resolves campaign-first, so a truncated
+        # file would not merely be broken -- it would SHADOW the world's intact
+        # one for as long as it sat there.
+        atomic.write_bytes(target, p.read_bytes())
 
 
 def _tombstoned_asset(kind: str, rid: str, rel: Path, gone: set[str]) -> bool:
