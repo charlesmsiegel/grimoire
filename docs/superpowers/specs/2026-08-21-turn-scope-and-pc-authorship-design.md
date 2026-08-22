@@ -147,9 +147,9 @@ always-on blocks with no ordering between them would be that finding, tripled.
 
    So the requirement is stated by position, not by slot: **the PC boundary is
    the final system instruction on every composition path**, emitted after
-   `appended` rather than before it. `post_history` remains where it renders
-   for the ordinary chat turn, which has no appended messages; the paths that
-   do get it last.
+   `appended` rather than before it — and as **its own message**, never as a
+   line inside another block, for the reason §6 gives. `post_history.j2` is
+   unaffected and keeps its existing slot and contents.
 
    **The opener is the third such path, and it was missed twice.**
    `compose_opener` appends `opener_shape.j2` after `post_history`
@@ -253,7 +253,20 @@ file serves both the player and the director, which is why there is no fourth
 You have been asked to close this scene. This reply ends it: bring the current
 beat to rest, let it land, and stop. Do not open anything new, and do not
 leave a thread mid-gesture for a reply that is not coming.
+
+If the beat is waiting on the player's answer, you still do not supply it.
+Close on the world instead — the room after the question, what the others do
+with the silence, the door left open. An unanswered choice is a way a scene
+can end.
 ```
+
+That last paragraph exists because without it the wrap turn has **no compliant
+output** in a common case: a bare `/end` sent while the current beat awaits
+the PC's decision. "Resolve the beat, leave no thread" and "stop where their
+answer begins" cannot both be satisfied, and the escapes are authoring the PC
+or ignoring `/end` — the first being the failure this spec exists to stop. The
+PC boundary wins, explicitly, and the close is permitted to frame an
+unanswered choice rather than resolve it.
 
 ### 2. `templates/scene/sections/player_character.j2` — new lock-in section
 
@@ -692,7 +705,7 @@ where their response begins.
 ```
 
 **Singular and plural, mirroring `player_character.j2`** — *"`<A>` and `<B>`
-are the players'…"*, with a multi-PC `post_history` test. Naming one PC here
+are the players'…"*, with a multi-PC test over the boundary template. Naming one PC here
 would be worse than naming none: this is the only boundary text positioned to
 override a hostile card instruction, so a second seated character left
 unnamed in it is unprotected in precisely the slot that matters. An
@@ -795,8 +808,8 @@ and PC-authorship discipline matter most.
 These two add roughly 410 more, so the standing always-on instruction overhead
 close to doubles — ~550 tokens on every chat, retry, regenerate and director
 turn, undroppable. An **opener** pays only for `player_character` (~230), since
-`turn_scope` carries `except_opener`. Add one short line to `post_history.j2`
-(§6) on every turn with a seated player. That is the price of the feature, and
+`turn_scope` carries `except_opener`. Add the short standalone boundary
+message (§6) on every turn with a seated player. That is the price of the feature, and
 it is worth naming here rather than discovering it in a token breakdown.
 
 ## Shipping this in two parts
@@ -807,8 +820,10 @@ at all.
 
 **Phase 1 — the prompt.** `turn_scope` (standard + pcless), `player_character`,
 the `response_format` edits, the `transient_tracker` rewording, the
-`post_history` line, `Section.removable` and the layout change, the precedence
-hierarchy, the behavioral grader, and the eval/cassette/snapshot fallout. No
+**standalone trailing PC-boundary message** — its template, its token
+reservation, its breakdown entry and its ordering tests, appended last on
+every composition path — `Section.removable` and the layout change, the
+precedence hierarchy, the behavioral grader, and the eval/cassette/snapshot fallout. No
 new routes and no new stored state — but it **must still pass `wrap=False`**
 to `response_format.j2`. Phase 1 edits that template to branch on `wrap`
 while Phase 2 supplies the accessor and the override, and the Jinja env runs
@@ -866,11 +881,12 @@ top of an unvalidated assumption.
 - **Non-removability** — a stored layout that omits `player_character` still
   renders it; one that omits `turn_scope` does not. Plus the upgrade case: a
   layout saved before this change receives both sections.
-- **`post_history`** — the PC line renders after the card blocks and before
-  the voice corrective; renders nothing in a pcless scene, leaving
-  `post_history` omissible there.
+- **Boundary position** — the standalone message is last on every path:
+  after `post_history`, after `appended` on a roll continuation and a guided
+  regenerate, and after `opener_shape.j2` on an opener. It renders nothing in
+  a pcless scene, and its tokens are reserved rather than uncounted.
 - **The frozen campaign reads as unwrapped.** Its scenes were written before
-  `wrap_next` existed, so `get_wrap` must answer `False` for frontmatter that
+  `wrap_next` existed, so `get_wrap_state` must answer `""` for frontmatter that
   has never heard of the key. This is precisely what that fixture is for — the
   only store in the repo today's code did not write — so it is worth an
   explicit case rather than leaving it to the snapshot diff.
@@ -912,9 +928,9 @@ be measured. Whether "advance one beat" is obeyed remains a question only
   what the request *looks like*, matching `system_contains` over the system
   messages (`llm_fakes.py:84`, `:110`), and *"a request matching no cassette
   entry raises rather than defaulting."* This change edits `response_format`'s
-  text, adds two system sections, and — via §6 — makes `post_history` a
-  system message present on every turn with a seated player, in scenes that
-  previously sent none. Any matcher keyed on text this change removes (most
+  text, adds two system sections, and — via §6 — appends a trailing system
+  message on every turn with a seated player, in scenes whose system messages
+  previously ended earlier. Any matcher keyed on text this change removes (most
   likely the old `Never write dialogue or actions for:` clause) stops
   matching. `test_llm_fakes.py` renders every real prompt template precisely
   so this surfaces here rather than silently everywhere else; expect to audit
@@ -926,7 +942,8 @@ be measured. Whether "advance one beat" is obeyed remains a question only
 - **`templates/README.md`** — section list and section-var list; the
   `player_names` move out of `response_format`.
 - **`verify_templates.py`** — its `gather()` mirror must reproduce `wrap` from
-  public store reads, which is what `scenes.read.get_wrap` exists for;
+  public store reads, which is what `scenes.read.get_wrap_state` exists for
+  (the boolean is derived at composition, never stored as one);
   `opener` it already supplies (`:917`).
 
   **And the comparison must not go vacuous.** That file refuses this
@@ -981,6 +998,15 @@ faster than another round of prose. Listed so none is lost:
 - **`wrap_note.j2` must be selected from the captured snapshot**, not a fresh
   read — otherwise a cancel between snapshot and note selection restores the
   "Continue the scene." contradiction the note exists to remove.
+- **A stopped wrap should stay `pending`.** `_chat_stream.on_abort` persists
+  the partial through the same `finalize` path as a completed reply, so a
+  player pressing Stop mid-wrap would flip the state to `consumed` and be told
+  the scene is closed. The transition needs the completion/abort outcome.
+- **Replay must retire a `consumed` wrap when accepting a step.**
+  `replay.accept()` only advances the record and `replay.stage()` restores
+  posts directly, so neither performs the ordinary-send clear — every later
+  `post_replay_turn` would snapshot `consumed` and close each remaining
+  replayed turn.
 - **`/end` sent with prose is lost across a failed-turn retry.** When the
   turn fails, `_take_the_post_back` removes the persisted post; `/retry` then
   composes with the wrap state but without the prose that accompanied it, so
@@ -1009,8 +1035,8 @@ faster than another round of prose. Listed so none is lost:
   length cascade would undo the "no knob" decision.
 - **No command framework.** One token, one flag, one branch.
 - **`opener_shape.j2` is unchanged.**
-- **No *adaptive* PC-authorship corrective.** §6 puts a **static** line in
-  `post_history.j2`; what stays out of scope is the measured, conditional kind
+- **No *adaptive* PC-authorship corrective.** §6 adds a **static** trailing
+  boundary message; what stays out of scope is the measured, conditional kind
   that `voice_correction` and `length_correction` are — one that detects
   violations in recent turns and escalates. Detecting "wrote the PC" in prose
   is materially harder than counting words, and the constant line costs
