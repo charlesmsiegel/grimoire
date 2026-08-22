@@ -7,7 +7,7 @@ from __future__ import annotations
 from .. import expressions
 from ..modules import fields as modules_fields
 from ..modules import validate as modules_validate
-from . import paths, pools
+from . import paths
 from .paths import SheetError
 
 
@@ -113,76 +113,53 @@ def _validate_instance(sheets_def: dict, file_kind: str, sheet_type,
     return modules_validate.validate_sheet_values(sheets_def, sheet_type, fields)
 
 
-def _pool_spent(sheets_def: dict, pool_id: str, costs: dict, merged: dict) -> int | None:
-    """What a value map spends against one creation pool, priced from its
-    fields' floors -- the same arithmetic ``creation._checked_creation_write``
-    charges a spend at, run over values that are already stored.
-
-    ``None`` when any one costed field cannot be priced. Not a partial total:
-    a pool is a sum, so a field left out of it makes the WHOLE sum a number no
-    rule produced -- and it errs the flattering way, reporting a sheet as
-    having more left to spend than it does."""
-    group_fields = pools._pool_group_fields(sheets_def, pool_id)
-    spent = 0
-    for field_key, cost in costs.items():
-        value = merged.get(field_key)
-        if (not isinstance(cost, int) or isinstance(cost, bool)
-                or not isinstance(value, int) or isinstance(value, bool)):
-            return None
-        spent += (value - pools._pool_floor(group_fields.get(field_key, {}))) * cost
-    return spent
-
-
-def unspent_pools(sheets_def: dict, type_id: str, fields: dict) -> dict[str, int]:
-    """Creation pools a sheet does not balance: ``{pool_id: budget - spent}``.
+def creation_pending(sheets_def: dict, type_id: str, fields: dict) -> list[str]:
+    """The creation pools a sheet has never been through, or ``[]``.
 
     A sheet type's ``creation`` block prices a set of fields against a budget,
     and ``creation.write_creation`` is the only writer that spends it. Every
     other way a sheet comes into being -- ``write`` with ``fields=None``, a
     world starting sheet copied by ``seed``, a bulk create -- writes the schema
-    defaults and consults no pool at all, so the sheet is *creation-incomplete*
-    the moment it exists and nothing on it says so.
+    defaults and consults no pool at all. That sheet is creation-incomplete the
+    moment it exists, and #201 turns on saying so rather than skipping it.
 
-    That is the gap this closes, and the reason it is computed rather than
-    stored: like ``derived``, it is a judgment about the values that are there,
-    so it cannot go stale behind an edit made anywhere else.
+    The test is "the values are still exactly this type's schema defaults",
+    which is a statement about the state the sheet was CREATED in -- exactly
+    what the issue asks the view to flag -- and it is what keeps this honest.
 
-    Only pools that do not balance are listed. A positive value is points still
-    to spend; a NEGATIVE one is a sheet already over its budget, which a module
-    whose schema defaults sit above its pool floors produces by construction --
-    reporting only the underspend would quietly call that one complete.
+    The obvious implementation, and the one this replaces, was arithmetic:
+    price the stored values against the pools and report ``budget - spent``.
+    That question has no answer for a sheet anyone has touched, and it produced
+    confident wrong ones. Two, both against shipped builtin modules:
 
-    Never raises, and never half-prices. A budget expression that does not
-    evaluate, a non-integer cost, a field whose stored value is not an integer:
-    each makes its POOL unjudgeable, and the pool is then absent rather than
-    totalled from the parts that did price -- a pool is a sum, and a sum
-    missing a term is a number no rule produced. Pack validation already
-    reports the first two as pack errors, and a sheet holding the third
-    carries a validation error of its own; neither needs a made-up figure
-    beside it.
+    - ``pool-basic``'s ``medium`` advanced one dot of ``wits`` through
+      ``advancement.advance`` -- a rules-legal raise bought with experience,
+      not creation points -- read as ``attributes: -2``, permanently, and the
+      roster badged that valid sheet as over budget.
+    - ``d20-basic``'s ``adept`` prices attributes from ``min: 1`` while the
+      schema defaults them to 10, so a *correctly* bulk-created sheet came out
+      at ``attributes: -48`` and the bulk create's own success report announced
+      each sheet it had just written as 48 over budget.
+
+    Both are the same mistake: current values are not a record of what was
+    spent at creation, and no arithmetic over them can recover one. So the
+    answer is not a number. It is the names of the pools nobody ran, for a
+    sheet that is still untouched, and nothing at all for a sheet that is not.
+
+    The error this can still make is the safe one -- a sheet edited once by
+    hand, but never taken through creation, stops being flagged. Silence about
+    a sheet somebody has worked on beats crying wolf over every valid one.
     """
     st = sheets_def.get("sheet_types", {}).get(type_id)
     if not isinstance(st, dict):
-        return {}
+        return []
     creation = st.get("creation")
     defined = creation.get("pools") if isinstance(creation, dict) else None
-    if not isinstance(defined, dict):
-        return {}
-    merged = {**default_fields(sheets_def, type_id), **fields}
-    out: dict[str, int] = {}
-    for pool_id, pool in defined.items():
-        if not isinstance(pool, dict) or not isinstance(pool.get("costs"), dict):
-            continue
-        try:
-            budget = pools._pool_budget(pool)
-        except expressions.ExpressionError:
-            continue
-        spent = _pool_spent(sheets_def, pool_id, pool["costs"], merged)
-        if spent is None:
-            continue
-        if budget != spent:
-            out[pool_id] = budget - spent
-    return out
+    if not isinstance(defined, dict) or not defined:
+        return []
+    if fields != default_fields(sheets_def, type_id):
+        return []
+    return sorted(pid for pid in defined if isinstance(pid, str))
 
 
 def instance_errors(pack: dict, file_kind: str, sheet_type, fields: dict) -> list[str]:

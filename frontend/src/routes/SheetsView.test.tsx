@@ -31,13 +31,13 @@ const MODULE = {
 };
 
 const row = (over: { id: string; name: string } & Record<string, unknown>) => ({
-  sheeted: false, sheet_type: null, errors: [], unspent: {}, ...over,
+  sheeted: false, sheet_type: null, errors: [], creation_pending: [], ...over,
 });
 
 const ROSTER = {
   characters: [
     row({ id: "mara", name: "Mara", sheeted: true, sheet_type: "medium",
-          unspent: { abilities: 6 } }),
+          creation_pending: ["abilities", "attributes"] }),
     row({ id: "winifred", name: "Winifred" }),
   ],
   items: [row({ id: "moon-disc", name: "Moon Disc", sheeted: true, sheet_type: "talisman" })],
@@ -86,7 +86,7 @@ test("the rail is the cast, badged with who has a sheet and who does not", async
 
   // A sheet that exists but still owes its creation pool is neither "Missing"
   // nor silently fine -- that distinction is the whole of #201's third bullet.
-  expect(railRow("Mara")).toHaveTextContent("6 left");
+  expect(railRow("Mara")).toHaveTextContent("Defaults");
   expect(railRow("Winifred")).toHaveTextContent("Missing");
   expect(railRow("Moon Disc")).toHaveTextContent("Sheet");
 });
@@ -103,7 +103,8 @@ test("picking a cast member opens their sheet, read-only", async () => {
   // SheetPanel's read-only summary, and its explicit edit step -- not a form
   expect(screen.getByRole("button", { name: "Open sheet" })).toBeInTheDocument();
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-  expect(screen.getByText("6 unspent in the abilities creation pool.")).toBeInTheDocument();
+  expect(screen.getByText(/abilities and attributes pools have not been spent/))
+    .toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "‹ All sheets" }));
   await screen.findByText("Sheet coverage");
@@ -112,7 +113,7 @@ test("picking a cast member opens their sheet, read-only", async () => {
 test("create missing sends the chosen type per kind and reports what it did", async () => {
   (api.createMissingSheets as any).mockResolvedValue({
     created: [{ kind: "characters", id: "winifred", name: "Winifred",
-                sheet_type: "shifter", unspent: { abilities: 6 } }],
+                sheet_type: "shifter", creation_pending: ["abilities"] }],
     skipped: [], failed: [],
   });
   renderSheets();
@@ -128,7 +129,8 @@ test("create missing sends the chosen type per kind and reports what it did", as
   // in with the rest -- a bulk create that only said "1 created" would be the
   // silent skip in a different hat.
   await screen.findByText("1 sheet created.");
-  expect(screen.getByText("Winifred: 6 unspent in abilities")).toBeInTheDocument();
+  expect(screen.getByText(
+    "Winifred: created from defaults — abilities not chosen yet.")).toBeInTheDocument();
   // and the roster is re-read, so the rail stops saying Missing
   expect(api.getCampaignSheetRoster).toHaveBeenCalledTimes(2);
 });
@@ -252,6 +254,67 @@ test("a module that keeps no sheets is not reported as no module", async () => {
   // and no table of headings with nothing under them
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryByRole("button", { name: /Create missing sheets/ })).toBeNull();
+});
+
+test("a slow module read is not reported as no module bound", async () => {
+  // The roster is one round trip and the module chain is two, so there is a
+  // window where the cast is on the rail and the module detail has not landed.
+  // Acting on whichever settled first told the reader their campaign had no
+  // mechanics while the rail beside it listed the cast.
+  let releaseModule: (m: unknown) => void = () => {};
+  (api.readModule as any).mockReturnValue(
+    new Promise((resolve) => { releaseModule = resolve; }));
+  renderSheets();
+  await screen.findByText("Sheet coverage");
+  expect(screen.queryByText(/no mechanics bound/i)).toBeNull();
+  expect(screen.queryByRole("table")).toBeNull();
+
+  releaseModule(MODULE);
+  await screen.findByRole("table");
+  expect(screen.queryByText(/no mechanics bound/i)).toBeNull();
+});
+
+test("a module that will not load is named, not called an unbound campaign", async () => {
+  // Permanent before the fix: `readModule` rejecting fell through to the same
+  // "no mechanics bound" state, pointing the reader at a binding that is right.
+  (api.readModule as any).mockRejectedValue(new Error("pack is unreadable"));
+  renderSheets();
+  await screen.findByText(/bound to .*pool-basic.*which could not be read/);
+  expect(screen.getByText(/pack is unreadable/)).toBeInTheDocument();
+  expect(screen.queryByText(/no mechanics bound/i)).toBeNull();
+});
+
+test("a failed roster read says so instead of claiming the module keeps no sheets", async () => {
+  // Swallowing the failure into `{}` rendered as "<Module> declares no sheet
+  // types…" with an Edit the module link: a false statement about their
+  // module, and no sign anything had gone wrong.
+  (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("read timed out"));
+  renderSheets();
+  await screen.findByText(/The cast could not be read: read timed out/);
+  expect(screen.queryByText(/declares no sheet types/)).toBeNull();
+  expect(column().getByText("The cast could not be read.")).toBeInTheDocument();
+
+  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: ROSTER });
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByRole("table");
+  expect(railRow("Winifred")).toHaveTextContent("Missing");
+});
+
+test("the bulk report survives a reload that empties or fails the roster", async () => {
+  // The report used to render inside the table's branch, so the reload fired
+  // in `createMissing`'s `finally` could erase the answer to the button the
+  // reader had just pressed.
+  (api.createMissingSheets as any).mockResolvedValue({
+    created: [], failed: [],
+    skipped: [{ kind: "characters", reason: "two sheet types" }],
+  });
+  renderSheets();
+  await screen.findByText("Sheet coverage");
+  (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("gone"));
+  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+
+  await screen.findByText(/Characters skipped/);
+  expect(screen.getByText(/The cast could not be read: gone/)).toBeInTheDocument();
 });
 
 test("a failed create surfaces the reason rather than a silent no-op", async () => {

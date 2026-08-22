@@ -1584,12 +1584,11 @@ export type SheetRosterRow = {
   sheeted: boolean;
   sheet_type: string | null;
   errors: string[];
-  /** Creation pools the sheet does not balance, `{pool: budget - spent}`. A
-   *  positive value is points still to spend — every sheet made from schema
-   *  defaults rather than through the creation wizard starts out owing them —
-   *  and a negative one is a sheet already over its budget. Balanced pools are
-   *  absent, so an empty object means "nothing outstanding". */
-  unspent: Record<string, number>;
+  /** The module's creation pools this sheet has never been through — non-empty
+   *  only while its values are still exactly the schema defaults, which is the
+   *  state a bulk create leaves them in. Empty for a sheet anyone has worked
+   *  on, and for a type with no creation step. */
+  creation_pending: string[];
 };
 
 export type SheetRoster = Record<string, SheetRosterRow[]>;
@@ -1599,7 +1598,7 @@ export type SheetRoster = Record<string, SheetRosterRow[]>;
  *  is in `skipped` with the reason. */
 export type SheetBulkResult = {
   created: { kind: string; id: string; name: string; sheet_type: string;
-             unspent: Record<string, number> }[];
+             creation_pending: string[] }[];
   skipped: { kind: string; reason: string }[];
   failed: { kind: string; id: string; detail: string }[];
 };

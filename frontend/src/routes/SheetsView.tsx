@@ -12,20 +12,18 @@ import { sheetKindLabel } from "../sheetKinds";
 
 /** What one cast member's row says on the rail, in one word.
  *
- *  Ordered worst-first on purpose: a sheet can be invalid AND owe creation
- *  points at once, and "invalid" is the one that stops it being usable, so it
- *  wins the badge. A row never shows two.
+ *  Worst-first: a sheet can be invalid AND still be sitting at its schema
+ *  defaults, and "invalid" is the one that stops it being usable, so it wins.
+ *  A row never shows two.
  */
 type Mark = { text: string; tone: "" | "missing" | "alert" };
 
 function markFor(row: SheetRosterRow): Mark {
   if (!row.sheeted) return { text: "Missing", tone: "missing" };
   if (row.errors.length) return { text: "Invalid", tone: "alert" };
-  const owed = Object.values(row.unspent);
-  const over = owed.filter((n) => n < 0).reduce((a, b) => a - b, 0);
-  if (over) return { text: `${over} over`, tone: "alert" };
-  const left = owed.reduce((a, b) => a + b, 0);
-  if (left) return { text: `${left} left`, tone: "missing" };
+  // Not an error, and not finished either: the sheet exists, its values are
+  // still the schema's, and nobody has been through the creation step.
+  if (row.creation_pending.length) return { text: "Defaults", tone: "missing" };
   return { text: "Sheet", tone: "" };
 }
 
@@ -43,6 +41,29 @@ function typesFor(module: ModuleDetail | null, kind: string): [string, string][]
     // the API accepts.
     .sort((a, b) => a[1].localeCompare(b[1]));
 }
+
+/** "attributes", "attributes and skills", "attributes, skills and gifts" —
+ *  these are pool ids, and they are read inside a sentence. */
+const andList = (xs: string[]) =>
+  xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+
+/** What this campaign's module is, as three distinguishable answers rather than
+ *  one nullable one.
+ *
+ *  Conflating them is how the page came to say "no mechanics bound" over a rail
+ *  that was listing the cast: the roster is one round trip and the module chain
+ *  is two, so there is a window where a module exists and its detail does not,
+ *  and `detail === null` is not "unbound". Nor is a `readModule` rejection —
+ *  that one made the wrong answer permanent. */
+type Bound = {
+  cid: string;
+  /** The module id this campaign resolves to, or null for genuinely unbound. */
+  resolved: string | null;
+  /** Its full detail — null when unbound, and when the read failed. */
+  detail: ModuleDetail | null;
+  /** Why there is no detail, when there should have been one. */
+  error: string | null;
+};
 
 /** Sheet coverage across a campaign's whole cast, and the one action that
  *  closes the gap.
@@ -68,7 +89,8 @@ export default function SheetsView() {
   // name until the new request settled (LedgerView holds its ledger the same
   // way, for the same reason).
   const [loaded, setLoaded] = useState<{ cid: string; roster: SheetRoster } | null>(null);
-  const [bound, setBound] = useState<{ cid: string; module: ModuleDetail | null } | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const [bound, setBound] = useState<Bound | null>(null);
   const [selected, setSelected] = useState<{ kind: string; id: string } | null>(null);
   const [types, setTypes] = useState<Record<string, string>>({});
   const [result, setResult] = useState<SheetBulkResult | null>(null);
@@ -88,17 +110,40 @@ export default function SheetsView() {
     let live = true;
     setBound(null);
     api.getCampaignModule(cid)
-      .then((m) => (m.resolved ? api.readModule(m.resolved) : null))
-      .then((detail) => { if (live) setBound({ cid, module: detail }); })
-      .catch(() => { if (live) setBound({ cid, module: null }); });
+      .then(async (m): Promise<Bound> => {
+        if (!m.resolved) return { cid, resolved: null, detail: null, error: null };
+        try {
+          return { cid, resolved: m.resolved, error: null,
+                   detail: await api.readModule(m.resolved) };
+        } catch (e) {
+          // A module IS bound and its pack would not load. Reporting that as
+          // "no mechanics" sends the reader to change a binding that is right.
+          return { cid, resolved: m.resolved, detail: null,
+                   error: e instanceof Error ? e.message : String(e) };
+        }
+      })
+      .then((next) => { if (live) setBound(next); })
+      .catch((e: unknown) => {
+        if (live) {
+          setBound({ cid, resolved: null, detail: null,
+                     error: e instanceof Error ? e.message : String(e) });
+        }
+      });
     return () => { live = false; };
   }, [cid]);
 
   const reload = useCallback(() => {
     let live = true;
+    setRosterError(null);
     api.getCampaignSheetRoster(cid)
       .then((r) => { if (live) setLoaded({ cid, roster: r.roster }); })
-      .catch(() => { if (live) setLoaded({ cid, roster: {} }); });
+      // NOT swallowed into an empty roster. An empty roster is a real and very
+      // different answer -- "this module keeps no sheets" -- so rendering a
+      // failed read as one tells the reader something false about their module
+      // and hides that anything went wrong at all.
+      .catch((e: unknown) => {
+        if (live) setRosterError(e instanceof Error ? e.message : String(e));
+      });
     return () => { live = false; };
   }, [cid]);
 
@@ -114,7 +159,8 @@ export default function SheetsView() {
   }, [cid, reload]);
 
   const roster = loaded && loaded.cid === cid ? loaded.roster : null;
-  const module = bound && bound.cid === cid ? bound.module : null;
+  const settled = bound !== null && bound.cid === cid ? bound : null;
+  const module = settled ? settled.detail : null;
   const kinds = useMemo(() => Object.keys(roster ?? {}), [roster]);
 
   /** A kind this campaign can bulk-create for, and whether a choice is owed:
@@ -178,14 +224,14 @@ export default function SheetsView() {
         <div className="eyebrow">Who has a sheet</div>
         <h2 className="ledger-ident-name">{name || cid}</h2>
       </div>
-      {roster === null && <p className="column-empty">Reading the cast…</p>}
-      {/* Two different nothings. A module that binds but declares no sheet
-          types is legal -- a pack can be all rules and checks -- and calling
-          that "no mechanics bound" would send the reader to change a binding
-          that is already what they want. */}
-      {roster !== null && kinds.length === 0 && (
+      {roster === null && !rosterError && <p className="column-empty">Reading the cast…</p>}
+      {rosterError && <p className="column-empty">The cast could not be read.</p>}
+      {/* A module that binds but declares no sheet types is legal — a pack can
+          be all rules and checks — and calling that "no mechanics bound" would
+          send the reader to change a binding that is already what they want. */}
+      {roster !== null && settled && kinds.length === 0 && (
         <p className="column-empty">
-          {module ? "This module keeps no sheets." : "No mechanics bound."}
+          {settled.resolved ? "This module keeps no sheets." : "No mechanics bound."}
         </p>
       )}
       {plan.map(({ kind, rows, sheeted }) => (
@@ -214,6 +260,38 @@ export default function SheetsView() {
     ? (roster?.[selected.kind] ?? []).find((r) => r.id === selected.id) ?? null
     : null;
 
+  /** The bulk-create report, rendered from its own state rather than from
+   *  inside the table's branch: the reload that follows a create can empty the
+   *  roster or fail, and the answer to a button the reader just pressed must
+   *  not vanish with it. */
+  const report = result && (
+    <div className="side-section">
+      <h4>Last create</h4>
+      <p className="field-hint">
+        {result.created.length} sheet{result.created.length === 1 ? "" : "s"} created.
+      </p>
+      {/* Named, not counted: a sheet written from schema defaults has not been
+          through the module's creation step, and a bulk create that reported
+          only a total would be the silent skip #201 rules out wearing a
+          different hat. */}
+      {result.created.filter((c) => c.creation_pending.length > 0).map((c) => (
+        <p className="field-hint" key={`${c.kind}/${c.id}`}>
+          {c.name}: created from defaults — {andList(c.creation_pending)} not chosen yet.
+        </p>
+      ))}
+      {result.skipped.map((s) => (
+        <p className="field-hint" key={s.kind}>
+          {sheetKindLabel(s.kind)} skipped — {s.reason}
+        </p>
+      ))}
+      {result.failed.map((f) => (
+        <p className="field-hint" key={`${f.kind}/${f.id}`}>
+          {sheetKindLabel(f.kind)} {f.id} failed — {f.detail}
+        </p>
+      ))}
+    </div>
+  );
+
   return (
     // No pinned footer. The obvious place for `+ Create missing sheets` was
     // the one the ledger puts its SHOW RETIRED toggle in -- but below 720px
@@ -235,7 +313,28 @@ export default function SheetsView() {
 
         {error && <div className="banner">{error}</div>}
 
-        {roster !== null && !module && (
+        {rosterError && (
+          <>
+            <div className="banner">The cast could not be read: {rosterError}</div>
+            <div className="form-actions">
+              <button className="subtle" onClick={() => { reload(); }}>Try again</button>
+            </div>
+          </>
+        )}
+
+        {settled?.error && (
+          <div className="banner">
+            {settled.resolved
+              ? `This campaign is bound to “${settled.resolved}”, which could not be read: `
+              : "The bound module could not be read: "}
+            {settled.error}
+          </div>
+        )}
+
+        {/* Every state below waits for BOTH reads to settle. Acting on
+            whichever landed first is how this page came to tell a campaign it
+            had no mechanics while its rail listed the cast. */}
+        {!rosterError && roster !== null && settled && !settled.resolved && !settled.error && (
           <p className="empty-state">
             <span className="empty-what">
               This campaign has no mechanics bound, so there are no sheets to keep.
@@ -247,7 +346,7 @@ export default function SheetsView() {
         {/* Bound, and it sheets nothing. Without this the page renders a table
             of column headings with no rows under them and a dead button, which
             reads as a page that failed rather than as an answer. */}
-        {roster !== null && module && kinds.length === 0 && (
+        {!rosterError && roster !== null && module && kinds.length === 0 && (
           <p className="empty-state">
             <span className="empty-what">
               {module.manifest.name} declares no sheet types, so this campaign&rsquo;s
@@ -264,13 +363,14 @@ export default function SheetsView() {
               {selectedRow.errors.length > 0 && (
                 <div className="banner">{selectedRow.errors.join("; ")}</div>
               )}
-              {Object.entries(selectedRow.unspent).map(([pool, left]) => (
-                <div className="field-hint" key={pool}>
-                  {left > 0
-                    ? `${left} unspent in the ${pool} creation pool.`
-                    : `${-left} over budget in the ${pool} creation pool.`}
+              {selectedRow.creation_pending.length > 0 && (
+                <div className="field-hint">
+                  Written from schema defaults — the{" "}
+                  {andList(selectedRow.creation_pending)}{" "}
+                  {selectedRow.creation_pending.length === 1 ? "pool has" : "pools have"} not
+                  been spent yet. Open the sheet to run creation.
                 </div>
-              ))}
+              )}
             </div>
             {/* Labelled: the shell's context column is a <complementary> too,
                 so an unnamed second one leaves a screen reader with two
@@ -293,51 +393,51 @@ export default function SheetsView() {
         {!selectedRow && module && roster !== null && kinds.length > 0 && (
           <>
             <div className="ledger-table-wrap">
-            <table className="ledger-table">
-              <thead>
-                <tr>
-                  <th scope="col">KIND</th>
-                  <th scope="col">SHEETED</th>
-                  <th scope="col">MISSING</th>
-                  <th scope="col">CREATE AS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {plan.map(({ kind, rows, options, missing, sheeted, needsChoice }) => (
-                  <tr key={kind}>
-                    <td>{sheetKindLabel(kind)}</td>
-                    <td>{sheeted}/{rows.length}</td>
-                    <td className={missing ? "ledger-mark alert" : undefined}>{missing}</td>
-                    <td>
-                      {/* A kind with no gap gets no control: there is nothing
-                          to create it AS. With two types and existing sheets
-                          possibly of both, naming one of them here would be a
-                          claim about the column's other rows. */}
-                      {missing === 0
-                        ? <span className="field-hint">—</span>
-                        : options.length <= 1
-                        ? <span className="field-hint">{options[0]?.[1] ?? "—"}</span>
-                        : (
-                          <select aria-label={`Sheet type for ${sheetKindLabel(kind)}`}
-                                  value={types[kind] ?? ""}
-                                  onChange={(e) => setTypes(
-                                    { ...types, [kind]: e.target.value })}>
-                            <option value="">Choose…</option>
-                            {options.map(([tid, label]) => (
-                              <option key={tid} value={tid}>{label}</option>
-                            ))}
-                          </select>
-                        )}
-                      {needsChoice && (
-                        <div className="field-hint">
-                          {options.length} types — choose one or this kind is skipped.
-                        </div>
-                      )}
-                    </td>
+              <table className="ledger-table">
+                <thead>
+                  <tr>
+                    <th scope="col">KIND</th>
+                    <th scope="col">SHEETED</th>
+                    <th scope="col">MISSING</th>
+                    <th scope="col">CREATE AS</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {plan.map(({ kind, rows, options, missing, sheeted, needsChoice }) => (
+                    <tr key={kind}>
+                      <td>{sheetKindLabel(kind)}</td>
+                      <td>{sheeted}/{rows.length}</td>
+                      <td className={missing ? "ledger-mark alert" : undefined}>{missing}</td>
+                      <td>
+                        {/* A kind with no gap gets no control: there is nothing
+                            to create it AS. With two types and existing sheets
+                            possibly of both, naming one of them here would be a
+                            claim about the column's other rows. */}
+                        {missing === 0
+                          ? <span className="field-hint">—</span>
+                          : options.length <= 1
+                          ? <span className="field-hint">{options[0]?.[1] ?? "—"}</span>
+                          : (
+                            <select aria-label={`Sheet type for ${sheetKindLabel(kind)}`}
+                                    value={types[kind] ?? ""}
+                                    onChange={(e) => setTypes(
+                                      { ...types, [kind]: e.target.value })}>
+                              <option value="">Choose…</option>
+                              {options.map(([tid, label]) => (
+                                <option key={tid} value={tid}>{label}</option>
+                              ))}
+                            </select>
+                          )}
+                        {needsChoice && (
+                          <div className="field-hint">
+                            {options.length} types — choose one or this kind is skipped.
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
             <div className="form-actions">
@@ -346,43 +446,14 @@ export default function SheetsView() {
                 {busy ? "Creating…"
                       : `+ Create missing sheets${missingTotal ? ` (${missingTotal})` : ""}`}
               </button>
-              {missingTotal === 0 && plan.length > 0 && (
+              {missingTotal === 0 && (
                 <span className="field-hint">Every cast member has a sheet.</span>
               )}
             </div>
-
-            {result && (
-              <div className="side-section">
-                <h4>Last create</h4>
-                <p className="field-hint">
-                  {result.created.length} sheet{result.created.length === 1 ? "" : "s"} created.
-                </p>
-                {/* Named, not counted: a sheet written from schema defaults owes
-                    its creation pools, and a bulk create that reported only a
-                    total would be the silent skip #201 rules out wearing a
-                    different hat. */}
-                {result.created.filter((c) => Object.keys(c.unspent).length > 0).map((c) => (
-                  <p className="field-hint" key={`${c.kind}/${c.id}`}>
-                    {c.name}: {Object.entries(c.unspent)
-                      .map(([pool, left]) => (left > 0
-                        ? `${left} unspent in ${pool}`
-                        : `${-left} over budget in ${pool}`)).join(", ")}
-                  </p>
-                ))}
-                {result.skipped.map((s) => (
-                  <p className="field-hint" key={s.kind}>
-                    {sheetKindLabel(s.kind)} skipped — {s.reason}
-                  </p>
-                ))}
-                {result.failed.map((f) => (
-                  <p className="field-hint" key={`${f.kind}/${f.id}`}>
-                    {sheetKindLabel(f.kind)} {f.id} failed — {f.detail}
-                  </p>
-                ))}
-              </div>
-            )}
           </>
         )}
+
+        {!selectedRow && report}
       </div>
     </PageShell>
   );
