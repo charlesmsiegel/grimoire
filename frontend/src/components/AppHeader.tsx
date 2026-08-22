@@ -4,15 +4,6 @@ import { useFocus } from "./focus";
 import { usePalette } from "./palette";
 import { useShellStatus } from "./ShellStatus";
 
-/** The 52px strip across the top, and the only chrome that never moves.
- *
- *  Left: the mark and the wordmark, both home. Middle: the ⌘K pill, which is
- *  the app's whole navigation surface — it names where you are and opens the
- *  palette that takes you anywhere else. Right: what the next turn will cost
- *  and cost against — the model, how full the context budget is, whether the
- *  connection is usable — and CONFIG.
- *
- *  There is no nav sidebar and no scene rail. That is not an omission. */
 /** The dot's three states, and the words that go with them.
  *
  *  `ready` is a statement about the *stored settings* — a key string is
@@ -36,6 +27,15 @@ function verdict(connection: string, ready: boolean, health: ProviderHealth | nu
   return { tone: "ok", words: `${connection}, not checked yet` };
 }
 
+/** The 52px strip across the top, and the only chrome that never moves.
+ *
+ *  Left: the mark and the wordmark, both home. Middle: the ⌘K pill, which is
+ *  the app's whole navigation surface — it names where you are and opens the
+ *  palette that takes you anywhere else. Right: what the next turn will cost
+ *  and cost against — the model, how full the context budget is, whether the
+ *  connection is usable and whether it last worked — and CONFIG.
+ *
+ *  There is no nav sidebar and no scene rail. That is not an omission. */
 export default function AppHeader(
   { model, connection, ready, health }: {
     model: string; connection: string; ready: boolean; health: ProviderHealth | null;
