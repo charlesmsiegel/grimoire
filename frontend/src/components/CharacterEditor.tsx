@@ -979,9 +979,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     // is not an acceptable answer to Stop.
     const run = { written: 0, reasons: {} as Record<string, number>,
                   failed: null as { detail: string; kind: string } | null,
-                  ended: false };
+                  started: false, ended: false };
     try {
       await api.generateWorldTaglines(wid, (e: TaglineBatchEvent) => {
+        run.started = true;
         if (e.total !== undefined) setTaglineBatch({ done: 0, total: e.total, name: "" });
         if (e.done !== undefined) {
           const done = e.done, name = e.name ?? "";
@@ -995,7 +996,16 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     } catch (err: unknown) {
       // An abort is the user's own Stop, not a failure — everything already
       // written is still written, and the report below says how much.
-      if (!isAbortError(err)) { setError(err); return; }
+      if (!isAbortError(err)) {
+        setError(err);
+        // A drop mid-stream gets the banner AND the report. The frames that
+        // arrived are facts about the store — the route writes as it goes —
+        // so throwing them away would tell someone whose connection died at
+        // character 200 that nothing happened. Only a failure before the
+        // first frame has nothing to report, and there the banner is the
+        // whole story.
+        if (!run.started) return;
+      }
     } finally {
       taglineAbort.current = null;
       setTaglineBatch(null);

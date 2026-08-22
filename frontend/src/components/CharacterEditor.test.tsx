@@ -853,6 +853,24 @@ test("the report does not follow the editor into another world", async () => {
   await waitFor(() => expect(screen.queryByText("Derived 2 taglines")).toBeNull());
 });
 
+test("a stream that drops mid-run reports what landed as well as the error", async () => {
+  // The route writes as it goes, so frames that arrived are facts about the
+  // store. Someone whose connection dies at character 200 must not be told
+  // that nothing happened.
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred"]));
+  (api.generateWorldTaglines as any).mockImplementation(
+    (_w: string, cb: (e: any) => void) => {
+      cb({ total: 2 });
+      cb({ done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." });
+      return Promise.reject(new TypeError("network error"));
+    });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(2\)/ }));
+  const note = await screen.findByText(/Derived 1 tagline/);
+  expect(note.textContent).toContain("run it again");
+  expect(screen.getByText(/network error/)).toBeInTheDocument();   // the banner too
+});
+
 test("a refusal before the stream starts is an error banner, not a report", async () => {
   (api.listCharacters as any).mockResolvedValue(roster(["mara"]));
   (api.generateWorldTaglines as any).mockRejectedValue(new ApiError(409, "no connection configured"));
