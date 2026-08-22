@@ -359,7 +359,7 @@ test("a location the read does not offer is cleared rather than sent unseen", as
   const onCreated = renderForm(GEN);   // GEN.location = "saltmarch"
   await screen.findByDisplayValue("The creditor");
   expect(screen.getByText(/no longer in this campaign/i)).toBeInTheDocument();
-  expect((screen.getByLabelText("Location") as HTMLSelectElement).value).toBe("");
+  expect(screen.getByLabelText<HTMLSelectElement>("Location").value).toBe("");
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
   expect(api.setSceneLocation).not.toHaveBeenCalled();
