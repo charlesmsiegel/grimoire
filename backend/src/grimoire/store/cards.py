@@ -105,6 +105,32 @@ def bake_char_token(text: str, name: str) -> str:
     return _CHAR_MACRO.sub(lambda _m: name, text)
 
 
+def card_data(card: dict) -> dict:
+    """A card's `data` object, or `{}` when it does not have a usable one.
+
+    `card.get("data", {})` is not enough and neither is `or {}`: a card whose
+    `data` is a LIST is truthy and has no `.get`, so both hand back something
+    that raises one attribute access later -- which is how a single hand-edited
+    card took out `list_characters`, and with it the whole roster grid, rather
+    than showing up as one odd card.
+
+    Not a theoretical shape. The store is user-editable markdown and JSON by
+    design (`docs/store-guarantees.md` promises no frontmatter validation and no
+    schema), so anything a text editor can produce can arrive here. The write
+    path is stricter -- `bake_char_name` raises on it, so version PUT never
+    stores one -- but a read must survive what is already on disk.
+
+    **Reach, stated rather than implied:** every `data` read in `characters.py`
+    goes through this, which is what the listing and detail routes need. The
+    same shape is still read unguarded in `lorebook`, `localize`, `export`,
+    `greetings`, `scenario`, `appearances` and `context.cast` -- a hand-edited
+    card can still take one of those down, and sweeping them is a change of its
+    own rather than a rider on the route that found this one (#57).
+    """
+    data = card.get("data")
+    return data if isinstance(data, dict) else {}
+
+
 def bake_char_name(card: dict) -> bool:
     """Replace the {{char}} macro with the card's own name in every text field,
     greeting, and lorebook entry. Baked at creation/import: scene-time {{char}}

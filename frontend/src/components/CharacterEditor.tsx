@@ -391,7 +391,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // see or stop, still spending a provider call per character, is the one
   // outcome worse than having to click Derive again. Stopping is cheap by
   // construction: a re-run targets whatever is still blank.
-  useEffect(() => () => taglineAbort.current?.abort(), [scope.kind, scope.id]);
+  useEffect(() => {
+    // Also drops the previous scope's report. It is a claim about one library
+    // ("Derived 12 taglines"), and left standing it becomes a claim about
+    // whichever library the editor is showing now -- indefinitely, because
+    // nothing else clears it.
+    setTaglineBatchMsg(null);
+    return () => taglineAbort.current?.abort();
+  }, [scope.kind, scope.id]);
 
   // `adopt`'s rule, for the roster rather than the open character: the read is
   // async, so the editor can be showing another library by the time it lands,

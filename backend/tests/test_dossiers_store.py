@@ -57,13 +57,14 @@ def test_a_dossier_does_not_expire_when_the_card_moves_on(monkeypatch, tmp_path)
     rewritten still answers with the stored paragraph, not with "" or a flag.
     """
     root = _root(monkeypatch, tmp_path)
-    dossiers.write(root, "aese", "Aese now trusts the owner.")
-    card = characters.blank_card("Aese")
+    characters.create_character(root, "Winifred", "main", characters.blank_card("Winifred"))
+    dossiers.write(root, "winifred", "Winifred now trusts the owner.")
+    card = characters.blank_card("Winifred")
     card["data"]["description"] = "rewritten from scratch"
-    characters.update_version(root, "aese",
-                              characters.read_character(root, "aese")["meta"]["default_version"],
+    characters.update_version(root, "winifred",
+                              characters.read_character(root, "winifred")["meta"]["default_version"],
                               card)
-    assert dossiers.read(root, "aese") == "Aese now trusts the owner."
+    assert dossiers.read(root, "winifred") == "Winifred now trusts the owner."
 
 
 def test_a_refresh_that_says_the_same_thing_proposes_nothing(monkeypatch, tmp_path):
@@ -71,7 +72,8 @@ def test_a_refresh_that_says_the_same_thing_proposes_nothing(monkeypatch, tmp_pa
     dossier is a *different* paragraph the reviewer accepts. An unchanged
     refresh is not an edit, so it never reaches the review as one."""
     root = _root(monkeypatch, tmp_path)
-    prior = "Aese now trusts the owner."
-    dossiers.write(root, "aese", prior)
-    assert dossiers.stage_edit("aese", "Aese", prior, prior) is None
-    assert dossiers.stage_edit("aese", "Aese", prior, "  ") is None
+    characters.create_character(root, "Winifred", "main", characters.blank_card("Winifred"))
+    prior = "Winifred now trusts the owner."
+    dossiers.write(root, "winifred", prior)
+    assert dossiers.stage_edit("winifred", "Winifred", prior, prior) is None
+    assert dossiers.stage_edit("winifred", "Winifred", prior, "  ") is None
