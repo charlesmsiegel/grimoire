@@ -508,3 +508,107 @@ def test_an_unsafe_id_on_a_review_route_is_a_refusal_and_not_a_crash(client, sce
     for route in ("absorb", "audit", "dossiers"):
         assert client.post(
             f"/api/campaigns/C:evil/scenes/{sid}/{route}").status_code == 404, route
+
+
+# ---- what a client is told when the record moves under a retry --------------
+#
+# A scoped retry is a read-modify-write of a review it does not own outright:
+# a cut can clear that record and a fresh absorb can replace it while the
+# retry's own call is still in flight. Neither is a write it may make anyway --
+# `{mechanics, edits}` written whole destroys the absorb's prose, its staged
+# edits and its commit token -- so each comes back as its own refusal, and
+# these pin which.
+
+def _wedged_retry(client, scene, monkeypatch, route="dossiers"):
+    """Start a scoped retry and stop with its provider mid-call."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    held = _Wedged()
+    client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}")
+    assert started.status_code == 202, started.json()
+    _wait_for(held.frames_seen)          # the call is really in flight
+    return started, held
+
+
+def test_a_retry_whose_review_was_cleared_reports_that_it_had_nowhere_to_land(
+        client, scene, monkeypatch):
+    """A cut clears the record (`cascade`), and a retry already in flight then
+    has nothing to fold into. Inventing one would put a phase report and a set
+    of staged edits on a scene with no review behind them."""
+    cid, sid = scene
+    started, held = _wedged_retry(client, scene, monkeypatch)
+
+    store.pending_reviews.clear(cid, sid)
+    # `_Wedged` runs itself out in about two seconds, so the merge below is
+    # reached without cancelling anything -- which is the point: this is the
+    # record moving under a retry that is otherwise perfectly healthy.
+    run = review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
+    assert run["state"] == "failed", run
+    assert run["error"]["kind"] == "review_missing"
+
+
+def test_a_retry_whose_review_was_replaced_does_not_fold_into_the_new_one(
+        client, scene, monkeypatch):
+    """A retry owns one phase of ONE review. Folded into the review that
+    replaced it, it would report a step that ran against the old one.
+
+    Unreachable through this app's own routes -- the exclusion key stops a
+    second review run on a scene -- and kept anyway, because the store is a
+    directory of plain files that a synced folder or a second process can
+    write. Driven here at the seam where that would show up.
+    """
+    cid, sid = scene
+    started, held = _wedged_retry(client, scene, monkeypatch)
+
+    store.pending_reviews.publish(cid, sid, "somebody-elses-generation",
+                                  {"one_line": "fresh", "edits": []}, {})
+    run = review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
+    assert run["state"] == "failed", run
+    assert run["error"]["kind"] == "review_replaced"
+    assert store.pending_reviews.read(cid, sid)["review"]["one_line"] == "fresh"
+
+
+def test_a_record_that_will_not_parse_is_reported_rather_than_read_as_absent(
+        client, scene):
+    """On both doors that open a stored review. A file that will not parse
+    cannot be repaired by asking again, and an empty panel reads as "the absorb
+    never happened" -- which invites paying for it a second time."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    store.scenes._review_path(cid, sid).write_text("{not json", encoding="utf-8")
+
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/pending-review")
+    assert got.status_code == 409 and got.json()["kind"] == "review_unreadable"
+    retried = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert retried.status_code == 409 and retried.json()["kind"] == "review_unreadable"
+
+
+def test_a_record_that_will_not_open_is_retryable_rather_than_absent(client, scene):
+    """Unreadable is not "no review" either, and it is not corrupt: a sync
+    client holding the file for a moment is transient, and the client already
+    retries a `busy`."""
+    cid, sid = scene
+    store.scenes._review_path(cid, sid).mkdir()
+
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/pending-review")
+    assert got.status_code == 409 and got.json()["kind"] == "busy"
+    retried = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit")
+    assert retried.status_code == 409 and retried.json()["kind"] == "busy"
+
+
+def test_a_save_is_not_wedged_by_a_review_it_cannot_read(client, scene):
+    """The watermark check is evidence, not a gate. A garbled sidecar must not
+    be able to stop a scene's review ever being saved -- the epoch check still
+    stands, and that is the one #271 put there."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+    store.scenes._review_path(cid, sid).write_text("{not json", encoding="utf-8")
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": review["one_line"], "summary": review["summary"],
+                         "keywords": [], "timeline_events": [], "edits": [],
+                         "commit_token": review["commit_token"]})
+    assert r.status_code == 200, r.json()

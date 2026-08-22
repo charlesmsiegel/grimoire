@@ -324,3 +324,30 @@ def test_a_retcon_drops_the_review_too(scene):
     store.pending_reviews.publish(cid, sid, "gen1", _review(), {})
     store.cascade.revert_scene(cid, sid)
     assert store.pending_reviews.read(cid, sid) is None
+
+
+def test_a_review_that_cannot_be_read_is_left_where_it_is(scene):
+    """A rename has ALREADY moved the transcript by the time the fan-out runs.
+
+    So a source this cannot read is left on disk rather than swept: the
+    difference is between "we could not carry your review across" and "we
+    deleted it", and only one of those is recoverable by fixing a permission.
+    """
+    cid, sid = scene
+    # A directory where the sidecar goes: the portable way to make the read
+    # fail without depending on what this process may do as its own owner.
+    store.scenes._review_path(cid, sid).mkdir()
+    store.pending_reviews.repoint_scenes(cid, {sid: "0002--moved"})
+    assert store.scenes._review_path(cid, sid).is_dir(), "the source was swept"
+    assert store.pending_reviews.read(cid, "0002--moved") is None
+
+
+def test_a_review_that_cannot_be_written_keeps_its_source(scene):
+    """The same judgement at the other end. The caller still owes half a dozen
+    stores their new id, so raising here would strand all of them to save one
+    sidecar -- and the review is still readable at the old path."""
+    cid, sid = scene
+    store.pending_reviews.publish(cid, sid, "gen1", _review(one_line="kept"), {})
+    store.scenes._review_path(cid, "0002--moved").mkdir()
+    store.pending_reviews.repoint_scenes(cid, {sid: "0002--moved"})
+    assert store.pending_reviews.read(cid, sid)["review"]["one_line"] == "kept"
