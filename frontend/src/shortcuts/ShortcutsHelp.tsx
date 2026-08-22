@@ -160,7 +160,13 @@ export default function ShortcutsHelp() {
             <div className="shortcuts-section" key={group}>
               <div className="shortcuts-group section-label">{group}</div>
               {keys.map(({ key, reachable }) => (
+                // `aria-disabled`, not only the dim: the colour is the whole
+                // answer for a sighted reader and none of it for anyone using a
+                // screen reader, who would otherwise be read a shortcut that
+                // dispatch will refuse exactly like one it will run (PR #400
+                // review).
                 <div key={`${key.keys}|${key.label}`}
+                     aria-disabled={reachable ? undefined : true}
                      className={"shortcuts-row" + (reachable ? "" : " off")}>
                   <span className="shortcuts-label">{key.label}</span>
                   <kbd className="shortcuts-keys">{formatChord(key.keys)}</kbd>

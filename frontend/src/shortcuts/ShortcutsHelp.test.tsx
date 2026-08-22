@@ -231,6 +231,24 @@ test("a modal that mounts while the sheet is up does not steal Escape", () => {
   expect(beneath).toHaveBeenCalledTimes(1);
 });
 
+// The dimming is a colour, and a colour is not an answer for anyone using a
+// screen reader: without a state in the accessibility tree the sheet reads a
+// shortcut that dispatch will refuse exactly like one it will run (PR #400
+// review).
+test("an unreachable row says so in the accessibility tree, not only in colour", () => {
+  render(
+    <>
+      <Bind keys={[{ ...NEW_SCENE, enabled: false }]} />
+      <Bind keys={[{ keys: "mod+k", label: "Go anywhere", group: "ANYWHERE", run: () => {} }]} />
+      <ShortcutsHelp />
+    </>,
+  );
+  press("?");
+  const row = (label: string) => screen.getByText(label).closest(".shortcuts-row")!;
+  expect(row("New scene").getAttribute("aria-disabled")).toBe("true");
+  expect(row("Go anywhere").getAttribute("aria-disabled")).toBeNull();
+});
+
 test("the sections read most-specific first", () => {
   render(
     <>
