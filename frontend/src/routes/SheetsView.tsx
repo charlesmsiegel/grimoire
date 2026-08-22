@@ -107,12 +107,28 @@ export default function SheetsView() {
   // cid-change effect below exists to prevent.
   const [result, setResult] = useState<{ cid: string; data: SheetBulkResult } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Tagged like `result`, and for the same reason: a create that fails for one
+  // campaign must not banner over the next one.
+  const [error, setError] = useState<{ cid: string; message: string } | null>(null);
+
+  // The campaign on screen right now, readable from a closure that was built
+  // for an earlier one. `createMissing` is such a closure -- it captures the
+  // render's `reload`, and after an in-place `:cid` change that reload was
+  // built for the campaign the reader has left.
+  const liveCid = useRef(cid);
+  liveCid.current = cid;
 
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
 
   useEffect(() => {
-    api.getCampaign(cid).then((c) => setName(c.meta.name)).catch(() => setName(cid));
+    // Guarded like the two effects below it: two of these can be in flight
+    // across a campaign switch, nothing orders the responses, and the loser
+    // labels both this page and the shell's ⌘K pill with the wrong campaign.
+    let live = true;
+    api.getCampaign(cid)
+      .then((c) => { if (live) setName(c.meta.name); })
+      .catch(() => { if (live) setName(cid); });
+    return () => { live = false; };
   }, [cid]);
 
   // The module's full detail, not just the bound id: `SheetPanel` renders
@@ -147,29 +163,37 @@ export default function SheetsView() {
     return () => { live = false; };
   }, [cid]);
 
-  // Every reload supersedes the one before it. Three callers start one
-  // imperatively -- the create's `finally`, `SheetPanel`'s `onChanged`, and
-  // Try again -- and all three discard the cancel closure, so without this a
-  // reload begun on campaign A could settle after the switch to B and commit
-  // `{cid: A}`. `roster` then reads null, nothing re-fetches, and the page sits
-  // on "Reading the cast…" until you navigate away and back.
+  /** Re-read the cast for whatever campaign is on screen, superseding any read
+   *  still in flight.
+   *
+   *  Deliberately closes over NO cid and has a stable identity. Three callers
+   *  start one imperatively -- the create's `finally`, `SheetPanel`'s
+   *  `onChanged`, and Try again -- and all three discard the cancel closure it
+   *  returns. A version bound to the render's cid made that worse rather than
+   *  better: after an in-place `:cid` change, `createMissing`'s captured copy
+   *  would cancel the NEW campaign's read and then commit the OLD campaign's
+   *  roster, leaving `roster` null with nothing left to re-fetch it and the
+   *  page stuck on "Reading the cast…". Reading `liveCid` at call time and
+   *  again at commit time is what makes every caller correct at once. */
   const cancelReload = useRef<() => void>(() => {});
   const reload = useCallback(() => {
     cancelReload.current();
+    const target = liveCid.current;
     let live = true;
     cancelReload.current = () => { live = false; };
     setRosterError(null);
-    api.getCampaignSheetRoster(cid)
-      .then((r) => { if (live) setLoaded({ cid, roster: r.roster }); })
+    const mine = () => live && liveCid.current === target;
+    api.getCampaignSheetRoster(target)
+      .then((r) => { if (mine()) setLoaded({ cid: target, roster: r.roster }); })
       // NOT swallowed into an empty roster. An empty roster is a real and very
       // different answer -- "this module keeps no sheets" -- so rendering a
       // failed read as one tells the reader something false about their module
       // and hides that anything went wrong at all.
       .catch((e: unknown) => {
-        if (live) setRosterError(e instanceof Error ? e.message : String(e));
+        if (mine()) setRosterError(e instanceof Error ? e.message : String(e));
       });
     return () => { live = false; };
-  }, [cid]);
+  }, []);
 
   // The campaign changed: drop the selection and the last bulk report with it,
   // or the report would be read as this campaign's.
@@ -237,7 +261,7 @@ export default function SheetsView() {
     } catch (e) {
       // `ApiError` extends Error with the server's `detail` as its message, so
       // this reads the same sentence the route wrote without importing it.
-      setError(e instanceof Error ? e.message : String(e));
+      setError({ cid, message: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
       reload();
@@ -341,7 +365,7 @@ export default function SheetsView() {
           </div>
         </div>
 
-        {error && <div className="banner">{error}</div>}
+        {error?.cid === cid && <div className="banner">{error.message}</div>}
 
         {rosterError && (
           <>
