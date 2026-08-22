@@ -324,6 +324,38 @@ def test_a_forced_push_overwrites_the_world_anyway(monkeypatch, tmp_path):
     assert sync.incoming(cid) == []
 
 
+def test_pushing_content_the_library_already_matches_just_clears_the_override(
+        monkeypatch, tmp_path):
+    """The state a crashed push leaves: world and campaign byte-identical, base
+    still describing the older text. Reporting that as "changed in the library"
+    is a conflict message for two sides that agree — and it is the very residue
+    push's own write ordering chooses, so a retry has to heal it, not refuse."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    entities.create_entity(wroot, "locations", "Saltmarch", "v1")
+    overlay.update_entity(cid, "locations", "saltmarch", body="mine")
+    # the world write landed; the base write did not
+    croot = campaigns.campaign_root(cid)
+    (wroot / "locations" / "saltmarch.md").write_text(
+        (croot / "locations" / "saltmarch.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+    sync.push(cid, "locations", "saltmarch")     # no conflict: the two agree
+
+    assert sync.incoming(cid) == []
+    assert sync.diverged(cid) == []
+    assert entities.read_entity(wroot, "locations", "saltmarch")["body"].strip() == "mine"
+
+
+def test_pushing_a_record_that_already_matches_and_is_in_sync_is_refused(
+        monkeypatch, tmp_path):
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+    overlay.materialize_entity(cid, "locations", "saltmarch")   # copy, unedited
+
+    with pytest.raises(sync.NotDivergedError):
+        sync.push(cid, "locations", "saltmarch")
+
+
 def test_push_refuses_a_record_the_campaign_only_inherits(monkeypatch, tmp_path):
     wid, cid = _world_and_campaign(monkeypatch, tmp_path)
     entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
