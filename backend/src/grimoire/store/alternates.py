@@ -22,13 +22,22 @@ variant ``_resolve`` reconciles out of the transcript rather than archiving (a
 plain turn's reply, a hand edit). A reader shows nothing for those rather than
 naming a model it is only guessing at.
 
-What it names, exactly: *a* route that produced this text, latest recorded
-wins. Two takes with identical text are one variant, so when two routes
-generate the same bytes the field can only name one of them — and a generation
-that recorded no pending pair at all (Retry, the empty send) cannot re-stamp
-what it lands on, because a pure read cannot tell an empty pending record from
-no reroll. Closing that gap needs the "a replacement is expected" flag rejected
-further down this docstring, for the reason given there.
+What it names, exactly: *a* route that produced this text, **latest recorded**
+wins — and "recorded" is the load-bearing word. Two takes with identical text
+are one variant, so when two routes generate the same bytes the field can only
+name one of them, and a generation that records an EMPTY pending pair cannot
+re-stamp what it lands on: a pure read cannot tell an empty pending record from
+no reroll at all. Three things record nothing — Retry and the empty send, which
+re-aim a dead reroll's pair to nothing before streaming, and a reroll onto a
+connection with no model configured, whose effective model is "" — so a
+deduplicated take can keep the stamp of an earlier take with the same text.
+
+That is a real limit and it is display-only: it reaches the swipe tooltip and
+nothing else, and only where two routes produced byte-identical prose, which is
+also the only case where the two are one variant at all. Closing it needs a
+third pending field saying "a route was recorded, and it was nothing" —
+affordable, since a pending field is spent by a read exactly as these two are,
+but a third thing to keep in step for a tooltip label. Stated instead.
 
 **What a set is keyed to.** One reroll can produce several posts
 (``scenes.split_reply`` segments a reply per speaker), so the unit here is the

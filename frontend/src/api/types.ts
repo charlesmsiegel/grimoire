@@ -14,9 +14,14 @@ import type { Model } from "./models";
 import type { RollProposalPayload } from "./stream";
 
 export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible";
+// `model` is what is STORED (what the connection editor edits); `effective_model`
+// is what a generation on it will actually run — they differ for `claude`
+// alone, which substitutes a default for an unset model. Any surface naming
+// the model a connection will use wants the second (#77).
 export type LLMConnection = {
   id: string; kind: LLMConnectionKind; name: string;
-  base_url: string; model: string; post_process: "none" | "strict";
+  base_url: string; model: string; effective_model: string;
+  post_process: "none" | "strict";
   key_set: boolean; rev: string;
 };
 export type LLMConnectionDetail = LLMConnection & { models: Model[]; fetched_at: string };

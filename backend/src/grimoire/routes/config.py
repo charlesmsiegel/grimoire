@@ -288,9 +288,32 @@ def get_store_conflicts():
 
 
 # ---- llm connections ----
+def _with_effective(conn: dict) -> dict:
+    """One connection as the client needs it: plus the model it will actually
+    run on.
+
+    `GET /config` has always reported this for the ACTIVE connection, because
+    the status bar names the model every scene will use and a `claude`
+    connection with none configured still generates on the dispatcher's
+    substitute. Every other connection reported its raw stored model, so the
+    reroll route picker (#77) — which has to tell the reader what an empty
+    model box will run for a connection that is not the active one — briefly
+    carried a copy of `llm.effective_model`'s rule AND of
+    `CLAUDE_DEFAULT_MODEL`, pinned by a test that scraped a `.tsx` file with a
+    regex. Reporting the answer here deletes the rule, the constant and the
+    scrape together, and a fourth kind that substitutes a model is then one
+    change in `llm.effective_model` rather than two in two languages.
+
+    Added beside `model` rather than replacing it: the connection editor edits
+    the stored value, and a form that round-tripped the effective one would
+    write the substitute into the file the substitution exists to avoid needing.
+    """
+    return {**conn, "effective_model": llm.effective_model(conn)}
+
+
 @router.get("/llm-connections")
 def get_connections():
-    return store.llm_connections.list_connections()
+    return [_with_effective(c) for c in store.llm_connections.list_connections()]
 
 
 @router.post("/llm-connections")
@@ -304,7 +327,7 @@ def post_connection(body: ConnectionCreate):
 @router.get("/llm-connections/{id}")
 def get_connection(id: str):
     try:
-        return store.llm_connections.read_connection(id)
+        return _with_effective(store.llm_connections.read_connection(id))
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
 
@@ -314,7 +337,7 @@ def put_connection(id: str, body: ConnectionUpdate):
     fields = {k: v for k, v in _dump(body).items() if v is not None}
     try:
         store.llm_connections.update_connection(id, **fields)
-        return store.llm_connections.read_connection(id)
+        return _with_effective(store.llm_connections.read_connection(id))
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
 

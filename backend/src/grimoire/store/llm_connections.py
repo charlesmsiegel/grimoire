@@ -56,7 +56,17 @@ def _write_raw(id: str, **fields: str) -> None:
 def _read(id: str) -> dict | None:
     """None for unsafe, missing, unreadable, or unrecognized-kind files — all
     four count as "not a valid seeded/created connection", used both by normal
-    lookups and by migration's crash-recovery check."""
+    lookups and by migration's crash-recovery check.
+
+    The `exists()` is INSIDE the try, which review caught it not being: an id
+    longer than the filesystem's NAME_MAX raises ENAMETOOLONG from the stat
+    itself, and pathlib does not swallow that one. `safe_id` does not bound
+    length — nothing about a long name lets it escape its directory — so a
+    caller-supplied id from a request body (#77's reroll override) reached this
+    and escaped as a 500 where the route documents a 400. A name the filesystem
+    cannot hold is a name no connection has, which is the answer every other
+    branch here gives.
+    """
     # #240's rule, which this module was outside: never join a caller-supplied
     # id onto a path unchecked. Every read reaches a connection through here,
     # and an id now arrives in a REQUEST BODY as well as a URL segment (#77's
@@ -68,9 +78,9 @@ def _read(id: str) -> dict | None:
     if not safe_id(id):
         return None
     p = _path(id)
-    if not p.exists():
-        return None
     try:
+        if not p.exists():
+            return None
         meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return None

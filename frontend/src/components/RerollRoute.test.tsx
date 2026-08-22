@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 vi.mock("../api/client", async () => ({
   ...(await vi.importActual<typeof import("../api/client")>("../api/client")),
-  api: { listConnections: vi.fn(), readConnection: vi.fn() },
+  api: { listConnections: vi.fn(), readConnection: vi.fn(), getConfig: vi.fn() },
 }));
 vi.mock("../api/models", async () => ({
   ...(await vi.importActual<typeof import("../api/models")>("../api/models")),
@@ -15,15 +15,15 @@ import RerollRoutePicker, { NO_REROLL_ROUTE } from "./RerollRoute";
 
 const OPENROUTER = {
   id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
-  model: "vendor/campaign", post_process: "none", key_set: true, rev: "r1",
+  model: "vendor/campaign", effective_model: "vendor/campaign", post_process: "none", key_set: true, rev: "r1",
 };
 const LOCAL = {
   id: "local", kind: "openai_compatible", name: "Local", base_url: "http://localhost:11434/v1",
-  model: "llama3", post_process: "none", key_set: false, rev: "r2",
+  model: "llama3", effective_model: "llama3", post_process: "none", key_set: false, rev: "r2",
 };
 const CLAUDE = {
   id: "claude", kind: "claude", name: "Claude", base_url: "",
-  model: "opus", post_process: "none", key_set: true, rev: "r3",
+  model: "opus", effective_model: "opus", post_process: "none", key_set: true, rev: "r3",
 };
 const ACTIVE = { id: "openrouter", kind: "openrouter" as const, name: "OpenRouter", model: "vendor/campaign" };
 
@@ -32,10 +32,14 @@ beforeEach(() => {
   (api.listConnections as any).mockResolvedValue([OPENROUTER, LOCAL, CLAUDE]);
   (api.readConnection as any).mockResolvedValue({ ...LOCAL, models: [], fetched_at: "" });
   (getModels as any).mockResolvedValue([]);
+  // Which connection is active is the picker's own read now, not a prop — so a
+  // popover that opens after another tab repointed it cannot be looking at a
+  // stale answer.
+  (api.getConfig as any).mockResolvedValue({ active_connection: ACTIVE });
 });
 
 test("the default option is offered, with the active connection on hover", async () => {
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />);
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
   const select = await screen.findByLabelText<HTMLSelectElement>("Reroll connection");
   expect(select.value).toBe("");
   await screen.findByRole("option", { name: "Default" });
@@ -52,14 +56,14 @@ test("the default option is offered, with the active connection on hover", async
 });
 
 test("the model box shows what leaving it blank would run", async () => {
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />);
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
   expect(await screen.findByPlaceholderText("vendor/campaign")).toBeInTheDocument();
 });
 
 test("choosing a connection clears the model chosen for the previous one", async () => {
   const onChange = vi.fn();
   render(<RerollRoutePicker value={{ connection_id: "", model: "vendor/bigger" }}
-                            onChange={onChange} active={ACTIVE} />);
+                            onChange={onChange} />);
   await screen.findByRole("option", { name: "Local" });
 
   fireEvent.change(screen.getByLabelText("Reroll connection"), { target: { value: "local" } });
@@ -74,7 +78,7 @@ test("a custom endpoint offers the models its own refresh cached", async () => {
     models: [{ id: "qwen3", name: "Qwen 3", context: 32768, prompt: null, completion: null }],
   });
   render(<RerollRoutePicker value={{ connection_id: "local", model: "" }}
-                            onChange={() => {}} active={ACTIVE} />);
+                            onChange={() => {}} />);
 
   await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("local"));
   fireEvent.focus(await screen.findByLabelText("Reroll model"));
@@ -87,16 +91,19 @@ test("a claude connection's blank box names the model the dispatcher substitutes
   // The two sources disagree for this one kind: /config reports the EFFECTIVE
   // model, /llm-connections the raw stored one. A blank box would say nothing
   // about a reroll that will run `opus`.
-  (api.listConnections as any).mockResolvedValue([OPENROUTER, { ...CLAUDE, model: "" }]);
+  // stored "" and effective "opus" — the one kind where they differ, which the
+  // server now resolves so the client never has to know the rule.
+  (api.listConnections as any).mockResolvedValue(
+    [OPENROUTER, { ...CLAUDE, model: "", effective_model: "opus" }]);
   render(<RerollRoutePicker value={{ connection_id: "claude", model: "" }}
-                            onChange={() => {}} active={ACTIVE} />);
+                            onChange={() => {}} />);
 
   expect(await screen.findByPlaceholderText("opus")).toBeInTheDocument();
 });
 
 test("a claude connection offers the model ids the connection form knows", async () => {
   render(<RerollRoutePicker value={{ connection_id: "claude", model: "" }}
-                            onChange={() => {}} active={ACTIVE} />);
+                            onChange={() => {}} />);
   await screen.findByRole("option", { name: "Claude" });
 
   fireEvent.focus(screen.getByLabelText("Reroll model"));
@@ -124,7 +131,7 @@ test.each([
   render(
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div onKeyDown={(e) => { if (e.key === "Escape") onOuterEscape(); }}>
-      <RerollRoutePicker value={value} onChange={() => {}} active={ACTIVE} />
+      <RerollRoutePicker value={value} onChange={() => {}} />
     </div>);
   const box = await screen.findByLabelText("Reroll model");
   fireEvent.focus(box);
@@ -141,7 +148,7 @@ test("Enter closes the model dropdown before it commits anything above it", asyn
   render(
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div onKeyDown={(e) => { if (e.key === "Enter") onOuterEnter(); }}>
-      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />
+      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />
     </div>);
   await waitFor(() => expect(getModels).toHaveBeenCalled());
   const box = screen.getByLabelText("Reroll model");
@@ -167,7 +174,7 @@ test("Escape closes the model dropdown before it closes anything above it", asyn
     // for exactly the reason the rule objects to — see CampaignView.
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div onKeyDown={(e) => { if (e.key === "Escape") onOuterEscape(); }}>
-      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />
+      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />
     </div>);
   await waitFor(() => expect(getModels).toHaveBeenCalled());
   const box = screen.getByLabelText("Reroll model");
@@ -188,7 +195,7 @@ test("Escape closes the model dropdown before it closes anything above it", asyn
 test("an openrouter reroll offers the catalog", async () => {
   (getModels as any).mockResolvedValue(
     [{ id: "vendor/bigger", name: "Bigger", context: 200000, prompt: "0.000001", completion: "0.000002" }]);
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />);
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
   await waitFor(() => expect(getModels).toHaveBeenCalled());
 
   fireEvent.focus(screen.getByLabelText("Reroll model"));
@@ -198,7 +205,7 @@ test("an openrouter reroll offers the catalog", async () => {
 
 test("a catalog that will not load leaves the box typeable and says so", async () => {
   (getModels as any).mockRejectedValue(new Error("offline"));
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />);
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
 
   expect(await screen.findByText(/couldn’t load model list/)).toBeInTheDocument();
   expect(screen.getByLabelText("Reroll model")).not.toBeDisabled();
@@ -206,7 +213,7 @@ test("a catalog that will not load leaves the box typeable and says so", async (
 
 test("a connection list that cannot be read still offers the default", async () => {
   (api.listConnections as any).mockRejectedValue(new Error("offline"));
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />);
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
 
   expect(await screen.findByRole("option", { name: "Default" })).toBeInTheDocument();
 });

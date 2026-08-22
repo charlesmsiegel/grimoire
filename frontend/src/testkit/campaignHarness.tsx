@@ -134,10 +134,10 @@ export function installCampaignMocks() {
   // it are unaffected.
   (api.listConnections as any).mockResolvedValue([
     { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
-      model: "campaign/model", post_process: "none", key_set: true, rev: "r1" }]);
+      model: "campaign/model", effective_model: "campaign/model", post_process: "none", key_set: true, rev: "r1" }]);
   (api.readConnection as any).mockResolvedValue(
     { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
-      model: "campaign/model", post_process: "none", key_set: true, rev: "r1",
+      model: "campaign/model", effective_model: "campaign/model", post_process: "none", key_set: true, rev: "r1",
       models: [], fetched_at: "" });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getReplay as any).mockResolvedValue(null);
