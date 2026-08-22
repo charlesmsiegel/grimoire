@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from grimoire.store import logs
+from grimoire.store import errors, logs
 
 
 @pytest.fixture
@@ -429,6 +429,35 @@ def test_a_window_skips_month_files_it_cannot_overlap(home, monkeypatch):
 
     out = logs.read(since="2026-08-01", until="2026-08-31")
     assert [r["message"] for r in out["rows"]] == ["august"]
+
+
+def test_a_hand_mangled_file_costs_its_bad_lines_and_nothing_else(home):
+    """The store is a folder the user can edit, sync and corrupt. Every reader
+    here is a report, and a report drawn short beats no report at all."""
+    logs.record("info", "runner", "good", ts="2026-08-12T01:00:00.000Z")
+    with (home / "logs" / "2026-08.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write('not json at all\n')
+        fh.write('[1, 2, 3]\n')                                  # json, not a row
+        fh.write('"just a string"\n')
+        fh.write('{"ts": 12345, "level": 9, "module": null, "message": {"a": 1}}\n')
+        fh.write('{"ts": "zzz", "level": "nope", "module": [], "message": "x"}\n')
+        fh.write('{"unterminated": ')                            # no newline either
+
+    out = logs.read(since="2026-08-01", until="2026-08-31")
+    assert "good" in [r.get("message") for r in out["rows"]]
+    assert all(isinstance(r, dict) for r in out["rows"])
+    assert errors.summary(366)["total"] >= 0        # and the rollups still draw
+
+
+def test_a_cursor_naming_a_file_outside_the_log_directory_is_refused(home):
+    """The cursor is a filename off the wire. It only ever selects from the
+    files the glob found, so a traversal names nothing and starts at the end."""
+    logs.record("info", "runner", "kept", ts="2026-08-12T01:00:00.000Z")
+
+    out = logs.tail("../../etc/passwd:0")
+
+    assert out["rows"] == []
+    assert out["cursor"].startswith("2026-08.jsonl:")
 
 
 # ---- live tailing ----
