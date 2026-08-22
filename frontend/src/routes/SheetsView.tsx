@@ -179,8 +179,14 @@ export default function SheetsView() {
         <h2 className="ledger-ident-name">{name || cid}</h2>
       </div>
       {roster === null && <p className="column-empty">Reading the cast…</p>}
+      {/* Two different nothings. A module that binds but declares no sheet
+          types is legal -- a pack can be all rules and checks -- and calling
+          that "no mechanics bound" would send the reader to change a binding
+          that is already what they want. */}
       {roster !== null && kinds.length === 0 && (
-        <p className="column-empty">No mechanics bound.</p>
+        <p className="column-empty">
+          {module ? "This module keeps no sheets." : "No mechanics bound."}
+        </p>
       )}
       {plan.map(({ kind, rows, sheeted }) => (
         <ColumnSection key={kind} label={sheetKindLabel(kind)}
@@ -238,6 +244,19 @@ export default function SheetsView() {
           </p>
         )}
 
+        {/* Bound, and it sheets nothing. Without this the page renders a table
+            of column headings with no rows under them and a dead button, which
+            reads as a page that failed rather than as an answer. */}
+        {roster !== null && module && kinds.length === 0 && (
+          <p className="empty-state">
+            <span className="empty-what">
+              {module.manifest.name} declares no sheet types, so this campaign&rsquo;s
+              cast has nothing to keep sheets for.
+            </span>{" "}
+            <Link to="/modules">Edit the module →</Link>
+          </p>
+        )}
+
         {selected && selectedRow && module && (
           <div className="detail-view">
             <div className="detail-main">
@@ -271,7 +290,7 @@ export default function SheetsView() {
           </div>
         )}
 
-        {!selectedRow && module && roster !== null && (
+        {!selectedRow && module && roster !== null && kinds.length > 0 && (
           <>
             <div className="ledger-table-wrap">
             <table className="ledger-table">
