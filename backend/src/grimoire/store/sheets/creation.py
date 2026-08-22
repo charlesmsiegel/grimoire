@@ -89,8 +89,9 @@ def _checked_creation_write(path: Path, mid: str, file_kind: str, eid: str,
     errs = modules_validate.validate_sheet_values(sheets_def, sheet_type, fields)
     if errs:
         raise SheetError("; ".join(errs))
-    paths._atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields,
-                                    "gen": paths._next_gen(path, sheet_type)})
+    # The one writer that runs the creation step, so the one that sets the mark.
+    paths._atomic_write_json(path, paths._sheet_doc(
+        sheet_type, fields, paths._next_gen(path, sheet_type), creation=True))
 
 
 def write_creation(cid: str, kind: str, eid: str, sheet_type: str,

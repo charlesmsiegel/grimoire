@@ -57,8 +57,16 @@ const andList = (xs: string[]) =>
  *  that one made the wrong answer permanent. */
 type Bound = {
   cid: string;
-  /** The module id this campaign resolves to, or null for genuinely unbound. */
+  /** The module id in force, or null. */
   resolved: string | null;
+  /** The id this campaign asked for when nothing resolved — `binding.resolve`
+   *  returns null for a module that is missing OR whose pack does not
+   *  validate, so a null `resolved` is not the same as an unbound campaign,
+   *  and telling one to bind a module it has already bound is the wrong
+   *  instruction. (A broken WORLD default still reads as unbound here: the
+   *  campaign's own `setting` is empty in that case and the route says no more.
+   *  `MechanicsConfig` has always drawn the line in the same place.) */
+  broken: string | null;
   /** Its full detail — null when unbound, and when the read failed. */
   detail: ModuleDetail | null;
   /** Why there is no detail, when there should have been one. */
@@ -111,21 +119,24 @@ export default function SheetsView() {
     setBound(null);
     api.getCampaignModule(cid)
       .then(async (m): Promise<Bound> => {
-        if (!m.resolved) return { cid, resolved: null, detail: null, error: null };
+        const asked = m.setting && m.setting !== "none" ? m.setting : null;
+        if (!m.resolved) {
+          return { cid, resolved: null, broken: asked, detail: null, error: null };
+        }
         try {
-          return { cid, resolved: m.resolved, error: null,
+          return { cid, resolved: m.resolved, broken: null, error: null,
                    detail: await api.readModule(m.resolved) };
         } catch (e) {
           // A module IS bound and its pack would not load. Reporting that as
           // "no mechanics" sends the reader to change a binding that is right.
-          return { cid, resolved: m.resolved, detail: null,
+          return { cid, resolved: m.resolved, broken: null, detail: null,
                    error: e instanceof Error ? e.message : String(e) };
         }
       })
       .then((next) => { if (live) setBound(next); })
       .catch((e: unknown) => {
         if (live) {
-          setBound({ cid, resolved: null, detail: null,
+          setBound({ cid, resolved: null, broken: null, detail: null,
                      error: e instanceof Error ? e.message : String(e) });
         }
       });
@@ -231,10 +242,12 @@ export default function SheetsView() {
           send the reader to change a binding that is already what they want. */}
       {roster !== null && settled && kinds.length === 0 && (
         <p className="column-empty">
-          {settled.resolved ? "This module keeps no sheets." : "No mechanics bound."}
+          {settled.resolved ? "This module keeps no sheets."
+           : settled.broken ? "The bound module is unusable."
+           : "No mechanics bound."}
         </p>
       )}
-      {plan.map(({ kind, rows, sheeted }) => (
+      {!rosterError && plan.map(({ kind, rows, sheeted }) => (
         <ColumnSection key={kind} label={sheetKindLabel(kind)}
                        count={`${sheeted}/${rows.length}`}>
           {rows.length === 0 && <p className="column-empty">None yet.</p>}
@@ -331,10 +344,24 @@ export default function SheetsView() {
           </div>
         )}
 
+        {/* Bound to something that does not resolve. `binding.resolve` answers
+            null for a module that is missing or whose pack fails validation,
+            so this is NOT the unbound case below and must not offer to bind. */}
+        {!rosterError && roster !== null && settled?.broken && !settled.error && (
+          <p className="empty-state">
+            <span className="empty-what">
+              This campaign is bound to &ldquo;{settled.broken}&rdquo;, which is missing or
+              does not validate — so it is playing with no mechanics and keeps no sheets.
+            </span>{" "}
+            <Link to="/modules">Fix the module →</Link>
+          </p>
+        )}
+
         {/* Every state below waits for BOTH reads to settle. Acting on
             whichever landed first is how this page came to tell a campaign it
             had no mechanics while its rail listed the cast. */}
-        {!rosterError && roster !== null && settled && !settled.resolved && !settled.error && (
+        {!rosterError && roster !== null && settled && !settled.resolved
+          && !settled.broken && !settled.error && (
           <p className="empty-state">
             <span className="empty-what">
               This campaign has no mechanics bound, so there are no sheets to keep.
@@ -390,7 +417,7 @@ export default function SheetsView() {
           </div>
         )}
 
-        {!selectedRow && module && roster !== null && kinds.length > 0 && (
+        {!rosterError && !selectedRow && module && roster !== null && kinds.length > 0 && (
           <>
             <div className="ledger-table-wrap">
               <table className="ledger-table">

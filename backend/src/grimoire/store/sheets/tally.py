@@ -185,7 +185,8 @@ def roster(cid: str) -> dict[str, list[dict]]:
                 row["errors"] = sheet["errors"]
                 if isinstance(sheet["sheet_type"], str):
                     row["creation_pending"] = schema.creation_pending(
-                        sheets_def, sheet["sheet_type"], sheet["fields"])
+                        sheets_def, sheet["sheet_type"], sheet["fields"],
+                        created=sheet["creation"])
             rows.append(row)
         out[kind] = rows
     return out

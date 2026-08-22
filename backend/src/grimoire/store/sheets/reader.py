@@ -35,24 +35,26 @@ def _read_path(path: Path, file_kind: str, mid: str | None,
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
-        return {"sheet_type": None, "fields": {}, "derived": {}, "gen": None,
+        return {"sheet_type": None, "fields": {}, "derived": {}, "gen": None, "creation": False,
                 "errors": [f"unreadable sheet file: {e}"]}
     if not isinstance(data, dict):
-        return {"sheet_type": None, "fields": {}, "derived": {}, "gen": None,
+        return {"sheet_type": None, "fields": {}, "derived": {}, "gen": None, "creation": False,
                 "errors": ["sheet file must be an object"]}
     sheet_type = data.get("sheet_type")
     fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
     if mid is None:
         return {"sheet_type": sheet_type, "fields": fields, "derived": {},
-                "gen": data.get("gen"), "errors": ["no module resolved"]}
+                "gen": data.get("gen"), "creation": data.get("creation") is True,
+                "errors": ["no module resolved"]}
     if pack is None:
         pack = modules_pack.load_pack(mid)
     errors = schema.instance_errors(pack, file_kind, sheet_type, fields)
     derived: dict = {}
     if isinstance(sheet_type, str):
         derived = schema._compute_derived(pack["sheets"], sheet_type, fields, [])
-    return {"sheet_type": sheet_type, "fields": fields,
-            "derived": derived, "gen": data.get("gen"), "errors": errors}
+    return {"sheet_type": sheet_type, "fields": fields, "derived": derived,
+            "gen": data.get("gen"), "creation": data.get("creation") is True,
+            "errors": errors}
 
 
 def read(cid: str, kind: str, eid: str) -> dict | None:

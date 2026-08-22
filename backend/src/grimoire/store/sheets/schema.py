@@ -113,7 +113,8 @@ def _validate_instance(sheets_def: dict, file_kind: str, sheet_type,
     return modules_validate.validate_sheet_values(sheets_def, sheet_type, fields)
 
 
-def creation_pending(sheets_def: dict, type_id: str, fields: dict) -> list[str]:
+def creation_pending(sheets_def: dict, type_id: str, fields: dict,
+                     *, created: bool = False) -> list[str]:
     """The creation pools a sheet has never been through, or ``[]``.
 
     A sheet type's ``creation`` block prices a set of fields against a budget,
@@ -123,9 +124,19 @@ def creation_pending(sheets_def: dict, type_id: str, fields: dict) -> list[str]:
     defaults and consults no pool at all. That sheet is creation-incomplete the
     moment it exists, and #201 turns on saying so rather than skipping it.
 
-    The test is "the values are still exactly this type's schema defaults",
-    which is a statement about the state the sheet was CREATED in -- exactly
-    what the issue asks the view to flag -- and it is what keeps this honest.
+    Two conditions, each covering the other's blind spot:
+
+    - ``created`` is the stored mark ``creation.write_creation`` sets. Without
+      it, a creation spend that happens to land on the schema defaults -- spend
+      ``pool-basic``'s attribute pool evenly at its minimum and it does -- reads
+      as a sheet nobody ever created. Provenance is not in the values.
+    - the values still being exactly this type's schema defaults, without which
+      a sheet somebody filled in by hand, thoroughly, but never took through
+      the wizard would carry the flag forever.
+
+    The one it still gets wrong is the quiet direction: a hand-edited sheet
+    that never ran creation stops being flagged. Silence about a sheet somebody
+    has worked on beats crying wolf over a finished one.
 
     The obvious implementation, and the one this replaces, was arithmetic:
     price the stored values against the pools and report ``budget - spent``.
@@ -143,13 +154,10 @@ def creation_pending(sheets_def: dict, type_id: str, fields: dict) -> list[str]:
 
     Both are the same mistake: current values are not a record of what was
     spent at creation, and no arithmetic over them can recover one. So the
-    answer is not a number. It is the names of the pools nobody ran, for a
-    sheet that is still untouched, and nothing at all for a sheet that is not.
-
-    The error this can still make is the safe one -- a sheet edited once by
-    hand, but never taken through creation, stops being flagged. Silence about
-    a sheet somebody has worked on beats crying wolf over every valid one.
+    answer is not a number. It is the names of the pools nobody ran.
     """
+    if created:
+        return []
     st = sheets_def.get("sheet_types", {}).get(type_id)
     if not isinstance(st, dict):
         return []
