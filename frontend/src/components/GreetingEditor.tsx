@@ -212,6 +212,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
   // location the campaign has deleted (or a list that failed to load) still
   // shows *something* the reader can recognise and clear.
   const locName = (id: string) => locations.find((l) => l.id === id)?.name ?? id;
+  const locationKnown = locations.some((l) => l.id === form.location);
 
   // --- rail filtering -------------------------------------------------------
   // Marks are campaign-only (a world has no play history), so the chips are
@@ -396,8 +397,15 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
                   </div>
                 </div>
               )}
-              {sideList("Location", form.location ? [form.location] : [], locName,
-                        onOpenLocation)}
+              {/* Clickable only once the list confirms the record is there. A
+                  chip for a deleted location would navigate to a record that
+                  404s -- a section switch with no explanation -- while the
+                  edit-mode picker calls the very same id "(missing)". Same
+                  three states as that picker: silent until the read lands,
+                  labelled only once it has. */}
+              {sideList("Location", form.location ? [form.location] : [],
+                        (id) => (locationsRead && !locationKnown ? `${id} (missing)` : locName(id)),
+                        locationKnown ? onOpenLocation : undefined)}
               {form.present.length > 0 && (
                 <div className="side-section">
                   <h4>Present characters</h4>

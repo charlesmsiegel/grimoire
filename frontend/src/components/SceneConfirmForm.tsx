@@ -76,6 +76,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
   // than a sentence, because what it means depends on state that outlives it.
   const [locationsFailed, setLocationsFailed] = useState(false);
   // Fixed for the life of this pane: a draft never changes source under it.
+  // Read at render rather than in the loader effect -- see the banner below.
   const seedsFromGreeting = draft.source === "greeting";
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
@@ -149,7 +150,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
     api.listCampaignPCs(cid).then(setPCs).catch(() => setPCs([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-  }, [cid, seedsFromGreeting]);
+  }, [cid]);
 
   // pcless scenes never seat players, matching start_from_greeting's guards.
   // Filtering `pcs` alone is NOT enough: a player can be seated as a

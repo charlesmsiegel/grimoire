@@ -625,11 +625,15 @@ class ImportGreetings(BaseModel):
 class StartFromGreeting(BaseModel):
     greeting: str
     # Whether the greeting's own location should seed a scene that has none
-    # (#218). The confirm pane sets this false: it pre-fills its location picker
-    # from the greeting and applies whatever the reader leaves there, so an
-    # empty scene means the reader CHOSE none -- seeding over that would put the
-    # greeting's location back on a scene they deliberately cleared. Every other
-    # caller has made no location decision at all, and gets the greeting's.
+    # (#218). False means the caller has already decided this scene's location,
+    # including deciding it has none. The confirm pane sends false only when its
+    # location picker actually loaded: it pre-fills that picker from the
+    # greeting and applies whatever the reader leaves there, so an empty scene
+    # means the reader CHOSE none. When the read failed there was no picker to
+    # choose with, so it sends true and the greeting's own location is used --
+    # an infrastructure fault must not be mistaken for an answer. Callers with
+    # no location UI at all (the campaign wizard's opener step) leave the
+    # default.
     seed_location: bool = True
 
 

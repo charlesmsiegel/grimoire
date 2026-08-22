@@ -115,7 +115,7 @@ def player_tags(cid: str) -> set[str]:
     return out
 
 
-def _resolve_locations(cid: str, rows: list[dict]) -> None:
+def _resolve_locations(cid: str, rows: list[dict], known: set[str] | None = None) -> None:
     """Blank any `location` these rows name that this campaign no longer has.
 
     This is the read-side policy `suggest.validate_ideas` applies to a saved
@@ -126,14 +126,16 @@ def _resolve_locations(cid: str, rows: list[dict]) -> None:
     nothing. `greetings.availability` cannot do this itself: it is pure and
     knows no root.
 
-    The listing is taken only when some row actually names a location. It costs
-    one file read per location in the campaign, and `available_greetings` is on
-    the scene picker's open path -- a world that does not use the field must not
-    pay for it (#218).
+    The listing is taken only when some row actually names a location, and a
+    caller holding the campaign's location ids already passes them as `known`
+    rather than making this read them again. It costs one file read per location
+    in the campaign, and `available_greetings` is on the scene picker's open
+    path -- a world that does not use the field must not pay for it (#218).
     """
     if not any(r["location"] for r in rows):
         return
-    known = {e["id"] for e in overlay.list_entities(cid, "locations")}
+    if known is None:
+        known = {e["id"] for e in overlay.list_entities(cid, "locations")}
     for r in rows:
         if r["location"] not in known:
             r["location"] = ""
@@ -145,10 +147,11 @@ def available_greetings(cid: str, after: str | None = None, *,
 
     `locations=False` leaves each row's `location` exactly as the greeting
     records it, unchecked. Resolving costs one file read per location in the
-    campaign, and two callers do not want it: `start_from_greeting`, which reads
-    this only for `{id: available}` and would pay the whole sweep to discard it,
-    and `greeting_ideas`, which has a second batch of rows to resolve and takes
-    one sweep over both instead of one each.
+    campaign, so every caller that does not read `location` passes it: today
+    `start_from_greeting` (which wants `{id: available}` alone),
+    `suggest.greeting_candidates` (ranking), and `greeting_ideas` (which has a
+    second batch of rows and takes one sweep over both instead of one each).
+    Only the route serving the picker actually reads the field.
     """
     plotmap = overlay.read_plotmap(cid)
     marks = read_marks(cid)
@@ -172,7 +175,7 @@ def available_greetings(cid: str, after: str | None = None, *,
     return out
 
 
-def greeting_ideas(cid: str) -> list[dict]:
+def greeting_ideas(cid: str, *, known_locations: set[str] | None = None) -> list[dict]:
     """The greeting half of the scene ledger (#88), composed rather than stored.
 
     Lives here, next to the marks it reads, because status is *derived* from
@@ -225,7 +228,7 @@ def greeting_ideas(cid: str) -> list[dict]:
                  if g["id"] in used or g["available"]]
     skipped = ([g for g in overlay.list_greetings(cid) if g["id"] in marks["skipped"]]
                if marks["skipped"] else [])
-    _resolve_locations(cid, startable + skipped)
+    _resolve_locations(cid, startable + skipped, known=known_locations)
     return ([entry(g, scene_ideas.USED if g["id"] in used else scene_ideas.ACTIVE)
              for g in startable]
             + [entry(g, scene_ideas.DISMISSED) for g in skipped])
@@ -237,10 +240,11 @@ def _seed_location(cid: str, sid: str, eid: str, *, seed: bool) -> None:
 
     Every one of the three reasons to do nothing lives here rather than at the
     call site: the caller opting out, the greeting naming nowhere, and the scene
-    already being somewhere. Only a scene with no location yet is touched, and
+    already being somewhere -- the last decided under the campaign lock, see
+    below. Only a scene with no location yet is touched, and
     only for a caller that has made no location decision of its own -- see
-    `StartFromGreeting.seed_location` for why the confirm pane opts out
-    entirely rather than relying on this guard. A location already on the scene
+    `StartFromGreeting.seed_location` for when the confirm pane opts out and
+    when it deliberately does not. A location already on the scene
     is a choice someone
     made about *this* scene, and re-imposing the greeting's over it would make
     every location picker upstream a decoration. On an empty history
@@ -254,10 +258,22 @@ def _seed_location(cid: str, sid: str, eid: str, *, seed: bool) -> None:
     reconstructed. Placed before `stamp_greeting` so it runs while the scene is
     still empty, and before the body is expanded and appended.
     """
-    if not seed or not eid or scenes_read.get_location_history(cid, sid):
+    if not seed or not eid:
         return
-    with contextlib.suppress(entities.EntityNotFound):
-        scenes_moment.set_location(cid, sid, eid)
+    # The emptiness check and the write are ONE critical section, for the same
+    # reason the scene-busy guards are taken inside the hold that covers their
+    # mutation: check first and lock after, and a concurrent
+    # `PUT /scenes/{sid}/location` fits in the window. `set_location` would then
+    # find a non-empty history, take its `moved` branch, and prepend "the scene
+    # moves to X" ahead of an opener that has not been written yet -- a
+    # transition recording a move nobody made, in the one artifact this app
+    # cannot regenerate. The lock is reentrant, so `set_location` taking it
+    # again is free.
+    with locks.campaign_lock(cid):
+        if scenes_read.get_location_history(cid, sid):
+            return
+        with contextlib.suppress(entities.EntityNotFound):
+            scenes_moment.set_location(cid, sid, eid)
 
 
 def start_from_greeting(cid: str, sid: str, gid: str, *, seed_location: bool = True) -> str:

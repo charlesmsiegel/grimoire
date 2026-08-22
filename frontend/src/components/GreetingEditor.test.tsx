@@ -783,6 +783,24 @@ test("a location the picker cannot offer is shown rather than silently blanked",
   expect(within(select).getByText(/the-drowned-library \(missing\)/)).toBeInTheDocument();
 });
 
+test("a deleted location is labelled, not offered as a link to nowhere", async () => {
+  // The chip navigates to the location record; for an id the campaign no longer
+  // has, that is a section switch onto a 404 with no explanation. It reads the
+  // same way the edit-mode picker does instead (#412 review).
+  withLocation("the-drowned-library");
+  const onOpenLocation = vi.fn();
+  const { container } = render(
+    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenLocation={onOpenLocation} />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await screen.findByRole("button", { name: /^edit$/i });
+
+  const aside = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(aside).getByText(/the-drowned-library \(missing\)/)).toBeInTheDocument();
+  expect(within(aside).queryByRole("button", { name: /the-drowned-library/ })).toBeNull();
+  expect(onOpenLocation).not.toHaveBeenCalled();
+});
+
 test("a failed locations read shows the stored id without calling it missing", async () => {
   // An empty list means three different things -- not read yet, read and
   // failed, read and there are none -- and only the last is evidence about

@@ -215,7 +215,10 @@ GREETING_EXCERPT = 300
 def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False) -> list[dict]:
     """Available greetings worth ranking — only when more than two are startable
     (with two or fewer the chooser simply shows them all)."""
-    avail = [g for g in playing.available_greetings(cid, after)
+    # `locations=False`: ranking reads id/name/available/pcless, and resolving
+    # each row's location would read every location in the campaign to build an
+    # answer this never looks at.
+    avail = [g for g in playing.available_greetings(cid, after, locations=False)
              if g["available"] and g.get("pcless", False) == pcless]
     if len(avail) <= 2:
         return []
