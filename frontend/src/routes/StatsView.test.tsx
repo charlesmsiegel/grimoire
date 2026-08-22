@@ -184,6 +184,29 @@ it("keeps every module in the picker after one of them is picked", async () => {
   expect(within(picker).getByRole("option", { name: "chat" })).toBeInTheDocument();
 });
 
+it("keeps the module picker on screen while a filter is active", async () => {
+  // Narrow the window until the chosen module is the only one the window
+  // holds. `length > 1` alone took the control away with the filter still on
+  // — the one state the user cannot get out of without reloading the page.
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  await screen.findByText("By module");
+
+  fireEvent.change(screen.getByLabelText("Module to report on"),
+                   { target: { value: "dossier" } });
+  vi.mocked(api.getStats).mockResolvedValue({
+    ...structuredClone(STATS),
+    errors: { ...ERRORS, modules: [ERRORS.modules[0]] },
+  } as never);
+  fireEvent.change(screen.getByLabelText("How many days to report on"),
+                   { target: { value: "7" } });
+
+  const picker = await screen.findByLabelText("Module to report on");
+  expect(within(picker).getByRole("option", { name: "every module" }))
+    .toBeInTheDocument();
+});
+
 it("never shows whole-library numbers under a filtered heading", async () => {
   let release: (v: unknown) => void = () => {};
   vi.mocked(api.getErrorSummary).mockImplementation((() =>

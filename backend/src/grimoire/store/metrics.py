@@ -72,6 +72,28 @@ MAX_SAMPLES = 50_000
 #: is uniform either way, and this is not a security decision.
 SAMPLE_SEED = 20260821
 
+#: Distinct labels a breakdown will open a bucket for. `MAX_SAMPLES` bounds
+#: what ONE bucket holds; this bounds how many there are, and both are needed:
+#: `task` and `model` are strings out of a file a human can edit, and a ledger
+#: whose model column had drifted (a per-request id landing where a model name
+#: belongs, say) would open a `_Series` -- with its own `random.Random` -- for
+#: every row in the window. Two hundred is far above any real library: this app
+#: has a dozen tasks and a handful of models, and the frontend ranks and shows
+#: the top few.
+#:
+#: Past the cap, further new labels are counted under `OVERFLOW`, so a capped
+#: breakdown holds `MAX_BUCKETS` named buckets plus that one and its totals
+#: still add up to the calls that were read. The numbers stay true and only the
+#: naming gets coarse, which is the right way round for a bound nobody with a
+#: real ledger will ever reach.
+MAX_BUCKETS = 200
+
+#: Where labels past `MAX_BUCKETS` are counted. A bucket genuinely called
+#: "other" would merge with it rather than be shadowed by it, which keeps the
+#: arithmetic honest and costs only the label -- the trade the `""` key on
+#: `totals` avoids because it can, and this cannot.
+OVERFLOW = "other"
+
 
 class _Series:
     """One bucket's durations, plus the counts that go beside them.
@@ -188,18 +210,25 @@ def performance(days: int = DEFAULT_DAYS, campaign: str = "") -> dict:
     time series is read left to right.
     """
     span = max(1, min(int(days or 1), logs.MAX_DAYS))
+    # Resolved ONCE, here, and handed to both readers. Each used to work the
+    # window out from its own clock -- `usage.calls` from `_today`,
+    # `errors.summary` from `logs.span`, and the reported pair from
+    # `logs.window` -- three calls to `time.gmtime` in one report. A report
+    # generated across UTC midnight therefore quoted a latency distribution
+    # from one window beside an error count from another, with the header
+    # naming a third.
+    since, until = logs.span("", "", span)
     overall = _Series()
     by_task: dict[str, _Series] = {}
     by_model: dict[str, _Series] = {}
     by_day: dict[str, _Series] = {}
-    for row in usage.calls(span, campaign):
+    for row in usage.calls(span, campaign, since=since, until=until):
         ms = _int(row.get("duration_ms"))
         failed = row.get("status") == "error"
         overall.add(ms, failed)
-        _label_series(by_task, row.get("task")).add(ms, failed)
-        _label_series(by_model, row.get("model")).add(ms, failed)
-        _label_series(by_day, str(row.get("ts", ""))[:10]).add(ms, failed)
-    since, until = logs.window(span)
+        _label_series(by_task, row.get("task"), MAX_BUCKETS).add(ms, failed)
+        _label_series(by_model, row.get("model"), MAX_BUCKETS).add(ms, failed)
+        _label_series(by_day, str(row.get("ts", ""))[:10], 0).add(ms, failed)
     return {
         "days": span, "since": since, "until": until, "campaign": campaign,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -212,16 +241,33 @@ def performance(days: int = DEFAULT_DAYS, campaign: str = "") -> dict:
         "by_day": [by_day[day].report(day) for day in sorted(by_day)],
         # From the error STORE, not the ledger -- see the module docstring on
         # why the two totals differ and why that is the point.
-        "errors": errors.summary(span, campaign=campaign),
+        "errors": errors.summary(span, campaign=campaign,
+                                 since=since, until=until),
     }
 
 
-def _label_series(buckets: dict[str, _Series], key: object) -> _Series:
+def _label_series(buckets: dict[str, _Series], key: object, cap: int) -> _Series:
     """The bucket for ``key``, created if new. A hand-edited ledger row can
     hold anything where a task name belongs, and a dict arriving at the
     frontend as a key would take the panel down -- so a non-string is
-    "unknown", the same narrowing `usage._label` does."""
+    "unknown", the same narrowing `usage._label` does.
+
+    Bounded at ``cap`` distinct labels; see `MAX_BUCKETS` for why a per-label
+    `_Series` is not something a read of a user-editable file gets to open
+    without a ceiling. Passed rather than defaulted, so the constant is read at
+    call time -- a default argument would bind it once at import and quietly
+    ignore a test that moved it.
+
+    ``cap`` of 0 is no bound, which is right for exactly one caller: `by_day`'s
+    labels come from the row's own `ts`, and `usage.calls` has already dropped
+    every row outside the window -- so that breakdown is bounded by the window
+    itself, at `MAX_DAYS`, which is *larger* than `MAX_BUCKETS`. Capping it
+    here would fold the far end of a year-long trend into a bucket called
+    "other" and draw it as a day.
+    """
     name = key if isinstance(key, str) and key else "unknown"
+    if cap and name not in buckets and len(buckets) >= cap:
+        name = OVERFLOW
     return buckets.setdefault(name, _Series())
 
 

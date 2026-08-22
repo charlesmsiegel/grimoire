@@ -150,6 +150,22 @@ DEFAULT_LIMIT = 200
 #: exceeds it is still there for the next poll.
 MAX_TAIL_BYTES = 256 * 1024
 
+#: How far the tail will scan for the end of a line that is longer than its
+#: budget. Nothing this module writes comes close -- `MAX_MESSAGE` plus a
+#: handful of fields is a few kilobytes -- so a line past the budget is
+#: corrupt, and the only question is how much is read to get past it. Reading
+#: to its newline unbounded (a bare `readline`) could materialize most of a
+#: month file, which is the allocation the byte budget exists to prevent.
+MAX_LINE_BYTES = 4 * 1024 * 1024
+
+#: The smallest window a tail read will use, whatever budget is left. Any row
+#: this module writes fits comfortably inside it (`MAX_MESSAGE` plus
+#: `MAX_TRACE` plus fields, even with every character escaped), which is what
+#: lets "no newline in a full window" mean "this line is corrupt" rather than
+#: "this poll was nearly out of budget" -- a distinction that decides whether
+#: an ordinary row is read or stepped over and lost.
+MIN_LINE_READ = 64 * 1024
+
 _MONTH = re.compile(r"^\d{4}-\d{2}$")
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -235,18 +251,25 @@ def apply_level(name: str = "") -> str:
     # one. Attaching the file handler is itself what takes those lines off
     # stderr, and no arrangement of levels here changes that.
     #
-    # So the floor governs both -- and `Handler.emit` writes WARNING and above
-    # to stderr itself, which is what gives a developer back the lines
-    # `lastResort` used to print. One handler, two destinations: the rule this
-    # module states is that there is never a SECOND handler and never one on
-    # the root logger, and neither is what that does.
+    # Three levels, and they are not the same question.
     #
-    # Lowering the logger is still required for DEBUG and INFO to reach a
-    # handler at all -- `logging`'s default is WARNING.
-    logger.setLevel(getattr(logging, level.upper()))
+    # The LOGGER decides what is emitted at all. It goes to the floor, but
+    # never quieter than WARNING: `Handler.emit` writes WARNING and above to
+    # stderr (giving back the lines `logging.lastResort` printed before this
+    # module attached a handler at all), and a record the logger discards never
+    # reaches `emit` to be written. Setting it to ERROR for an `error` floor
+    # therefore silenced the terminal again through the back door -- for a
+    # setting Configuration describes as being about a FILE.
+    #
+    # The HANDLER stays open, because it is the one that also feeds stderr.
+    #
+    # `record` is where the file's floor is actually enforced -- and it has to
+    # be there regardless, since `store.errors` and every direct caller reach
+    # it without passing through a handler at all.
+    logger.setLevel(min(getattr(logging, level.upper()), logging.WARNING))
     for handler in logger.handlers:
         if isinstance(handler, Handler):
-            handler.setLevel(getattr(logging, level.upper()))
+            handler.setLevel(logging.NOTSET)
     return level
 
 
@@ -525,13 +548,6 @@ def _valid_day(text: object) -> str:
     except ValueError:
         return ""
     return text
-
-
-def window(days: int) -> tuple[str, str]:
-    """The ``[since, until]`` day pair for a window of ``days`` ending today."""
-    span = max(1, min(int(days or 1), MAX_DAYS))
-    today = date.fromisoformat(time.strftime("%Y-%m-%d", time.gmtime()))
-    return (today - timedelta(days=span - 1)).isoformat(), today.isoformat()
 
 
 def span(since: object, until: object, days: int) -> tuple[str, str]:
@@ -952,22 +968,45 @@ def _tail_matches(row: dict, filters: dict) -> bool:
                     str(filters.get("campaign") or ""))
 
 
+def _past_newline(handle, budget: int) -> int | None:
+    """Bytes from here to just past the next newline, or None if there is none.
+
+    Reads in `budget`-sized chunks and keeps none of them: the caller is
+    stepping over a corrupt line, not collecting it. Gives up after
+    `MAX_LINE_BYTES` and reports what it consumed, so a file with no newline
+    left in it at all cannot hold the tail still forever.
+    """
+    consumed = 0
+    while consumed < MAX_LINE_BYTES:
+        chunk = handle.read(budget)
+        if not chunk:
+            return None
+        found = chunk.find(b"\n")
+        if found >= 0:
+            return consumed + found + 1
+        consumed += len(chunk)
+    return consumed
+
+
 def _read_from(path: Path, offset: int,
                budget: int) -> tuple[list[dict], int, int, bool]:
     """Complete rows in ``path`` after ``offset``, the new offset, the bytes
-    consumed, and whether the read filled its budget.
+    consumed, and whether the read filled its window.
 
-    That last flag is what `tail` turns into ``more``. It is deliberately not
-    "are there bytes left in the file": a trailing line with no newline leaves
-    bytes that will never become a row, and a caller that polls again while
-    bytes remain would spin on them forever.
+    That last flag is what `tail` turns into ``more``, and it is deliberately
+    not "are there bytes left in the file": a trailing line with no newline
+    leaves bytes that will never become a row, and a caller that polls again
+    while bytes remain would spin on them forever.
 
-    At most ``budget`` bytes are read, cut back to the last complete newline
-    inside it -- so the offset returned always names a row boundary and never
-    lands inside a line. A single line longer than the budget would otherwise
-    wedge the tail forever, so the budget is stretched to cover one whole line
-    when that happens; `MAX_MESSAGE` bounds how long a line can be, and the
-    alternative is a cursor that can never advance.
+    The read window is ``budget`` but never smaller than `MIN_LINE_READ`.
+    That floor is what distinguishes "this line is corrupt" from "this poll
+    had little budget left": with a window of a few hundred bytes, an ordinary
+    row has no newline inside it either, and the oversized-line path below
+    would step over a perfectly good row and drop it. Reading slightly past a
+    small remaining budget costs one line; getting this wrong costs rows.
+
+    Only whole lines are consumed, so the offset returned always names a row
+    boundary and never lands inside one.
     """
     # No `except OSError` here, unlike `_lines`. A log that cannot be READ is
     # the thing a live tail most needs to say out loud: swallowing it into an
@@ -975,27 +1014,29 @@ def _read_from(path: Path, offset: int,
     # the route's `except OSError` -- which exists to send exactly that frame
     # -- could never fire. The paged reader stays tolerant because a report
     # drawn short beats no report; a tail drawn short is a lie.
+    window = max(int(budget), MIN_LINE_READ)
     size = path.stat().st_size
     if offset > size:
         offset = 0                       # truncated or replaced; see `tail`
     with path.open("rb") as handle:
         handle.seek(offset)
-        data = handle.read(budget)
+        data = handle.read(window)
         end = data.rfind(b"\n")
-        if end < 0 and len(data) >= budget:
-            # A line longer than the budget: take the rest of it rather than
-            # returning nothing forever.
-            data += handle.readline()
-            end = data.rfind(b"\n")
-    if end < 0:
-        # `filled=False` even when the read took its whole budget. A line with
-        # no newline anywhere in it -- an unterminated row at EOF longer than
-        # the budget, which the `readline` above could not finish either --
-        # yields no row and never will until more bytes land. Saying "more is
-        # waiting" here is what makes the caller poll again with no sleep, and
-        # the cursor cannot advance, so it would spin on those bytes forever.
-        return [], offset, 0, False
-    filled = len(data) >= budget
+        if end < 0:
+            if len(data) < window:
+                # A partial trailing line. `filled=False`: nothing here can
+                # become a row until more bytes land, and saying otherwise is
+                # what makes the caller re-poll with no sleep, forever.
+                return [], offset, 0, False
+            # No newline in a full window, so longer than anything this module
+            # writes: corrupt. Stepped over in bounded chunks rather than read
+            # -- a bare `readline` here would pull the rest of the file into
+            # memory, which is exactly what the budget exists to prevent.
+            past = _past_newline(handle, window)
+            if past is None:
+                return [], offset, 0, False   # no newline yet; wait for more
+            return [], offset + len(data) + past, len(data) + past, True
+    filled = len(data) >= window
     whole = data[:end + 1]
     out = []
     for chunk in whole.decode("utf-8", errors="replace").splitlines():
