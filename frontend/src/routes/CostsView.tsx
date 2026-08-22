@@ -33,20 +33,6 @@ const SORTS: { key: Sort; label: string; hint: string }[] = [
   { key: "turns", label: "Most turns", hint: "BY GENERATION COUNT" },
 ];
 
-/** What a failed load degrades to: an empty report rather than a stuck
- *  "Loading…", the policy `LedgerView` runs on. `since`/`until` stay empty so
- *  the footer says nothing about a window nothing was read from. */
-const EMPTY: CampaignSceneCosts = {
-  campaign: "", since: "", until: "", generated_at: "", order: "cost",
-  totals: {
-    calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
-    cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
-    modelled_usd: 0, priced_calls: 0, unpriced_calls: 0, subscription_calls: 0,
-    modelled_calls: 0, duration_ms: 0,
-  },
-  scenes: [], listed: 0, truncated: false,
-};
-
 /** A scene's name for the table. The id when the title is empty, and the id
  *  alone when the scene is gone — a deleted scene's spend is still in the
  *  total, so it keeps a row, and the row has to say what it is rather than
@@ -81,6 +67,13 @@ export function CostsView() {
   // component mounted and a bare `CampaignSceneCosts | null` would show one
   // game's spend under the other's name until the new read settled.
   const [loaded, setLoaded] = useState<{ cid: string; data: CampaignSceneCosts } | null>(null);
+  /** The read failed, so there is no report — as distinct from a report saying
+   *  the campaign has spent nothing. Degrading to `EMPTY` printed a `$0.00`
+   *  headline and "Nothing has been generated" over a campaign with real
+   *  spend, which is this feature's cardinal error wearing a different hat: a
+   *  figure nobody measured, rendered as zero. */
+  const [failed, setFailed] = useState(false);
+  const [reload, setReload] = useState(0);
 
   const name = named && named.cid === cid ? named.name : "";
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
@@ -95,11 +88,12 @@ export function CostsView() {
 
   useEffect(() => {
     let live = true;
+    setFailed(false);
     api.getCampaignSceneCosts(cid, sort)
       .then((d) => { if (live) setLoaded({ cid, data: d }); })
-      .catch(() => { if (live) setLoaded({ cid, data: EMPTY }); });
+      .catch(() => { if (!live) return; setLoaded(null); setFailed(true); });
     return () => { live = false; };
-  }, [cid, sort]);
+  }, [cid, sort, reload]);
 
   const report = loaded && loaded.cid === cid ? loaded.data : null;
   const rows = report?.scenes ?? [];
@@ -123,8 +117,10 @@ export function CostsView() {
         {/* The headline this page exists for. Rendered only once the read has
             landed: a `$0.00` under "All time" while a request is in flight is
             the one figure a cost page must not print casually. */}
-        {totals === undefined && <p className="column-empty">Reading the ledger…</p>}
-        {totals !== undefined && (
+        {failed && <p className="column-empty">Unread — no total to show.</p>}
+        {!failed && totals === undefined
+          && <p className="column-empty">Reading the ledger…</p>}
+        {!failed && totals !== undefined && (
           <>
             <div className="cost-headline">{bucketPrice(totals)}</div>
             <div className="ctx-tokens">
@@ -161,14 +157,33 @@ export function CostsView() {
       <div className="page-wide view-anim">
         <div className="shelf-head">
           <div>
-            <div className="eyebrow">{SORTS.find((s) => s.key === sort)?.hint}</div>
+            {/* Keyed to what came BACK, not to what was just clicked. An
+                all-time rescan can be slow, and until it lands the rows are
+                still in the previous order — a heading following `sort` would
+                describe them wrongly for the length of the request. */}
+            <div className="eyebrow">
+              {SORTS.find((s) => s.key === (report?.order ?? sort))?.hint}
+              {report && report.order !== sort && " · REORDERING…"}
+            </div>
             <h1 className="screen-title">Costs by scene</h1>
           </div>
         </div>
 
-        {report === null && <p className="column-empty">Reading the ledger…</p>}
+        {failed && (
+          <p className="empty-state">
+            <span className="empty-what">
+              Could not read this campaign's costs. Nothing is shown rather than
+              a total, because an unread ledger is not a ledger saying zero.
+            </span>{" "}
+            <button className="subtle" onClick={() => setReload((n) => n + 1)}>
+              Try again
+            </button>
+          </p>
+        )}
 
-        {report !== null && rows.length === 0 && (
+        {!failed && report === null && <p className="column-empty">Reading the ledger…</p>}
+
+        {!failed && report !== null && rows.length === 0 && (
           <p className="empty-state">
             <span className="empty-what">Nothing has been generated in this campaign yet.</span>{" "}
             <Link to={`/campaigns/${cid}`}>Back to play →</Link>
@@ -209,12 +224,20 @@ export function CostsView() {
                     </td>
                     <td className="cost-cell">
                       <div>{bucketPrice(row)}</div>
-                      {/* The parenthetical, per row: what was NOT billed per
-                          token, priced at what it would have been. */}
-                      {(row.estimated_usd > 0 || row.modelled_usd > 0)
-                        && row.priced_calls > row.subscription_calls && (
+                      {/* The parentheticals, per row: what was NOT billed per
+                          token, priced at what it would have been — one line
+                          each, never totalled. The two rest on different
+                          evidence (the provider's own arithmetic vs the user's
+                          table), so a merged figure reconciles to neither
+                          column. `bucketPrice` refuses the same merge above. */}
+                      {row.estimated_usd > 0 && (
                         <div className="field-hint">
-                          + {about(row.estimated_usd + row.modelled_usd)} not billed
+                          + {about(row.estimated_usd)} subscription
+                        </div>
+                      )}
+                      {row.modelled_usd > 0 && (
+                        <div className="field-hint">
+                          + {about(row.modelled_usd)} estimated
                         </div>
                       )}
                       {row.unpriced_calls > 0 && (

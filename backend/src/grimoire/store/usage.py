@@ -95,7 +95,7 @@ KIND_LLM = "llm"
 #: they rewrite a JSON file under the campaign lock, and rewriting a month file
 #: would race the unlocked `O_APPEND` writes that are the whole reason `record`
 #: never blocks a turn. So the rename is APPENDED like everything else, and the
-#: read side walks the trail (`_aliases`) instead. That also keeps the file what
+#: read side walks the trail (`_scene_now`) instead. That also keeps the file what
 #: it claims to be: a log of what happened, in the order it happened, that
 #: nothing rewrites after the fact.
 KIND_RENAME = "rename"
@@ -130,12 +130,16 @@ _SESSION_START = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 #: named no price at all -- the weakest of the three, and the only one grimoire
 #: computes rather than receives. Each carries its own call count so a view can
 #: say how much of a total is which, and `unpriced_calls` keeps counting only
-#: what none of them covers.
+#: what none of them covers -- and `unmetered_calls` is the slice of THAT which
+#: no rate could ever cover, because the provider reported no token counts
+#: either. The split exists so a view can tell a reader whether typing a rate
+#: would help: for an unmetered call it would not, and sending them to do it is
+#: sending them to an action that cannot resolve the warning.
 _ZERO = {"calls": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
          "total_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
          "cost_usd": 0.0, "estimated_usd": 0.0, "modelled_usd": 0.0,
          "priced_calls": 0, "unpriced_calls": 0, "subscription_calls": 0,
-         "modelled_calls": 0, "duration_ms": 0}
+         "modelled_calls": 0, "unmetered_calls": 0, "duration_ms": 0}
 
 #: Cents-of-a-cent. Provider costs run to eight decimal places on a cheap model,
 #: and summing raw floats surfaces as `0.30000000000000004` in a UI that renders
@@ -612,6 +616,13 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
         modelled = rates.estimate(row) if rates is not None else None
         if modelled is None:
             bucket["unpriced_calls"] += 1
+            # Counted whether or not a rate exists, and read straight off the
+            # row rather than from the estimator's verdict: the question is
+            # "could ANY rate have priced this", and the answer is no whenever
+            # a count is missing -- see `pricing.estimate`, which requires both.
+            if _count(row.get("prompt_tokens")) is None \
+                    or _count(row.get("completion_tokens")) is None:
+                bucket["unmetered_calls"] += 1
         else:
             bucket["modelled_calls"] += 1
             bucket["modelled_usd"] += modelled
@@ -835,7 +846,7 @@ def _post(row: dict) -> int | None:
     return post
 
 
-#: How far `_aliases` will follow a rename trail before giving up. A scene is
+#: How far `_scene_now` will follow a rename trail before giving up. A scene is
 #: renamed once or twice in its life (the first date set, an edited title), so
 #: any real chain is short -- and this is a file a human can edit, where
 #: ``a -> b -> a`` is one typo away from looping forever inside a report.
@@ -843,17 +854,21 @@ _MAX_RENAMES = 64
 
 
 def _rename_trail(campaign: str, since: str,
-                  until: str) -> dict[str, tuple[str, str]]:
-    """Every `old -> (new, when)` hop this campaign's scenes made in the window.
+                  until: str) -> dict[str, list[tuple[str, str]]]:
+    """Every hop this campaign's scenes made in the window, as
+    ``old -> [(when, new), ...]`` oldest first.
 
-    One pass over the `KIND_RENAME` rows, shared by the two readers that follow
-    the trail from opposite ends: `_aliases` walks it backwards to find every id
-    ONE scene's rows can be filed under, and `_scene_now` walks it forwards to
-    ask which scene a GIVEN row belongs to. Both need the same map, and two
-    copies of the "last row wins" rule below is how they would come to disagree
-    about a scene renamed twice.
+    A LIST per id, not one hop, and that is the whole point of the shape. An id
+    a scene is renamed off is free for the next scene to take (`paths.uniquify`
+    checks only what exists now), and that scene can be renamed too -- so ``a``
+    can genuinely hop to ``b`` and, later and as a different scene, to ``c``.
+    Keeping only the last of those sent every row ever filed under ``a`` to
+    ``c``, including the ones written before ``b`` existed.
+
+    Sorted by stamp so `_scene_now` can take the FIRST hop at or after a row's
+    own stamp, which is the one that was in force when the row was written.
     """
-    forward: dict[str, tuple[str, str]] = {}
+    trail: dict[str, list[tuple[str, str]]] = {}
     for row in _read_rows(since, until):
         if row.get("kind") != KIND_RENAME or row.get("campaign") != campaign:
             continue
@@ -861,79 +876,38 @@ def _rename_trail(campaign: str, since: str,
         if not (isinstance(was, str) and isinstance(now, str) and isinstance(ts, str)):
             continue
         if was and now and was != now:
-            # Last row wins: a `was` seen twice means the scene was renamed back
-            # to it and away again, and the later hop is the one still true.
-            forward[was] = (now, ts)
-    return forward
+            trail.setdefault(was, []).append((ts, now))
+    for hops in trail.values():
+        hops.sort()
+    return trail
 
 
-def _scene_now(scene: str, ts: str, forward: dict[str, tuple[str, str]]) -> str:
+def _scene_now(scene: object, ts: str, trail: dict[str, list[tuple[str, str]]]) -> str:
     """Which scene a row filed under `scene` at `ts` belongs to today.
 
-    The forward walk of `_aliases`' backward one, and it stops for the same
-    reason that one takes a cutoff: an id that has been renamed away from is
-    free for the next scene to take (`paths.uniquify` checks only what exists
-    now), so a hop only carries rows written BEFORE it. A row stamped after the
-    rename belongs to whatever took the id, which is the id itself.
+    The one resolver both cost views ask, replacing the alias-and-cutoff pair
+    this module used to keep for the per-scene read. That pair could express
+    "``a`` stopped being this scene at T" but not "``a`` WAS this scene only
+    between T1 and T2", which is exactly what a recycled id produces -- so the
+    question is now asked per row, where it has a single right answer.
 
-    Bounded by `_MAX_RENAMES`, like the backward walk: this file is
-    hand-editable and `a -> b -> a` is one typo away from a loop inside a
-    report.
+    The hop taken is the first at or after the row's own stamp: a rename only
+    carries the rows written before it, and a row stamped after every hop off
+    an id belongs to whatever holds that id now, which is the id itself.
+
+    Bounded by `_MAX_RENAMES`: this file is hand-editable and ``a -> b -> a`` is
+    one typo away from a loop inside a report.
     """
+    if not isinstance(scene, str) or not scene:
+        return NO_SCENE
     cursor, seen = scene, 0
-    while cursor in forward and seen < _MAX_RENAMES:
-        nxt, at = forward[cursor]
-        if ts > at:
-            break
-        cursor = nxt
+    while seen < _MAX_RENAMES:
+        hop = next(((at, nxt) for at, nxt in trail.get(cursor, ()) if ts <= at), None)
+        if hop is None:
+            return cursor
+        cursor = hop[1]
         seen += 1
     return cursor
-
-
-def _aliases(campaign: str, scene: str, since: str, until: str) -> dict[str, str]:
-    """Every id this scene's rows can be filed under, mapped to the stamp after
-    which that id stopped being this scene's. `scene` itself maps to ``""``,
-    meaning no cutoff.
-
-    A scene's id is its filename stem, so setting a date on it renames it
-    (`scenes.moment`) -- and that happens to most scenes, usually a turn or two
-    in. The rows already written carry the id the scene had then. Without this,
-    the panel that asks what a scene cost would answer with the spend since its
-    last rename and call it the scene's, which is the quiet kind of wrong this
-    whole module is trying not to be.
-
-    **The cutoff is not decoration.** `paths.uniquify` checks only what exists
-    *now*, so the moment a scene is renamed off ``001--x`` that id is free for
-    the next scene to take -- and its rows would then be charged to the scene
-    that used to hold it. An alias is only an alias for the rows written before
-    the rename that gave it up.
-
-    A second pass over the window rather than a bigger first one: renames are
-    rare, so this collects only `KIND_RENAME` rows and stays constant-memory,
-    where folding it into the main scan would mean holding every row of the
-    campaign to find out which ones belonged.
-    """
-    forward = _rename_trail(campaign, since, until)
-    ids = {scene: ""}
-    for old, (_, ts) in forward.items():
-        # The scene's CURRENT id never takes a cutoff, whatever the trail says.
-        # A title renamed and renamed back (a -> b -> a, one typo and its fix)
-        # walks a chain that returns to where it started, and letting that write
-        # a cutoff onto the live id would drop every row this scene has filed
-        # since -- the trail silencing the very scene it exists to follow.
-        if old == scene:
-            continue
-        cursor, seen = old, 0
-        while cursor in forward and seen < _MAX_RENAMES:
-            cursor = forward[cursor][0]
-            seen += 1
-            if cursor == scene:
-                # The cutoff is THIS id's own rename, not the end of the chain:
-                # `a` stopped being this scene the moment a->b happened, whatever
-                # b did later.
-                ids[old] = ts
-                break
-    return ids
 
 
 def scene_usage(campaign: str, scene: str, *, since: str = "",
@@ -969,7 +943,7 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
     # flag is what lets the view say "this breakdown does not reach that far"
     # instead of implying it is complete.
     clamped = bool(_valid_day(since)) and start > _valid_day(since)
-    ids = _aliases(campaign, scene, start, until)
+    trail = _rename_trail(campaign, start, until)
     rates = Rates.current()
     totals = dict(_ZERO)
     by_task: dict[str, dict] = {}
@@ -979,10 +953,10 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
     for row in _read_rows(start, until):
         if not _is_call(row) or row.get("campaign") != campaign:
             continue
-        cutoff = ids.get(row.get("scene"))
-        # `None` is "not this scene's id at all"; a cutoff is "not any more,
-        # after this stamp" -- see `_aliases` for why an id can change hands.
-        if cutoff is None or (cutoff and row["ts"] > cutoff):
+        # Asked per row rather than resolved to a set of ids up front: an id can
+        # belong to this scene for a stretch and to another scene before and
+        # after it, which no per-id answer can express. See `_scene_now`.
+        if _scene_now(row.get("scene"), row["ts"], trail) != scene:
             continue
         _add(totals, row, rates)
         _add(by_task.setdefault(_label(row.get("task")), dict(_ZERO)), row, rates)

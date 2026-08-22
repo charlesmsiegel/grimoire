@@ -748,3 +748,106 @@ def test_a_director_turn_is_charged_to_the_scene_and_to_no_post(client, home):
     bucket, = body["by_post"]
     assert bucket["calls"] == 1, "only the send is the post's"
     assert bucket["rerolls"] == 0
+
+
+def test_a_pricing_file_nobody_can_parse_is_reported_rather_than_read_as_empty(client, home):
+    """An empty table is a form to fill in; an unreadable one is a form that
+    must not be offered, because saving it replaces the real file with nothing."""
+    (home / "pricing.json").write_text("{not json,", encoding="utf-8")
+
+    body = client.get("/api/pricing").json()
+    assert body["unreadable"] is True
+    assert body["rates"] == {}
+    assert body["detail"]
+
+
+def test_a_readable_table_says_so_explicitly(client):
+    client.put("/api/pricing", json={"rates": {
+        "local/glm": {"prompt_usd_per_1k": 1, "completion_usd_per_1k": 2}}})
+
+    body = client.get("/api/pricing").json()
+    assert body["unreadable"] is False
+    assert list(body["rates"]) == ["local/glm"]
+
+
+def test_a_table_that_is_not_an_object_is_a_400_not_a_500(client):
+    r = client.put("/api/pricing", json={"rates": "everything is free"})
+
+    assert r.status_code in (400, 422)
+
+
+def test_a_table_over_the_cap_is_refused_rather_than_silently_truncated(client):
+    too_many = {f"m{n}": {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}
+                for n in range(501)}
+
+    r = client.put("/api/pricing", json={"rates": too_many})
+
+    assert r.status_code == 400
+    assert "500" in r.json()["detail"]
+
+
+def test_the_scene_cost_list_can_be_ordered_by_the_caller(client, home):
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    one, two = _scene(client, cid, "One"), _scene(client, cid, "Two")
+    client.post(f"/api/campaigns/{cid}/scenes/{one}/chat", json={"content": "hi"})
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    client.post(f"/api/campaigns/{cid}/scenes/{two}/chat", json={"content": "hi"})
+
+    body = client.get(f"/api/campaigns/{cid}/usage/scenes?order=recent").json()
+    assert body["order"] == "recent"
+    # Echoed back so a view can tell an answer to the sort it asked for from a
+    # stale one still on screen.
+    assert client.get(f"/api/campaigns/{cid}/usage/scenes?order=nonsense"
+                      ).json()["order"] == "cost"
+
+
+# ---- the two post-attribution helpers, directly ----
+def test_the_answering_post_is_the_last_player_message(home):
+    """Read off a transcript that came from disk, so it is read defensively:
+    an attribution must cost itself, never the turn it is attributing."""
+    from grimoire.routes import streaming
+
+    assert streaming._answering_post([{"role": "user"}, {"role": "assistant"}]) == 0
+    assert streaming._answering_post(
+        [{"role": "user"}, {"role": "assistant"}, {"role": "user"}]) == 2
+    # A scene that is all narration — an opener, or a director-driven scene
+    # before the player has said anything — answers no post rather than a wrong one.
+    assert streaming._answering_post([{"role": "assistant"}]) is None
+    assert streaming._answering_post([]) is None
+    assert streaming._answering_post("not a transcript") is None
+    assert streaming._answering_post([None, "x", {"role": "user"}]) == 2
+
+
+def test_a_continuation_inherits_its_proposals_attribution(client, home):
+    """Re-deriving it here gets a DIFFERENT answer for the case the first half
+    got right — see `_continuation_post`."""
+    from grimoire import store
+    from grimoire.routes import streaming
+
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+
+    # No record at all.
+    assert streaming._continuation_post(cid, sid, "pr-nope") is None
+
+    rec = store.proposals.new(cid, sid, {"kind": "check"}, 4)
+    assert streaming._continuation_post(cid, sid, rec["id"]) == 4
+    # A different proposal's id must not collect this one's attribution.
+    assert streaming._continuation_post(cid, sid, "pr-someone-else") is None
+
+    # A director turn's proposal names no post, and the continuation inherits
+    # that rather than inventing one from the last visible message.
+    director = store.proposals.new(cid, sid, {"kind": "check"}, None)
+    assert streaming._continuation_post(cid, sid, director["id"]) is None
+
+
+def test_a_hand_edited_post_index_on_a_proposal_is_ignored(client, home):
+    from grimoire import store
+    from grimoire.routes import streaming
+
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    for bad in (-1, "four", True, None):
+        rec = store.proposals.new(cid, sid, {"kind": "check"}, bad)
+        assert streaming._continuation_post(cid, sid, rec["id"]) is None, bad

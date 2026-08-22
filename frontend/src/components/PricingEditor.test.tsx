@@ -138,6 +138,44 @@ test("a failed save is reported without losing what was typed", async () => {
   expect(screen.getByLabelText(/Input rate for local\/glm/)).toHaveValue(0.25);
 });
 
+test("an unparseable file refuses the form too, not just a failed request", async () => {
+  // A 200 carrying `unreadable` is the same danger through a different door:
+  // the file is there, and an empty form saved over it replaces real rates.
+  vi.mocked(api.getPricing).mockResolvedValue(
+    { ...TABLE, rates: {}, unreadable: true, detail: "line 1" });
+  render(<PricingEditor />);
+
+  expect(await screen.findByText(/Could not read the rate table/)).toBeInTheDocument();
+  expect(screen.queryByText("Save rates")).toBeNull();
+});
+
+test("two rows claiming one model block the save that would drop one", async () => {
+  vi.mocked(api.getPricing).mockResolvedValue({ ...TABLE, rates: {} });
+  render(<PricingEditor />);
+
+  fireEvent.click(await screen.findByText("+ Add a model"));
+  fireEvent.click(screen.getByText("+ Add a model"));
+  fireEvent.change(screen.getByLabelText(/Model id for row 1/),
+                   { target: { value: "local/x" } });
+  // Trailing space: `toTable` trims, so these collapse to one key on save.
+  fireEvent.change(screen.getByLabelText(/Model id for row 2/),
+                   { target: { value: "local/x " } });
+
+  expect(screen.getAllByText(/Two rows claim this model/)).toHaveLength(2);
+  expect(screen.getByText("Save rates")).toBeDisabled();
+});
+
+test("two unnamed rows are not duplicates of each other", async () => {
+  // Neither is saved at all, so neither can displace anything.
+  vi.mocked(api.getPricing).mockResolvedValue({ ...TABLE, rates: {} });
+  render(<PricingEditor />);
+
+  fireEvent.click(await screen.findByText("+ Add a model"));
+  fireEvent.click(screen.getByText("+ Add a model"));
+
+  expect(screen.queryByText(/Two rows claim this model/)).toBeNull();
+});
+
 test("a failed read refuses to offer a form that could wipe the table", async () => {
   // The failure mode this replaced: a transient GET degraded to an editable
   // empty table, and one click of Save then sent `{}` and deleted every rate

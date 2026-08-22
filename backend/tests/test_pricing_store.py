@@ -221,3 +221,70 @@ def test_a_call_that_genuinely_completed_nothing_is_still_priced():
 def test_no_entry_prices_nothing():
     assert pricing.estimate(None, prompt_tokens=100, completion_tokens=100) is None
     assert pricing.estimate({}, prompt_tokens=100, completion_tokens=100) is None
+
+
+@pytest.mark.parametrize("counts", [
+    {"prompt_tokens": 5000, "completion_tokens": None},
+    {"prompt_tokens": None, "completion_tokens": 5000},
+])
+def test_half_a_call_counted_is_not_half_a_call_priced(counts):
+    """`from_openai_chunk` reads the two counters independently, so a usage
+    block carrying only one is a shape a real provider sends. Pricing the
+    uncounted half at zero marks the call modelled and, when the counted half
+    is empty, renders `$0.00` for a call nobody priced."""
+    entry = {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}
+
+    assert pricing.estimate(entry, **counts) is None
+
+
+def test_a_broken_table_is_strict_for_the_caller_that_asks(home):
+    """A rollup wants a report drawn without estimates; an editor must not be
+    handed an empty form it would then save over the real file."""
+    (home / "pricing.json").write_text("{not json,", encoding="utf-8")
+
+    assert pricing.read_pricing() == {}
+    with pytest.raises(pricing.PricingUnreadableError):
+        pricing.read_pricing(strict=True)
+
+
+def test_a_table_that_is_not_an_object_is_unreadable_too(home):
+    _write(home, ["realm/opus", 0.003])
+
+    assert pricing.read_pricing() == {}
+    with pytest.raises(pricing.PricingUnreadableError):
+        pricing.read_pricing(strict=True)
+
+
+def test_an_absent_table_is_empty_in_both_modes(home):
+    """Nothing to lose in a file that does not exist — that is a form to fill
+    in, not a read that failed."""
+    assert pricing.read_pricing() == {}
+    assert pricing.read_pricing(strict=True) == {}
+
+
+def test_an_entry_that_is_not_an_object_is_dropped(home):
+    _write(home, {"realm/opus": "expensive",
+                  "": {"prompt_usd_per_1k": 1, "completion_usd_per_1k": 1}})
+
+    assert list(pricing.read_pricing()) == [""]
+
+
+def test_a_non_string_key_is_skipped_on_read_and_refused_on_write(home):
+    """JSON object keys are strings, so this is a `write_pricing` caller
+    handing in a dict Python built — refused there, and skipped on the way in
+    rather than failing the read a rollup depends on."""
+    (home / "pricing.json").write_text(
+        '{"1": {"prompt_usd_per_1k": 1, "completion_usd_per_1k": 1}}', encoding="utf-8")
+    assert list(pricing.read_pricing()) == ["1"]
+
+    with pytest.raises(ValueError):
+        pricing.write_pricing({7: {"prompt_usd_per_1k": 1, "completion_usd_per_1k": 1}})
+
+
+def test_a_table_over_the_cap_on_disk_is_read_up_to_it(home):
+    """Refused on the way IN (nothing is lost), truncated on the way OUT of a
+    file somebody grew by hand — a rollup must still draw."""
+    _write(home, {f"m{n}": {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}
+                  for n in range(pricing.MAX_ENTRIES + 5)})
+
+    assert len(pricing.read_pricing()) == pricing.MAX_ENTRIES

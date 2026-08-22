@@ -9,7 +9,7 @@ const ZERO = {
   calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
   cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
   modelled_usd: 0, priced_calls: 0, unpriced_calls: 0,
-  subscription_calls: 0, modelled_calls: 0, duration_ms: 0,
+  subscription_calls: 0, modelled_calls: 0, unmetered_calls: 0, duration_ms: 0,
 };
 
 test("a cheap turn keeps the digits that make it non-zero", () => {
@@ -85,6 +85,24 @@ test("the footnotes name each kind of uncounted call separately", () => {
   expect(screen.getByText(/2 calls billed to a subscription/)).toBeInTheDocument();
   expect(screen.getByText(/2 calls the provider did not price/)).toBeInTheDocument();
   expect(screen.getByText(/1 call came back with no price/)).toBeInTheDocument();
+});
+
+test("the rates hint is offered only where a rate could actually help", () => {
+  // A call whose provider reported no token counts cannot be priced by any
+  // rate, so sending the reader to Configuration is sending them nowhere.
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 2, unpriced_calls: 2, unmetered_calls: 2 }} />);
+
+  expect(container.textContent).toMatch(/No rate can price these/);
+  expect(container.textContent).not.toMatch(/Set per-token rates/);
+});
+
+test("a mix says how many of them no rate can reach", () => {
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 3, unpriced_calls: 3, unmetered_calls: 1 }} />);
+
+  expect(container.textContent).toMatch(/Set per-token rates in Configuration/);
+  expect(container.textContent).toMatch(/1 of them reported no token counts/);
 });
 
 test("a complete bucket has no footnotes at all", () => {

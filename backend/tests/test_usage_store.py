@@ -204,7 +204,8 @@ def test_an_empty_ledger_summarizes_to_zero_rather_than_failing(home, monkeypatc
                             "cost_usd": 0.0, "estimated_usd": 0.0,
                             "modelled_usd": 0.0, "priced_calls": 0,
                             "unpriced_calls": 0, "subscription_calls": 0,
-                            "modelled_calls": 0, "duration_ms": 0}
+                            "modelled_calls": 0, "unmetered_calls": 0,
+                            "duration_ms": 0}
     assert out["by_day"] == []
 
 
@@ -891,10 +892,11 @@ def test_a_modelled_figure_is_never_added_to_what_was_billed(home, monkeypatch):
     ledger rests on, checked where the third one enters."""
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
-    _seed("2026-08-14", model="realm/opus", prompt_tokens=1000, cost_usd=0.5)
-    _seed("2026-08-14", model="claude/agent", prompt_tokens=1000, cost_usd=0.25,
-          cost_basis="equivalent")
-    _seed("2026-08-14", model="local/glm", prompt_tokens=1000)
+    _seed("2026-08-14", model="realm/opus", prompt_tokens=1000,
+          completion_tokens=0, cost_usd=0.5)
+    _seed("2026-08-14", model="claude/agent", prompt_tokens=1000,
+          completion_tokens=0, cost_usd=0.25, cost_basis="equivalent")
+    _seed("2026-08-14", model="local/glm", prompt_tokens=1000, completion_tokens=0)
 
     totals = usage.summary(days=30)["totals"]
     assert totals["cost_usd"] == pytest.approx(0.5)
@@ -945,7 +947,7 @@ def test_a_turn_carries_the_modelled_figure_beside_its_absent_price(home, monkey
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
-          model="local/glm", prompt_tokens=2000)
+          model="local/glm", prompt_tokens=2000, completion_tokens=0)
 
     turn, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["turns"]
     assert turn["cost_usd"] is None
@@ -1166,3 +1168,145 @@ def test_a_scene_with_no_usable_start_date_is_not_reported_as_clamped(home, monk
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
 
     assert usage.scene_usage("saltmarch", "001-arrival", since="")["clamped"] is False
+
+
+def test_a_call_nobody_counted_is_reported_apart_from_one_no_rate_covers(home, monkeypatch):
+    """Both are unpriced, but only one of them is something a reader can do
+    anything about: typing a rate cannot price a call whose provider reported
+    no token counts, and telling them to go and try is sending them to an
+    action that cannot resolve the warning."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", model="local/glm")                      # no counts at all
+    _seed("2026-08-14", model="other/thing", prompt_tokens=100,
+          completion_tokens=50)                                  # counted, unrated
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["unpriced_calls"] == 2
+    assert totals["unmetered_calls"] == 1
+
+
+def test_a_half_counted_call_is_unmetered_too(home, monkeypatch):
+    """Half a call counted is half a call priceable, which is not priceable."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
+    _seed("2026-08-14", model="local/glm", prompt_tokens=1000)   # no completion count
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["modelled_calls"] == 0
+    assert totals["unpriced_calls"] == 1
+    assert totals["unmetered_calls"] == 1
+
+
+def test_a_reused_id_renamed_again_keeps_each_scene_its_own_rows(home, monkeypatch):
+    """`a -> b`, then a NEW scene takes `a` and is later renamed to `c`.
+
+    Keeping only the last hop off `a` sent every row ever filed under it to
+    `c`, including the ones written before `b` existed — the first scene's
+    whole cost, charged to a scene that did not exist when it was spent.
+    """
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T11:00:00Z")
+    usage.record(task="chat", campaign="saltmarch", scene="a", cost_usd=0.10,
+                 ts="2026-08-14T10:00:00Z")
+    usage.repoint_scenes("saltmarch", {"a": "b"})                  # stamped 11:00
+    # The freed id is taken by a new scene, which spends and is renamed in turn.
+    usage.record(task="chat", campaign="saltmarch", scene="a", cost_usd=0.70,
+                 ts="2026-08-14T12:00:00Z")
+    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T13:00:00Z")
+    usage.repoint_scenes("saltmarch", {"a": "c"})                  # stamped 13:00
+
+    spend = {b["scene"]: b["cost_usd"]
+             for b in usage.campaign_scenes("saltmarch")["scenes"]}
+    assert spend == {"b": pytest.approx(0.10), "c": pytest.approx(0.70)}
+
+    # And the per-scene read agrees, which is the point of both asking one
+    # resolver rather than each keeping its own idea of the trail.
+    assert usage.scene_usage("saltmarch", "b", since="2026-08-01")["totals"]["cost_usd"] \
+        == pytest.approx(0.10)
+    assert usage.scene_usage("saltmarch", "c", since="2026-08-01")["totals"]["cost_usd"] \
+        == pytest.approx(0.70)
+
+
+# ---- the defensive branches, which exist because these are hand-editable files ----
+def test_every_ordering_is_exercised_and_breaks_ties_the_same_way(home, monkeypatch):
+    """The two non-default orderings had no test at all, which is how a sort
+    nobody runs comes to disagree with the heading above it."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    usage.record(task="chat", campaign="saltmarch", scene="cheap-but-new",
+                 cost_usd=0.01, ts="2026-08-14T18:00:00Z")
+    for n in range(3):
+        usage.record(task="chat", campaign="saltmarch", scene="dear-but-old",
+                     cost_usd=1.00, ts=f"2026-08-14T0{n}:00:00Z")
+
+    order = lambda o: [b["scene"] for b in
+                       usage.campaign_scenes("saltmarch", order=o)["scenes"]]
+    assert order("cost") == ["dear-but-old", "cheap-but-new"]
+    assert order("recent") == ["cheap-but-new", "dear-but-old"]
+    assert order("turns") == ["dear-but-old", "cheap-but-new"]
+    # An unknown order is the default rather than a 422: this backs a control,
+    # and a silly value there should draw a table.
+    assert order("sideways") == order("cost")
+    assert usage.campaign_scenes("saltmarch", order="sideways")["order"] == "cost"
+
+
+def test_ties_break_on_the_id_in_every_ordering(home, monkeypatch):
+    """`reverse=True` over one key tuple would flip the tie-break too, giving
+    each ordering a different idea of what "equal" means."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for scene in ("b", "a", "c"):
+        usage.record(task="chat", campaign="saltmarch", scene=scene,
+                     cost_usd=0.5, ts="2026-08-14T10:00:00Z")
+
+    for order in usage.SCENE_ORDERS:
+        assert [b["scene"] for b in
+                usage.campaign_scenes("saltmarch", order=order)["scenes"]] == ["a", "b", "c"], order
+
+
+def test_a_malformed_rename_row_is_skipped_rather_than_followed(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    path = home / "usage" / "2026-08.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("\n".join(json.dumps(row) for row in [
+        {"ts": "2026-08-14T10:00:00Z", "kind": "rename", "campaign": "c",
+         "scene": 42, "was": "a"},                       # `scene` is not a string
+        {"ts": "2026-08-14T10:00:00Z", "kind": "rename", "campaign": "c",
+         "scene": "b", "was": ""},                       # nothing renamed
+        {"ts": "2026-08-14T11:00:00Z", "kind": "llm", "task": "chat",
+         "campaign": "c", "scene": "a", "cost_usd": 0.25},
+    ]) + "\n", encoding="utf-8")
+
+    spend = {b["scene"]: b["cost_usd"]
+             for b in usage.campaign_scenes("c")["scenes"]}
+    assert spend == {"a": pytest.approx(0.25)}, "no usable hop, so the id stands"
+
+
+def test_a_row_with_no_scene_resolves_to_the_no_scene_bucket(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+
+    assert usage._scene_now(None, "2026-08-14T10:00:00Z", {}) == usage.NO_SCENE
+    assert usage._scene_now("", "2026-08-14T10:00:00Z", {}) == usage.NO_SCENE
+
+
+def test_a_blank_or_undated_line_is_skipped(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    path = home / "usage" / "2026-08.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("\n".join([
+        "",
+        "   ",
+        json.dumps({"kind": "llm", "task": "chat", "cost_usd": 9.0}),      # no ts
+        json.dumps({"ts": 42, "kind": "llm", "task": "chat", "cost_usd": 9.0}),
+        json.dumps({"ts": "2026-08-14T10:00:00Z", "kind": "llm", "task": "chat",
+                    "cost_usd": 0.25}),
+    ]) + "\n", encoding="utf-8")
+
+    assert usage.summary(days=30)["totals"]["cost_usd"] == pytest.approx(0.25)
+
+
+def test_a_scene_start_that_is_not_a_string_falls_back_to_the_default_window(home, monkeypatch):
+    """`since` reaches here off a hand-editable scene frontmatter."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+
+    out = usage.scene_usage("saltmarch", "001-arrival", since=42)
+    assert out["since"] == "2026-07-16", "the default 30-day window"
+    assert out["clamped"] is False
