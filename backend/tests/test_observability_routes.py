@@ -11,6 +11,7 @@ import pytest
 from grimoire import routes
 from grimoire.routes import observability
 from grimoire.store import logs, usage
+from tests import review_runs
 
 
 @pytest.fixture(autouse=True)
@@ -170,8 +171,11 @@ def test_a_dossier_that_fails_during_absorb_leaves_a_trace(client):
 
     fake = _AbsorbFake()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    # 202 and a run to poll (#396): the absorb outlives the request, and its
+    # phase statuses reach the reviewer through the stored review rather than
+    # off the POST. What this test is about is the half that outlives BOTH.
     with mock.patch.object(store.dossiers, "read", unreadable):
-        body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+        body = review_runs.absorb(client, cid, sid).json()
 
     assert body["dossiers"]["status"] == "failed"          # still reported live...
     errors = client.get("/api/errors").json()              # ...and now written down
