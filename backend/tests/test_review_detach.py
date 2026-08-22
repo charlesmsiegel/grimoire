@@ -933,3 +933,27 @@ def test_an_absorb_is_refused_before_it_spends_anything_on_an_unwritable_name(
     assert calls == [], "the absorb generated before finding out it could not store it"
     # ...and nothing is left holding the scene, so the rename it asks for works.
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/run").json()["run"] is None
+
+
+def test_a_save_with_no_token_is_not_refused_by_somebody_else_s_review(client, scene):
+    """A tokenless save is the documented opt-out from idempotency
+    (`models.ChronicleSave`), not a claim about any review -- so there is
+    nothing for the stored record to contradict, and reading the default empty
+    string as "a different token" refused every one of them on any scene with a
+    review waiting."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "By hand.", "summary": "Typed, not absorbed.",
+                         "keywords": [], "timeline_events": [], "edits": []})
+
+    assert r.status_code == 200, r.json()
+    # ...and it takes the review with it. A tokenless save has no ledger entry,
+    # so it cannot be the replay the token scoping exists for -- and it advances
+    # the scene epoch like any other commit, so the review left behind would be
+    # a panel that could only ever be refused.
+    assert store.pending_reviews.read(cid, sid) is None
+    assert _pending(client, cid, sid)["review"] is None
+    assert review["commit_token"]        # it really did have one to be scoped by

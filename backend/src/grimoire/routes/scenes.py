@@ -3521,6 +3521,12 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
     still save it, and a caller-minted token -- which is a supported thing to
     send -- is unaffected on a scene nobody is reviewing.
 
+    A save with **no token at all** falls through too. That is the documented
+    opt-out from idempotency (`models.ChronicleSave`), not a claim about any
+    review, so there is nothing for the stored record to contradict -- and
+    reading the default `""` as "a different token" refused every one of them
+    on any scene with a review waiting.
+
     Everything else refuses, and each for its own reason:
 
     * **A record for a DIFFERENT token.** Another device force-absorbed this
@@ -3556,7 +3562,7 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
             detail={"kind": "review_unreadable",
                     "detail": "this scene's stored review is unreadable, so this save "
                               "cannot be checked against it — re-run End Scene"}) from exc
-    if record is None:
+    if record is None or not token:
         return
     if record["review"].get("commit_token") != token:
         raise HTTPException(
@@ -3589,6 +3595,12 @@ def _clear_pending_review(cid: str, sid: str, token: str) -> None:
     wrote nothing: the loss this whole change exists to prevent, arrived at
     through its own cleanup.
 
+    A **tokenless** save clears whatever is stored, and that is not a hole in
+    the scoping. It has no ledger entry, so it cannot be the replay the
+    paragraph above is about; and it advances the scene epoch like any other
+    commit, so a review left behind by it is one whose own token can no longer
+    pass -- a panel that could only ever be refused.
+
     Never fatal. The commit has landed by the time this runs, so a sidecar that
     will not go must not turn a successful save into a 500 -- the review it
     leaves behind is refused at its next retrieval by the watermark, and
@@ -3597,7 +3609,9 @@ def _clear_pending_review(cid: str, sid: str, token: str) -> None:
     try:
         record = store.pending_reviews.read(cid, sid)
         # `read` has already refused anything whose `review` is not a dict.
-        if record is None or record["review"].get("commit_token") != token:
+        if record is None:
+            return
+        if token and record["review"].get("commit_token") != token:
             return
         store.pending_reviews.clear(cid, sid, record.get("generation"))
     except (OSError, store.pending_reviews.CorruptReviewError):
