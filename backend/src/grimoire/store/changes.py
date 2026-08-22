@@ -60,16 +60,24 @@ def line_diff(before: str, after: str) -> list[dict]:
     report the entire scene as replaced.
 
     So: match the common prefix and suffix off directly, then split what is left
-    on lines that occur exactly ONCE on each side and agree in order. Those are
+    on RUNS that occur exactly ONCE on each side and agree in order. Those are
     unambiguous alignment points -- the patience-diff idea -- and finding them
     is a sort rather than a search. Each gap between two anchors goes through
     the same treatment again, which review showed is not optional: uniqueness is
     measured within a span, so a block that repeats on either side of a
     separator is unique nowhere until that separator has split it, and diffing
     the gaps directly reported 2,402 deletions for two edits. Only a span that
-    is small enough reaches difflib; a span with no anchors at all is
-    duplicate-dominated by definition, and there the honest answer is the coarse
-    one -- the whole span replaced, in linear time.
+    is small enough reaches difflib; a span with no anchors at all has nothing
+    that can be placed without searching, and there the honest answer is the
+    coarse one -- the whole span replaced, in linear time.
+
+    A run rather than a line because review found the second half of the same
+    hole: 4,000 identical lines with the line above and below them edited is a
+    span where no LINE is unique anywhere, so it took the coarse answer and hid
+    two edits inside a full replacement. As one (length, line) token the block
+    anchors, and the same case is now two deletions and two insertions. What
+    survives is narrower and is pinned by a test: a block whose LENGTH moved is
+    a different token on each side and still cannot anchor.
     """
     out: list[dict] = []
     # An explicit stack rather than recursion: a span splits into gaps that are
@@ -126,7 +134,7 @@ def _split_middle(a: list[str], b: list[str]) -> list[tuple[str, list, list]]:
         return [_rows(_exact(a, b))]
     anchors = _anchors(a, b)
     if not anchors:
-        # No line is unique to both sides anywhere in this span, so nothing can
+        # No run is unique to both sides anywhere in this span, so nothing can
         # be placed without searching, which is the cost this bounds. The whole
         # span replaced, in linear time.
         return [_rows(_tagged("delete", a) + _tagged("insert", b))]
@@ -138,10 +146,10 @@ def _split_middle(a: list[str], b: list[str]) -> list[tuple[str, list, list]]:
     # here reported 2,402 deletions and 2,402 insertions for two edits.
     parts: list[tuple[str, list, list]] = []
     i = j = 0
-    for ai, bj in anchors:
+    for ai, bj, n in anchors:
         parts.append(("span", a[i:ai], b[j:bj]))
-        parts.append(_rows([{"op": "equal", "text": a[ai]}]))
-        i, j = ai + 1, bj + 1
+        parts.append(_rows(_tagged("equal", a[ai:ai + n])))
+        i, j = ai + n, bj + n
     parts.append(("span", a[i:], b[j:]))
     return parts
 
@@ -163,20 +171,50 @@ def _exact(a: list[str], b: list[str]) -> list[dict]:
     return out
 
 
-def _anchors(a: list[str], b: list[str]) -> list[tuple[int, int]]:
-    """Positions of lines occurring exactly ONCE in each side, in the longest
-    order-preserving run of them.
+def _runs(lines: list[str]) -> list[tuple[int, int]]:
+    """Maximal runs of the same line repeated consecutively, as (start, length)."""
+    runs: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lines):
+        j = i + 1
+        while j < len(lines) and lines[j] == lines[i]:
+            j += 1
+        runs.append((i, j - i))
+        i = j
+    return runs
 
-    Uniqueness is what makes an alignment unambiguous: a line appearing once on
-    each side can only correspond to itself, so it needs no search to place.
+
+def _anchors(a: list[str], b: list[str]) -> list[tuple[int, int, int]]:
+    """Alignment points as (a_start, b_start, length): RUNS occurring exactly
+    ONCE in each side, in the longest order-preserving sequence of them.
+
+    Uniqueness is what makes an alignment unambiguous: something appearing once
+    on each side can only correspond to itself, so it needs no search to place.
     The longest increasing subsequence over their partner positions is then the
     largest set of them that can all be right at once -- everything else is a
     genuine reordering, and lands in a gap.
+
+    A RUN rather than a line, which review earned twice over. A block of
+    identical consecutive lines is unique nowhere by the line measure, so a span
+    made mostly of one repeated line had no anchors at all and took the coarse
+    answer -- 4,000 identical lines with the line above and below them edited
+    came back as 4,002 deletions and 4,002 insertions, hiding two edits inside a
+    full replacement. Collapsed to (length, line) the same block is one token,
+    unique on both sides, and anchors.
+
+    Strictly more anchors than the line measure, never fewer: a line occurring
+    once on a side IS a run of length one there, so every anchor the old rule
+    found survives the collapse. What the collapse cannot rescue is a block whose
+    LENGTH moved -- 4,000 against 3,999 is two different tokens -- and that span
+    still takes the coarse answer, as it did before.
     """
-    once_a, once_b = Counter(a), Counter(b)
-    at = {line: j for j, line in enumerate(b) if once_b[line] == 1}
-    pairs = [(i, at[line]) for i, line in enumerate(a)
-             if once_a[line] == 1 and line in at]
+    runs_a, runs_b = _runs(a), _runs(b)
+    key_a = [(n, a[i]) for i, n in runs_a]
+    key_b = [(n, b[j]) for j, n in runs_b]
+    once_a, once_b = Counter(key_a), Counter(key_b)
+    at = {key: j for j, key in enumerate(key_b) if once_b[key] == 1}
+    pairs = [(i, at[key]) for i, key in enumerate(key_a)
+             if once_a[key] == 1 and key in at]
 
     tails: list[int] = []            # smallest tail partner-index per length
     ends: list[int] = []             # which pair sits at each of those tails
@@ -192,12 +230,12 @@ def _anchors(a: list[str], b: list[str]) -> list[tuple[int, int]]:
             ends[k] = n
     if not ends:
         return []
-    run, n = [], ends[-1]
+    chain, n = [], ends[-1]
     while n != -1:
-        run.append(pairs[n])
+        chain.append(pairs[n])
         n = prev[n]
-    run.reverse()
-    return run
+    chain.reverse()
+    return [(runs_a[i][0], runs_b[j][0], runs_a[i][1]) for i, j in chain]
 
 
 def _path(cid: str) -> Path:
