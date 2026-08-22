@@ -957,3 +957,42 @@ def test_a_save_with_no_token_is_not_refused_by_somebody_else_s_review(client, s
     assert store.pending_reviews.read(cid, sid) is None
     assert _pending(client, cid, sid)["review"] is None
     assert review["commit_token"]        # it really did have one to be scoped by
+
+
+def test_a_save_whose_review_was_discarded_elsewhere_is_refused(client, scene):
+    """One tab discards a review while another still has it open. That is the
+    PANEL doing it, not a hand-made request -- and the record is where that
+    review's watermark lives, so a missing one is not "nothing to check
+    against" but "the only evidence about this save is gone". Play then
+    continues, which advances no epoch, and the old token sails through to
+    commit a summary of posts nobody reviewed over a transcript that moved."""
+    cid, sid = scene
+    generation, _ = _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+    assert review_runs.cancel(client, cid, sid, generation).status_code == 200
+    store.scenes.append_message(cid, sid, "user", "And then we left.")
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": review["one_line"], "summary": review["summary"],
+                         "keywords": [], "timeline_events": [], "edits": [],
+                         "commit_token": review["commit_token"]})
+
+    assert r.status_code == 409
+    assert r.json()["kind"] == "review_discarded"
+    assert store.chronicle.read_chronicle(cid) == {}, "the chronicle was written"
+
+
+def test_a_token_this_app_never_minted_still_saves_without_a_record(client, scene):
+    """The other side of it, and the documented opt-out: a caller-minted key
+    was never stamped with an epoch, so it keeps the weaker pre-#271 guarantee
+    rather than being refused for a stamp nobody asked it to carry."""
+    cid, sid = scene
+    generation, _ = _absorb(client, cid, sid)
+    assert review_runs.cancel(client, cid, sid, generation).status_code == 200
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "By hand.", "summary": "Typed, not absorbed.",
+                         "keywords": [], "timeline_events": [], "edits": [],
+                         "commit_token": "my-own-key"})
+
+    assert r.status_code == 200, r.json()
