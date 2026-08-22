@@ -1005,6 +1005,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // dialogue by the next Send. That is the "never posted" contract broken by
   // the recovery meant to protect it.
   const parkedPrompts = useRef<Map<string, { text: string; director: boolean }>>(new Map());
+  // Mirrors of the composer's two live facts, for the same reason
+  // `activeIdRef` exists: `recoverPrompt` runs from a callback that outlives
+  // the render it started in, and a captured `input`/`directing` would answer
+  // for the moment the turn began rather than the moment it failed.
+  const inputRef = useRef("");
+  const directingRef = useRef(false);
+  inputRef.current = input;
+  directingRef.current = directing;
+  // Something recovered for THIS scene that the box is not free to take yet.
+  // Read off the ref during render rather than mirrored into state: every
+  // trigger that can change the answer — parking, switching scene, typing,
+  // flipping the mode — is already a re-render.
+  const heldForScene = activeId ? parkedPrompts.current.get(activeId) : undefined;
+  const heldNote = !!heldForScene && heldForScene.director && !!input.trim()
+    && heldForScene.director !== directing;
   const [parkedTick, setParkedTick] = useState(0);
 
   // Appending, not replacing: the composer stays editable while a turn runs,
@@ -1023,6 +1038,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (!activeId) return;
     const held = parkedPrompts.current.get(activeId);
     if (held === undefined) return;
+    // Same rule as `recoverPrompt`: a draft of the other kind still owns the
+    // box, so the held text waits rather than merging into it. `input` is a
+    // dependency for exactly this — clearing or sending the draft is what
+    // releases it, and that is the moment it comes back.
+    if (input.trim() && held.director !== directing) return;
     parkedPrompts.current.delete(activeId);
     giveBackPrompt(held.text);
     // Restored HERE rather than when the note was parked: the player may have
@@ -1030,7 +1050,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // and flipping the shared composer's mode under that draft would mis-stage
     // it. The mode arrives with the words it belongs to.
     if (held.director) setDirectMode(true);
-  }, [activeId, parkedTick, giveBackPrompt]);
+  }, [activeId, parkedTick, giveBackPrompt, input, directing]);
 
   // Where a recovered prompt goes: the composer if the player is still on the
   // scene it belongs to, the parking map otherwise. `activeIdRef`, not
@@ -1038,7 +1058,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // in, and a captured `activeId` would be the scene the turn began on, which
   // is exactly the stale answer this exists to avoid.
   const recoverPrompt = useCallback((sid: string, text: string, director = false) => {
-    if (activeIdRef.current === sid) {
+    // Merged only into a draft of the SAME kind (Codex review, round 3).
+    // `giveBackPrompt` prepends, and one composer carries one mode — so
+    // folding a recovered note into dialogue typed since would give the
+    // combined text a single mode that is wrong for half of it: as Direct the
+    // dialogue is spent as an ephemeral note and never posted, as Speak the
+    // note is posted as dialogue. Neither is acceptable, and discarding either
+    // text is worse than both. So the odd one out waits: it stays parked until
+    // the box is free, and `heldNote` says so on screen meanwhile.
+    if (activeIdRef.current === sid
+        && (!inputRef.current.trim() || director === directingRef.current)) {
       giveBackPrompt(text);
       if (director) setDirectMode(true);
       return;
@@ -4255,6 +4284,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 transcript never sees it. */}
             {directing && (
               <span className="composer-meta-hint">steers the reply · never posted</span>
+            )}
+            {/* A note that could not be handed back because a draft of the
+                other kind holds the box. Without this it waits in a place with
+                nothing on screen naming it, which is its own way of losing
+                what somebody wrote. */}
+            {heldNote && (
+              <span className="composer-meta-hint">
+                🎬 note held · clear the box to get it back
+              </span>
             )}
             <label className="composer-meta-label" htmlFor="response-length">Response</label>
             <select id="response-length" aria-label="Response length"
