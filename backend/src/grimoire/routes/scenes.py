@@ -2560,6 +2560,7 @@ def delete_pending_review(cid: str, sid: str, request: Request,
     discarded. Cancel means stopped, the way it does for a turn.
     """
     _require_scene(cid, sid)
+    removed, refused = False, None
     with store.locks.campaign_lock(cid):
         # The flag lands FIRST and stays landed even if the removal below
         # refuses: stopping the work is the half of Cancel that cannot be
@@ -2569,16 +2570,25 @@ def delete_pending_review(cid: str, sid: str, request: Request,
         try:
             removed = store.pending_reviews.clear(cid, sid, generation)
         except OSError as exc:
-            # A sidecar that would not open. Not a 500: `clear` declines to
-            # remove a record it could not identify (the safe direction), and
-            # the condition is transient -- a sync client holding the file, a
-            # sharing violation -- so the client is told to retry rather than
-            # shown a crash for a button that half worked.
-            runs.await_reviews_stopped(flagged)
-            raise HTTPException(status_code=409, detail={
-                "kind": "busy",
-                "detail": f"the review could not be removed: {exc}"}) from exc
-    return {"removed": removed, "stopped": runs.await_reviews_stopped(flagged)}
+            # Carried OUT of the hold rather than raised inside it. The wait
+            # below must happen outside the campaign lock -- a flagged run
+            # reaches its terminal persist through that same lock, so waiting
+            # for it while holding it is a deadlock with a thirty-second fuse
+            # per run. There is exactly one `await_reviews_stopped` call in
+            # this route for that reason, and it is after the `with`.
+            refused = exc
+    stopped = runs.await_reviews_stopped(flagged)
+    if refused is not None:
+        # Not a 500: `clear` declines to remove a record it could not identify
+        # (the safe direction), and the condition is transient -- a sync client
+        # holding the file, a sharing violation -- so the client is told to
+        # retry rather than shown a crash for a button that half worked. The
+        # runs it flagged are stopped either way, which is the half that
+        # cannot be retried into existence later.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": f"the review could not be removed: {refused}"}) from refused
+    return {"removed": removed, "stopped": stopped}
 
 
 def _pending_for_retry(cid: str, sid: str) -> dict:

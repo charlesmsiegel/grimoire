@@ -727,3 +727,33 @@ def test_a_cancel_whose_scene_cannot_be_resolved_still_removes_the_record(
     gone = review_runs.cancel(client, cid, sid, generation)
     assert gone.status_code == 200 and gone.json() == {"removed": True, "stopped": 0}
     assert store.pending_reviews.read(cid, sid) is None
+
+
+def test_cancel_never_waits_for_a_run_while_holding_the_lock_it_needs(
+        client, scene, monkeypatch):
+    """A flagged run reaches its terminal persist through the campaign lock, so
+    waiting for it while holding that lock is a deadlock with a thirty-second
+    fuse per run -- and the run's own persist is then refused as busy.
+
+    Asserted on BOTH exits, because the refusal arm is the one that grew a
+    second wait and put it on the wrong side of the `with`.
+    """
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    generation = _pending(client, cid, sid)["generation"]
+    depths = []
+
+    real = routes.runs.await_reviews_stopped
+
+    def watched(flagged):
+        depths.append(store.locks.campaign_lock(cid)._depth)
+        return real(flagged)
+
+    monkeypatch.setattr(routes.runs, "await_reviews_stopped", watched)
+
+    assert review_runs.cancel(client, cid, sid, generation).status_code == 200
+    # A directory where the sidecar goes drives the refusal arm.
+    store.scenes._review_path(cid, sid).mkdir()
+    assert review_runs.cancel(client, cid, sid, generation).status_code == 409
+
+    assert depths == [0, 0], f"the lock was still held when the wait began: {depths}"
