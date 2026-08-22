@@ -480,3 +480,23 @@ def test_a_cancel_over_an_unreadable_record_still_stops_the_work(client, scene,
     run = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/"
                      f"{started.json()['run']['id']}").json()["run"]
     assert run["state"] == "cancelled", run
+
+
+def test_an_unsafe_id_on_a_review_route_is_a_refusal_and_not_a_crash(client, scene):
+    """Every id-carrying route in this app is swept for this.
+
+    These join the scene id onto a filename (`scenes/<sid>.review.json`), so
+    they answer for it twice over: `_require_scene` refuses an id the store
+    cannot address before the path is ever built, and an unhandled store error
+    would be a 500 rather than the 404 every sibling route gives.
+    """
+    cid, sid = scene
+    unsafe = [f"/api/campaigns/C:evil/scenes/{sid}/pending-review",
+              f"/api/campaigns/{cid}/scenes/C:evil/pending-review",
+              f"/api/campaigns/{cid}/scenes/nope/pending-review"]
+    for path in unsafe:
+        assert client.get(path).status_code == 404, path
+        assert client.delete(path + "?generation=g").status_code == 404, path
+    for route in ("absorb", "audit", "dossiers"):
+        assert client.post(
+            f"/api/campaigns/C:evil/scenes/{sid}/{route}").status_code == 404, route

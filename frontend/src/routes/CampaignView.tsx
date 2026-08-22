@@ -3888,6 +3888,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   disabled={!activeId || review.absorbing || busy || sceneLocked || rolling}>
             {review.absorbing ? "Ending…" : "End scene"}
           </button>
+          {/* The way out of an absorb that is still running (#396). A review
+              holds the scene against play for as long as it runs and
+              `absorb_budget = 0` means nothing bounds that, so without this a
+              wedged End scene locks the scene until the process restarts --
+              and until the review lands there is no panel, and so no Cancel.
+              The same argument the panel's Cancel already carries for a wedged
+              retry, one step earlier. */}
+          {review.absorbing && (
+            <button className="scene-action" onClick={() => void review.stopAbsorb()}>
+              Stop
+            </button>
+          )}
           {/* A review that is on disk and unusable (#396). The scene was played
               on after the absorb landed -- appended, cut, retconned -- and the
               stored review summarises posts that are no longer there. Saying so
