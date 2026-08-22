@@ -187,6 +187,13 @@ def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
     if not messages:
         raise HTTPException(status_code=400,
                             detail="an imported scene needs at least one message")
+    # The parse route bounds its upload; this one is plain JSON and had no
+    # bound at all. The cap is on the SCENE, not on the request: a transcript
+    # of this length is already past what the app can render or absorb, and the
+    # store's own guidance is to break a log into scenes. Without it a single
+    # request could hold the campaign lock for minutes.
+    if len(messages) > store.scene_import.MAX_MESSAGES:
+        raise HTTPException(status_code=413, detail=store.scene_import.TOO_MANY)
     cast = [{"kind": ref.kind, "id": ref.id,
              "role": _resolve_role(ref.kind, ref.role, body.pcless),
              "version": _actor_version(cid, ref.kind, ref.id, ref.version)}
@@ -213,10 +220,20 @@ def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
         # has to be the one that does -- `set_datetime` renames the scene, so
         # after that step `sid` here is not the id the scene has.
         return store.scene_import.commit(cid, sid, messages, date=body.date,
-                                         location=body.location, cast=cast)
+                                         location=body.location, cast=cast,
+                                         turn_sizes=body.turn_sizes)
     except (store.calendars.CalendarError, store.entities.EntityNotFound,
             store.appearances.AppearError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except store.scenes.SceneNotFound as exc:
+        # The scene this call created was renamed or removed under it -- a
+        # concurrent width-crossing repad is the reachable way. `commit` has
+        # already discarded what it wrote (it follows the identity, not the
+        # id), so this is retryable and says so rather than 500-ing: nothing
+        # here is wrong with the request.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": "the scene moved while it was being imported — try again"}) from exc
 
 
 def _resolve_cast(cid: str, tokens: list[str], memo: dict[str, str] | None = None) -> list[dict]:

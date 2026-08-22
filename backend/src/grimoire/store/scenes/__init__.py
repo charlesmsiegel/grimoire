@@ -95,6 +95,7 @@ from .write import (  # noqa: F401
     RollMessageImmutable,
     add_dismissed,
     append_message,
+    append_messages,
     append_reply,
     delete_from,
     dismiss_scene_break,

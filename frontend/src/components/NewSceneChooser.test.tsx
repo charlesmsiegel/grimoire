@@ -40,7 +40,8 @@ beforeEach(() => {
   (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
   (api.sceneImportParse as any).mockResolvedValue(
     { title: "The Long Quay", date: "", location: "", pcless: false,
-      messages: [{ role: "user", content: "hi" }], cast: [], unmatched: [], warnings: [] });
+      messages: [{ role: "user", content: "hi" }], turn_sizes: null,
+      cast: [], unmatched: [], warnings: [] });
   (api.sceneImport as any).mockResolvedValue({ id: "s9", messages: 1, cast: 0 });
 });
 

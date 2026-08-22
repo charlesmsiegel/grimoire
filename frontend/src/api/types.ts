@@ -1323,6 +1323,10 @@ export type SceneImportCast = {
 export type SceneImportDraft = {
   title: string; date: string; location: string; pcless: boolean;
   messages: Message[];
+  /** The source's reply boundaries, when it had some that still fit. Nothing
+   *  for the reviewer to decide — it rides the draft back to the commit so an
+   *  imported scene rerolls one generation rather than its whole trailing run. */
+  turn_sizes: number[] | null;
   cast: SceneImportCast[];
   unmatched: string[];
   warnings: string[];

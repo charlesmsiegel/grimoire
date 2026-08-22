@@ -13,9 +13,17 @@ Split in two like ``lorebook``, and for the same reason: ``parse`` reads a file
 into a draft and writes **nothing**, ``commit`` writes the draft a reviewer
 approved. Everything this format cannot settle on its own -- a speaker who
 names nobody in this campaign, a location this campaign does not have, a date
-its calendar cannot read -- is reported by ``parse`` as a warning or an
-unmatched label instead of being guessed at, so the review step is a real gate
-rather than a confirmation dialog over work already done.
+its calendar cannot read even in the form the exporter wrote -- is reported by
+``parse`` as a warning or an unmatched label instead of being guessed at, so
+the review step is a real gate rather than a confirmation dialog over work
+already done.
+
+What it does *not* do is treat "I cannot parse this" as "this cannot be read".
+A bundle chapter carries the calendar's friendly rendering ("2 January 2026"),
+which no provider's ``parse`` accepts -- but ``calendars.resolve`` reads back
+any form the calendar itself renders, and the header line's one genuinely
+ambiguous case (a lone bit that could be a date or a place) is settled by
+asking the two authorities that know, the calendar and the location roster.
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ from collections.abc import Sequence
 # copy of it here would be a parser that agrees with the store's reader only
 # until one of the two changes. They are re-exported by the package's `__init__`
 # rather than reached into a submodule for.
-from . import appearances, calendars, locks, overlay, scenes
+from . import appearances, calendars, clock, context, locks, overlay, scenes
 from .campaigns import paths as campaigns_paths
 from .frontmatter import parse_frontmatter
 
@@ -62,6 +70,14 @@ class TranscriptTooLargeError(SceneImportError):
 MAX_BYTES = 16 * 1024 * 1024
 TOO_LARGE = "transcript is too large (max 16 MB)"
 
+#: Bounds the COMMIT, whose body is plain JSON and so never met `MAX_BYTES`.
+#: Every message is a block in one scene file that the app renders, absorbs and
+#: rewrites whole; past a few thousand the store's own advice is to break the
+#: log into scenes, which is what the ingest skill does. Without a cap one
+#: request can hold the campaign lock for minutes.
+MAX_MESSAGES = 5000
+TOO_MANY = f"too many messages for one scene (max {MAX_MESSAGES}) — split the log into scenes"
+
 
 #: The chapter heading `build_markdown_bundle` writes: `# 3. The Long Quay`.
 #: The number is the bundle's own chapter marker (`toc_label`), not part of the
@@ -91,7 +107,7 @@ def _decoded(data: bytes) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _split_chapter_header(body: str) -> tuple[dict, str]:
+def _split_chapter_header(body: str, roster: list[str]) -> tuple[dict, str]:
     """A bundle chapter's header, and the transcript under it.
 
     Only entered when the body opens with a ``# `` heading, which a stored
@@ -111,7 +127,7 @@ def _split_chapter_header(body: str) -> tuple[dict, str]:
         if not line or line.startswith("> "):
             i += 1                      # blank, or the epigraph absorb rewrites anyway
         elif line.startswith(_CAST_LABEL):
-            head["cast"] = [n.strip() for n in line[len(_CAST_LABEL):].split(",") if n.strip()]
+            head["cast"] = _cast_names(line[len(_CAST_LABEL):], roster)
             i += 1
         elif line.startswith("*") and line.endswith("*") and not line.startswith("**"):
             head["meta"] = line.strip("*").strip()
@@ -121,38 +137,103 @@ def _split_chapter_header(body: str) -> tuple[dict, str]:
     return head, "\n".join(lines[i:])
 
 
-def _meta_bits(meta: str) -> tuple[str, str, list[str]]:
-    """(date, location name, warnings) from a chapter's italic header line.
+def _cast_names(line: str, roster: list[str]) -> list[str]:
+    """The names in a `**Cast:**` line, whose separator is also a legal
+    character in a name.
 
-    `_header_lines` drops whichever of the two the scene lacks, so one bit is
-    genuinely ambiguous -- "Saltmarch" and "2 January 2026" arrive in the same
-    position, and reading a location as a date (or the reverse) puts a value in
-    a field the reviewer then has to notice is wrong. Two bits are unambiguous,
-    one is reported and left for the reviewer to place.
+    `export._header_lines` joins with ", " and escapes nothing, so a character
+    called "Winifred, the Grey" is written into the middle of the list and a
+    bare split shreds it into "Winifred" (which may mis-resolve onto a
+    different Winifred by word-boundary prefix) plus a phantom "the Grey" for
+    the reviewer to puzzle over. Kept whole where the whole line is a name;
+    otherwise split, because the ambiguity is real and the split is right for
+    every name that does not contain a comma. Fully unambiguous parsing would
+    need the exporter to quote, which is a change to the written format.
+    """
+    whole = line.strip()
+    if whole and "," in whole and any(n.strip().lower() == whole.lower() for n in roster):
+        return [whole]                    # the whole line IS one roster name
+    return [n.strip() for n in line.split(",") if n.strip()]
+
+
+def _meta_bits(cid: str, meta: str) -> tuple[str, str, list[str]]:
+    """(date, location id, warnings) from a chapter's italic header line.
+
+    Two bits are unambiguous -- `_header_lines` writes date then location.
+
+    ONE bit is the interesting case, and it is answerable rather than a guess:
+    `_header_lines` drops whichever of the two the scene lacked, so "2 January
+    2026" and "Saltmarch" arrive in the same position. Both authorities are
+    right here -- the campaign's calendar knows whether a string is a date it
+    could have written (that is what `calendars.resolve` is), and the location
+    roster knows whether it is a place. So the bit is offered to each in turn
+    and placed by whichever one claims it; only a bit that neither recognises
+    is reported for the reviewer to place, which is the honest remainder rather
+    than the whole case.
+
+    Deliberately date-first: a location NAMED like a date would otherwise have
+    to be distinguished from a date, and no evidence available here could.
     """
     parts = [p.strip() for p in meta.split(_META_JOIN)]
     if len(parts) >= 2:
-        return parts[0], _META_JOIN.join(parts[1:]), []
-    return "", "", [(f"“{meta}” is either the date or the location — "
-                     "the file does not say which, so neither was filled in.")]
+        date, hints = _canonical_date(cid, parts[0])
+        location, place_hints = _resolve_location(cid, _META_JOIN.join(parts[1:]))
+        return date, location, hints + place_hints
+    date, _ = _canonical_date(cid, parts[0])
+    if date:
+        return date, "", []
+    location, _ = _resolve_location(cid, parts[0])
+    if location:
+        return "", location, []
+    return "", "", [(f"“{meta}” is neither a date this campaign's calendar can read "
+                     "nor a location it has — set the scene's date and place below.")]
+
+
+def _anchor(cid: str) -> str:
+    """A date to read a friendly rendering NEAR.
+
+    `resolve` scans a window rather than parsing, because "2 Tevet" is only
+    unambiguous near a year -- so it needs somewhere to look. The campaign's
+    own clock first (one "now" for the whole campaign, moved deliberately),
+    then the most recent dated scene.
+
+    A campaign with neither has no window, and the friendly form of a date then
+    genuinely cannot be recovered: nothing here knows what year "2 January"
+    belongs to. That is the honest limit and `_canonical_date` reports it --
+    and it is the FIRST import into an empty campaign, where there is also
+    nothing to be inconsistent with, so the reviewer simply sets the date.
+    """
+    if clock.now(cid):
+        return clock.now(cid)
+    for meta in scenes.list_scenes(cid):          # most-recently-updated first
+        if meta.get("date"):
+            return meta["date"]
+    return ""
 
 
 def _canonical_date(cid: str, candidate: str) -> tuple[str, list[str]]:
     """`candidate` in the campaign's primary calendar, or "" and a warning.
 
-    A stored scene's ``time_history`` is already canonical and passes through
-    untouched; a bundle chapter carries the calendar's *friendly* rendering
-    ("2 January 2026"), which most providers do not read back. Settled here,
-    where nothing is written and no lock is held, so the draft the reviewer
-    edits only ever holds a date the commit can actually set -- and so a
-    hand-written provider's code never runs under the campaign lock (see
-    `scenes.lifecycle._date_hint`).
+    `resolve`, not `normalize`, and the difference is the feature's headline
+    round trip. A stored scene's ``time_history`` is already canonical and
+    either reads back; a bundle chapter carries the calendar's *friendly*
+    rendering ("2 January 2026"), which no provider's `parse` accepts -- so
+    `normalize` lost the date on every exported chapter, for every calendar
+    including the default. `resolve` exists for exactly that ("accepting any
+    form THIS calendar renders"), and it is calendar-agnostic by construction:
+    the only strings it adds are ones the provider itself produced.
+
+    Settled here, where nothing is written and no lock is held, so the draft
+    the reviewer edits only ever holds a date the commit can actually set --
+    and so a hand-written provider's code never runs under the campaign lock
+    (see `scenes.lifecycle._date_hint`).
     """
     if not candidate:
         return "", []
     try:
         cfg = calendars.read_calendar(campaigns_paths.campaign_root(cid))
-        return calendars.normalize(calendars.get_provider(cfg["primary"]), candidate), []
+        provider = calendars.get_provider(cfg["primary"])
+        return calendars.resolve(provider, candidate, near=_anchor(cid)), []
     except (calendars.CalendarError, KeyError):
         return "", [(f"“{candidate}” is not a date this campaign's calendar can read — "
                      "set the scene's date below.")]
@@ -192,7 +273,7 @@ def _speaker_labels(messages: list[dict], declared: list[str]) -> list[str]:
     return labels
 
 
-def _suggest_cast(cid: str, labels: list[str]) -> tuple[list[dict], list[str]]:
+def _suggest_cast(actors: list[dict], labels: list[str]) -> tuple[list[dict], list[str]]:
     """(matched cast, labels that matched nobody) for this campaign's roster.
 
     `scenes.match_name` is the resolver the transcript itself is read with, so
@@ -200,7 +281,6 @@ def _suggest_cast(cid: str, labels: list[str]) -> tuple[list[dict], list[str]]:
     an ambiguous one ("Winifred", with two Winifreds in the campaign) matches
     nobody here rather than being handed to whichever came first.
     """
-    actors = _actors(cid)
     names = [a["name"] for a in actors]
     cast, unmatched, seated = [], [], set()
     for label in labels:
@@ -285,6 +365,56 @@ def _dropped_text(transcript: str) -> list[str]:
     return warnings
 
 
+def _untag_rolls(messages: list[dict]) -> list[str]:
+    """Strip the `⁣Roll` tag from imported messages, in place.
+
+    That tag is a PROMISE, not decoration: `edit_message` refuses a tagged
+    message outright (`RollMessageImmutable`) and reroll refuses to step past
+    one, both because "its transcript line must stay in lockstep with
+    rolls.json" (`serialize.py`). An import creates no `rolls.json` entry --
+    there is no roll to be in lockstep with -- so importing the tag makes that
+    promise false and leaves the message permanently uneditable and the scene
+    permanently unrerollable past it, for a line that is now just text.
+
+    The line itself is kept verbatim; only the internal tag goes, which is what
+    the text always looked like to a reader (the tag is never displayed). The
+    transition tag is deliberately NOT stripped: it carries no such guarantee,
+    it is drift metadata, and the scene's own transitions belong to it.
+    """
+    rolls = [m for m in messages if m.get("speaker") == scenes.ROLL_SPEAKER]
+    for m in rolls:
+        m.pop("speaker", None)
+    if not rolls:
+        return []
+    return [(f"{len(rolls)} manual dice-roll line(s) import as ordinary text: this "
+             "campaign's roll log has no entry for them, and keeping them tagged "
+             "would freeze those messages against editing.")]
+
+
+def _carryable_turn_sizes(meta: dict, messages: list[dict]) -> list[int] | None:
+    """The source's reply boundaries, when they still describe these messages.
+
+    A stored scene file carries `turn_sizes` (written by `append_reply`), and it
+    is what tells a reroll how many blocks the LAST generation had. Dropped, the
+    scene is untracked and the first reroll takes the untracked branch, which
+    removes the whole trailing model run -- so importing a scene that ends in a
+    three-speaker reply and rerolling it eats all three.
+
+    Carried only when `_tracked_suffix_fits` says the list can still describe
+    this transcript, which is the same check every repair path uses. A list
+    that does not fit is worse than none (`TurnSizesDesynced` exists to say
+    so), so it is dropped rather than guessed at.
+    """
+    raw = [n for n in str(meta.get("turn_sizes", "")).split(",") if n.strip()]
+    try:
+        sizes = [int(n) for n in raw]
+    except ValueError:
+        return None
+    if not sizes or any(n <= 0 for n in sizes):
+        return None
+    return sizes if scenes._tracked_suffix_fits(messages, sizes) else None
+
+
 def _moves_left_behind(times: list[str], places: list[str]) -> list[str]:
     """A warning when the file records a scene that MOVED.
 
@@ -319,7 +449,8 @@ def parse(cid: str, data: bytes) -> dict:
     """
     text = _decoded(data)
     meta, body = parse_frontmatter(text)
-    head, transcript = _split_chapter_header(body)
+    actors = _actors(cid)
+    head, transcript = _split_chapter_header(body, [a["name"] for a in actors])
 
     warnings: list[str] = []
     # The store's own reader, not a second copy of the split: `histories` exists
@@ -333,85 +464,145 @@ def parse(cid: str, data: bytes) -> dict:
         location, place_hints = _known_location(cid, location)
         warnings += place_hints
     elif head.get("meta"):
-        date, location_name, hints = _meta_bits(head["meta"])
+        date, location, hints = _meta_bits(cid, head["meta"])
         warnings += hints
-        location, place_hints = _resolve_location(cid, location_name)
-        warnings += place_hints
-    date, date_hints = _canonical_date(cid, date)
-    warnings += date_hints
+    if date and not head.get("meta"):
+        # A frontmatter date is already canonical; run it through anyway, so a
+        # hand-edited one that the calendar cannot read is caught here rather
+        # than deep inside the commit.
+        date, date_hints = _canonical_date(cid, date)
+        warnings += date_hints
 
     messages = scenes._parse_messages(transcript, frozenset())
     if not messages:
         raise SceneImportError(
             "no **Speaker:** blocks found — this is not a grimoire transcript")
     warnings += _dropped_text(transcript)
+    labels = _speaker_labels(messages, head.get("cast", []))
+    # After the labels are read off them, and before the sizes are measured
+    # against them: an untagged roll line is an ordinary assistant block, which
+    # is what `_model_blocks` counts.
+    warnings += _untag_rolls(messages)
 
-    cast, unmatched = _suggest_cast(cid, _speaker_labels(messages, head.get("cast", [])))
+    cast, unmatched = _suggest_cast(actors, labels)
     return {
         "title": meta.get("title") or head.get("title") or "Imported scene",
         "date": date,
         "location": location,
         "pcless": meta.get("pcless") == "true",
         "messages": messages,
+        # The reply boundaries, when the source had some that still fit. Not a
+        # field the review form shows -- there is nothing for a reader to decide
+        # about it -- but it rides the draft because only the parse has seen the
+        # frontmatter it comes from.
+        "turn_sizes": _carryable_turn_sizes(meta, messages),
         "cast": cast,
         "unmatched": unmatched,
         "warnings": warnings,
     }
 
 
-def _discard(cid: str, sid: str) -> None:
-    """Remove the scene a commit could not finish filling.
+def _discard(cid: str, sid: str, seated: list[dict]) -> None:
+    """Remove the scene a commit could not finish filling, and the seats it took.
 
-    Best effort, deliberately: the caller is already raising the failure worth
+    Two halves, and the second was missing. Deleting the scene leaves every
+    `appearances` record this commit wrote still naming it -- `delete_scene`
+    retires `prompt_log`, `commits`, `turnstate`, `pins` and the alternates
+    sidecar for the recycled-id hazard, but never appearances, because until
+    now nothing deleted a scene it had already cast. Scene ids ARE recycled:
+    `_numbering` reads the files on disk, so retrying a failed import of the
+    same file lands on the same id and the retry's brand-new scene opens with
+    the failed run's cast already on stage.
+
+    So the seats come off first, while the scene still exists (`leave` narrates
+    into a transcript that is about to be deleted, which costs nothing and
+    keeps the call the store's own idempotent one). What `leave` does not undo
+    is the campaign-wide version lock a first appearance takes -- there is no
+    API for that by design, "the actor stays appeared campaign-wide" -- so a
+    failed import can still leave an actor on the roster with no scenes. That
+    is a state the app already has (cast someone, remove them) rather than a
+    phantom cast on a live scene, which is the one that misattributes.
+
+    Best effort throughout: the caller is already raising the failure worth
     reading, and a delete that fails on top of it would replace that error with
-    a less useful one. What it leaves behind then is an empty, listed scene the
-    reviewer can delete -- not a fragment of a transcript.
+    a less useful one.
     """
+    for a in seated:
+        with contextlib.suppress(OSError, appearances.AppearError, locks.StoreBusy):
+            appearances.leave(cid, sid, a["kind"], a["id"])
     with contextlib.suppress(OSError, scenes.SceneNotFound, locks.StoreBusy):
         scenes.delete_scene(cid, sid)
 
 
 def commit(cid: str, sid: str, messages: list[dict], date: str = "", location: str = "",
-           cast: Sequence[dict] = ()) -> dict:
+           cast: Sequence[dict] = (), turn_sizes: list[int] | None = None) -> dict:
     """Write a reviewed draft into the freshly created, still-empty scene `sid`.
 
     **All or nothing, as far as a delete can make it**: either the scene ends
-    up holding the whole draft, or it is removed -- and where the removal itself
-    fails (see `_discard`) what is left is an empty scene rather than a
-    fragment. A scene holding half an imported transcript reads exactly like a
-    scene, and nothing downstream -- not the reviewer, not absorb -- can tell
-    which half is missing. The caller creates the scene (only it can take the
-    repad guard, which needs the app's run registry) and this removes it again
-    on any failure, because only this can: `set_datetime` RENAMES the scene on
-    the first date it sets, so after that step the id the caller holds is not
-    the id the scene has.
+    up holding the whole draft, or it and the seats it took are removed -- and
+    where the removal itself fails (see `_discard`) what is left is an empty
+    scene rather than a fragment. A scene holding half an imported transcript
+    reads exactly like a scene, and nothing downstream -- not the reviewer, not
+    absorb -- can tell which half is missing.
+
+    Three things make that true rather than merely intended:
+
+    - **The scene is followed by IDENTITY, not by id.** `set_datetime` renames
+      the scene on the first date it sets, and a concurrent rename or a
+      width-crossing repad can move it at any point besides; a cleanup that
+      deletes the id the caller created deletes nothing and leaves the
+      half-scene standing. `scene_identity` is the token the rest of the app
+      already follows a moving scene by.
+    - **One hold spans the writes.** Not one per message: between two separate
+      acquisitions another writer can rename the scene out from under the rest
+      of the transcript, which is exactly the fragment above. The calendar step
+      stays OUTSIDE it, because resolving a provider runs user-authored plugin
+      code and that must never happen under a campaign-wide lock (the same cut
+      `scenes.moment.set_datetime` and `lifecycle._date_hint` make).
+    - **The transcript is one write.** `append_message` per message is a whole
+      file read and write each, so a long import was quadratic and held the
+      lock once per post; `scenes.append_messages` does the batch in one.
 
     Ordered so the transcript comes out exactly as it went in. The moment and
     the place go first: both `set_datetime` and `set_location` append a
     transition line when they CHANGE a setting the scene already had, and are
-    silent only on the first one. The cast goes last and never narrates, for the
-    same reason -- `appear` appends "*X joins the scene.*" to a transcript that
-    already has messages, a line the imported log never contained -- and after
-    the rename, so the appearance record is written against the id the scene
-    keeps rather than repointed onto it.
+    silent only on the first one. The cast goes last and never narrates -- an
+    imported log never contained "*X joins the scene.*" -- and after the
+    rename, so the appearance record is written against the id the scene keeps.
+
+    Macros are resolved once, here, for the reason `post_chat` resolves them at
+    persist time (#137): a `{{roll:1d20}}` sitting in an imported transcript
+    would otherwise roll a different number into the prompt on every later
+    context build. Resolved after the moment is set, so `{{date}}` reads as the
+    imported scene's own.
 
     Returns the scene's id, which is not necessarily the one that came in.
     """
+    identity = scenes.scene_identity(cid, sid)
+    seated: list[dict] = []
     try:
         if date:
+            # Outside the hold: this resolves and runs the campaign's calendar
+            # provider, which may be user-authored code.
             sid = scenes.set_datetime(cid, sid, date)["id"]  # raises calendars.CalendarError
-        if location:
-            scenes.set_location(cid, sid, location)          # raises entities.EntityNotFound
-        for m in messages:
-            scenes.append_message(cid, sid, m.get("role") or "assistant", m.get("content", ""),
-                                  speaker=m.get("speaker") or None)
-        for a in cast:
-            appearances.appear(cid, sid, a["kind"], a["id"], a["version"], a["role"],
-                               narrate=False)                # raises appearances.AppearError
+        with locks.campaign_lock(cid):
+            if location:
+                scenes.set_location(cid, sid, location)      # raises entities.EntityNotFound
+            subs = context.scene_substitutions(cid, sid)
+            written = [{"role": m.get("role") or "assistant",
+                        "speaker": m.get("speaker") or None,
+                        "content": context.expand_macros(m.get("content", ""), subs, cid, sid)}
+                       for m in messages]
+            scenes.append_messages(cid, sid, written, turn_sizes=turn_sizes)
+            for a in cast:
+                appearances.appear(cid, sid, a["kind"], a["id"], a["version"], a["role"],
+                                   narrate=False)            # raises appearances.AppearError
+                seated.append(a)
     except BaseException:
-        # Including the ones this module cannot name -- an OSError mid-append, a
-        # store gone busy, a cancellation. Every one of them leaves the same
-        # half-scene, and the id to remove is the one tracked above.
-        _discard(cid, sid)
+        # Including the ones this module cannot name -- an OSError mid-write, a
+        # store gone busy, a cancellation. The id is re-read from the identity
+        # first: by here the scene may have been renamed by this very call.
+        current = (scenes.find_by_identity(cid, identity) if identity else None) or sid
+        _discard(cid, current, seated)
         raise
     return {"id": sid, "messages": len(messages), "cast": len(cast)}

@@ -1414,6 +1414,7 @@ export const api = {
   sceneImport: (cid: string, body: {
     title: string; date: string; location: string; pcless: boolean;
     messages: Message[]; cast: { kind: string; id: string; role?: string }[];
+    turn_sizes: number[] | null;
   }) => request<{ id: string; messages: number; cast: number }>(
     "POST", `/api/campaigns/${cid}/scenes/import`, body),
 

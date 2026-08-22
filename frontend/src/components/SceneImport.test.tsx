@@ -25,6 +25,7 @@ const DRAFT: SceneImportDraft = {
     { role: "user", content: "I walk the quay looking for Mara." },
     { role: "assistant", speaker: "Mara", content: '"You found me."' },
   ],
+  turn_sizes: [1],
   cast: [{ label: "Mara", kind: "characters", id: "mara", name: "Mara", role: "npc" }],
   unmatched: [],
   warnings: [],
@@ -78,6 +79,7 @@ test("import sends the reviewed draft, not the parsed one", async () => {
   expect(body.title).toBe("A Better Title");
   expect(body.cast).toEqual([]);
   expect(body.messages).toEqual(DRAFT.messages);                 // the transcript is untouched
+  expect(body.turn_sizes).toEqual([1]);                          // and its reply boundaries ride along
   await waitFor(() => expect(onImported).toHaveBeenCalledWith("001--the-long-quay"));
 });
 

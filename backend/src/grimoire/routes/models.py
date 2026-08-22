@@ -742,6 +742,11 @@ class SceneImportCommit(BaseModel):
     pcless: bool = False
     messages: list[ImportedMessage] = []
     cast: list[Appear] = []
+    # The source's reply boundaries, as `parse` reported them. Rides the draft
+    # rather than being shown: there is nothing for a reviewer to decide about
+    # it, and only the parse has seen the frontmatter it came from. A client
+    # that omits it gets an untracked scene, which is what it was before.
+    turn_sizes: list[int] | None = None
 
 
 class PinRule(BaseModel):
