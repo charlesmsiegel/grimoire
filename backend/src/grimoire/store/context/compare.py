@@ -25,15 +25,25 @@ Three deliberate choices, each of which had a cheaper alternative:
   field it was written for, and both the precision and the cost of a naive
   difflib call go wrong at that size.
 
-- **Matched by `id`, not by position.** Sections move: one dropping out shifts
-  every row after it, and a positional pairing would then report every section
-  in the prompt as changed. `id` is the stable identity #29 gave them. When a
-  snapshot frozen before ids existed is one of the two, BOTH sides fall back to
-  `label` -- keying each side by what it happens to have would compare
-  `Character state` against `character_state` and match nothing (see
-  `_key_field`). Labels predate editable labels too, so theirs are still
-  unique, and the occurrence counter keeps a genuinely duplicated key from
-  pairing two rows onto one.
+- **Matched by identity, not by position.** Sections move: one dropping out
+  shifts every row after it, and a positional pairing would then report every
+  section in the prompt as changed. `id` is the stable identity #29 gave them,
+  and three qualifications on it are each load-bearing -- every one of them was
+  a silent wrong answer first:
+
+  - When a snapshot frozen before ids existed is one of the two, BOTH sides
+    fall back to `label`. Keying each side by what it happens to have would
+    compare `Character state` against `character_state` and match nothing (see
+    `_key_field`). Labels were unique before #29 made them editable, and the
+    occurrence counter keeps a genuinely duplicated key from pairing two rows
+    onto one.
+  - Appended messages key on their `label` even when everything else keys on
+    `id`, because theirs is a POSITION rather than an identity (see
+    `_POSITIONAL_ID`).
+  - Matching two rows is not the same as difflib pairing them: it aligns the
+    longest IN-ORDER run of keys, so a section that only moved falls outside it
+    and would come back as a removal plus an addition. `_pair_moves` puts those
+    two back together and marks the survivor `moved`.
 
 - **Long unchanged runs are elided.** A record field is a paragraph; a prompt
   section is the whole transcript, and one appended exchange would otherwise
@@ -301,25 +311,28 @@ def _pair_moves(plan: list[list], keys_l: list[str], keys_r: list[str]) -> None:
     insertion -- reported as one section vanishing and an unrelated one
     appearing, each carrying the full text, when the layout editor (#29) did
     nothing but drag a row. That is the reordering case review caught, and the
-    claim "matched by id, not by position" is only true once it is handled:
-    matching by identity is what pairs the two, and the ORDER difflib imposed on
-    top of it is what separated them.
+    module's "matched by identity, not by position" is only true once it is
+    handled: matching by identity is what pairs the two, and the ORDER difflib
+    imposed on top of it is what separated them.
 
     The survivor is the addition, so the row reads where the section now sits;
     the removal becomes `gone` and is dropped. `moved` is reported beside
     `status` rather than folded into it, because a move and a rewrite are
     different things and a section can do both at once.
+
+    One removal per key is all this has to consider, and that is a guarantee
+    rather than an assumption: `_keyed` appends an occurrence number, so a key
+    is unique within its own side however often its label or id repeats.
     """
-    pending: dict[str, list[int]] = {}
-    for n, (kind, i, _j) in enumerate(plan):
-        if kind == "del":
-            pending.setdefault(keys_l[i], []).append(n)
+    #: A plan entry is `[kind, left_index, right_index]`, with -1 for the side
+    #: it does not have.
+    kind, left, right = 0, 1, 2
+    removals = {keys_l[e[left]]: e for e in plan if e[kind] == "del"}
     for entry in plan:
-        if entry[0] != "ins":
+        if entry[kind] != "ins":
             continue
-        waiting = pending.get(keys_r[entry[2]])
-        if not waiting:
+        removal = removals.get(keys_r[entry[right]])
+        if removal is None:
             continue
-        removal = plan[waiting.pop(0)]
-        entry[0], entry[1] = "moved", removal[1]
-        removal[0] = "gone"
+        entry[kind], entry[left] = "moved", removal[left]
+        removal[kind] = "gone"

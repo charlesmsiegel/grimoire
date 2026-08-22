@@ -72,6 +72,10 @@ export function ContextDiff({ diff, recomputing = false }:
         </p>
       )}
 
+      {/* "differ", not "changed": a section whose only difference is where it
+          now sits is in this list too, and it has no changed lines to point at
+          — which is also why the affordance below promises detail rather than
+          promising lines. */}
       {moved.length === 0 ? (
         <p className="field-hint">
           Nothing changed — every section is identical, including what the packer
@@ -79,8 +83,8 @@ export function ContextDiff({ diff, recomputing = false }:
         </p>
       ) : (
         <div className="ctx-caption">
-          {moved.length} {moved.length === 1 ? "section" : "sections"} changed ·
-          click a row for the lines
+          {moved.length} {moved.length === 1 ? "section differs" : "sections differ"} ·
+          click a row for detail
         </div>
       )}
 
@@ -194,7 +198,12 @@ function flagNotes(section: PromptDiffSection): string[] {
  *  nor a timestamp. */
 function sideLabel(side: PromptDiffSide): string {
   if (side.id === LIVE) return "Live preview";
-  return `${taskLabel(side.task)} · ${whenLabel(side.ts)}`;
+  // Falls back to the entry id, for the same reason `whenLabel` falls back to
+  // the raw string: a snapshot is only required to carry a `task` and a `ts`
+  // that are strings, not ones that say anything, and a heading reading " · "
+  // over a real comparison is worse than one naming the turn by its number.
+  return [taskLabel(side.task), whenLabel(side.ts)].filter(Boolean).join(" · ")
+         || side.id;
 }
 
 function budgetLabel(side: PromptDiffSide): string {
