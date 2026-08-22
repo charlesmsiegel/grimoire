@@ -595,9 +595,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // Scoped to the scene the review belongs to. A review outlives a scene
   // switch, so an absorb still running for scene A must not lock scene B --
   // the server would allow a turn there, and the reader is entitled to play it.
+  //
+  // `holdsScene` rather than a condition spelled out here: there are four ways
+  // a review can be holding a scene -- an absorb this browser started, one it
+  // found and is waiting out, a scoped retry, and a Discard whose DELETE has
+  // not answered yet -- and all four are `review` runs sharing one exclusion
+  // key with `turn`. Enumerating them at this call site is how three of them
+  // came to be missing. The hook owns the state, so the hook answers.
   const sceneLocked = !!activeId
-    && (activeId === streamingId
-        || (review.absorbing && (review.absorbSid ?? activeId) === activeId));
+    && (activeId === streamingId || review.holdsScene(activeId));
   const { absorb } = review;
 
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -3884,8 +3890,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               has not reached yet, then the partial lands underneath a scene
               already marked absorbed. That one does not come back: the review
               is committed against a transcript that no longer matches (#95). */}
+          {/* `!review.settling`: a Discard still on its way to the server holds
+              the scene for the play controls above, and End scene is the one
+              operation that waits it out instead of being refused by it (see
+              `endScene`). Disabling it here would make the reader click twice
+              for a wait the code already does. */}
           <button className="scene-action end" onClick={review.endScene}
-                  disabled={!activeId || review.absorbing || busy || sceneLocked || rolling}>
+                  disabled={!activeId || review.absorbing || busy || rolling
+                            || (sceneLocked && !review.settling)}>
             {review.absorbing ? "Ending…" : "End scene"}
           </button>
           {/* The way out of an absorb that is still running (#396). A review

@@ -314,15 +314,37 @@ def _phase_row(rows: list, name: str, block: dict) -> list:
             for r in rows]
 
 
+#: Phase statuses that mean the step produced nothing because it never got to
+#: run, as against running and finding nothing. `_run_audit` and
+#: `_stage_dossiers` both report a failure as a status rather than raising, so
+#: this is the only thing that tells the two apart.
+_SAID_NOTHING = frozenset({"failed", "skipped"})
+
+
 def merge_audit(review: dict, result: dict) -> dict:
     """The audit retry's fold: fresh `mechanics`, fresh sheet rows, nothing else.
 
     Only the `sheet` rows are replaced. The audit is the phase that proposes
-    them and it proposes all of them, so dropping the old ones is exact -- and
-    touching any other kind would discard prose, dossier or relationship edits
-    the reviewer has already been through.
+    them and it proposes all of them, so replacing them wholesale is exact --
+    and touching any other kind would discard prose, dossier or relationship
+    edits the reviewer has already been through.
+
+    **A retry that FAILED replaces nothing.** `_run_audit` reports a failure as
+    a status rather than raising, so a wedged call, a budget refusal or an
+    unparseable verdict all arrive here as `edits == []` with `status:
+    "failed"` -- and dropping the stored rows for that would delete every sheet
+    proposal the absorb had made and put nothing in their place, recoverable
+    only by re-running the whole absorb. That is the loss `merge_dossiers` is
+    written to prevent for its own rows, and it is the same loss here.
+
+    An audit that RAN and found nothing does replace them, and the difference
+    is the point: "nothing is wrong with the sheets" is this run's answer, and
+    the reviewer is entitled to see it.
     """
     mechanics = result.get("mechanics") or {}
+    if mechanics.get("status") in _SAID_NOTHING:
+        return {**review, "mechanics": mechanics,
+                "phases": _phase_row(review.get("phases", []), "audit", mechanics)}
     kept = [e for e in review.get("edits", []) if e.get("kind") != "sheet"]
     return {**review, "mechanics": mechanics,
             "phases": _phase_row(review.get("phases", []), "audit", mechanics),

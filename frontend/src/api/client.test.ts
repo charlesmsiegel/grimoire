@@ -1337,3 +1337,49 @@ test("a reaped run with nothing on disk still reports the failure", async () => 
     vi.useRealTimers();
   }
 });
+
+test("a failed poll is not a failed run", async () => {
+  // The conditions this feature exists for -- a backgrounded WebView, a
+  // suspended tab resuming into a dead socket -- all show up as a failed poll,
+  // and ending the wait for one reports a failure for a run that is still
+  // generating: a banner, a composer unlocked over a scene the server is still
+  // holding, and nothing to open the review when it lands.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(runResponse("landed"))
+      .mockResolvedValueOnce(jsonOk({ review: { one_line: "They met." },
+                                      generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const pending = api.absorbScene("run", "s1");
+    await vi.advanceTimersByTimeAsync(20000);
+    expect((await pending).review.one_line).toBe("They met.");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a poll that keeps failing does give up", async () => {
+  // The counterweight: riding out a transient failure must not become waiting
+  // forever on a server that is gone.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    globalThis.fetch = fetchMock;
+    const failed = api.absorbScene("run", "s1").then(
+      () => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(await failed).toBeInstanceOf(TypeError);
+  } finally {
+    vi.useRealTimers();
+  }
+});
