@@ -849,6 +849,11 @@ export type ContextDiffLine = {
  *  the text, which the diff lines carry. */
 export type PromptDiffFacts = {
   label: string; tokens: number; dropped: boolean; trimmed: number; pinned: boolean;
+  /** The packing tier the section sat in — its priority, since the packer drops
+   *  from the bottom of a tier. Compared, because a release that re-tiers a
+   *  catalog section changes what gets cut first while every other fact can
+   *  stay identical. */
+  tier: string;
 };
 /** One section, compared. `base`/`head` is null on the side that does not have
  *  it. `diff` is empty on an `unchanged` row, and ALSO on a `changed` one whose

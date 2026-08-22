@@ -37,7 +37,8 @@ export function ContextDiff({ diff, recomputing = false }:
   // to answer for these too, or it contradicts the model/budget warning printed
   // three lines earlier — a model switch can by itself explain a different
   // reply, which is the question this panel is opened to answer.
-  const metaDiffers = cutDiffers || diff.base.model !== diff.head.model
+  const metaDiffers = cutDiffers || delta !== 0
+                      || diff.base.model !== diff.head.model
                       || diff.base.budget_tokens !== diff.head.budget_tokens;
 
   return (
@@ -224,6 +225,9 @@ function flagNotes(section: PromptDiffSection): string[] {
     notes.push("Dropped by the budget packer on both sides — the model saw neither version.");
   else if (base.dropped !== head.dropped)
     notes.push(head.dropped ? DROPPED : "Kept this time; the budget packer had dropped it.");
+  if (base.tier !== head.tier)
+    notes.push(`Packing tier: ${base.tier} → ${head.tier}. The packer drops from`
+               + " the bottom of a tier, so this section's priority moved.");
   if (base.pinned !== head.pinned)
     notes.push(head.pinned ? "Pinned, so the packer left it alone." : "No longer pinned.");
   if (base.trimmed !== head.trimmed)
