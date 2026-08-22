@@ -111,7 +111,16 @@ def seed_world(name: str = "Saltmarch") -> str:
     # it -- a claim worth a file to be made against.
     image_subjects.write_subjects(root, gid, {"embed-def456": [cid]})
 
-    pcs.create_pc(root, "Mara", ["player"], "default", pcs.blank_persona("Mara"))
+    # The third localized-URL shape (`/pcs/{pid}/versions/{vid}/images/{name}`).
+    # It travels for the same reason the other two do -- the substitution is on
+    # the `/api/worlds/{wid}/` PREFIX, not on a per-kind list -- and that is
+    # exactly why it is worth one seeded persona to prove rather than to assert.
+    pid = pcs.create_pc(root, "Mara", ["player"], "default", pcs.blank_persona("Mara"))[0]
+    persona = pcs.read_persona(root, pid, "default")
+    persona["description"] = (
+        f"A tidewright.\n\n"
+        f"![](/api/worlds/{wid}/pcs/{pid}/versions/default/images/embed-pc001)\n")
+    pcs.update_version(root, pid, "default", persona)
 
     tags.add_tag(root, "Coastal")
     greetings.set_edges(root, gid, leads_to=[gid])
