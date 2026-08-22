@@ -1420,6 +1420,48 @@ test("clicking the profile avatar opens the crop picker and saves the focus", as
   await waitFor(() => expect(api.setAvatarFocus).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", "default", 80));
 });
 
+// A bulk import finishing behind an open avatar crop used to queue the tagline
+// prompt UNDER it: same backdrop, same z-index, so the crop stays painted on
+// top (later sibling) while the prompt, mounting later, took the keyboard.
+// Escape then skipped a prompt the reader never saw instead of cancelling the
+// crop in front of them (PR #400 review). The two no longer coexist.
+test("a tagline prompt queued behind the avatar crop waits for it", async () => {
+  let finishImport: (v: unknown) => void = () => {};
+  (api.importCharacterFromChub as any)
+    .mockImplementationOnce(() => new Promise((res) => { finishImport = res; }))
+    .mockResolvedValue({ character: "two", version: "default", updated: false,
+                         gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] } });
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"], avatar_focus: null }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Seraphine");
+
+  // Two URLs, so the import does not end by opening the new character's detail
+  // and pulling the crop out from under the test.
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  fireEvent.change(screen.getByLabelText("Card URLs"), { target: { value: "creator/one\ncreator/two" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+  // ...and while it is in flight, the reader opens the crop.
+  fireEvent.click(await screen.findByText("Seraphine"));
+  fireEvent.click(await screen.findByRole("button", { name: /adjust avatar crop/i }));
+  await screen.findByLabelText("Crop position");
+
+  finishImport({ character: "one", version: "default", updated: false,
+                 gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] } });
+  await screen.findByText(/added 2\/2 characters/i);
+
+  // The crop is still what the reader sees, and still what Escape answers.
+  expect(screen.getByLabelText("Crop position")).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: /set tagline/i })).toBeNull();
+  fireEvent.keyDown(window, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByLabelText("Crop position")).toBeNull());
+  // ...and only then does the queued prompt get its turn.
+  expect(await screen.findByRole("dialog", { name: /set tagline/i })).toBeInTheDocument();
+});
+
 test("stored focus is applied as object-position on detail and grid avatars", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: true,
