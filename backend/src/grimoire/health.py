@@ -65,6 +65,15 @@ class ProviderHealth:
         facade is handed connection *dicts*, and a caller that builds one by
         hand (tests, and `_fallback_connection`'s dead ends) would otherwise
         collide with every other anonymous connection in one shared slot.
+
+        What is filed describes the connection **as it was when the call ran**,
+        which is not quite the same as the connection now. Edit a key while a
+        turn is streaming on it and that turn's failure — the old key's — is
+        recorded against the new settings a moment after the route cleared the
+        verdict for them. The window is one call wide and closes on the next
+        one, and narrowing it would mean carrying a revision token through the
+        facade for a status dot; a wrong verdict for one turn is the cheaper
+        of the two.
         """
         cid = conn.get("id") or ""
         if not cid:
@@ -87,9 +96,12 @@ class ProviderHealth:
     def forget(self, cid: str) -> None:
         """Drop what is known about `cid`.
 
-        Called when a connection is deleted. Ids are slugs and are reusable —
-        deleting `endpoint` and creating another connection named "Endpoint"
-        lands on the same id — so leaving the old verdict in place would greet
-        a brand-new connection with the previous one's failure.
+        Called when a connection is deleted, and when one is edited. Both for
+        the same reason: what was recorded is about settings that are gone. Ids
+        are slugs and are reusable — deleting `endpoint` and creating another
+        connection named "Endpoint" lands on the same id — so a verdict left in
+        place would greet a brand-new connection with the previous one's
+        failure, and a reader who has just fixed a key would be told their fix
+        did not take.
         """
         self._by_id.pop(cid, None)
