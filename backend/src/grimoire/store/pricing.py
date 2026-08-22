@@ -308,4 +308,11 @@ def estimate(entry: dict | None, *, prompt_tokens: int | None,
         total += taken * rate
     total += prompt * entry[PROMPT]
     total += completion * entry[COMPLETION]
-    return total / 1000.0
+    total /= 1000.0
+    # A rate this module accepted as finite can still overflow once multiplied
+    # by a real token count -- `1e308` times a few thousand is `inf`. That value
+    # would reach every rollup response and `json.dumps` cannot write it, so one
+    # absurd rate would 500 every cost endpoint until the file was edited by
+    # hand. An estimate that overflowed is not an estimate: None, like every
+    # other answer this function cannot compute.
+    return total if total == total and total != float("inf") else None

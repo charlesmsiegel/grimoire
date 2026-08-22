@@ -1310,3 +1310,62 @@ def test_a_scene_start_that_is_not_a_string_falls_back_to_the_default_window(hom
     out = usage.scene_usage("saltmarch", "001-arrival", since=42)
     assert out["since"] == "2026-07-16", "the default 30-day window"
     assert out["clamped"] is False
+
+
+def test_a_hop_does_not_carry_a_row_through_an_earlier_tenancy_of_the_next_id(home, monkeypatch):
+    """`b -> c` happens, and only THEN is `a` renamed onto the freed `b`.
+
+    A row written under `a` before either event follows `a -> b` correctly and
+    must then stop: `b -> c` belongs to a different scene's tenancy of that id
+    and happened before this row's scene ever held it. Compared against the
+    row's original stamp it looks applicable, and the row lands on `c`.
+    """
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    usage.record(task="chat", campaign="saltmarch", scene="a", cost_usd=0.10,
+                 ts="2026-08-14T09:00:00Z")
+    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T10:00:00Z")
+    usage.repoint_scenes("saltmarch", {"b": "c"})       # somebody else vacates `b`
+    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T11:00:00Z")
+    usage.repoint_scenes("saltmarch", {"a": "b"})       # `a` takes the freed id
+
+    spend = {x["scene"]: x["cost_usd"]
+             for x in usage.campaign_scenes("saltmarch")["scenes"]}
+    assert spend == {"b": pytest.approx(0.10)}, "the walk stops where the scene is"
+    assert usage.scene_usage("saltmarch", "b", since="2026-08-01")["totals"]["cost_usd"] \
+        == pytest.approx(0.10)
+
+
+def test_a_replayed_answer_counts_as_a_reroll(home, monkeypatch):
+    """A retcon replays the turns after a post; the post itself stands, so the
+    replayed generation re-answers text a previous take already answered — and
+    that earlier take was cut. Leaving it out hid the discarded generation the
+    count exists to show."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for task in ("chat", "replay"):
+        _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
+              cost_usd=0.01, post=2)
+
+    bucket, = usage.scene_usage("saltmarch", "001-arrival",
+                                since="2026-08-01")["by_post"]
+    assert bucket["calls"] == 2
+    assert bucket["rerolls"] == 1
+
+
+def test_a_rename_trail_that_keeps_swapping_two_ids_is_bounded(home, monkeypatch):
+    """The `_MAX_RENAMES` bound, reached. A pair of ids swapped back and forth
+    with ever-later stamps is a walk that never runs out of applicable hops —
+    one typo's worth of hand-editing away from spinning inside a report."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    path = home / "usage" / "2026-08.jsonl"
+    path.parent.mkdir(parents=True)
+    rows = [{"ts": "2026-08-14T00:00:00Z", "kind": "llm", "task": "chat",
+             "campaign": "c", "scene": "a", "cost_usd": 0.25}]
+    for n in range(usage._MAX_RENAMES + 10):
+        was, now = ("a", "b") if n % 2 == 0 else ("b", "a")
+        rows.append({"ts": f"2026-08-14T{n // 60 + 1:02d}:{n % 60:02d}:00Z",
+                     "kind": "rename", "campaign": "c", "scene": now, "was": was})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    out = usage.campaign_scenes("c")           # must return rather than spin
+    assert out["totals"]["cost_usd"] == pytest.approx(0.25)
+    assert [b["scene"] for b in out["scenes"]] in (["a"], ["b"])

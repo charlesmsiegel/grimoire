@@ -256,16 +256,32 @@ export function CostsView() {
 
         {report?.truncated && (
           <p className="ledger-lead">
-            Showing the {report.listed} most expensive scenes. The all-time total
-            beside them covers every one.
+            Showing the {report.listed} scenes that came first by{" "}
+            {SORTS.find((s) => s.key === report.order)?.label.toLowerCase()
+              ?? "spend"}. The all-time total beside them covers every one.
           </p>
         )}
 
-        {totals !== undefined && totals.calls > 0 && (
+        {/* Gated on a call having actually been BILLED, not merely made. With
+            only subscription, modelled or unpriced calls under it `cost_usd` is
+            0.0, and this sentence would say providers reported a charge of
+            $0.00 — asserting a reported zero where nobody reported anything.
+            That is the claim this whole feature exists to avoid, made in prose
+            rather than in a figure. */}
+        {!failed && totals !== undefined
+          && totals.priced_calls > totals.subscription_calls && (
           <p className="ledger-lead">
             {money(totals.cost_usd)} is what providers said they charged. Anything
             billed against a subscription, and anything a provider priced at
             nothing, is counted separately — an estimate is never added to a bill.
+          </p>
+        )}
+        {!failed && totals !== undefined && totals.calls > 0
+          && totals.priced_calls <= totals.subscription_calls && (
+          <p className="ledger-lead">
+            No provider reported a charge for this campaign — everything here was
+            billed to a subscription, estimated from your own rates, or came back
+            with no price at all. None of it is money anybody was invoiced for.
           </p>
         )}
       </div>

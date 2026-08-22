@@ -127,6 +127,31 @@ test("calls that belong to no scene are still in the list", async () => {
   expect(await screen.findByText("Outside any scene")).toBeInTheDocument();
 });
 
+test("a campaign nobody billed does not claim a reported charge of $0.00", async () => {
+  // `cost_usd` is 0.0 when everything was subscription-billed, and the closing
+  // line would then say providers reported a charge of $0.00 — a reported zero
+  // where nobody reported anything.
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT,
+    totals: { ...ZERO, calls: 2, priced_calls: 2, subscription_calls: 2,
+              estimated_usd: 0.80 },
+    scenes: REPORT.scenes.slice(0, 1),
+  });
+  renderCosts();
+
+  expect(await screen.findByText(/No provider reported a charge for this campaign/))
+    .toBeInTheDocument();
+  expect(screen.queryByText(/is what providers said they charged/)).toBeNull();
+});
+
+test("the truncation note names the order the rows were cut by", async () => {
+  (api.getCampaignSceneCosts as any).mockResolvedValue(
+    { ...REPORT, order: "recent", truncated: true, listed: 2 });
+  renderCosts();
+
+  expect(await screen.findByText(/came first by most recent/)).toBeInTheDocument();
+});
+
 test("a scene nobody priced does not total to $0.00", async () => {
   (api.getCampaignSceneCosts as any).mockResolvedValue({
     ...REPORT,

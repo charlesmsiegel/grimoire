@@ -750,7 +750,13 @@ SCENE_TURNS = 200
 #: of ONE answer, and counting it as a reroll would tell a player they had
 #: rerolled a turn they never touched. Named here rather than in the view
 #: because it is a fact about the task labels this module writes.
-REROLL_TASKS = ("retry", "regenerate")
+#:
+#: `replay` IS one. A retcon replays the turns after a post -- the post itself
+#: stands, so the replayed generation answers the same text a previous one
+#: already answered, and the earlier take was cut. That is what a reroll is, and
+#: leaving it out hid exactly the discarded generation this count exists to
+#: show.
+REROLL_TASKS = ("retry", "regenerate", "replay")
 
 
 def _valid_day(text: object) -> str:
@@ -891,21 +897,31 @@ def _scene_now(scene: object, ts: str, trail: dict[str, list[tuple[str, str]]]) 
     between T1 and T2", which is exactly what a recycled id produces -- so the
     question is now asked per row, where it has a single right answer.
 
-    The hop taken is the first at or after the row's own stamp: a rename only
-    carries the rows written before it, and a row stamped after every hop off
-    an id belongs to whatever holds that id now, which is the id itself.
+    The hop taken is the first at or after the stamp the walk currently holds:
+    a rename only carries the rows written before it, and a row stamped after
+    every hop off an id belongs to whatever holds that id now, which is the id
+    itself. That stamp starts as the row's own and moves forward with each hop
+    -- see the loop for why comparing every hop against the row's original
+    stamp follows renames from another scene's tenancy of the same id.
 
     Bounded by `_MAX_RENAMES`: this file is hand-editable and ``a -> b -> a`` is
     one typo away from a loop inside a report.
     """
     if not isinstance(scene, str) or not scene:
         return NO_SCENE
-    cursor, seen = scene, 0
+    cursor, at, seen = scene, ts, 0
     while seen < _MAX_RENAMES:
-        hop = next(((at, nxt) for at, nxt in trail.get(cursor, ()) if ts <= at), None)
+        hop = next(((when, nxt) for when, nxt in trail.get(cursor, ()) if at <= when), None)
         if hop is None:
             return cursor
-        cursor = hop[1]
+        # The clock ADVANCES to the hop just taken, and this is the subtle half.
+        # An id can be renamed away from and later handed to a different scene,
+        # so `b`'s own hops include ones that happened BEFORE this row's scene
+        # ever became `b`. Comparing them against the row's original stamp
+        # follows a rename belonging to somebody else's tenancy of that id --
+        # `b -> c` at T1 then `a -> b` at T2 sent a row written before T1 all
+        # the way to `c`, when it should stop at `b`.
+        at, cursor = hop
         seen += 1
     return cursor
 

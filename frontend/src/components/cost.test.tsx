@@ -63,9 +63,17 @@ test("a response missing a money column renders nothing rather than NaN", () => 
 });
 
 test("a turn's estimate is shown in place of an absent price, marked", () => {
-  expect(turnPrice({ cost_usd: null, modelled_usd: 0.01 })).toBe("≈ $0.01");
-  expect(turnPrice({ cost_usd: null, modelled_usd: null })).toBe("unpriced");
-  expect(turnPrice({ cost_usd: 0.02, modelled_usd: null })).toBe("$0.02");
+  const turn = { cost_usd: null, modelled_usd: null, cost_basis: "" };
+  expect(turnPrice({ ...turn, modelled_usd: 0.01 })).toBe("≈ $0.01");
+  expect(turnPrice(turn)).toBe("unpriced");
+  expect(turnPrice({ ...turn, cost_usd: 0.02, cost_basis: "billed" })).toBe("$0.02");
+});
+
+test("a subscription turn is marked in the collapsed row, not just when opened", () => {
+  // Its `cost_usd` is what it WOULD have cost. Rendered bare in the turn list
+  // — the surface a reader scans — that is non-spend presented as spend.
+  expect(turnPrice({ cost_usd: 0.5, modelled_usd: null, cost_basis: "equivalent" }))
+    .toBe("≈ $0.50");
 });
 
 test("a date-only ledger bound is not shifted a day by a timezone", () => {
