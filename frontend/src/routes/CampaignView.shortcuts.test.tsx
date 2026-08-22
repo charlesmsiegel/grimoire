@@ -44,9 +44,13 @@ test("the send chord reaches the turn from outside the composer", async () => {
   // clicked a dossier chip and still means to send what they wrote.
   screen.getByRole("button", { name: /\+ new scene/i }).focus();
   press("Enter", { metaKey: true });
+  // The trailing `false` is `director` (#83), and it is asserted rather than
+  // wildcarded: the chord sends what the composer holds as a PLAYER POST, and
+  // a chord that quietly sent it as a director note instead would be a
+  // different feature passing this test.
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
     "run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal),
-    expect.any(String), expect.any(Function)));
+    expect.any(String), expect.any(Function), false));
 });
 
 test("the send chord sends once, not once per listener, from inside the composer", async () => {
