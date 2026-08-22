@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import grimoire.store as store
 from grimoire import routes
+from tests import review_runs
 from tests.llm_fakes import FakeOpenRouterComplete
 
 STORED = """---
@@ -221,8 +222,15 @@ def test_an_imported_scene_absorbs_like_a_played_one(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "They met on the quay.", "summary": "Mara was found.",'
         ' "keywords": ["quay"], "timeline_events": []}')
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
-    assert r.status_code == 200 and r.json()["one_line"] == "They met on the quay."
+    # 202 and a run to poll (#396): the absorb outlives the request that asked
+    # for it, and the review it produces is read back off the store. Nothing
+    # about that is special-cased for an import either.
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert started.status_code == 202, started.json()
+    review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
+
+    pending = client.get(f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()
+    assert pending["review"]["one_line"] == "They met on the quay."
 
 
 def test_an_imported_scene_can_be_played_on(client):
