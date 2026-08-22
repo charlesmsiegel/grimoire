@@ -450,3 +450,49 @@ def test_a_cancel_after_the_producer_started_leaves_teardown_to_the_producer(
 
 def _sse_frame() -> str:
     return 'data: {"done": true}\n\n'
+
+
+def test_the_terminal_sink_is_told_what_kind_of_work_landed(app_with_lifespan):
+    """The completion notification's wording turns on this.
+
+    A `turn` produces a reply and a `review` produces an end-of-scene form, so
+    a shell told only "landed" announces "New Post" for an absorb -- sending
+    the reader into the scene looking for narration that was never generated.
+    Untested until #396 added a second notifying class, at which point the
+    signature stopped being a formality.
+    """
+    app = app_with_lifespan
+    seen = []
+    app.state.on_run_terminal = lambda *args: seen.append(args)
+
+    async def done():
+        return None
+
+    for cls, kind in (("turn", "chat"), ("review", "absorb")):
+        run, _ = app.state.runs.start_or_existing(
+            SCENE, cls, kind, None, "identity-1", LABELS)
+        runner.start(app, run, done)
+        _wait_terminal(app, run.id)
+
+    assert [(a[1], a[2]) for a in seen] == [("landed", "turn"), ("landed", "review")]
+    # ...and the rest of what a notification needs to be worth tapping, which
+    # the class was inserted in the middle of.
+    assert seen[0][3:] == ("Saltmarch", "Mara", "saltmarch", "identity-1")
+
+
+def test_a_failing_terminal_sink_does_not_fail_the_run(app_with_lifespan):
+    """A notification is the least important thing a terminal run does: an OS
+    that refuses one must not flip a successfully persisted run to `failed`."""
+    app = app_with_lifespan
+
+    def refuse(*_args):
+        raise RuntimeError("no notifications here")
+
+    app.state.on_run_terminal = refuse
+
+    async def done():
+        return None
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "review", "absorb", None, "i", LABELS)
+    runner.start(app, run, done)
+    assert _wait_terminal(app, run.id).state == "landed"

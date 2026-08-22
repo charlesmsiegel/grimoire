@@ -114,7 +114,9 @@ test("re-absorbing a scene asks for confirmation, then retries with force", asyn
   await waitFor(() => expect(api.absorbScene).toHaveBeenCalledTimes(2));
   // the FIRST attempt must be unforced -- otherwise the guard is bypassed outright
   expect((api.absorbScene as any).mock.calls[0][2]).toBeFalsy();
-  expect((api.absorbScene as any).mock.calls[1]).toEqual(["run", "s1", true]);
+  // The fourth argument is the generation callback the panel uses to offer
+  // Stop while the absorb runs; what this test is about is `force`.
+  expect((api.absorbScene as any).mock.calls[1].slice(0, 3)).toEqual(["run", "s1", true]);
   expect(confirm).toHaveBeenCalled();
   expect(await screen.findByLabelText("Scene one-line")).toHaveValue("Again.");
   confirm.mockRestore();
@@ -2598,6 +2600,41 @@ test("the scene being absorbed is locked from the moment End scene is pressed", 
   await openScene(/Newer/);
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
 
-  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledWith("run", "s2"));
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledWith(
+    "run", "s2", false, expect.any(Function)));
   expect(screen.getByRole("button", { name: "Rename scene" })).toBeDisabled();
+});
+
+test("Stop ends an absorb that is holding the scene, before there is a review", async () => {
+  // The escape hatch a detached review needs and a synchronous one did not: a
+  // review holds the scene's exclusion key for as long as it runs, and
+  // `absorb_budget = 0` means nothing bounds that -- so without this a wedged
+  // End scene locks the scene against play until the process restarts.
+  withScene();
+  let never: (v: unknown) => void = () => {};
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      onStarted("gen-live");
+      return new Promise((r) => { never = r; });
+    });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-live"));
+  // The scene is playable again the moment the Stop answers -- the DELETE waits
+  // for the run it flagged, so "stopped" really means stopped.
+  expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Rename scene" })).toBeEnabled();
+
+  // ...and the absorb answering afterwards raises no banner: being refused is
+  // the answer the reader asked for.
+  await act(async () => {
+    never(reviewResult(STORED_REVIEW, "gen-live"));
+    await Promise.resolve();
+  });
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
 });

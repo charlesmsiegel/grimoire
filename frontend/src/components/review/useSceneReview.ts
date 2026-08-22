@@ -84,6 +84,13 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // What Discard and a replacing absorb have to name, readable after an await.
   const generationRef = useRef<string | null>(null);
   useEffect(() => { generationRef.current = generation; }, [generation]);
+  // A Stop the reader pressed while the absorb was still running. The request
+  // it stops is not this one's to reject -- it will come back `review_stale` or
+  // `review_cancelled`, both of which are the answer the reader ASKED for, and
+  // reporting either through the banner would be telling them their own Stop
+  // failed. Bumped rather than a boolean, so a Stop belongs to one absorb: a
+  // flag would still be set when the next End scene answered.
+  const absorbStopRef = useRef(0);
   // …and which retry, within one review. `openReviewRef` cannot separate two
   // retries of the SAME review: both capture the same token, so both pass that
   // check whatever order they answer in, and a first request that returns
@@ -323,6 +330,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // unbounded budget is exactly when the reader needs End scene, which is the
     // same reason Cancel stays live during a retry.
     releaseRetries();
+    const stopGen = ++absorbStopRef.current;
     setAbsorbing(true);
     // The scene being absorbed, recorded BEFORE the request rather than when it
     // answers. `absorbSid` is what scopes the scene lock, and it can be holding
@@ -341,16 +349,20 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // and it would cost something real: the re-absorb below asks for
       // confirmation, and a reader who declines would have lost the review
       // they were looking at to a question they answered "no" to.
+      // The generation, minutes before the review. It is what `stopAbsorb`
+      // names, and without it a reader watching "Ending…" has no way to stop a
+      // run that is holding their scene against play.
+      const hold = (g: string) => { if (absorbStopRef.current === stopGen) setGeneration(g); };
       let a;
       try {
-        a = await api.absorbScene(cid, activeId);
+        a = await api.absorbScene(cid, activeId, false, hold);
       } catch (err: any) {
         if (err?.kind !== "already_absorbed") throw err;
         if (!window.confirm(
           "This scene has already been absorbed. Absorbing again re-proposes every " +
           "change from scratch, so appended lore and plot beats can end up duplicated. " +
           "Absorb it again?")) return;
-        a = await api.absorbScene(cid, activeId, true);
+        a = await api.absorbScene(cid, activeId, true, hold);
       }
       // The review belongs to the campaign that asked for it. An absorb is the
       // slowest request in the app -- several LLM calls -- so there is ample
@@ -360,11 +372,21 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // where Save posts them to B: scene ids repeat across campaigns and a
       // fresh commit token matches, so nothing downstream would refuse them.
       if (campaignRef.current !== cid) return;
+      // A Stop that landed while this was in flight, on the SUCCESS path as
+      // well as the failure one. The DELETE it sent removes the record, so a
+      // panel opened here would be showing a review that is not stored -- and
+      // saving it would go through, undoing the Stop the reader pressed.
+      if (absorbStopRef.current !== stopGen) return;
       openReview(a.review, activeId, a.generation);
     } catch (err: any) {
       // Same guard on the failure path: A's banner over B is the same category
       // of wrong answer, just a cheaper one.
       if (campaignRef.current !== cid) return;
+      // ...and a Stop the reader pressed is not a failure to report. The
+      // request comes back refused either way -- the record it was going to
+      // write is gone -- and a banner there tells them their own Stop broke
+      // something.
+      if (absorbStopRef.current !== stopGen) return;
       // `false`, for the scoped retries' reason: the banner's Retry runs the
       // CHAT retry, so it would answer a failed absorb by generating one more
       // reply into the scene the user was trying to finish. End scene is its
@@ -443,6 +465,31 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       setSaveError(err.detail ?? String(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Stop an absorb that is still running, before there is a review to discard.
+   *
+   *  The escape hatch a detached review needs and a synchronous one did not: a
+   *  `review` holds the scene's exclusion key for as long as it runs, so an
+   *  absorb on an unbounded budget can lock a scene against play indefinitely
+   *  -- and until it lands there is no panel, and so no Cancel. The same
+   *  reasoning the Cancel button carries for a wedged retry, one step earlier.
+   */
+  async function stopAbsorb() {
+    const sid = absorbSid ?? activeId;
+    const gen = generationRef.current;
+    absorbStopRef.current++;          // this absorb's answer is no longer wanted
+    setAbsorbing(false);
+    setGeneration(null);
+    if (!sid || !gen) return;
+    try {
+      await api.discardReview(cid, sid, gen);
+    } catch (err: unknown) {
+      // Reported, unlike the panel's Cancel: there the record is refused at
+      // save anyway, but here the reader is being told a scene is free that
+      // may still be held -- and the next thing they do is try to play in it.
+      if (campaignRef.current === cid) fail(err, false);
     }
   }
 
@@ -802,7 +849,8 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // it started. The reader does not care whether this browser asked for it.
     absorbing: absorbing || adopting,
     saving, reviewBusy, retryingAudit, retryingDossiers,
-    endScene, saveAbsorb, discard, decide, editRow, editPayload, resolveConflict,
+    endScene, stopAbsorb, saveAbsorb, discard, decide, editRow, editPayload,
+    resolveConflict,
     approveAllCited, retryAudit, retryDossiers, sceneRenamed,
     budgetCutPhases, approvedCount, rejectedCount, undecidedCount,
     uncitedRows, lowRows, groupCounts, shownRows,

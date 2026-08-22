@@ -1648,9 +1648,17 @@ export const api = {
   // back off the store once the run lands. The wait is the client's now, and
   // it is a poll rather than a held connection precisely because the client
   // may not be there for the whole of it.
-  absorbScene: async (cid: string, sid: string, force = false) => {
+  //
+  // `onStarted` is handed the review's generation the moment the POST answers,
+  // minutes before the review itself. That is the only window in which the
+  // caller can offer a way OUT: a `review` holds the scene against play for as
+  // long as it runs, and `absorb_budget = 0` means nothing bounds that -- so a
+  // panel with no generation to name has no way to stop what it started.
+  absorbScene: async (cid: string, sid: string, force = false,
+                      onStarted?: (generation: string) => void) => {
     const started = await request<{ run: RunHandle; generation: string }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`);
+    onStarted?.(started.generation);
     try {
       await awaitRun(cid, sid, started.run);
     } catch (err) {
