@@ -452,3 +452,61 @@ def test_a_hand_edited_card_is_derived_from_rather_than_500ing(client):
     assert fake.calls == 1
     assert _tagline(client, wid, cid) == "A courier with cold hands."
     assert frames[-1]["summary"] == {"total": 1, "written": 1, "skipped": 0, "stopped": False}
+
+
+def test_a_default_version_repointed_during_the_call_is_not_described_by_the_old_card(
+        client, monkeypatch):
+    """The one case the card comparison cannot see on its own: re-pointing the
+    default leaves the old version file untouched, so its bytes still match
+    while the character has moved. A tagline is character-wide, so the old
+    version's sentence would land on a character whose card now says something
+    else — and no later run would fix it, because it is no longer blank."""
+    wid = _world(client)
+    cid = _character(client, wid, "Mara")
+    root = store.worlds.world_root(wid)
+    later = client.post(f"/api/worlds/{wid}/characters/{cid}/versions",
+                        json={"name": "later",
+                              "card": {"data": {"name": "Mara",
+                                                "description": "a locksmith now"}}}).json()["version"]
+    _answers(client, ["A courier with cold hands."])
+    real_parse = store.taglines.parse_output
+
+    def repointing_parse(text):
+        # Through the store, not a nested request: the run holds the test
+        # client's only worker, so an HTTP call from in here never returns.
+        store.characters.set_default_version(root, cid, later)
+        return real_parse(text)
+
+    monkeypatch.setattr(store.taglines, "parse_output", repointing_parse)
+
+    _, frames = _derive(client, wid)
+
+    assert _tagline(client, wid, cid) == ""
+    assert frames[1]["skipped"] == "changed"
+
+
+def test_a_storage_move_stops_the_run_rather_than_paying_into_the_old_library(
+        client, monkeypatch, tmp_path):
+    """`PUT /config/data-dir` is refused while a detached *run* is live; this is
+    deliberately not one, so nothing stops the root moving mid-derive. The loop
+    notices instead — otherwise every remaining character is a paid call writing
+    into a library the app has already left, billed against the new one."""
+    wid = _world(client)
+    _character(client, wid, "Mara")
+    _character(client, wid, "Winifred")
+    fake = _answers(client, ["A courier with cold hands.", "never asked"])
+    real_root = store.worlds.world_root
+    moved = tmp_path / "elsewhere"
+
+    def moving_root(w):
+        # The first character's turn sees the real root; the move lands during
+        # its call, so the second character's check is the one that trips.
+        return real_root(w) if not fake.calls else moved / "worlds" / w
+
+    monkeypatch.setattr(store.worlds, "world_root", moving_root)
+
+    _, frames = _derive(client, wid)
+
+    assert fake.calls == 1, "the run kept spending after the store moved"
+    assert frames[-2]["error"]["kind"] == "store_moved"
+    assert frames[-1]["summary"] == {"total": 2, "written": 1, "skipped": 0, "stopped": True}
