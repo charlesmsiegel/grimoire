@@ -2892,3 +2892,121 @@ test("a Discard settling in one campaign does not lock the same-id scene in anot
 
   expect(await screen.findByRole("button", { name: "Rename scene" })).toBeEnabled();
 });
+
+test("Cancel is not undone by the absorb whose review it threw away", async () => {
+  // The adoption pass and End scene can both be waiting on the SAME run — the
+  // reader left the scene and came back mid-absorb — and the adoption pass can
+  // win. Cancel then closes a panel End scene is still polling for, and its
+  // answer arrives to a page with no review open: unguarded it installs the
+  // one the reader just discarded, back on screen and savable, because the
+  // record the DELETE removed has no watermark left to refuse it with.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+  let land: (v: unknown) => void = () => {};
+  let started = false;
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      started = true;
+      onStarted("gen-live");
+      return new Promise((r) => { land = r; });
+    });
+  (api.pendingReview as any).mockImplementation(async (_c: string, sid: string) =>
+    (started && sid === "s1"
+      ? { review: STORED_REVIEW, generation: "gen-live", stale: null }
+      : { review: null, generation: null, stale: null }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalled());
+  await openScene(/Newer/);
+  await openScene(/Old/);
+  await screen.findByDisplayValue("A stored summary.");
+
+  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-live"));
+
+  await act(async () => {
+    land(reviewResult(STORED_REVIEW, "gen-live"));
+    await Promise.resolve();
+  });
+
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+  // ...and the latches End scene set are not left behind with it.
+  expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeInTheDocument();
+});
+
+test("a Cancel the server refused is reported, not swallowed", async () => {
+  // The panel closes either way — the reviewer asked for it — but a DELETE
+  // that failed leaves the record on disk with a watermark that still matches,
+  // because nothing was played while they were reading. The next mount adopts
+  // and re-opens the review they dismissed, and the run it was going to stop
+  // goes on holding the scene against play. The next thing they do is try to
+  // play in a scene they were told was free.
+  withScene();
+  (api.discardReview as any).mockRejectedValue(new Error("the review would not go"));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
+
+  expect(await screen.findByText(/the review would not go/)).toBeInTheDocument();
+});
+
+test("a Discard settling elsewhere does not reopen End scene inside the abort window", async () => {
+  // `sceneLocked` has two halves and End scene waives only one of them. A
+  // Discard on THIS scene is a review hold, and End scene waits it out. The
+  // shielded-abort window (#95) is not: absorb inside it and the chronicle
+  // summarises a transcript the partial has not reached yet, then the partial
+  // lands underneath a scene already marked absorbed. Answered campaign-wide,
+  // a Discard settling for scene A opened that door on scene B.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, total: 0, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      onStarted("gen-A");
+      return new Promise(() => { /* still absorbing when the Stop lands */ });
+    });
+  (api.discardReview as any).mockReturnValue(
+    new Promise(() => { /* the DELETE never answers */ }));
+  // A turn that streams and then hangs until its signal aborts, rejecting the
+  // way fetch does -- the shape a real in-flight turn has.
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any,
+           _r: unknown, signal: AbortSignal) => {
+      onEvent({ delta: "The tide " });
+      await new Promise<void>((_res, reject) => {
+        signal.addEventListener("abort", () => {
+          const err = new Error("The operation was aborted.");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+  renderCampaign();
+  await screen.findByText("hi");
+
+  // Scene 1 gets an absorb and a Stop, so its Discard is settling...
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-A"));
+
+  // ...and scene 2 is left in the window where the socket is gone but the
+  // backend's shielded write has not landed.
+  await openScene(/Newer/);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send \u25b8/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop \u25a0/i }));
+  await screen.findByRole("button", { name: /continue \u25b6/i });   // busy is clear
+
+  expect(screen.getByRole("button", { name: /^End scene$/ })).toBeDisabled();
+});

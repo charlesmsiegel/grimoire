@@ -3890,14 +3890,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               has not reached yet, then the partial lands underneath a scene
               already marked absorbed. That one does not come back: the review
               is committed against a transcript that no longer matches (#95). */}
-          {/* `!review.settling`: a Discard still on its way to the server holds
-              the scene for the play controls above, and End scene is the one
+          {/* `settlesScene`: a Discard still on its way to the server holds the
+              scene for the play controls above, and End scene is the one
               operation that waits it out instead of being refused by it (see
               `endScene`). Disabling it here would make the reader click twice
-              for a wait the code already does. */}
+              for a wait the code already does.
+              `streamingId` is spelled out again rather than left to
+              `sceneLocked`, because that waiver must not reach it: the two
+              halves of `sceneLocked` are a review holding the scene, which a
+              Discard on THIS scene is and which End scene waits out, and the
+              shielded-abort window above, which it is not and which End scene
+              must never be pressed inside. Folded together, a Discard settling
+              here would open the #95 door. */}
           <button className="scene-action end" onClick={review.endScene}
                   disabled={!activeId || review.absorbing || busy || rolling
-                            || (sceneLocked && !review.settling)}>
+                            || activeId === streamingId
+                            || (sceneLocked && !review.settlesScene(activeId))}>
             {review.absorbing ? "Ending…" : "End scene"}
           </button>
           {/* The way out of an absorb that is still running (#396). A review
