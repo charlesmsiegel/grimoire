@@ -405,8 +405,9 @@ export type Greeting = {
   requires_tags: string[];
   predecessor_join: "all" | "any";
   pcless?: boolean;
-  /** A location id, "" for none (#218). Greetings written before the key
-   *  existed simply lack it, which reads back as "". */
+  /** A location id, "" for none (#218). Always on the wire — a greeting
+   *  written before the key existed lacks it in its FRONTMATTER, and the store
+   *  reads that back as "". Optional here for the same reason `pcless` is. */
   location?: string;
   mark?: GreetingMark;   // campaign lists carry it
 };
