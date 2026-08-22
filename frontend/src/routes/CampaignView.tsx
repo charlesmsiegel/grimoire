@@ -950,7 +950,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // outside-click listener and an Escape handler. It is a native <select> now,
   // which the browser opens, closes, dismisses and keyboard-drives for free --
   // so all three are gone rather than reimplemented.
-  const [directorNote, setDirectorNote] = useState<string | null>(null);
+  // The transient 🎬 note, and the scene it is steering. Codex review (P2): a
+  // bare string plus the GLOBAL `busy` rendered one scene's note inside
+  // another's transcript, because a turn deliberately survives navigation --
+  // the reader moves, the run does not. Campaign as well as scene: ids are
+  // campaign-local, so `s1` names a different scene in every campaign and a
+  // scene-only guard answers true for the wrong one.
+  const [directorNote, setDirectorNote] =
+    useState<{ cid: string; sid: string; text: string } | null>(null);
 
   // #83: the composer's two modes. Speak writes a player post; Direct writes a
   // director note — sent to steer one generation, never stored. Both have
@@ -2684,19 +2691,32 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // mode, or the only kind of turn an offscreen scene has — or, in any scene
     // and either mode, an empty send meaning "next NPC round".
     //
-    // What the player typed is NOT handed back if this turn dies, which is the
-    // one thing Direct mode gives up against Speak. The recovery machinery
-    // decides by asking the server whether this attempt's post is still in the
-    // transcript, and an ephemeral turn stores no post whether it succeeded or
-    // failed — so wiring it up here would hand the note back after it worked,
-    // which is worse than losing one that did not.
+    // The note is recovered in-session but NOT made durable, and that asymmetry
+    // is the whole of it (Codex review, P1).
+    //
+    // `onPromptUnstored` is safe here: it fires on what the STREAM said --
+    // refused, unreachable, or interrupted over a transcript that did not grow
+    // -- and for an ephemeral turn "did not grow" means no reply landed, with
+    // no post of its own to confuse the measurement. A refusal is the case that
+    // matters: nothing generated, nothing to duplicate, and the composer was
+    // cleared on send, so without this the player's words exist nowhere.
+    //
+    // `recoverableText` is deliberately NOT passed, and that is not timidity.
+    // The durable half settles by asking the server `attemptState().retained`,
+    // and an ephemeral turn writes no attempt record at all -- so it answers
+    // false for a note that WORKED exactly as loudly as for one that died. Arm
+    // it and every successful director turn hands its note back afterwards.
+    // In-session recovery can tell those apart; the durable one cannot.
     if (directing || !content) {
-      if (directing) setDirectorNote(content || null);
+      if (directing) setDirectorNote(content ? { cid, sid: id, text: content } : null);
       try {
         const landed = await runStream(id,
           (onEvent, signal, attempt, onIndex) =>
             api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
-                     signal, attempt, onIndex, directing));
+                     signal, attempt, onIndex, directing),
+          // An empty send has nothing to give back — it is the "next NPC round"
+          // fast path, not words anyone typed.
+          content ? () => recoverPrompt(id, content) : undefined);
         if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote(null);
@@ -4076,11 +4096,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 ))}
               </div>
             ))}
-            {directorNote && busy && (
+            {directorNote && busy
+              && directorNote.cid === cid && directorNote.sid === activeId && (
               <div className="run director-note">
                 <div className="msg assistant">
                   <span className="msg-gutter" />
-                  <div className="msg-body">🎬 {directorNote}</div>
+                  <div className="msg-body">🎬 {directorNote.text}</div>
                 </div>
               </div>
             )}

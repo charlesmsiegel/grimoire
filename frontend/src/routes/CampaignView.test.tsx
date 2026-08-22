@@ -4704,6 +4704,54 @@ test("a note carried out of an offscreen scene is still a note", async () => {
     .toHaveValue("the storm intensifies");
 });
 
+test("a refused Direct send hands the note back", async () => {
+  // Codex P1. The composer is cleared on send, and a director note reaches no
+  // transcript by design — so a send the server REFUSES (no connection
+  // configured, say) used to destroy what the player wrote with no copy
+  // anywhere. A refusal is the unambiguous case: nothing generated, nothing to
+  // duplicate, and the words are the only thing at stake.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockRejectedValue(
+    new ApiError(409, "OpenRouter key not set", "missing_key"));
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  const box = screen.getByPlaceholderText(/direct the scene/i);
+  fireEvent.change(box, { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
+  // and it comes back as a NOTE: the mode is sticky, so the recovered words
+  // are staged as what they were written as
+  expect(screen.getByRole("button", { name: "Direct" }))
+    .toHaveAttribute("aria-pressed", "true");
+});
+
+test("a running scene's director note does not show in another scene", async () => {
+  // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
+  // left running in one scene rendered its note inside whatever transcript the
+  // reader moved to — and navigation during a detached run is deliberately
+  // allowed. Scoped to the campaign as well as the scene: ids are
+  // campaign-local, so `s1` names a different scene in every campaign.
+  (api.listScenes as any).mockResolvedValue(TWO_SCENES);
+  transcriptsPerScene();
+  // Held open, then RELEASED at the end. A turn left hanging keeps `busy` true
+  // past the end of the test and the next one inherits a locked composer.
+  let release: () => void = () => {};
+  (api.chat as any).mockReturnValue(new Promise<void>((r) => { release = () => r(); }));
+  renderCampaign();
+  await screen.findByText("transcript of s1");
+  fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await screen.findByText(/🎬 the storm intensifies/);
+
+  await openScene(/The Saltmarch Gate/);
+
+  await screen.findByText("transcript of s2");
+  expect(screen.queryByText(/🎬 the storm intensifies/)).toBeNull();
+  release();
+});
+
 test("the mode travels with the text it labels across a scene switch", async () => {
   // The composer is one shared box whose contents deliberately survive a scene
   // change. A mode that reset there would send words written as direction as
