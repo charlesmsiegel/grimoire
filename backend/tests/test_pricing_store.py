@@ -41,28 +41,54 @@ def test_a_table_round_trips_through_write_and_read(home):
 
 def test_a_rate_typed_as_a_string_is_still_a_rate(home):
     """`pricing.json` is hand-editable, and `"0.002"` is what a hand types."""
-    _write(home, {"realm/opus": {"prompt_usd_per_1k": "0.002"}})
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": "0.002",
+                                 "completion_usd_per_1k": 1}})
 
     assert pricing.read_pricing()["realm/opus"]["prompt_usd_per_1k"] == 0.002
 
 
 @pytest.mark.parametrize("bad", [-1, "twelve", float("inf"), float("nan"), None, True])
-def test_an_unusable_rate_is_dropped_rather_than_read_as_zero(home, bad):
+def test_an_unusable_cache_rate_is_dropped_rather_than_read_as_zero(home, bad):
+    """The cache pair is the optional half, so a bad one costs itself and
+    leaves the entry standing — priced at the prompt rate, which is what a
+    table naming no cache rate says."""
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": 0.003,
+                                 "completion_usd_per_1k": 0.01,
+                                 "cache_read_usd_per_1k": bad}})
+
+    entry = pricing.read_pricing()["realm/opus"]
+    assert "cache_read_usd_per_1k" not in entry
+    assert entry["prompt_usd_per_1k"] == 0.003
+
+
+@pytest.mark.parametrize("bad", [-1, "twelve", float("inf"), float("nan"), None, True])
+def test_an_unusable_base_rate_drops_the_whole_entry(home, bad):
+    """A base rate that will not parse leaves an entry that can only price half
+    a call, and half a call priced is a figure that is confidently wrong."""
     _write(home, {"realm/opus": {"prompt_usd_per_1k": bad,
                                  "completion_usd_per_1k": 0.01}})
 
-    entry = pricing.read_pricing()["realm/opus"]
-    assert "prompt_usd_per_1k" not in entry
-    assert entry["completion_usd_per_1k"] == 0.01
+    assert pricing.read_pricing() == {}
 
 
-def test_an_entry_with_no_usable_rate_is_dropped_entirely(home):
-    """Kept as `{}` it would shadow the default for exactly the model somebody
-    was trying to price — pricing silently OFF where it was just turned on."""
-    _write(home, {"realm/opus": {"prompt_usd_per_1k": "free"},
-                  "": {"prompt_usd_per_1k": 0.001}})
+def test_an_entry_missing_a_base_rate_is_dropped_entirely(home):
+    """Kept partial it would shadow the default for exactly the model somebody
+    was trying to price, and value that model's prompt tokens at nothing."""
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": 0.002},
+                  "": {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}})
 
-    assert pricing.read_pricing() == {"": {"prompt_usd_per_1k": 0.001}}
+    assert pricing.read_pricing() == {
+        "": {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}}
+
+
+def test_a_completion_only_entry_cannot_price_a_call_at_zero(home):
+    """The failure this rule exists for: prompt tokens valued at nothing, the
+    call marked priced, and a reply that generated nothing rendering `$0.00`
+    for a call the provider never priced at all."""
+    assert pricing.estimate({"completion_usd_per_1k": 0.01},
+                            prompt_tokens=5000, completion_tokens=0) is None
+    assert pricing.estimate({"prompt_usd_per_1k": 0.01},
+                            prompt_tokens=5000, completion_tokens=100) is None
 
 
 def test_a_broken_file_costs_the_estimates_not_the_report(home):
@@ -79,13 +105,13 @@ def test_a_table_that_is_not_an_object_reads_as_no_table(home):
 
 def test_writing_a_non_mapping_is_refused(home):
     with pytest.raises(ValueError):
-        pricing.write_pricing([{"prompt_usd_per_1k": 1}])
+        pricing.write_pricing([{"prompt_usd_per_1k": 1, "completion_usd_per_1k": 1}])
 
 
 def test_writing_more_entries_than_the_cap_is_refused_not_truncated(home):
     """Truncating would silently discard rates somebody typed and would never
     see again."""
-    too_many = {f"m{n}": {"prompt_usd_per_1k": 0.001}
+    too_many = {f"m{n}": {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}
                 for n in range(pricing.MAX_ENTRIES + 1)}
 
     with pytest.raises(ValueError):
@@ -95,9 +121,9 @@ def test_writing_more_entries_than_the_cap_is_refused_not_truncated(home):
 
 # ---- which entry prices a model ----
 def test_an_exact_model_id_wins_over_a_wildcard_and_the_default():
-    table = {"realm/opus": {"prompt_usd_per_1k": 1.0},
-             "realm/*": {"prompt_usd_per_1k": 2.0},
-             "": {"prompt_usd_per_1k": 3.0}}
+    table = {"realm/opus": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0},
+             "realm/*": {"prompt_usd_per_1k": 2.0, "completion_usd_per_1k": 2.0},
+             "": {"prompt_usd_per_1k": 3.0, "completion_usd_per_1k": 3.0}}
 
     assert pricing.rate_for(table, "realm/opus")["prompt_usd_per_1k"] == 1.0
 
@@ -105,28 +131,28 @@ def test_an_exact_model_id_wins_over_a_wildcard_and_the_default():
 def test_the_longest_matching_wildcard_wins():
     """A table naturally holds both a family and a narrower branch of it, and
     the narrower one is the one that was typed second on purpose."""
-    table = {"realm/*": {"prompt_usd_per_1k": 2.0},
-             "realm/opus-*": {"prompt_usd_per_1k": 4.0},
-             "": {"prompt_usd_per_1k": 3.0}}
+    table = {"realm/*": {"prompt_usd_per_1k": 2.0, "completion_usd_per_1k": 2.0},
+             "realm/opus-*": {"prompt_usd_per_1k": 4.0, "completion_usd_per_1k": 4.0},
+             "": {"prompt_usd_per_1k": 3.0, "completion_usd_per_1k": 3.0}}
 
     assert pricing.rate_for(table, "realm/opus-4")["prompt_usd_per_1k"] == 4.0
     assert pricing.rate_for(table, "realm/haiku")["prompt_usd_per_1k"] == 2.0
 
 
 def test_a_model_nothing_names_falls_through_to_the_default():
-    table = {"realm/*": {"prompt_usd_per_1k": 2.0}, "": {"prompt_usd_per_1k": 3.0}}
+    table = {"realm/*": {"prompt_usd_per_1k": 2.0, "completion_usd_per_1k": 2.0}, "": {"prompt_usd_per_1k": 3.0, "completion_usd_per_1k": 3.0}}
 
     assert pricing.rate_for(table, "other/thing")["prompt_usd_per_1k"] == 3.0
 
 
 def test_a_model_nothing_names_with_no_default_is_priced_by_nothing():
-    assert pricing.rate_for({"realm/*": {"prompt_usd_per_1k": 2.0}}, "other/x") is None
+    assert pricing.rate_for({"realm/*": {"prompt_usd_per_1k": 2.0, "completion_usd_per_1k": 2.0}}, "other/x") is None
 
 
 def test_a_row_with_no_model_at_all_can_only_match_the_default():
     """`store.usage` labels a model-less row "unknown"; nobody knows what
     answered, so only a rate claiming to cover everything may price it."""
-    table = {"realm/*": {"prompt_usd_per_1k": 2.0}, "": {"prompt_usd_per_1k": 3.0}}
+    table = {"realm/*": {"prompt_usd_per_1k": 2.0, "completion_usd_per_1k": 2.0}, "": {"prompt_usd_per_1k": 3.0, "completion_usd_per_1k": 3.0}}
 
     assert pricing.rate_for(table, "")["prompt_usd_per_1k"] == 3.0
     assert pricing.rate_for(table, None)["prompt_usd_per_1k"] == 3.0

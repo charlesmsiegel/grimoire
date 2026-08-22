@@ -29,7 +29,7 @@ const TURN = {
 
 const USAGE = {
   campaign: "c", scene: "s", since: "2026-08-01", until: "2026-08-14",
-  generated_at: "2026-08-14T12:00:00Z",
+  clamped: false, generated_at: "2026-08-14T12:00:00Z",
   totals: { ...ZERO, calls: 2, prompt_tokens: 1800, completion_tokens: 80,
             total_tokens: 1880, cost_usd: 0.0084, priced_calls: 2 },
   by_task: [{ key: "chat", ...ZERO, calls: 2, cost_usd: 0.0084 }],

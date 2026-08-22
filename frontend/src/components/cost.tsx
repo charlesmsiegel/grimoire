@@ -70,8 +70,17 @@ export function bucketPrice(bucket: UsageBucket): string {
   if (billed > 0 || n(bucket.priced_calls) > n(bucket.subscription_calls)) {
     return money(billed);
   }
-  const off = n(bucket.modelled_usd) + n(bucket.estimated_usd);
-  if (off > 0) return about(off);
+  // Nothing was charged, so the headline falls back to an estimate — but only
+  // when there is ONE kind of estimate under it. `estimated_usd` and
+  // `modelled_usd` are both per-token equivalents, and it is tempting to total
+  // them; a bucket holding both (a connection changed between rerolls) would
+  // then print a figure that reconciles to neither column, which is the
+  // failure the three-column split exists to prevent. With both present the
+  // headline says `unpriced` and `Footnotes` prints each one separately,
+  // named, which is the only rendering that can be checked against the ledger.
+  const estimates = [n(bucket.estimated_usd), n(bucket.modelled_usd)].filter((v) => v > 0);
+  if (estimates.length === 1) return about(estimates[0]);
+  if (estimates.length > 1) return UNPRICED;
   return n(bucket.unpriced_calls) > 0 ? UNPRICED : money(billed);
 }
 
@@ -85,6 +94,18 @@ export function turnPrice(turn: Pick<UsageTurn, "cost_usd" | "modelled_usd">): s
   // `undefined`.
   if (turn.cost_usd != null) return money(turn.cost_usd);
   return turn.modelled_usd != null ? about(turn.modelled_usd) : UNPRICED;
+}
+
+/** A date-only ledger bound (`since`/`until`) as a reader's own calendar day.
+ *
+ *  NOT `new Date(s).toLocaleDateString()`: a bare `YYYY-MM-DD` is parsed as UTC
+ *  midnight, so west of Greenwich that renders the day before — a scan window
+ *  reported a day early at both ends, describing a file the report never read.
+ *  Built from the parts at noon local, where no offset can move the day. */
+export function bound(date: string): string {
+  const [y, m, d] = (date ?? "").split("-").map(Number);
+  if (!y || !m || !d) return date;
+  return new Date(y, m - 1, d, 12).toLocaleDateString();
 }
 
 function plural(n: number, one: string): string {
@@ -155,10 +176,12 @@ export function PostCost({ bucket }: { bucket: UsagePostBucket }) {
     `${plural(n(bucket.calls), "generation")} answering this post`,
     `${n(bucket.total_tokens).toLocaleString()} tokens`,
     n(bucket.subscription_calls) > 0
-      ? `${plural(n(bucket.subscription_calls), "call")} billed to a subscription`
+      ? `${plural(n(bucket.subscription_calls), "call")} billed to a subscription `
+        + `(${about(n(bucket.estimated_usd))})`
       : "",
     n(bucket.modelled_calls) > 0
-      ? `${plural(n(bucket.modelled_calls), "call")} estimated from your rates`
+      ? `${plural(n(bucket.modelled_calls), "call")} estimated from your rates `
+        + `(${about(n(bucket.modelled_usd))})`
       : "",
     n(bucket.unpriced_calls) > 0
       ? `${plural(n(bucket.unpriced_calls), "call")} came back with no price`

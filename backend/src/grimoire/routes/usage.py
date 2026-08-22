@@ -94,13 +94,24 @@ def get_scene_usage(cid: str, sid: str):
     that player post — the first reply and each reroll of it. That is what makes
     a per-post figure worth reading: a post rerolled five times cost five
     generations, and only the fifth is still on screen.
+
+    `clamped` says the scan could not reach all the way back to the scene's
+    start (a scene played across more than `store.usage.MAX_DAYS`). Every
+    figure here is a floor when it is set, and `by_post` in particular is then
+    incomplete in a way a transcript cannot see — a post with no bucket looks
+    exactly like a post that cost nothing.
     """
     scene = _require_scene(cid, sid)
     return store.usage.scene_usage(cid, sid, since=scene["meta"].get("created", ""))
 
 
+_ORDER = Query("cost", description="How to order the scenes before the list is "
+                                   "capped: cost | recent | turns. An unknown "
+                                   "value falls back to cost.")
+
+
 @router.get("/campaigns/{cid}/usage/scenes")
-def get_campaign_scene_costs(cid: str):
+def get_campaign_scene_costs(cid: str, order: str = _ORDER):
     """What each of this campaign's scenes has cost, over the whole ledger.
 
     The all-time view, and the only read here that is not windowed: "what has
@@ -118,9 +129,15 @@ def get_campaign_scene_costs(cid: str):
     resolves to a scene keeps its id and is marked `missing` — the spend
     happened, and hiding a deleted scene's cost would make the rows stop adding
     up to the total above them.
+
+    `order` is applied by the store, over every bucket, *before* the list is
+    capped. It is a server parameter rather than a client-side re-sort for
+    exactly that reason: a campaign with more buckets than the cap would
+    otherwise have "most recent" mean "the most recent of the most expensive",
+    with a recent cheap scene missing from a list that claims to show it.
     """
     _campaign_root_or_404(cid)
-    rollup = store.usage.campaign_scenes(cid)
+    rollup = store.usage.campaign_scenes(cid, order=order)
     titles = {s["id"]: s for s in store.scenes.list_scenes(cid)}
     named = []
     for bucket in rollup["scenes"]:

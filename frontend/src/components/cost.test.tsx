@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { Footnotes, PostCost, about, bucketPrice, money, turnPrice } from "./cost";
+import { Footnotes, PostCost, about, bound, bucketPrice, money, turnPrice } from "./cost";
 
 /** The rule these three surfaces share: a price nobody reported is never
  *  rendered as zero, and a figure grimoire computed is never rendered as one it
@@ -39,6 +39,14 @@ test("a bucket that was only ever modelled reads as an estimate", () => {
     .toBe("≈ $0.25");
 });
 
+test("a bucket holding both kinds of estimate refuses to merge them", () => {
+  // Both are per-token equivalents, and totalling them would print a figure
+  // that reconciles to neither column. The footnotes name each separately.
+  expect(bucketPrice({ ...ZERO, calls: 4, priced_calls: 2, subscription_calls: 2,
+                       estimated_usd: 0.5, modelled_calls: 2,
+                       modelled_usd: 0.25 })).toBe("unpriced");
+});
+
 test("a bucket that was only ever subscription-billed reads as an estimate too", () => {
   // `priced_calls` counts it, but nobody was charged — so it must not be
   // rendered as a bill of $0.00 either.
@@ -58,6 +66,14 @@ test("a turn's estimate is shown in place of an absent price, marked", () => {
   expect(turnPrice({ cost_usd: null, modelled_usd: 0.01 })).toBe("≈ $0.01");
   expect(turnPrice({ cost_usd: null, modelled_usd: null })).toBe("unpriced");
   expect(turnPrice({ cost_usd: 0.02, modelled_usd: null })).toBe("$0.02");
+});
+
+test("a date-only ledger bound is not shifted a day by a timezone", () => {
+  // `new Date("2026-06-01")` is UTC midnight, which west of Greenwich renders
+  // as May 31 — a scan window reported a day early at both ends.
+  expect(bound("2026-06-01")).toBe(new Date(2026, 5, 1, 12).toLocaleDateString());
+  expect(bound("")).toBe("");
+  expect(bound("not a date")).toBe("not a date");
 });
 
 test("the footnotes name each kind of uncounted call separately", () => {

@@ -1170,8 +1170,12 @@ export const api = {
                         undefined, { fresh: true }),
   // All-time, and deliberately not `fresh`: this is a report opened on purpose
   // rather than a figure read mid-turn, and it scans the whole ledger.
-  getCampaignSceneCosts: (cid: string) =>
-    request<CampaignSceneCosts>("GET", `/api/campaigns/${cid}/usage/scenes`),
+  // `order` goes to the server because the list is capped there, after the
+  // sort: re-ordering the response here would make every ordering but the
+  // default mean "…of the most expensive N".
+  getCampaignSceneCosts: (cid: string, order = "cost") =>
+    request<CampaignSceneCosts>(
+      "GET", `/api/campaigns/${cid}/usage/scenes?order=${encodeURIComponent(order)}`),
   // The per-model rate table (#158). `fresh` on the read, because saving a rate
   // and seeing the old table is the one thing an editor must not do.
   getPricing: () => request<PricingTable>("GET", "/api/pricing", undefined, { fresh: true }),

@@ -949,12 +949,26 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
 
     ``turns`` is newest first and capped at ``limit``; ``totals`` and ``by_task``
     are summed over the whole window regardless, so the numbers do not change
-    when the list is cut. A campaign or scene id that never appears answers with
+    when the list is cut.
+
+    ``clamped`` says the window starts later than ``since`` asked for, which
+    `_scan_since` does for a scene older than `MAX_DAYS`. Everything in this
+    payload is then a floor -- including ``by_post``, whose older posts have no
+    bucket at all rather than an empty one, so a view that did not know would
+    render them as posts that cost nothing. A campaign or scene id that never appears answers with
     zeroes — a scene that has generated nothing has spent nothing, which is an
     answer, and the route above is what distinguishes it from a typo.
     """
     until = _today()
     start = _scan_since(since, until)
+    # Whether the scan starts LATER than the scene did. `_scan_since` floors a
+    # long-lived scene's window at `MAX_DAYS`, so a scene played across more
+    # than a year is scanned from part-way through its own life -- and the
+    # per-post breakdown then simply has no bucket for its older posts, which
+    # in a transcript is indistinguishable from a post that cost nothing. The
+    # flag is what lets the view say "this breakdown does not reach that far"
+    # instead of implying it is complete.
+    clamped = bool(_valid_day(since)) and start > _valid_day(since)
     ids = _aliases(campaign, scene, start, until)
     rates = Rates.current()
     totals = dict(_ZERO)
@@ -990,6 +1004,7 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
     turns.sort(key=lambda turn: turn["ts"], reverse=True)
     limit = max(0, int(limit))
     return {"campaign": campaign, "scene": scene, "since": start, "until": until,
+            "clamped": clamped,
             "generated_at": _now(), "totals": _rounded(totals),
             "by_task": _ranked(by_task),
             # Keyed by transcript index, ascending, so a view can walk it beside
@@ -1018,6 +1033,33 @@ CAMPAIGN_SCENES = 500
 #: add up.
 NO_SCENE = ""
 
+#: How `campaign_scenes` may order its buckets, and what each orders BY. The
+#: order has to be applied to the whole set before the cap is, or the cap
+#: silently turns every other ordering into "these orderings, of the most
+#: expensive N" -- a recent cheap scene missing from "most recent" while the
+#: view claims to be showing it.
+SCENE_ORDERS = ("cost", "recent", "turns")
+
+
+def _sort_scenes(scenes: list[dict], order: str) -> None:
+    """Order `scenes` in place by one of `SCENE_ORDERS`, ties on the scene id.
+
+    TWO PASSES, and that is the trick rather than an inefficiency: every
+    ordering here is descending, the tie-break is ascending, and `reverse=True`
+    on one key tuple would flip the tie-break too. Python's sort is stable, so
+    sorting by the id first and then by the real key leaves equal rows in id
+    order -- one rule, three orderings, and no wrapper class whose only job is
+    to compare backwards.
+    """
+    scenes.sort(key=lambda b: b["scene"])
+    if order == "recent":
+        scenes.sort(key=lambda b: b["last_ts"], reverse=True)
+    elif order == "turns":
+        scenes.sort(key=lambda b: b["calls"], reverse=True)
+    else:
+        scenes.sort(key=lambda b: (b["cost_usd"], b["modelled_usd"],
+                                   b["estimated_usd"], b["calls"]), reverse=True)
+
 
 def lifetime_since() -> str:
     """The first day the ledger could hold a row for, as ``YYYY-MM-DD``.
@@ -1033,14 +1075,20 @@ def lifetime_since() -> str:
     """
     root = ledger_dir()
     try:
-        months = sorted(path.stem for path in root.iterdir()
-                        if path.suffix == ".jsonl" and _MONTH.match(path.stem))
+        entries = [path.stem for path in root.iterdir() if path.suffix == ".jsonl"]
     except OSError:
         return _today()
-    return f"{months[0]}-01" if months else _today()
+    # Parsed as a real date, not merely matched against `_MONTH`. The regex
+    # accepts `2026-00`, which sorts before every real month and which
+    # `date.fromisoformat` then raises on inside `_window_files` -- turning one
+    # stray filename (a hand edit, or a row whose `ts` came in through the
+    # facade) into a 500 on every request to this endpoint. A name that is not
+    # a month names no window, so it is skipped like an unparseable row.
+    days = [day for day in (_valid_day(f"{stem}-01") for stem in entries) if day]
+    return min(days) if days else _today()
 
 
-def campaign_scenes(campaign: str, *, since: str = "",
+def campaign_scenes(campaign: str, *, since: str = "", order: str = "cost",
                     limit: int = CAMPAIGN_SCENES) -> dict:
     """What each of a campaign's scenes has cost, and what the campaign has.
 
@@ -1051,10 +1099,13 @@ def campaign_scenes(campaign: str, *, since: str = "",
     rather than from the rename — the same correction `scene_usage` makes for
     one scene, applied to all of them at once.
 
-    `scenes` is ordered by spend, descending: the question this view answers is
-    "where did the money go", and the answer is at the top. `first_ts`/`last_ts`
-    let a caller re-sort chronologically without a second read. Ties break on
-    the id so two reads of the same data agree.
+    `order` is one of `SCENE_ORDERS`, applied to the WHOLE set before `limit`
+    cuts it -- which is why it is a parameter here rather than a re-sort on the
+    client. A campaign with more buckets than the cap would otherwise have
+    every alternative ordering silently mean "of the most expensive N", so a
+    recent cheap scene would be missing from a list headed "most recent". An
+    unknown order falls back to `cost`, the default this view opens on. Ties
+    break on the id so two reads of the same data agree.
     """
     until = _today()
     start = min(_valid_day(since) or lifetime_since(), until)
@@ -1076,11 +1127,11 @@ def campaign_scenes(campaign: str, *, since: str = "",
         stamps[1] = max(stamps[1], row["ts"])
     scenes = [{"scene": sid, "first_ts": seen[sid][0], "last_ts": seen[sid][1],
                **_rounded(bucket)} for sid, bucket in buckets.items()]
-    scenes.sort(key=lambda b: (-b["cost_usd"], -b["modelled_usd"],
-                              -b["estimated_usd"], -b["calls"], b["scene"]))
+    order = order if order in SCENE_ORDERS else SCENE_ORDERS[0]
+    _sort_scenes(scenes, order)
     limit = max(0, int(limit))
     return {"campaign": campaign, "since": start, "until": until,
-            "generated_at": _now(), "totals": _rounded(totals),
+            "generated_at": _now(), "totals": _rounded(totals), "order": order,
             "scenes": scenes[:limit], "listed": min(len(scenes), limit),
             "truncated": len(scenes) > limit}
 
