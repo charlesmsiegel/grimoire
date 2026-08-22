@@ -446,6 +446,69 @@ test("a checkpoint stops counting once the campaign has moved on", async () => {
   expect(api.forkCampaign).toHaveBeenCalledTimes(2);
 });
 
+test("an advance that landed in the campaign you left is not reported here", async () => {
+  // The clock moved in A, which is right — A is what the request named. What
+  // must not follow it is B adopting the result: "Advanced" over another
+  // campaign's digest, and B's half-typed reason cleared by A's success.
+  type AdvanceResult = Awaited<ReturnType<typeof api.advanceTime>>;
+  let release: (r: AdvanceResult) => void = () => { /* replaced */ };
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: { ...DIGEST, fork: false } });
+  const landed = { ok: true, moved: true, now: "2026-12-27",
+                   friendly: "27 December 2026", digest: DIGEST } as AdvanceResult;
+  vi.mocked(api.advanceTime).mockReturnValue(new Promise((res) => { release = res; }));
+
+  const { rerender } = render(<ClockPanel cid="a" />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a day" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await waitFor(() =>
+    expect(api.advanceTime).toHaveBeenCalledWith("a", { days: 1, reason: "a day" }));
+
+  rerender(<ClockPanel cid="b" />);           // the reader moves on, mid-advance
+  release(landed);
+  await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledWith("b"));
+
+  expect(screen.queryByText(/^Advanced/)).not.toBeInTheDocument();
+  // The reason survives a campaign switch, so A clearing it would be visible.
+  expect(screen.getByLabelText("Reason")).toHaveValue("a day");
+});
+
+test("a checkpoint of the campaign you left is never recorded against the new one", async () => {
+  // The worst shape this class takes. A copy of A marked as B's means a large
+  // skip in B offers "Retry the skip", takes no copy at all, and advances
+  // anyway — the feature failing silently in the one direction it exists to
+  // prevent, with the reader believing a restore point exists.
+  let release: (r: ForkReport) => void = () => { /* replaced */ };
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.forkCampaign).mockReturnValue(new Promise((res) => { release = res; }));
+  vi.mocked(api.advanceTime).mockRejectedValue({ detail: "campaign is busy" });
+
+  const { rerender } = render(<ClockPanel cid="a" />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+
+  rerender(<ClockPanel cid="b" />);          // the reader moves on, mid-copytree
+  release(FORK_REPORT);
+  await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledWith("b"));
+
+  // B never heard about A's copy...
+  expect(screen.queryByText(/Checkpoint saved/)).not.toBeInTheDocument();
+  // ...so a large skip here is offered a checkpoint of its own, not a retry.
+  vi.mocked(api.advanceTime).mockResolvedValue(
+    { ok: true, moved: true, now: "2027-03-24", friendly: "24 March 2027",
+      digest: BIG } as never);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "onwards" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+  expect(screen.getByText("Checkpoint, then advance")).toBeInTheDocument();
+  expect(screen.queryByText("Retry the skip")).not.toBeInTheDocument();
+});
+
 test("dismissing after a checkpoint landed does not take a second one", async () => {
   // `checkpointed` has to outlive the question being closed. Without that, a
   // reader who cancels after the copy landed and then asks again gets a second

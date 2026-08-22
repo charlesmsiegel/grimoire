@@ -108,6 +108,12 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // on the strength of a span measured in A. The reset effect below does not
   // help: it runs when `cid` changes, which is BEFORE the late reply arrives.
   const showing = useRef(cid);
+  //: Whether this panel is still showing the campaign a call was made FOR.
+  //: Every state write that happens after an `await` is guarded by it, and the
+  //: rule is one sentence: the request belongs to the campaign it named, the
+  //: panel belongs to whoever is on screen now, and only the first of those is
+  //: fixed when the call was made.
+  const stillShowing = (forCid: string) => showing.current === forCid;
   // `useLayoutEffect` rather than a write during render, and declared above
   // every effect that starts a request: layout effects run first, so the ref is
   // already current by the time anything below can fire. Same shape and same
@@ -139,7 +145,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // was never about would fork for one skip and take another.
   useEffect(() => {
     setDigest(null); setOutcome("preview");
-    setGate(null); setCheckpointed(false); setSaved("");
+    setGate(null); setCheckpointed(false); setSaved(""); setError(null);
   }, [cid, mode, days, target]);
 
   // ...and the same rule for the other way a shown span goes stale: the inputs
@@ -185,8 +191,10 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       setPricedNow(clock?.now ?? "");
       setOutcome("preview");
     } catch (err: unknown) {
-      setError(refusal(err));
+      if (stillShowing(cid)) setError(refusal(err));
     } finally {
+      // Never guarded: `busy` is the panel's, not the campaign's, and a guard
+      // here would leave the controls disabled for whoever is on screen.
       setBusy(false);
     }
   }
@@ -195,6 +203,11 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
    *  so there is exactly one place the clock moves. */
   async function runAdvance() {
     const r = await api.advanceTime(cid, { ...request(), reason });
+    // The clock moved in the campaign this call named, which is right. What
+    // must not follow it is this panel adopting the result: it may be showing
+    // somebody else by now, and "Advanced" over another campaign's digest is
+    // the mildest of the things that go wrong.
+    if (!stillShowing(cid)) return;
     setDigest(r.digest);
     setOutcome(r.moved ? "moved" : "unchanged");
     setGate(null);
@@ -253,8 +266,10 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       }
       await runAdvance();
     } catch (err: unknown) {
-      setError(refusal(err));
+      if (stillShowing(cid)) setError(refusal(err));
     } finally {
+      // Never guarded: `busy` is the panel's, not the campaign's, and a guard
+      // here would leave the controls disabled for whoever is on screen.
       setBusy(false);
     }
   }
@@ -272,6 +287,11 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       if (!checkpointed) {
         const name = forkName.trim();
         const report = await api.forkCampaign(cid, name);
+        // The sharpest case for the rule above. A copy of A recorded as B's
+        // means a large skip in B offers "Retry the skip", takes no copy at
+        // all, and advances anyway — the feature failing silently in exactly
+        // the direction it exists to prevent.
+        if (!stillShowing(cid)) return;
         setCheckpointed(true);
         // A fork from where the campaign stands cuts nothing, so `forkNotes` is
         // almost always "". Shown when it is not, on the same footing the shelf
@@ -284,7 +304,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       await runAdvance();
     } catch (err: unknown) {
       // The question stays open: the reader can retry, or skip without one.
-      setError(refusal(err));
+      if (stillShowing(cid)) setError(refusal(err));
     } finally {
       setBusy(false);
     }
@@ -297,8 +317,10 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     try {
       await runAdvance();
     } catch (err: unknown) {
-      setError(refusal(err));
+      if (stillShowing(cid)) setError(refusal(err));
     } finally {
+      // Never guarded: `busy` is the panel's, not the campaign's, and a guard
+      // here would leave the controls disabled for whoever is on screen.
       setBusy(false);
     }
   }
