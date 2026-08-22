@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
@@ -148,7 +149,11 @@ def get_logs_tail(request: Request, cursor: str = Query(""),
     async def event_stream():
         position = cursor or store.logs.cursor()
         yield _sse({"cursor": position})
-        quiet = 0.0
+        # A clock, not a counter. `quiet += TAIL_INTERVAL` per iteration was
+        # only the elapsed time while every iteration slept -- and the
+        # fast-drain branch below deliberately does not, so a busy log emitted
+        # a keep-alive every fifteen LOOPS instead of every fifteen seconds.
+        last_sent = time.monotonic()
         while True:
             if await request.is_disconnected():
                 return
@@ -171,16 +176,14 @@ def get_logs_tail(request: Request, cursor: str = Query(""),
                 continue
             position = out["cursor"]
             if out["rows"]:
-                quiet = 0.0
+                last_sent = time.monotonic()
                 yield _sse({"rows": out["rows"], "cursor": position})
-            else:
-                quiet += TAIL_INTERVAL
-                if quiet >= TAIL_HEARTBEAT:
-                    quiet = 0.0
-                    # A comment frame, not a data frame: SSE ignores it, so a
-                    # client never has to special-case a keep-alive that looks
-                    # like an empty batch of rows.
-                    yield ": keep-alive\n\n"
+            elif time.monotonic() - last_sent >= TAIL_HEARTBEAT:
+                last_sent = time.monotonic()
+                # A comment frame, not a data frame: SSE ignores it, so a
+                # client never has to special-case a keep-alive that looks
+                # like an empty batch of rows.
+                yield ": keep-alive\n\n"
             if out["more"]:
                 # One poll reads a bounded number of bytes, so a burst bigger
                 # than that budget leaves rows waiting. Coming straight back

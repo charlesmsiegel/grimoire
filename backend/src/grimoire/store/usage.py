@@ -88,6 +88,24 @@ from . import atomic, errors, paths, pricing
 #: kind it understands instead of assuming every row is a chat completion.
 KIND_LLM = "llm"
 
+#: The attribute an exception sets to say "I am not a provider failure".
+#:
+#: `Meter` cannot tell these apart by type -- the store does not import the
+#: routes that define them (#239) -- and it cannot tell them apart by looking
+#: either: `BudgetRefused` is an `LLMError` subclass carrying `kind="timeout"`,
+#: which is indistinguishable from a provider that really did time out. But the
+#: two mean opposite things. A refusal means the call was NEVER ISSUED because
+#: the clock was already gone, and `Abandoned` means the person waiting closed
+#: the review. Neither is a failure of anything, and recording them would put
+#: rows in the #156 error store for work that was deliberately not done -- with
+#: the budget one wearing the same kind as a real timeout, which is the worst
+#: possible place for a false positive.
+#:
+#: So the exception declares it, as a class attribute, and the meter treats it
+#: exactly as it treats a cancellation. Absent means True: an ordinary
+#: exception IS a failure, which is the safe default for anything new.
+NOT_A_FAILURE = "llm_call_failed"
+
 #: A row saying one scene id became another (#153). Not a call, and every
 #: rollup skips it -- see `_is_call`. A scene's id is its filename stem, so the
 #: first date set on a scene renames it and every store holding that id has to
@@ -382,6 +400,11 @@ class Meter:
         """
         if exc is None:
             self.done()
+        elif getattr(exc, NOT_A_FAILURE, True) is False:
+            # Work that was deliberately not done -- see `NOT_A_FAILURE`. The
+            # same treatment a cancellation gets, and for the same reason:
+            # nothing went wrong, so nothing should say it did.
+            self.done("aborted")
         elif isinstance(exc, Exception):
             # `kind` is the LLMError taxonomy the frontend already branches on;
             # anything else is recorded by its type name, which is the only

@@ -37,6 +37,7 @@ class name.
 from __future__ import annotations
 
 import contextlib
+import traceback
 
 from . import logs
 
@@ -97,12 +98,29 @@ def record_exception(exc: BaseException, module: str, *, detail: str = "",
     if getattr(exc, _RECORDED, False):
         return None
     row = record(module, getattr(exc, "kind", None) or type(exc).__name__,
-                 detail or str(exc).strip(), campaign=campaign, scene=scene, task=task)
+                 detail or str(exc).strip(), campaign=campaign, scene=scene, task=task,
+                 # The frames, not just the message. These rows are written
+                 # from `except` blocks that turn an exception into a status,
+                 # so this is the only place the stack survives at all -- and
+                 # a traceback the log captured but never carried is the
+                 # write-only field the collapsible view exists to show.
+                 trace=_frames(exc))
     with contextlib.suppress(AttributeError):
         # An exception with `__slots__` cannot carry the mark. Best-effort on
         # purpose: recording twice is a worse answer than not recording at all.
         setattr(exc, _RECORDED, True)
     return row
+
+
+def _frames(exc: BaseException) -> str:
+    """``exc``'s traceback as text, or "" if it has none.
+
+    An exception that was constructed but never raised has no `__traceback__`,
+    which is a real case here -- a call site can build one to describe a
+    failure that was not an exception in the first place."""
+    if exc.__traceback__ is None:
+        return ""
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 
 def mark_recorded(exc: BaseException) -> None:

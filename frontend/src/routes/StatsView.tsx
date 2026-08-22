@@ -262,6 +262,10 @@ export default function StatsView() {
   useEffect(() => {
     if (section !== "errors") return;
     let alive = true;
+    // Dropped first: this read is scoped to `days` and `errorModule`, and
+    // showing the previous window's answer under the new one's heading is a
+    // page stating something that has stopped being true.
+    setErrorSummary(null);
     api.getErrorSummary(days, { module: errorModule })
       .then((e) => { if (alive) { setErrorSummary(e); setFailed(""); } })
       .catch((e) => { if (alive) setFailed(errorText(e)); });
@@ -279,15 +283,17 @@ export default function StatsView() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // The log page is re-read whenever a filter moves.
+  // The log page is re-read whenever a filter moves -- and `days` is one of
+  // them. Without it the footer's Window control silently governed two of the
+  // three sections, and the log answered "Last 90 days" with thirty.
   useEffect(() => {
     if (section !== "log") return;
     let alive = true;
-    api.getLogs({ level, module, q: settled, limit: LOG_LIMIT })
+    api.getLogs({ days, level, module, q: settled, limit: LOG_LIMIT })
       .then((p) => { if (alive) { setPage(p); setFailed(""); } })
       .catch((e) => { if (alive) setFailed(errorText(e)); });
     return () => { alive = false; };
-  }, [section, level, module, settled]);
+  }, [section, days, level, module, settled]);
 
   useEffect(() => {
     let alive = true;
@@ -339,6 +345,9 @@ export default function StatsView() {
   // Whichever is current: the section's own filtered read once it has landed,
   // the stats copy until then, so opening Errors does not blank the page.
   const errors: ErrorSummary | null = errorSummary ?? stats?.errors ?? null;
+  // The RAIL counts the window, never the filter. `errors` above is the
+  // filtered read, and a rail row labelled just "Errors" showing one module's
+  // total is a number that does not say what it is counting.
   // Built from the unfiltered copy, so picking a module cannot remove every
   // other option from the control you picked it with.
   const errorModules = stats?.errors.modules.map((m) => m.module) ?? [];
@@ -349,9 +358,9 @@ export default function StatsView() {
   // was never started.
   const counts = useMemo((): Record<SectionKey, number | null | undefined> => ({
     performance: stats ? stats.totals.calls : null,
-    errors: errors ? errors.total : null,
+    errors: stats ? stats.errors.total : null,
     log: page ? page.total : (section === "log" ? null : undefined),
-  }), [stats, errors, page, section]);
+  }), [stats, page, section]);
 
   const column = (
     <>

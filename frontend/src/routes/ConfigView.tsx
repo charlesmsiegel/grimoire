@@ -31,6 +31,22 @@ import { useTheme } from "../theme/ThemeProvider";
  *  visit. `GET /logs/level` reports the one actually in force. */
 const LOG_LEVELS = ["debug", "info", "warning", "error"] as const;
 
+/** A stored `log_level` as the floor actually in force, mirroring
+ *  `logs.level_name` then `logs.FLOORS`'s clamp.
+ *
+ *  A store written before `critical` stopped being offered still holds it, and
+ *  without this the select renders with no matching option (showing the
+ *  first), reads as unchanged against the dirty count, and writes `critical`
+ *  straight back on the next save — against a backend that clamps it to
+ *  `error` anyway. Anything unrecognized falls to the default the same way the
+ *  server's `level_name` does, so the control never shows a floor that is not
+ *  the one being applied. */
+function normalizeFloor(value: string): string {
+  const level = (value || "").trim().toLowerCase();
+  if (level === "critical") return "error";          // clamped by `logs.FLOORS`
+  return (LOG_LEVELS as readonly string[]).includes(level) ? level : "info";
+}
+
 const DRAFT_FIELDS = [
   "active_connection_id", "fallback_connection_id", "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
@@ -64,6 +80,7 @@ function draftOf(c: Config): Draft {
   // compares against is the value the control can actually show, and an
   // untouched legacy theme does not read as an unsaved change.
   d.theme = normalizeMode(c.theme);
+  d.log_level = normalizeFloor(d.log_level);
   return d;
 }
 
@@ -489,7 +506,7 @@ export default function ConfigView() {
               <div className="config-field">
                 <label htmlFor="cfg-log-level">Record</label>
                 <div className="config-input">
-                  <select id="cfg-log-level" value={draft.log_level || "info"}
+                  <select id="cfg-log-level" value={draft.log_level}
                           onChange={(e) => edit("log_level", e.target.value)}>
                     {LOG_LEVELS.map((l) => (
                       <option key={l} value={l}>{l} and above</option>

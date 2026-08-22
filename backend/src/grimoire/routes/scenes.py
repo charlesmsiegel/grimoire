@@ -1301,6 +1301,10 @@ class Abandoned(Exception):
     stopping, not in what is returned.
     """
 
+    #: `store.usage.NOT_A_FAILURE`: a reviewer walking away is not a provider
+    #: failing them, so this must not reach the error store (#156).
+    llm_call_failed = False
+
 
 ABANDON_POLL = 0.5
 
@@ -1427,6 +1431,13 @@ class BudgetRefused(LLMError):
     but a phase that cares can tell "never sent" from "sent, then cancelled".
     Only the first means the step was never attempted, and only the first is a
     step to report as skipped rather than failed."""
+
+    #: `store.usage.NOT_A_FAILURE`. This carries `kind="timeout"` like every
+    #: other LLMError, which is exactly why it has to say so out loud: nothing
+    #: downstream could otherwise tell a step the clock refused to start from a
+    #: provider that really did time out, and the error store would report the
+    #: second when it was the first.
+    llm_call_failed = False
 
 
 class _Budget:
