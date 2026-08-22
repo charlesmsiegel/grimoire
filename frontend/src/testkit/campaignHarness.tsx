@@ -57,7 +57,6 @@ export const RESPONSE_BUNDLE = {
   provenance: { reply_words: { scope: "default", source: "default" } },
 };
 
-/** Everything a campaign-view suite needs reset and re-defaulted per test. */
 /** What `api.absorbScene` resolves to now (#396).
  *
  *  The absorb is a detached run: the client starts it, polls it, and reads the
@@ -75,6 +74,7 @@ export function absorbs(review: unknown, generation = "gen1") {
   (api.absorbScene as any).mockResolvedValue(reviewResult(review, generation));
 }
 
+/** Everything a campaign-view suite needs reset and re-defaulted per test. */
 export function installCampaignMocks() {
   localStorage.clear();
   vi.clearAllMocks();

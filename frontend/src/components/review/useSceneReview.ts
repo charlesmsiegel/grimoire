@@ -254,6 +254,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setAbsorbSid(null);
     setGeneration(null);
     setStaleReview(null);
+    // Scene ids repeat across campaigns -- a fork has the same ones by
+    // construction -- and `holdsScene` compares them bare, so a Discard still
+    // in flight for campaign A would lock the same-id scene in B for as long
+    // as the DELETE takes to answer. The request is left to finish; only this
+    // page's belief that it is holding something is dropped.
+    setSettlingSid(null);
     setEditRows([]);
     setConflicts([]);
     setSaveError(null);
@@ -471,6 +477,13 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // panel opened here would be showing a review that is not stored -- and
       // saving it would go through, undoing the Stop the reader pressed.
       if (absorbStopRef.current !== stopGen) return;
+      // ...and not over a review that is already open. Leaving the scene and
+      // coming back while this generates starts the adoption pass on the SAME
+      // run, and the two waiters poll on independently-phased cadences: the
+      // adoption pass can win, open the panel, and have the reader approving
+      // rows for seconds before this answer arrives and rebuilds every one of
+      // them with `approvedByDefault`.
+      if (hasReviewRef.current) return;
       openReview(a.review, activeId, a.generation);
     } catch (err: any) {
       // Same guard on the failure path: A's banner over B is the same category
@@ -487,7 +500,14 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // own recovery, and it is still right there.
       fail(err, false);
     } finally {
-      setAbsorbing(false);
+      // Only the newest absorb owns the latch. A superseded one -- stopped, or
+      // replaced by a second End scene -- can still be polling on its 1-5s
+      // cadence, and clearing the flag when it finally answers would take
+      // "Ending…" and the Stop button off a run that is still going, unlock
+      // the composer over a scene the server refuses, and leave an unbounded
+      // absorb with nothing left to stop it. Every other latch in this file
+      // guards its `finally` the same way.
+      if (absorbStopRef.current === stopGen) setAbsorbing(false);
     }
   }
 

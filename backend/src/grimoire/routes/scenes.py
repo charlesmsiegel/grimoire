@@ -1562,7 +1562,7 @@ def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
 
     ("Phase" here means a step of one absorb run; the `Phase 2:`/`Phase 5:`
     comments elsewhere in this file are roadmap milestones, unrelated.)"""
-    keys = ("status", "reason", "attempted", "budget_exhausted")
+    keys = store.pending_reviews.PHASE_KEYS
     return [{"name": "extraction", "status": "ok", "reason": None,
              "attempted": True, "budget_exhausted": False}] + \
            [{"name": name, **{k: block[k] for k in keys}}
@@ -3506,8 +3506,18 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
                     "current_posts": mark["count"]})
 
 
-def _clear_pending_review(cid: str, sid: str) -> None:
-    """Drop the pending review a completed save has made obsolete.
+def _clear_pending_review(cid: str, sid: str, token: str) -> None:
+    """Drop the pending review THIS save has made obsolete, and no other.
+
+    Scoped to the committed token, because "whatever is stored" is a different
+    record on the path that needs this most. The commit is idempotent by design
+    (#235), so a duplicate PUT of an already-recorded token arrives long after
+    its first response was lost -- by which time another device may have
+    force-absorbed the scene and stored a *newer* review, whose own token
+    carries the epoch that save advanced and is therefore still savable.
+    Clearing that one deletes an entire end-of-scene generation for a save that
+    wrote nothing: the loss this whole change exists to prevent, arrived at
+    through its own cleanup.
 
     Never fatal. The commit has landed by the time this runs, so a sidecar that
     will not go must not turn a successful save into a 500 -- the review it
@@ -3515,8 +3525,12 @@ def _clear_pending_review(cid: str, sid: str) -> None:
     replaced outright by the next absorb.
     """
     try:
-        store.pending_reviews.clear(cid, sid)
-    except OSError:
+        record = store.pending_reviews.read(cid, sid)
+        # `read` has already refused anything whose `review` is not a dict.
+        if record is None or record["review"].get("commit_token") != token:
+            return
+        store.pending_reviews.clear(cid, sid, record.get("generation"))
+    except (OSError, store.pending_reviews.CorruptReviewError):
         log.warning("pending review for %s/%s could not be cleared after the save",
                     cid, sid, exc_info=True)
 
@@ -3582,7 +3596,7 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
                 # the review, leaving an obsolete review retrievable forever
                 # for a scene that is demonstrably absorbed. Under the same
                 # hold, so nothing reads it between the two.
-                _clear_pending_review(cid, sid)
+                _clear_pending_review(cid, sid, body.commit_token)
                 return prior["result"]
             if not prior["journalled"]:
                 # Reserved before #271, so there is no account of what it did --
@@ -3732,7 +3746,7 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
         # now landed. Inside the hold, after the ledger entry, so a save that
         # raised before this point leaves the review where the retry can find
         # it.
-        _clear_pending_review(cid, sid)
+        _clear_pending_review(cid, sid, body.commit_token)
     return result
 
 

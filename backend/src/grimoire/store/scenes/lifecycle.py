@@ -18,6 +18,7 @@ from .. import (
     atomic,
     calendars,
     commits,
+    pending_reviews,
     pins,
     prompt_log,
     scene_ids,
@@ -71,6 +72,10 @@ def repad(cid: str, width: int) -> None:
     # failure lands with every scene already renamed and the other stores still
     # pointing at the old ids; here it costs nothing but the request.
     alternates.clear_destinations(cid, set(mapping.values()))
+    # ...and the review sidecar, for the same reason and a sharper one: an
+    # inherited review carries a commit token, so saving it would write a dead
+    # scene's summary into the chronicle under this scene's id.
+    pending_reviews.clear_destinations(cid, set(mapping.values()))
     for old, new in mapping.items():
         paths._scene_path(cid, old).rename(paths._scene_path(cid, new))
     scene_refs.repoint(cid, mapping)
