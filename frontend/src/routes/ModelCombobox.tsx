@@ -8,6 +8,7 @@ export default function ModelCombobox({
   error = false,
   ariaLabel,
   placeholder,
+  disabled = false,
 }: {
   value: string;
   onChange: (id: string) => void;
@@ -19,6 +20,11 @@ export default function ModelCombobox({
   /** What an EMPTY value falls back to, shown in the box. Only a picker whose
    *  blank means something other than "unset" has one to offer. */
   placeholder?: string;
+  /** Refuse input while the caller cannot yet say what an empty box means —
+   *  the reroll picker's `placeholder` is the model its route will run, and
+   *  until the route is known the control has nothing true to tell the reader
+   *  and nothing to attribute what they type to (#77, Codex review). */
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -42,7 +48,7 @@ export default function ModelCombobox({
   // than on `open`, because review caught it swallowing Escape for a list that
   // was not there — leaving Escape a dead key for every custom endpoint with
   // nothing cached, which is most of them.
-  const listShown = open && !error && matches.length > 0;
+  const listShown = open && !disabled && !error && matches.length > 0;
 
   function select(id: string) {
     onChange(id);
@@ -56,6 +62,7 @@ export default function ModelCombobox({
         type="text"
         aria-label={ariaLabel}
         placeholder={placeholder}
+        disabled={disabled}
         value={value}
         onChange={(e) => {
           onChange(e.target.value);
