@@ -706,3 +706,24 @@ def test_a_refusal_with_no_kind_still_reaches_the_client_as_words(client, scene)
     assert routes.scenes._run_error(
         routes.scenes.HTTPException(status_code=400, detail="nothing to absorb")) == {
             "kind": "refused", "detail": "nothing to absorb", "status": 400}
+
+
+def test_a_cancel_whose_scene_cannot_be_resolved_still_removes_the_record(
+        client, scene, monkeypatch):
+    """A Cancel that cannot find a run still has a record to remove.
+
+    Raising here instead would make the transient case -- a scene header a sync
+    client is holding for a moment -- the one in which the reviewer cannot
+    dismiss a review at all, which is the opposite of what a Discard is for.
+    """
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    generation = _pending(client, cid, sid)["generation"]
+
+    def unreadable(*_a, **_kw):
+        raise OSError("the scene header is locked just now")
+
+    monkeypatch.setattr(routes.runs.scenes, "scene_identity_strict", unreadable)
+    gone = review_runs.cancel(client, cid, sid, generation)
+    assert gone.status_code == 200 and gone.json() == {"removed": True, "stopped": 0}
+    assert store.pending_reviews.read(cid, sid) is None
