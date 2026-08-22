@@ -176,7 +176,14 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // often there blanks a question under a reader mid-decision; firing too often
   // here costs one extra copy of a campaign that may not have needed it, which
   // is the side to be wrong on.
-  useEffect(() => { setCheckpointed(false); }, [refreshKey]);
+  //
+  //: The counter exists because `refreshKey` cannot answer this question from
+  //: inside an `await`: it is a prop, so a handler reads whatever it captured
+  //: when it was called. Clearing the marker in the effect is not enough on its
+  //: own — a fork still in flight writes the marker back afterwards and undoes
+  //: the invalidation, which is the case this counter closes.
+  const refreshGen = useRef(0);
+  useEffect(() => { refreshGen.current += 1; setCheckpointed(false); }, [refreshKey]);
 
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
   const ready = mode === "days" ? !isNaN(parseInt(days, 10)) : !!target;
@@ -286,19 +293,32 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     try {
       if (!checkpointed) {
         const name = forkName.trim();
+        const took = refreshGen.current;
         const report = await api.forkCampaign(cid, name);
         // The sharpest case for the rule above. A copy of A recorded as B's
         // means a large skip in B offers "Retry the skip", takes no copy at
         // all, and advances anyway — the feature failing silently in exactly
         // the direction it exists to prevent.
         if (!stillShowing(cid)) return;
-        setCheckpointed(true);
+        // A copy is of whatever the campaign was when `copytree` ran. A turn
+        // landing while it ran is on one side of that or the other — the lock
+        // decides, and nothing here can see which way it went. So a copy taken
+        // across a change counts as a copy, not as a checkpoint: the reader is
+        // told it exists and told what it might be missing, and the marker
+        // stays clear so a retry takes a fresh one rather than reusing this.
+        // Assuming the worse of the two costs one `copytree` on a path that is
+        // already a failure; assuming the better one hands back a restore point
+        // quietly missing a turn.
+        const current = refreshGen.current === took;
+        if (current) setCheckpointed(true);
         // A fork from where the campaign stands cuts nothing, so `forkNotes` is
         // almost always "". Shown when it is not, on the same footing the shelf
         // and the campaign page show it — a checkpoint that quietly came up
         // short is worse than one that says so.
         const notes = forkNotes(report);
         setSaved(`Checkpoint saved: “${name}” is on the campaigns shelf.`
+                 + (current ? "" : " The campaign changed while it was being"
+                                 + " copied, so it may not hold the latest turn.")
                  + (notes ? ` ${notes}` : ""));
       }
       await runAdvance();
