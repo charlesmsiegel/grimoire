@@ -224,6 +224,31 @@ test.each([
   expect(onOuterEscape).toHaveBeenCalledTimes(1);
 });
 
+test("Enter on the connection select belongs to the menu, not to the popover", async () => {
+  // Codex review: a keyboard reader confirming an option with Enter had the
+  // keydown bubble up and commit the reroll before the select's own default
+  // applied — sending the turn through the route they were replacing.
+  const onOuterEnter = vi.fn();
+  const onOuterEscape = vi.fn();
+  render(
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div onKeyDown={(e) => {
+      if (e.key === "Enter") onOuterEnter();
+      if (e.key === "Escape") onOuterEscape();
+    }}>
+      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />
+    </div>);
+  const select = await screen.findByLabelText("Reroll connection");
+
+  fireEvent.keyDown(select, { key: "Enter" });
+  expect(onOuterEnter).not.toHaveBeenCalled();
+
+  // Escape still bubbles: backing out of the popover from any of its three
+  // controls is deliberate.
+  fireEvent.keyDown(select, { key: "Escape" });
+  expect(onOuterEscape).toHaveBeenCalledTimes(1);
+});
+
 test("Enter closes the model dropdown before it commits anything above it", async () => {
   (getModels as any).mockResolvedValue(
     [{ id: "vendor/bigger", name: "Bigger", context: 200000, prompt: null, completion: null }]);
