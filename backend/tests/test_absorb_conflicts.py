@@ -64,7 +64,7 @@ def test_a_lore_body_that_moved_since_staging_is_reported_not_overwritten(monkey
 
     assert applied == []
     assert failures == [{"id": "lore:the-pact", "kind": "conflict",
-                         "reason": "this entry changed since the scene was absorbed"}]
+                         "reason": "this record changed since the scene was absorbed"}]
     assert entities.read_entity(croot, "lore", "the-pact")["body"].strip() == (
         "Signed at dusk.\n\nWitnessed by the harbour watch.")
 

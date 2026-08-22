@@ -230,7 +230,7 @@ const PACT_CONFLICT = {
   id: "lore:the-pact", label: "The Pact — lore", kind: "lore", field: "body",
   before: "Signed at dusk.", after: "Signed at dusk.\n\nBroken by morning.",
   stored: "Witnessed by the watch.",
-  reason: "this entry changed since the scene was absorbed",
+  reason: "this record changed since the scene was absorbed",
   mergeable: true, merged: "Witnessed by the watch.\n\nBroken by morning.",
   index: 0,
 };
@@ -283,7 +283,7 @@ test("the ordinary end-of-scene review carries no contradiction badges", async (
 test("a refused save keeps the review open and shows what the record now says", async () => {
   await reviewIntoConflict();
   expect(screen.getByText("Witnessed by the watch.")).toBeTruthy();
-  expect(screen.getByText(/this entry changed since the scene was absorbed/)).toBeTruthy();
+  expect(screen.getByText(/this record changed since the scene was absorbed/)).toBeTruthy();
   // The review survives untouched -- nothing was written, so it is savable again.
   expect(screen.getByLabelText("Scene summary")).toBeTruthy();
   expect(screen.getByRole("button", { name: /Keep stored The Pact/ })).toBeTruthy();
