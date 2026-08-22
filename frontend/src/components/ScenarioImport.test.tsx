@@ -248,6 +248,13 @@ test("the entry category options are the server's kinds, and an unknown one comm
 test("a kinds read that fails leaves the entry dropdown on the build's own kinds", async () => {
   (api.entityKinds as any).mockRejectedValue(new Error("offline"));
   await readCard();
+  // See the note in LorebookImport.test.tsx: the built-ins are also the initial
+  // state, so the call itself has to be asserted.
+  expect(api.entityKinds).toHaveBeenCalled();
   const select = screen.getByLabelText<HTMLSelectElement>("entry category 0");
   expect([...select.options].map((o) => o.value)).toEqual([...ENTITY_KINDS]);
+
+  // and the import the user came for still goes through
+  fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
+  await waitFor(() => { expect(api.scenarioImport).toHaveBeenCalled(); });
 });

@@ -48,8 +48,12 @@ export function useEntityKinds(enabled: boolean): string[] {
         // dropdown makes every row uncommittable, which is strictly worse than
         // a list that is merely out of date.
         if (live && Array.isArray(fresh) && fresh.length > 0) setKinds(fresh);
-      } catch {
-        // Keep the built-ins. See above.
+      } catch (err) {
+        // Keep the built-ins — but say so. Offline this is expected and
+        // harmless; a renamed or removed `api.entityKinds` lands here too, and
+        // a silent catch would leave that shipping as a permanently stale
+        // dropdown with nothing anywhere to notice it.
+        console.warn("entity kinds unavailable; using this build's own list", err);
       }
     })();
     return () => { live = false; };

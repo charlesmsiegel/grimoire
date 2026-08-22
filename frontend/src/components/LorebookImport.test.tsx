@@ -81,9 +81,21 @@ test("a kinds read that fails leaves the dropdown on the build's own kinds", asy
   // import they already parsed.
   (api.entityKinds as any).mockRejectedValue(new Error("offline"));
   await parsed();
+  // `toHaveBeenCalled` first: `ENTITY_KINDS` is also the hook's initial state,
+  // so asserting the options alone would pass with the read deleted outright.
+  expect(api.entityKinds).toHaveBeenCalled();
   expect(options("category 0")).toEqual([...ENTITY_KINDS]);
   fireEvent.click(screen.getByRole("button", { name: /import 2 entries/i }));
   await screen.findByText(/imported 2 entries/i);
+});
+
+test("an empty or malformed kind list is treated as no answer", async () => {
+  // An empty dropdown makes every row uncommittable, which is worse than a
+  // list that is merely out of date.
+  (api.entityKinds as any).mockResolvedValue({ kinds: [] });
+  await parsed();
+  expect(api.entityKinds).toHaveBeenCalled();
+  expect(options("category 0")).toEqual([...ENTITY_KINDS]);
 });
 
 test("a row whose kind the list is missing keeps it, rather than displaying another one", async () => {
