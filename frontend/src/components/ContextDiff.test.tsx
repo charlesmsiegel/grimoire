@@ -266,11 +266,11 @@ test("identical sections and identical cuts really do say nothing changed", () =
   expect(screen.queryByText(/dropped to fit/)).toBeNull();
 });
 
-test("identical words at a different cost say why, rather than a bare delta", () => {
-  // Conversation history counts per MESSAGE, so a change in how the transcript
-  // groups moves the total while the joined text stays byte-identical — which
-  // is what a PC rename does, her blocks reparsing from `user` to `assistant`
-  // and merging runs that used to alternate.
+test("identical words at a different cost say so, rather than a bare delta", () => {
+  // Byte-identical text whose total moved: a change in how the transcript
+  // groups (history counts per message), a store captured on Android and
+  // compared on desktop, a trailing newline `splitlines` cannot see. The delta
+  // alone reads as an unexplained discrepancy in a panel built to be trusted.
   render(<ContextDiff diff={diff({
     sections: [section({ id: "history", label: "Conversation history", status: "changed",
                          base: facts({ tokens: 54 }), head: facts({ tokens: 42 }),
@@ -289,18 +289,21 @@ test("a section with lines to show is not given the counted-differently note", (
   expect(screen.queryByText(/counted differently/)).toBeNull();
 });
 
-test("a non-history section is not told a story about the transcript", () => {
-  // The grouping explanation is specific to Conversation history. Any other
-  // section reaching the same condition — a trailing newline `splitlines`
-  // cannot see, a tokenizer rounding boundary — gets the honest answer instead.
-  render(<ContextDiff diff={diff({
-    sections: [section({ id: "lore", label: "World lore", status: "changed",
-                         base: facts({ tokens: 40 }), head: facts({ tokens: 41 }),
-                         diff: [] })],
-  })} />);
-  screen.getByText(/what moved is the measurement, not the words/);
-  expect(screen.queryByText(/grouped into a different number of messages/)).toBeNull();
-});
+test.each([["history", "Conversation history"], ["lore", "World lore"]])(
+  "the counted-differently note names no cause it cannot check (%s)", (id, label) => {
+    // Not even for history, where message regrouping is a real cause: an
+    // identical transcript captured on Android (`store/tokens.py` falls back to
+    // a character count without tiktoken) and compared on desktop differs in
+    // tokens with nothing regrouped, and `PromptDiffFacts` carries neither the
+    // counter nor the grouping to tell those apart.
+    render(<ContextDiff diff={diff({
+      sections: [section({ id, label, status: "changed",
+                           base: facts({ tokens: 40 }), head: facts({ tokens: 41 }),
+                           diff: [] })],
+    })} />);
+    screen.getByText(/what moved is the measurement, not the words/);
+    expect(screen.queryByText(/grouped into a different number of messages/)).toBeNull();
+  });
 
 test("a one-sided history section still reports its trimming", () => {
   // An opener against a later turn: history exists on one side only, and its

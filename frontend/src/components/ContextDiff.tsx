@@ -234,21 +234,19 @@ function flagNotes(section: PromptDiffSection): string[] {
     notes.push(`History trimmed: ${base.trimmed} → ${head.trimmed} messages`
                + " cut from the front.");
   // Identical words, different cost, and nothing above accounted for it. The
-  // note says only what is known, which review caught the first version getting
-  // wrong: it named message regrouping for EVERY section, and that cause is
-  // specific to Conversation history — whose tokens are counted per message, so
-  // a PC rename reparsing her blocks from `user` to `assistant` merges runs that
-  // used to alternate. Any other section reaching this line got told a story
-  // about a transcript it is not part of; there the honest answer is that the
-  // measurement moved and the words did not (a trailing newline `splitlines`
-  // cannot see, a tokenizer rounding boundary).
+  // note names the SYMPTOM and stops there, because none of the candidate
+  // causes is in the payload. Message regrouping is one (history counts per
+  // message, so a PC rename reparsing her blocks from `user` to `assistant`
+  // merges runs that used to alternate), a different counter is another —
+  // `store/tokens.py` falls back to a character count wherever tiktoken is
+  // unimportable, which is every Android capture, and a store in a synced
+  // folder is compared on whichever device opened it. A trailing newline
+  // `splitlines` cannot see and a tokenizer rounding boundary are two more.
+  // `PromptDiffFacts` records neither the counter nor the grouping, so naming
+  // any one of them is a guess printed in the voice of a fact.
   if (section.diff.length === 0 && base.tokens !== head.tokens && !notes.length)
-    notes.push(section.id === "history"
-      ? "Identical text, counted differently — the transcript grouped into a"
-        + " different number of messages, and each one carries its own framing"
-        + " allowance."
-      : "Identical text, counted differently — what moved is the measurement,"
-        + " not the words.");
+    notes.push("Identical text, counted differently — what moved is the"
+               + " measurement, not the words.");
   return notes;
 }
 
