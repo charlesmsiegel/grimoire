@@ -23,11 +23,12 @@ from __future__ import annotations
 import ast
 import json
 import pathlib
+import re
 
 import pytest
 
-from grimoire import llm_errors, routes
-from grimoire.llm_errors import LLMError
+from grimoire import llm, llm_errors, routes
+from grimoire.llm_errors import KINDS, LLMError
 from grimoire.routes import common
 from tests.llm_fakes import FailingOpenRouter, FakeCatalog
 
@@ -298,3 +299,44 @@ def test_a_streamed_failure_still_answers_200_with_an_in_band_error(client):
     # The frame carries more than this (`post_returned`, which is the streaming
     # path's own business); what matters here is that the taxonomy travels in it.
     assert [(e["detail"], e["kind"]) for e in errors] == [("slow down", "rate_limit")]
+
+
+# ---- and the browser reads the same taxonomy (#146) ----
+FRONTEND = SRC.parents[3] / "frontend" / "src"
+
+
+def _string_set(source: str, name: str) -> set[str]:
+    """The string literals of a `const NAME = new Set([...])` in a TS file.
+
+    Read as text rather than executed: a python test cannot import TypeScript,
+    and the alternative — trusting the two lists to be kept in step by hand —
+    is what this exists to stop. `test_android_manifest.py` reads XML from here
+    for the same reason: the file has to be opened by *something* in the
+    ordinary gate, or a change to it is checked by nothing at all.
+    """
+    block = re.search(rf"{name} = new Set\(\[(.*?)\]\)", source, re.DOTALL)
+    assert block, f"{name} is no longer a `new Set([...])` — this guard reads it as text"
+    return set(re.findall(r'"([a-z_]+)"', block.group(1)))
+
+
+def test_the_browser_and_the_backend_agree_on_what_a_provider_failure_is():
+    """`errors.ts` decides whether a failure means "the provider's status just
+    changed" (#146), and it decides it by listing the kinds. A kind added to
+    `llm_errors.KINDS` and not here is a failure the status bar would never
+    notice; one listed here and not there is a `kind` from some other route
+    being read as an LLM going down, which is the confusion the list exists to
+    prevent — `PUT /config/data-dir` answers `data_dir`.
+    """
+    front = _string_set((FRONTEND / "api" / "errors.ts").read_text(encoding="utf-8"),
+                        "PROVIDER_KINDS")
+    assert front == set(KINDS)
+
+
+def test_the_browser_and_the_backend_agree_on_which_kinds_have_a_catalog():
+    """Same drift, one layer along (#149): `ConnectionEditor` decides whether to
+    offer a Fetch-models button, and a button offered for a kind the route
+    refuses can only ever produce a 400."""
+    source = (FRONTEND / "components" / "ConnectionEditor.tsx").read_text(encoding="utf-8")
+    block = re.search(r"LISTABLE: LLMConnectionKind\[\] = \[(.*?)\]", source, re.DOTALL)
+    assert block, "LISTABLE is no longer an array literal — this guard reads it as text"
+    assert set(re.findall(r'"([a-z_]+)"', block.group(1))) == set(llm.LISTABLE_KINDS)
