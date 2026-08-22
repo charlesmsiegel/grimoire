@@ -59,6 +59,20 @@ test("the send chord sends once, not once per listener, from inside the composer
   await waitFor(() => expect(api.chat).toHaveBeenCalledTimes(1));
 });
 
+// An absorbed scene has its summary written and its changes applied, which is
+// why the composer is REPLACED by "Scene complete" rather than disabled: a post
+// added now sits outside the record already taken of it. A chord that still
+// sent would put one there (PR #400 review).
+test("the send chord is inert on a scene already absorbed", async () => {
+  (api.listScenes as any).mockResolvedValue(
+    [{ id: "s1", title: "Old", model: "", created: "", updated: "", done: true }]);
+  renderCampaign();
+  await screen.findByText(/scene complete/i);
+  press("Enter", { metaKey: true });
+  await waitFor(() => expect(api.getScene).toHaveBeenCalled());
+  expect(api.chat).not.toHaveBeenCalled();
+});
+
 test("N opens the new-scene chooser", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
