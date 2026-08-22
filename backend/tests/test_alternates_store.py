@@ -582,6 +582,20 @@ def test_a_calendar_plugins_long_date_cannot_overflow_the_id(monkeypatch, tmp_pa
     assert len(f"{sid}.alts.json") <= 255
 
 
+def test_every_sidecar_still_fits_after_the_headroom_is_spent():
+    """The cap is `MAX_SID` plus `_ID_HEADROOM`, and the headroom is not
+    decoration: `uniquify` appends `-2`.. when a truncation collides and
+    `repad` widens the number prefix, so a real id on disk can be that long.
+    Budgeting for the shortest sidecar is the bug this arithmetic already
+    carries a comment about; `.review.json` (#396) is two bytes longer again
+    than the `.alts.json` that comment names, and an id that fits every other
+    sidecar and not that one is a scene whose absorb is refused after it is
+    minted, permanently, for a reason the reader can only fix by renaming."""
+    longest = scene_ids.MAX_SID + scene_ids._ID_HEADROOM
+    for suffix in (".md", ".alts.json", ".review.json"):
+        assert longest + len(suffix) <= scene_ids._MAX_COMPONENT, suffix
+
+
 def test_the_legacy_migration_finds_an_unclearable_destination_first_too(monkeypatch, tmp_path):
     """`repad` was not the only path that renames every transcript before
     repointing: the startup migration for legacy ids does the same, and its

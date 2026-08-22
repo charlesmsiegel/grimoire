@@ -93,6 +93,15 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // failed. Bumped rather than a boolean, so a Stop belongs to one absorb: a
   // flag would still be set when the next End scene answered.
   const absorbStopRef = useRef(0);
+  // Which absorb the READER stopped, as against which ones are merely
+  // superseded. `absorbStopRef` answers "is this answer still wanted", and
+  // three things move it: a Stop, a Cancel, and the campaign reset. Only the
+  // first of those wants the run DELETED, and `endScene`'s `hold` -- the
+  // precancel that fires when a Stop beat the 202 -- had no way to tell them
+  // apart: leaving a campaign mid-absorb sent a Discard for the campaign just
+  // left, unlinking the whole end-of-scene generation the reset exists to
+  // preserve, silently, because the failure path is campaign-guarded.
+  const stoppedGenRef = useRef<number | null>(null);
   // A Discard still on its way to the server. `DELETE .../pending-review`
   // answers only once the runs it flagged have really stopped, and until it
   // does they are still holding the scene's exclusion key -- so an End scene
@@ -299,6 +308,11 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // as the DELETE takes to answer. The request is left to finish; only this
     // page's belief that it is holding something is dropped.
     setSettlingSid(null);
+    // ...including the promise `endScene` waits on before it posts. Left here,
+    // End scene in the NEW campaign blocks on the old one's DELETE -- which
+    // itself waits up to the server's cancellation timeout per flagged run --
+    // and never posts at all if that request hangs.
+    discardRef.current = null;
     setEditRows([]);
     setConflicts([]);
     setSaveError(null);
@@ -505,6 +519,11 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
           setGeneration(g);
           return;
         }
+        // Superseded, but by what? A campaign switch and a second End scene
+        // both move the counter and neither wants this run's review deleted --
+        // it is still being prepared and still wanted, on disk, where the next
+        // mount adopts it. Only the Stop that named THIS absorb does.
+        if (stoppedGenRef.current !== stopGen) return;
         // Reported, not swallowed. `stopAbsorb` had no generation to name when
         // the reader pressed Stop, so this is the ONLY cancellation this Stop
         // ever gets: a network or busy failure here leaves an unbounded run
@@ -657,6 +676,9 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   async function stopAbsorb() {
     const sid = absorbSid ?? activeId;
     const gen = generationRef.current;
+    // Recorded BEFORE the bump, so it names the absorb being stopped. This is
+    // the reader's statement, and the only one that authorises a DELETE.
+    stoppedGenRef.current = absorbStopRef.current;
     absorbStopRef.current++;          // this absorb's answer is no longer wanted
     // BOTH flags. An absorb this browser started sets `absorbing`; one it
     // merely found and waited out sets `adopting`, and Stop is offered for

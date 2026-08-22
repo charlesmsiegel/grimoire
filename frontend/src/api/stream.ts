@@ -48,6 +48,10 @@ export type RunHandle = {
    *  with it. Attaching to a review's (empty) frame stream would show an
    *  endless empty reply over a scene that is being absorbed perfectly well. */
   cls?: "turn" | "review" | "background" | "draft";
+  /** Which piece of work within that class — `absorb`, `audit`, `dossiers`,
+   *  `chat`, … . A whole review's worth of runs share one `cls`, so this is
+   *  what tells the absorb apart from a retry of one of its phases. */
+  kind?: string;
   /** Which pending review a `review` run is preparing. Cancel is addressed to
    *  the review rather than to one of the runs building it, so this is what a
    *  client discovering an absorb after a reload needs in order to stop it. */
