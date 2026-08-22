@@ -298,7 +298,7 @@
     "PERF401": 1
   },
   "backend/src/grimoire/store/overlay.py": {
-    "RET504": 3,
+    "RET504": 2,
     "SIM105": 2
   },
   "backend/src/grimoire/store/pcs.py": {

@@ -12952,10 +12952,18 @@ def test_restoring_the_world_text_over_a_tombstone_is_a_real_divergence(client):
 def test_clearing_an_uninherited_campaign_anchor_leaves_no_tombstone(client):
     """With no world anchor there is nothing to suppress, and a tombstone would
     be a standing promise to ignore one the world might add later -- which is
-    not what clearing an already-empty field says."""
+    not what clearing an already-empty field says.
+
+    Read on a character the campaign MATERIALIZED from its world, not one it
+    created. A campaign-created actor is `detached` from birth (#225), so it
+    inherits nothing by design and could not tell a missing tombstone from a
+    working one -- it would pass this test with the tombstone bug fully
+    present. The claim is about the tombstone; the world anchor arriving late
+    is how the claim is read back, so it has to be a world anchor this
+    campaign would really take."""
     wid, cid = _campaign(client)
-    store.overlay.create_character(cid, "Winifred", "default",
-                                   store.characters.blank_card("Winifred"))
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"})
+    store.overlay.materialize_actor(cid, "characters", "winifred")
     client.put(f"/api/campaigns/{cid}/characters/winifred/voice-anchor",
                json={"voice_anchor": ""})
     assert not store.voice_anchors.read_record(
@@ -12963,6 +12971,19 @@ def test_clearing_an_uninherited_campaign_anchor_leaves_no_tombstone(client):
 
     store.voice_anchors.write(store.worlds.world_root(wid), "winifred", "Added later.")
     assert store.overlay.voice_anchor(cid, "winifred") == "Added later."
+
+
+def test_clearing_a_campaign_made_characters_anchor_leaves_no_tombstone(client):
+    """The campaign-created half of the same rule, which now has to be asked
+    separately: she inherits nothing either way, so the only thing left to
+    check is the record itself."""
+    _wid, cid = _campaign(client)
+    store.overlay.create_character(cid, "Winifred", "default",
+                                   store.characters.blank_card("Winifred"))
+    client.put(f"/api/campaigns/{cid}/characters/winifred/voice-anchor",
+               json={"voice_anchor": ""})
+    assert not store.voice_anchors.read_record(
+        store.campaigns.campaign_root(cid), "winifred")["disabled"]
 
 
 def test_a_standing_tombstone_survives_the_world_anchor_going_away(client):

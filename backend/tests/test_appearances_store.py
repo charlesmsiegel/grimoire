@@ -3,7 +3,17 @@ import shutil
 import pytest
 
 from grimoire.store import appearances as ap
-from grimoire.store import assets, campaigns, characters, dossiers, overlay, pcs, scenes, worlds
+from grimoire.store import (
+    assets,
+    campaigns,
+    characters,
+    dossiers,
+    overlay,
+    pcs,
+    scenes,
+    taglines,
+    worlds,
+)
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
@@ -575,3 +585,50 @@ def test_actor_source_reads_emergent_for_a_campaign_whose_world_ref_is_blank(mon
     mp.write_text(dump_frontmatter({**meta, "world": ""}, body), encoding="utf-8")
     assert not campaigns.world_root_of(cid).is_dir()
     assert ap.actor_source(cid, "characters", "seraphine") == "emergent"
+
+
+def test_actor_source_stays_emergent_when_the_world_later_takes_the_slug(monkeypatch, tmp_path):
+    """A campaign-invented character keeps her own identity when a world
+    character is later created under the same slug (Codex review, #225).
+
+    `overlay.create_character` allocates against the world as it stands, which
+    is what makes a world record claiming that id *afterwards* a stranger --
+    the same position a spared copy is in once its world original is deleted.
+    Reading her as that stranger's, diverged, is the exact mistake `detached`
+    exists to prevent, arrived at from the other direction."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    aid, vid = overlay.create_character(cid, "Winifred")
+    ap.appear(cid, "s1", "characters", aid, vid, "npc")
+    assert ap.actor_source(cid, "characters", aid) == "emergent"
+
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    stranger, _ = characters.create_character(
+        wroot, "Winifred", "default",
+        {"data": {"name": "Winifred", "description": "someone else entirely"}})
+    assert stranger == aid                       # the slug really did collide
+    assert ap.actor_source(cid, "characters", aid) == "emergent"
+
+
+def test_a_campaign_made_actor_takes_nothing_from_the_slugs_later_owner(monkeypatch, tmp_path):
+    """The half of the same bug that has nothing to do with badges: a campaign
+    character invented before the world had that slug used to inherit the
+    stranger's avatar and tagline the moment the world claimed it."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    aid, vid = overlay.create_character(cid, "Winifred")
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    characters.create_character(wroot, "Winifred", "default",
+                                {"data": {"name": "Winifred", "description": "someone else"}})
+    assets.put_image(wroot, aid, "default", "avatar", b"\x89PNG\r\n\x1a\nx", "png")
+    taglines.write(wroot, aid, "the stranger's tagline")
+    assert overlay.list_images(cid, aid, vid) == []
+    assert overlay.tagline(cid, aid) == ""
+
+
+def test_a_campaign_made_pc_is_its_own_from_birth(monkeypatch, tmp_path):
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    pid, vid = overlay.create_pc(cid, "Mara", [])
+    ap.appear(cid, "s1", "pcs", pid, vid, "player")
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    stranger, _ = pcs.create_pc(wroot, "Mara", [])
+    assert stranger == pid
+    assert ap.actor_source(cid, "pcs", pid) == "emergent"
