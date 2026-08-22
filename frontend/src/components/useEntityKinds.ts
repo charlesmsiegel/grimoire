@@ -10,10 +10,14 @@ import { ENTITY_KINDS } from "../api/types";
  *  Server-first, built-in as the floor. `GET /api/entity-kinds` is
  *  `store.entities.ENTITY_KINDS` itself, and `lorebook.commit` /
  *  `scenario.apply` validate against that same tuple — so every option this
- *  offers is one they accept, and a kind added to it reaches the dropdown
- *  without either dialog being edited. (The frontend's own `ENTITY_KINDS`
- *  still has to learn it — see the guard named at the bottom of this note.) The list starts on this build's own kinds so the table is
- *  usable on the first frame, and a failed read keeps them: an auxiliary GET
+ *  offers is one they accept (`kindOptions` below is the one deliberate
+ *  exception, for the reason given there), and a kind added to it reaches the
+ *  dropdown without either dialog being edited. (The frontend's own
+ *  `ENTITY_KINDS` still has to learn it — see the guard named at the bottom of
+ *  this note.)
+ *
+ *  The list starts on this build's own kinds so the table is usable on the
+ *  first frame, and a failed read keeps them: an auxiliary GET
  *  must not take the Category column down beside an import the user has
  *  already parsed and is about to commit. `string[]` rather than
  *  `EntityKind[]`, because the server is allowed to know a kind this build does
