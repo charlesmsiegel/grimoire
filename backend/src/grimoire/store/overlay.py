@@ -182,19 +182,36 @@ def detached(cid: str) -> set[str]:
 
 
 def add_detached(cid: str, ref: str) -> None:
-    """Mark `ref` detached.
+    """Mark `ref` detached. UNDER `campaign_lock`, unlike its two siblings.
 
-    Read-modify-write, and deliberately unserialized: two concurrent world
-    deletes whose campaigns both own a copy can each read this file and each
-    replace it, losing one marker (Codex review). That is true, and it is the
-    same shape as `add_deleted` beside it and `campaigns.paths.write_manifest`
-    below it -- the latter is named in `locks.OUTSIDE_DOMAIN` as exactly this
-    known gap, and `overlay` sits in `locks.UNREVIEWED` because nothing here
-    serializes. Giving this one file a lock its two siblings do not have would
-    not make the campaign ledger safe; it would only make the gap harder to
-    find. Closing it is the review that takes `overlay` out of that backlog."""
-    atomic.write_text(_detached_path(cid),
-                      json.dumps(sorted(detached(cid) | {ref}), indent=2) + "\n")
+    Read-modify-replace, so two unserialized writers each read this file and
+    each replace it, losing one marker. This used to be left open, and the
+    argument was that `add_deleted` beside it and `campaigns.paths.write_manifest`
+    below it have the identical shape -- the latter named in
+    `locks.OUTSIDE_DOMAIN` as exactly that known gap -- so giving this one file
+    a lock its siblings lack would not make the campaign ledger safe, only make
+    the gap harder to find.
+
+    What changed is the write rate. That argument was written when the only
+    caller was the world-delete sweep, where losing a marker takes two deletes
+    landing on one campaign at once. `_mark_campaign_owned` now writes here on
+    every campaign actor creation, so the sweep races ordinary play, and a lost
+    marker silently un-fixes one actor -- no error, nothing to see until a slug
+    collision hands her a stranger's assets (Codex review, twice). A hazard
+    that common is not one to leave standing on the grounds that its neighbours
+    share it.
+
+    So the asymmetry is real and deliberate: `detached.json` is serialized;
+    `deleted.json` and the manifest keep their documented gap. Stated here
+    rather than left to be discovered, and it does NOT take `overlay` out of
+    `locks.UNREVIEWED` -- that review is still owed, and this is one file of
+    the three it has to settle.
+
+    Reentrant, so `create_character`, which holds the lock across the create
+    and this mark to make the pair atomic, pays nothing for it."""
+    with locks.campaign_lock(cid):
+        atomic.write_text(_detached_path(cid),
+                          json.dumps(sorted(detached(cid) | {ref}), indent=2) + "\n")
 
 
 def _undetach(cid: str, ref: str) -> None:
@@ -204,10 +221,18 @@ def _undetach(cid: str, ref: str) -> None:
     campaign's copy is its own. Delete that copy and the statement has no
     subject -- but it would keep suppressing the per-file resolvers, so a later
     world record of the same slug would list in the campaign with its images
-    and sidecars hidden (Codex review)."""
-    keep = detached(cid) - {ref}
-    if keep != detached(cid):
-        atomic.write_text(_detached_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
+    and sidecars hidden (Codex review).
+
+    UNDER `campaign_lock`, for `add_detached`'s reason: this rewrites the whole
+    ledger to remove one ref, so an unserialized run of it drops whatever
+    markers landed since it read -- including an actor marker it has nothing to
+    do with, since entity and greeting deletes come through here too. Locking
+    only the writers that ADD would leave the file racing the ones that
+    subtract."""
+    with locks.campaign_lock(cid):
+        keep = detached(cid) - {ref}
+        if keep != detached(cid):
+            atomic.write_text(_detached_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
     # Images deleted while detached tombstoned SLOTS of a record that is now
     # gone. Reattaching without clearing them inherits the world's replacement
     # with its avatar still hidden (Codex review) -- the same reasoning as the
@@ -1383,7 +1408,7 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
     for cid in cids:
         try:
             _forget_in_campaign(cid, kind, rid, wroot)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, locks.StoreBusy) as exc:
             # Per campaign, not per sweep: an unreadable sync.md used to raise
             # through the loop, so one damaged campaign cost every LATER
             # dependent its cleanup -- and the route 500'd on a delete that had
@@ -1392,6 +1417,15 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
             # reaches `json.loads` here and raises JSONDecodeError, which is a
             # ValueError and not a decode error (Codex review). The wider catch
             # covers both, since both mean "this campaign's file is garbage".
+            #
+            # StoreBusy joins them now that `add_detached`/`_undetach` take the
+            # campaign lock: a campaign busy for LOCK_TIMEOUT would otherwise
+            # abort the sweep for every campaign after it and 500 a delete that
+            # has already happened -- reintroducing, by a new route, exactly the
+            # failure the paragraph above records fixing. Skipping one campaign
+            # leaves it at the pre-#225 behaviour, which `_dependent_campaigns`
+            # already names as the acceptable direction for a sweep that cannot
+            # run.
             log.warning("could not finish sweeping campaign %s after %s/%s was deleted "
                         "(%s) -- a record recreated under that id may inherit its state",
                         cid, kind, rid, exc)
