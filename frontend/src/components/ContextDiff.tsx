@@ -209,6 +209,17 @@ function flagNotes(section: PromptDiffSection): string[] {
   if (base.trimmed !== head.trimmed)
     notes.push(`History trimmed: ${base.trimmed} → ${head.trimmed} messages`
                + " cut from the front.");
+  // Identical words, different cost, and nothing above accounted for it. The
+  // case that produces this is Conversation history: its tokens are counted per
+  // MESSAGE, so a change in how the transcript groups into messages moves the
+  // total while the joined text stays byte-identical. Renaming a PC does
+  // exactly that — her old blocks stop matching the player list and reparse
+  // from `user` to `assistant`, which merges runs that used to alternate.
+  // Without this note the row is a bare token delta with no visible cause.
+  if (section.diff.length === 0 && base.tokens !== head.tokens && !notes.length)
+    notes.push("Identical text, counted differently — the transcript grouped into"
+               + " a different number of messages, and each one carries its own"
+               + " framing allowance.");
   return notes;
 }
 

@@ -265,3 +265,26 @@ test("identical sections and identical cuts really do say nothing changed", () =
   screen.getByText(/Nothing changed/);
   expect(screen.queryByText(/dropped to fit/)).toBeNull();
 });
+
+test("identical words at a different cost say why, rather than a bare delta", () => {
+  // Conversation history counts per MESSAGE, so a change in how the transcript
+  // groups moves the total while the joined text stays byte-identical — which
+  // is what a PC rename does, her blocks reparsing from `user` to `assistant`
+  // and merging runs that used to alternate.
+  render(<ContextDiff diff={diff({
+    sections: [section({ id: "history", label: "Conversation history", status: "changed",
+                         base: facts({ tokens: 54 }), head: facts({ tokens: 42 }),
+                         diff: [] })],
+  })} />);
+  screen.getByText(/Identical text, counted differently/);
+  screen.getByText("−12");
+});
+
+test("a section with lines to show is not given the counted-differently note", () => {
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed", base: facts({ tokens: 10 }),
+                         head: facts({ tokens: 20 }),
+                         diff: [{ op: "insert", text: "new" }] })],
+  })} />);
+  expect(screen.queryByText(/counted differently/)).toBeNull();
+});
