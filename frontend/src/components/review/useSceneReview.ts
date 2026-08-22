@@ -210,6 +210,15 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // running with nobody left to receive it and no disconnect for the server to
   // notice. Setting state from a cleanup on an unmounted component is the one
   // thing that must NOT happen here, hence the split.
+  //
+  // It abandons the POLL, not the run: a retry is a detached `review` run now
+  // (#396), so the server goes on making it and goes on holding the scene's
+  // exclusion key. That is deliberate rather than an oversight -- the only
+  // thing that stops a review run is `discardReview`, which DELETES the
+  // review, and destroying a reviewer's staged edits because they visited
+  // Configuration would be a far worse answer than a retry finishing into the
+  // record. Coming back to the scene re-adopts that record, and Cancel there
+  // is the escape hatch for a retry that never lands.
   function abortRetries() {
     auditAbortRef.current?.abort();
     dossierAbortRef.current?.abort();
@@ -620,15 +629,39 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
    *  that request on the way out. */
   function discard() {
     releaseRetries();
+    // Cancel is also a Stop, and has to say so in the one place the rest of
+    // this file reads. `endScene` and the adoption pass are both still capable
+    // of answering here: the adoption pass runs on the SAME run when the
+    // reader leaves the scene and comes back mid-absorb, and it can win and
+    // put the panel up while `endScene` is still polling. Without this bump
+    // that answer arrives after the DELETE, finds no review open, and installs
+    // the one the reader just threw away -- back on screen, and savable,
+    // because a record the DELETE removed no longer has a watermark to refuse
+    // it with. Same statement `stopAbsorb` makes, for the same reason.
+    absorbStopRef.current++;
+    // ...and the latches those two would have cleared in a `finally` that is
+    // now guarded against them. Left set, "Ending…" outlives the review it was
+    // announcing and End scene never comes back.
+    setAbsorbing(false);
+    setAdopting(false);
     // The review is on disk (#396), so throwing it away is a request and not a
-    // `setState`. Fire-and-forget: the panel closes now either way -- the
-    // reviewer asked for it -- and a record left behind by a failed DELETE is
-    // replaced by the next absorb or refused at save by its own watermark. It
-    // is also what STOPS a retry still generating for this review, which
-    // nothing else can do now that closing the connection is not a cancel.
+    // `setState`. The panel closes now either way -- the reviewer asked for it
+    // -- but the request is NOT fire-and-forget: a DELETE that fails leaves the
+    // record on disk with a watermark that still matches (nothing was played,
+    // the reader was reading), so the next mount adopts and re-opens the review
+    // they dismissed, and the run it was going to stop keeps holding the scene
+    // against play. That is the same thing `stopAbsorb` reports for, and the
+    // reader is owed it here for the same reason: the next thing they do is try
+    // to play in a scene they were told was free.
     const sid = absorbSid ?? activeId;
     const gen = generationRef.current;
-    if (sid && gen) noteDiscard(api.discardReview(cid, sid, gen).catch(() => {}), sid);
+    if (sid && gen) {
+      const stopping = api.discardReview(cid, sid, gen);
+      noteDiscard(stopping.catch(() => {}), sid);
+      void stopping.catch((err: unknown) => {
+        if (campaignRef.current === cid) fail(err, false);
+      });
+    }
     setAbsorb(null);
     setAbsorbSid(null);
     setGeneration(null);
@@ -976,11 +1009,18 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
 
   return {
     absorb, absorbSid, generation, staleReview, holdsScene,
-    /** A Discard whose DELETE has not answered. The play controls treat it as
-     *  the scene being held, because it is; End scene does not, because End
-     *  scene is the one operation that WAITS for it rather than being refused
-     *  by it -- the same reason Cancel is not disabled by `reviewBusy`. */
-    settling: settlingSid !== null,
+    /** Whether THIS scene is the one a Discard is still settling for. The play
+     *  controls treat that as the scene being held, because it is; End scene
+     *  does not, because End scene is the one operation that WAITS for it
+     *  rather than being refused by it -- the same reason Cancel is not
+     *  disabled by `reviewBusy`.
+     *
+     *  Scoped to the scene rather than answered campaign-wide, for the reason
+     *  `holdsScene` is: scene ids repeat across campaigns and a review outlives
+     *  a scene switch, so a Discard settling for scene A must not waive scene
+     *  B's lock -- which on B is not this Discard at all but the shielded-abort
+     *  window (#95) that End scene must never be pressed inside. */
+    settlesScene: (sid: string | null) => !!sid && settlingSid === sid,
     dismissStale: () => setStaleReview(null),
     editRows, reviewQuote, setReviewQuote,
     editChronicle, openSection, openDrawer,
