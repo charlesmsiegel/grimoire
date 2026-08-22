@@ -4990,6 +4990,33 @@ test("merely visiting an offscreen scene does not leave the next scene in Direct
   expect(screen.getByPlaceholderText(/speak your intent/i)).toBeInTheDocument();
 });
 
+test("a Direct turn that produced nothing keeps the one-shot length override", async () => {
+  // Codex review, against this change's own round-five fix. That fix hands the
+  // note back when a turn finishes cleanly having written nothing — but the
+  // turn still reported as landed, so `send` spent the one-shot override on
+  // it. The override was promised to the next REPLY, and no reply came; it
+  // rides with the note into the retry.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [], total: 0 });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => { onEvent({ done: true }); });
+  renderCampaign();
+  const picker = await screen.findByLabelText("Response length");
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));
+  fireEvent.change(picker, { target: { value: "terse" } });
+
+  fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+
+  // the note came back for another attempt...
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
+  // ...and so did the length chosen for the reply that never arrived
+  expect(screen.getByText(/next reply only/i)).toBeInTheDocument();
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the
