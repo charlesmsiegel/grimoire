@@ -113,17 +113,22 @@ def _validate_instance(sheets_def: dict, file_kind: str, sheet_type,
     return modules_validate.validate_sheet_values(sheets_def, sheet_type, fields)
 
 
-def _pool_spent(sheets_def: dict, pool_id: str, costs: dict, merged: dict) -> int:
+def _pool_spent(sheets_def: dict, pool_id: str, costs: dict, merged: dict) -> int | None:
     """What a value map spends against one creation pool, priced from its
     fields' floors -- the same arithmetic ``creation._checked_creation_write``
-    charges a spend at, run over values that are already stored."""
+    charges a spend at, run over values that are already stored.
+
+    ``None`` when any one costed field cannot be priced. Not a partial total:
+    a pool is a sum, so a field left out of it makes the WHOLE sum a number no
+    rule produced -- and it errs the flattering way, reporting a sheet as
+    having more left to spend than it does."""
     group_fields = pools._pool_group_fields(sheets_def, pool_id)
     spent = 0
     for field_key, cost in costs.items():
         value = merged.get(field_key)
         if (not isinstance(cost, int) or isinstance(cost, bool)
                 or not isinstance(value, int) or isinstance(value, bool)):
-            continue   # unjudgeable; see unspent_pools' docstring
+            return None
         spent += (value - pools._pool_floor(group_fields.get(field_key, {}))) * cost
     return spent
 
@@ -147,11 +152,14 @@ def unspent_pools(sheets_def: dict, type_id: str, fields: dict) -> dict[str, int
     whose schema defaults sit above its pool floors produces by construction --
     reporting only the underspend would quietly call that one complete.
 
-    Never raises. A budget expression that does not evaluate, a non-integer
-    cost, a field whose stored value is not an integer: each makes its pool (or
-    that one field) unjudgeable, and pack validation already reports the first
-    two as pack errors. Guessing here would put a number on the screen that no
-    rule produced.
+    Never raises, and never half-prices. A budget expression that does not
+    evaluate, a non-integer cost, a field whose stored value is not an integer:
+    each makes its POOL unjudgeable, and the pool is then absent rather than
+    totalled from the parts that did price -- a pool is a sum, and a sum
+    missing a term is a number no rule produced. Pack validation already
+    reports the first two as pack errors, and a sheet holding the third
+    carries a validation error of its own; neither needs a made-up figure
+    beside it.
     """
     st = sheets_def.get("sheet_types", {}).get(type_id)
     if not isinstance(st, dict):
@@ -170,6 +178,8 @@ def unspent_pools(sheets_def: dict, type_id: str, fields: dict) -> dict[str, int
         except expressions.ExpressionError:
             continue
         spent = _pool_spent(sheets_def, pool_id, pool["costs"], merged)
+        if spent is None:
+            continue
         if budget != spent:
             out[pool_id] = budget - spent
     return out
