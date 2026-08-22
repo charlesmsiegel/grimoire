@@ -71,8 +71,9 @@ def scene(client):
     return cid, sid
 
 
-def _absorb(client, cid, sid):
-    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+def _absorb(client, cid, sid, force=False):
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb",
+                          params={"force": "true"} if force else None)
     assert started.status_code == 202, started.json()
     body = started.json()
     run = review_runs.wait_for_run(client, cid, sid, body["run"]["id"])
@@ -599,10 +600,13 @@ def test_a_record_that_will_not_open_is_retryable_rather_than_absent(client, sce
     assert retried.status_code == 409 and retried.json()["kind"] == "busy"
 
 
-def test_a_save_is_not_wedged_by_a_review_it_cannot_read(client, scene):
-    """The watermark check is evidence, not a gate. A garbled sidecar must not
-    be able to stop a scene's review ever being saved -- the epoch check still
-    stands, and that is the one #271 put there."""
+def test_a_save_whose_review_cannot_be_read_is_refused_not_waved_through(client, scene):
+    """A garbled sidecar is not evidence that this save is stale -- and not
+    evidence that it is sound either. The epoch check does not stand in for
+    this one: play continuing advances no epoch, so a transcript that moved
+    while the review sat open passes it, and the summary of posts nobody
+    reviewed goes in. Refusing costs a re-run, which the message asks for and
+    which replaces the sidecar outright; committing does not come back."""
     cid, sid = scene
     _absorb(client, cid, sid)
     review = _pending(client, cid, sid)["review"]
@@ -612,7 +616,55 @@ def test_a_save_is_not_wedged_by_a_review_it_cannot_read(client, scene):
                    json={"one_line": review["one_line"], "summary": review["summary"],
                          "keywords": [], "timeline_events": [], "edits": [],
                          "commit_token": review["commit_token"]})
-    assert r.status_code == 200, r.json()
+    assert r.status_code == 409
+    assert r.json()["kind"] == "review_unreadable"
+    assert store.chronicle.read_chronicle(cid) == {}, "the chronicle was written"
+
+
+def test_a_review_that_will_not_open_is_a_retryable_refusal(client, scene, monkeypatch):
+    """The other half, told apart because the reader needs a different thing
+    from each: a sync client holding the sidecar for a moment clears on its
+    own, so that one asks them to try again rather than to spend the whole
+    budget on a fresh absorb."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+
+    def _boom(*a, **k):
+        raise OSError("the sidecar is locked")
+    monkeypatch.setattr(store.pending_reviews, "read", _boom)
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": review["one_line"], "summary": review["summary"],
+                         "keywords": [], "timeline_events": [], "edits": [],
+                         "commit_token": review["commit_token"]})
+    assert r.status_code == 409
+    assert r.json()["kind"] == "busy"
+
+
+def test_an_older_review_cannot_commit_over_the_one_that_replaced_it(client, scene):
+    """Two devices on one scene. The second force-absorbs, so the record now
+    describes a NEWER review of the same posts; the first still holds its own.
+    Falling through on a token the record does not name committed that older
+    summary and edits on the strength of an epoch check a fresh scene passes
+    anyway -- the stale write the watermark exists to stop, reached by
+    declining to look at the evidence."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    stale = _pending(client, cid, sid)["review"]
+    _absorb(client, cid, sid, force=True)
+    fresh = _pending(client, cid, sid)["review"]
+    assert fresh["commit_token"] != stale["commit_token"]
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": stale["one_line"], "summary": stale["summary"],
+                         "keywords": [], "timeline_events": [], "edits": [],
+                         "commit_token": stale["commit_token"]})
+    assert r.status_code == 409
+    assert r.json()["kind"] == "review_superseded"
+    assert store.chronicle.read_chronicle(cid) == {}, "the chronicle was written"
+    # ...and the review that IS current is still there to be saved.
+    assert _pending(client, cid, sid)["review"]["commit_token"] == fresh["commit_token"]
 
 
 # ---- what the terminal write turns each failure into ------------------------
@@ -789,3 +841,95 @@ def test_a_replayed_save_does_not_delete_a_newer_review(client, scene):
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                       json=body).status_code == 200
     assert _pending(client, cid, sid)["review"]["commit_token"] == newer["commit_token"]
+
+
+def test_a_review_whose_save_already_landed_is_not_offered_again(client, scene):
+    """`_clear_pending_review` is deliberately non-fatal: a commit that landed
+    must not become a 500 because a sidecar would not unlink. So a record can
+    outlive the save it belongs to -- and nothing else notices, because
+    `mark_absorbed` writes frontmatter and the watermark digests messages, so
+    the transcript still matches and the spent review reads as current. The
+    reviewer reloads and is handed a form for work already in the chronicle."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+    saved = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                       json={"one_line": review["one_line"], "summary": review["summary"],
+                             "keywords": [], "timeline_events": [], "edits": [],
+                             "commit_token": review["commit_token"]})
+    assert saved.status_code == 200, saved.json()
+    # The unlink that failed, reconstructed: the record is back on disk, exactly
+    # as a sidecar the save could not remove would have left it.
+    store.pending_reviews.publish(cid, sid, "gen-spent", review,
+                                  store.pending_reviews.watermark(
+                                      store.scenes.read_scene(cid, sid)["messages"]))
+
+    assert _pending(client, cid, sid)["review"] is None
+    # ...and the retrieval cleaned it up on the way past.
+    assert store.pending_reviews.read(cid, sid) is None
+
+
+def test_a_reserved_but_unfinished_commit_still_keeps_its_review(client, scene):
+    """The other side of that check, and why it is `done` rather than merely
+    present: an entry is reserved before the four writes and marked done after
+    them, so the in-between state is a commit that began and may yet be resumed
+    by a retry carrying the same token -- which needs the record it is resuming,
+    not a panel told there is nothing here."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+    store.commits.reserve(cid, review["commit_token"], "fp", sid)
+
+    assert _pending(client, cid, sid)["review"] is not None
+
+
+def test_a_retry_reserves_its_run_under_the_lock_cancel_deletes_beneath(client, scene,
+                                                                        monkeypatch):
+    """Split apart, the check and the reservation leave a window: the record is
+    read, Cancel's DELETE removes it and flags nothing (there is no run yet),
+    and the reservation then starts a retry for a review that is gone -- holding
+    the scene and spending the whole retry budget before ending in
+    `review_missing`, with the browser's abort stopping none of it."""
+    import threading
+
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    held: list[bool] = []
+    real = routes.runs.reserve_review
+
+    def _watched(app, c, s, kind, generation):
+        # From ANOTHER thread: the lock is reentrant, so asking on this one
+        # would answer True whether or not the route took it.
+        def probe():
+            with store.locks.campaign_lock_nowait(c) as got:
+                held.append(not got)
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join()
+        return real(app, c, s, kind, generation)
+
+    monkeypatch.setattr(routes.runs, "reserve_review", _watched)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit")
+
+    assert r.status_code == 202, r.json()
+    assert held == [True], "the retry reserved its run outside the campaign lock"
+
+
+def test_an_absorb_is_refused_before_it_spends_anything_on_an_unwritable_name(
+        client, scene, monkeypatch):
+    """A store written before scene ids were capped can hold a sid whose `.md`
+    fits its directory entry and whose nine-characters-longer `.review.json`
+    does not. Left to `publish`, that scene answers every End Scene with a
+    failure AFTER several minutes of generation, forever."""
+    cid, sid = scene
+    monkeypatch.setattr(store.pending_reviews, "name_usable", lambda *a: False)
+    calls: list[int] = []
+    monkeypatch.setattr(store.usage, "meter",
+                        lambda *a, **k: calls.append(1))          # never reached
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+
+    assert r.status_code == 409 and r.json()["kind"] == "scene_id_too_long"
+    assert calls == [], "the absorb generated before finding out it could not store it"
+    # ...and nothing is left holding the scene, so the rename it asks for works.
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/run").json()["run"] is None

@@ -421,3 +421,97 @@ def test_a_phase_row_carries_exactly_what_the_phase_report_puts_in_one():
     assert {r["name"] for r in built} == {"extraction", "dossiers", "voice", "audit"}
     for row in built:
         assert set(row) == {"name", *store.pending_reviews.PHASE_KEYS}
+
+
+# ---- what a rename carries, beyond the file itself -------------------------
+
+def _commitment_row(sid, kind="commitment"):
+    return {"id": "commitment:a-promise", "kind": kind,
+            "before": f"promise, open — She missed the payment. [2 beats, "
+                      f"last moved in {sid}]",
+            "resolve_from": f"promise, open — Earlier. [1 beat, last moved in {sid}]",
+            "payload": {"scene": sid, "text": "She missed the payment."}}
+
+
+def test_a_renamed_scene_carries_its_staged_scene_stamps_with_it(scene):
+    """A durable review is renamable in a way an in-flight one was not: it
+    survives with the panel closed, and renaming a scene before saving its
+    review is ordinary use. `scene_refs.repoint` has already moved the stored
+    commitment onto the new id, so a staged row still holding the old one no
+    longer matches what the store says -- and saves as a spurious
+    `edit_conflicts` refusal, on a commitment nobody touched, which blocks the
+    whole chronicle save. `sceneRenamed` is the same repair for an open panel."""
+    cid, sid = scene
+    new = "0002--moved"
+    store.pending_reviews.publish(
+        cid, sid, "g1", _review(edits=[_commitment_row(sid)]), {})
+
+    store.pending_reviews.repoint_scenes(cid, {sid: new})
+
+    row = store.pending_reviews.read(cid, new)["review"]["edits"][0]
+    assert row["before"].endswith(f"last moved in {new}]")
+    assert row["resolve_from"].endswith(f"last moved in {new}]")
+    assert row["payload"]["scene"] == new
+
+
+def test_a_beat_that_quotes_the_old_scene_id_is_left_alone(scene):
+    """Anchored to the END of the line, exactly as the panel anchors it. The
+    fingerprint is a suffix; a beat that happens to name the scene in its own
+    prose is the reviewer's text and moving it would rewrite what they read."""
+    cid, sid = scene
+    row = _commitment_row(sid)
+    row["before"] = f"promise, open — They spoke of {sid} again. [1 beat]"
+    store.pending_reviews.publish(cid, sid, "g1", _review(edits=[row]), {})
+
+    store.pending_reviews.repoint_scenes(cid, {sid: "0002--moved"})
+
+    moved = store.pending_reviews.read(cid, "0002--moved")["review"]["edits"][0]
+    assert moved["before"] == f"promise, open — They spoke of {sid} again. [1 beat]"
+
+
+def test_a_record_that_cannot_be_decoded_is_still_carried_across(scene):
+    """Following the stamps is an improvement to a record that can be read,
+    never a precondition for carrying one: the move is raw bytes precisely so a
+    garbled sidecar cannot strand a rename, and that has to stay true."""
+    cid, sid = scene
+    store.scenes._review_path(cid, sid).write_text("{not json", encoding="utf-8")
+
+    store.pending_reviews.repoint_scenes(cid, {sid: "0002--moved"})
+
+    assert not store.scenes._review_path(cid, sid).exists()
+    assert store.scenes._review_path(cid, "0002--moved").read_text(
+        encoding="utf-8") == "{not json"
+
+
+# ---- the name the sidecar needs --------------------------------------------
+
+def test_a_sid_whose_sidecar_name_cannot_exist_is_reported_before_the_spend(home):
+    """`<sid>.review.json` is nine characters longer than the `<sid>.md` beside
+    it, and a store written before ids were capped can hold a sid where the
+    transcript fits its directory entry and the sidecar does not. Asked BEFORE
+    an absorb spends its budget, because otherwise that scene answers every End
+    Scene with a failure minutes in, forever."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    # 250 characters: `<sid>.md` is 252 and fits; `<sid>.review.json` is 262.
+    legacy = "0001--" + "x" * 244
+    assert len(legacy) == 250
+
+    assert store.pending_reviews.name_usable(cid, legacy) is False
+    assert store.pending_reviews.name_usable(cid, "0001--the-tearoom") is True
+
+
+def test_an_ordinary_read_failure_is_not_read_as_an_unusable_name(home, monkeypatch):
+    """Only an over-long NAME is a "no". Every other `OSError` is a filesystem
+    in some other kind of trouble, and refusing an absorb over one would swap a
+    transient failure the write itself reports better for a refusal that reads
+    as permanent."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "The Tearoom")
+
+    def _denied(self, *a, **k):
+        raise PermissionError("nope")
+    monkeypatch.setattr("pathlib.Path.stat", _denied)
+
+    assert store.pending_reviews.name_usable(cid, sid) is True

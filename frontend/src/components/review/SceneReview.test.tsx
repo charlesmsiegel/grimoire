@@ -3010,3 +3010,114 @@ test("a Discard settling elsewhere does not reopen End scene inside the abort wi
 
   expect(screen.getByRole("button", { name: /^End scene$/ })).toBeDisabled();
 });
+
+test("a review that lands between the two discovery reads is still found", async () => {
+  // "No live run" is not "no review". The absorb can land between the store
+  // read and the run read: the store said nothing was ready, and by the time
+  // discovery asked, the run had finished and was filtered out for being
+  // terminal. Returning there left a completed review invisible for as long as
+  // the scene stayed selected, with End scene enabled to run the whole absorb
+  // again and replace it.
+  withScene();
+  (api.pendingReview as any)
+    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
+    .mockResolvedValue({ review: STORED_REVIEW, generation: "gen-landed", stale: null });
+  (api.liveReview as any).mockResolvedValue(null);   // it landed a moment ago
+  renderCampaign();
+
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+});
+
+test("a scene that has moved on is reported even when its run has already gone", async () => {
+  // Same second read, the other answer: the run landed and the transcript has
+  // since moved, so what the store has is a stale notice rather than a review.
+  withScene();
+  (api.pendingReview as any)
+    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
+    .mockResolvedValue({ review: null, generation: "gen-landed",
+                         stale: { prepared_posts: 4, current_posts: 7 } });
+  (api.liveReview as any).mockResolvedValue(null);
+  renderCampaign();
+
+  expect(await screen.findByText(/The scene changed after its review was prepared/))
+    .toBeInTheDocument();
+});
+
+test("a stale notice raised for one scene does not follow the reader to another", async () => {
+  // The adoption effect re-runs for the new scene, but nothing in it clears a
+  // notice when that scene has neither a pending nor a live review — so scene
+  // A's "the transcript changed" sat beside B's End scene claiming B had moved,
+  // which invites an absorb nobody needed.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.pendingReview as any).mockImplementation(async (_cid: string, sid: string) =>
+    (sid === "s1"
+      ? { review: null, generation: "gen-A", stale: { prepared_posts: 4, current_posts: 7 } }
+      : { review: null, generation: null, stale: null }));
+  renderCampaign();
+  await screen.findByText(/The scene changed after its review was prepared/);
+
+  await openScene(/Newer/);
+
+  expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeEnabled();
+  expect(screen.queryByText(/The scene changed after its review was prepared/)).toBeNull();
+});
+
+test("switching campaigns mid-absorb does not leave the next one stuck on Ending…", async () => {
+  // `releaseRetries` does not cover the absorb. Left set, `endScene` refuses
+  // every call in the new campaign until the old campaign's poll settles —
+  // which for an unbounded or wedged absorb is never.
+  withScene();
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      onStarted("gen-A");
+      return new Promise(() => { /* A is still absorbing */ });
+    });
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
+    </MemoryRouter>,
+  );
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  await screen.findByRole("button", { name: /Ending…/ });
+
+  fireEvent.click(screen.getByText("switch campaign"));
+  await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("other"));
+  await screen.findByText("hi");
+
+  expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeEnabled();
+});
+
+test("a delayed Stop the server refused is reported, not swallowed", async () => {
+  // Stop pressed before the 202 arrives has no generation to name, so the
+  // callback that honours it when the review IS named is the only cancellation
+  // that Stop ever gets. A network or busy failure there leaves an unbounded
+  // run holding the scene with nothing left to stop it, and the reader
+  // believing they stopped it.
+  withScene();
+  let name: ((g: string) => void) | null = null;
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      name = onStarted;
+      return new Promise(() => { /* answers long after the Stop */ });
+    });
+  (api.discardReview as any).mockRejectedValue(new Error("the run would not stop"));
+  renderCampaign();
+  await screen.findByText("hi");
+
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  expect(api.discardReview).not.toHaveBeenCalled();   // nothing to name it with yet
+  await act(async () => { name!("gen-late"); });
+
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-late"));
+  expect(await screen.findByText(/the run would not stop/)).toBeInTheDocument();
+});

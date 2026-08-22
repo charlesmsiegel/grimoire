@@ -1383,3 +1383,186 @@ test("a poll that keeps failing does give up", async () => {
     vi.useRealTimers();
   }
 });
+
+test("an absorb whose 202 never arrived is adopted, not reported as failed", async () => {
+  // The server can accept the POST, reserve the run and start generating, and
+  // the 202 be lost on the way back -- a dropped link, a WebView backgrounded
+  // in the same second. Reported as a failure, the caller clears its latch for
+  // an absorb that is running: the scene is held for as long as it takes, End
+  // scene answers `run_in_flight`, and there is no generation to offer a Stop
+  // with, because `onStarted` never fired.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))        // the lost 202
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0,
+                                             review_generation: "gen1" } }))
+      .mockResolvedValueOnce(runResponse("landed"))
+      .mockResolvedValueOnce(jsonOk({ review: { one_line: "They met." },
+                                      generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const named: string[] = [];
+    const pending = api.absorbScene("run", "s1", false, (g) => named.push(g));
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await pending).review.one_line).toBe("They met.");
+    // ...and the Stop the panel needs is named, which is the half that makes
+    // the adoption worth doing at all.
+    expect(named).toEqual(["gen1"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("an absorb the server refused in words is not adopted", async () => {
+  // Only a failure that carried NO reply is ambiguous. An `ApiError` means the
+  // server answered -- `already_absorbed`, a missing key, a busy scene -- and
+  // every one of those is the caller's to handle. Adopting a live run there
+  // would swallow the confirmation prompt a re-absorb depends on.
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce({ ok: false, status: 409,
+                             json: async () => ({ detail: "already absorbed",
+                                                  kind: "already_absorbed" }) });
+  globalThis.fetch = fetchMock;
+
+  const failed = await api.absorbScene("run", "s1").then(
+    () => { throw new Error("resolved"); }, (e: unknown) => e);
+
+  expect((failed as ApiError).kind).toBe("already_absorbed");
+  expect(fetchMock).toHaveBeenCalledTimes(1);       // no discovery attempt
+});
+
+test("an absorb that failed with no run to find still reports the failure", async () => {
+  // The counterweight: a POST that never reached the server has nothing to
+  // adopt, and silence there would leave the reader looking at a scene that
+  // never started ending.
+  const fetchMock = vi.fn()
+    .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+    .mockResolvedValueOnce(jsonOk({ run: null }));
+  globalThis.fetch = fetchMock;
+
+  const failed = await api.absorbScene("run", "s1").then(
+    () => { throw new Error("resolved"); }, (e: unknown) => e);
+
+  expect(failed).toBeInstanceOf(TypeError);
+});
+
+test("a reaped audit retry is read back off the stored review", async () => {
+  // A retry is a detached run too, and it merges its phase into the durable
+  // record before its own run record is anything but a receipt. A tab away
+  // longer than the retention window polls a retry that landed perfectly well
+  // and 404s: the panel keeps the phase it was retrying, and saving commits
+  // those stale rows and clears the record. The completed retry is gone, and
+  // nothing said so.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk({
+        review: { mechanics: { status: "ok" },
+                  edits: [{ id: "sheet:mara", kind: "sheet" },
+                          { id: "lore:tea", kind: "lore" }] },
+        generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const pending = api.retryAudit("run", "s1");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const got = await pending;
+    expect(got.mechanics.status).toBe("ok");
+    // Only the rows this phase owns: the audit proposes the sheet edits and
+    // proposes all of them, and the rest of the review is not its to hand back.
+    expect(got.edits.map((e) => e.id)).toEqual(["sheet:mara"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a reaped dossier retry hands back only the rows it re-proposed", async () => {
+  // `proposed` is the phase's own list of who it prepared a dossier for -- the
+  // same projection the server's merge kept the rows by -- so this reads back
+  // exactly that retry's contribution and leaves the first pass's other NPCs
+  // where they are.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk({
+        review: { dossiers: { status: "ok", proposed: ["aese"] },
+                  edits: [{ id: "d:aese", kind: "dossier", target: { id: "aese" } },
+                          { id: "d:winifred", kind: "dossier",
+                            target: { id: "winifred" } }] },
+        generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const pending = api.retryDossiers("run", "s1");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await pending).edits.map((e) => e.id)).toEqual(["d:aese"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a retry that FAILED is not answered with the phase it was retrying", async () => {
+  // The narrowness is the point. A run that ended `failed` never merged
+  // anything, so reading the record back hands the panel the PRE-retry phase
+  // and presents it as this retry's result -- a wrong answer dressed as a right
+  // one, and the reviewer never learns the retry did not run.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce(runResponse("failed", {
+        error: { kind: "run_failed", detail: "the auditor blew up", status: 409 } }))
+      // The store has a perfectly good record for THIS review -- the pre-retry
+      // one. Queued deliberately: the only thing that must stop it being
+      // handed back is the failure being a failure and not a reaping.
+      .mockResolvedValue(jsonOk({ review: { mechanics: { status: "failed" }, edits: [] },
+                                  generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const failed = api.retryAudit("run", "s1").then(
+      () => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await failed as ApiError).kind).toBe("run_failed");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a reaped retry whose review has been replaced still reports the failure", async () => {
+  // Matched on the generation, for `absorbScene`'s reason: a scene can be
+  // holding a review this retry has nothing to do with.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk({ review: { mechanics: { status: "ok" }, edits: [] },
+                                      generation: "gen2", stale: null }));
+    globalThis.fetch = fetchMock;
+    const failed = api.retryAudit("run", "s1").then(
+      () => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await failed as ApiError).kind).toBe("run_gone");
+  } finally {
+    vi.useRealTimers();
+  }
+});

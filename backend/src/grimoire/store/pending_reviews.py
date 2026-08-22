@@ -46,6 +46,7 @@ superseded.
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import json
 
@@ -89,6 +90,38 @@ class ReviewReplacedError(Exception):
 
 def _path(cid: str, sid: str):
     return scenes_paths._review_path(cid, sid)
+
+
+def name_usable(cid: str, sid: str) -> bool:
+    """Whether this scene's sidecar name can exist on this filesystem at all.
+
+    Asked BEFORE an absorb spends its budget, and that is the entire point.
+    `<sid>.review.json` is nine characters longer than the `<sid>.md` beside it,
+    and a store written before scene ids were capped can hold a sid where the
+    transcript fits its directory entry and the sidecar does not
+    (`scenes.lifecycle._unlink_sidecar` documents the same legacy shape from the
+    other end). Left to `publish`, that scene answers every End Scene with a
+    failure *after* several minutes of generation, forever -- the most
+    expensive way to be told to shorten a title.
+
+    `Path.exists()` cannot answer this: it swallows `OSError` and reports an
+    unusable name as merely absent, which is also why `_sid_taken` cannot be
+    read as a proxy for it. Only an over-long NAME is a "no"; every other
+    `OSError` is a filesystem in some other kind of trouble, and refusing an
+    absorb over one would substitute a permanent-sounding refusal for a
+    transient failure the write itself reports better.
+    """
+    try:
+        _path(cid, sid).stat()
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        # Windows reports the over-long name as ERROR_FILENAME_EXCED_RANGE,
+        # which does not always reach `errno` -- same pair `_unlink_sidecar`
+        # matches on, for the same reason.
+        return not (exc.errno == errno.ENAMETOOLONG
+                    or getattr(exc, "winerror", None) == 206)
+    return True
 
 
 def watermark(messages: list[dict]) -> dict:
@@ -266,6 +299,64 @@ def clear_destinations(cid: str, sids) -> None:
             _path(cid, sid).unlink(missing_ok=True)
 
 
+#: Staged edit kinds whose payload stamps the scene the proposal came from.
+#: Mirrors `components/review/editRows.ts`'s `SCENE_STAMPED`, which is the same
+#: list for the same reason -- the panel repoints these when a rename happens
+#: while the review is OPEN, and this repoints them when it happens while the
+#: review is only on disk.
+_SCENE_STAMPED = frozenset({"plot", "commitment", "fact"})
+
+
+def _follow_stamps(raw: bytes, old: str, new: str) -> bytes:
+    """The record with the scene ids its staged rows carry moved onto `new`.
+
+    A durable review is renamable in a way an in-flight one was not: it survives
+    with the panel closed, and renaming a scene before saving its review is
+    ordinary use. `scene_refs.repoint` has already moved the stored records
+    these rows will be checked against -- `commitments.json`'s `last_scene`
+    among them -- so a row still holding the old id no longer matches what the
+    store says and saves as a spurious `edit_conflicts` refusal, on a commitment
+    nobody touched, blocking the whole chronicle save. `useSceneReview`'s
+    `sceneRenamed` is the same repair for an open panel, matched field for field.
+
+    Undecodable in, unchanged out. The move is raw bytes precisely so a garbled
+    sidecar cannot strand a rename (see `repoint_scenes`), and that has to stay
+    true of this: following the stamps is an improvement to a record that can be
+    read, never a precondition for carrying one.
+    """
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return raw
+    review = (data or {}).get("review") if isinstance(data, dict) else None
+    edits = review.get("edits") if isinstance(review, dict) else None
+    if not isinstance(edits, list):
+        return raw
+    # Anchored to the END of the line, exactly as `sceneRenamed` anchors it: a
+    # beat that happens to quote the old scene id in its own text is left alone.
+    # The beat count sits in front of it and is deliberately not matched -- it
+    # is "1 beat" singular and "N beats" otherwise, and matching the plural
+    # alone silently skipped every commitment with exactly one beat.
+    frm, to = f", last moved in {old}]", f", last moved in {new}]"
+
+    def repoint(v):
+        return v[:-len(frm)] + to if isinstance(v, str) and v.endswith(frm) else v
+
+    for edit in edits:
+        if not isinstance(edit, dict) or edit.get("kind") not in _SCENE_STAMPED:
+            continue
+        payload = edit.get("payload")
+        if isinstance(payload, dict) and payload.get("scene") == old:
+            payload["scene"] = new
+        # No kind check beyond the one above: only `conflicts.commitment_line`
+        # ends in this suffix, so a plot or fact row's `before` is untouched by
+        # construction rather than by a second list to keep in step.
+        for field in ("before", "resolve_from"):
+            if field in edit:
+                edit[field] = repoint(edit[field])
+    return (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids: carry each review to its scene's new id.
 
@@ -287,12 +378,17 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     Not shared with `alternates`: that module's destination clear is allowed to
     raise (inheriting someone else's parked *transcripts* has no harmless
     reading), and this one's is not, so the two differ exactly where it counts.
+
+    The bytes are *followed* on the way across where they can be decoded (see
+    `_follow_stamps`), because a rename moves the stored records this review's
+    staged rows are checked against.
     """
     with locks.campaign_lock(cid):
         moving, stranded = {}, set()
         for old in mapping:
             try:
-                moving[old] = _path(cid, old).read_bytes()
+                moving[old] = _follow_stamps(
+                    _path(cid, old).read_bytes(), old, mapping[old])
             except FileNotFoundError:
                 continue
             except OSError:

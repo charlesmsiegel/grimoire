@@ -2285,6 +2285,16 @@ def post_absorb(cid: str, sid: str, request: Request, force: bool = False,
     _campaign_root_or_404(cid)
     _require_scene(cid, sid)
     conn = _require_connection("absorb", cid)
+    # Before the reservation and before a token of the budget: a scene whose id
+    # predates the cap can be one the review sidecar's longer name will not fit
+    # beside, and finding that out in `publish` costs the whole generation and
+    # then costs it again on every retry. Refused with what to do about it.
+    if not store.pending_reviews.name_usable(cid, sid):
+        raise HTTPException(
+            status_code=409,
+            detail={"kind": "scene_id_too_long",
+                    "detail": "this scene's id is too long for its review file — "
+                              "rename the scene to something shorter, then end it"})
     generation = uuid.uuid4().hex
     run = runs.reserve_review(request.app, cid, sid, "absorb", generation)
     with runs.reservation(request.app, run):
@@ -2508,6 +2518,15 @@ def get_pending_review(cid: str, sid: str) -> dict:
     a summary of posts that are no longer there. Saying so on the way in is
     what lets the panel offer "re-run" instead of letting the reviewer fill in
     a form that is going to be refused.
+
+    A review whose token has ALREADY committed is withheld too, and cleaned up
+    on the way past. `_clear_pending_review` is deliberately non-fatal -- a save
+    that landed must not be turned into a 500 by a sidecar that will not unlink
+    -- so a record can outlive the commit it belongs to, and nothing else here
+    would notice: `mark_absorbed` writes frontmatter and the watermark digests
+    messages, so the transcript still matches and the stale review reads as
+    perfectly current. The reviewer reloads and is handed a form for work that
+    is already in the chronicle.
     """
     with store.locks.campaign_lock(cid):
         scene = _require_scene(cid, sid)
@@ -2526,6 +2545,11 @@ def get_pending_review(cid: str, sid: str) -> dict:
                 "kind": "busy",
                 "detail": f"the stored review could not be read: {exc}"}) from exc
         answer: dict = {"review": None, "generation": None, "stale": None}
+        if record is not None and _already_committed(cid, record):
+            # Under the same hold as the read, so nothing serves it in between.
+            _clear_pending_review(cid, sid,
+                                  record["review"].get("commit_token") or "")
+            record = None
         if record is not None:
             mark = store.pending_reviews.watermark(scene["messages"])
             prepared = record.get("watermark") or {}
@@ -2536,6 +2560,21 @@ def get_pending_review(cid: str, sid: str) -> dict:
                 answer["stale"] = {"prepared_posts": prepared.get("count"),
                                    "current_posts": mark["count"]}
     return answer
+
+
+def _already_committed(cid: str, record: dict) -> bool:
+    """Whether this record's save has already landed.
+
+    `done`, not merely present: an entry is reserved before the writes and
+    marked done after them, and the in-between state is a commit that began and
+    may yet be resumed by a retry carrying the same token -- which needs the
+    record it is resuming, not a panel told there is nothing here.
+
+    A caller-minted token that this app never reserved is simply unseen, which
+    is the same answer as "not committed" and the right one.
+    """
+    entry = store.commits.lookup(cid, record["review"].get("commit_token") or "")
+    return bool(entry and entry.get("done"))
 
 
 @router.delete("/campaigns/{cid}/scenes/{sid}/pending-review")
@@ -2638,9 +2677,17 @@ def _retry_start(cid: str, sid: str, request: Request, kind: str, work_for) -> d
     a fresh absorb landing in the meantime makes its merge refuse rather than
     fold one review's phase into another's.
     """
-    record = _pending_for_retry(cid, sid)
-    generation = record.get("generation") or ""
-    run = runs.reserve_review(request.app, cid, sid, kind, generation)
+    # ONE hold across the check and the reservation. Cancel flags and deletes
+    # under this same lock, so split apart there is a window where the record
+    # is read, the DELETE removes it and flags nothing (no run exists yet), and
+    # this then reserves a run for a review that is gone: it holds the scene
+    # and spends the whole retry budget before ending in `review_missing`, and
+    # aborting the browser's request stops none of that. Reentrant, so
+    # `reserve_review`'s own acquisition costs nothing.
+    with store.locks.campaign_lock(cid):
+        record = _pending_for_retry(cid, sid)
+        generation = record.get("generation") or ""
+        run = runs.reserve_review(request.app, cid, sid, kind, generation)
     with runs.reservation(request.app, run):
         runs.start_computing(request.app, run, work_for(run, generation))
         return _accepted(run, generation)
@@ -3468,32 +3515,55 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
     MUST be called inside the campaign-lock hold that covers the writes: read
     outside one, it answers a question that was true a moment ago.
 
-    The stored review is evidence about ONE save: the one carrying its token.
-    A body with a different token -- a caller-minted key, which is supported,
-    or a review this app did not set up -- is not described by it, and refusing
-    that on the strength of a record about something else would reject a save
-    the store has nothing against. So the check is scoped to a matching token,
-    and a scene with no stored review falls through to the epoch check alone.
+    A scene with NO stored review falls through to the epoch check alone. That
+    is where the watermark's reach ends, and saying so is better than implying
+    more: a client holding a review whose record has since been discarded can
+    still save it, and a caller-minted token -- which is a supported thing to
+    send -- is unaffected on a scene nobody is reviewing.
 
-    That boundary is where the watermark's reach ends, and saying so is better
-    than implying more: a client holding a review whose record has since been
-    discarded can still save it. Every path in this app that discards a record
-    -- Cancel, a completed save, a fresh absorb -- drops the client's copy in
-    the same step, so the gap is reachable by a hand-made request and not by
-    the panel.
+    Everything else refuses, and each for its own reason:
+
+    * **A record for a DIFFERENT token.** Another device force-absorbed this
+      scene while this review sat open, so the record describes a newer review
+      of the same posts. Falling through committed this older one's summary and
+      edits on the strength of an epoch check that a fresh scene passes anyway
+      -- the exact stale write the watermark exists to stop, arrived at by
+      declining to look. Only reachable for a *fresh* save: a replay of an
+      already-recorded token returns its prior result well above this.
+    * **Unreadable.** Not evidence that this save is stale, but not evidence
+      that it is sound either, and the epoch check does not cover what this one
+      does: play continuing advances no epoch. Refusing is recoverable -- a
+      fresh absorb replaces the sidecar outright, which is what the message
+      says to do -- where committing is not. `OSError` is split off from a
+      garbled file because it says something different: a sync client holding
+      the sidecar for a moment clears on its own, so that one is the ordinary
+      retryable refusal rather than an instruction to re-run.
     """
     try:
         record = store.pending_reviews.read(cid, sid)
-    except (store.pending_reviews.CorruptReviewError, OSError):
-        # Unreadable is not "no review", but it is also not evidence that this
-        # save is stale -- and the epoch check below still stands. Logged
-        # rather than refused: a garbled sidecar must not be able to wedge a
-        # scene's review out of ever being saved.
+    except OSError as exc:
         log.warning("pending review for %s/%s could not be read at save",
                     cid, sid, exc_info=True)
+        raise HTTPException(
+            status_code=409,
+            detail={"kind": "busy",
+                    "detail": f"this scene's review could not be read: {exc}"}) from exc
+    except store.pending_reviews.CorruptReviewError as exc:
+        log.warning("pending review for %s/%s is corrupt at save",
+                    cid, sid, exc_info=True)
+        raise HTTPException(
+            status_code=409,
+            detail={"kind": "review_unreadable",
+                    "detail": "this scene's stored review is unreadable, so this save "
+                              "cannot be checked against it — re-run End Scene"}) from exc
+    if record is None:
         return
-    if record is None or (record["review"] or {}).get("commit_token") != token:
-        return
+    if record["review"].get("commit_token") != token:
+        raise HTTPException(
+            status_code=409,
+            detail={"kind": "review_superseded",
+                    "detail": "a newer review of this scene is waiting to be saved — "
+                              "reload the campaign to see it"})
     scene = _require_scene(cid, sid)
     mark = store.pending_reviews.watermark(scene["messages"])
     if mark != record.get("watermark"):
