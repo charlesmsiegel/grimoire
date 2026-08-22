@@ -104,6 +104,21 @@ test("a speaker who names nobody here is named, and does not block the import", 
   await waitFor(() => expect(api.sceneImport).toHaveBeenCalled());
 });
 
+test("a PC-named post counts as a player post, not just a **You:** block", async () => {
+  // The shape every real grimoire transcript has: `post_chat` stamps the
+  // seated player's NAME onto their posts, and `parse` resolves roles against
+  // an empty player set, so those come back as role "assistant". A guard that
+  // only reads the role misses every actual scene file.
+  (api.sceneImportParse as any).mockResolvedValue(draft({
+    messages: [{ role: "assistant", speaker: "Seraphine", content: "I take the ledger." }],
+    cast: [{ label: "Seraphine", kind: "pcs", id: "seraphine", name: "Seraphine", role: "player" }],
+  }));
+  render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
+  readFile();
+  await screen.findByDisplayValue("The Long Quay");
+  expect(screen.getByLabelText("Offscreen scene")).toBeDisabled();
+});
+
 test("a transcript with player posts cannot be imported as offscreen", async () => {
   // `post_chat` never stores a user turn for a pcless scene, so importing one
   // would create a scene the play loop could not have produced -- with the
@@ -117,9 +132,11 @@ test("a transcript with player posts cannot be imported as offscreen", async () 
 
 test("a player cannot be seated once the scene is marked offscreen", async () => {
   (api.sceneImportParse as any).mockResolvedValue(draft({
-    // No player posts, so the offscreen box is available to tick at all.
-    messages: [{ role: "assistant", speaker: "Seraphine", content: "She waits." }],
-    cast: [{ label: "Seraphine", kind: "pcs", id: "seraphine", name: "Seraphine", role: "player" }],
+    // No player posts: the only speaker is an NPC, so the offscreen box is
+    // available to tick, and the PC below is a seat the reviewer could add.
+    messages: [{ role: "assistant", speaker: "Mara", content: "She waits." }],
+    cast: [{ label: "Mara", kind: "characters", id: "mara", name: "Mara", role: "npc" },
+           { label: "Seraphine", kind: "pcs", id: "seraphine", name: "Seraphine", role: "player" }],
   }));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
   readFile();
@@ -132,7 +149,9 @@ test("a player cannot be seated once the scene is marked offscreen", async () =>
 
   fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
   await waitFor(() => expect(api.sceneImport).toHaveBeenCalled());
-  expect((api.sceneImport as any).mock.calls[0][1].cast).toEqual([]);
+  // The player's seat is dropped; the NPC's is not.
+  expect((api.sceneImport as any).mock.calls[0][1].cast)
+    .toEqual([{ kind: "characters", id: "mara", role: "npc" }]);
 });
 
 test("a location the campaign no longer has never reaches the commit", async () => {

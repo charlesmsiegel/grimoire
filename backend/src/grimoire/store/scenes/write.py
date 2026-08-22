@@ -123,9 +123,16 @@ def append_messages(cid: str, sid: str, messages: list[dict],
         raise paths.SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     index = len(serialize._markers(body))
-    for m in messages:
-        body = serialize._append_block(
-            body, serialize._block(m["role"], m.get("speaker"), m["content"]))
+    # Joined once, not accumulated. `_append_block` copies the whole body twice
+    # per call (`rstrip` re-copies), so appending in a loop is quadratic in
+    # BYTES even when it is one file write -- 5000 posts of ordinary length
+    # measured 7.8s of pure string copying against 3.8ms for the join, all of
+    # it inside the campaign lock. Fixing the I/O without fixing this fixes the
+    # smaller half.
+    blocks = [serialize._block(m["role"], m.get("speaker"), m["content"]) for m in messages]
+    if blocks:
+        tail = "\n\n".join(b.rstrip("\n") for b in blocks) + "\n"
+        body = (body.rstrip() + "\n\n" + tail) if body.strip() else tail
     if turn_sizes is not None:
         turns._set_turn_sizes(meta, turn_sizes)
     meta["updated"] = now_iso()

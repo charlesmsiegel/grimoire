@@ -203,7 +203,17 @@ def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
         # number-width boundary repads every scene in the campaign, renaming
         # them all under any live turn. See that route.
         with store.locks.campaign_lock(cid):
-            if store.scenes.create_would_repad(cid):
+            try:
+                widens = store.scenes.create_would_repad(cid)
+            except OSError as exc:
+                # ONLY the boundary read. Spanning the create too would report a
+                # full disk or a read-only store as a retryable "could not be
+                # read", and the client retries `busy` forever over a condition
+                # that never clears, named as the wrong operation.
+                raise HTTPException(status_code=409, detail={
+                    "kind": "busy",
+                    "detail": f"the campaign could not be read: {exc}"}) from exc
+            if widens:
                 runs.require_campaign_free(request.app, cid)
             sid = store.scenes.create_scene(cid, body.title or "Imported scene",
                                             pcless=body.pcless)
@@ -211,10 +221,6 @@ def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
         # `from None`: the store's own exception says nothing the caller can act
         # on beyond the 404 -- the same reading `_campaign_root_or_404` takes.
         raise HTTPException(status_code=404, detail="campaign not found") from None
-    except OSError as exc:
-        raise HTTPException(status_code=409, detail={
-            "kind": "busy",
-            "detail": f"the campaign could not be read: {exc}"}) from exc
     try:
         # All or nothing: `commit` removes the scene again on any failure. It
         # has to be the one that does -- `set_datetime` renames the scene, so

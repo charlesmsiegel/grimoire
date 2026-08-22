@@ -176,6 +176,13 @@ def _meta_bits(cid: str, meta: str) -> tuple[str, str, list[str]]:
     """
     parts = [p.strip() for p in meta.split(_META_JOIN)]
     if len(parts) >= 2:
+        # The separator is legal inside a location NAME ("The Quay — Lower
+        # Deck"), and `_header_lines` escapes nothing, so a dateless scene at
+        # such a place writes a line that splits into two bogus halves. Asked
+        # whole first, exactly as `_cast_names` asks about commas.
+        whole, _ = _resolve_location(cid, meta)
+        if whole:
+            return "", whole, []
         date, hints = _canonical_date(cid, parts[0])
         location, place_hints = _resolve_location(cid, _META_JOIN.join(parts[1:]))
         return date, location, hints + place_hints
@@ -405,14 +412,31 @@ def _carryable_turn_sizes(meta: dict, messages: list[dict]) -> list[int] | None:
     that does not fit is worse than none (`TurnSizesDesynced` exists to say
     so), so it is dropped rather than guessed at.
     """
-    raw = [n for n in str(meta.get("turn_sizes", "")).split(",") if n.strip()]
-    try:
-        sizes = [int(n) for n in raw]
-    except ValueError:
-        return None
-    if not sizes or any(n <= 0 for n in sizes):
+    # The store's own strict parse, not a second copy of it: `_parse_turn_sizes`
+    # is where "a field that cannot be trusted end to end means no tracking"
+    # lives, and two copies is two places for that rule to drift -- the same
+    # argument `parse` makes about `histories` a few lines above.
+    sizes = scenes._parse_turn_sizes(str(meta.get("turn_sizes", "")))
+    if not sizes:
         return None
     return sizes if scenes._tracked_suffix_fits(messages, sizes) else None
+
+
+def _macro_notice(messages: list[dict]) -> list[str]:
+    """Say that `{{...}}` text will not survive the import verbatim.
+
+    The import resolves macros once at write time (#137), which for
+    `{{roll:1d20}}` is the whole point -- but the same pass DROPS any braced
+    token the scene cannot resolve, so `{{ignis}}` in imported prose simply
+    disappears. The review pane shows the reviewer the unexpanded text and
+    tells them the posts import unchanged, so the one case where that is untrue
+    has to be named rather than discovered afterwards.
+    """
+    n = sum(1 for m in messages if "{{" in m.get("content", ""))
+    return [] if not n else [
+        (f"{n} post(s) contain {{{{…}}}} macros: dice and random macros are rolled once "
+         "on import, and any other braced token is dropped — the rest of the text is "
+         "imported exactly as it is.")]
 
 
 def _moves_left_behind(times: list[str], places: list[str]) -> list[str]:
@@ -483,6 +507,7 @@ def parse(cid: str, data: bytes) -> dict:
     # against them: an untagged roll line is an ordinary assistant block, which
     # is what `_model_blocks` counts.
     warnings += _untag_rolls(messages)
+    warnings += _macro_notice(messages)
 
     cast, unmatched = _suggest_cast(actors, labels)
     return {
@@ -527,11 +552,42 @@ def _discard(cid: str, sid: str, seated: list[dict]) -> None:
     reading, and a delete that fails on top of it would replace that error with
     a less useful one.
     """
+    # The transcript goes FIRST, and the order is the point: `leave` appends a
+    # "*X leaves the scene.*" line to a non-empty transcript, which on a large
+    # import is a full parse, read and write per actor -- into a file that is
+    # about to be unlinked. With the scene already gone it takes the record off
+    # and returns at its own `SceneNotFound`, which is all this needs.
+    with contextlib.suppress(OSError, scenes.SceneNotFound, locks.StoreBusy):
+        scenes.delete_scene(cid, sid)
     for a in seated:
         with contextlib.suppress(OSError, appearances.AppearError, locks.StoreBusy):
             appearances.leave(cid, sid, a["kind"], a["id"])
-    with contextlib.suppress(OSError, scenes.SceneNotFound, locks.StoreBusy):
-        scenes.delete_scene(cid, sid)
+
+
+def _expanded(cid: str, sid: str, messages: list[dict]) -> list[dict]:
+    """The messages as they will be stored, with macros resolved once.
+
+    Outside the campaign lock, deliberately: `expand_macros` resolves the
+    campaign's calendar provider -- user-authored plugin code -- and doing that
+    per message under a campaign-wide hold is the thing `commit` keeps
+    `set_datetime` outside the lock to avoid.
+
+    And only for text that actually carries a macro. Most imported posts carry
+    none, so the common case does no calendar work at all and the stored text
+    is byte-identical to the file's; without the test, a 5000-post import
+    resolved the provider 5000 times to change nothing.
+    """
+    subs = None
+    out = []
+    for m in messages:
+        content = m.get("content", "")
+        if "{{" in content:
+            if subs is None:
+                subs = context.scene_substitutions(cid, sid)
+            content = context.expand_macros(content, subs, cid, sid)
+        out.append({"role": m.get("role") or "assistant",
+                    "speaker": m.get("speaker") or None, "content": content})
+    return out
 
 
 def commit(cid: str, sid: str, messages: list[dict], date: str = "", location: str = "",
@@ -585,15 +641,17 @@ def commit(cid: str, sid: str, messages: list[dict], date: str = "", location: s
             # Outside the hold: this resolves and runs the campaign's calendar
             # provider, which may be user-authored code.
             sid = scenes.set_datetime(cid, sid, date)["id"]  # raises calendars.CalendarError
+        written = _expanded(cid, sid, messages)
         with locks.campaign_lock(cid):
             if location:
                 scenes.set_location(cid, sid, location)      # raises entities.EntityNotFound
-            subs = context.scene_substitutions(cid, sid)
-            written = [{"role": m.get("role") or "assistant",
-                        "speaker": m.get("speaker") or None,
-                        "content": context.expand_macros(m.get("content", ""), subs, cid, sid)}
-                       for m in messages]
-            scenes.append_messages(cid, sid, written, turn_sizes=turn_sizes)
+            # Re-checked here, not trusted from the caller: `parse` and this are
+            # two requests over a body the client controls, and boundaries that
+            # do not fit make every future reroll on the scene raise
+            # `TurnSizesDesynced` with no UI path to repair it.
+            fits = turn_sizes if turn_sizes and scenes._tracked_suffix_fits(
+                written, turn_sizes) else None
+            scenes.append_messages(cid, sid, written, turn_sizes=fits)
             for a in cast:
                 appearances.appear(cid, sid, a["kind"], a["id"], a["version"], a["role"],
                                    narrate=False)            # raises appearances.AppearError
@@ -602,7 +660,16 @@ def commit(cid: str, sid: str, messages: list[dict], date: str = "", location: s
         # Including the ones this module cannot name -- an OSError mid-write, a
         # store gone busy, a cancellation. The id is re-read from the identity
         # first: by here the scene may have been renamed by this very call.
-        current = (scenes.find_by_identity(cid, identity) if identity else None) or sid
+        # Suppressed, and that matters: `find_by_identity` RAISES
+        # `UnreadableError` (an OSError) when it could not read every candidate
+        # -- the sync-client and sharing-violation cases it was hardened for.
+        # Raised from inside this handler it would skip the discard entirely
+        # and replace the real failure with itself, which is the opposite of
+        # what this path is for.
+        current = sid
+        if identity:
+            with contextlib.suppress(OSError):
+                current = scenes.find_by_identity(cid, identity) or sid
         _discard(cid, current, seated)
         raise
     return {"id": sid, "messages": len(messages), "cast": len(cast)}
