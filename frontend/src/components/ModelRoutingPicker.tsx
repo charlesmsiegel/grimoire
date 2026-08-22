@@ -40,7 +40,14 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
   const load = useCallback(() => {
     const n = (ticket.current += 1);
     const get = scope === "global" ? api.getGlobalRouting() : api.getCampaignRouting(cid!);
-    return get.then((r) => { if (n === ticket.current) setBundle(r); }).catch((err: unknown) => {
+    return get.then((r) => {
+      if (n !== ticket.current) return;
+      // Cleared on success, not only set on failure: a banner that outlives the
+      // condition it describes is a page telling you something is wrong while
+      // showing you the state that proves it is not.
+      setError(null);
+      setBundle(r);
+    }).catch((err: unknown) => {
       if (n !== ticket.current) return;
       setBundle(null);
       setError(reason(err));
@@ -63,10 +70,13 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
       if (n === ticket.current) setBundle(next);
     } catch (err: unknown) {
       if (n !== ticket.current) return;
-      setError(reason(err));
-      // The select is rendered from the bundle, so a failed write would
-      // otherwise leave the row showing a choice the store never took.
+      // The recovery read FIRST, the message second, and the order is the
+      // whole point: the select is rendered from the bundle, so a failed write
+      // would otherwise leave the row showing a choice the store never took --
+      // and `load` clears the error on success, so saying why before re-reading
+      // would wipe the refusal the reader needs to see.
       await load();
+      setError(reason(err));
     } finally {
       setBusy("");
     }
