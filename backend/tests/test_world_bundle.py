@@ -80,6 +80,25 @@ def test_export_carries_every_file(monkeypatch, tmp_path):
     assert packed == tree(root)
 
 
+def test_export_skips_a_write_temp_but_not_a_record_that_looks_like_one(
+        monkeypatch, tmp_path):
+    """The other side of `atomic.is_write_temp`, which the fork uses too. A
+    half-written record inside a bundle somebody hands to a colleague is what
+    this stops; a `.notes.tmp` the user wrote is a file, and dropping it would
+    be silent (Codex review)."""
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    root = worlds.world_root(wid)
+    (root / ".world.md.a1b2c3d4.tmp").write_text("half a record", encoding="utf-8")
+    (root / ".notes.tmp").write_text("mine", encoding="utf-8")
+
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        packed = {n[len(world_bundle.WORLD_PREFIX) + 1:]: z.read(n)
+                  for n in z.namelist() if n != world_bundle.MANIFEST_NAME}
+    assert ".world.md.a1b2c3d4.tmp" not in packed
+    assert packed[".notes.tmp"] == b"mine"
+
+
 def test_export_stores_already_compressed_assets_uncompressed(monkeypatch, tmp_path):
     """Deflating a PNG costs CPU on a gigabyte-scale world and saves nothing."""
     _home(monkeypatch, tmp_path)

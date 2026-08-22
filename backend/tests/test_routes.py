@@ -13799,12 +13799,18 @@ def test_forked_localized_image_urls_actually_serve(client):
 
 def test_world_fork_is_not_read_as_an_entity_kind(client):
     """`fork` is a literal second segment competing with the generic
-    POST /worlds/{wid}/{kind}, which would answer 200 with a created entity --
-    so the id it returns naming a world is what proves this one won."""
+    POST /worlds/{wid}/{kind}, which would answer with a created ENTITY -- so
+    the id coming back naming a WORLD is what proves this one won.
+
+    And the reverse, which is the risk of declaring a literal segment before a
+    catch-all: a real kind must still reach the catch-all afterwards."""
     wid = _world(client, "Saltmarch")
     new = client.post(f"/api/worlds/{wid}/fork", json={"name": "Copy"}).json()["id"]
-    assert client.get(f"/api/worlds/{new}").status_code == 200
-    assert client.get(f"/api/worlds/{wid}/fork").status_code in (404, 405)
+    assert client.get(f"/api/worlds/{new}").json()["meta"]["name"] == "Copy"
+    assert client.post(f"/api/worlds/{wid}/lore",
+                       json={"name": "The Tide Accord"}).status_code == 200
+    assert [e["name"] for e in client.get(f"/api/worlds/{wid}/lore").json()] \
+        == ["The Tide Accord"]
 
 
 def test_world_fork_unknown_world_404(client):
