@@ -205,6 +205,32 @@ describe("containment", () => {
   });
 });
 
+// The sheet draws above every other overlay, so it has to answer Escape above
+// them too -- including one that mounts asynchronously while it is up (an
+// import finishing behind it). Newest-registration alone would hand Escape to
+// a prompt the reader cannot even see (PR #400 review).
+test("a modal that mounts while the sheet is up does not steal Escape", () => {
+  const beneath = vi.fn();
+  function Later() {
+    const [there, setThere] = useState(false);
+    return (
+      <>
+        <button onClick={() => setThere(true)}>mount</button>
+        {there && <Bind keys={[{ keys: "escape", run: beneath }]} modal />}
+      </>
+    );
+  }
+  render(<><Later /><ShortcutsHelp /></>);
+  press("?");
+  fireEvent.click(screen.getByText("mount"));
+  press("Escape");
+  expect(beneath).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog", { name: /keyboard/i })).toBeNull();
+  // ...and once the sheet is gone, it is that overlay's key again.
+  press("Escape");
+  expect(beneath).toHaveBeenCalledTimes(1);
+});
+
 test("the sections read most-specific first", () => {
   render(
     <>

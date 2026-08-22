@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { usePalette, usePaletteSource, type PaletteItem } from "../components/palette";
-import { activeHotkeys, watchHotkeys, type HotkeyRow } from "./registry";
+import { activeHotkeys, promoteScope, watchHotkeys, type HotkeyRow } from "./registry";
 import { formatChord } from "./keys";
 import { useHotkeys } from "./useHotkeys";
 
@@ -60,7 +60,14 @@ export default function ShortcutsHelp() {
   const [, refresh] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     if (!open) return;
-    return watchHotkeys((changed) => { if (changed !== self) refresh(); });
+    return watchHotkeys((changed, kind) => {
+      if (changed === self) return;
+      // An overlay that mounted UNDER this one is not on top of it, whatever
+      // registration order says: this sheet draws above every other overlay in
+      // the app, so it re-asserts the position its z-index already claims.
+      if (kind === "registered") promoteScope(self);
+      refresh();
+    });
   }, [open, self]);
 
   // The palette is the other surface that opens from anywhere, and it draws
