@@ -10,7 +10,7 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const kinds = useEntityKinds(entries !== null);
+  const kinds = useEntityKinds((entries?.length ?? 0) > 0);
 
   async function parse() {
     const file = fileRef.current?.files?.[0];

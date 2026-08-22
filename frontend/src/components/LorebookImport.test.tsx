@@ -103,14 +103,24 @@ test("a row whose kind the list is missing keeps it, rather than displaying anot
   });
 });
 
-test("nothing is asked of the server until there is a table to ask for", async () => {
+test("nothing is asked of the server until there are rows to file", async () => {
   // The dialog mounts inside a collapsed <details> on the Lore section, so an
-  // unconditional read would fire on every visit to a page nobody imported on.
+  // unconditional read would fire on every visit to a page nobody imported on
+  // -- and a file with nothing importable in it has no Category column either.
+  (api.lorebookParse as any).mockResolvedValue({ entries: [] });
   render(<LorebookImport wid="w" />);
   await screen.findByRole("button", { name: /parse/i });
   expect(api.entityKinds).not.toHaveBeenCalled();
 
   pickFile();
+  fireEvent.click(screen.getByRole("button", { name: /parse/i }));
+  await screen.findByText(/no importable entries/i);
+  expect(api.entityKinds).not.toHaveBeenCalled();
+
+  // and a parse that does yield rows asks
+  (api.lorebookParse as any).mockResolvedValue({
+    entries: [{ name: "Salt Pact", keys: ["pact"], body: "binds", category: "lore" }],
+  });
   fireEvent.click(screen.getByRole("button", { name: /parse/i }));
   await screen.findByDisplayValue("Salt Pact");
   expect(api.entityKinds).toHaveBeenCalled();
