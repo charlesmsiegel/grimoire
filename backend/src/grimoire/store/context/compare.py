@@ -125,19 +125,36 @@ def _key_field(rows: list[dict]) -> str:
     return "id" if all(row.get("id") for row in rows) else "label"
 
 
+#: `_breakdown` numbers the messages a caller appends after the system one --
+#: `appended_0`, `appended_1` -- so the id says WHERE a row sat, not what it is.
+#: Which is fine within one turn and wrong across two: `appended_0` is the
+#: opener's prompt on an opener, the note on a director turn, and the guidance
+#: on a regenerate. Comparing two different kinds of turn is ordinary here (the
+#: picker lists them all), so these are keyed by their LABEL instead, and an
+#: opener prompt against a director note reads as one removed and one added
+#: rather than as a single section that was somehow renamed between them.
+_POSITIONAL_ID = "appended_"
+
+
+def _stem(row: dict, field: str) -> str:
+    if str(row.get("id", "")).startswith(_POSITIONAL_ID):
+        return str(row.get("label") or "")
+    return str(row.get(field) or row.get("label") or "")
+
+
 def _keyed(rows: list[dict], field: str) -> list[tuple[str, dict]]:
     """`(key, row)` per section, in prompt order.
 
-    The key is `field` -- see `_key_field` -- plus how many rows with that same
-    value came before it. The counter is not paranoia about hand-edited files:
-    `_breakdown` numbers its appended rows precisely because two of them can
-    share a label. Without it, difflib would pair the first occurrence on each
-    side and silently drop the rest.
+    The key is `field` -- see `_key_field` and `_POSITIONAL_ID` -- plus how many
+    rows with that same value came before it. The counter is not paranoia about
+    hand-edited files: `_breakdown` numbers its appended rows precisely because
+    two of them can share a label. Without it, difflib would pair the first
+    occurrence on each side and silently drop the rest.
     """
     seen: Counter[str] = Counter()
     out: list[tuple[str, dict]] = []
     for row in rows:
-        stem = str(row.get(field) or row.get("label") or "")
+        stem = _stem(row, field)
         seen[stem] += 1
         out.append((f"{stem}#{seen[stem]}", row))
     return out
@@ -176,7 +193,7 @@ def _text(row: dict) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _row(key: str, before: dict | None, after: dict | None) -> dict:
+def _row(key: str, before: dict | None, after: dict | None, moved_to: bool = False) -> dict:
     """One comparison row: the two sides, what happened, and the lines when
     that answer is "the text moved".
 
@@ -198,9 +215,16 @@ def _row(key: str, before: dict | None, after: dict | None) -> dict:
                  "label": str(shown.get("label", "")),
                  "base": _side(before) if before is not None else None,
                  "head": _side(after) if after is not None else None,
+                 "moved": moved_to,
                  "diff": []}
     if before is not None and after is not None:
-        moved = _text(before) != _text(after)
+        # Compared as LINES, not as raw strings, because lines are what the diff
+        # below can show. A section differing only by a trailing newline is the
+        # same to `splitlines`, so a raw comparison called it changed and then
+        # rendered nothing changed -- a row claiming a difference it could not
+        # point at. If that newline moved the token count, the flags carry it
+        # and the row is still `changed`, with the delta visible.
+        moved = _text(before).splitlines() != _text(after).splitlines()
         row["status"] = "changed" if moved or row["base"] != row["head"] else "unchanged"
         if not moved:
             # Identical words: emitting them as one long run of `equal` rows
@@ -238,7 +262,7 @@ def compare_breakdowns(base: dict, head: dict) -> dict:
     field = _key_field(left_rows + right_rows)
     left, right = _keyed(left_rows, field), _keyed(right_rows, field)
     keys_l, keys_r = [k for k, _ in left], [k for k, _ in right]
-    rows: list[dict] = []
+
     # `autojunk=False`, and safe here in a way it is NOT in `line_diff`: this
     # sequence is one element per SECTION, so a customised layout crossing 200
     # is reachable but thousands are not, and the quadratic term that made the
@@ -246,18 +270,56 @@ def compare_breakdowns(base: dict, head: dict) -> dict:
     # prompt is matched the same way either side of that threshold, which is not
     # one anyone would think to look for.
     matcher = difflib.SequenceMatcher(None, keys_l, keys_r, autojunk=False)
+    plan: list[list] = []
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             # `strict`: difflib's `equal` spans are equal-length by definition,
             # so a mismatch is a broken assumption rather than a short pair to
             # be silently truncated past.
-            rows += [_row(keys_l[i], left[i][1], right[j][1])
+            plan += [["pair", i, j]
                      for i, j in zip(range(i1, i2), range(j1, j2), strict=True)]
         else:
-            # `replace` as well as `delete`/`insert`: a key that changed is a
-            # different section, not a renamed one, so it is reported as the
-            # removal and the addition it is. Removals first, so the row a
-            # section was replaced BY reads after the one it replaced.
-            rows += [_row(keys_l[i], left[i][1], None) for i in range(i1, i2)]
-            rows += [_row(keys_r[j], None, right[j][1]) for j in range(j1, j2)]
-    return {"sections": rows}
+            # Removals first, so the row a section was replaced BY reads after
+            # the one it replaced.
+            plan += [["del", i, -1] for i in range(i1, i2)]
+            plan += [["ins", -1, j] for j in range(j1, j2)]
+
+    _pair_moves(plan, keys_l, keys_r)
+    return {"sections": [_row(keys_r[j] if j >= 0 else keys_l[i],
+                              left[i][1] if i >= 0 else None,
+                              right[j][1] if j >= 0 else None,
+                              moved_to=(kind == "moved"))
+                         for kind, i, j in plan if kind != "gone"]}
+
+
+def _pair_moves(plan: list[list], keys_l: list[str], keys_r: list[str]) -> None:
+    """Rewrite an unmatched removal and addition of the SAME key into one moved
+    row, in place.
+
+    difflib pairs the longest IN-ORDER run of keys, so a section that merely
+    changed position falls outside it and comes back as a deletion plus an
+    insertion -- reported as one section vanishing and an unrelated one
+    appearing, each carrying the full text, when the layout editor (#29) did
+    nothing but drag a row. That is the reordering case review caught, and the
+    claim "matched by id, not by position" is only true once it is handled:
+    matching by identity is what pairs the two, and the ORDER difflib imposed on
+    top of it is what separated them.
+
+    The survivor is the addition, so the row reads where the section now sits;
+    the removal becomes `gone` and is dropped. `moved` is reported beside
+    `status` rather than folded into it, because a move and a rewrite are
+    different things and a section can do both at once.
+    """
+    pending: dict[str, list[int]] = {}
+    for n, (kind, i, _j) in enumerate(plan):
+        if kind == "del":
+            pending.setdefault(keys_l[i], []).append(n)
+    for entry in plan:
+        if entry[0] != "ins":
+            continue
+        waiting = pending.get(keys_r[entry[2]])
+        if not waiting:
+            continue
+        removal = plan[waiting.pop(0)]
+        entry[0], entry[1] = "moved", removal[1]
+        removal[0] = "gone"

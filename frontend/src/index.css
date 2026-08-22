@@ -1724,6 +1724,9 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 }
 .ctx-status.added { color: var(--accent); border-color: var(--accent); }
 .ctx-status.removed { color: var(--alert); border-color: var(--alert); }
+/* A move is neither a gain nor a loss, so it takes neither colour — the muted
+   default `.ctx-status` already reads as "noted, not alarming". */
+.ctx-status.moved { letter-spacing: 0.08em; }
 .ctx-diff-section.removed .ctx-label { color: var(--muted); text-decoration: line-through; }
 /* Scrolls internally like `.ctx-text`, and for the same reason: one section of
    a prompt is long enough to push everything below it off the rail. */

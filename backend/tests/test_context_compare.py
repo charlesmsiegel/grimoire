@@ -260,3 +260,95 @@ def test_one_edit_in_a_long_repetitive_section_is_one_edit():
 
     assert [r["text"] for r in row["diff"] if r["op"] == "delete"] == ["- item"]
     assert [r["text"] for r in row["diff"] if r["op"] == "insert"] == ["- item CHANGED"]
+
+
+# --- what "matched by id, not by position" has to survive ---------------------
+
+
+def test_a_reordered_section_is_paired_and_marked_moved():
+    """The layout editor (#29) lets a reader drag a section. difflib pairs the
+    longest IN-ORDER run of keys, so a row that only moved falls outside it and
+    came back as a removal plus an addition -- one section vanishing and an
+    unrelated one appearing, each carrying its full text, for a drag that
+    changed nothing else."""
+    before = _bd(_row("lore", "the marsh floods"), _row("cast", "Mara"),
+                 _row("state", "wary"))
+    after = _bd(_row("cast", "Mara"), _row("state", "wary"),
+                _row("lore", "the marsh floods"))
+
+    rows = context.compare_breakdowns(before, after)["sections"]
+    assert [r["id"] for r in rows] == ["cast", "state", "lore"]
+    assert [r["status"] for r in rows] == ["unchanged"] * 3
+    assert [r["moved"] for r in rows] == [False, False, True]
+    # ...and it is reported once, not twice, so its text does not ship twice.
+    assert rows[2]["diff"] == []
+
+
+def test_a_section_can_move_and_change_at_once():
+    """`moved` sits beside `status` rather than inside it, because a drag and a
+    rewrite are different things and one section can do both.
+
+    Three sections rather than two: with a single pair swapped, "which one
+    moved" has two equally good answers and difflib picks one of them, so the
+    assertion would be pinning its tie-break rather than this behaviour.
+    """
+    before = _bd(_row("lore", "the marsh floods"), _row("cast", "Mara"),
+                 _row("state", "wary"))
+    after = _bd(_row("cast", "Mara"), _row("state", "wary"),
+                _row("lore", "the marsh is dry"))
+    row = _by_id(context.compare_breakdowns(before, after))["lore"]
+    assert (row["status"], row["moved"]) == ("changed", True)
+    assert [d["op"] for d in row["diff"]] == ["delete", "insert"]
+
+
+def test_a_real_removal_is_still_a_removal():
+    """The floor for the move pairing: it must not turn every cut section into
+    a move by finding some addition to marry it to."""
+    before = _bd(_row("lore", "x"), _row("cast", "y"), _row("state", "z"))
+    rows = context.compare_breakdowns(before, _bd(_row("cast", "y")))["sections"]
+    assert [(r["id"], r["status"], r["moved"]) for r in rows] == [
+        ("lore", "removed", False), ("cast", "unchanged", False),
+        ("state", "removed", False)]
+
+
+def test_appended_messages_are_keyed_by_label_not_by_position():
+    """`_breakdown` numbers appended rows `appended_0`, `appended_1` -- WHERE
+    they sat, not what they are. `appended_0` is the opener's prompt on an
+    opener and the note on a director turn, and comparing two kinds of turn is
+    ordinary here, so keying on the id claimed an opener prompt had been renamed
+    into a director note."""
+    before = _bd(_row("appended_0", "open the scene", label="Opener prompt"))
+    after = _bd(_row("appended_0", "raise the stakes", label="Director note"))
+    rows = context.compare_breakdowns(before, after)["sections"]
+    assert [(r["label"], r["status"]) for r in rows] == [
+        ("Opener prompt", "removed"), ("Director note", "added")]
+
+
+def test_two_appended_rows_sharing_a_label_still_pair_one_to_one():
+    """Which is what the id was numbering around in the first place: an opener
+    sends its prompt AND its shape rules, and both can carry one label."""
+    before = _bd(_row("appended_0", "one", label="Shape rules"),
+                 _row("appended_1", "two", label="Shape rules"))
+    after = _bd(_row("appended_0", "one", label="Shape rules"),
+                _row("appended_1", "TWO", label="Shape rules"))
+    assert [r["status"] for r in context.compare_breakdowns(before, after)["sections"]] \
+        == ["unchanged", "changed"]
+
+
+def test_a_trailing_newline_alone_is_not_announced_as_a_change():
+    """`splitlines` cannot see it, so a raw-string comparison marked the section
+    changed and then rendered nothing changed -- a row claiming a difference it
+    could not point at."""
+    row = _by_id(context.compare_breakdowns(
+        _bd(_row("lore", "a\nb")), _bd(_row("lore", "a\nb\n"))))["lore"]
+    assert row["status"] == "unchanged"
+    assert row["diff"] == []
+
+
+def test_a_newline_that_moves_the_token_count_still_reports_the_change():
+    """The other half: what the lines cannot show, the flags still carry."""
+    row = _by_id(context.compare_breakdowns(
+        _bd(_row("lore", "a\nb", tokens=4)),
+        _bd(_row("lore", "a\nb\n", tokens=5))))["lore"]
+    assert row["status"] == "changed"
+    assert (row["base"]["tokens"], row["head"]["tokens"]) == (4, 5)
