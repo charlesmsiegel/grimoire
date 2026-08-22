@@ -343,9 +343,11 @@ def test_the_frontend_ships_the_same_kind_list():
     dropdown shows when `GET /api/entity-kinds` does not answer (#138).
 
     Both jobs rot silently, and nothing else in either suite notices: a kind
-    added here and forgotten there leaves the fallback list short, and leaves
-    the record it imports without a label or per-kind fields (both keyed by the
-    union this pins, so tsc catches those once the kind IS added here).
+    added to `ENTITY_KINDS` here and forgotten in `types.ts` leaves the
+    fallback list short, and leaves the record it imports without a label or
+    per-kind fields -- both keyed by the union `types.ts` declares, so tsc
+    catches those two only once the kind is added THERE, which is what this
+    test is here to make happen.
 
     What this does NOT reach: `WorldView`'s own `IndexKey` union and `INDEX`
     array are hand-written and tied to nothing, so a kind can satisfy this

@@ -279,10 +279,11 @@ export type ScenePage = Scene & {
 // against. At runtime the authority is the server -- `GET /api/entity-kinds`
 // (see `components/useEntityKinds.ts`), which is what lets a kind added to
 // `store.entities.ENTITY_KINDS` reach the import dialogs' Category dropdown
-// without either dialog being edited (#138) — this list still has to learn the
-// kind, and `test_the_frontend_ships_the_same_kind_list` requires it. This list is what those dropdowns fall back to
-// when that read fails, and it stays the compile-time union because the tabs,
-// labels and per-kind field table are all written against named kinds.
+// without either dialog being edited (#138). This list still has to learn the
+// kind — `test_the_frontend_ships_the_same_kind_list` requires it — and it is
+// what those dropdowns fall back to when the read fails. It stays the
+// compile-time union because the tabs, labels and per-kind field table are all
+// written against named kinds.
 // Import it from `../api/types` and not through `../api/client`: a component
 // that reads it at module scope would otherwise crash every suite that mocks
 // the client wholesale, including suites that only import a helper out of it.

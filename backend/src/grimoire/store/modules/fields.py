@@ -7,7 +7,16 @@ scope instead of deferring the import back into ``modules``.
 
 from __future__ import annotations
 
-CONTENT_KINDS = ("locations", "lore", "items", "groups", "creatures")
+from .. import entities
+
+#: What kind a module's content row may be filed under. `entities.ENTITY_KINDS`
+#: itself, not a copy of it: a content row IS an entity once the module is
+#: applied, so a kind this tuple lacks would be one the pack could never carry
+#: and the "+ New content" picker could never legally offer. It sat here as its
+#: own literal, equal by luck, until the picker started reading the entity kinds
+#: (#138) -- at which point the next kind added to the store would have been
+#: offered by the editor and refused by `upsert_content` on save.
+CONTENT_KINDS: tuple[str, ...] = entities.ENTITY_KINDS
 
 
 def numeric_names(fields: list[dict]) -> set[str]:

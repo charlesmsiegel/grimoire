@@ -320,6 +320,28 @@ def test_rule_round_trip_and_flags(monkeypatch, tmp_path):
     assert module_edit.delete_rule(mid, "combat-basics")["ok"]
 
 
+def test_every_kind_the_content_picker_offers_is_one_upsert_accepts(monkeypatch, tmp_path):
+    """`ModuleContentEditor`'s Kind dropdown is `entities.ENTITY_KINDS` (#138),
+    and `upsert_content` validates against `modules.fields.CONTENT_KINDS`.
+
+    Those were two hand-kept tuples that happened to be equal. Once the picker
+    started reading the entity kinds, the next kind added to the store would
+    have been offered by the editor and refused on save -- an option that
+    always errors, which is the failure the import dialogs' own
+    offered-equals-accepted test exists to prevent. `CONTENT_KINDS` is the
+    entity tuple now; this is what keeps it that way.
+    """
+    from grimoire.store import entities
+    from grimoire.store.modules import fields as modules_fields
+    assert modules_fields.CONTENT_KINDS == entities.ENTITY_KINDS
+
+    mid = _mk_schema(monkeypatch, tmp_path)
+    for kind in entities.ENTITY_KINDS:
+        res = module_edit.upsert_content(mid, kind, f"row-{kind}", name=f"Row {kind}",
+                                         body="body", keys="", fields={}, sheet=None)
+        assert res["ok"], f"{kind}: {res['errors']}"
+
+
 def test_content_round_trip_with_sheet(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     item_type = {"label": "Relic", "kind": "items", "groups": [],
