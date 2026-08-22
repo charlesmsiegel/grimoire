@@ -480,7 +480,10 @@ def test_the_bundle_carries_no_key_material(client):
     for path in ("/api/routing", f"/api/campaigns/{cid}/routing"):
         body = client.get(path).json()
         assert "sk-do-not-leak-me" not in json.dumps(body), path
-        assert all(set(c) == {"id", "name", "kind", "model"}
+        # `usable` is a verdict, not a credential: it says whether the
+        # connection can send, which is the fact the picker needs and the one
+        # `key_set` already exposes on every connection listing.
+        assert all(set(c) == {"id", "name", "kind", "model", "usable"}
                    for c in body["connections"]), path
 
 

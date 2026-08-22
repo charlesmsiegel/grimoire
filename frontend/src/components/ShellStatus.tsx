@@ -19,6 +19,10 @@ type Ctx = {
    *  the header falls back to the global one. */
   sceneModel: string | null;
   setSceneModel: (next: string | null) => void;
+  /** False when the connection this campaign's scene turns are routed to
+   *  cannot send at all. `null` when no page has an opinion. */
+  sceneReady: boolean | null;
+  setSceneReady: (next: boolean | null) => void;
 };
 
 // A no-op default rather than a thrown error: every editor test renders its
@@ -27,15 +31,18 @@ type Ctx = {
 const ShellStatusCtx = createContext<Ctx>({
   context: null, setContext: () => {}, usage: null, setUsage: () => {},
   sceneModel: null, setSceneModel: () => {},
+  sceneReady: null, setSceneReady: () => {},
 });
 
 export function ShellStatusProvider({ children }: { children: ReactNode }) {
   const [context, setContext] = useState<ShellContext>(null);
   const [usage, setUsage] = useState<number | null>(null);
   const [sceneModel, setSceneModel] = useState<string | null>(null);
+  const [sceneReady, setSceneReady] = useState<boolean | null>(null);
   const value = useMemo(
-    () => ({ context, setContext, usage, setUsage, sceneModel, setSceneModel }),
-    [context, usage, sceneModel]);
+    () => ({ context, setContext, usage, setUsage, sceneModel, setSceneModel,
+             sceneReady, setSceneReady }),
+    [context, usage, sceneModel, sceneReady]);
   return <ShellStatusCtx.Provider value={value}>{children}</ShellStatusCtx.Provider>;
 }
 
@@ -80,10 +87,11 @@ export function usePublishContextUsage(usage: number | null): void {
  *  Only the page that knows the campaign can answer, hence publishing upward
  *  rather than the chrome resolving a cascade it has no cid for.
  */
-export function usePublishSceneModel(model: string | null): void {
-  const { setSceneModel } = useShellStatus();
+export function usePublishSceneModel(model: string | null, ready: boolean | null = null): void {
+  const { setSceneModel, setSceneReady } = useShellStatus();
   useEffect(() => {
     setSceneModel(model);
-    return () => setSceneModel(null);
-  }, [model, setSceneModel]);
+    setSceneReady(ready);
+    return () => { setSceneModel(null); setSceneReady(null); };
+  }, [model, ready, setSceneModel, setSceneReady]);
 }

@@ -189,17 +189,36 @@ def bundle(*, campaign_meta: dict, cfg: dict, exists: Callable[[str], bool],
     routes = {r.key: str(own.get(config_key(r.key), "") or "") for r in mine}
     effective: dict[str, str] = {}
     provenance: dict[str, dict] = {}
-    # The same routes in all three maps, not every route in two of them: a
+    inherited: dict[str, str] = {}
+    inherited_from: dict[str, dict] = {}
+    # The same routes in all four maps, not every route in some of them: a
     # campaign bundle that reported an effective value for a route the campaign
     # cannot set would be answering a question its picker never asks, and a
-    # reader diffing the three keys would have to work out which is which.
+    # reader diffing the keys would have to work out which is which.
     for r in mine:
         # Any of the route's tasks answers for all of them -- they resolve
         # through the same key by construction -- so the first one stands in.
         got = resolve(r.tasks[0], campaign_meta=campaign_meta, cfg=cfg, exists=exists)
         effective[r.key] = got["connection_id"]
         provenance[r.key] = {"scope": got["scope"]}
-    return {"routes": routes, "effective": effective, "provenance": provenance}
+        # What this route would resolve to if THIS scope said nothing, which is
+        # the only honest label for an "inherit" option. `effective` includes
+        # the scope's own opinion, so a row that already names a connection
+        # would otherwise offer "inherit (that same connection)" and change the
+        # answer when you picked it.
+        without = resolve(r.tasks[0], exists=exists,
+                          campaign_meta=_silenced(campaign_meta, r) if scope == "campaign"
+                          else campaign_meta,
+                          cfg=_silenced(cfg, r) if scope == "global" else cfg)
+        inherited[r.key] = without["connection_id"]
+        inherited_from[r.key] = {"scope": without["scope"]}
+    return {"routes": routes, "effective": effective, "provenance": provenance,
+            "inherited": inherited, "inherited_from": inherited_from}
+
+
+def _silenced(meta: dict, r: Route) -> dict:
+    """`meta` with this route's key removed -- the scope having no opinion."""
+    return {k: v for k, v in meta.items() if k != config_key(r.key)}
 
 
 def refused(scope: str, fields: Iterable[str]) -> list[str]:

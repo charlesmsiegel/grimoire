@@ -4,16 +4,16 @@ import AppHeader from "./AppHeader";
 import { ShellStatusProvider, usePublishSceneModel } from "./ShellStatus";
 
 /** A page that knows which model its turns run on, standing in for CampaignView. */
-function Publisher({ model }: { model: string | null }) {
-  usePublishSceneModel(model);
+function Publisher({ model, ready }: { model: string | null; ready?: boolean | null }) {
+  usePublishSceneModel(model, ready ?? null);
   return null;
 }
 
-function renderHeader(published?: string | null) {
+function renderHeader(published?: string | null, ready: boolean | null = null) {
   return render(
     <MemoryRouter>
       <ShellStatusProvider>
-        {published !== undefined && <Publisher model={published} />}
+        {published !== undefined && <Publisher model={published} ready={ready} />}
         <AppHeader model="vendor/active" connection="OpenRouter" ready />
       </ShellStatusProvider>
     </MemoryRouter>,
@@ -57,4 +57,16 @@ test("a page that resolved nothing leaves the global model alone", async () => {
   // hiccup that changes nothing about what the turn will use.
   renderHeader(null);
   expect(await screen.findByText("VENDOR/ACTIVE")).toBeInTheDocument();
+});
+
+test("the dot reports the routed connection, not the active one", async () => {
+  // A campaign routing its scene turns at a keyless connection 409s every send.
+  // A green dot beside that describes a connection this page is not using.
+  renderHeader("vendor/cheap", false);
+  expect(await screen.findByTitle(/not ready/)).toBeInTheDocument();
+});
+
+test("a page with no opinion about readiness leaves the global verdict alone", async () => {
+  renderHeader("vendor/cheap");
+  expect(await screen.findByTitle(/OpenRouter · connected/)).toBeInTheDocument();
 });
