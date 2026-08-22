@@ -243,14 +243,21 @@ def test_a_flagged_run_publishes_nothing(client, scene, monkeypatch):
     written = []
 
     class Run:
-        review_cancelled = True
+        review_cancelled = False
+        cancel_requested = False
         scene_identity = store.scenes.scene_identity(cid, sid)
 
-    with pytest.raises(routes.scenes._ReviewCancelledError):
-        routes.scenes._under_review_lock(cid, sid, Run(), lambda: written.append(1))
+    # Either intent suppresses it: a Discard of the REVIEW and a Stop on the
+    # RUN are different requests that want the same answer, and a Stop that
+    # only stopped the generating would publish anyway -- a cancelled scope
+    # does not reach into a threadpool worker already inside this write.
+    for flag in ("review_cancelled", "cancel_requested"):
+        stopped = Run()
+        setattr(stopped, flag, True)
+        with pytest.raises(routes.scenes._ReviewCancelledError):
+            routes.scenes._under_review_lock(cid, sid, stopped, lambda: written.append(1))
     assert written == []
 
-    Run.review_cancelled = False
     routes.scenes._under_review_lock(cid, sid, Run(), lambda: written.append(1))
     assert written == [1]
 
@@ -264,6 +271,7 @@ def test_a_run_whose_scene_was_replaced_publishes_nothing(client, scene):
 
     class Run:
         review_cancelled = False
+        cancel_requested = False
         scene_identity = "0" * 32       # never minted for this scene
 
     with pytest.raises(routes.scenes._SceneMovedError):
