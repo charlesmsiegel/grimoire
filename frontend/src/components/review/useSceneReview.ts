@@ -347,43 +347,6 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setReviewQuote("");
   }
 
-  /** Wait out a scoped retry that is already running for the review just
-   *  opened, and take its result off the store when it lands.
-   *
-   *  Only for a retry of THIS review -- matched on the generation, which every
-   *  run belonging to one review carries -- and only while the panel is still
-   *  showing it. The re-open rebuilds the rows, which is what a retry does on
-   *  screen anyway; the alternative is a panel that silently disagrees with the
-   *  record it is about to save over.
-   */
-  async function adoptLiveRetry(sid: string, generation: string | null,
-                                dropped: () => boolean) {
-    if (!generation) return;
-    const live = await api.liveReview(cid, sid).catch(() => null);
-    if (live?.review_generation !== generation || live.kind === "absorb") return;
-    if (dropped() || campaignRef.current !== cid) return;
-    const stopGen = absorbStopRef.current;
-    setRetryingAudit(live.kind === "audit");
-    setRetryingDossiers(live.kind === "dossiers");
-    try {
-      await api.awaitRun(cid, sid, live);
-      const merged = await api.pendingReview(cid, sid);
-      if (dropped() || campaignRef.current !== cid
-          || absorbStopRef.current !== stopGen
-          || generationRef.current !== generation) return;
-      if (merged.review) openReview(merged.review, sid, merged.generation);
-    } catch {
-      // The retry's own failure is the retry's to report, and this browser did
-      // not ask for it. What is on screen is the review the store had, which is
-      // exactly what it would have been without this.
-    } finally {
-      if (!dropped()) {
-        setRetryingAudit(false);
-        setRetryingDossiers(false);
-      }
-    }
-  }
-
   // Adopt whatever this scene already has (#396). The review is durable now, so
   // three states are reachable on a fresh mount that were not before: one
   // waiting to be saved, one the transcript has moved out from under, and one
@@ -395,114 +358,114 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // so adopting on every scene change would replace the one on screen with the
   // one belonging to whatever the reader just clicked -- throwing away every
   // proposal they had judged.
+  //
+  // **WHAT IS RUNNING IS ASKED BEFORE WHAT IS STORED**, and that order is the
+  // whole correctness of this effect. A stored payload is only final when
+  // nothing can still change it, and three different runs can:
+  //
+  //   * a scoped retry merges into the SAME record, and its pre-retry payload
+  //     is necessarily already on disk -- so reading the store first opens the
+  //     phase the retry is replacing, with nobody waiting to refresh it, and
+  //     saving later commits those stale rows over the completed retry;
+  //   * a fresh absorb from another tab leaves the old record in place until
+  //     its terminal publish, so a stale notice read first is shown as the
+  //     final state, with no latch and no Stop for a run that is holding this
+  //     scene;
+  //   * and a run that LANDS between the two reads is caught by whichever is
+  //     second, which is why the store has to be the second one.
+  //
+  // The cost is one extra round-trip before the panel opens. The alternative
+  // is a panel that disagrees with the record it is about to save over.
   useEffect(() => {
     if (!activeId) return;
     const sid = activeId;
     let dropped = false;
     void (async () => {
       if (hasReviewRef.current) return;
-      let pending;
-      try {
-        pending = await api.pendingReview(cid, sid);
-      } catch {
-        // A failed request is not an answer of "no review" -- the next mount
-        // asks again. Reading it as "none" would leave a durable review
-        // invisible with End scene the only way back to it, which re-runs the
-        // whole absorb over a review that is sitting on disk.
-        return;
-      }
-      if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
-      if (pending.review) {
-        openReview(pending.review, sid, pending.generation);
-        // A stored review is not necessarily a SETTLED one. A scoped retry
-        // merges into this same record, and its pre-retry payload is
-        // necessarily already on disk -- so mounting while one runs opens the
-        // phase it is replacing and then has nobody waiting to refresh it.
-        // Once the run releases the scene, saving commits those stale rows and
-        // clears the record the retry landed in: the completed retry is gone,
-        // and nothing said so.
-        await adoptLiveRetry(sid, pending.generation, () => dropped);
-        return;
-      }
-      if (pending.stale) {
-        // A review that is there and unusable, and nothing more is recorded
-        // about it. Holding its generation would be state nothing reads: there
-        // is no panel here, so no Cancel to name it with, and End scene does
-        // not delete on the way in -- a fresh absorb replaces the record. What
-        // the reader needs is the notice, which is what this is.
-        setStale(pending.stale, sid);
-        return;
-      }
       let live;
       try {
         live = await api.liveReview(cid, sid);
       } catch {
+        // A failed request is not an answer of "nothing is running" -- and
+        // reading it as one is what opens the pre-retry payload. Nothing is
+        // installed; the next mount asks again.
         return;
       }
       if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
-      if (!live) {
-        // "No live run" is not "no review". The absorb can LAND between the two
-        // reads above -- the store said nothing was ready, and by the time this
-        // asked, the run had finished and `liveReview` filtered it out for
-        // being terminal. Returning there left a completed review invisible for
-        // as long as the scene stayed selected (this effect is keyed on it),
-        // with End scene enabled to run the whole absorb again and replace it.
-        // One more read closes the window rather than narrowing it: whatever
-        // the run did, the store now has the answer.
-        const settled = await api.pendingReview(cid, sid).catch(() => null);
-        if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
-        if (settled?.review) openReview(settled.review, sid, settled.generation);
-        else if (settled?.stale) setStale(settled.stale, sid);
+      if (live) {
+        // Still generating, whatever kind it is. Show the scene as held and
+        // wait it out -- the run is the server's, and this client is a
+        // subscriber that can come and go. A retry gets the same treatment as
+        // an absorb deliberately: it holds the scene the same way, Cancel
+        // names it the same way, and what it produces reaches this page the
+        // same way, off the store when it lands.
+        //
+        // Captured, not bumped: this wait does not supersede anything, it just
+        // has to notice being superseded. `stopAbsorb` moves the counter, and
+        // the run it stopped then answers `review_cancelled` -- which is the
+        // reader's own request coming back, not a failure to report at them.
+        // `endScene` guards its two exits for exactly this reason; this one is
+        // reachable the same way, from the Stop offered beside "Ending…".
+        const stopGen = absorbStopRef.current;
+        setAdopting(true);
+        setAbsorbSid(sid);
+        setGeneration(live.review_generation ?? null);
+        try {
+          await api.awaitRun(cid, sid, live);
+          const landed = await api.pendingReview(cid, sid);
+          if (dropped || campaignRef.current !== cid || hasReviewRef.current
+              || absorbStopRef.current !== stopGen) return;
+          if (landed.review) openReview(landed.review, sid, landed.generation);
+          else setStale(landed.stale, sid);
+        } catch (err: unknown) {
+          if (dropped || campaignRef.current !== cid
+              || absorbStopRef.current !== stopGen) return;
+          // THE STORE IS THE ANSWER, not the run record -- `api.absorbScene`
+          // documents why and this path needs it more, not less: it is the
+          // locked-phone case itself, so the wait it is recovering from is the
+          // one most likely to have outlived the run's retention window.
+          // Without this the reader is told "no such run" over a scene whose
+          // finished review is sitting in its sidecar.
+          const landed = await api.pendingReview(cid, sid).catch(() => null);
+          if (dropped || campaignRef.current !== cid || hasReviewRef.current
+              || absorbStopRef.current !== stopGen) return;
+          if (landed?.review) {
+            openReview(landed.review, sid, landed.generation);
+            return;
+          }
+          // `false`, for the scoped retries' reason: the banner's Retry runs
+          // the CHAT retry, so offering it here would answer a failed absorb
+          // by generating one more reply into the scene being finished.
+          fail(err, false);
+        } finally {
+          // Only for a wait that is still THIS effect's. A wait that has been
+          // dropped can settle long after the next scene's adoption has set
+          // the flag for itself, and clearing it there would take "Ending…"
+          // off a scene that is still being absorbed. The dropped case is
+          // released by the cleanup below instead, which runs before the next
+          // effect body and so cannot clobber it.
+          if (!dropped) setAdopting(false);
+        }
         return;
       }
-      // Still generating. Show the panel as busy and wait it out -- the run is
-      // the server's, and this client is a subscriber that can come and go.
-      // Captured, not bumped: this wait does not supersede anything, it just
-      // has to notice being superseded. `stopAbsorb` moves the counter, and
-      // the run it stopped then answers `review_cancelled` -- which is the
-      // reader's own request coming back, not a failure to report at them.
-      // `endScene` guards its two exits for exactly this reason; this one is
-      // reachable the same way, from the Stop offered beside "Ending…".
-      const stopGen = absorbStopRef.current;
-      setAdopting(true);
-      setAbsorbSid(sid);
-      setGeneration(live.review_generation ?? null);
+      // Nothing is running, so what the store has is the final word on it.
+      let pending;
       try {
-        await api.awaitRun(cid, sid, live);
-        const landed = await api.pendingReview(cid, sid);
-        if (dropped || campaignRef.current !== cid || hasReviewRef.current
-            || absorbStopRef.current !== stopGen) return;
-        if (landed.review) openReview(landed.review, sid, landed.generation);
-        else setStale(landed.stale, sid);
-      } catch (err: unknown) {
-        if (dropped || campaignRef.current !== cid
-            || absorbStopRef.current !== stopGen) return;
-        // THE STORE IS THE ANSWER, not the run record -- `api.absorbScene`
-        // documents why and this path needs it more, not less: it is the
-        // locked-phone case itself, so the wait it is recovering from is the
-        // one most likely to have outlived the run's retention window. Without
-        // this the reader is told "no such run" over a scene whose finished
-        // review is sitting in its sidecar.
-        const landed = await api.pendingReview(cid, sid).catch(() => null);
-        if (dropped || campaignRef.current !== cid || hasReviewRef.current
-            || absorbStopRef.current !== stopGen) return;
-        if (landed?.review) {
-          openReview(landed.review, sid, landed.generation);
-          return;
-        }
-        // `false`, for the scoped retries' reason: the banner's Retry runs the
-        // CHAT retry, so offering it here would answer a failed absorb by
-        // generating one more reply into the scene being finished.
-        fail(err, false);
-      } finally {
-        // Only for a wait that is still THIS effect's. A wait that has been
-        // dropped can settle long after the next scene's adoption has set the
-        // flag for itself, and clearing it there would take "Ending…" off a
-        // scene that is still being absorbed. The dropped case is released by
-        // the cleanup below instead, which runs before the next effect body
-        // and so cannot clobber it.
-        if (!dropped) setAdopting(false);
+        pending = await api.pendingReview(cid, sid);
+      } catch {
+        // Same rule as above. Reading a failure as "no review" would leave a
+        // durable review invisible with End scene the only way back to it,
+        // which re-runs the whole absorb over a review sitting on disk.
+        return;
       }
+      if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
+      if (pending.review) openReview(pending.review, sid, pending.generation);
+      // A review that is there and unusable, and nothing more is recorded
+      // about it. Holding its generation would be state nothing reads: there
+      // is no panel here, so no Cancel to name it with, and End scene does not
+      // delete on the way in -- a fresh absorb replaces the record. What the
+      // reader needs is the notice, which is what this is.
+      else if (pending.stale) setStale(pending.stale, sid);
     })();
     return () => { dropped = true; setAdopting(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps

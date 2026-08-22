@@ -1719,3 +1719,25 @@ test("a retry does not adopt a live absorb as its own run", async () => {
 
   expect(failed).toBeInstanceOf(TypeError);
 });
+
+test("a transient failure discovering a live review is retried, not answered", async () => {
+  // The adoption pass asks this first and treats a rejection as unknown rather
+  // than as "nothing running" — but a single dropped fetch stranding the mount
+  // until the reader changes scenes is a poor answer to a blip.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             kind: "absorb", attempt_id: null,
+                                             next_index: 0,
+                                             review_generation: "gen1" } }));
+    globalThis.fetch = fetchMock;
+    const pending = api.liveReview("run", "s1");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await pending)?.review_generation).toBe("gen1");
+  } finally {
+    vi.useRealTimers();
+  }
+});
