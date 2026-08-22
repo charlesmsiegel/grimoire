@@ -153,6 +153,12 @@ const CLAUDE_PINNED = [
  *  sidecar — so any other picker offering Claude models has to get them from
  *  here or hard-code a second copy that drifts the next time a model ships.
  *  Priced and sized as null: this file knows the ids, not the tariff. */
+/** What a `claude` connection runs when its model is unset — the dispatcher
+ *  substitutes it (`llm.CLAUDE_DEFAULT_MODEL`), so a picker reporting the bare
+ *  "" would tell the reader nothing about the model that will answer them.
+ *  The one kind whose stored model and effective model differ. */
+export const CLAUDE_FALLBACK_MODEL = "opus";
+
 export const CLAUDE_MODEL_OPTIONS: Model[] = [
   ...CLAUDE_ALIASES.map((m) => ({ id: m.id, name: m.label })),
   ...CLAUDE_PINNED.map((id) => ({ id, name: id })),

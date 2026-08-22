@@ -3872,7 +3872,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                               // of three of them is worse than not offering it
                               // at all. Keydown bubbles from every child.
                               onKeyDown={(e) => {
+                                // Both keys on the popover, so all three of its
+                                // controls commit and dismiss alike. Enter used
+                                // to work from the guidance input alone, which
+                                // meant typing a model id and pressing Enter
+                                // did nothing at all. `ModelCombobox` stops an
+                                // Escape that is closing its own dropdown, so
+                                // that one does not reach here.
                                 if (e.key === "Escape") setRerollPrompt(null);
+                                if (e.key === "Enter") reroll();
                               }}>
                           {/* Above the guidance, not beside it: this is where
                               the reroll goes, and the hint is what it says once
@@ -3887,7 +3895,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                               aria-label="Reroll guidance"
                               value={rerollPrompt}
                               onChange={(e) => setRerollPrompt(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === "Enter") reroll(); }}
                             />
                             <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
                           </span>

@@ -22,6 +22,14 @@ variant ``_resolve`` reconciles out of the transcript rather than archiving (a
 plain turn's reply, a hand edit). A reader shows nothing for those rather than
 naming a model it is only guessing at.
 
+What it names, exactly: *a* route that produced this text, latest recorded
+wins. Two takes with identical text are one variant, so when two routes
+generate the same bytes the field can only name one of them — and a generation
+that recorded no pending pair at all (Retry, the empty send) cannot re-stamp
+what it lands on, because a pure read cannot tell an empty pending record from
+no reroll. Closing that gap needs the "a replacement is expected" flag rejected
+further down this docstring, for the reason given there.
+
 **What a set is keyed to.** One reroll can produce several posts
 (``scenes.split_reply`` segments a reply per speaker), so the unit here is the
 *generation* — exactly what ``scenes.remove_trailing_assistant_run`` removes and

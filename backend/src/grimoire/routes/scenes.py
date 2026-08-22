@@ -378,13 +378,21 @@ def delete_scene(cid: str, sid: str, request: Request):
     return {"ok": True}
 
 
-def _disown_dead_guidance(cid: str, sid: str) -> None:
-    """Re-aim the reroll hint before streaming something that did not send it.
+def _disown_dead_pending(cid: str, sid: str) -> None:
+    """Re-aim a dead reroll's hint AND route before streaming something that
+    sent neither.
 
-    A guided reroll whose stream died leaves its hint parked for "whatever lands
-    next". Every other way of streaming into that empty slot — Retry, and the
-    empty-send / director turn, which persist no player message — never sent
-    that hint, so the take they produce must not be labelled with it.
+    A reroll whose stream died leaves its pending pair parked for "whatever
+    lands next" (`store.alternates`). Every other way of streaming into that
+    empty slot — Retry, and the empty-send / director turn, which persist no
+    player message — sent neither the hint nor the route, so the take they
+    produce must not be labelled with either.
+
+    Both halves, and named for both since #77 gave the pair a second field:
+    this reaches the model through `archive`'s `model=""` default rather than
+    by saying so, which is exactly the silence `store.alternates
+    .disown_guidance` was renamed `disown_pending` to stop. Re-aiming only the
+    hint would credit the take that lands with a route it was not generated on.
 
     Only over an *empty* slot. Above a live reply these paths append a
     consecutive generation rather than replacing one, which moves the slot and
@@ -394,7 +402,9 @@ def _disown_dead_guidance(cid: str, sid: str) -> None:
     """
     parked = store.alternates.state(cid, sid)
     if parked["runs"] and parked["active"] is None:
-        store.alternates.archive(cid, sid, "")
+        # Both fields said out loud rather than left to the signature's
+        # defaults, so the next reader can see that the route is re-aimed too.
+        store.alternates.archive(cid, sid, guidance="", model="")
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
@@ -474,7 +484,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     # (pcless), or — in any scene — an empty send meaning "next NPC round"
     ephemeral = store.scenes.is_pcless(cid, sid) or not turn.content.strip()
     # Heal, then the sidecar, then retire — the same split regenerate makes, and
-    # for the same reason. `_disown_dead_guidance` writes a file that can refuse
+    # for the same reason. `_disown_dead_pending` writes a file that can refuse
     # the write, and it used to run AFTER the retirement: an empty send over an
     # unwritable sidecar then retired a recoverable decision and returned 500
     # having generated nothing. Heal still leads, because it is what can append
@@ -495,7 +505,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             raise HTTPException(status_code=404, detail="scene not found")
         store.proposals.heal(cid, sid)
         if ephemeral:
-            _disown_dead_guidance(cid, sid)
+            _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
         posted_at, content, speaker = None, "", None
         if not ephemeral:
@@ -617,7 +627,7 @@ def _retry_run(cid: str, sid: str, body, request: Request,
         if streaming._scene_moved(cid, sid, run.scene_identity):
             raise HTTPException(status_code=404, detail="scene not found")
         store.proposals.heal(cid, sid)
-        _disown_dead_guidance(cid, sid)
+        _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body), describe=store.prompt_log.capturing())
@@ -696,12 +706,11 @@ def post_regenerate(cid: str, sid: str, request: Request,
     # with no key, must refuse BEFORE the reservation below — past it the route
     # has archived and removed the outgoing reply, and a 400 raised there would
     # report a rejected request over a scene that is one reply short.
-    override = _override_connection(body)
-    # Spelled out twice rather than reusing `routed` as the condition: the
-    # narrowing a type checker can follow is the `is not None` itself, not a
-    # bool derived from it.
-    routed = override is not None
-    conn = override if override is not None else _require_connection()
+    # `conn` is always the resolved connection and `routed` says whether it is
+    # somewhere this turn would not have gone anyway — two answers, because the
+    # stamps below need the second and the generation needs the first, and a
+    # single sentinel could not carry both without the caller re-resolving.
+    conn, routed = _override_connection(body)
     # RESERVED BEFORE THE FIRST MUTATOR, which matters more here than anywhere
     # else: this route archives the outgoing reply and removes it from the
     # transcript before the replacement exists, so a 409 raised afterwards
@@ -920,12 +929,17 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # after the turn claim inside `_chat_stream` (which can raise StoreBusy on a
     # contended campaign). Both would leave Turn history showing a regeneration
     # the model never saw.
-    # `ran_on` for a routed reroll, and the scene's own stamp otherwise (see
-    # `routed` above). `SceneInspector` reads the recorded model back to look up
-    # the context size it measures a snapshot against, so a reroll sent to a 32k
-    # local endpoint and filed under the campaign's 200k model is a percentage
-    # bar that reads comfortable for a prompt that did not fit.
-    _record_prompt(cid, sid, "regenerate", breakdown, model=ran_on if routed else "")
+    # `ran_on` for a routed reroll, and None -- "use the scene's own stamp" --
+    # otherwise (see `routed` above). None rather than "", because "" is a real
+    # answer here: a custom endpoint with no model configured generates on the
+    # provider's default, and `_record_prompt` must not read that as "nothing
+    # to say" and fall back to the campaign's model.
+    #
+    # `SceneInspector` reads the recorded model back to look up the context
+    # size it measures a snapshot against, so a reroll sent to a 32k local
+    # endpoint and filed under the campaign's 200k model is a percentage bar
+    # that reads comfortable for a prompt that did not fit.
+    _record_prompt(cid, sid, "regenerate", breakdown, model=ran_on if routed else None)
     # `on_unstarted` is `restore` again, for the one path the stream's own hooks
     # cannot cover: a Stop that arrived while this route was still in the
     # synchronous setup above. The runner honours it with a checkpoint BEFORE

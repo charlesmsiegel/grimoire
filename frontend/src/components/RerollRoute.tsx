@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import type { ActiveConnection, LLMConnection, LLMConnectionKind } from "../api/types";
 import ModelCombobox from "../routes/ModelCombobox";
-import { CLAUDE_MODEL_OPTIONS } from "./ConnectionForm";
+import { CLAUDE_FALLBACK_MODEL, CLAUDE_MODEL_OPTIONS } from "./ConnectionForm";
 
 /** One reroll's route override (#77): which connection to send it to, and
  *  which model to drive that connection at. Both empty is the standing
@@ -86,6 +86,12 @@ export default function RerollRoutePicker({
     return () => { live = false; };
   }, [kind, chosenId]);
 
+  /** `llm.effective_model`'s rule, on the client. Only `claude` substitutes. */
+  function effectiveModel(c: { kind?: string; model?: string } | null): string {
+    if (!c) return "";
+    return c.kind === "claude" ? (c.model || CLAUDE_FALLBACK_MODEL) : (c.model ?? "");
+  }
+
   const models =
     kind === "openrouter" ? orModels
     : kind === "claude" ? CLAUDE_MODEL_OPTIONS
@@ -125,10 +131,12 @@ export default function RerollRoutePicker({
       <ModelCombobox
         ariaLabel="Reroll model"
         // What leaving it blank means, spelled out rather than implied: the
-        // model the chosen connection already carries. `active.model` for the
-        // default because config reports the EFFECTIVE one, which is the model
-        // a Claude connection with none configured actually runs.
-        placeholder={(value.connection_id ? chosen?.model : active?.model) || "model"}
+        // model the chosen route will actually run. The two sources disagree
+        // about that for one kind and review caught it: `/config` reports the
+        // active connection's EFFECTIVE model, while `/llm-connections` reports
+        // the raw stored one — so a Claude connection with none configured
+        // showed an empty box for a reroll that would run `opus`.
+        placeholder={effectiveModel(value.connection_id ? chosen : active) || "model"}
         value={value.model}
         onChange={(model) => onChange({ ...value, model })}
         models={models}
