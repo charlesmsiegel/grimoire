@@ -431,6 +431,22 @@ def test_past_the_cap_only_errors_are_recorded_and_the_cap_says_so(home, monkeyp
     assert sum(1 for r in _rows(home) if r.get("kind") == "log_capped") == 1
 
 
+def test_deleting_a_capped_month_turns_ordinary_logging_back_on(home, monkeypatch):
+    """Deleting the file is exactly what a user does to reclaim the space the
+    cap is complaining about. Remembering the cap for the life of the process
+    left logging switched off after they had -- until a restart or the month
+    rolled over, with nothing on screen to say why."""
+    monkeypatch.setattr(logs, "MAX_MONTH_BYTES", 400)
+    monkeypatch.setattr(logs, "_STAT_EVERY", 1)
+    for i in range(40):
+        logs.record("info", "runner", f"tick {i}")
+    assert logs.record("info", "runner", "dropped") is None
+
+    (home / "logs" / f"{logs._now()[:7]}.jsonl").unlink()
+
+    assert logs.record("info", "runner", "after") is not None
+
+
 # ---- reading ----
 def _seed(home):
     logs.apply_level("debug")
@@ -601,6 +617,19 @@ def test_a_cursor_naming_a_file_outside_the_log_directory_is_refused(home):
 
     assert out["rows"] == []
     assert out["cursor"].startswith("2026-08.jsonl:")
+
+
+def test_an_early_but_valid_date_draws_an_empty_report_not_a_500(home):
+    """`_valid_day` accepts anything `date.fromisoformat` parses, and
+    `0001-01-01` is a perfectly good date -- so subtracting a window from it
+    crossed `date.min` and raised, reaching the caller as a 500 rather than as
+    the bounded, empty report these endpoints promise."""
+    logs.record("info", "runner", "today")
+
+    out = logs.read(until="0001-01-01")
+
+    assert out["rows"] == [] and out["total"] == 0
+    assert out["since"] and out["until"]         # a real window, not a crash
 
 
 # ---- live tailing ----
