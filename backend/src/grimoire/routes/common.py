@@ -969,20 +969,32 @@ def _routed_connection(task: str, cid: str) -> tuple[dict | None, dict]:
     return seen.get(resolution["connection_id"]), resolution
 
 
-def _require_connection(task: str = "", cid: str = "") -> dict:
-    """The connection this generation runs on, or a 409 saying why there is none.
+def _standing_connection(task: str, cid: str) -> tuple[dict | None, dict, bool]:
+    """Where `task` would run, how that was decided, and whether a route chose it.
 
-    `task` is the same string the call site meters under (`store.usage.meter`),
-    and `store/routing.py` maps it to a route; `cid` lets a campaign override
-    that route. Both default to "unrouted", which resolves to the active
-    connection -- but `test_routing_guard.py` fails a call site in `routes/`
-    that leaves `task` off, so the default covers callers outside the route
-    layer rather than being an option for one inside it.
+    `_require_connection`'s resolution half, without its refusals, and the only
+    place in `routes/` that reads the active connection. Two callers need
+    exactly this and differ only in what they do when it is unusable: the seam
+    below refuses, and `_override_connection` still has a question to answer --
+    "is this override somewhere the turn would not have gone anyway?" has an
+    answer when the standing route is broken, and refusing there would reject
+    the reroll that FIXES the session.
     """
     conn, resolution = _routed_connection(task, cid)
     routed = conn is not None
     if conn is None:
         conn = store.llm_connections.get_active()  # routing-ok: this IS the seam
+    return conn, resolution, routed
+
+
+def _usable_or_409(conn: dict | None, resolution: dict, routed: bool) -> dict:
+    """The 409 that says why this connection cannot send, or the connection.
+
+    Shared by the seam and by `_override_connection`, which resolves the
+    standing route itself to answer a second question and must refuse it on
+    exactly the same terms -- including the routed-connection wording below,
+    which its own inline copy of these checks used to lose.
+    """
     if conn is None:
         raise HTTPException(
             status_code=409, detail={"detail": "No LLM connection selected", "kind": "missing_key"})
@@ -1011,7 +1023,20 @@ def _require_connection(task: str = "", cid: str = "") -> dict:
     return conn
 
 
-def _override_connection(body) -> tuple[dict, bool]:
+def _require_connection(task: str = "", cid: str = "") -> dict:
+    """The connection this generation runs on, or a 409 saying why there is none.
+
+    `task` is the same string the call site meters under (`store.usage.meter`),
+    and `store/routing.py` maps it to a route; `cid` lets a campaign override
+    that route. Both default to "unrouted", which resolves to the active
+    connection -- but `test_routing_guard.py` fails a call site in `routes/`
+    that leaves `task` off, so the default covers callers outside the route
+    layer rather than being an option for one inside it.
+    """
+    return _usable_or_409(*_standing_connection(task, cid))
+
+
+def _override_connection(body, task: str = "", cid: str = "") -> tuple[dict, bool]:
     """Where ONE call runs, and whether that is somewhere it would not have gone
     anyway (#77).
 
@@ -1082,34 +1107,32 @@ def _override_connection(body) -> tuple[dict, bool]:
     """
     conn_id = (getattr(body, "connection_id", None) or "").strip() if body else ""
     model = (getattr(body, "model", None) or "").strip() if body else ""
-    if not conn_id and not model:
-        return _require_connection(), False
+    # No early return for "neither field set": that case IS this function's
+    # main path with an empty override -- it resolves the standing route,
+    # refuses it on the same terms, and compares it against itself to report
+    # `routed=False`. A short-circuit through `_require_connection` would only
+    # be a second spelling of the same thing, and it took a task this helper
+    # does not have.
     if len(model) > store.alternates.MAX_MODEL_CHARS:
         raise HTTPException(
             status_code=400,
             detail="That is too long to be a model id — check it and try again.")
-    # Read ONCE and used for both roles below: resolving a `model`-only
-    # override, and deciding whether the result differs from the standing
-    # route. Review caught the first draft of this claiming exactly that while
+    # The STANDING ROUTE for this task (#142), which is the active connection
+    # only when nothing routes it elsewhere. Read ONCE and used for both roles
+    # below: resolving a `model`-only override, and deciding whether the result
+    # differs from where this turn would have gone. Review caught the first draft of this claiming exactly that while
     # the `model`-only branch went through `_require_connection()`, which reads
     # again — the same two-read window the tuple return was introduced to
     # close, left open in the one branch the fix did not reach. A repoint
     # landing between the two sent "the same provider, its bigger model" to a
     # different provider entirely, and computed `routed` against a connection
     # that never served the turn.
-    active = store.llm_connections.get_active()
+    active, resolution, routed = _standing_connection(task, cid)
     if not conn_id:
-        # `_require_connection`'s two refusals, raised against the connection
-        # already in hand rather than by reading it a second time.
-        if active is None:
-            raise HTTPException(
-                status_code=409,
-                detail={"detail": "No LLM connection selected", "kind": "missing_key"})
-        problem = _connection_problem(active)
-        if problem is not None:
-            raise HTTPException(status_code=409,
-                                detail={"detail": problem, "kind": "missing_key"})
-        conn = active
+        # The seam's refusals, raised against the connection already in hand
+        # rather than by reading it a second time -- and through the seam's own
+        # helper, so a routed connection that cannot send says so here too.
+        conn = _usable_or_409(active, resolution, routed)
     else:
         try:
             conn = store.llm_connections.read_connection_raw(conn_id)

@@ -833,7 +833,10 @@ def post_regenerate(cid: str, sid: str, request: Request,
     # somewhere this turn would not have gone anyway — two answers, because the
     # stamps below need the second and the generation needs the first, and a
     # single sentinel could not carry both without the caller re-resolving.
-    conn, routed = _override_connection(body)
+    # The task literal lives here, at the call site, because this is where a
+    # generation knows what it is: a reroll of a scene reply routes exactly
+    # where the reply it replaces would have (#142).
+    conn, routed = _override_connection(body, "regenerate", cid)
     # RESERVED BEFORE THE FIRST MUTATOR, which matters more here than anywhere
     # else: this route archives the outgoing reply and removes it from the
     # transcript before the replacement exists, so a 409 raised afterwards

@@ -385,7 +385,7 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
     new root, and deriving there fills them.
     """
     root = _world_root_or_404(wid)
-    conn = _require_connection()
+    conn = _require_connection("tagline")
     # Off the event loop: `list_characters` stats every version and every image
     # of every character, which is ~200ms on a large world (see
     # `list_undescribed_images`). Eagerly, before the response is returned, so
