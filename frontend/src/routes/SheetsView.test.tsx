@@ -241,6 +241,19 @@ test("creating one sheet in the detail pane refreshes the rail beside it", async
   await waitFor(() => expect(railRow("Winifred")).toHaveTextContent("Sheet"));
 });
 
+test("a module that keeps no sheets is not reported as no module", async () => {
+  // A pack can be all rules and checks. Calling that "no mechanics bound"
+  // sends the reader to change a binding that is already what they want.
+  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: {} });
+  renderSheets();
+  await screen.findByText(/declares no sheet types/);
+  expect(screen.getByText(/Pool Basic declares no sheet types/)).toBeInTheDocument();
+  expect(column().getByText("This module keeps no sheets.")).toBeInTheDocument();
+  // and no table of headings with nothing under them
+  expect(screen.queryByRole("table")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Create missing sheets/ })).toBeNull();
+});
+
 test("a failed create surfaces the reason rather than a silent no-op", async () => {
   (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
   renderSheets();
