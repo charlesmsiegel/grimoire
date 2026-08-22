@@ -556,9 +556,11 @@ def get_entity_kinds():
     bundle-skew case downstream would all be unnecessary. It was not taken for
     two reasons. `ScenarioProposal` is both the parse response AND the body the
     reviewer edits and posts back to `/scenario/import`, so a `kinds` field on
-    it would be a response-only key riding on a request model and stripped
-    again on the way in -- exactly the wart `art` already is, and that one has
-    a comment apologising for it. And the list has readers that never go
+    it would be a key that is not part of the proposal, hung on the model
+    anyway and lifted back out before use -- the same wart `art` already is
+    (mirrored: `art` rides inbound and `post_scenario_import` pops it, `kinds`
+    would ride outbound), and that one carries a comment apologising for
+    itself. And the list has readers that never go
     through a parse at all: #27 wants this review table driven from a stored
     card, #119 wants it after the fact on committed records. A standalone GET
     serves those without either of them growing a parse step. The cost is real
