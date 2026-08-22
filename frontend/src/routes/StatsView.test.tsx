@@ -184,6 +184,27 @@ it("keeps every module in the picker after one of them is picked", async () => {
   expect(within(picker).getByRole("option", { name: "chat" })).toBeInTheDocument();
 });
 
+it("never shows whole-library numbers under a filtered heading", async () => {
+  let release: (v: unknown) => void = () => {};
+  vi.mocked(api.getErrorSummary).mockImplementation((() =>
+    new Promise((res) => { release = res; })) as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  await screen.findByLabelText("Module to report on");
+
+  fireEvent.change(screen.getByLabelText("Module to report on"),
+                   { target: { value: "dossier" } });
+
+  // The filtered read has not landed. The unfiltered copy from /stats must
+  // not stand in for it — a moment of "reading…" is the honest answer.
+  await screen.findByText(/Reading the log/);
+  expect(screen.queryByText("By module")).not.toBeInTheDocument();
+
+  release({ ...ERRORS, total: 2, modules: [ERRORS.modules[0]] });
+  expect(await screen.findByText("By module")).toBeInTheDocument();
+});
+
 it("says which module is empty, and offers the way back", async () => {
   vi.mocked(api.getErrorSummary).mockResolvedValue(
     { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] });

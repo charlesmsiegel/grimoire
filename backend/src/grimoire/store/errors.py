@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import contextlib
 import traceback
+from datetime import date
 
 from . import logs
 
@@ -69,6 +70,17 @@ def record(module: str, kind: str, detail: str, *, campaign: str = "",
                        scene=scene, task=task, trace=trace)
 
 
+def usage_flag() -> str:
+    """The attribute name `store.usage.NOT_A_FAILURE` declares.
+
+    Read through a function rather than imported: `store.usage` imports THIS
+    module, so a module-scope import back would be the cycle
+    `tests/test_import_guard.py` exists to refuse.
+    """
+    from . import usage  # import-ok: deferred to break a genuine cycle; see above
+    return usage.NOT_A_FAILURE
+
+
 #: Marks an exception object as already recorded. An attribute on the
 #: exception rather than a set of ids, because the exception IS the identity
 #: and a set would either leak or need a lifetime nobody can define.
@@ -96,6 +108,14 @@ def record_exception(exc: BaseException, module: str, *, detail: str = "",
     failure has no kind but the name of what went wrong.
     """
     if getattr(exc, _RECORDED, False):
+        return None
+    if getattr(exc, usage_flag(), True) is False:
+        # Work that was deliberately not done is not a failure, and the meter
+        # already applies this. Applying it HERE too is what makes the property
+        # hold for any call site: without it, only the clause order in one
+        # `except` chain kept `BudgetRefused` -- an `LLMError` wearing
+        # `kind="timeout"` -- out of the store, and the next recorder to be
+        # added would have quietly put it back.
         return None
     row = record(module, getattr(exc, "kind", None) or type(exc).__name__,
                  detail or str(exc).strip(), campaign=campaign, scene=scene, task=task,
@@ -183,7 +203,9 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
         daily[ts[:10]] = daily.get(ts[:10], 0) + 1
         recent.offer(row)
     return {
-        "since": since, "until": until, "days": _span(days),
+        # Derived from the window that was actually read, so the three fields
+        # cannot describe three different spans when `since`/`until` name one.
+        "since": since, "until": until, "days": _days_between(since, until),
         "total": total,
         "modules": sorted(
             ({**b, "kinds": _ranked(b["kinds"])} for b in by_module.values()),
@@ -195,11 +217,14 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
     }
 
 
-def _span(days: int) -> int:
-    """The window actually read, after `logs.window`'s clamp -- so a caller
-    that asked for 100000 days is told it got 366, rather than being echoed
-    its own number back."""
-    return max(1, min(int(days or 1), logs.MAX_DAYS))
+def _days_between(since: str, until: str) -> int:
+    """How many days the resolved window spans, inclusive.
+
+    Reported instead of echoing the caller's `days` back, which was a
+    different number whenever `since`/`until` named the window and disagreed
+    with the `since`/`until` printed beside it.
+    """
+    return (date.fromisoformat(until) - date.fromisoformat(since)).days + 1
 
 
 def _ranked(counts: dict[str, int]) -> list[dict]:
