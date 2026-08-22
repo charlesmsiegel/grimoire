@@ -2449,12 +2449,14 @@ test("a turn that the provider refused tells the shell its status is stale", asy
 
 test("a turn that failed for a reason of ours leaves the status alone", async () => {
   // A scene that is busy, a stale write, a 404 — none of them are a statement
-  // about the provider, and re-reading the config over one is noise.
+  // about the provider, and re-reading the config over one is noise. `busy` is
+  // the kind `streaming.py` really sends for this, not an invented one: a
+  // negative test against a string the app never emits proves nothing.
   const seen: string[] = [];
   const off = onConfigChanged(() => seen.push("config"));
   (api.chat as any).mockImplementation(
     async (_c: string, _s: string, _t: string, onEvent: any) => {
-      onEvent({ error: { detail: "that scene is busy", kind: "scene_busy" } });
+      onEvent({ error: { detail: "that scene is busy", kind: "busy" } });
     });
   renderCampaign();
   await screen.findByRole("textbox");

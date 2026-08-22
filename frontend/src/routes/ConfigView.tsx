@@ -4,6 +4,7 @@ import {
   api, type Config, type ConfigUpdate, type LLMConnection, type PromptLayoutSection,
   type SceneContext,
 } from "../api/client";
+import { errorText } from "../api/errors";
 import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { ColumnSection, PageShell } from "../components/PageShell";
@@ -233,6 +234,7 @@ export default function ConfigView() {
   const [section, setSection] = useState<SectionId>("storage");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
   const [probe, setProbe] = useState<Probe>(null);
   // Bumped when the store pointer moves, to remount anything describing the
   // old library rather than leave it showing a report about a folder the app
@@ -314,6 +316,32 @@ export default function ConfigView() {
     setTheme(saved.theme);
     setLayout(layoutSaved);
     setError(null);
+  }
+
+  /** Ask the selected connection's provider whether it can serve (#146).
+   *
+   *  The answer is not held here: `checkConnection` files it server-side and
+   *  announces, and the connection list this page draws its caption from is
+   *  re-read on that announcement — so the verdict lands in the same sentence
+   *  that was already reporting the last one, rather than in a second place
+   *  saying something slightly different.
+   */
+  async function testConnection(cid: string) {
+    if (!cid || testing) return;
+    setTesting(true);
+    setError(null);
+    try {
+      await api.checkConnection(cid);
+      setConnections(await api.listConnections());
+    } catch (err: unknown) {
+      // Only the request failing gets here — a *provider* that refuses is a
+      // 200 whose verdict is in the caption. `errorText` rather than this
+      // file's older `err: any` idiom: it is the leaf helper written for
+      // exactly this and it costs the compiler nothing.
+      setError(errorText(err));
+    } finally {
+      setTesting(false);
+    }
   }
 
   async function save() {
@@ -601,6 +629,14 @@ export default function ConfigView() {
                     ends up debugging their prompt. */}
                 <p className="config-caption">{connectionCaption(
                   connections.find((c) => c.id === draft.active_connection_id))}</p>
+                {/* The button #146 asks for, beside the line it qualifies. It
+                    tests the connection the picker NAMES, saved or not: the id
+                    is a real connection either way, and the reader pressing it
+                    is asking about the one they are looking at. */}
+                <button className="link" disabled={testing}
+                        onClick={() => { void testConnection(draft.active_connection_id); }}>
+                  {testing ? "Testing…" : "Test connection"}
+                </button>
               </div>
               <NumField id="cfg-llm-retries" label="Retries" placeholder="2"
                         caption="0 = send once, then report the failure"

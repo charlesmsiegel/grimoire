@@ -8,7 +8,7 @@ vi.mock("../api/client", () => ({
     getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(),
     listBackups: vi.fn(), createBackup: vi.fn(),
     getStoreConflicts: vi.fn(),
-    listStyles: vi.fn(), listConnections: vi.fn(),
+    listStyles: vi.fn(), listConnections: vi.fn(), checkConnection: vi.fn(),
     listCampaigns: vi.fn(), listScenes: vi.fn(),
     listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
     getPromptLayout: vi.fn(), putPromptLayout: vi.fn(),
@@ -232,6 +232,32 @@ test("the connection line reports what the provider did, not what the file holds
 
   expect(screen.getByText(/last attempt failed — No auth credentials found/)).toBeInTheDocument();
   expect(screen.queryByText("key set")).toBeNull();
+});
+
+test("Test connection asks the provider and refreshes the line that reports it", async () => {
+  // The button #146 names, on the page it names. The verdict is not held in
+  // this component: the check files it server-side, and the caption is redrawn
+  // from a re-read list, so there is one sentence about this connection rather
+  // than two that can disagree.
+  (api.checkConnection as any).mockResolvedValue({
+    ok: false, kind: "auth", detail: "No auth credentials found",
+    checked_at: "2026-08-21T09:00:00Z",
+  });
+  (api.listConnections as any)
+    .mockResolvedValueOnce(connections)
+    .mockResolvedValue([
+      { ...connections[0],
+        health: { state: "error", kind: "auth", detail: "No auth credentials found", at: "2026-08-21T09:00:00Z" } },
+      ...connections.slice(1),
+    ]);
+  renderView();
+  await open(/^Connection/);
+
+  fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+
+  await waitFor(() => expect(api.checkConnection).toHaveBeenCalledWith("openrouter"));
+  expect(await screen.findByText(/last attempt failed — No auth credentials found/))
+    .toBeInTheDocument();
 });
 
 test("a connection nothing has exercised says so, rather than claiming to work", async () => {
