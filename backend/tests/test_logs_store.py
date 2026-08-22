@@ -222,24 +222,33 @@ def test_installing_the_bridge_does_not_create_the_store(monkeypatch, tmp_path):
     assert not root.exists()
 
 
-def test_the_floor_governs_the_file_and_the_logger_alike(home):
-    """This test used to claim the floor never took grimoire's warnings off a
-    developer's terminal, and asserted `isEnabledFor` -- which is true and
-    proves nothing. `logging.lastResort` fires only when a record finds NO
-    handler, so attaching the file handler is itself what takes those lines off
-    stderr; no arrangement of levels changes it. The honest property is that
-    one floor governs, and that is what is checked here."""
+def test_the_floor_governs_the_file_without_silencing_the_terminal(home, capsys):
+    """The setting Configuration offers is about a FILE, and it governs one:
+    at an `error` floor the file holds errors only.
+
+    It must not also silence the terminal, which is what setting the LOGGER to
+    the floor did -- a record the logger discards never reaches `emit`, and
+    `emit` is what writes WARNING and above to stderr (giving back the lines
+    `logging.lastResort` printed before this module attached a handler at all).
+    So the logger is clamped no quieter than WARNING and the handler is left
+    open; `record` is where the file's floor is enforced, and it has to be
+    there regardless, since `store.errors` reaches it without a handler."""
     logs.install()
     logs.apply_level("error")
 
-    assert logging.getLogger("grimoire").level == logging.ERROR
+    assert logging.getLogger("grimoire").level == logging.WARNING
     handler, = [h for h in logging.getLogger("grimoire").handlers
                 if isinstance(h, logs.Handler)]
-    assert handler.level == logging.ERROR
+    assert handler.level == logging.NOTSET
 
+    logging.getLogger("grimoire.runner").info("well below the floor")
     logging.getLogger("grimoire.runner").warning("below the floor")
     logging.getLogger("grimoire.runner").error("at the floor")
+
     assert [r["message"] for r in _rows(home)] == ["at the floor"]
+    err = capsys.readouterr().err
+    assert "WARNING: grimoire.runner: below the floor" in err
+    assert "well below the floor" not in err
 
 
 def test_two_threads_recording_at_once_lose_no_rows_and_tear_no_lines(home):
@@ -790,16 +799,51 @@ def test_an_unterminated_line_over_the_budget_does_not_leave_the_tail_spinning(h
         assert out["more"] is False                 # nothing is waiting; go back to sleep
 
 
-def test_a_line_longer_than_the_budget_still_advances_the_cursor(home):
-    """Otherwise one long row wedges the tail permanently: the budget never
-    reaches a newline, the offset never moves, and nothing after it arrives."""
+def test_a_line_longer_than_the_budget_is_still_read_whole(home):
+    """A small remaining budget is not evidence that a line is corrupt.
+
+    The read window has a floor of `MIN_LINE_READ` precisely so an ordinary row
+    -- which has no newline inside it either, when the window is a few hundred
+    bytes -- is not mistaken for an oversized one and stepped over. Reading
+    slightly past a small budget costs one line; getting this wrong costs rows.
+    """
     start = logs.cursor()
     logs.record("info", "runner", "x" * 500)
     logs.record("info", "runner", "after")
 
     out = logs.tail(start, budget=10)
-    assert out["rows"] and out["rows"][0]["message"].startswith("xxx")
-    assert [r["message"] for r in logs.tail(out["cursor"], budget=10)["rows"]] == ["after"]
+    assert [r["message"][:3] for r in out["rows"]] == ["xxx", "aft"]
+    assert logs.tail(out["cursor"], budget=10)["rows"] == []
+
+
+def test_a_line_longer_than_the_read_window_still_advances_the_cursor(home):
+    """Otherwise one long row wedges the tail permanently: the read never
+    reaches a newline, the offset never moves, and nothing after it arrives.
+
+    Written by hand, because nothing in `record` can produce a line this long
+    -- `MAX_MESSAGE` and `MAX_TRACE` see to that. A hand-edited or
+    half-synced file can, and that is the file this store has to survive."""
+    start = logs.cursor()
+    logs.record("info", "runner", "first")
+    path, = sorted((home / "logs").glob("*.jsonl"))
+    with path.open("ab") as handle:
+        handle.write(b"x" * (logs.MIN_LINE_READ + 4096) + b"\n")
+    logs.record("info", "runner", "after")
+
+    out = logs.tail(start, budget=10)
+    assert [r["message"] for r in out["rows"]] == ["first"]
+
+    # The oversized line is stepped over rather than collected, and the cursor
+    # moves past it, so the row behind it is reachable.
+    seen: list[str] = []
+    cursor = out["cursor"]
+    for _ in range(10):
+        out = logs.tail(cursor, budget=10)
+        seen += [r["message"] for r in out["rows"]]
+        cursor = out["cursor"]
+        if not out["more"]:
+            break
+    assert seen == ["after"]
 
 
 def test_a_filtered_tail_consumes_the_log_at_the_same_rate_as_an_open_one(home):

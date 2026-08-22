@@ -494,7 +494,8 @@ def meter(task: str, *, kind: str = KIND_LLM, campaign: str = "", scene: str = "
 
 
 # ---- rollups ----
-def calls(days: int = 30, campaign: str = ""):
+def calls(days: int = 30, campaign: str = "", *,
+          since: str = "", until: str = ""):
     """Every generation in the last ``days``, oldest first.
 
     The public half of `_read_rows`, for a reader that wants the rows rather
@@ -506,10 +507,19 @@ def calls(days: int = 30, campaign: str = ""):
     days" means the same span on both halves of the stats page; and the same
     `_is_call` filter, so a rename row cannot enter a latency distribution as a
     call that took no time.
+
+    ``since``/``until`` name the window outright, for a caller that reads more
+    than one store into a single report. `store.metrics` does: it takes
+    latencies from this ledger and errors from `store.errors`, and each
+    resolving "the last 30 days" from its own clock meant a report generated
+    across UTC midnight could quote a p90 from one window beside an error count
+    from another -- silently, and only ever for the person awake at midnight.
+    The caller resolves the pair once and hands the same one to both.
     """
     days = max(1, min(int(days), MAX_DAYS))
-    until = _today()
-    since = (date.fromisoformat(until) - timedelta(days=days - 1)).isoformat()
+    if not (since and until):
+        until = _today()
+        since = (date.fromisoformat(until) - timedelta(days=days - 1)).isoformat()
     for row in _read_rows(since, until):
         if _is_call(row) and not (campaign and row.get("campaign") != campaign):
             yield row

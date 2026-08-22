@@ -210,3 +210,59 @@ def test_under_the_cap_nothing_claims_to_have_been_sampled(home):
     _call(100)
 
     assert metrics.performance(30)["totals"]["sampled"] is False
+
+
+def test_a_breakdown_stops_opening_buckets_and_folds_the_rest_into_one(home,
+                                                                      monkeypatch):
+    """`MAX_SAMPLES` bounds what one bucket holds; this bounds how many there
+    are. `model` is a string out of a file a human can edit, and a drifted
+    column -- a per-request id where a model name belongs -- would otherwise
+    open a `_Series`, each with its own `random.Random`, per row."""
+    monkeypatch.setattr(metrics, "MAX_BUCKETS", 3)
+    for i in range(10):
+        _call(100, model=f"realm/model-{i}")
+
+    by_model = metrics.performance(30)["by_model"]
+    # The cap bounds how many labels open a bucket; the overflow bucket is the
+    # one they are folded into, so a capped breakdown is `cap` + it.
+    assert len(by_model) == 4
+    assert {b["key"] for b in by_model} == {"realm/model-0", "realm/model-1",
+                                            "realm/model-2", metrics.OVERFLOW}
+    # The numbers still add up to what was read -- only the naming got coarse.
+    assert sum(b["calls"] for b in by_model) == 10
+    assert metrics.performance(30)["totals"]["calls"] == 10
+
+
+def test_the_trend_is_not_capped_because_its_labels_are_the_window(home,
+                                                                  monkeypatch):
+    """`by_day`'s labels come from the row's own `ts`, and every row outside
+    the window has already been dropped -- so it is bounded by `MAX_DAYS`,
+    which is larger than `MAX_BUCKETS`. Capping it would fold the far end of a
+    year-long trend into a bucket called "other" and draw it as a day."""
+    monkeypatch.setattr(metrics, "MAX_BUCKETS", 2)
+    for day in ("2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"):
+        _call(100, day=day)
+
+    days = [b["key"] for b in metrics.performance(366)["by_day"]]
+    assert days == ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"]
+
+
+def test_every_half_of_the_report_reads_the_same_window(home, monkeypatch):
+    """The ledger read, the error read and the reported header used to resolve
+    "the last N days" from three separate clock reads. Across UTC midnight they
+    disagreed: a p90 from one window beside an error count from another, under
+    a header naming a third. The window is resolved once and handed to both."""
+    asked: dict[str, str] = {}
+    real = usage.calls
+
+    def spy(days, campaign="", *, since="", until=""):
+        asked.update(since=since, until=until)
+        return real(days, campaign, since=since, until=until)
+
+    monkeypatch.setattr(usage, "calls", spy)
+    _call(100)
+
+    report = metrics.performance(7)
+    assert asked == {"since": report["since"], "until": report["until"]}
+    assert report["since"] == report["errors"]["since"]
+    assert report["until"] == report["errors"]["until"]

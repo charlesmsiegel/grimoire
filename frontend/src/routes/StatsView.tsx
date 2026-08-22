@@ -538,10 +538,16 @@ export default function StatsView() {
               </>
         )}
 
-        {section === "errors" && errorModules.length > 1 && (
+        {section === "errors" && (errorModules.length > 1 || errorModule !== "") && (
           // Above the empty check, deliberately: filtering to a module with
           // nothing in it must not also remove the control that would undo
           // that. Built from the unfiltered copy for the same reason.
+          //
+          // And shown whenever a filter is ACTIVE, however few options there
+          // are. `length > 1` alone meant that narrowing the window until the
+          // chosen module was the only one left took the control away with the
+          // filter still on -- the one state from which the user cannot get
+          // back to "every module" without reloading the page.
           <div className="stats-filters">
             <label>
               <span className="section-label">Module</span>
