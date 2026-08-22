@@ -1653,9 +1653,13 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
         # Recorded as well as reported (#156): the phase status is visible in
         # the review that is open right now, and gone the moment it is closed.
-        store.errors.record("dossier", type(exc).__name__,
-                            f"could not read the scene cast: {exc}",
-                            campaign=cid, scene=sid, task="dossier")
+        # `record_exception`, like the generic handler below, so the frames
+        # survive too. This row is the only durable trace of a cast read that
+        # failed -- the phase status dies with the review it is rendered in --
+        # and a row without the stack is the one that cannot be acted on.
+        store.errors.record_exception(exc, "dossier",
+                                      detail=f"could not read the scene cast: {exc}",
+                                      campaign=cid, scene=sid, task="dossier")
         return [], {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
     def drop_tail(i: int) -> None:
         """Record the NPC at `i` and everyone after it as never reached.

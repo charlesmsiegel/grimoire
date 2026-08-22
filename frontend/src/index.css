@@ -3279,7 +3279,9 @@ a.column-back { text-decoration: none; }
 .stats-search input { width: 100%; }
 .stats-live { flex-direction: row !important; align-items: center; gap: 6px; }
 .stats-threshold { margin: 0 0 10px; }
-.stats-window { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; }
+.stats-footer { display: flex; align-items: flex-end; gap: 10px; padding: 10px 16px; }
+.stats-window { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.stats-refresh { flex: none; }
 .stats-window .section-label { margin: 0; border-bottom: 0; padding-bottom: 0; }
 
 /* A log line. Fixed columns for everything but the message, so four hundred

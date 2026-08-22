@@ -318,6 +318,103 @@ def test_no_third_party_logger_reaches_the_file_however_it_is_named(home):
     assert _rows(home) == []
 
 
+def test_a_malformed_row_is_reshaped_rather_than_handed_on_to_crash_the_page(home):
+    """"A bad line costs that line" has to cover the SHAPE, not just the
+    syntax. A hand-edited line can be perfectly good JSON carrying
+    `"level": 9` -- and that reaches the browser, where `level.toUpperCase()`
+    takes the whole page down."""
+    logs.record("info", "runner", "good")
+    with (home / "logs" / f"{logs._now()[:7]}.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(f'{{"ts": "{logs._now()[:10]}T10:00:00.000Z", "level": 9, '
+                 '"module": null, "message": {"a": 1}, "kind": []}\n')
+
+    for row in logs.read()["rows"]:
+        assert isinstance(row["level"], str) and row["level"] in logs.LEVELS
+        assert isinstance(row["module"], str) and row["module"]
+        assert isinstance(row["message"], str)
+        # An unusable field reads as ABSENT, never as `str({'a': 1})` --
+        # rendering corruption as content is worse than dropping it.
+        assert "kind" not in row or isinstance(row["kind"], str)
+
+
+def test_the_paged_reader_never_holds_a_whole_month_in_memory(home):
+    """A month file may approach `MAX_MONTH_BYTES`, and slurping it held the
+    file as one string plus a list of every parsed row -- for a result bounded
+    to a couple of hundred rows. On the packaged Android build that is an
+    out-of-memory kill at exactly the moment a verbose log is being read.
+
+    Measured rather than asserted against the source: the property is peak
+    memory, and a reader could regress to slurping without the word
+    `read_text` appearing anywhere."""
+    import tracemalloc
+
+    day = logs._now()[:10]
+    fat = home / "logs" / f"{logs._now()[:7]}.jsonl"
+    fat.parent.mkdir(parents=True, exist_ok=True)
+    row = (f'{{"ts": "{day}T10:00:00.000Z", "level": "info", "module": "runner", '
+           f'"message": "{"x" * 900}"}}\n')
+    with fat.open("w", encoding="utf-8") as fh:
+        for _ in range(8000):            # ~8 MB
+            fh.write(row)
+    assert fat.stat().st_size > 7_000_000
+
+    tracemalloc.start()
+    out = logs.read(limit=50)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+
+    assert len(out["rows"]) == 50 and out["total"] == 8000
+    # Comfortably under the file, and nowhere near a copy of it.
+    assert peak < 2_000_000, f"peak {peak} bytes for an 8 MB file"
+
+
+def test_a_tail_that_cannot_read_the_log_raises_rather_than_looking_quiet(home,
+                                                                          monkeypatch):
+    """The paged reader is tolerant because a report drawn short beats no
+    report. A TAIL drawn short is a lie: the panel goes on saying the log is
+    merely quiet, and the route's `except OSError` -- which exists to send
+    exactly that frame -- can never fire."""
+    logs.record("info", "runner", "seed")
+    cursor = logs.cursor()
+    logs.record("info", "runner", "unreadable from here")
+
+    def locked(self, *args, **kwargs):
+        raise OSError("locked by a sync client")
+
+    monkeypatch.setattr(logs.Path, "open", locked)
+    with pytest.raises(OSError):
+        logs.tail(cursor)
+
+
+def test_a_peers_future_dated_month_does_not_capture_the_tail(home):
+    """A store synced from a machine whose clock is ahead already holds a
+    future month, and it sorts newest -- so the tail would sit in it, and the
+    rows THIS device goes on writing would never appear in Live at all."""
+    logs.record("info", "runner", "mine")
+    (home / "logs" / "2099-01.jsonl").write_text(
+        '{"ts": "2099-01-01T00:00:00.000Z", "level": "info", '
+        '"module": "peer", "message": "ahead"}\n', encoding="utf-8")
+
+    assert logs.cursor().startswith(f"{logs._now()[:7]}.jsonl:")
+
+    start = f"{logs._now()[:7]}.jsonl:0"
+    assert [r["message"] for r in logs.tail(start)["rows"]] == ["mine"]
+
+
+def test_a_warning_still_reaches_stderr_now_that_a_handler_exists(home, capsys):
+    """`logging.lastResort` prints WARNING and above to stderr only while a
+    record finds NO handler. Installing the log file is what stops it, so
+    without this, adding a log silently took grimoire's warnings off every
+    terminal that had them."""
+    logs.install()
+    logging.getLogger("grimoire.runner").warning("the provider gave up")
+    logging.getLogger("grimoire.runner").info("routine, and not stderr's business")
+
+    err = capsys.readouterr().err
+    assert "the provider gave up" in err
+    assert "routine" not in err
+
+
 # ---- the size backstop ----
 def test_past_the_cap_only_errors_are_recorded_and_the_cap_says_so(home, monkeypatch):
     monkeypatch.setattr(logs, "MAX_MONTH_BYTES", 400)

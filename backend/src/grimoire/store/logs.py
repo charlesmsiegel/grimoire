@@ -74,6 +74,7 @@ import heapq
 import json
 import logging
 import re
+import sys
 import threading
 import time
 import traceback
@@ -234,9 +235,12 @@ def apply_level(name: str = "") -> str:
     # one. Attaching the file handler is itself what takes those lines off
     # stderr, and no arrangement of levels here changes that.
     #
-    # So the floor governs both, honestly. A developer who wants grimoire's
-    # output in a terminal configures `logging` for it the way uvicorn does;
-    # what this module promises is the file, and `/stats` is where it is read.
+    # So the floor governs both -- and `Handler.emit` writes WARNING and above
+    # to stderr itself, which is what gives a developer back the lines
+    # `lastResort` used to print. One handler, two destinations: the rule this
+    # module states is that there is never a SECOND handler and never one on
+    # the root logger, and neither is what that does.
+    #
     # Lowering the logger is still required for DEBUG and INFO to reach a
     # handler at all -- `logging`'s default is WARNING.
     logger.setLevel(getattr(logging, level.upper()))
@@ -445,8 +449,17 @@ class Handler(logging.Handler):
             if log_record.exc_info and log_record.exc_info[0] is not None:
                 kind = log_record.exc_info[0].__name__
                 trace = "".join(traceback.format_exception(*log_record.exc_info))
-            record(_level_of(log_record.levelno), log_record.name,
-                   log_record.getMessage(), kind=kind, trace=trace)
+            level = _level_of(log_record.levelno)
+            message = log_record.getMessage()
+            record(level, log_record.name, message, kind=kind, trace=trace)
+            if log_record.levelno >= logging.WARNING:
+                # Installing this handler is what stops `logging.lastResort`
+                # firing -- it runs only when a record finds NO handler -- so
+                # without this line, adding a log FILE silently took grimoire's
+                # warnings off every terminal that had them before. Written
+                # here rather than by a second handler, which this module
+                # forbids for a reason that has nothing to do with stderr.
+                sys.stderr.write(f"{level.upper()}: {log_record.name}: {message}\n")
         except Exception:  # noqa: BLE001 - a handler that raises is worse than a lost row
             pass
 
@@ -556,6 +569,19 @@ def _window_files(since: str, until: str) -> list[Path]:
             continue
         out.append(path)
     return out
+
+
+def _tail_files() -> list[Path]:
+    """The files the live tail may sit in: everything up to the current month.
+
+    A store synced from a peer whose clock is ahead already holds a
+    future-dated month file, and it sorts newest. `cursor()` would start there
+    and `tail` only ever moves toward later names, so the rows THIS device goes
+    on writing -- into the real current month -- would never appear in Live at
+    all. Bounded here rather than in `_window_files`, which backs the paged
+    reader: reading a future month is fine, following one is not.
+    """
+    return _window_files("0000-00", _now()[:7])
 
 
 def _matches(row: dict, level_: str, module: str, since: str, until: str,
@@ -706,25 +732,73 @@ class Newest:
         return [row for _, _, row in sorted(self._heap, reverse=True)]
 
 
-def _lines(path: Path) -> list[dict]:
-    """Every well-formed row in ``path``, oldest first. See `read` on why an
-    unreadable file is empty rather than an exception."""
+def _lines(path: Path):
+    """Every well-formed row in ``path``, oldest first, one at a time.
+
+    A GENERATOR reading line by line, not `read_text().splitlines()`. A month
+    file may approach `MAX_MONTH_BYTES`, and slurping it held the whole file as
+    one string plus a list of every parsed row -- for a read whose result is
+    bounded to a couple of hundred rows by `Newest`. On the packaged Android
+    build that is an out-of-memory kill at exactly the moment somebody is
+    investigating a verbose log. The usage ledger's reader already made this
+    call; this one now matches it.
+
+    See `read` on why an unreadable file is empty rather than an exception --
+    and note that `_read_from`, which backs the live tail, deliberately does
+    the opposite.
+    """
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    out = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict):
-            out.append(row)
-    return out
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                row = _shaped(raw)
+                if row is not None:
+                    yield row
+    except (OSError, ValueError):
+        # Mid-file as well as on open: a decode error surfaces on the read that
+        # reaches the bad bytes, and a report drawn short beats no report.
+        return
+
+
+def _shaped(raw: str) -> dict | None:
+    """One line as a row whose fields are the types every reader assumes, or
+    None to skip it.
+
+    Parsing is not enough. A hand-edited or half-synced line can be a perfectly
+    good JSON object carrying `"level": 9`, `"module": null`,
+    `"message": {...}` -- and every one of those reaches the browser, where
+    `r.level.toUpperCase()` takes the whole page down. "A bad line costs that
+    line" has to mean the SHAPE too, or the promise only covers the syntax.
+    """
+    line = raw.strip()
+    if not line:
+        return None
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(row, dict):
+        return None
+    row["ts"] = _text(row.get("ts"))
+    row["level"] = level_name(row.get("level"))
+    row["module"] = _text(row.get("module")) or "app"
+    row["message"] = _text(row.get("message"))
+    for key in ("kind", "campaign", "scene", "task", "trace"):
+        if key in row:
+            text = _text(row[key])
+            if text:
+                row[key] = text
+            else:
+                del row[key]
+    return row
+
+
+def _text(value: object) -> str:
+    """A field as the string a reader assumes it is; "" for anything else.
+
+    Deliberately NOT `str(value)`: rendering `{'a': 1}` as a message is
+    presenting corruption as content. An unusable field reads as absent.
+    """
+    return value if isinstance(value, str) else ""
 
 
 # ---- live tailing ----
@@ -736,7 +810,7 @@ def cursor() -> str:
     cursor does both, since rows share a millisecond and a row can be appended
     with a ts already passed.
     """
-    paths_ = _window_files("0000-00", "9999-99")
+    paths_ = _tail_files()
     if not paths_:
         return f"{_now()[:7]}.jsonl:0"
     newest = paths_[-1]
@@ -787,7 +861,7 @@ def tail(from_cursor: str = "", budget: int = MAX_TAIL_BYTES, **filters) -> dict
         offset = max(0, int(raw))
     except ValueError:
         offset = 0
-    files = _window_files("0000-00", "9999-99")
+    files = _tail_files()
     if not files:
         return {"rows": [], "cursor": from_cursor or cursor(), "more": False}
     names = [p.name for p in files]
@@ -865,21 +939,24 @@ def _read_from(path: Path, offset: int,
     when that happens; `MAX_MESSAGE` bounds how long a line can be, and the
     alternative is a cursor that can never advance.
     """
-    try:
-        size = path.stat().st_size
-        if offset > size:
-            offset = 0                   # truncated or replaced; see `tail`
-        with path.open("rb") as handle:
-            handle.seek(offset)
-            data = handle.read(budget)
+    # No `except OSError` here, unlike `_lines`. A log that cannot be READ is
+    # the thing a live tail most needs to say out loud: swallowing it into an
+    # empty poll made the panel go on claiming the log was merely quiet, and
+    # the route's `except OSError` -- which exists to send exactly that frame
+    # -- could never fire. The paged reader stays tolerant because a report
+    # drawn short beats no report; a tail drawn short is a lie.
+    size = path.stat().st_size
+    if offset > size:
+        offset = 0                       # truncated or replaced; see `tail`
+    with path.open("rb") as handle:
+        handle.seek(offset)
+        data = handle.read(budget)
+        end = data.rfind(b"\n")
+        if end < 0 and len(data) >= budget:
+            # A line longer than the budget: take the rest of it rather than
+            # returning nothing forever.
+            data += handle.readline()
             end = data.rfind(b"\n")
-            if end < 0 and len(data) >= budget:
-                # A line longer than the budget: take the rest of it rather
-                # than returning nothing forever.
-                data += handle.readline()
-                end = data.rfind(b"\n")
-    except OSError:
-        return [], offset, 0, False
     if end < 0:
         # `filled=False` even when the read took its whole budget. A line with
         # no newline anywhere in it -- an unterminated row at EOF longer than
@@ -892,13 +969,7 @@ def _read_from(path: Path, offset: int,
     whole = data[:end + 1]
     out = []
     for chunk in whole.decode("utf-8", errors="replace").splitlines():
-        line = chunk.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict):
+        row = _shaped(chunk)
+        if row is not None:
             out.append(row)
     return out, offset + len(whole), len(whole), filled
