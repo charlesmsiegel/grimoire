@@ -160,9 +160,10 @@ def roster(cid: str) -> dict[str, list[dict]]:
     reporting per entity instead of summing.
 
     Each row: ``id``, ``name``, ``sheeted``, the ``sheet_type`` (None when
-    there is no sheet), the stored sheet's ``errors``, and ``unspent`` --
-    ``schema.unspent_pools``, so a sheet created from schema defaults says what
-    it still owes its creation pools rather than passing as finished.
+    there is no sheet), the stored sheet's ``errors``, and
+    ``creation_pending`` -- the creation pools a sheet still sitting at its
+    schema defaults has never been through, so a bulk-created sheet says it is
+    unfinished rather than passing as done.
     """
     mid = modules_binding.resolve(cid)
     if mid is None:
@@ -176,14 +177,14 @@ def roster(cid: str) -> dict[str, list[dict]]:
         for member in _cast(cid, kind):
             eid = member["id"]
             row: dict = {"id": eid, "name": member.get("name") or eid, "sheeted": False,
-                         "sheet_type": None, "errors": [], "unspent": {}}
+                         "sheet_type": None, "errors": [], "creation_pending": []}
             sheet = read_one(kind, eid)
             if sheet is not None:
                 row["sheeted"] = True
                 row["sheet_type"] = sheet["sheet_type"]
                 row["errors"] = sheet["errors"]
                 if isinstance(sheet["sheet_type"], str):
-                    row["unspent"] = schema.unspent_pools(
+                    row["creation_pending"] = schema.creation_pending(
                         sheets_def, sheet["sheet_type"], sheet["fields"])
             rows.append(row)
         out[kind] = rows
@@ -227,11 +228,12 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
     individually, the kind is. That accounting is the point: a bulk create that
     quietly did less than it claimed is the one outcome this must not have.
 
-    - ``created``: ``{kind, id, name, sheet_type, unspent}``. ``unspent`` is
-      non-empty for a type whose ``creation`` block the schema defaults do not
-      balance -- the sheet exists and is explicitly incomplete, which the
-      roster then flags. Skipping those entities silently was the alternative,
-      and it is the one option #201 rules out.
+    - ``created``: ``{kind, id, name, sheet_type, creation_pending}``.
+      ``creation_pending`` names the creation pools a type has that this sheet
+      was not taken through -- it exists and is explicitly unfinished, which
+      the roster goes on flagging until somebody works on it. Skipping those
+      entities silently was the alternative, and it is the one option #201
+      rules out.
     - ``skipped``: ``{kind, reason}`` -- a whole kind, because the only reason
       to skip one is that no sheet type could be chosen for it. A kind with no
       gaps is never listed: there was nothing to choose a type FOR.
@@ -277,8 +279,9 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
                 skipped.append({"kind": kind, "reason": reason})
                 continue
             # Once per kind, not once per entity: every sheet created for this
-            # kind is written from the same schema defaults.
-            unspent = schema.unspent_pools(
+            # kind is written from the same schema defaults, so it is the same
+            # answer for all of them.
+            pending = schema.creation_pending(
                 sheets_def, sheet_type, schema.default_fields(sheets_def, sheet_type))
             for member in gaps:
                 eid = member["id"]
@@ -295,5 +298,6 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
                     continue
                 created.append({"kind": kind, "id": eid,
                                 "name": member.get("name") or eid,
-                                "sheet_type": sheet_type, "unspent": unspent})
+                                "sheet_type": sheet_type,
+                                "creation_pending": pending})
     return {"created": created, "skipped": skipped, "failed": failed}

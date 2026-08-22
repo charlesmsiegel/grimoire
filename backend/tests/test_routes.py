@@ -11490,8 +11490,8 @@ def test_campaign_sheet_roster_route(client):
     roster = client.get(f"/api/campaigns/{cid}/sheets/roster").json()["roster"]
     rows = {r["id"]: r for r in roster["characters"]}
     assert rows[mara]["sheeted"] is True and rows[mara]["name"] == "Mara"
-    # a default sheet still owes its creation pool, and says so
-    assert rows[mara]["unspent"] == {"abilities": 6}
+    # a default sheet has not been through creation, and says so
+    assert rows[mara]["creation_pending"] == ["abilities", "attributes"]
     assert rows["winifred"]["sheeted"] is False
     # `roster` is four segments and `entities`' generic /{kind}/{eid} read is
     # included last, so this must not have been swallowed as kind="sheets"
@@ -11526,7 +11526,7 @@ def test_campaign_sheets_create_missing_route(client):
     assert client.get(f"/api/campaigns/{cid}/sheets").json()["coverage"]["characters"] \
         == {"total": 1, "sheeted": 1, "invalid": 0}
     # the created character sheet is real, and reported incomplete
-    assert out["created"][0]["unspent"] == {"abilities": 6}
+    assert out["created"][0]["creation_pending"] == ["abilities", "attributes"]
 
     # idempotent: a second press has nothing left to do
     assert client.post(url, json={"types": {"characters": "medium",

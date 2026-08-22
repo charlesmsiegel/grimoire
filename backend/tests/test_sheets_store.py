@@ -1193,89 +1193,68 @@ def test_instance_errors_includes_derived_failures(monkeypatch, tmp_path):
 # and until #201 nothing said so. These are the tests for the thing that says so
 # and for the bulk create that leans on it.
 
-# A sheet type whose schema defaults sit ABOVE its pool budget. pool-basic
-# cannot express this (its defaults balance or underspend), and a bulk create
-# that reported only underspend would quietly call this one finished.
-_OVERSPENT_DEF = {
-    "groups": {"attributes": {"label": "Attributes", "fields": [
-        {"key": "vigor", "label": "Vigor", "type": "dots", "max": 5, "default": 3}]}},
-    "sheet_types": {"mortal": {
-        "label": "Mortal", "kind": "characters", "groups": ["attributes"], "fields": [],
-        "creation": {"pools": {"attributes": {"budget": 2, "costs": {"vigor": 2}}}}}},
-}
-
-
 def _pool_basic_sheets_def():
     return modules.load_pack("pool-basic")["sheets"]
 
 
-def test_unspent_pools_reports_what_a_default_sheet_still_owes():
+def test_creation_pending_names_the_pools_a_default_sheet_never_ran():
     d = _pool_basic_sheets_def()
-    unspent = sheets.unspent_pools(d, "medium", sheets.default_fields(d, "medium"))
-    # attributes: three dots priced at 2, all defaulting to 1 -> 6 of a 6 budget
-    # spent, so it balances and is not listed at all.
-    assert unspent == {"abilities": 6}
+    assert sheets.creation_pending(d, "medium", sheets.default_fields(d, "medium")) \
+        == ["abilities", "attributes"]
+    # `shifter` has no creation block at all, so nothing is owed
+    assert sheets.creation_pending(d, "shifter", sheets.default_fields(d, "shifter")) == []
+    assert sheets.creation_pending(d, "ghost", {}) == []
 
 
-def test_unspent_pools_is_empty_for_a_fully_spent_creation(monkeypatch, tmp_path):
+def test_creation_pending_is_silent_once_anyone_has_touched_the_sheet(monkeypatch, tmp_path):
+    """The test is "still exactly the schema defaults", which is the state a
+    bulk create leaves a sheet in -- not arithmetic over whatever the values
+    have since become."""
+    d = _pool_basic_sheets_def()
+    defaults = sheets.default_fields(d, "medium")
+    assert sheets.creation_pending(d, "medium", {**defaults, "brawl": 1}) == []
+
     wid, cid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Mara")
     sheets.write_creation(cid, "characters", "mara", "medium",
-                          # 3 dots at 2 each, then 6 at 1 each: both budgets to zero
                           {"attributes": {"vigor": 3},
-                           "abilities": {"brawl": 3, "occult": 3}},
-                          expected=None)
+                           "abilities": {"brawl": 3, "occult": 3}}, expected=None)
     s = sheets.read(cid, "characters", "mara")
-    assert sheets.unspent_pools(_pool_basic_sheets_def(), "medium", s["fields"]) == {}
+    assert sheets.creation_pending(d, "medium", s["fields"]) == []
 
 
-def test_unspent_pools_reports_an_overspend_as_a_negative():
-    unspent = sheets.unspent_pools(_OVERSPENT_DEF, "mortal",
-                                   sheets.default_fields(_OVERSPENT_DEF, "mortal"))
-    assert unspent == {"attributes": -4}          # budget 2, defaults spend 6
+def test_creation_pending_does_not_call_an_advanced_sheet_over_budget(monkeypatch, tmp_path):
+    """Regression, and the reason this is not arithmetic.
+
+    `advancement.advance` raises a field with experience, not creation points.
+    Pricing the raised values against the creation pools reported
+    `pool-basic`'s `medium` at `attributes: -2` after one legal raise -- so the
+    rail badged a valid, played character as over budget, permanently."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    sheets.write(cid, "characters", "mara", "medium",
+                 {**sheets.default_fields(_pool_basic_sheets_def(), "medium"),
+                  "xp": {"current": 20, "max": 999}}, expected=None)
+    sheets.advance(cid, "characters", "mara", "wits")
+
+    row = next(r for r in sheets.roster(cid)["characters"] if r["id"] == "mara")
+    assert row["errors"] == []
+    assert row["creation_pending"] == []
 
 
-def test_unspent_pools_skips_a_pool_it_cannot_price():
-    """A budget expression that does not evaluate, a cost that is not an int, a
-    stored value that is not an int: each makes the whole POOL unjudgeable, and
-    the pool is dropped rather than totalled from the terms that did price.
+def test_creation_pending_does_not_flag_a_module_whose_defaults_clear_its_floors():
+    """The other half of the same regression, and the worse one.
 
-    A pool is a sum. Pricing three of its four fields and reporting the
-    remainder is a number no rule produced -- and it is wrong in the
-    flattering direction, since a skipped term reads as unspent budget."""
-    broken = {"groups": {"attributes": {"fields": [{"key": "vigor", "type": "dots"}]}},
-              "sheet_types": {"mortal": {"kind": "characters", "groups": ["attributes"],
-                                         "creation": {"pools": {
-                                             "attributes": {"budget": "1 +",
-                                                            "costs": {"vigor": 2}}}}}}}
-    assert sheets.unspent_pools(broken, "mortal", {"vigor": 1}) == {}
-    text_cost = {**_OVERSPENT_DEF}
-    text_cost["sheet_types"] = {"mortal": {
-        **_OVERSPENT_DEF["sheet_types"]["mortal"],
-        "creation": {"pools": {"attributes": {"budget": 2, "costs": {"vigor": "two"}}}}}}
-    # Both of these used to price as "2 left to spend" by dropping the one term
-    # they could not read -- for a sheet whose only costed field is garbage.
-    assert sheets.unspent_pools(text_cost, "mortal", {"vigor": 3}) == {}
-    assert sheets.unspent_pools(_OVERSPENT_DEF, "mortal", {"vigor": "three"}) == {}
-    # A pool that prices completely is still reported next to one that cannot
-    two_pools = {
-        "groups": {
-            "attributes": {"fields": [{"key": "vigor", "type": "dots", "default": 3}]},
-            "abilities": {"fields": [{"key": "brawl", "type": "dots", "default": 0}]},
-        },
-        "sheet_types": {"mortal": {"kind": "characters",
-                                   "groups": ["attributes", "abilities"],
-                                   "creation": {"pools": {
-                                       "attributes": {"budget": 2, "costs": {"vigor": "two"}},
-                                       "abilities": {"budget": 4, "costs": {"brawl": 1}}}}}},
-    }
-    assert sheets.unspent_pools(two_pools, "mortal", {}) == {"abilities": 4}
-
-
-def test_unspent_pools_is_empty_for_a_type_with_no_creation_block():
-    d = _pool_basic_sheets_def()
-    assert sheets.unspent_pools(d, "shifter", sheets.default_fields(d, "shifter")) == {}
-    assert sheets.unspent_pools(d, "ghost", {}) == {}
+    `d20-basic`'s `adept` prices attributes from `min: 1` while the schema
+    defaults them to 10, so pricing current values reported every CORRECTLY
+    bulk-created sheet at `attributes: -48` -- in the bulk create's own success
+    report, about sheets it had just written. What is true of that sheet is not
+    a budget overrun; it is that nobody has run creation on it."""
+    d = modules.load_pack("d20-basic")["sheets"]
+    assert sheets.creation_pending(d, "adept", sheets.default_fields(d, "adept")) \
+        == ["attributes", "skills"]
+    # and `warrior`, which has no creation block, stays silent
+    assert sheets.creation_pending(d, "warrior", sheets.default_fields(d, "warrior")) == []
 
 
 def test_roster_names_the_cast_and_says_who_has_a_sheet(monkeypatch, tmp_path):
@@ -1291,9 +1270,9 @@ def test_roster_names_the_cast_and_says_who_has_a_sheet(monkeypatch, tmp_path):
     assert rows["mara"]["sheet_type"] == "medium"
     assert rows["mara"]["errors"] == []
     # the point of the whole exercise: a default sheet is not a finished one
-    assert rows["mara"]["unspent"] == {"abilities": 6}
+    assert rows["mara"]["creation_pending"] == ["abilities", "attributes"]
     assert rows["winifred"] == {"id": "winifred", "name": "Winifred", "sheeted": False,
-                                "sheet_type": None, "errors": [], "unspent": {}}
+                                "sheet_type": None, "errors": [], "creation_pending": []}
     # and it agrees with the tally it is the long form of
     assert sheets.coverage(cid)["characters"] == {"total": 2, "sheeted": 1, "invalid": 0}
     # kinds the module has no sheet type for stay off the roster, as in coverage
@@ -1311,7 +1290,7 @@ def test_roster_carries_an_invalid_sheets_errors(monkeypatch, tmp_path):
     modules.set_campaign_module(cid, "d20-basic")     # talisman is now unknown
     row = sheets.roster(cid)["items"][0]
     assert row["sheeted"] is True and row["errors"]
-    assert row["unspent"] == {}                       # unjudgeable, not guessed
+    assert row["creation_pending"] == []              # unjudgeable, not guessed
 
 
 def test_roster_is_empty_without_a_module(monkeypatch, tmp_path):
@@ -1335,9 +1314,9 @@ def test_create_missing_fills_the_gap_and_flags_what_is_incomplete(monkeypatch, 
     assert made[("characters", "winifred")]["sheet_type"] == "medium"
     # created, and explicitly incomplete -- not skipped, which is the one
     # option #201 rules out
-    assert made[("characters", "winifred")]["unspent"] == {"abilities": 6}
+    assert made[("characters", "winifred")]["creation_pending"] == ["abilities", "attributes"]
     # `talisman` has no creation block at all, so nothing is owed
-    assert made[("items", "moon-disc")]["unspent"] == {}
+    assert made[("items", "moon-disc")]["creation_pending"] == []
     assert out["failed"] == []
     # `haven` is the only locations type, so it needed no choice -- and there
     # are no locations, so it produced nothing and is not a skip either
@@ -1559,12 +1538,12 @@ def test_the_roster_flags_what_a_bulk_create_left_incomplete(monkeypatch, tmp_pa
     characters.create_character(worlds.world_root(wid), "Winifred")
 
     out = sheets.create_missing(cid, {"characters": "medium", "pcs": "medium"})
-    assert all(c["unspent"] == {"abilities": 6} for c in out["created"])
+    assert all(c["creation_pending"] == ["abilities", "attributes"] for c in out["created"])
 
     rows = {r["id"]: r for r in sheets.roster(cid)["characters"]}
     assert all(r["sheeted"] and r["errors"] == [] for r in rows.values())
-    assert rows["mara"]["unspent"] == {"abilities": 6}
-    assert rows["winifred"]["unspent"] == {"abilities": 6}
+    assert rows["mara"]["creation_pending"] == ["abilities", "attributes"]
+    assert rows["winifred"]["creation_pending"] == ["abilities", "attributes"]
     assert sheets.coverage(cid)["characters"]["sheeted"] == 2
 
 
