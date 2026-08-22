@@ -473,6 +473,38 @@ test("an advance that landed in the campaign you left is not reported here", asy
   expect(screen.getByLabelText("Reason")).toHaveValue("a day");
 });
 
+test("an invalidated copy leaves a way forward, not a dead end", async () => {
+  // Aborting the skip must not strand the reader: a campaign whose turns keep
+  // landing could invalidate copy after copy. Asking again always reaches a
+  // completed skip once nothing lands during the copy, and skipping without
+  // one is on screen the whole time.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  let release: (r: ForkReport) => void = () => { /* replaced */ };
+  vi.mocked(api.forkCampaign).mockReturnValueOnce(new Promise((res) => { release = res; }));
+  vi.mocked(api.forkCampaign).mockResolvedValue(FORK_REPORT);
+
+  const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  rerender(<ClockPanel cid="c" refreshKey={1} />);      // a turn lands mid-copytree
+  release(FORK_REPORT);
+  await screen.findByText(/was not taken/);
+  expect(api.advanceTime).not.toHaveBeenCalled();
+
+  // The question is still standing and the escape hatch is still there.
+  expect(screen.getByText("Skip without one")).toBeInTheDocument();
+  // Asking again, with nothing landing this time, completes.
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+  expect(api.forkCampaign).toHaveBeenCalledTimes(2);
+  expect(api.advanceTime).toHaveBeenCalledTimes(1);
+});
+
 test("a copy taken across a change does not carry the skip with it", async () => {
   // A turn landing while `copytree` runs is on one side of it or the other and
   // nothing here can see which. Reusing that copy on a retry would hand back a
