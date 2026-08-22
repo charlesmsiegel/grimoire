@@ -4725,6 +4725,59 @@ test("a refused Direct send hands the note back", async () => {
     .toHaveAttribute("aria-pressed", "true");
 });
 
+test("a Direct turn the provider killed hands the note back", async () => {
+  // Codex round 2, P1. The refusal fix did not cover this: when the provider
+  // dies mid-stream the backend answers with an error frame, and it cannot set
+  // `post_returned` because a director turn has no post to return. The error
+  // frame therefore recovers nothing, and `errored` is excluded from the
+  // transcript-based pass — so the note was still destroyed. An empty
+  // transcript is the witness: the generation left no reply behind.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "the provider gave up" } });
+    });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
+});
+
+test("a note recovered into a composer switched to Speak comes back as a note", async () => {
+  // Codex round 2, P2. The mode buttons stay live while a turn runs, so the
+  // player can be in Speak by the time a Direct turn fails. Handing the words
+  // back without the kind stages scene direction as dialogue, and the next
+  // Send persists it — the "never posted" contract broken by the recovery
+  // meant to protect it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let fail: () => void = () => {};
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) =>
+      new Promise<void>((resolve) => {
+        fail = () => { onEvent({ error: { detail: "the provider gave up" } }); resolve(); };
+      }));
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await screen.findByText(/🎬 the storm intensifies/);
+
+  // the player flips to Speak while the turn is still running
+  fireEvent.click(screen.getByRole("button", { name: "Speak" }));
+  expect(screen.getByRole("button", { name: "Speak" })).toHaveAttribute("aria-pressed", "true");
+  fail();
+
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
+  // back as what it was written as, not as the player's next line
+  expect(screen.getByRole("button", { name: "Direct" }))
+    .toHaveAttribute("aria-pressed", "true");
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the
