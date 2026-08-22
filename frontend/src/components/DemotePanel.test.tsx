@@ -63,8 +63,8 @@ test("unchecking it changes both the wording and the request", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Remove from library…" }));
   fireEvent.click(await screen.findByRole("checkbox"));
 
-  expect(screen.getByText(/deleted everywhere/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Remove everywhere" }));
+  expect(screen.getByText(/already have their own keep it/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Remove without copying down" }));
 
   await waitFor(() => expect(api.demoteFromLibrary)
     .toHaveBeenCalledWith("w", "locations", "saltmarch", { copy_down: false }));
@@ -109,7 +109,11 @@ test("a world with no campaigns says so rather than listing nothing", async () =
 test("cancelling closes without calling anything", async () => {
   show();
   fireEvent.click(await screen.findByRole("button", { name: "Remove from library…" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+  // wait for the CONFIRMATION to be up before grabbing its Cancel: the pending
+  // "checking…" panel has a Cancel of its own, and clicking the node that one
+  // left behind dispatches nothing at all
+  await screen.findByRole("button", { name: "Remove and copy down" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
   expect(await screen.findByRole("button", { name: "Remove from library…" })).toBeTruthy();
   expect(api.demoteFromLibrary).not.toHaveBeenCalled();
@@ -142,4 +146,21 @@ test("dependents that cannot be read render nothing rather than a broken panel",
   const { container } = render(<DemotePanel wid="w" kind="locations" id="saltmarch" />);
   await waitFor(() => expect(api.libraryDependents).toHaveBeenCalled());
   expect(container.querySelector(".side-section")).toBeNull();
+});
+
+test("a refresh that fails leaves a way out instead of checking forever", async () => {
+  show();
+  await waitFor(() => expect(api.libraryDependents).toHaveBeenCalledTimes(1));
+  (api.libraryDependents as any).mockRejectedValueOnce(
+    new (ApiError as any)(500, "the world could not be read", undefined));
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
+
+  expect(await screen.findByText("the world could not be read")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  // and retrying really re-asks
+  (api.libraryDependents as any).mockResolvedValue(DEPS);
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("button", { name: "Remove and copy down" })).toBeTruthy();
 });

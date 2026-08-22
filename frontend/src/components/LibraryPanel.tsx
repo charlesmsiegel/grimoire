@@ -53,14 +53,21 @@ export function LibraryPanel({ cid, kind, id, onMoved }: {
 
   if (!status) return null;
   if (!status.can_promote && !status.can_push && !conflict) {
-    // In the library and identical to it. Said out loud rather than left blank:
-    // "no button" and "nothing to save" look the same otherwise.
-    return status.in_library ? (
+    if (!status.in_library) return null;
+    // Two different states, and saying the wrong one is worse than saying
+    // nothing: an actor this campaign has rewritten IS diverged, it simply
+    // cannot be pushed (#53 option B). Calling that "in sync with the library"
+    // is a claim about two records, and a false one.
+    return (
       <div className="side-section">
         <h4>Library</h4>
-        <div className="field-hint">in sync with the library</div>
+        <div className="field-hint">
+          {status.diverged
+            ? "this campaign's own version; the library keeps its own, and this kind cannot be saved back"
+            : "in sync with the library"}
+        </div>
       </div>
-    ) : null;
+    );
   }
 
   return (

@@ -19,6 +19,7 @@ Design: docs/superpowers/specs/2026-08-21-library-promote-demote-design.md
 from __future__ import annotations
 
 import logging
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -392,8 +393,12 @@ def _reattaching_on_failure(cid: str, ref: str):
     documented residue, which is the harmless one and self-heals on retry.
     """
     was_detached = ref in overlay.detached(cid)
-    overlay.undetach(cid, ref)
     try:
+        # Inside the try, not before it. `undetach` is itself two writes -- the
+        # marker, then the asset tombstones the detachment kept -- so a failure
+        # in the second one used to escape this handler entirely, leaving the
+        # campaign attached with no world record written (Codex review).
+        overlay.undetach(cid, ref)
         yield
     except BaseException:
         if was_detached:
@@ -485,11 +490,17 @@ def promote(cid: str, kind: str, eid: str) -> None:
     campaigns_lifecycle.ensure_campaign_slim(cid)   # only ever run against the overlay layout
     _safe_ref(kind, eid)
     wroot = _require_world(campaigns_read.world_root_of(cid))
-    if kind in appearances_paths.ACTOR_KINDS:
-        _promote_actor(cid, kind, eid, wroot)
-    else:
-        _flat_kind(kind)
-        _promote_flat(cid, kind, eid, wroot)
+    # sync.md is rewritten WHOLE, so two library moves on the same campaign can
+    # each read it and each republish it, and the later write drops the other's
+    # ref -- leaving a promoted record no manifest names, which no world edit
+    # ever reaches again (Codex review). One lock, held across the read and the
+    # write, and the same one demote takes.
+    with locks.campaign_lock(cid):
+        if kind in appearances_paths.ACTOR_KINDS:
+            _promote_actor(cid, kind, eid, wroot)
+        else:
+            _flat_kind(kind)
+            _promote_flat(cid, kind, eid, wroot)
     _touch_world(wroot)
 
 
@@ -538,6 +549,15 @@ def _require_world_character(cid: str, wroot: Path, text: str, gid: str) -> None
     char = str(meta.get("character", "")).strip()
     if char:
         _require_world_actor(wroot, detached_here, char, gid, "belongs to")
+        # The VERSION too, not just the actor. `start_from_greeting` seats the
+        # owner at `g["version"]`, so a greeting pinned to a campaign-only
+        # version of an otherwise-shared character publishes fine and then
+        # raises in every sibling campaign (Codex review).
+        vid = str(meta.get("version", "")).strip()
+        if (vid and safe_id(vid)
+                and appearances_versions.actor_hash(wroot, "characters", char, vid) is None):
+            raise DanglingReferenceError(
+                f"{gid} is pinned to {char}'s {vid} version, which is not in the library")
     # `present` names the rest of the cast the greeting opens with, and
     # `playing.start_from_greeting` reads every one of them. A campaign-local
     # name there publishes a greeting that raises the moment anyone starts it
@@ -571,15 +591,15 @@ def _promote_actor(cid: str, kind: str, aid: str, wroot: Path) -> None:
     ref = _ref_str(kind, aid)
     dst = wroot / kind / aid
     dst.mkdir(parents=True, exist_ok=True)
-    # No meta means no actor, so any version file here is residue from an
-    # interrupted attempt. Drop it: overwriting only what our snapshot holds
-    # would publish a version the earlier attempt copied and this one does not,
-    # which the base we are about to record does not cover. The same argument
-    # `overlay.materialize_actor` makes on the campaign side.
-    ext = "json" if kind == "characters" else "md"
-    for p in dst.glob(f"*.{ext}"):
-        if p.name != meta_name:
-            p.unlink()
+    # No meta means no actor, so EVERYTHING here is residue -- from an
+    # interrupted attempt, or from a delete that could not finish removing the
+    # directory. The whole tree goes, not just the version files: `assets/`,
+    # tagline.md and voice_anchor.md are only ever overwritten where this
+    # campaign supplies one, so a slot it leaves empty would keep the dead
+    # actor's face and voice and hand them to the promoted one -- and through
+    # the overlay, to every campaign of this world (#225, Codex review).
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True, exist_ok=True)
     # The meta file is the commit point every reader keys an actor on, so it is
     # written last and is what `recorded_base` watches: version files landing
     # without it leave no actor at all — the harmless residue.
@@ -653,9 +673,18 @@ def library_status(cid: str, kind: str, eid: str) -> dict:
     ref = _ref_str(kind, eid)
     actor = kind in appearances_paths.ACTOR_KINDS
     text: str | None = None
+    actor_diverged = False
     if actor:
-        has_own = overlay.actor_snapshot(cid, kind, eid) is not None
+        mine = overlay.actor_snapshot(cid, kind, eid)
+        has_own = mine is not None
         in_world = _world_holds_actor(wroot, kind, eid)
+        # Compared even though actors cannot be pushed. Reporting a materialized
+        # and edited actor as `diverged: False` made the panel say "in sync with
+        # the library" about a card this campaign had rewritten -- a claim about
+        # two records, and a false one (Codex review). Push stays unavailable;
+        # what changes is that the editor stops asserting the opposite.
+        if has_own and in_world:
+            actor_diverged = mine[0] != campaigns_paths.read_manifest(cid).get(ref)
     else:
         _flat_kind(kind)
         text = overlay.record_text(cid, kind, eid)
@@ -668,7 +697,7 @@ def library_status(cid: str, kind: str, eid: str) -> dict:
         diverged_here = base is None or entities.content_hash(text) != base
     return {
         "in_library": in_world and not detached_here,
-        "diverged": diverged_here,
+        "diverged": (diverged_here or actor_diverged) and not detached_here,
         # Exactly `promote`'s precondition, so the button is never offered for a
         # call that would refuse -- including the detached record whose slug the
         # library has since handed to somebody else.
@@ -701,6 +730,11 @@ def push(cid: str, kind: str, eid: str, *, force: bool = False) -> None:
     _safe_ref(kind, eid)
     campaigns_lifecycle.ensure_campaign_slim(cid)
     wroot = _require_world(campaigns_read.world_root_of(cid))
+    with locks.campaign_lock(cid):      # see `promote` on why the manifest needs it
+        _push_locked(cid, kind, eid, wroot, force=force)
+
+
+def _push_locked(cid: str, kind: str, eid: str, wroot: Path, *, force: bool) -> None:
     ref = _ref_str(kind, eid)
     text = overlay.record_text(cid, kind, eid)
     if text is None:
@@ -713,6 +747,12 @@ def push(cid: str, kind: str, eid: str, *, force: bool = False) -> None:
         # the exact harm detaching exists to prevent (#225).
         raise NotInLibraryError(
             f"{ref} no longer belongs to the library record of that name")
+    if kind == "greetings":
+        # The same referential check promote runs. A campaign can edit an
+        # inherited greeting's cast to name an emergent character, and pushing
+        # those bytes publishes a greeting every sibling campaign inherits and
+        # none of them can start (Codex review).
+        _require_world_character(cid, wroot, text, eid)
     base = campaigns_paths.read_manifest(cid).get(ref)
     world_h = entities.entity_hash(wroot, kind, eid)
     mine = entities.content_hash(text)
@@ -727,6 +767,10 @@ def push(cid: str, kind: str, eid: str, *, force: bool = False) -> None:
         if base == mine:
             raise NotDivergedError(f"{ref} already matches the library")
         _put_base(cid, ref, mine)    # clearing the override IS the whole ask
+        # Stamped here as well: the interrupted push that left this state failed
+        # before its own touch, so without this the world keeps its pre-edit
+        # `updated` forever even though the edit landed (Codex review).
+        _touch_world(wroot)
         return
     if base is None and not force:
         # A copy with no base: nothing proves the two share an ancestor, so
@@ -836,6 +880,14 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
                 # the world's pictures -- and the delete below takes the world's
                 # record directory with it (`overlay.forget_world_record`).
                 overlay.copy_record_dir_down(dep["id"], kind, eid)
+                if kind == "greetings":
+                    # The greeting's edges live in the plot map, not in the
+                    # greeting -- and `delete_greeting` strips them from the
+                    # world's. A campaign still inheriting that map would watch
+                    # the record it was just given lose its prerequisites and
+                    # unlock itself, which is the opposite of keeping it
+                    # (Codex review). Its own map, taken before the delete.
+                    overlay.materialize_plotmap(dep["id"])
                 if dep["has_copy"]:
                     continue     # already its own; materializing is a no-op anyway
                 overlay.materialize_entity(dep["id"], kind, eid)

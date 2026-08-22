@@ -30,7 +30,12 @@ export function DemotePanel({ wid, kind, id, onDemoted }: {
     // exists, and a stale one with the button live lets the user confirm
     // without ever seeing the campaign they are about to affect (Codex review).
     setDeps(null);
-    api.libraryDependents(wid, kind, id).then(setDeps).catch(() => setDeps(null));
+    api.libraryDependents(wid, kind, id)
+      .then(setDeps)
+      // Recorded, not swallowed: with `open` true and `deps` null the panel is
+      // showing "checking…", and a silent failure would leave it saying that
+      // forever with no Cancel and no retry (Codex review).
+      .catch((err) => setError(err instanceof ApiError ? err.detail : String(err)));
   }, [wid, kind, id]);
 
   useEffect(load, [load]);
@@ -55,7 +60,15 @@ export function DemotePanel({ wid, kind, id, onDemoted }: {
     return (
       <div className="side-section">
         <h4>Library</h4>
-        <div className="field-hint">checking which campaigns use this record…</div>
+        {error
+          ? <div className="field-hint error">{error}</div>
+          : <div className="field-hint">checking which campaigns use this record…</div>}
+        <div className="form-actions">
+          {error && <button className="subtle" onClick={load}>Try again</button>}
+          <button className="subtle" onClick={() => { setOpen(false); setError(null); }}>
+            Cancel
+          </button>
+        </div>
       </div>
     );
   }
@@ -94,12 +107,17 @@ export function DemotePanel({ wid, kind, id, onDemoted }: {
           <div className="field-hint">
             {copyDown
               ? "The record and its images become campaign-local, one copy each."
-              : "The record is deleted everywhere. Campaigns that had no copy lose it."}
+              // NOT "deleted everywhere": a campaign that already made its own
+              // copy keeps it, detached (`forget_world_record`). Saying
+              // otherwise sends someone who picked this option precisely to
+              // clear every copy away believing they had (Codex review).
+              : "Removes the library record without giving anyone a new copy. "
+                + "Campaigns that already have their own keep it; the rest lose it."}
           </div>
           <div className="form-actions">
             <button className="subtle" disabled={busy}
                     onClick={() => { void demote(); }}>
-              {copyDown ? "Remove and copy down" : "Remove everywhere"}
+              {copyDown ? "Remove and copy down" : "Remove without copying down"}
             </button>
             <button className="subtle" disabled={busy}
                     onClick={() => { setOpen(false); setError(null); }}>Cancel</button>
