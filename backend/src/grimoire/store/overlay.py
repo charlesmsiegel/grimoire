@@ -785,6 +785,35 @@ def character_refs(cid: str) -> list[str]:
     return [c["id"] for c in list_characters(cid)]
 
 
+def _mark_campaign_owned(cid: str, kind: str, aid: str) -> None:
+    """Record a campaign-created actor as the campaign's own outright (#225).
+
+    The `taken` guards below allocate the id against the world *as it stands*,
+    so a campaign-created id names no world record at birth -- which is exactly
+    what makes a world record claiming that id **later** a stranger. That is
+    the same position a spared copy is in once its world original is deleted,
+    and `detached` is the word this module already has for it; only the end the
+    collision arrives from is different.
+
+    Without this, a campaign's invented Winifred took a later world Winifred's
+    avatar, tagline, voice anchor and sync updates by coincidence of slug --
+    every item `detached`'s own docstring lists -- and
+    `appearances.actor_source` read her as that stranger's record diverged
+    rather than as the campaign's own (Codex review on #99).
+
+    A no-op until such a collision happens: with nothing under the id in the
+    world there is nothing for the per-file resolvers to inherit and nothing
+    for sync to offer. That is what keeps the blast radius to the bug.
+
+    After the create, never before. A marker orphaned by a failed create would
+    suppress inheritance for whatever holds that id next -- failure *adding*
+    content, the one direction a user cannot spot by looking, which is the
+    argument `detached` itself makes. Crashing between the two leaves an
+    unmarked campaign actor: what every one of them was until now.
+    """
+    add_detached(cid, _flat_ref(kind, aid))
+
+
 def create_character(cid: str, name: str, version_name: str = "default",
                      card: dict | None = None) -> tuple[str, str]:
     wroot, gone = wroot_of(cid), deleted(cid)
@@ -793,7 +822,9 @@ def create_character(cid: str, name: str, version_name: str = "default",
         return ((wroot / "characters" / aid).is_dir()
                 or _flat_ref("characters", aid) in gone)
 
-    return characters.create_character(croot_of(cid), name, version_name, card, taken=taken)
+    made = characters.create_character(croot_of(cid), name, version_name, card, taken=taken)
+    _mark_campaign_owned(cid, "characters", made[0])
+    return made
 
 
 def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default",
@@ -804,6 +835,7 @@ def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default
         return (wroot / "pcs" / pid).is_dir() or _flat_ref("pcs", pid) in gone
 
     made = pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
+    _mark_campaign_owned(cid, "pcs", made[0])
     return made
 
 

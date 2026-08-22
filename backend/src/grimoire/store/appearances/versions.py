@@ -52,13 +52,19 @@ def actor_source(cid: str, kind: str, actor_id: str) -> str:
     reason the answer is computed from hashes that already exist:
 
     - **emergent** -- this campaign owns the actor outright, and no library
-      record stands behind it. Either the world never had one under that id
-      (`overlay.create_character`, the emergent-cast route, #98), or it had one
-      and it was deleted -- which `overlay.detached` records precisely because
-      whatever claims the freed slug next is a stranger. A campaign whose world
-      is missing entirely reads the same way, and deliberately: that campaign
-      inherits nothing, which is the reading `campaigns.read.world_root_of`
-      already gives it by answering an unoccupiable path.
+      record stands behind it. `overlay.detached` is the first and best answer
+      for both routes in: a campaign-created actor is marked so at birth (the
+      emergent-cast route, #98, and the absorb pass), and so is a copy whose
+      world original was deleted. Either way the marker says the same thing --
+      whatever holds that slug in the world is a stranger to this record.
+
+      The world-side existence check behind it is the fallback, for the cases
+      no marker covers: campaigns written before actors were marked at birth,
+      and a world record that vanished without `forget_world_record`'s
+      best-effort sweep reaching this campaign. A campaign whose world is
+      missing entirely lands here too, and deliberately: it inherits nothing,
+      which is the reading `campaigns.read.world_root_of` already gives it by
+      answering an unoccupiable path.
     - **library** -- the campaign's copy still hashes to the `base` recorded
       when the version was locked, so nobody has edited it here.
     - **override** -- it does not, so the text under the lock is this
@@ -78,8 +84,8 @@ def actor_source(cid: str, kind: str, actor_id: str) -> str:
     through sync rather than holding a version of their own.
 
     `overlay.detached` is fail-soft, so a corrupt `detached.json` loses the
-    first test above -- and the actor then falls to the hash comparison against
-    a base recorded from the original the world no longer has, which cannot
+    marker -- and the actor then falls to the existence check, which finds the
+    stranger, and then to a hash comparison against a base the stranger cannot
     match. The badge degrades to "override", never to "library": a wrong answer
     that overstates the campaign's ownership, rather than one that promises a
     library record stands behind a card the library never wrote.
