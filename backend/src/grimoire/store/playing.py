@@ -139,7 +139,17 @@ def _resolve_locations(cid: str, rows: list[dict]) -> None:
             r["location"] = ""
 
 
-def available_greetings(cid: str, after: str | None = None) -> list[dict]:
+def available_greetings(cid: str, after: str | None = None, *,
+                        locations: bool = True) -> list[dict]:
+    """Every greeting this campaign could start, with its gating verdict.
+
+    `locations=False` leaves each row's `location` exactly as the greeting
+    records it, unchecked. Resolving costs one file read per location in the
+    campaign, and two callers do not want it: `start_from_greeting`, which reads
+    this only for `{id: available}` and would pay the whole sweep to discard it,
+    and `greeting_ideas`, which has a second batch of rows to resolve and takes
+    one sweep over both instead of one each.
+    """
     plotmap = overlay.read_plotmap(cid)
     marks = read_marks(cid)
     out = greetings.availability(overlay.list_greetings(cid), plotmap,
@@ -156,7 +166,8 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
             unlocked = set(greetings.edges_of(plotmap, gid)["leads_to"])
     for g in out:
         g["unlocked"] = g["id"] in unlocked
-    _resolve_locations(cid, out)
+    if locations:
+        _resolve_locations(cid, out)
     out.sort(key=lambda g: not g["unlocked"])  # stable: unlocked first, rest keep order
     return out
 
@@ -206,15 +217,18 @@ def greeting_ideas(cid: str) -> list[dict]:
                 "pcless": bool(g.get("pcless")), "source": scene_ideas.GREETING,
                 "status": status, "created": "", "used_scene": ""}
 
-    # `available_greetings` has already blanked the unresolvable locations in
-    # its own rows; the skipped pass reads raw metas, so it takes the same check.
-    out = [entry(g, scene_ideas.USED if g["id"] in used else scene_ideas.ACTIVE)
-           for g in available_greetings(cid) if g["id"] in used or g["available"]]
-    if marks["skipped"]:
-        skipped = [g for g in overlay.list_greetings(cid) if g["id"] in marks["skipped"]]
-        _resolve_locations(cid, skipped)
-        out += [entry(g, scene_ideas.DISMISSED) for g in skipped]
-    return out
+    # Both batches of rows are collected first and resolved in ONE sweep: the
+    # check reads every location in the campaign, so doing it inside
+    # `available_greetings` and again for the skipped rows would read them twice
+    # to answer one request.
+    startable = [g for g in available_greetings(cid, locations=False)
+                 if g["id"] in used or g["available"]]
+    skipped = ([g for g in overlay.list_greetings(cid) if g["id"] in marks["skipped"]]
+               if marks["skipped"] else [])
+    _resolve_locations(cid, startable + skipped)
+    return ([entry(g, scene_ideas.USED if g["id"] in used else scene_ideas.ACTIVE)
+             for g in startable]
+            + [entry(g, scene_ideas.DISMISSED) for g in skipped])
 
 
 def _seed_location(cid: str, sid: str, eid: str, *, seed: bool) -> None:
@@ -256,7 +270,11 @@ def start_from_greeting(cid: str, sid: str, gid: str, *, seed_location: bool = T
         raise PlayError("an offscreen scene must start from an offscreen greeting")
     if g["pcless"] and appearances_cast.players_in_scene(cid, sid):
         raise PlayError("an offscreen greeting cannot start a scene with players seated")
-    if not {a["id"]: a["available"] for a in available_greetings(cid)}.get(gid, False):
+    # `locations=False`: this reads the availability verdict only, and resolving
+    # each row's location would read every location in the campaign to throw the
+    # answer away.
+    if not {a["id"]: a["available"]
+            for a in available_greetings(cid, locations=False)}.get(gid, False):
         raise PlayError(f"greeting {gid} is not available")
     # Cast everyone present at the opener. A locked version always wins; otherwise
     # the primary uses the greeting's version and co-present characters their default.

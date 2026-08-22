@@ -380,6 +380,19 @@ test("a failed locations read lets the server seed the greeting's own location",
   expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", true);
 });
 
+test("declining the greeting stops the banner promising its location", async () => {
+  // The promise only holds while the greeting is actually going to be the first
+  // post: declining it skips startFromGreeting, which is what seeds (#412
+  // review). The banner has to follow that choice, not the read that failed.
+  (api.listEntities as any).mockRejectedValue({ detail: "boom" });
+  renderForm(GRT);
+  await screen.findByDisplayValue("Reckoning");
+  expect(screen.getByText(/open at the greeting's own location/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("radio", { name: /nothing/i }));
+  expect(screen.queryByText(/open at the greeting's own location/i)).toBeNull();
+  expect(screen.getByText(/pre-filled location was cleared/i)).toBeInTheDocument();
+});
+
 test("the location picker is not editable before it can show what is selected", async () => {
   // No <option> matches a pre-filled id until the list lands, so the browser
   // shows index 0 and picking it fires no change event -- the value the reader
