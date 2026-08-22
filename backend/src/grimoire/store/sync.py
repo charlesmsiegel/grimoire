@@ -19,7 +19,6 @@ Design: docs/superpowers/specs/2026-08-21-library-promote-demote-design.md
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 
 from . import atomic, characters, entities, greetings, overlay, pcs
@@ -380,8 +379,22 @@ def _copy_extras(what: str, copy) -> None:
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
-    if src.is_dir():
-        shutil.copytree(src, dst, dirs_exist_ok=True)
+    """Copy a record's asset tree, file by file and atomically.
+
+    Not `shutil.copytree`, for the reason `sheets/tally.py` gives at the
+    identical copy in the other direction: a partial copy must never appear
+    under a real name. The destination here is a LIVE world record's asset
+    directory, which every campaign of that world reads through the overlay the
+    instant a file lands, so a torn image is served rather than merely stored.
+    """
+    if not src.is_dir():
+        return
+    for p in sorted(src.rglob("*")):
+        if not p.is_file():
+            continue
+        target = dst / p.relative_to(src)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic.write_bytes(target, p.read_bytes())
 
 
 def _put_base(cid: str, ref: str, base: str) -> None:
