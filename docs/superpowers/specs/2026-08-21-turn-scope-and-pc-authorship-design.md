@@ -64,8 +64,13 @@ sentence rhythm, not turn scope.
 ## Decisions (from brainstorming)
 
 - **Always-on sections, no knob.** Two new lock-in sections, siblings to
-  `natural_prose.j2`. No config keys, no cascade, no Configuration UI. Both
+  `natural_prose.j2`. No config keys, no cascade, no Configuration UI — both
   problems are "the default is wrong", not "I need per-campaign control".
+  They differ in one respect settled later (§6): `player_character` is
+  **non-removable**, since whose words these are is not a preference, while
+  `turn_scope` stays removable through the existing prompt-layout editor,
+  since pacing is. That distinction carries frontend work in Phase 1; it is
+  not a Configuration-page knob.
 - **Ban the closing narration block**, rather than rationing narration or
   capping it per reply. Structural, one sentence, mechanically checkable, and
   it removes the block where PC authorship concentrates.
@@ -528,9 +533,13 @@ that all need it: the assembler, the `DELETE .../wrap` route, and the scene
 payload feeding the indicator. It is also **required** — `verify_templates.py`
 rebuilds the template data *"from public store reads"* in its `gather()`
 mirror, so a value only `_assemble` can compute cannot be verified at all.
-Coercion follows the module's existing posture: anything that isn't the stored
-truthy value reads as `False`, because a hand-edited frontmatter must cost a
-non-wrapping turn rather than a 500 on the play path.
+Coercion follows the module's existing posture, and is **string-valued
+throughout**: exactly `"pending"` and `"consumed"` are accepted, and anything
+else — absent, legacy, misspelled, hand-edited — reads as `""`. An earlier
+draft said `False` here, left over from the boolean accessor; returning a
+bool would leak into the scene payload and break the consumers that
+distinguish the two live states. A malformed value must cost a non-wrapping
+turn, never a 500 on the play path.
 
 **One invariant, easy to break by reading the spec correctly:** the clear
 hangs off `delete_from` *specifically*, never off transcript removal in
@@ -703,8 +712,27 @@ land — while leaving it in place fails the requirement outright. One template
 cannot be both.
 
 So the boundary is a **standalone trailing system message**, rendered from its
-own small template and appended last on every composition path: after
-`post_history`, after `appended`, and after `opener_shape.j2` on the opener.
+own small template and appended last on every composition path.
+
+**There are exactly three composers, and the list is taken from the code
+rather than assembled a reviewer at a time** — this spec has now claimed
+"every path" four times and been wrong three of them (`appended`, then the
+opener, then the director). `build_messages`, `build_opener_messages` and
+`build_director_messages` are thin wrappers; the composers are:
+
+| composer | boundary goes after |
+|---|---|
+| `compose_turn` (`:624`) | `post_history`, then `appended` |
+| `compose_opener` (`:55`) | `post_history`, then `opener_shape.j2` |
+| `compose_director_turn` (`:685`) | `post_history` |
+
+The director path is not a corner case: `_chat_run`'s `ephemeral` branch uses
+it for **an empty "next NPC round" send in an ordinary scene with a seated
+PC**, not only for pcless scenes. Its composer currently ends at
+`post_history` (`:706-707`), so without the boundary a hostile card
+instruction would remain the closest system guidance on the commonest send in
+the app. Each of the three reserves the message's tokens the way it already
+reserves its other mandatory ones.
 It carries its own token reservation — `compose_opener` renders trailing
 messages before packing *"so their tokens can be reserved: neither is
 droppable, so neither may go uncounted"*, and this is a third such message —
