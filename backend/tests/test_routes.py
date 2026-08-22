@@ -5158,6 +5158,23 @@ def test_lorebook_import_unknown_category_400(client):
     assert r.status_code == 400
 
 
+def test_a_refused_category_leaves_nothing_behind(client):
+    # The refusal is taken before any row is written, so a bad category on the
+    # LAST row does not land the first two -- the same guarantee
+    # `scenario.apply` states, and now reachable through the review table: a
+    # bundle older than this server keeps a row's own kind among its options,
+    # so a category this server does not know can be committed (#138).
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/lorebook/import", json={"entries": [
+        {"name": "Kept", "keys": [], "body": "a", "category": "lore"},
+        {"name": "Also kept", "keys": [], "body": "b", "category": "locations"},
+        {"name": "Refused", "keys": [], "body": "c", "category": "vehicles"},
+    ]})
+    assert r.status_code == 400
+    assert client.get(f"/api/worlds/{wid}/lore").json() == []
+    assert client.get(f"/api/worlds/{wid}/locations").json() == []
+
+
 def test_lorebook_imported_key_activates_in_builder(client):
     # end-to-end sanity: an imported keyed entry feeds the context builder
     wid = _world(client)

@@ -491,8 +491,18 @@ def get_entity_kinds():
 
     `store.entities.ENTITY_KINDS` itself, in its own order, so the import
     dialogs stop keeping a second copy of the list: the per-row Category
-    dropdown is built from this, and a kind added to the tuple appears there
-    with no frontend edit at all.
+    dropdown is built from this, and a kind added to the tuple reaches it
+    without either dialog being edited.
+
+    Not "with no frontend edit at all" -- adding a kind still means adding it
+    to the frontend's own `ENTITY_KINDS`, which the tabs, labels and per-kind
+    field table are keyed by and which
+    `test_entities_store.py::test_the_frontend_ships_the_same_kind_list`
+    requires. What this removes is a *hand-kept list of options*, in two
+    components, that had to be found and edited each time; and what it adds is
+    the one case that edit cannot cover -- a bundle older than the backend
+    serving it, which still offers exactly the categories that backend accepts
+    instead of the ones it shipped believing in.
 
     Deliberately NOT world-scoped (the issue floated
     `/worlds/{wid}/entity-kinds`). The kinds are a property of the code, not of

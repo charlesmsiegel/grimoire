@@ -264,8 +264,12 @@ export type EntityKind = (typeof ENTITY_KINDS)[number];
 /** A kind as it comes back over HTTP: one of the above, or one this build has
  *  not heard of. `str` on the wire too (`routes.models.LoreEntry.category`),
  *  validated against `entities.ENTITY_KINDS` at the commit boundary rather than
- *  by its type. Use `EntityKind` for kinds this code names itself. */
-export type EntityKindName = string;
+ *  by its type. Use `EntityKind` for kinds this code names itself.
+ *
+ *  `string & {}` rather than a bare `string`: it widens to any string exactly
+ *  as the wire does, but keeps the five known kinds as editor completions
+ *  instead of collapsing the union away. */
+export type EntityKindName = EntityKind | (string & {});
 export type EntityScope = { kind: "world" | "campaign"; id: string };
 
 // Mirrors backend/src/grimoire/store/entity_schema.py — keep in sync.

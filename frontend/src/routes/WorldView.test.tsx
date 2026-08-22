@@ -39,12 +39,6 @@ vi.mock("../api/client", () => ({
     getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
     getCampaignModule: vi.fn(), readModule: vi.fn(), getWorldSheetsIndex: vi.fn(), getSheet: vi.fn(),
     worldCampaigns: vi.fn(),
-    // Both import panels live on this page, but only ask what a row may be
-    // filed under once a review table is up (#138) -- which no test here
-    // reaches. Declared anyway, so that changing does not fail as a crash.
-    entityKinds: vi.fn(async () => ({
-      kinds: ["locations", "lore", "items", "groups", "creatures"],
-    })),
   },
 }));
 import { api } from "../api/client";

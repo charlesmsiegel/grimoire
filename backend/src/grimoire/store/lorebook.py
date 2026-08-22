@@ -104,12 +104,21 @@ def commit(root: Path, entries: list[dict]) -> list[dict]:
     whose name, keys, and body all match an existing entity of the same
     category (or an earlier entry in the batch) is dropped, so re-importing
     the same book is a no-op instead of piling up slug-suffixed copies."""
-    created: list[dict] = []
-    seen: dict[str, set[tuple[str, str, str]]] = {}
+    # Every category checked BEFORE anything is written, the way
+    # `scenario.apply` does it: the check used to sit inside the create loop, so
+    # a bad category on the third row returned 400 with the first two already
+    # on disk. The review table can now offer a category this server does not
+    # know (a bundle older than the backend keeps a row's own kind among its
+    # options), which is exactly the request that would have half-landed.
     for e in entries:
         category = e.get("category", "lore")
         if category not in entities.ENTITY_KINDS:
             raise LorebookError(f"unknown category: {category}")
+
+    created: list[dict] = []
+    seen: dict[str, set[tuple[str, str, str]]] = {}
+    for e in entries:
+        category = e.get("category", "lore")
         if category not in seen:
             seen[category] = _existing_signatures(root, category)
         sig = (e.get("name", "Imported entry"), ",".join(e.get("keys", [])), e.get("body", "").strip())
