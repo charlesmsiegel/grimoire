@@ -3450,7 +3450,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // reaches this. A list of open widgets here would have to be extended by
       // whoever adds the next inline handler -- and would silently go back to
       // double-firing when they didn't (PR #400 review).
-      enabled: !absorb && !busy && !rolling && !renamesInFlight,
+      // `activeDone` is not a disabled control but a REPLACED one: an absorbed
+      // scene has its summary written and its changes applied, so the composer
+      // goes entirely and a post added now would sit outside the record taken
+      // of it. A chord that ignored that would put one there -- the transcript
+      // and the chronicle disagreeing, with nothing to say which is right
+      // (PR #400 review).
+      enabled: !absorb && !activeDone && !busy && !rolling && !renamesInFlight,
       run: () => void send(),
     },
     {
