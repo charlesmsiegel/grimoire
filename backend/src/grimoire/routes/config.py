@@ -513,6 +513,23 @@ def get_entity_kinds():
     `/worlds/{wid}/{kind}` catch-all for free, and `test_route_order.py` would
     say so if it did not.
 
+    The issue offered two shapes for this and named the other one first:
+    put the kinds *on the parse response* instead. That variant is genuinely
+    cheaper here -- the list would arrive with the rows it applies to, from the
+    process that will validate the commit, so it could not disagree with them
+    in either direction, and the fallback, `kindOptions` and the whole
+    bundle-skew case downstream would all be unnecessary. It was not taken for
+    two reasons. `ScenarioProposal` is both the parse response AND the body the
+    reviewer edits and posts back to `/scenario/import`, so a `kinds` field on
+    it would be a response-only key riding on a request model and stripped
+    again on the way in -- exactly the wart `art` already is, and that one has
+    a comment apologising for it. And the list has readers that never go
+    through a parse at all: #27 wants this review table driven from a stored
+    card, #119 wants it after the fact on committed records. A standalone GET
+    serves those without either of them growing a parse step. The cost is real
+    and is paid in the frontend, where `useEntityKinds` has a fallback and
+    `kindOptions` has a seam that the parse-response shape would not need.
+
     `lorebook.commit` and `scenario.apply` validate an incoming category
     against the same tuple, so what this offers is exactly what they accept;
     `test_every_offered_kind_is_a_category_both_imports_accept` is that
