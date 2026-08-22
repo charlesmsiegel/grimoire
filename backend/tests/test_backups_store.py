@@ -66,6 +66,28 @@ def test_the_archive_excludes_the_backups_dir_and_the_derived_cache(monkeypatch,
     assert first.name not in names_in(second)
 
 
+def test_the_archive_excludes_worlds_and_packs_still_being_assembled(
+        monkeypatch, tmp_path):
+    """`.world-staging` / `.module-staging` hold a world or a pack part-way
+    through being copied. Both sit inside the store so the publishing rename
+    stays on one filesystem, and both are the size of the thing being copied --
+    so a backup overlapping a gigabyte-scale fork or import would archive the
+    half-made tree ALONGSIDE its source and restore data nothing will finish
+    making (Codex review)."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    for staging_dir in (".world-staging", ".module-staging"):
+        part = root / staging_dir / "deadbeef" / "world"
+        part.mkdir(parents=True)
+        (part / "world.md").write_text("half a world", encoding="utf-8")
+
+    names = names_in(backups.create_backup(when=AT))
+
+    assert not any(n.startswith(".world-staging/") for n in names), names
+    assert not any(n.startswith(".module-staging/") for n in names), names
+    assert "worlds/realm/world.md" in names        # the real library still travels
+
+
 def test_the_archive_round_trips_the_bytes_it_stored(monkeypatch, tmp_path):
     root = home(monkeypatch, tmp_path)
     small_store(root)

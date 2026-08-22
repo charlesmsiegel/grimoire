@@ -38,6 +38,7 @@ from grimoire.store import (
     taglines,
     worlds,
 )
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.worlds import staging
 
 from .world_fixtures import PNG, seed_world, tree
@@ -67,7 +68,7 @@ def test_fork_copies_every_file_and_only_identity_differs(monkeypatch, tmp_path)
     """
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     src, dst = tree(worlds.world_root(wid)), tree(worlds.world_root(new))
 
     assert set(src) == set(dst)                     # nothing dropped, nothing invented
@@ -93,7 +94,7 @@ def test_a_file_no_kind_owns_still_travels(monkeypatch, tmp_path):
     (invented / "thing.json").write_text('{"kept": true}', encoding="utf-8")
     (invented / "portrait.png").write_bytes(PNG)
 
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     copied = tree(worlds.world_root(new))
     assert copied["invented-later/deep/thing.json"] == b'{"kept": true}'
     assert copied["invented-later/deep/portrait.png"] == PNG
@@ -109,13 +110,13 @@ def test_a_read_only_record_does_not_sink_the_fork(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
     root = worlds.world_root(wid)
-    lid = entities.create_entity(root, "lore", "Sealed")
+    lid = entities.create_entity(root, "lore", "The Tide Accord")
     entities.update_entity(root, "lore", lid,
                            body=f"![](/api/worlds/{wid}/greetings/g/images/a)\n")
     sealed = next(p for p in root.rglob(f"{lid}.md"))
     sealed.chmod(0o444)
 
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     copy = worlds.world_root(new) / sealed.relative_to(root)
     # Asserted on the mode bits rather than through `os.access`, which answers
     # True for everything when the suite runs as root.
@@ -124,13 +125,52 @@ def test_a_read_only_record_does_not_sink_the_fork(monkeypatch, tmp_path):
     assert sealed.stat().st_mode & 0o777 == 0o444      # the source keeps its bit
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_a_read_only_directory_does_not_sink_the_fork(monkeypatch, tmp_path):
+    """The other half of the read-only case, and the one dropping file metadata
+    does NOT fix: `copytree` applies `copystat` to every destination DIRECTORY
+    whatever `copy_function` is. A `0555` directory arrives `0555` in staging,
+    and `repoint_urls` then cannot create the sibling temp `store.atomic`
+    publishes through -- the fork fails, and the cleanup cannot unlink out of
+    that directory either, so the whole staged copy is left behind (Codex)."""
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    root = worlds.world_root(wid)
+    sealed = root / "lore"
+    sealed.chmod(0o555)
+    try:
+        new = worlds.fork_world(wid, "Winifred")
+    finally:
+        sealed.chmod(0o755)                       # so tmp_path can be cleaned
+
+    copied = worlds.world_root(new) / "lore"
+    # Asserted on the mode bits, not through `os.access`, which answers True
+    # for everything when the suite runs as root.
+    assert copied.stat().st_mode & 0o200, oct(copied.stat().st_mode)
+    assert _staging_is_empty()
+
+
+def test_a_directory_that_looks_like_a_write_temp_still_travels(monkeypatch, tmp_path):
+    """`store.atomic` only ever makes FILES. A directory whose name matches --
+    a user's, or a layout this code has not met -- would have had its whole
+    subtree dropped from a copy that calls itself deep, silently (Codex)."""
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    odd = worlds.world_root(wid) / ".notes.a1b2c3d4.tmp"
+    odd.mkdir()
+    (odd / "kept.md").write_text("mine", encoding="utf-8")
+
+    new = worlds.fork_world(wid, "Winifred")
+    assert tree(worlds.world_root(new))[".notes.a1b2c3d4.tmp/kept.md"] == b"mine"
+
+
 def test_fork_carries_binary_assets_verbatim(monkeypatch, tmp_path):
     """Byte equality on the PNGs specifically: a rewrite that widened past
     `.md`/`.json` would corrupt an asset, and a tree-wide comparison that
     happened to be run over an empty gallery would not notice."""
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Copy")
+    new = worlds.fork_world(wid, "Winifred")
     pngs = [rel for rel in tree(worlds.world_root(new)) if rel.endswith(".png")]
     assert len(pngs) >= 3                            # two character versions and a greeting
     root = worlds.world_root(new)
@@ -141,12 +181,39 @@ def test_fork_stamps_a_new_name_and_fresh_timestamps(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
     before = worlds.read_world(wid)["meta"]
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     meta = worlds.read_world(new)["meta"]
     assert meta["id"] == new != wid
-    assert meta["name"] == "Saltmarch (fork)"
+    assert meta["name"] == "Winifred"
     assert meta["created"] == meta["updated"] >= before["created"]
     assert worlds.read_world(wid)["meta"] == before   # the source is untouched
+
+
+def test_a_fork_sorts_ahead_of_a_source_touched_in_the_same_second(
+        monkeypatch, tmp_path):
+    """`now_iso()` has one-second resolution, so forking a world that was just
+    edited gives both the same `updated` -- and the UI refreshes instead of
+    navigating precisely because it promises the copy is at the front. The tie
+    breaks on `created`, which a copy has and the thing it was copied from
+    does not (Codex review)."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Saltmarch")
+    # A world made a year ago and edited just now -- the shape you actually
+    # fork. `created` is what separates it from its copy; a world CREATED in
+    # the same second as its fork ties on both stamps and nothing here can
+    # order it, which `list_worlds` says out loud.
+    mp = worlds.world_meta_path(wid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["created"] = "2025-01-01T00:00:00Z"          # `updated` stays at now
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+    stamp = worlds.read_world(wid)["meta"]["updated"]
+    new = worlds.fork_world(wid, "Winifred")
+    assert worlds.read_world(new)["meta"]["updated"] == stamp, "seed raced the clock"
+    # The source's slug sorts FIRST alphabetically, so directory order would
+    # put it ahead if nothing broke the tie.
+    assert wid < new
+    assert [w["id"] for w in worlds.list_worlds()] == [new, wid]
 
 
 def test_a_fork_sorts_to_the_front_of_the_shelf(monkeypatch, tmp_path):
@@ -157,7 +224,7 @@ def test_a_fork_sorts_to_the_front_of_the_shelf(monkeypatch, tmp_path):
     mp = worlds.world_meta_path(wid)
     mp.write_text(mp.read_text(encoding="utf-8").replace(
         worlds.read_world(wid)["meta"]["updated"], "2019-01-01T00:00:00Z"), encoding="utf-8")
-    new = worlds.fork_world(wid, "Realm Again")
+    new = worlds.fork_world(wid, "Winifred")
     assert [w["id"] for w in worlds.list_worlds()] == [new, wid]
 
 
@@ -171,7 +238,7 @@ def test_fork_carries_the_module_binding_and_the_body(monkeypatch, tmp_path):
     mp.write_text("---\nname: Realm\ncreated: 2020-01-01T00:00:00Z\n"
                   "updated: 2020-01-01T00:00:00Z\nmodule: wod20\n---\nA drowned coast.\n",
                   encoding="utf-8")
-    new = worlds.fork_world(wid, "Realm Copy")
+    new = worlds.fork_world(wid, "Winifred")
     got = worlds.read_world(new)
     assert got["meta"]["module"] == "wod20"
     assert got["body"].strip() == "A drowned coast."
@@ -186,7 +253,7 @@ def test_fork_repoints_localized_urls_onto_the_copy(monkeypatch, tmp_path):
     world is deleted."""
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
 
     for world in (wid, new):
         root = worlds.world_root(world)
@@ -210,7 +277,7 @@ def test_fork_carries_an_entitys_own_gallery_and_repoints_its_sidecar(
     """
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     root = worlds.world_root(new)
     lid = entities.list_entities(root, "locations")[0]["id"]
 
@@ -227,7 +294,7 @@ def test_fork_repoints_a_pc_personas_url_too(monkeypatch, tmp_path):
     third kind, not a reason to assume it."""
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     root = worlds.world_root(new)
     pid = pcs.list_pcs(root)[0]["id"]
     assert _repointed(pcs.read_persona(root, pid, "default")["description"], wid, new)
@@ -244,14 +311,14 @@ def test_fork_leaves_an_id_only_sidecar_byte_identical(monkeypatch, tmp_path):
     before = (worlds.world_root(wid) / rel).read_bytes()
     assert b"/api/worlds/" not in before                 # the premise of the no-op
 
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     assert (worlds.world_root(new) / rel).read_bytes() == before
 
 
 def test_fork_repoints_every_version_not_just_the_default(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     root = worlds.world_root(new)
     cid = characters.list_characters(root)[0]["id"]
     versions = [v["id"] for v in characters.read_character(root, cid)["versions"]]
@@ -269,11 +336,11 @@ def test_a_world_id_that_prefixes_another_is_not_rewritten_by_half(monkeypatch, 
     assert wid == "realm"
     other = worlds.create_world("Realm")
     assert other == "realm-2"
-    lid = entities.create_entity(worlds.world_root(wid), "lore", "Signposts")
+    lid = entities.create_entity(worlds.world_root(wid), "lore", "The Tide Accord")
     body = (f"![](/api/worlds/{wid}/greetings/g/images/a)\n"
             f"![](/api/worlds/{other}/greetings/g/images/b)\n")
     entities.update_entity(worlds.world_root(wid), "lore", lid, body=body)
-    new = worlds.fork_world(wid, "Third Realm")
+    new = worlds.fork_world(wid, "Winifred")
     got = entities.read_entity(worlds.world_root(new), "lore", lid)["body"]
     assert f"/api/worlds/{new}/greetings/g/images/a" in got
     assert f"/api/worlds/{other}/greetings/g/images/b" in got   # untouched
@@ -282,8 +349,8 @@ def test_a_world_id_that_prefixes_another_is_not_rewritten_by_half(monkeypatch, 
 def test_a_fork_of_a_fork_references_itself(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    once = worlds.fork_world(wid, "First")
-    twice = worlds.fork_world(once, "Second")
+    once = worlds.fork_world(wid, "Mara")
+    twice = worlds.fork_world(once, "Winifred")
     root = worlds.world_root(twice)
     cid = characters.list_characters(root)[0]["id"]
     card = characters.read_card(root, cid, "default")
@@ -298,12 +365,12 @@ def test_editing_the_fork_leaves_the_source_alone(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
     before = tree(worlds.world_root(wid))
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
 
     root = worlds.world_root(new)
     cid = characters.list_characters(root)[0]["id"]
     taglines.write(root, cid, "Rewritten.")
-    entities.create_entity(root, "locations", "A New Wing")
+    entities.create_entity(root, "locations", "The Tide Accord")
     lid = entities.list_entities(root, "lore")[0]["id"]
     entities.delete_entity(root, "lore", lid)
 
@@ -313,10 +380,10 @@ def test_editing_the_fork_leaves_the_source_alone(monkeypatch, tmp_path):
 def test_editing_the_source_leaves_the_fork_alone(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     before = tree(worlds.world_root(new))
-    entities.create_entity(worlds.world_root(wid), "locations", "A New Wing")
-    worlds.rename_world(wid, "Renamed")
+    entities.create_entity(worlds.world_root(wid), "locations", "The Tide Accord")
+    worlds.rename_world(wid, "Winifred")
     assert tree(worlds.world_root(new)) == before
 
 
@@ -324,7 +391,7 @@ def test_deleting_the_source_leaves_the_fork_whole(monkeypatch, tmp_path):
     """The consequence that would expose a copy made of symlinks."""
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     before = tree(worlds.world_root(new))
     worlds.delete_world(wid)
     assert tree(worlds.world_root(new)) == before
@@ -343,7 +410,7 @@ def test_a_symlink_in_the_source_becomes_a_real_file_in_the_fork(monkeypatch, tm
     (worlds.world_root(wid) / "lore").mkdir()
     (worlds.world_root(wid) / "lore" / "linked.md").symlink_to(outside)
 
-    new = worlds.fork_world(wid, "Realm Copy")
+    new = worlds.fork_world(wid, "Winifred")
     copied = worlds.world_root(new) / "lore" / "linked.md"
     assert not copied.is_symlink()
     assert copied.read_text(encoding="utf-8") == "shared\n"
@@ -363,10 +430,10 @@ def test_the_fork_gets_its_own_id_even_under_the_same_name(monkeypatch, tmp_path
 def test_fork_refuses_a_source_that_is_not_a_world(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     with pytest.raises(worlds.WorldNotFound):
-        worlds.fork_world("nope", "Copy")
+        worlds.fork_world("nope", "Winifred")
     # An id the resolvers refuse outright is as absent as a missing directory.
     with pytest.raises(worlds.WorldNotFound):
-        worlds.fork_world("../evil", "Copy")
+        worlds.fork_world("../evil", "Winifred")
     assert worlds.list_worlds() == []
 
 
@@ -374,7 +441,7 @@ def test_a_refused_fork_creates_nothing(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
     with pytest.raises(worlds.WorldNotFound):
-        worlds.fork_world("nope", "Copy")
+        worlds.fork_world("nope", "Winifred")
     assert [w["id"] for w in worlds.list_worlds()] == [wid]
 
 
@@ -388,7 +455,7 @@ def test_fork_reads_the_source_under_the_spelling_the_filesystem_holds(
     wid = seed_world("Realm")
     if not worlds.world_exists(wid.upper()):
         pytest.skip("case-sensitive filesystem: REALM is genuinely absent")
-    new = worlds.fork_world(wid.upper(), "Realm Copy")
+    new = worlds.fork_world(wid.upper(), "Winifred")
     root = worlds.world_root(new)
     cid = characters.list_characters(root)[0]["id"]
     assert _repointed(characters.read_card(root, cid, "default")["data"]["description"],
@@ -405,7 +472,7 @@ def test_fork_canonicalizes_its_source_id(monkeypatch, tmp_path):
     monkeypatch.setattr(worlds.lifecycle.paths, "canonical_id",
                         lambda w: wid if w == wid.upper() else real(w))
 
-    new = worlds.fork_world(wid.upper(), "Realm Copy")
+    new = worlds.fork_world(wid.upper(), "Winifred")
     root = worlds.world_root(new)
     cid = characters.list_characters(root)[0]["id"]
     assert _repointed(characters.read_card(root, cid, "default")["data"]["description"],
@@ -428,7 +495,7 @@ def test_a_fork_that_fails_partway_publishes_nothing(monkeypatch, tmp_path):
 
     monkeypatch.setattr(staging, "repoint_urls", explode)
     with pytest.raises(RuntimeError):
-        worlds.fork_world(wid, "Doomed Copy")
+        worlds.fork_world(wid, "Winifred")
     assert [w["id"] for w in worlds.list_worlds()] == [wid]
     assert not (worlds._worlds_dir() / "doomed-copy").exists()
     assert _staging_is_empty()
@@ -437,7 +504,7 @@ def test_a_fork_that_fails_partway_publishes_nothing(monkeypatch, tmp_path):
 def test_a_successful_fork_leaves_no_staging_litter(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    worlds.fork_world(wid, "Saltmarch (fork)")
+    worlds.fork_world(wid, "Winifred")
     assert _staging_is_empty()
 
 
@@ -456,7 +523,7 @@ def test_fork_reports_a_lost_id_race_rather_than_merging(monkeypatch, tmp_path):
     monkeypatch.setattr(worlds.lifecycle, "uniquify", lambda base, _exists: "doomed-copy")
 
     with pytest.raises(staging.WorldIdConflictError):
-        worlds.fork_world(wid, "Doomed Copy")
+        worlds.fork_world(wid, "Winifred")
     # The squatter is intact -- publish refused rather than merging into it.
     assert list(tree(taken)) == ["world.md"]
     assert _staging_is_empty()
@@ -474,7 +541,7 @@ def test_fork_skips_a_write_temp_caught_mid_write(monkeypatch, tmp_path):
     assert atomic.is_write_temp(root / ".world.md.a1b2c3d4.tmp")
     assert not atomic.is_write_temp(root / ".notes.tmp")
 
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     copied = tree(worlds.world_root(new))
     assert ".world.md.a1b2c3d4.tmp" not in copied
     assert copied[".notes.tmp"] == b"mine"
@@ -496,7 +563,7 @@ def test_calendar_and_plotmap_travel(monkeypatch, tmp_path):
     entity kind owns -- the ones a per-kind walk would have to remember."""
     _home(monkeypatch, tmp_path)
     wid = seed_world()
-    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    new = worlds.fork_world(wid, "Winifred")
     root = worlds.world_root(new)
     assert json.loads((root / "calendar.json").read_text(encoding="utf-8"))["primary"] == "gregorian"
     assert (root / "plotmap.json").is_file()

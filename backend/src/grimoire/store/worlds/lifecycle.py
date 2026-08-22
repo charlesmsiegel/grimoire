@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import stat
 from pathlib import Path
 
 from .. import atomic
@@ -19,12 +20,32 @@ class WorldInUse(Exception):
 
 
 def create_world(name: str) -> str:
+    """Make an empty world and return its id.
+
+    Staged and published by one rename, like the fork and the bundle import --
+    and here that is not about crash-safety (there is almost nothing to write)
+    but about never publishing an EMPTY directory.
+
+    This used to `mkdir` the world and then write `world.md` into it, which
+    left a window in which `worlds/<id>/` existed and held nothing. POSIX
+    `rename` REPLACES an empty destination directory, so a fork or an import
+    that had just checked the id was free could rename its finished tree over
+    that directory -- and this call would then write its `world.md` into
+    somebody else's copied world. Both callers returned the same id, and the
+    world that resulted was two worlds mixed together (Codex review, P1).
+
+    Publishing a directory that is never empty is what closes it: `rename`
+    refuses a non-empty destination (ENOTEMPTY), so `staging.publish` can only
+    lose the race, which it already handles by picking another id and retrying.
+    """
     ensure_home()
-    wid = uniquify(slugify(name), lambda c: paths.world_root(c).exists())
-    paths.world_root(wid).mkdir(parents=True)
+    base = slugify(name)
     now = now_iso()
-    atomic.write_text(paths.world_meta_path(wid), dump_frontmatter({"name": name, "created": now, "updated": now}, ""))
-    return wid
+    with staging.staging_tree() as tree:
+        atomic.write_text(tree / "world.md",
+                          dump_frontmatter({"name": name, "created": now, "updated": now}, ""))
+        return staging.publish(tree, base,
+                               uniquify(base, lambda c: paths.world_root(c).exists()))
 
 
 def fork_world(wid: str, name: str) -> str:
@@ -120,6 +141,7 @@ def fork_world(wid: str, name: str) -> str:
         # it, which is the whole point of it owning both halves.
         shutil.copytree(root, dest, ignore=_skip_write_temps,
                         copy_function=shutil.copyfile, dirs_exist_ok=True)
+        _make_writable(dest)
         mp = dest / "world.md"
         meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
         now = now_iso()
@@ -136,8 +158,36 @@ def _skip_write_temps(directory: str | Path, names: list[str]) -> set[str]:
 
     `directory` is whatever `copytree` was handed -- a `Path` here, but the
     signature says both because the callback protocol does not promise which.
+
+    A temp is a FILE. Matching on the name alone would let a directory called
+    `.notes.abcdefgh.tmp` -- a user's, or a layout this code has not met yet --
+    take its whole subtree out of a copy that calls itself deep, silently
+    (Codex review). `atomic` only ever produces files here, so requiring one
+    costs nothing and closes that.
     """
-    return {n for n in names if atomic.is_write_temp(Path(directory) / n)}
+    return {n for n in names
+            if atomic.is_write_temp(Path(directory) / n)
+            and (Path(directory) / n).is_file()}
+
+
+def _make_writable(root: Path) -> None:
+    """Give the owner write access to every directory in the staged copy.
+
+    `copytree` applies `copystat` to each destination DIRECTORY whatever
+    `copy_function` is, so a `0555` directory in the source arrives `0555` here
+    -- and then `repoint_urls` cannot create the sibling temp `store.atomic`
+    publishes through, the fork fails, and the cleanup cannot unlink out of
+    that directory either, so the whole staged copy is left behind (Codex
+    review). Dropping the file metadata was only half the fix.
+
+    Owner-write is added rather than the mode being replaced: nothing here
+    needs to widen a directory for anyone else, and the published fork keeps
+    whatever the source said about group and other.
+    """
+    for d in [root, *(p for p in root.rglob("*") if p.is_dir())]:
+        mode = d.stat().st_mode
+        if not mode & stat.S_IWUSR:
+            d.chmod(stat.S_IMODE(mode) | stat.S_IRWXU)
 
 
 def rename_world(wid: str, name: str) -> None:

@@ -92,7 +92,11 @@ export default function WorldsView() {
     // grid does, and here a silent no-op is indistinguishable from a fork that
     // never happened.
     try {
-      setWorlds(await api.listWorlds());
+      // `fresh`: a fork runs long enough that a world-list GET issued before it
+      // published can still be in flight, and joining that one would answer
+      // with a list the copy is not in -- no error, button re-enabled, and the
+      // obvious retry makes a second copy (Codex review).
+      setWorlds(await api.listWorlds(true));
     } catch {
       setError(`'${name}' was created, but the list could not be refreshed.`);
     } finally {
@@ -125,7 +129,7 @@ export default function WorldsView() {
     // user retries and imports a second copy (Codex review).
     setImporting(false);
     try {
-      setWorlds(await api.listWorlds());
+      setWorlds(await api.listWorlds(true));   // as in `fork`: a post-mutation read
     } catch {
       /* the grid is stale; navigating to the new world is what matters */
     }
@@ -183,7 +187,12 @@ export default function WorldsView() {
                         disabled={forking !== null} onClick={() => { void fork(w); }}>
                   {forking === w.id ? "…" : "⑂"}
                 </button>
-                <button aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>✕</button>
+                {/* Disabled while any fork is in flight, not just this card's:
+                    the copy walks the SOURCE for as long as it runs, and
+                    deleting that world mid-walk fails the fork and leaves
+                    neither the copy nor the original (Codex review). */}
+                <button aria-label={`Delete ${w.name}`} disabled={forking !== null}
+                        onClick={() => remove(w)}>✕</button>
               </div>
             </div>
           ))}

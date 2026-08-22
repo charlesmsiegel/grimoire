@@ -44,7 +44,7 @@ SEEDED_FILES = (
     "locations/the-drowned-library/assets/default/descriptions.json",
     "greetings/the-gala/assets/default/subjects.json",
     "characters/seraphine/tagline.md",
-    "characters/seraphine/assets/before-the-flood/embed-old789.png",
+    "characters/seraphine/assets/winifred/embed-old789.png",
 )
 
 
@@ -87,7 +87,7 @@ def seed_world(name: str = "Saltmarch") -> str:
     (assets_dir / "embed-abc123.png").write_bytes(PNG)
     # A second version, its own card and its own asset directory: the per-
     # version tree is the part of a character a hand-written copy walk forgets.
-    older = characters.create_version(root, cid, "Before the Flood",
+    older = characters.create_version(root, cid, "Winifred",
                                       characters.blank_card("Seraphine"))
     old_card = characters.read_card(root, cid, older)
     old_avatar = f"/api/worlds/{wid}/characters/{cid}/versions/{older}/images/embed-old789"
