@@ -337,7 +337,7 @@ def test_every_kind_the_content_picker_offers_is_one_upsert_accepts(monkeypatch,
 
     mid = _mk_schema(monkeypatch, tmp_path)
     for kind in entities.ENTITY_KINDS:
-        res = module_edit.upsert_content(mid, kind, f"row-{kind}", name=f"Row {kind}",
+        res = module_edit.upsert_content(mid, kind, kind, name="Seraphine",
                                          body="body", keys="", fields={}, sheet=None)
         assert res["ok"], f"{kind}: {res['errors']}"
 
