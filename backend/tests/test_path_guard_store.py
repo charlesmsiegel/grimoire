@@ -15,7 +15,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from grimoire.main import create_app
-from grimoire.store import appearances, campaigns, characters, entities, overlay, pcs, sync, worlds
+from grimoire.store import (
+    appearances,
+    campaigns,
+    characters,
+    entities,
+    llm_connections,
+    overlay,
+    pcs,
+    sync,
+    worlds,
+)
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.paths import safe_id
 
@@ -76,6 +86,44 @@ def test_char_dir_rejects_unsafe_ids(tmp_path, cid):
 def test_pc_dir_rejects_unsafe_ids(tmp_path, pid):
     with pytest.raises(pcs.PCNotFound):
         pcs._pc_dir(tmp_path, pid)
+
+
+# ---- llm connections (#77 brought a caller-supplied id in through a BODY)
+#
+# This module was outside the rule until a reroll's route override gave it an
+# id that arrives in `RegenerateBody` rather than as a URL segment — the case
+# this file's own docstring names as getting no protection from the router's
+# path matching. Guarded at `_read`, which every read reaches a connection
+# through, and separately at `delete_connection`, the one caller-id join that
+# does not read first and the one that unlinks.
+@pytest.mark.parametrize("conn_id", UNSAFE)
+def test_reading_a_connection_rejects_unsafe_ids(monkeypatch, tmp_path, conn_id):
+    home(monkeypatch, tmp_path)
+    with pytest.raises(llm_connections.ConnectionNotFound):
+        llm_connections.read_connection_raw(conn_id)
+    with pytest.raises(llm_connections.ConnectionNotFound):
+        llm_connections.read_connection(conn_id)
+
+
+@pytest.mark.parametrize("conn_id", UNSAFE)
+def test_deleting_a_connection_rejects_unsafe_ids(monkeypatch, tmp_path, conn_id):
+    home(monkeypatch, tmp_path)
+    with pytest.raises(llm_connections.ConnectionNotFound):
+        llm_connections.delete_connection(conn_id)
+
+
+def test_an_unsafe_connection_id_cannot_read_a_file_beside_the_store(monkeypatch, tmp_path):
+    """The concrete escape: `llm_connections/` sits under the store root beside
+    every other collection, and a connection file is frontmatter — so `..`
+    hops name real, parseable files."""
+    home(monkeypatch, tmp_path)
+    llm_connections.ensure_migrated()
+    (tmp_path / "planted.md").write_text(
+        dump_frontmatter({"kind": "openrouter", "name": "Planted",
+                          "api_key": "sk-stolen"}, ""), encoding="utf-8")
+
+    with pytest.raises(llm_connections.ConnectionNotFound):
+        llm_connections.read_connection_raw("../planted")
 
 
 def test_sibling_collection_is_not_reachable_through_a_world_id(monkeypatch, tmp_path):

@@ -1081,6 +1081,21 @@ def test_a_stamp_is_spent_and_does_not_re_label_the_next_take(monkeypatch, tmp_p
     assert [r.get("model", "") for r in runs] == ["", "local/llama3", ""]
 
 
+def test_a_deduplicated_take_is_re_stamped_when_only_the_route_changed(
+        monkeypatch, tmp_path):
+    """The dedup branch with a model and no hint beside it — the shape an
+    override sent without guidance takes when the model repeats itself."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")])
+
+    _reroll(cid, sid, [_seg("Fog over the pilings.")], model="local/llama3")
+
+    state = alternates.state(cid, sid)
+    assert state["runs"][state["active"]]["segments"] == [_seg("Fog over the pilings.")]
+    assert state["runs"][state["active"]]["model"] == "local/llama3"
+
+
 def test_a_deduplicated_take_is_re_stamped_with_the_route_that_produced_it(
         monkeypatch, tmp_path):
     """Two identical takes are one variant, but the second reroll is what is on
