@@ -196,7 +196,17 @@ scene has room; this reply does not have to use it all.
 - **Hand the moment over, don't set it down.** Stop at the point the story is
   still moving; ending a beat at rest is what ending a scene is for, and this
   reply is not ending one.
+- No prose style relaxes this. A style sets how the writing sounds, not how
+  much story one reply covers.
 ```
+
+The last bullet is not decoration. The Precedence section says these
+relationships are *stated in the blocks themselves*, and without it nothing in
+the prompt tells the model that turn scope outranks a style asking for a
+resolved vignette. Section order cannot carry it either: `turn_scope` sits
+after `prose_style` only by default, and `layout.py` lets a user reorder
+sections freely, so proximity is not a mechanism. The same line appears in the
+`pcless` variant.
 
 The third bullet is phrased as a positive direction with the prohibition
 trailing it, deliberately. The natural-prose spec's stated mitigation for
@@ -408,8 +418,18 @@ alone. That undo is wired only into the persisted-post branch
 its stream with no undo hook at all. So a bare `/end` — which scrubs to `""`
 and is therefore *always* ephemeral — and every pcless generation would fail
 with `wrap_next` still set, leaving the indicator claiming a wrap that
-produced nothing. The failure clear is therefore its own small hook, invoked
-from both branches, rather than a line inside the post rollback.
+produced nothing. The failure clear is therefore its own small hook — and it is invoked at
+**route level, around the whole post-mutation setup span**, not from inside
+the two streams. A hook reachable only once a stream exists still misses every
+way setup can fail after `wrap_next` is set and before there is a stream to
+carry an `on_error`: `compose_turn` / `compose_director_turn` raising, a
+template failing to render, and `_chat_stream`'s synchronous claim, which the
+route's own comment notes "claims the turn under the campaign lock before it
+returns, so a contended campaign raises `StoreBusy` at this line and the route
+answers 409 having sent nothing". Each of those unwinds the reservation while
+leaving the scene marked to wrap over a reply that never existed. The tests
+therefore cover a **composition failure and a claim failure**, not only an LLM
+streaming error.
 
 Two accepted losses, both stated rather than solved: a turn that errors clears
 a flag that a *previous* `/end` may have set, and a rewind clears it
@@ -504,6 +524,18 @@ inside the hold that already covers setup, and pass it through
 outrank every stored scope. Composition then reads the snapshot, not the
 file, and the race closes without making the route refuse anything.
 
+**The same snapshot applies to `post_roll_proposal`.** CLAUDE.md inventories
+it as one of the five scene-turn handlers that start detached runs, and a wrap
+reply can legitimately stop at a roll fence with `wrap_next` still set.
+Accepting or declining that proposal then builds the continuation through
+`routes/mechanics.py:_continuation_messages` / `_declined_continuation_messages`,
+both of which call `compose_turn` today with **no `turn=` override at all**
+(`mechanics.py:98`, `:105`). Since the cancel route stays usable during the
+detached run, a cancel between proposal processing and composition would
+un-wrap a continuation already starting — the identical race, one route over.
+Both builders take the snapshot through the same override, and the race test
+is written for this path too, not only for chat and regenerate.
+
 With that, cancelling mid-turn cleanly means "not the next one" rather than
 "not this one", which is also the honest thing to show: the indicator names
 the next reply explicitly — *"the next reply will close this scene"* — so a
@@ -540,6 +572,14 @@ intend, realize or conclude, and never presume their answer. You may write
 what the world does to them, and how their body answers on its own. Stop
 where their response begins.
 ```
+
+**Singular and plural, mirroring `player_character.j2`** — *"`<A>` and `<B>`
+are the players'…"*, with a multi-PC `post_history` test. Naming one PC here
+would be worse than naming none: this is the only boundary text positioned to
+override a hostile card instruction, so a second seated character left
+unnamed in it is unprotected in precisely the slot that matters. An
+implementation that substitutes the first name, or joins the list into the
+singular sentence, produces exactly that gap.
 
 The wording carries the **whole** distinction, not a shortened gesture at it,
 and both halves matter because this is the only boundary text positioned
@@ -623,7 +663,10 @@ at all.
 the `response_format` edits, the `transient_tracker` rewording, the
 `post_history` line, `Section.removable` and the layout change, the precedence
 hierarchy, the behavioral grader, and the eval/cassette/snapshot fallout. No
-new routes, no new stored state, no frontend. This alone answers both problems
+new routes and no new stored state. It **does** carry frontend work — §6's
+`removable` has to reach `layout.describe`, the API type and
+`PromptLayoutEditor`, with a test, or Phase 1 ships the misleading checkbox it
+exists to remove. This alone answers both problems
 this spec opened with, and it is what should go to `writing-plans` first.
 
 **Phase 2 — `/end`.** `store/commands.py`, the `wrap_next` lifecycle and its
