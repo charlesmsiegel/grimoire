@@ -340,22 +340,13 @@ reinforce rather than compete.
   present is entirely `**Grimoire:**`. Ungated, the prompt would contain a
   rule its own final message orders the model to break.
 
-  `wrap` and `opener` therefore both become vars of this template, and they
-  arrive by different routes. `wrap` is assembled data like any other section
-  var. `opener` is **not** today: `_render_sections(a, cid, sid, opener=False)`
-  keeps it as a function parameter and renders each template with `**data`, so
-  no template can see it — `opener_only` and `except_opener` are tested against
-  the parameter in Python, never in Jinja. It gets injected into the dict
-  `_render_sections` passes (one line), which also makes it available to
-  `_VARIANTS` should a later section want an opener variant.
-
-  This completes a convention rather than inventing one: the
-  `verify_templates.py` mirror **already** builds its opener data as
-  `{**gather(...), "opener": True}` (`:917`). The key exists on the mirror
-  side and is simply absent on the production side, and nothing catches the
-  divergence today because no template reads it. The moment
-  `response_format.j2` does, the mirror renders and the builder raises — a
-  loud failure, but one the injection removes outright.
+  `wrap` and `opener` therefore both become vars of this template. **Both are
+  already available** — an earlier draft of this spec claimed `opener` was
+  only a function parameter and needed injecting; that was wrong.
+  `_render_sections` builds its render dict as
+  `data = {**a["data"], "opener": opener}` (`assemble.py:561`), and
+  `verify_templates.py` mirrors it with `{**gather(...), "opener": True}`
+  (`:917`). Both sides already carry it; no plumbing is needed, only use.
 
   Both must be passed: `verify_templates.py` renders with `StrictUndefined`,
   so a missing var is a hard failure rather than a silent blank.
@@ -455,9 +446,17 @@ direction — the player retypes three characters.
 `get_rolling_summary` / `scene_break_fields`:
 
 ```python
-def wrap_fields(meta: dict) -> bool: ...          # frontmatter -> flag
-def get_wrap(cid: str, sid: str) -> bool: ...     # read fresh off disk
+def wrap_state(meta: dict) -> str: ...            # "" | "pending" | "consumed"
+def get_wrap_state(cid: str, sid: str) -> str:    # read fresh off disk
 ```
+
+**State-valued, not boolean**, with the boolean derived at the one place that
+wants one: composition wraps whenever the state is non-empty
+(`wrap = bool(state)`), since a `consumed` wrap must still wrap so that retry
+and regenerate reproduce the closing reply. A `bool` accessor could not carry
+the `pending`/`consumed` distinction the indicator needs (§5), and a
+string-valued one would clash with the `wrap: bool | None` composition
+override — so the accessor is the state and the override stays the boolean.
 
 Public rather than a frontmatter poke inside `_assemble`, for three consumers
 that all need it: the assembler, the `DELETE .../wrap` route, and the scene
@@ -523,6 +522,18 @@ three closing posts with nothing on screen explaining why.
   closes. The state is stored rather than derived, because after a bare
   `/end` — which appends no post — the transcript's last message cannot tell
   the two apart.
+- **`pending` → `consumed` happens when the scene is actually closed, which is
+  not always the first persistence.** A wrap turn may stop at a roll fence: its
+  pre-fence narration persists, but nothing has been closed, and consuming
+  there would have the indicator announce a closed scene mid-check. So a reply
+  ending in a roll fence leaves the state `pending`, and the accepted or
+  declined continuation performs the transition instead.
+- **The transition is a conditional write under the finalizer's campaign
+  lock** — `pending` → `consumed` only, never a blind set. The cancel route is
+  deliberately unguarded and can clear the state while a turn is live; an
+  unconditional write in the finalizer would resurrect a `consumed` the player
+  had just cancelled. Both cases are state-machine tests: the roll-continuation
+  path, and cancel-racing-finalize.
 - The scene payload carries that state, read off the same frontmatter the
   assembler reads.
 - `CampaignView` renders an indicator near the composer whose copy follows the
@@ -681,6 +692,22 @@ split depends on — just to opt out of pacing. So the closing-narration rule
 renders only when `turn_scope` is enabled in the resolved layout, making the
 toggle mean what it says. The PC boundary is unaffected: it is non-removable
 and does not ride on this gate.
+
+**How the gate reaches the template, because the obvious two ways both
+fail.** `_render_sections` fixes its render dict at `assemble.py:561` and only
+then walks `layout.apply(SECTIONS)` at `:564`, so a template cannot observe
+whether a sibling survived — the data is already frozen. And reaching for the
+existing `_section_on` helper would be a *second* layout read: its own
+docstring concedes it "costs one `read_config` and at most one small file
+read", so under a concurrent layout save the two reads can disagree and the
+rule can render for a `turn_scope` that did not.
+
+The fix is to resolve once: `_render_sections` binds
+`sections = layout.apply(SECTIONS)` to a local, derives
+`turn_scope_enabled` from **that exact list**, folds it into `data` beside
+`opener`, and iterates the same local. One read, one truth, and
+`verify_templates.py`'s mirror derives the value the same way so the
+comparison stays honest.
 
 No migration is needed for either: `layout.py`'s upgrade rule already inserts
 a catalog section a stored layout never mentioned *"after its nearest
