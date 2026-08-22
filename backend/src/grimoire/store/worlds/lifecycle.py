@@ -90,6 +90,15 @@ def fork_world(wid: str, name: str) -> str:
         # that skipped them would produce a world missing files it appears to
         # have.
         #
+        # Following does materialize the target, so a fork-then-export packs
+        # content the export of the SOURCE would have skipped. Accepted: the
+        # copy stays in the same store under the same user, the world already
+        # serves that link's content over the API today, and planting the
+        # symlink at all needs write access to the store -- with which one can
+        # simply put the bytes in a record and skip the laundering. What the
+        # export's skip actually buys is that no ordinary export silently
+        # dereferences a link; a fork is not ordinary and is not silent.
+        #
         # `store.atomic`'s in-flight temps are skipped: they are not part of the
         # world, and the writer that owns one renames or unlinks it out from
         # under the walk -- so copying one is both wrong and racy.
