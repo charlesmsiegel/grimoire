@@ -401,6 +401,35 @@ def test_config_context_scan_depth_defaults_and_roundtrips(client):
     assert client.get("/api/config").json()["context_scan_depth"] == "3"
 
 
+def test_every_writable_config_key_is_reported_back(client):
+    """`GET /config` must name every key `PUT /config` accepts (#410).
+
+    `_public_config` enumerates its response by hand, so a key can be writable
+    and readable by the store while being invisible to the page that sets it:
+    the PUT answers 200, the setting takes effect, and the field redisplays its
+    default forever. `replay_fork_threshold` shipped that way from #80 until
+    #107 put a second threshold beside it and the pair disagreed.
+
+    Compared against `ConfigUpdate` rather than `_CONFIG_KEYS`: the question is
+    not "does the store keep this" but "can the page that wrote it read it
+    back", and `ConfigUpdate` is exactly the set the page can write. Keys the
+    store holds for itself are not this test's business.
+
+    Names the missing keys in the failure, because the fix is one line per key
+    and the useful part is which line.
+    """
+    from grimoire.routes.models import ConfigUpdate
+
+    # `model_fields` on v2, `__fields__` on v1 — short-circuited rather than
+    # tried in order, so v2 never touches the deprecated name. No `pydantic-ok`
+    # marker: `test_pydantic_guard.py` scans `src/grimoire` only, so one here
+    # would claim to clear a guard that never looked.
+    writable = set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+    reported = set(client.get("/api/config").json())
+    assert not (writable - reported), \
+        f"writable but never reported by GET /config: {sorted(writable - reported)}"
+
+
 def test_config_fork_thresholds_default_and_roundtrip(client):
     """Both fork nudges, and the round trip is the point. `replay_fork_threshold`
     stored fine and was never reported back (#80's half of this), so the
