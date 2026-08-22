@@ -121,6 +121,16 @@ export default function RerollRoutePicker({
       <select
         aria-label="Reroll connection"
         value={value.connection_id}
+        // Enter belongs to the native menu here, not to the popover's commit.
+        // Codex review: a keyboard reader confirming an option with Enter had
+        // the keydown bubble up and fire the reroll BEFORE the select's own
+        // default applied — sending the turn through the route they were in
+        // the middle of replacing. `ModelCombobox` stops the same key while
+        // its list is up; a native select has no equivalent to hook, so the
+        // guard belongs here. Escape is deliberately left to bubble: backing
+        // out of the popover from any of its three controls is the behaviour
+        // an earlier round added on purpose.
+        onKeyDown={(e) => { if (e.key === "Enter") e.stopPropagation(); }}
         onChange={(e) => {
           // The model is cleared with the connection, never carried across:
           // an OpenRouter id means nothing to a local endpoint, and a picker
