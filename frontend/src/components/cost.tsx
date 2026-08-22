@@ -190,7 +190,16 @@ export function Footnotes({ bucket, showRatesHint = true }: {
  *  absence of one is the inspector's business.
  */
 export function PostCost({ bucket }: { bucket: UsagePostBucket }) {
-  const figure = bucketPrice(bucket);
+  // `bucketPrice` answers UNPRICED for a bucket holding BOTH kinds of estimate,
+  // because a merged headline reconciles to neither column. On the scene and
+  // campaign surfaces `Footnotes` prints them separately underneath; a chip has
+  // no underneath, so it prints them side by side instead — still two figures,
+  // still never summed. Hiding the chip there would drop a post whose every
+  // generation the ledger actually priced, reroll count and all.
+  const estimates = [n(bucket.estimated_usd), n(bucket.modelled_usd)].filter((v) => v > 0);
+  const figure = bucketPrice(bucket) === UNPRICED && estimates.length > 1
+    ? estimates.map(about).join(" + ")
+    : bucketPrice(bucket);
   if (figure === UNPRICED) return null;
   // The server's count, not `calls - 1`: a turn continued past a dice roll is
   // two calls and one answer, and reporting that as a reroll would tell a

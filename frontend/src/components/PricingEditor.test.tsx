@@ -89,18 +89,19 @@ test("an empty box is left out rather than sent as a zero", async () => {
   }));
 });
 
-test("a row nobody has named is not sent under the catch-all key", async () => {
+test("a row nobody has named cannot be sent at all", async () => {
+  // Guarded twice on purpose: Save is blocked here, and `toTable` would still
+  // refuse to file it under the catch-all key if it ever got through.
   render(<PricingEditor />);
   fireEvent.click(await screen.findByText("+ Add a model"));
   fireEvent.change(screen.getByLabelText(/Input rate for a new model/),
                    { target: { value: "9" } });
   fireEvent.change(screen.getByLabelText(/Output rate for a new model/),
                    { target: { value: "9" } });
-  fireEvent.click(screen.getByText("Save rates"));
 
-  await waitFor(() => expect(api.setPricing).toHaveBeenCalledWith({
-    "local/glm": { prompt_usd_per_1k: 0.5, completion_usd_per_1k: 1.5 },
-  }));
+  expect(screen.getByText("Save rates")).toBeDisabled();
+  fireEvent.click(screen.getByText("Save rates"));
+  expect(api.setPricing).not.toHaveBeenCalled();
 });
 
 test("removing a row and saving drops it", async () => {
@@ -195,6 +196,31 @@ test("a failed read can be retried", async () => {
   fireEvent.click(await screen.findByText("Try again"));
 
   expect(await screen.findByDisplayValue("local/glm")).toBeInTheDocument();
+});
+
+test("a filled-in row with no model id blocks the save that would discard it", async () => {
+  // `toTable` drops it (an unnamed row must not become the catch-all), and it
+  // did so under a "Rates saved" that threw away everything typed.
+  vi.mocked(api.getPricing).mockResolvedValue({ ...TABLE, rates: {} });
+  render(<PricingEditor />);
+
+  fireEvent.click(await screen.findByText("+ Add a model"));
+  fireEvent.change(screen.getByLabelText(/Input rate for a new model/),
+                   { target: { value: "1" } });
+  fireEvent.change(screen.getByLabelText(/Output rate for a new model/),
+                   { target: { value: "2" } });
+
+  expect(screen.getByText(/This row needs a model id/)).toBeInTheDocument();
+  expect(screen.getByText("Save rates")).toBeDisabled();
+});
+
+test("an untouched new row is not nagged about its missing id", async () => {
+  vi.mocked(api.getPricing).mockResolvedValue({ ...TABLE, rates: {} });
+  render(<PricingEditor />);
+
+  fireEvent.click(await screen.findByText("+ Add a model"));
+
+  expect(screen.queryByText(/This row needs a model id/)).toBeNull();
 });
 
 test("a row missing a base rate says it will not be saved, and is not", async () => {

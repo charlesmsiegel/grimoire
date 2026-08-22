@@ -655,10 +655,25 @@ def _float(value: object) -> float | None:
     return float(value) if value == value and abs(value) != float("inf") else None
 
 
+def _money(value: float) -> float:
+    """One money column, rounded — but never rounded THROUGH zero.
+
+    `_CENTS` puts the floor at $0.0000005, and a real figure can sit under it:
+    twenty tokens at $0.00002/1k is 4e-7. Rounded that becomes `0.0` while the
+    call count beside it stays positive, and every cost surface then renders a
+    priced call as `$0.00` — the one claim this module exists to prevent, made
+    by the rounding rather than by the ledger. A positive value that would
+    round away keeps its own precision instead; the views already have a
+    `<$0.0001` rendering for figures that small.
+    """
+    rounded = round(value, _CENTS)
+    return value if rounded == 0.0 and value > 0.0 else rounded
+
+
 def _rounded(bucket: dict) -> dict:
-    return {**bucket, "cost_usd": round(bucket["cost_usd"], _CENTS),
-            "estimated_usd": round(bucket["estimated_usd"], _CENTS),
-            "modelled_usd": round(bucket["modelled_usd"], _CENTS)}
+    return {**bucket, "cost_usd": _money(bucket["cost_usd"]),
+            "estimated_usd": _money(bucket["estimated_usd"]),
+            "modelled_usd": _money(bucket["modelled_usd"])}
 
 
 def _ranked(buckets: dict[str, dict]) -> list[dict]:

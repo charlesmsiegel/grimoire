@@ -1369,3 +1369,27 @@ def test_a_rename_trail_that_keeps_swapping_two_ids_is_bounded(home, monkeypatch
     out = usage.campaign_scenes("c")           # must return rather than spin
     assert out["totals"]["cost_usd"] == pytest.approx(0.25)
     assert [b["scene"] for b in out["scenes"]] in (["a"], ["b"])
+
+
+def test_a_positive_estimate_below_the_rounding_floor_is_not_reported_as_zero(home, monkeypatch):
+    """`_CENTS` floors at $0.0000005, and a real figure can sit under it: 20
+    tokens at $0.00002/1k is 4e-7. Rounded to 0.0 beside a positive call count,
+    every cost surface renders a priced call as `$0.00` — the claim this module
+    exists to prevent, made by the rounding rather than by the ledger."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 0.00002, "completion_usd_per_1k": 0.0}})
+    _seed("2026-08-14", model="local/glm", prompt_tokens=20, completion_tokens=0)
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["modelled_calls"] == 1
+    assert totals["modelled_usd"] > 0.0, "a priced call must never total to zero"
+    assert totals["modelled_usd"] == pytest.approx(4e-7)
+
+
+def test_an_ordinary_figure_is_still_rounded(home, monkeypatch):
+    """The floor is a guard on zero, not a licence to hand back float noise."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", cost_usd=0.1)
+    _seed("2026-08-14", cost_usd=0.2)
+
+    assert usage.summary(days=30)["totals"]["cost_usd"] == 0.3
