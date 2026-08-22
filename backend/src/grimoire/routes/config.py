@@ -529,6 +529,14 @@ def get_entity_kinds():
     dropdown is built from this, and a kind added to the tuple reaches it
     without either dialog being edited.
 
+    What the dropdown shows is this list INTERSECTED with the bundle's own
+    (`useEntityKinds`), not this list outright. A kind the bundle has never
+    heard of has no tab, label or editor there, so offering it would let a user
+    file a row somewhere they could not then look at it -- correctly written
+    and effectively lost. So the endpoint is not a way to introduce a kind
+    ahead of the frontend; it is the half of the answer that keeps the dialog
+    from offering a category this server would refuse.
+
     Not "with no frontend edit at all" -- adding a kind still means adding it
     to the frontend's own `ENTITY_KINDS`, which the tabs, labels and per-kind
     field table are keyed by and which
