@@ -38,7 +38,10 @@ function typesFor(module: ModuleDetail | null, kind: string): [string, string][]
   return Object.entries(module.sheets.sheet_types)
     .filter(([, st]) => st.kind === typeKind(kind))
     .map(([tid, st]) => [tid, st.label] as [string, string])
-    .sort((a, b) => a[0].localeCompare(b[0]));
+    // By the LABEL, which is what the reader sees. `tally._kind_types` sorts
+    // the same list by id, because what it builds is a message naming the ids
+    // the API accepts.
+    .sort((a, b) => a[1].localeCompare(b[1]));
 }
 
 /** Sheet coverage across a campaign's whole cast, and the one action that
@@ -201,19 +204,17 @@ export default function SheetsView() {
     </>
   );
 
-  const footer = (
-    <button className="primary" onClick={() => { void createMissing(); }}
-            disabled={busy || missingTotal === 0 || !module}>
-      {busy ? "Creating…" : `+ Create missing sheets${missingTotal ? ` (${missingTotal})` : ""}`}
-    </button>
-  );
-
   const selectedRow = selected
     ? (roster?.[selected.kind] ?? []).find((r) => r.id === selected.id) ?? null
     : null;
 
   return (
-    <PageShell column={column} footer={footer} columnLabel="The cast">
+    // No pinned footer. The obvious place for `+ Create missing sheets` was
+    // the one the ledger puts its SHOW RETIRED toggle in -- but below 720px
+    // `PageShell` shows the column or main, never both, and the per-kind type
+    // selects this action reads live in main. Pinned, the page's one action
+    // would sit in a different view from its own inputs on a phone.
+    <PageShell column={column} columnLabel="The cast">
       <div className="page-wide view-anim">
         <div className="shelf-head">
           <div>
@@ -289,7 +290,13 @@ export default function SheetsView() {
                     <td>{sheeted}/{rows.length}</td>
                     <td className={missing ? "ledger-mark alert" : undefined}>{missing}</td>
                     <td>
-                      {options.length <= 1
+                      {/* A kind with no gap gets no control: there is nothing
+                          to create it AS. With two types and existing sheets
+                          possibly of both, naming one of them here would be a
+                          claim about the column's other rows. */}
+                      {missing === 0
+                        ? <span className="field-hint">—</span>
+                        : options.length <= 1
                         ? <span className="field-hint">{options[0]?.[1] ?? "—"}</span>
                         : (
                           <select aria-label={`Sheet type for ${sheetKindLabel(kind)}`}
@@ -314,9 +321,16 @@ export default function SheetsView() {
             </table>
             </div>
 
-            {missingTotal === 0 && plan.length > 0 && (
-              <p className="field-hint">Every cast member has a sheet.</p>
-            )}
+            <div className="form-actions">
+              <button className="primary" onClick={() => { void createMissing(); }}
+                      disabled={busy || missingTotal === 0}>
+                {busy ? "Creating…"
+                      : `+ Create missing sheets${missingTotal ? ` (${missingTotal})` : ""}`}
+              </button>
+              {missingTotal === 0 && plan.length > 0 && (
+                <span className="field-hint">Every cast member has a sheet.</span>
+              )}
+            </div>
 
             {result && (
               <div className="side-section">

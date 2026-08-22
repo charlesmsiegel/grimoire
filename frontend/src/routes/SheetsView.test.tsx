@@ -149,6 +149,16 @@ test("a kind with more than one sheet type says so until one is chosen", async (
   expect(screen.getByText("2 types — choose one or this kind is skipped."))
     .toBeInTheDocument();
 
+  // The action reads these selects, so it renders beside them rather than in
+  // the shell's pinned footer -- which below 720px is a different view.
+  const overview = screen.getByRole("table").closest(".page-wide");
+  expect(within(overview as HTMLElement)
+    .getByRole("button", { name: /Create missing sheets/ })).toBeInTheDocument();
+  // Ordered by what the reader sees, not by the id behind it
+  expect(within(screen.getByLabelText("Sheet type for Characters"))
+    .getAllByRole("option").map((o) => o.textContent))
+    .toEqual(["Choose…", "Medium", "Shifter"]);
+
   // items has exactly one type, so it needs no choice and offers no select
   expect(screen.queryByLabelText("Sheet type for Items")).not.toBeInTheDocument();
 
@@ -172,14 +182,20 @@ test("a skipped kind is reported, not swallowed", async () => {
     .toBeInTheDocument();
 });
 
-test("nothing missing leaves the bulk button disabled", async () => {
+test("nothing missing leaves the bulk button disabled and offers no choice", async () => {
   (api.getCampaignSheetRoster as any).mockResolvedValue({
-    roster: { items: [row({ id: "moon-disc", name: "Moon Disc", sheeted: true,
-                            sheet_type: "talisman" })] },
+    roster: {
+      // Two sheet types, every member already sheeted: naming one of them
+      // under CREATE AS would be a claim about rows nobody is creating.
+      characters: [row({ id: "mara", name: "Mara", sheeted: true, sheet_type: "medium" })],
+      items: [row({ id: "moon-disc", name: "Moon Disc", sheeted: true,
+                    sheet_type: "talisman" })],
+    },
   });
   renderSheets();
   await screen.findByText("Every cast member has a sheet.");
   expect(screen.getByRole("button", { name: /Create missing sheets/ })).toBeDisabled();
+  expect(screen.queryByLabelText("Sheet type for Characters")).not.toBeInTheDocument();
 });
 
 test("a campaign with no module bound says so instead of an empty cast", async () => {
@@ -190,7 +206,9 @@ test("a campaign with no module bound says so instead of an empty cast", async (
   await screen.findByText(/no sheets to keep/);
   // and the rail says the same thing where the cast would be
   expect(column().getByText("No mechanics bound.")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Create missing sheets/ })).toBeDisabled();
+  // Not a disabled button: with no module there is no cast to sheet and no
+  // table for the action to belong to, so the whole overview is absent.
+  expect(screen.queryByRole("button", { name: /Create missing sheets/ })).toBeNull();
 });
 
 test("creating one sheet in the detail pane refreshes the rail beside it", async () => {

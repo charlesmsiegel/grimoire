@@ -46,6 +46,16 @@ records (greetings, lore, locations, characters, …) is a two-pane editor with 
 read-only detail view and an explicit edit step. Canonical implementations:
 `components/GreetingEditor.tsx` and `components/EntityEditor.tsx`.
 
+**Where the rail goes depends on whether the page owns the screen.** An editor
+that sits *inside* another page — a library section, a world tab, a campaign
+panel — brings its own `.editor-list` rail, as below. A page that IS the screen
+(the ledger, the timeline, `routes/SheetsView.tsx`) already has a rail: the
+274px context column `components/PageShell.tsx` gives it. Put the records in
+`ColumnSection`s there and the detail in main. Building an `.editor` rail
+beside that column is the "second navigation surface" `PageShell`'s own
+docstring calls a misread of the page — the modes, the read-only-by-default
+rule and the explicit edit step are the same either way.
+
 **Structure** — `.editor` containing:
 - `.editor-list` — the rail. A `+ New …` button plus one `.row` button per record
   (its name). The rail is `position: sticky` and `overflow-y: auto`, so it scrolls
