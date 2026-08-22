@@ -13,7 +13,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from grimoire.store import characters, entities, greetings, pcs, taglines, tags, worlds
+from grimoire.store import (
+    characters,
+    entities,
+    greetings,
+    image_descriptions,
+    image_subjects,
+    pcs,
+    taglines,
+    tags,
+    worlds,
+)
 
 # A one-pixel PNG: real binary that must survive verbatim (deflate on an
 # already-compressed asset is exactly what a copy must not corrupt).
@@ -21,9 +31,21 @@ PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
        b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
 
-#: What the seed guarantees exists at the world root. Asserted rather than
-#: assumed: an elided `plotmap.json` would let a whole category pass untested.
-SEEDED_FILES = ("world.md", "plotmap.json", "tags.md", "calendar.json")
+#: What the seed guarantees, relative to the world root. Asserted rather than
+#: assumed: an elided `plotmap.json` would let a whole category pass untested,
+#: and a gallery that silently failed to write would leave every "the copy
+#: carries the assets" test passing against no assets at all.
+SEEDED_FILES = (
+    "world.md", "plotmap.json", "tags.md", "calendar.json",
+    # An entity's own gallery and its prose sidecar (#41 asked for the
+    # entity-with-assets case by name), and the greeting sidecar that holds
+    # ids rather than URLs.
+    "locations/the-drowned-library/assets/default/avatar.png",
+    "locations/the-drowned-library/assets/default/descriptions.json",
+    "greetings/the-gala/assets/default/subjects.json",
+    "characters/seraphine/tagline.md",
+    "characters/seraphine/assets/before-the-flood/embed-old789.png",
+)
 
 
 def seed_world(name: str = "Saltmarch") -> str:
@@ -34,8 +56,24 @@ def seed_world(name: str = "Saltmarch") -> str:
     wid = worlds.create_world(name)
     root = worlds.world_root(wid)
 
-    entities.create_entity(root, "locations", "The Drowned Library")
+    lid = entities.create_entity(root, "locations", "The Drowned Library")
     entities.create_entity(root, "lore", "The Tide Accord")
+    # An ENTITY with assets, named separately from the character and greeting
+    # galleries below: entity kinds get the same per-version folder layout
+    # (`store/assets.py`), and a copy tested only against characters would not
+    # notice losing them. #41 asked for this case by name.
+    place = root / "locations" / lid / "assets" / "default"
+    place.mkdir(parents=True)
+    (place / "avatar.png").write_bytes(PNG)
+    entities.update_entity(
+        root, "locations", lid,
+        body=f"A flooded stack.\n\n![](/api/worlds/{wid}/locations/{lid}/images/avatar)\n")
+    # The description sidecar is the one under `assets/` holding prose an author
+    # wrote, so it is the one that can carry a URL of its own.
+    image_descriptions.set_description(
+        root, lid, "default", "avatar",
+        f"Shelves under water; see /api/worlds/{wid}/locations/{lid}/images/avatar",
+        base="locations")
 
     cid = characters.create_character(root, "Seraphine", "default",
                                       characters.blank_card("Seraphine"))[0]
@@ -67,6 +105,11 @@ def seed_world(name: str = "Saltmarch") -> str:
     gassets = root / "greetings" / gid / "assets" / "default"
     gassets.mkdir(parents=True, exist_ok=True)
     (gassets / "embed-def456.png").write_bytes(PNG)
+
+    # The id-and-offset sidecars the URL rewrite must leave alone: `subjects.json`
+    # holds character ids, never URLs, and the rewrite is a documented no-op on
+    # it -- a claim worth a file to be made against.
+    image_subjects.write_subjects(root, gid, {"embed-def456": [cid]})
 
     pcs.create_pc(root, "Mara", ["player"], "default", pcs.blank_persona("Mara"))
 

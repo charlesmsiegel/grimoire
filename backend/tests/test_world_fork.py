@@ -190,6 +190,43 @@ def test_fork_repoints_localized_urls_onto_the_copy(monkeypatch, tmp_path):
         assert _repointed(body, wid if world == new else new, world)
 
 
+def test_fork_carries_an_entitys_own_gallery_and_repoints_its_sidecar(
+        monkeypatch, tmp_path):
+    """Entity kinds get the same per-version asset folder characters do
+    (`store/assets.py`), so a copy proven only against a character gallery
+    proves nothing about them -- the case #41 asked for by name.
+
+    `descriptions.json` is the sidecar under `assets/` that holds prose an
+    author wrote, so it is the one that can carry a URL of its own, and
+    `repoint_urls` scans it for exactly that reason.
+    """
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    root = worlds.world_root(new)
+    lid = entities.list_entities(root, "locations")[0]["id"]
+
+    gallery = root / "locations" / lid / "assets" / "default"
+    assert (gallery / "avatar.png").read_bytes() == PNG
+    assert _repointed(entities.read_entity(root, "locations", lid)["body"], wid, new)
+    assert _repointed((gallery / "descriptions.json").read_text(encoding="utf-8"), wid, new)
+
+
+def test_fork_leaves_an_id_only_sidecar_byte_identical(monkeypatch, tmp_path):
+    """`subjects.json` holds character ids and no URLs, and `repoint_urls`
+    documents itself as a no-op on it. A no-op is a claim, and this is the file
+    that makes it -- the rewrite is scoped by EXTENSION, so `.json` sidecars are
+    read and must come out unchanged rather than merely unharmed by luck."""
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    rel = "greetings/the-gala/assets/default/subjects.json"
+    before = (worlds.world_root(wid) / rel).read_bytes()
+    assert b"/api/worlds/" not in before                 # the premise of the no-op
+
+    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    assert (worlds.world_root(new) / rel).read_bytes() == before
+
+
 def test_fork_repoints_every_version_not_just_the_default(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = seed_world()
