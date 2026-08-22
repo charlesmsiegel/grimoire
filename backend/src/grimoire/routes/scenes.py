@@ -3515,21 +3515,21 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
     MUST be called inside the campaign-lock hold that covers the writes: read
     outside one, it answers a question that was true a moment ago.
 
-    A scene with NO stored review is where the watermark's reach ends, and what
-    happens there depends on who minted the token:
+    A scene with NO stored review falls through to the epoch check alone, and
+    that is a KNOWN GAP rather than a claim that nothing can go wrong there: one
+    tab discarding a review while another still has it open leaves the second
+    tab holding a token whose watermark no longer exists, and play continuing
+    advances no epoch, so it can commit a summary of posts nobody reviewed.
 
-    * **Server-minted** (`commits.token_epoch` can read an epoch out of it):
-      refused. The record is where that review's watermark lives, so a missing
-      one is not "nothing to check against" but "the only evidence about this
-      save is gone" -- and it goes missing for a reason. One tab discarding a
-      review while another still has it open is the panel doing it, not a
-      hand-made request: play then continues, which advances no epoch, and the
-      old token sails through to commit a summary of posts nobody reviewed over
-      a transcript that has moved.
-    * **Anything else** -- a caller-minted key, an older build's token, no token
-      at all -- falls through, exactly as before. Those were never stamped, so
-      they keep the weaker pre-#271 guarantee rather than being refused for a
-      stamp nobody asked them to carry.
+    It is left open deliberately, because nothing on disk can tell that case
+    apart from the ordinary one. "The token was server-minted" does not do it --
+    `commits.mint` stamps a token for any save that asks, including one for a
+    scene that never had a review at all, so refusing on that reads a fresh
+    hand-made save as a discarded review (`test_routes.py`'s
+    `test_a_caller_minted_token_is_fenced_from_newer_saves_too` is exactly that
+    shape). Closing it needs the discard to leave something behind -- a spent
+    token recorded where the ledger can see it -- which is a durable structure
+    with a lifecycle of its own, not a condition to add here.
 
     A save with **no token at all** falls through too. That is the documented
     opt-out from idempotency (`models.ChronicleSave`), not a claim about any
@@ -3572,16 +3572,8 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
             detail={"kind": "review_unreadable",
                     "detail": "this scene's stored review is unreadable, so this save "
                               "cannot be checked against it — re-run End Scene"}) from exc
-    if not token:
+    if record is None or not token:
         return
-    if record is None:
-        if store.commits.token_epoch(token) is None:
-            return
-        raise HTTPException(
-            status_code=409,
-            detail={"kind": "review_discarded",
-                    "detail": "this scene's review is no longer stored, so this save "
-                              "cannot be checked against it — re-run End Scene"})
     if record["review"].get("commit_token") != token:
         raise HTTPException(
             status_code=409,
