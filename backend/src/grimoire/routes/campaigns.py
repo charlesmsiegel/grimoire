@@ -781,8 +781,11 @@ def get_campaign_routing(cid: str):
 
 @router.put("/campaigns/{cid}/routing")
 def put_campaign_routing(cid: str, body: RoutingUpdate):
-    fields = _routing_fields("campaign", body)
+    # The campaign first: a 400 about which routes this scope may set is an
+    # answer about a campaign, and answering it for one that does not exist
+    # tells the caller the wrong thing about their request.
     _campaign_meta_or_404(cid)
+    fields = _routing_fields("campaign", body)
     try:
         store.campaigns.set_campaign_routing(cid, fields)
     except store.campaigns.CampaignNotFound as exc:
