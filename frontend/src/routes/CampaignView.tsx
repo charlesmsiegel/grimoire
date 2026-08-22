@@ -3443,23 +3443,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // it, and prevents the default, so this cannot send the same keystroke
       // twice.)
       whileTyping: true,
-      // ...and off while an inline action owns Enter. The reroll box, the dice
-      // inputs and the scene-rename box all answer Enter without preventing
-      // the default and without looking at modifiers, so a send chord typed
-      // into one reached both -- their handler AND `send()` from here, each
-      // reading the same render's `busy` (or `renamesInFlight`) as clear, each
-      // going ahead. Two turns racing one scene, or a send racing the rename
-      // that counter exists to stop (PR #400 review). Guarded here rather than
-      // by teaching four inline handlers about modifiers: while one of them is
-      // open it owns the keyboard.
-      //
-      // An open EDIT form is deliberately not on this list. That textarea
-      // answers no key at all, so there is nothing to double-fire, and
-      // refusing the chord there would make it stricter than the Send button
-      // beside it -- which is the fault this same review found twice in my
-      // Escape guards.
-      enabled: !absorb && !busy && !rolling && !renamesInFlight
-               && rerollPrompt === null && !rollForm && !renamingScene,
+      // Nothing here about which popover is open, and that is the point. An
+      // inline Enter handler that answers the key now PREVENTS it (the reroll
+      // box, both dice inputs, both rename boxes), which is the signal the
+      // dispatcher has always read, so a chord typed into one of them never
+      // reaches this. A list of open widgets here would have to be extended by
+      // whoever adds the next inline handler -- and would silently go back to
+      // double-firing when they didn't (PR #400 review).
+      enabled: !absorb && !busy && !rolling && !renamesInFlight,
       run: () => void send(),
     },
     {
@@ -3538,7 +3529,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                    value={renamingScene.title}
                    onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
                    onKeyDown={(e) => {
-                     if (e.key === "Enter") commitSceneRename();
+                     // See the reroll box: an inline Enter is claimed, not shared.
+                     if (e.key === "Enter") { e.preventDefault(); commitSceneRename(); }
                      if (e.key === "Escape") setRenamingScene(null);
                    }} />
           ) : (
@@ -3776,7 +3768,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   value={renamingScene.title}
                   onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") commitSceneRename();
+                    // See the reroll box: an inline Enter is claimed, not shared.
+                    if (e.key === "Enter") { e.preventDefault(); commitSceneRename(); }
                     if (e.key === "Escape") setRenamingScene(null);
                   }}
                 />
@@ -3953,7 +3946,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                                 // Escape that is closing its own dropdown, so
                                 // that one does not reach here.
                                 if (e.key === "Escape") setRerollPrompt(null);
-                                if (e.key === "Enter") reroll();
+                                // `preventDefault` is what tells the shortcut
+                                // dispatcher this keystroke is spoken for: ⌘⏎
+                                // typed here means "reroll", not "send", and
+                                // without it both fired (PR #400 review).
+                                if (e.key === "Enter") { e.preventDefault(); reroll(); }
                               }}>
                           {/* Above the guidance, not beside it: this is where
                               the reroll goes, and the hint is what it says once
@@ -4228,7 +4225,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   disabled={rolling}
                   onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") doRoll();
+                    // See the reroll box: an inline Enter is claimed, not shared.
+                    if (e.key === "Enter") { e.preventDefault(); doRoll(); }
                     if (e.key === "Escape") setRollForm(null);
                   }}
                 />
@@ -4239,7 +4237,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   disabled={rolling}
                   onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") doRoll();
+                    // See the reroll box: an inline Enter is claimed, not shared.
+                    if (e.key === "Enter") { e.preventDefault(); doRoll(); }
                     if (e.key === "Escape") setRollForm(null);
                   }}
                 />
