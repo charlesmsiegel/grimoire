@@ -155,6 +155,20 @@ test("a refused write shows the reason and restores what the store actually has"
   expect(screen.getByLabelText<HTMLSelectElement>("Scene turns").value).toBe("");
 });
 
+test("the refusal survives the recovery read, and a later success clears it", async () => {
+  // Both halves are one rule about ordering. The failed write re-reads to put
+  // the row back, and that read must not wipe the message explaining why --
+  // but the banner must not outlive the condition either.
+  vi.mocked(api.setGlobalRouting).mockRejectedValueOnce(new ApiError(400, "nope"));
+  render(<ModelRoutingPicker scope="global" />);
+  fireEvent.change(await screen.findByLabelText("Scene turns"), { target: { value: "big" } });
+  expect(await screen.findByText("nope")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText("Scene turns"), { target: { value: "cheap" } });
+
+  await waitFor(() => expect(screen.queryByText("nope")).not.toBeInTheDocument());
+});
+
 test("a route naming a connection the list does not have still shows as set", async () => {
   vi.mocked(api.getGlobalRouting).mockResolvedValue(bundle({
     routes: { scene: "since-deleted", dossier: "" },
