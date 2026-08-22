@@ -217,6 +217,60 @@ def test_a_cancelled_call_is_not_an_error(home):
     assert errors.summary(30)["total"] == 0
 
 
+# ---- one exception, one row ----
+def test_a_provider_failure_the_meter_recorded_is_not_recorded_again(home):
+    """The normal shape: the meter writes the row, and the call site around it
+    catches the same exception to turn it into a phase status. A call site that
+    recorded too would double every provider failure in the per-kind counts."""
+    from grimoire.llm_errors import LLMError
+
+    caught = None
+    try:
+        with usage.meter("dossier", campaign="saltmarch") as m:
+            m.usage.update({"model": "realm/opus"})
+            raise LLMError("rate_limit", "429 Too Many Requests")
+    except LLMError as exc:
+        caught = exc
+        assert errors.record_exception(exc, "dossier", campaign="saltmarch") is None
+
+    assert caught is not None
+    assert errors.summary(30)["total"] == 1
+
+
+def test_a_failure_the_meter_never_saw_is_recorded_by_the_call_site(home):
+    """#156's actual complaint, and the half the meter cannot cover: an
+    unreadable character file or a dossier that would not parse never reaches
+    a provider, so nothing else in the app writes it down."""
+    exc = ValueError("could not parse the dossier")
+
+    row = errors.record_exception(exc, "dossier", campaign="saltmarch", scene="001-arrival")
+
+    assert row is not None
+    out = errors.summary(30)
+    assert out["total"] == 1
+    assert out["modules"][0]["module"] == "dossier"
+    assert out["kinds"] == [{"kind": "ValueError", "count": 1}]
+
+
+def test_recording_the_same_exception_twice_writes_one_row(home):
+    exc = ValueError("boom")
+
+    errors.record_exception(exc, "dossier")
+    errors.record_exception(exc, "absorb")
+
+    assert errors.summary(30)["total"] == 1
+
+
+def test_an_exception_that_cannot_be_marked_still_gets_recorded(home):
+    """`__slots__` makes the mark impossible. Recording twice is a worse
+    answer than not recording at all, so the mark is best-effort and the row
+    is not."""
+    class SlottedError(Exception):
+        __slots__ = ()
+
+    assert errors.record_exception(SlottedError("no room"), "dossier") is not None
+
+
 def test_a_successful_call_records_no_error(home):
     with usage.meter("chat") as m:
         m.usage.update({"model": "realm/opus", "prompt_tokens": 5})

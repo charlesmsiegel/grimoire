@@ -1717,6 +1717,14 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             drop_tail(i)
             break
         except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
+            # Recorded here as well as reported, and `record_exception` is what
+            # makes that safe: a provider failure has already been written down
+            # by the meter above and is marked, so this call leaves it alone,
+            # while the failures the meter never saw -- an unreadable character
+            # file, a dossier that would not parse -- are #156's "fails with
+            # zero trace anywhere" and get their row here.
+            store.errors.record_exception(exc, "dossier", campaign=cid, scene=sid,
+                                          task="dossier")
             # Type-prefixed: a bare str() is useless for the store's own errors
             # (CharacterNotFound("aese") stringifies to just "aese").
             detail = str(exc).strip()

@@ -36,6 +36,8 @@ class name.
 
 from __future__ import annotations
 
+import contextlib
+
 from . import logs
 
 #: Rows one read hands back. Errors are rare, and a page of the most recent
@@ -64,6 +66,51 @@ def record(module: str, kind: str, detail: str, *, campaign: str = "",
     """
     return logs.record("error", module, detail or kind, kind=kind, campaign=campaign,
                        scene=scene, task=task, trace=trace)
+
+
+#: Marks an exception object as already recorded. An attribute on the
+#: exception rather than a set of ids, because the exception IS the identity
+#: and a set would either leak or need a lifetime nobody can define.
+_RECORDED = "_grimoire_error_recorded"
+
+
+def record_exception(exc: BaseException, module: str, *, detail: str = "",
+                     campaign: str = "", scene: str = "", task: str = "") -> dict | None:
+    """Record ``exc`` once, however many handlers see it.
+
+    One exception passing two recorders is the normal shape here, not an
+    exotic one: `usage.Meter` records every LLM failure at the one choke point
+    that sees them all, and the call site around it then catches the same
+    exception to turn it into a phase status -- and a call site that also
+    recorded would double every provider failure in the per-kind counts.
+    Equally, a call site that recorded nothing (to avoid that) leaves the
+    failures the meter never saw -- an unreadable character file, a parse
+    error -- with no trace at all, which is #156's original complaint.
+
+    So the mark travels on the exception. Both recorders call this; the first
+    one writes the row.
+
+    ``kind`` comes from `LLMError.kind` when there is one and from the class
+    name otherwise, which is the same rule `Meter` applies -- a non-LLM
+    failure has no kind but the name of what went wrong.
+    """
+    if getattr(exc, _RECORDED, False):
+        return None
+    row = record(module, getattr(exc, "kind", None) or type(exc).__name__,
+                 detail or str(exc).strip(), campaign=campaign, scene=scene, task=task)
+    with contextlib.suppress(AttributeError):
+        # An exception with `__slots__` cannot carry the mark. Best-effort on
+        # purpose: recording twice is a worse answer than not recording at all.
+        setattr(exc, _RECORDED, True)
+    return row
+
+
+def mark_recorded(exc: BaseException) -> None:
+    """Say that ``exc`` has already been written down, so an outer handler
+    calling `record_exception` leaves it alone. `usage.Meter` uses this: it
+    records through the ledger's own path, not through `record_exception`."""
+    with contextlib.suppress(AttributeError):     # `__slots__`; see `record_exception`
+        setattr(exc, _RECORDED, True)
 
 
 def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
