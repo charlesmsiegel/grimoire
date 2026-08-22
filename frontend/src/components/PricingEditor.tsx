@@ -120,12 +120,29 @@ function duplicates(rows: Row[]): Set<string> {
   return twice;
 }
 
+function typed(row: Row, key: string): boolean {
+  const raw = (row.rates[key] ?? "").trim();
+  return raw !== "" && Number.isFinite(Number(raw)) && Number(raw) >= 0;
+}
+
 /** Whether this row will survive a save. Both base rates, per `toTable`. */
 function complete(row: Row): boolean {
-  return ["prompt_usd_per_1k", "completion_usd_per_1k"].every((key) => {
-    const value = Number((row.rates[key] ?? "").trim());
-    return (row.rates[key] ?? "").trim() !== "" && Number.isFinite(value) && value >= 0;
-  });
+  return ["prompt_usd_per_1k", "completion_usd_per_1k"].every((k) => typed(row, k));
+}
+
+/** A row somebody has started filling in. Anything typed counts — the point is
+ *  to tell "I have not touched this yet" from "I filled this in and it is
+ *  about to be thrown away". */
+function started(row: Row): boolean {
+  return row.isDefault || row.id.trim() !== ""
+    || Object.keys(row.rates).some((k) => typed(row, k));
+}
+
+/** A row that has been filled in but never named. `toTable` drops it — an
+ *  unnamed row must not become the catch-all — and without this it did so
+ *  silently, under a "Rates saved" that discarded everything typed into it. */
+function unnamed(row: Row): boolean {
+  return !row.isDefault && row.id.trim() === "" && started(row);
 }
 
 /** The same rate as providers publish it. Every price sheet quotes dollars per
@@ -194,6 +211,7 @@ export function PricingEditor() {
   }
 
   const clashes = rows === null ? new Set<string>() : duplicates(rows);
+  const nameless = (rows ?? []).some(unnamed);
 
   if (rows === null) return <p className="field-hint">Reading rates…</p>;
 
@@ -245,6 +263,12 @@ export function PricingEditor() {
               ✕
             </button>
           </div>
+          {unnamed(row) && (
+            <div className="field-hint error">
+              This row needs a model id — give it one, or remove it. Saving as
+              it stands would throw away what you have typed here.
+            </div>
+          )}
           {clashes.has(keyOf(row)) && (
             <div className="field-hint error">
               Two rows claim this model. Saving would keep only one of them —
@@ -301,10 +325,12 @@ export function PricingEditor() {
         {/* `void`: an async handler returns a promise, and a click handler
             that returns one is a floating promise nothing awaits. */}
         <button className="primary" onClick={() => void save()}
-                disabled={busy || clashes.size > 0}
+                disabled={busy || clashes.size > 0 || nameless}
                 title={clashes.size > 0
                   ? "Two rows claim the same model; saving would drop one"
-                  : undefined}>
+                  : nameless
+                    ? "A row has rates but no model id; saving would drop it"
+                    : undefined}>
           Save rates
         </button>
       </div>

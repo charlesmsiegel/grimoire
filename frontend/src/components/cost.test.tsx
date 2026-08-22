@@ -149,6 +149,21 @@ test("a post answered once says nothing about rerolls", () => {
   expect(screen.queryByText(/reroll/)).not.toBeInTheDocument();
 });
 
+test("a post whose rerolls mixed both estimate kinds still gets a chip", () => {
+  // `bucketPrice` answers UNPRICED there so no merged headline is printed, but
+  // the ledger priced every one of these generations — hiding the chip would
+  // drop the post entirely, reroll count and all.
+  render(<PostCost bucket={{ ...ZERO, post: 0, rerolls: 1, calls: 2,
+                             priced_calls: 1, subscription_calls: 1,
+                             estimated_usd: 0.5, modelled_calls: 1,
+                             modelled_usd: 0.25 }} />);
+
+  expect(screen.getByText(/≈ \$0\.50 \+ ≈ \$0\.25/)).toBeInTheDocument();
+  expect(screen.getByText(/1 reroll/)).toBeInTheDocument();
+  // Side by side, never summed: $0.75 reconciles to neither column.
+  expect(screen.queryByText(/\$0\.75/)).toBeNull();
+});
+
 test("a post nothing could price shows no chip rather than an empty one", () => {
   // What is worth interrupting a transcript for is a cost. The absence of one
   // is the inspector's business, not a badge on every post in the scene.

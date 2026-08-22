@@ -301,3 +301,32 @@ def test_a_rate_that_overflows_a_real_token_count_answers_nothing(home):
     # magnitude of the input.
     assert pricing.estimate({"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0},
                             prompt_tokens=5000, completion_tokens=5000) is not None
+
+
+def test_a_strict_read_refuses_a_table_it_had_to_shorten(home):
+    """The editor saves by whole-table replacement, so a form filled in from a
+    shortened read deletes what did not survive the read — permanently, under a
+    successful save. One hand-edited rate with a missing half triggers it."""
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": 0.003},          # half an entry
+                  "": {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}})
+
+    assert list(pricing.read_pricing()) == [""], "a rollup still draws"
+    with pytest.raises(pricing.PricingUnreadableError):
+        pricing.read_pricing(strict=True)
+
+
+def test_a_strict_read_refuses_a_table_past_the_cap(home):
+    _write(home, {f"m{n}": {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}
+                  for n in range(pricing.MAX_ENTRIES + 5)})
+
+    assert len(pricing.read_pricing()) == pricing.MAX_ENTRIES
+    with pytest.raises(pricing.PricingUnreadableError):
+        pricing.read_pricing(strict=True)
+
+
+def test_a_table_that_survives_whole_is_not_reported_lossy(home):
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": 0.003,
+                                 "completion_usd_per_1k": 0.015}})
+
+    assert pricing.read_pricing(strict=True) == {
+        "realm/opus": {"prompt_usd_per_1k": 0.003, "completion_usd_per_1k": 0.015}}

@@ -178,12 +178,26 @@ def read_pricing(strict: bool = False) -> dict[str, dict]:
             raise PricingUnreadableError("pricing.json is not an object")
         return {}
     table: dict[str, dict] = {}
+    lost = 0
     for key, value in data.items():
         if not isinstance(key, str) or len(table) >= MAX_ENTRIES:
+            lost += 1
             continue
         entry = _entry(value)
         if entry is not None:
             table[key] = entry
+        else:
+            lost += 1
+    # Dropping an entry is fine for a rollup -- that model reads "unpriced"
+    # again, which is what it read before anyone typed a rate. It is NOT fine
+    # for the editor: it saves by whole-table replacement, so a form filled in
+    # from a shortened read deletes every entry that did not survive the read,
+    # permanently, and reports a successful save. One hand-edited rate with a
+    # missing half is enough to trigger it. Strict callers get the refusal.
+    if lost and strict:
+        raise PricingUnreadableError(
+            f"{lost} entr{'y' if lost == 1 else 'ies'} in pricing.json could not be "
+            f"read; refusing to hand back a table that is missing them")
     return table
 
 
