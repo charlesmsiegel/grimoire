@@ -1,4 +1,5 @@
 import shutil
+import threading
 
 import pytest
 
@@ -8,6 +9,7 @@ from grimoire.store import (
     campaigns,
     characters,
     dossiers,
+    locks,
     overlay,
     pcs,
     scenes,
@@ -596,12 +598,12 @@ def test_actor_source_stays_emergent_when_the_world_later_takes_the_slug(monkeyp
     the same position a spared copy is in once its world original is deleted.
     Reading her as that stranger's, diverged, is the exact mistake `detached`
     exists to prevent, arrived at from the other direction."""
-    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    wid, cid = _world_with_char(monkeypatch, tmp_path)
     aid, vid = overlay.create_character(cid, "Winifred")
     ap.appear(cid, "s1", "characters", aid, vid, "npc")
     assert ap.actor_source(cid, "characters", aid) == "emergent"
 
-    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    wroot = worlds.world_root(wid)
     stranger, _ = characters.create_character(
         wroot, "Winifred", "default",
         {"data": {"name": "Winifred", "description": "someone else entirely"}})
@@ -613,9 +615,9 @@ def test_a_campaign_made_actor_takes_nothing_from_the_slugs_later_owner(monkeypa
     """The half of the same bug that has nothing to do with badges: a campaign
     character invented before the world had that slug used to inherit the
     stranger's avatar and tagline the moment the world claimed it."""
-    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    wid, cid = _world_with_char(monkeypatch, tmp_path)
     aid, vid = overlay.create_character(cid, "Winifred")
-    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    wroot = worlds.world_root(wid)
     characters.create_character(wroot, "Winifred", "default",
                                 {"data": {"name": "Winifred", "description": "someone else"}})
     assets.put_image(wroot, aid, "default", "avatar", b"\x89PNG\r\n\x1a\nx", "png")
@@ -625,10 +627,73 @@ def test_a_campaign_made_actor_takes_nothing_from_the_slugs_later_owner(monkeypa
 
 
 def test_a_campaign_made_pc_is_its_own_from_birth(monkeypatch, tmp_path):
-    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    wid, cid = _world_with_char(monkeypatch, tmp_path)
     pid, vid = overlay.create_pc(cid, "Mara", [])
     ap.appear(cid, "s1", "pcs", pid, vid, "player")
-    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    wroot = worlds.world_root(wid)
     stranger, _ = pcs.create_pc(wroot, "Mara", [])
     assert stranger == pid
     assert ap.actor_source(cid, "pcs", pid) == "emergent"
+
+
+def test_an_unmarked_campaign_actor_still_reads_emergent(monkeypatch, tmp_path):
+    """Campaigns written before actors were marked at birth have no marker, and
+    `_mark_campaign_owned` says in as many words that they still read correctly
+    -- so the fallback that makes that true gets a test rather than a promise.
+
+    Simulated by clearing `detached.json` after the create, which is exactly the
+    state such a store is in."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    aid, vid = overlay.create_character(cid, "Winifred")
+    ap.appear(cid, "s1", "characters", aid, vid, "npc")
+    (campaigns.campaign_root(cid) / "detached.json").write_text("[]", encoding="utf-8")
+    assert overlay.detached(cid) == set()
+    assert ap.actor_source(cid, "characters", aid) == "emergent"
+
+
+def test_a_campaign_made_pc_takes_nothing_from_the_slugs_later_owner(monkeypatch, tmp_path):
+    """The PC half of the same bleed. Worth its own pass rather than trusting
+    the character one: the image resolver keys its detached check on the ASSET
+    BASE (`pcs.ASSET_BASE`) while the marker is written under the actor KIND,
+    and those two agreeing is a coincidence of spelling, not a shared name."""
+    wid, cid = _world_with_char(monkeypatch, tmp_path)
+    pid, vid = overlay.create_pc(cid, "Mara", [])
+    wroot = worlds.world_root(wid)
+    stranger, _ = pcs.create_pc(wroot, "Mara", [])
+    assert stranger == pid
+    assets.put_image(wroot, pid, vid, "avatar", b"\x89PNG\r\n\x1a\nx", "png", pcs.ASSET_BASE)
+    assert overlay.list_images(cid, pid, vid, pcs.ASSET_BASE) == []
+
+
+def test_creating_a_campaign_actor_takes_the_campaign_lock(monkeypatch, tmp_path):
+    """`_mark_campaign_owned` claims its callers hold the lock, and the claim is
+    the whole reason "after the create" is a window rather than a race:
+    `add_detached` is an unserialized read-modify-replace, so two unlocked
+    creates would drop one of the two markers (Codex review).
+
+    Driven from a second thread, since the lock is reentrant and a same-thread
+    acquire would sail straight through the thing being tested."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    try:
+        assert held.wait(10), "holder thread never took the lock"
+        with pytest.raises(locks.CampaignBusy):
+            overlay.create_character(cid, "Winifred")
+        with pytest.raises(locks.CampaignBusy):
+            overlay.create_pc(cid, "Mara", [])
+    finally:
+        release.set()
+        t.join(10)
+
+    # and the hold is released, so the ordinary path still works afterwards
+    aid, _vid = overlay.create_character(cid, "Winifred")
+    assert f"characters/{aid}" in overlay.detached(cid)

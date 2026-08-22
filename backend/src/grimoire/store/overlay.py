@@ -14,10 +14,12 @@ the world live. Rules:
 - sync.md holds base hashes for materialized records only. Tombstones live in
   <campaign>/deleted.json (a sorted JSON list of refs); a tombstoned id counts
   as taken for uniquify, so nothing ever resurrects under a reused id.
-- <campaign>/detached.json (same shape) holds the third state: a campaign copy
-  whose world original was DELETED, so it shares only a slug with whatever
-  claims that id next. Records, sidecars and assets all stop resolving through
-  for it -- see `detached()`.
+- <campaign>/detached.json (same shape) holds the third state: a record that
+  shares only a slug with whatever the world files under that id. Two ways in,
+  and they are the same fact from either end -- the campaign copy whose world
+  original was DELETED, and the record the campaign CREATED for itself, whose
+  id named nothing in the world when it was allocated. Records, sidecars and
+  assets all stop resolving through for it -- see `detached()`.
 
 Which records inherit, and which do not, is the whole content of the rule, so
 it is declared below as data (INHERITED_KINDS / INHERITED_FILES) rather than
@@ -152,11 +154,17 @@ def detached(cid: str) -> set[str]:
 
     The third state a record can be in here, after "campaign copy" and
     "tombstone". A tombstone says *absent*; this says **mine, and nothing filed
-    under that id in the world applies to it** — which is what a campaign copy
-    becomes when the world record it was copied from is deleted. The id is then
-    free, and the next world record to claim it is a stranger that would
-    otherwise supply this campaign's record with its sync updates, its avatar,
-    its tagline and its voice anchor, all by coincidence of slug (#225).
+    under that id in the world applies to it**. The id is free, and the next
+    world record to claim it is a stranger that would otherwise supply this
+    campaign's record with its sync updates, its avatar, its tagline and its
+    voice anchor, all by coincidence of slug (#225).
+
+    A record arrives here two ways, and they are one fact read from either end:
+    the copy whose world original was **deleted** (`forget_world_record`), and
+    the record the campaign **created** for itself, whose id named nothing in
+    the world when `uniquify` allocated it (`_mark_campaign_owned`). Neither
+    has a world record behind it; both would otherwise adopt the next one to
+    take the slug.
 
     Detaching is one-way and per record: the campaign copy already exists, so
     there is nothing to fall through *to* that could be right.
@@ -810,32 +818,66 @@ def _mark_campaign_owned(cid: str, kind: str, aid: str) -> None:
     content, the one direction a user cannot spot by looking, which is the
     argument `detached` itself makes. Crashing between the two leaves an
     unmarked campaign actor: what every one of them was until now.
+
+    Callers hold `campaign_lock` across both halves, which is what makes "after
+    the create" a window rather than a race. `add_detached` is an unserialized
+    read-modify-replace, so two concurrent creates in one campaign would each
+    read the same ledger and the later write would drop the earlier marker --
+    silently un-fixing one actor (Codex review). The lock also closes the older
+    hazard underneath it: `uniquify` allocates against the filesystem, so those
+    same two creates could hand out one id twice.
+
+    Which is the boundary: this marks actors created from here on, and there is
+    deliberately no startup backfill for the ones already on disk. The rule a
+    backfill would need -- "the world has no actor under this id, so detach" --
+    cannot tell a campaign-created actor from a store whose `worlds/` has not
+    finished syncing, and `store.home()` is pointed at a synced folder on
+    purpose (CLAUDE.md). Detaching is one-way, so guessing wrong there would
+    permanently cut a campaign off from its own library to pre-empt a
+    collision that needs the user to name a world character after one their
+    campaign invented. `appearances.actor_source` still reads an unmarked
+    campaign actor correctly until such a collision, through the world-side
+    existence check it keeps as a fallback for exactly this data.
+
+    One consequence to carry forward: promoting a campaign-made character into
+    the library (#60) now has to CLEAR this marker as well as advance the sync
+    base. A promoted character does have a world record behind her, and leaving
+    her detached would cut her off from the very library she was just added to.
     """
     add_detached(cid, _flat_ref(kind, aid))
 
 
 def create_character(cid: str, name: str, version_name: str = "default",
                      card: dict | None = None) -> tuple[str, str]:
-    wroot, gone = wroot_of(cid), deleted(cid)
+    """Create a character this campaign owns. UNDER `campaign_lock` -- see
+    `_mark_campaign_owned`, and `set_description` above for why new code in
+    this module takes it rather than riding `locks.UNREVIEWED`."""
+    with locks.campaign_lock(cid):
+        # Inside the hold, all of it: the id is allocated against what `taken`
+        # sees, so reading the world dir and the tombstones outside the lock
+        # would be the same check-then-act the lock is here to close.
+        wroot, gone = wroot_of(cid), deleted(cid)
 
-    def taken(aid: str) -> bool:
-        return ((wroot / "characters" / aid).is_dir()
-                or _flat_ref("characters", aid) in gone)
+        def taken(aid: str) -> bool:
+            return ((wroot / "characters" / aid).is_dir()
+                    or _flat_ref("characters", aid) in gone)
 
-    made = characters.create_character(croot_of(cid), name, version_name, card, taken=taken)
-    _mark_campaign_owned(cid, "characters", made[0])
+        made = characters.create_character(croot_of(cid), name, version_name, card, taken=taken)
+        _mark_campaign_owned(cid, "characters", made[0])
     return made
 
 
 def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default",
               persona: dict | None = None) -> tuple[str, str]:
-    wroot, gone = wroot_of(cid), deleted(cid)
+    """The PC counterpart of `create_character`, lock and all."""
+    with locks.campaign_lock(cid):
+        wroot, gone = wroot_of(cid), deleted(cid)
 
-    def taken(pid: str) -> bool:
-        return (wroot / "pcs" / pid).is_dir() or _flat_ref("pcs", pid) in gone
+        def taken(pid: str) -> bool:
+            return (wroot / "pcs" / pid).is_dir() or _flat_ref("pcs", pid) in gone
 
-    made = pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
-    _mark_campaign_owned(cid, "pcs", made[0])
+        made = pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
+        _mark_campaign_owned(cid, "pcs", made[0])
     return made
 
 
