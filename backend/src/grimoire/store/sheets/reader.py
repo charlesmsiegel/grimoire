@@ -19,7 +19,17 @@ from . import paths, schema
 from .paths import FILE_KINDS
 
 
-def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
+def _read_path(path: Path, file_kind: str, mid: str | None,
+               pack: dict | None = None) -> dict | None:
+    """``pack`` is the caller's already-loaded pack for ``mid``, for a sweep
+    reading many sheets against one module.
+
+    Not an optimization looking for a problem: ``load_pack`` re-reads and
+    re-validates the whole pack from disk every call with no memo, and
+    ``read`` below pays for TWO of them per sheet -- one here and one inside
+    ``modules_binding.resolve``. Per cast member, that is what a coverage sweep
+    over a few hundred characters costs. Passing a pack that is not ``mid``'s
+    is the caller's bug; every caller here loads it two lines earlier."""
     if not path.exists():
         return None
     try:
@@ -35,7 +45,8 @@ def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
     if mid is None:
         return {"sheet_type": sheet_type, "fields": fields, "derived": {},
                 "gen": data.get("gen"), "errors": ["no module resolved"]}
-    pack = modules_pack.load_pack(mid)
+    if pack is None:
+        pack = modules_pack.load_pack(mid)
     errors = schema.instance_errors(pack, file_kind, sheet_type, fields)
     derived: dict = {}
     if isinstance(sheet_type, str):
