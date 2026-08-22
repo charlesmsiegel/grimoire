@@ -1670,8 +1670,10 @@ export const api = {
       ...(opts.limit ? { limit: String(opts.limit) } : {}),
     })), undefined, { fresh: true }),
   getLogs: (opts: { level?: LogLevel; module?: string; q?: string; campaign?: string;
-                    since?: string; until?: string; limit?: number } = {}) =>
+                    since?: string; until?: string; days?: number;
+                    limit?: number } = {}) =>
     request<LogPage>("GET", "/api/logs?" + String(new URLSearchParams({
+      ...(opts.days ? { days: String(opts.days) } : {}),
       ...(opts.level ? { level: opts.level } : {}),
       ...(opts.module ? { module: opts.module } : {}),
       ...(opts.q ? { q: opts.q } : {}),

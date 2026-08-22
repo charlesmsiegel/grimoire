@@ -511,15 +511,25 @@ def _span(since: object, until: object, days: int) -> tuple[str, str]:
     ``since`` is ``days`` back from it. A reversed pair is read rather than
     refused -- this backs a date control, and swapping two fields should draw
     the window, not a 422.
+
+    Never wider than `MAX_DAYS`, however it was asked for. The bound is on the
+    query rather than on trust: this is one HTTP request doing unbounded file
+    reads otherwise, and a date typed into a field is as able to ask for the
+    whole history as an absent one was.
     """
     end = _valid_day(until) or time.strftime("%Y-%m-%d", time.gmtime())
     start = _valid_day(since)
-    if not start:
-        span = max(1, min(int(days or DEFAULT_DAYS), MAX_DAYS))
-        start = (date.fromisoformat(end) - timedelta(days=span - 1)).isoformat()
-    if start > end:
+    if start and start > end:
         start, end = end, start
-    return start, end
+    span = max(1, min(int(days or DEFAULT_DAYS), MAX_DAYS))
+    floor_day = (date.fromisoformat(end) - timedelta(days=MAX_DAYS - 1)).isoformat()
+    if not start:
+        start = (date.fromisoformat(end) - timedelta(days=span - 1)).isoformat()
+    # The ceiling applies to a NAMED `since` as well. Clamping only the derived
+    # one left `?since=1970-01-01` reading every month file the install ever
+    # wrote -- exactly the unbounded scan `DEFAULT_DAYS` was added to remove,
+    # reachable by typing a date.
+    return max(start, floor_day), end
 
 
 def _window_files(since: str, until: str) -> list[Path]:
@@ -606,9 +616,14 @@ def read(*, level: str = "debug", module: str = "", since: str = "", until: str 
     newest = Newest(cap)
     for path in _window_files(since, until):
         for row in _lines(path):
+            # `modules` is collected WITHOUT the module filter applied, so the
+            # dropdown a reader picked a module from still offers the others.
+            # Narrowing it to the selection is a control that removes every way
+            # back out of itself -- the same bug the errors view had.
+            if _matches(row, floor, "", since, until, contains, campaign):
+                modules.add(str(row.get("module", "")))
             if not _matches(row, floor, module, since, until, contains, campaign):
                 continue
-            modules.add(str(row.get("module", "")))
             counts[level_name(row.get("level"))] += 1
             newest.offer(row)
     return {"rows": newest.rows(), "modules": sorted(m for m in modules if m),
@@ -848,9 +863,15 @@ def _read_from(path: Path, offset: int,
                 end = data.rfind(b"\n")
     except OSError:
         return [], offset, 0, False
-    filled = len(data) >= budget
     if end < 0:
-        return [], offset, 0, filled     # nothing complete yet
+        # `filled=False` even when the read took its whole budget. A line with
+        # no newline anywhere in it -- an unterminated row at EOF longer than
+        # the budget, which the `readline` above could not finish either --
+        # yields no row and never will until more bytes land. Saying "more is
+        # waiting" here is what makes the caller poll again with no sleep, and
+        # the cursor cannot advance, so it would spin on those bytes forever.
+        return [], offset, 0, False
+    filled = len(data) >= budget
     whole = data[:end + 1]
     out = []
     for chunk in whole.decode("utf-8", errors="replace").splitlines():

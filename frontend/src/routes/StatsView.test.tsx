@@ -214,6 +214,41 @@ it("reads the log only once its section is opened", async () => {
   expect(await screen.findByText("started a turn")).toBeInTheDocument();
 });
 
+it("applies the page's Window control to the log too", async () => {
+  // The footer said "Last 90 days" while the log read thirty, and the rail
+  // printed that thirty-day total beside it.
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await waitFor(() => expect(api.getLogs).toHaveBeenLastCalledWith(
+    expect.objectContaining({ days: 30 })));
+
+  fireEvent.change(screen.getByLabelText("How many days to report on"),
+                   { target: { value: "90" } });
+
+  await waitFor(() => expect(api.getLogs).toHaveBeenLastCalledWith(
+    expect.objectContaining({ days: 90 })));
+});
+
+it("counts the whole window in the rail, never the module filter", async () => {
+  // A rail row labelled just "Errors" showing one module's total is a number
+  // that does not say what it is counting.
+  vi.mocked(api.getErrorSummary).mockResolvedValue(
+    { ...ERRORS, total: 2, modules: [ERRORS.modules[0]] } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  await screen.findByText("By module");
+
+  fireEvent.change(screen.getByLabelText("Module to report on"),
+                   { target: { value: "dossier" } });
+
+  await waitFor(() => expect(api.getErrorSummary).toHaveBeenLastCalledWith(
+    30, { module: "dossier" }));
+  // 3 is the window's total from /stats; 2 is the filtered read.
+  expect(screen.getByRole("button", { name: /Errors/ })).toHaveTextContent("3");
+});
+
 it("builds its filter dropdowns from the window, not from the page", async () => {
   view();
   await screen.findByRole("heading", { name: "Performance" });

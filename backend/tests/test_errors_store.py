@@ -271,6 +271,55 @@ def test_an_exception_that_cannot_be_marked_still_gets_recorded(home):
     assert errors.record_exception(SlottedError("no room"), "dossier") is not None
 
 
+def test_work_that_was_deliberately_not_done_is_not_a_failure(home):
+    """`BudgetRefused` means the call was NEVER ISSUED, and it is an `LLMError`
+    subclass carrying `kind="timeout"` -- indistinguishable, to anything that
+    only looks, from a provider that really did time out. `Abandoned` means the
+    person waiting closed the review. Neither belongs in the error store, and
+    the budget one would be the worst possible false positive."""
+    from grimoire.routes.scenes import Abandoned, BudgetRefused
+
+    for exc in (BudgetRefused("timeout", "no time left"), Abandoned()):
+        with pytest.raises(type(exc)), usage.meter("dossier", campaign="saltmarch") as m:
+            m.usage.update({"model": "realm/opus"})
+            raise exc
+
+    assert errors.summary(30)["total"] == 0
+
+
+def test_a_provider_that_really_did_time_out_is_still_recorded(home):
+    """The other side of the exemption: it must not silence the real thing."""
+    from grimoire.llm_errors import LLMError
+
+    with pytest.raises(LLMError), usage.meter("dossier") as m:
+        m.usage.update({"model": "realm/opus"})
+        raise LLMError("timeout", "the provider stopped responding")
+
+    assert errors.summary(30)["kinds"] == [{"kind": "timeout", "count": 1}]
+
+
+def test_a_recorded_exception_carries_its_frames(home):
+    """These rows are written from `except` blocks that turn an exception into
+    a status, so this is the only place the stack survives -- and a traceback
+    captured but never carried is the write-only field the collapsible view in
+    the log exists to show."""
+    try:
+        raise ValueError("could not parse the dossier")
+    except ValueError as exc:
+        errors.record_exception(exc, "dossier")
+
+    row, = _log_rows(home)
+    assert "ValueError: could not parse the dossier" in row["trace"]
+
+
+def test_an_exception_that_was_never_raised_still_records(home):
+    """A call site can build one to describe a failure that was not an
+    exception in the first place; it simply has no frames."""
+    row = errors.record_exception(ValueError("built, not raised"), "dossier")
+
+    assert row is not None and "trace" not in row
+
+
 def test_a_successful_call_records_no_error(home):
     with usage.meter("chat") as m:
         m.usage.update({"model": "realm/opus", "prompt_tokens": 5})

@@ -332,6 +332,17 @@ def test_read_filters_by_level_floor_module_campaign_and_text(home):
         "rate limited"]
 
 
+def test_picking_a_module_leaves_the_other_modules_in_the_dropdown(home):
+    """`modules` is what the filter control is built from, so narrowing it to
+    the current selection makes a control with no way back out of itself."""
+    _seed(home)
+
+    out = logs.read(module="runner", since="2026-08-01", until="2026-08-31")
+
+    assert [r["module"] for r in out["rows"]] == ["runner", "runner"]
+    assert out["modules"] == ["llm", "runner", "store.replay"]
+
+
 def test_the_filter_vocabulary_describes_the_window_not_the_page(home):
     """A dropdown built from the newest 200 rows loses an option the moment
     something else gets chatty."""
@@ -416,11 +427,12 @@ def test_a_read_with_no_dates_is_still_bounded(home):
     assert [r["message"] for r in out["rows"]] == ["recent"]
     assert out["since"]                      # a real day, not ""
 
-    # `days` widens only as far as the ceiling -- 366 back from today does not
-    # reach 2019, which is the ceiling doing its job. Naming the dates is how
-    # you read further back than that.
+    # The ceiling holds however the window is asked for. Clamping only the
+    # DERIVED `since` left `?since=1970-01-01` reading every month file the
+    # install ever wrote -- the same unbounded scan, reachable by typing a date.
     assert len(logs.read(days=4000)["rows"]) == 1
-    assert len(logs.read(since="2019-01-01", until="2026-12-31")["rows"]) == 2
+    assert len(logs.read(since="2019-01-01", until="2026-12-31")["rows"]) == 1
+    assert logs.read(since="1970-01-01")["since"] >= "2025-"
 
 
 def test_a_window_skips_month_files_it_cannot_overlap(home, monkeypatch):
@@ -565,6 +577,23 @@ def test_a_trailing_partial_line_does_not_leave_the_tail_spinning(home):
     with path.open("a", encoding="utf-8") as fh:
         fh.write('"}\n')
     assert [r["message"] for r in logs.tail(out["cursor"])["rows"]] == ["half"]
+
+
+def test_an_unterminated_line_over_the_budget_does_not_leave_the_tail_spinning(home):
+    """The round-six fix covered a SHORT partial line. One longer than the
+    budget took a different path: the read filled its budget, reported `more`,
+    consumed nothing, and could not advance -- so the route's no-sleep re-poll
+    branch spun on it at full speed forever."""
+    logs.record("info", "runner", "seed")
+    start = logs.cursor()
+    path = home / "logs" / f"{logs._now()[:7]}.jsonl"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"message": "' + "x" * 4000)      # no newline, longer than the budget
+
+    for _ in range(3):
+        out = logs.tail(start, budget=1000)
+        assert out["rows"] == []
+        assert out["more"] is False                 # nothing is waiting; go back to sleep
 
 
 def test_a_line_longer_than_the_budget_still_advances_the_cursor(home):
