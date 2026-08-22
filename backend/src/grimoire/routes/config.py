@@ -684,7 +684,12 @@ def get_global_routing():
 
 @router.put("/routing")
 def put_global_routing(body: RoutingUpdate):
-    store.write_config(**_routing_fields("global", body))
+    fields = _routing_fields("global", body)
+    # An empty map is a read: `write_config` rewrites the whole file, and a
+    # request that names no route has nothing to publish. The campaign side
+    # skips its write on the same reasoning (`set_campaign_routing`).
+    if fields:
+        store.write_config(**fields)
     return _routing_body("global", {})
 
 

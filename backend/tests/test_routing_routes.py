@@ -447,6 +447,10 @@ def test_the_bundle_carries_no_key_material(client):
 def test_routing_a_campaign_that_does_not_exist_is_a_404(client):
     assert client.get("/api/campaigns/nope/routing").status_code == 404
     assert client.put("/api/campaigns/nope/routing", json={"routes": {}}).status_code == 404
+    # Even when the body is also wrong: "you may not set that route here" is an
+    # answer about a campaign, and this one does not exist.
+    assert client.put("/api/campaigns/nope/routing",
+                      json={"routes": {"tagline": "x"}}).status_code == 404
 
 
 def test_the_global_bundle_offers_every_route_and_the_campaign_one_does_not(client):
