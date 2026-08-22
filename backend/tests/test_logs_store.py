@@ -517,6 +517,27 @@ def test_a_partial_poll_says_there_is_more_rather_than_looking_idle(home):
     assert logs.tail(logs.cursor())["more"] is False
 
 
+def test_a_trailing_partial_line_does_not_leave_the_tail_spinning(home):
+    """`more` means rows are WAITING, not that the file holds more bytes. The
+    route re-polls immediately while it is true, so a line with no newline --
+    a half-written row, or a hand-edited file -- would spin at full speed on a
+    byte count that never becomes a row."""
+    start = logs.cursor()
+    path = home / "logs" / f"{logs._now()[:7]}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"ts": "2026-08-21T10:00:00.000Z", "level": "info", '
+                    '"module": "runner", "message": "half', encoding="utf-8")
+
+    out = logs.tail(start)
+    assert out["rows"] == []
+    assert out["more"] is False
+
+    # And it is still delivered the moment the line is finished.
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('"}\n')
+    assert [r["message"] for r in logs.tail(out["cursor"])["rows"]] == ["half"]
+
+
 def test_a_line_longer_than_the_budget_still_advances_the_cursor(home):
     """Otherwise one long row wedges the tail permanently: the budget never
     reaches a newline, the offset never moves, and nothing after it arrives."""
