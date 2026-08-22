@@ -473,7 +473,7 @@ test("an advance that landed in the campaign you left is not reported here", asy
   expect(screen.getByLabelText("Reason")).toHaveValue("a day");
 });
 
-test("a copy taken across a change counts as a copy, not as a checkpoint", async () => {
+test("a copy taken across a change does not carry the skip with it", async () => {
   // A turn landing while `copytree` runs is on one side of it or the other and
   // nothing here can see which. Reusing that copy on a retry would hand back a
   // restore point quietly missing a turn, so the marker stays clear and the
@@ -481,7 +481,6 @@ test("a copy taken across a change counts as a copy, not as a checkpoint", async
   let release: (r: ForkReport) => void = () => { /* replaced */ };
   vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
   vi.mocked(api.forkCampaign).mockReturnValue(new Promise((res) => { release = res; }));
-  vi.mocked(api.advanceTime).mockRejectedValue({ detail: "campaign is busy" });
 
   const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
   await screen.findByText(/Now: 24 December 2026/);
@@ -493,10 +492,14 @@ test("a copy taken across a change counts as a copy, not as a checkpoint", async
 
   rerender(<ClockPanel cid="c" refreshKey={1} />);   // a turn lands mid-copytree
   release(FORK_REPORT);
-  await screen.findByText(/campaign is busy/);
+  await screen.findByText(/may not hold the latest turn/);
 
-  expect(screen.getByText(/may not hold the latest turn/)).toBeInTheDocument();
-  // ...so the retry takes a fresh copy rather than reusing that one.
+  // The clock does NOT move. The panel's own rule is that a copy which fails
+  // abandons the skip; a copy that may not hold the moment is that failure in
+  // a weaker form, and advancing anyway would hand back exactly what the
+  // reader said they did not want.
+  expect(api.advanceTime).not.toHaveBeenCalled();
+  // ...and asking again takes a fresh copy rather than reusing that one.
   expect(screen.getByText("Checkpoint, then advance")).toBeInTheDocument();
   expect(screen.queryByText("Retry the skip")).not.toBeInTheDocument();
 });

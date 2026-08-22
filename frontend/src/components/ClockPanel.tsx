@@ -284,9 +284,11 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
 
   /** Copy the campaign as it stands, then skip in the original.
    *
-   *  Strictly in that order, and the skip is abandoned if the copy fails: the
-   *  reader asked to be able to come back to this moment, and moving past it
-   *  anyway would give them the one thing they said they did not want.
+   *  Strictly in that order, and the skip is abandoned if the copy fails — or
+   *  if the campaign moved while the copy was being taken, which is the same
+   *  failure in a weaker form. The reader asked to be able to come back to this
+   *  moment; moving past it on a copy that may not hold it would give them the
+   *  one thing they said they did not want.
    */
   async function checkpointThenAdvance() {
     setError(null);
@@ -318,9 +320,20 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // short is worse than one that says so.
         const notes = forkNotes(report);
         setSaved(`Checkpoint saved: “${name}” is on the campaigns shelf.`
-                 + (current ? "" : " The campaign changed while it was being"
-                                 + " copied, so it may not hold the latest turn.")
+                 + (current ? "" : " The campaign changed while it was being copied,"
+                                 + " so it may not hold the latest turn and the skip"
+                                 + " was not taken — ask again to checkpoint where"
+                                 + " the campaign stands now.")
                  + (notes ? ` ${notes}` : ""));
+        // ...and the clock stays where it is. This panel's own rule, three
+        // lines up in the docstring, is that a copy which fails abandons the
+        // skip, because the reader asked to be able to come back to this moment
+        // and moving past it anyway hands them the one thing they said they did
+        // not want. A copy that may not HOLD that moment is the same failure in
+        // a weaker form, and letting it through was an inconsistency rather than
+        // a decision. The question stays open, so asking again takes a fresh
+        // copy — one extra `copytree` against a restore point missing a turn.
+        if (!current) return;
       }
       await runAdvance();
     } catch (err: unknown) {
