@@ -774,12 +774,14 @@ def tail(from_cursor: str = "", budget: int = MAX_TAIL_BYTES, **filters) -> dict
     left = max(1, min(int(budget or MAX_TAIL_BYTES), MAX_TAIL_BYTES))
     rows: list[dict] = []
     index = names.index(name)
+    more = False
     while True:
-        chunk, offset, used = _read_from(files[index], offset, left)
+        chunk, offset, used, filled = _read_from(files[index], offset, left)
         rows.extend(row for row in chunk if _tail_matches(row, filters))
         left -= used
+        more = filled or left <= 0
         if left <= 0:
-            break                          # budget spent; the rest waits a second
+            break                          # budget spent; the rest waits a poll
         # Only move on once the current file is EXHAUSTED. Advancing while
         # bytes remain in it is the same row-loss the docstring describes,
         # wearing a different shape.
@@ -787,8 +789,13 @@ def tail(from_cursor: str = "", budget: int = MAX_TAIL_BYTES, **filters) -> dict
             index, offset = index + 1, 0   # month rolled over
             continue
         break
-    return {"rows": rows, "cursor": f"{files[index].name}:{offset}",
-            "more": not _at_end(files[index], offset) or index + 1 < len(files)}
+    # `more` means "rows are WAITING", not "the file holds more bytes", and the
+    # difference is a hot loop: the caller polls again immediately while this
+    # is true, so a trailing line with no newline -- what a half-written row
+    # and a hand-edited file both look like -- would spin forever on a byte
+    # count that never becomes a row. `filled` is the honest signal: the read
+    # took everything its budget allowed, so the file had more to give.
+    return {"rows": rows, "cursor": f"{files[index].name}:{offset}", "more": more}
 
 
 def _at_end(path: Path, offset: int) -> bool:
@@ -809,9 +816,15 @@ def _tail_matches(row: dict, filters: dict) -> bool:
                     str(filters.get("campaign") or ""))
 
 
-def _read_from(path: Path, offset: int, budget: int) -> tuple[list[dict], int, int]:
-    """Complete rows in ``path`` after ``offset``, the new offset, and the bytes
-    consumed.
+def _read_from(path: Path, offset: int,
+               budget: int) -> tuple[list[dict], int, int, bool]:
+    """Complete rows in ``path`` after ``offset``, the new offset, the bytes
+    consumed, and whether the read filled its budget.
+
+    That last flag is what `tail` turns into ``more``. It is deliberately not
+    "are there bytes left in the file": a trailing line with no newline leaves
+    bytes that will never become a row, and a caller that polls again while
+    bytes remain would spin on them forever.
 
     At most ``budget`` bytes are read, cut back to the last complete newline
     inside it -- so the offset returned always names a row boundary and never
@@ -834,9 +847,10 @@ def _read_from(path: Path, offset: int, budget: int) -> tuple[list[dict], int, i
                 data += handle.readline()
                 end = data.rfind(b"\n")
     except OSError:
-        return [], offset, 0
+        return [], offset, 0, False
+    filled = len(data) >= budget
     if end < 0:
-        return [], offset, 0             # nothing complete yet
+        return [], offset, 0, filled     # nothing complete yet
     whole = data[:end + 1]
     out = []
     for chunk in whole.decode("utf-8", errors="replace").splitlines():
@@ -849,4 +863,4 @@ def _read_from(path: Path, offset: int, budget: int) -> tuple[list[dict], int, i
             continue
         if isinstance(row, dict):
             out.append(row)
-    return out, offset + len(whole), len(whole)
+    return out, offset + len(whole), len(whole), filled
