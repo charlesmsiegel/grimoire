@@ -27,6 +27,12 @@ export function ContextDiff({ diff, recomputing = false }:
   const moved = diff.sections.filter((s) => s.status !== "unchanged" || s.moved);
   const same = diff.sections.length - moved.length;
   const delta = diff.head.total_tokens - diff.base.total_tokens;
+  // History the packer trimmed off the FRONT leaves no section behind — the
+  // `history` row carries how many messages went, not what they weighed — so
+  // the only record that two turns cut different amounts is this side-level
+  // total. Ignoring it let the panel say every section was identical when the
+  // packer had demonstrably done different work.
+  const cutDiffers = diff.base.dropped_tokens !== diff.head.dropped_tokens;
 
   return (
     <>
@@ -45,6 +51,16 @@ export function ContextDiff({ diff, recomputing = false }:
           {signed(delta)}
         </span>}
       </div>
+      {cutDiffers && (
+        <div className="ctx-tokens">
+          {diff.base.dropped_tokens.toLocaleString()} → {diff.head.dropped_tokens.toLocaleString()}
+          {" "}tok dropped to fit
+          <span className={"ctx-delta " + (diff.head.dropped_tokens > diff.base.dropped_tokens
+                                           ? "up" : "down")}>
+            {signed(diff.head.dropped_tokens - diff.base.dropped_tokens)}
+          </span>
+        </div>
+      )}
       {/* The two ends can have been packed to different ceilings — a snapshot
           carries the budget in force when it was captured — so a reader
           comparing across a budget change is told rather than left to wonder
@@ -78,8 +94,12 @@ export function ContextDiff({ diff, recomputing = false }:
           promising lines. */}
       {moved.length === 0 ? (
         <p className="field-hint">
-          Nothing changed — every section is identical, including what the packer
-          dropped.
+          {cutDiffers
+            ? "No section differs, but the two turns dropped different amounts to"
+              + " fit the budget — history cut from the front leaves no section"
+              + " behind to show it."
+            : "Nothing changed — every section is identical, and the same weight"
+              + " was cut to fit."}
         </p>
       ) : (
         <div className="ctx-caption">

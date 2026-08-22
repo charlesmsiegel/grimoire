@@ -1930,3 +1930,27 @@ test("a diff arriving after the reader moved on is dropped, not shown", async ()
   await screen.findByText("lore text");
   expect(screen.queryByText("the pact was signed at dusk")).toBeNull();
 });
+
+test("a comparison whose turn ages out keeps its option in the picker", async () => {
+  // A turn-against-turn diff is frozen at both ends and so is not re-read, but
+  // retention can still evict the entry it names. Without an option the browser
+  // falls back to the first one and the picker contradicts the panel below it;
+  // clearing would throw away a comparison the reader is in the middle of.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "000002" } });
+  await screen.findByText("the pact was signed at dusk");
+
+  // the compared turn falls out of the retention window
+  (api.listScenePrompts as any).mockResolvedValue({ entries: [TURNS[1]] });
+  rerender(<SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+
+  await screen.findByText(/aged out of the log/);
+  expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe("000002");
+  await screen.findByText("the pact was signed at dusk");   // still on screen
+});

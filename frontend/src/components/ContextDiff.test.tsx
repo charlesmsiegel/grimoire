@@ -244,3 +244,24 @@ test("a section the packer kept this time says the packer had dropped it", () =>
   })} />);
   screen.getByText(/Kept this time; the budget packer had dropped it/);
 });
+
+test("a difference only the side totals record is reported, not denied", () => {
+  // History cut from the FRONT leaves no section behind — the `history` row
+  // carries how many messages went, not what they weighed — so two turns can
+  // have identical sections and demonstrably different packer work.
+  render(<ContextDiff diff={diff({
+    base: side({ dropped_tokens: 1200 }),
+    head: side({ id: "live", dropped_tokens: 3400 }),
+    sections: [section()],
+  })} />);
+  screen.getByText(/1,200 → 3,400/);
+  screen.getByText("+2,200");
+  screen.getByText(/No section differs, but the two turns dropped different amounts/);
+  expect(screen.queryByText(/Nothing changed/)).toBeNull();
+});
+
+test("identical sections and identical cuts really do say nothing changed", () => {
+  render(<ContextDiff diff={diff({ sections: [section()] })} />);
+  screen.getByText(/Nothing changed/);
+  expect(screen.queryByText(/dropped to fit/)).toBeNull();
+});
