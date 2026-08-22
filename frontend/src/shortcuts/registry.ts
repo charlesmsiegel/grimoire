@@ -166,6 +166,18 @@ export function registerScope(scope: Scope): () => void {
   };
 }
 
+/** Whether some OTHER overlay is currently up.
+ *
+ *  For the one thing in this app that appears without the reader asking: the
+ *  tagline prompt, which arrives when an import finishes and can land on top of
+ *  whatever they were doing. Naming the dialogs it must not cover is a list
+ *  that rots -- it cannot even name the sheet takeover, whose open state lives
+ *  inside `SheetPanel` -- so it asks the registry instead, which is the one
+ *  place that knows what is open (PR #400 review). */
+export function otherModalOpen(ignoring?: Scope): boolean {
+  return scopes.some((s) => s !== ignoring && s.modal);
+}
+
 /** A binding, and whether pressing it right now would actually do anything. */
 export type HotkeyRow = { key: Hotkey; reachable: boolean };
 
