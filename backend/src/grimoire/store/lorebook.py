@@ -107,9 +107,12 @@ def commit(root: Path, entries: list[dict]) -> list[dict]:
     # Every category checked BEFORE anything is written, the way
     # `scenario.apply` does it: the check used to sit inside the create loop, so
     # a bad category on the third row returned 400 with the first two already
-    # on disk. The review table can now offer a category this server does not
-    # know (a bundle older than the backend keeps a row's own kind among its
-    # options), which is exactly the request that would have half-landed.
+    # on disk. Reachable from the review table in one direction only -- a bundle
+    # NEWER than the backend serving it, whose `/entity-kinds` read failed, so
+    # its dropdown fell back to its own longer list and offered a kind this
+    # server does not have. (The other direction cannot: an older bundle is
+    # handed a superset it simply shows, and both parse paths clamp an incoming
+    # category to this tuple anyway.)
     for e in entries:
         category = e.get("category", "lore")
         if category not in entities.ENTITY_KINDS:

@@ -5585,7 +5585,10 @@ def test_lorebook_parse_then_import(client):
 def test_entity_kinds_endpoint_is_the_stores_own_tuple(client):
     # The dialog's category dropdown is built from this, so it is the store's
     # own tuple rather than a hand-kept copy -- a kind added to ENTITY_KINDS
-    # reaches the review table with no frontend edit (#138).
+    # reaches the review table without either dialog being edited (#138). Not
+    # "with no frontend edit": the frontend's own ENTITY_KINDS still has to
+    # learn the kind, and `test_the_frontend_ships_the_same_kind_list` insists
+    # on it.
     assert client.get("/api/entity-kinds").json()["kinds"] == list(store.entities.ENTITY_KINDS)
 
 
@@ -5655,8 +5658,9 @@ def test_a_refused_category_leaves_nothing_behind(client):
     # The refusal is taken before any row is written, so a bad category on the
     # LAST row does not land the first two -- the same guarantee
     # `scenario.apply` states, and now reachable through the review table: a
-    # bundle older than this server keeps a row's own kind among its options,
-    # so a category this server does not know can be committed (#138).
+    # bundle NEWER than this server, whose `/entity-kinds` read failed, falls
+    # back to its own longer list and can offer a kind this server refuses
+    # (#138).
     wid = _world(client)
     r = client.post(f"/api/worlds/{wid}/lorebook/import", json={"entries": [
         {"name": "Kept", "keys": [], "body": "a", "category": "lore"},

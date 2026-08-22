@@ -542,8 +542,11 @@ def get_entity_kinds():
     Deliberately NOT world-scoped (the issue floated
     `/worlds/{wid}/entity-kinds`). The kinds are a property of the code, not of
     a world, and a world-scoped path would promise a per-world answer that does
-    not exist -- besides needing to be registered ahead of the generic
-    `/worlds/{wid}/{kind}` routes to be reachable at all.
+    not exist. That is the whole argument -- route order is NOT part of it:
+    `routes.__init__` includes this module well before `entities`, so a
+    world-scoped handler declared here would sit ahead of the generic
+    `/worlds/{wid}/{kind}` catch-all for free, and `test_route_order.py` would
+    say so if it did not.
 
     `lorebook.commit` and `scenario.apply` validate an incoming category
     against the same tuple, so what this offers is exactly what they accept;
