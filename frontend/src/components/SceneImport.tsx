@@ -220,7 +220,17 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
 
   const posts = draft.messages.length;
   const opening = draft.messages[0];
-  const hasPlayerPosts = draft.messages.some((m) => m.role === "user");
+  // Two ways a transcript carries the player, and the role alone catches only
+  // the first. `parse` resolves roles against an EMPTY player set, so only a
+  // literal `**You:**` block comes back as role "user" -- but `post_chat`
+  // stamps the seated player's NAME onto their posts, so every real scene file
+  // (and every exported chapter) writes `**Seraphine:**` and parses back as
+  // "assistant". Asking the cast as well is what makes this true for the shape
+  // an actual grimoire transcript has.
+  const hasPlayerPosts = draft.messages.some((m) => m.role === "user")
+    || draft.cast.some((c) => c.role === "player"
+                             && draft.messages.some((m) => m.speaker
+                                 && (m.speaker === c.label || m.speaker.startsWith(`${c.label} (`))));
   return (
     <>
       {error && <div className="banner">{error}</div>}

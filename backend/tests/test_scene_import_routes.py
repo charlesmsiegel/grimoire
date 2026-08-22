@@ -174,15 +174,27 @@ def test_a_transcript_too_long_for_one_scene_is_refused(client):
 
 
 def test_a_long_import_does_not_hold_the_campaign_lock_per_post(client):
-    """`append_message` per message is a whole-file read and write each, so the
-    commit was quadratic: 3200 posts took ~27s of continuous acquire/release.
-    One batched write is the fix; this pins that it stays one."""
+    """Three costs, all of which were quadratic or per-message, and all of which
+    a naive fixture hides:
+
+    * `append_message` per message is a whole-file read and write each (3200
+      posts took ~27s of continuous acquire/release);
+    * building the body by repeated concatenation copies it twice per message,
+      which scales with post LENGTH -- invisible with 8-character posts, 7.8s
+      for 5000 realistic ones;
+    * expanding macros per message re-resolves the campaign's calendar
+      provider, which does nothing at all unless the scene HAS a date.
+
+    So the fixture uses realistic post lengths and sets a date. Without both,
+    this guard reports green through two of the three."""
     import time
     _wid, cid = _campaign(client)
-    msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"post {i}"}
+    body = "She set the ledger down and looked at the tide for a while. " * 12  # ~700 chars
+    msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"{body} {i}"}
             for i in range(1200)]
     started = time.monotonic()
-    r = client.post(f"/api/campaigns/{cid}/scenes/import", json={"title": "Long", "messages": msgs})
+    r = client.post(f"/api/campaigns/{cid}/scenes/import",
+                    json={"title": "Long", "messages": msgs, "date": "2026-01-02"})
     assert r.status_code == 200 and r.json()["messages"] == 1200
     # Deliberately loose -- this is a shape check, not a benchmark. The
     # quadratic version took several seconds for this length on an idle box.
