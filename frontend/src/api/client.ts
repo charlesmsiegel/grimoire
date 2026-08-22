@@ -1,5 +1,5 @@
-import { isAbortError, parseSSEChunk, type ChatEvent, type ChubGalleryEvent,
-  type LocalizeEvent, type RunHandle, type TaglineBatchEvent, } from "./stream";
+import { isAbortError, parseSSEChunk, type ChatEvent, type LocalizeEvent,
+  type ChubGalleryEvent, type RunHandle, type TaglineBatchEvent } from "./stream";
 import { campaignsChanged, configChanged } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
