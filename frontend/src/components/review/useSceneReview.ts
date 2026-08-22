@@ -298,17 +298,26 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       if (dropped || campaignRef.current !== cid || hasReviewRef.current || !live) return;
       // Still generating. Show the panel as busy and wait it out -- the run is
       // the server's, and this client is a subscriber that can come and go.
+      // Captured, not bumped: this wait does not supersede anything, it just
+      // has to notice being superseded. `stopAbsorb` moves the counter, and
+      // the run it stopped then answers `review_cancelled` -- which is the
+      // reader's own request coming back, not a failure to report at them.
+      // `endScene` guards its two exits for exactly this reason; this one is
+      // reachable the same way, from the Stop offered beside "Ending…".
+      const stopGen = absorbStopRef.current;
       setAdopting(true);
       setAbsorbSid(sid);
       setGeneration(live.review_generation ?? null);
       try {
         await api.awaitRun(cid, sid, live);
         const landed = await api.pendingReview(cid, sid);
-        if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
+        if (dropped || campaignRef.current !== cid || hasReviewRef.current
+            || absorbStopRef.current !== stopGen) return;
         if (landed.review) openReview(landed.review, sid, landed.generation);
         else setStaleReview(landed.stale);
       } catch (err: unknown) {
-        if (dropped || campaignRef.current !== cid) return;
+        if (dropped || campaignRef.current !== cid
+            || absorbStopRef.current !== stopGen) return;
         // `false`, for the scoped retries' reason: the banner's Retry runs the
         // CHAT retry, so offering it here would answer a failed absorb by
         // generating one more reply into the scene being finished.
@@ -505,7 +514,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     const sid = absorbSid ?? activeId;
     const gen = generationRef.current;
     absorbStopRef.current++;          // this absorb's answer is no longer wanted
+    // BOTH flags. An absorb this browser started sets `absorbing`; one it
+    // merely found and waited out sets `adopting`, and Stop is offered for
+    // either -- so clearing only the first leaves "Ending…" on screen over a
+    // run that has just been told to stop.
     setAbsorbing(false);
+    setAdopting(false);
     setGeneration(null);
     if (!sid || !gen) return;
     const stopping = api.discardReview(cid, sid, gen);
