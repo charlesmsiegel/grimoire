@@ -36,8 +36,6 @@ class name.
 
 from __future__ import annotations
 
-from collections import deque
-
 from . import logs
 
 #: Rows one read hands back. Errors are rare, and a page of the most recent
@@ -91,12 +89,11 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
     by_module: dict[str, dict] = {}
     by_kind: dict[str, int] = {}
     daily: dict[str, int] = {}
-    cap = max(1, min(int(rows or DEFAULT_ROWS), MAX_ROWS))
-    # A bounded deque rather than a list trimmed from the front: `scan` yields
-    # oldest first, so the page is the newest `cap` and every row past that
-    # costs a `pop(0)` -- an O(n) shift per row, which on a bad month turns a
-    # dashboard read into a quadratic one.
-    recent: deque[dict] = deque(maxlen=cap)
+    # `logs.Newest` rather than "the last `cap` rows `scan` yielded": that
+    # would be the newest only while the file's order matches its timestamps,
+    # which is the assumption `read` was visibly wrong about. Shared with
+    # `read` so the two pages cannot end up ordering themselves differently.
+    recent = logs.Newest(max(1, min(int(rows or DEFAULT_ROWS), MAX_ROWS)))
     total = 0
     for row in logs.scan(level="error", module=module, campaign=campaign,
                          since=since, until=until):
@@ -115,7 +112,7 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
             bucket["last"], bucket["last_detail"] = ts, str(row.get("message", ""))
         by_kind[kind] = by_kind.get(kind, 0) + 1
         daily[ts[:10]] = daily.get(ts[:10], 0) + 1
-        recent.append(row)
+        recent.offer(row)
     return {
         "since": since, "until": until, "days": _span(days),
         "total": total,
@@ -124,8 +121,8 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
             key=lambda b: (-b["count"], b["module"])),
         "kinds": _ranked(by_kind),
         "daily": [{"day": day, "count": count} for day, count in sorted(daily.items())],
-        "rows": list(reversed(recent)),   # newest first, like every other log view
-        "truncated": total > len(recent),
+        "rows": recent.rows(),            # newest first, like every other log view
+        "truncated": recent.dropped,
     }
 
 

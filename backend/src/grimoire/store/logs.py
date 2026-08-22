@@ -70,6 +70,7 @@ pruner that destroys history somebody turned this on to have.
 
 from __future__ import annotations
 
+import heapq
 import json
 import logging
 import re
@@ -479,10 +480,13 @@ def install() -> str:
 
 # ---- reading ----
 def _valid_day(text: object) -> str:
-    """``text`` as ``YYYY-MM-DD``, or "" if it is not one. A `date` is accepted
-    too, so a caller does not have to format one to ask a question with it."""
-    if isinstance(text, date):
-        return text.isoformat()
+    """``text`` as ``YYYY-MM-DD``, or "" if it is not one.
+
+    `object` rather than `str` because every caller is ultimately a query
+    string: the shape is whatever arrived over the wire, and narrowing it here
+    is cheaper than a validator at each route that would answer a mistyped date
+    with a 422 instead of a window.
+    """
     text = str(text or "")
     if not _DAY.match(text):
         return ""
@@ -571,6 +575,16 @@ def read(*, level: str = "debug", module: str = "", since: str = "", until: str 
     doing it here rather than in the client is what lets ``limit`` mean "the
     most recent N" instead of "the first N, then throw most of them away".
 
+    Ordered by the rows' own ``ts``, and NOT by their position in the file.
+    Those are usually the same -- rows are appended as they happen -- and the
+    version that assumed it was visibly wrong the moment anything wrote a row
+    out of order: a page rendered 08-21, 08-18, 08-19, 08-20, 08-21 while
+    calling itself newest-first. Two writers on a synced store with skewed
+    clocks do that, so does a hand-edited file, and an ordering claim that
+    holds only while nothing unusual has happened is not one a reader can use.
+    The heap keeps it to ``limit`` rows of memory rather than sorting the
+    window.
+
     Tolerant in both directions, exactly as the usage ledger's reader is: a file
     that cannot be opened is skipped rather than failing the view, and a line
     that will not parse is skipped rather than failing the file --
@@ -587,23 +601,19 @@ def read(*, level: str = "debug", module: str = "", since: str = "", until: str 
     floor = level_name(level)
     since, until = _span(since, until, days)
     cap = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
-    rows: list[dict] = []
     modules: set[str] = set()
     counts = dict.fromkeys(LEVELS, 0)
-    truncated = False
-    for path in reversed(_window_files(since, until)):
-        for row in reversed(_lines(path)):
+    newest = Newest(cap)
+    for path in _window_files(since, until):
+        for row in _lines(path):
             if not _matches(row, floor, module, since, until, contains, campaign):
                 continue
             modules.add(str(row.get("module", "")))
             counts[level_name(row.get("level"))] += 1
-            if len(rows) < cap:
-                rows.append(row)
-            else:
-                truncated = True
-    return {"rows": rows, "modules": sorted(m for m in modules if m),
+            newest.offer(row)
+    return {"rows": newest.rows(), "modules": sorted(m for m in modules if m),
             "counts": counts, "total": sum(counts.values()),
-            "truncated": truncated, "level": floor,
+            "truncated": newest.dropped, "level": floor,
             "since": since, "until": until, "levels": list(LEVELS)}
 
 
@@ -630,6 +640,45 @@ def scan(*, level: str = "debug", module: str = "", since: str = "", until: str 
         for row in _lines(path):
             if _matches(row, floor, module, since, until, contains, campaign):
                 yield row
+
+
+class Newest:
+    """The ``cap`` rows with the largest ``ts``, newest first.
+
+    Public because `store.errors` pages over the same rows and has to order
+    them the same way; two readers with their own idea of "newest" is how one
+    of them ends up disagreeing with the other about the same file.
+
+    A bounded min-heap rather than "collect and sort": a month of DEBUG rows is
+    the case this has to survive, and holding all of them to hand back two
+    hundred is the read that turns a dashboard request into a memory event.
+    Only the smallest kept timestamp is ever compared against, so the cost is
+    one comparison per row and `cap` rows of memory.
+
+    Ties are broken by arrival, and they are common -- rows are stamped to the
+    millisecond and a burst produces several inside one. Without the counter
+    `heapq` would fall through to comparing the row DICTS, which raises.
+    """
+
+    def __init__(self, cap: int):
+        self.cap = cap
+        self.dropped = False
+        self._seq = 0
+        self._heap: list[tuple[str, int, dict]] = []
+
+    def offer(self, row: dict) -> None:
+        self._seq += 1
+        item = (str(row.get("ts", "")), self._seq, row)
+        if len(self._heap) < self.cap:
+            heapq.heappush(self._heap, item)
+        elif item > self._heap[0]:
+            heapq.heapreplace(self._heap, item)
+            self.dropped = True
+        else:
+            self.dropped = True
+
+    def rows(self) -> list[dict]:
+        return [row for _, _, row in sorted(self._heap, reverse=True)]
 
 
 def _lines(path: Path) -> list[dict]:

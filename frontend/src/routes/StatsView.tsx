@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, type ErrorSummary, type LogLevel, type LogPage, type LogRow,
   type PerfBucket, type Stats,
@@ -57,10 +57,17 @@ function percent(rate: number): string {
   return rate < 0.001 ? "<0.1%" : `${(rate * 100).toFixed(1)}%`;
 }
 
-/** The clock half of a timestamp, which is the half that distinguishes two log
- *  rows; the date is in the window control above them. */
+/** The clock half of a timestamp. The date half is carried by the separator
+ *  `LogRows` puts in whenever the day changes -- without it a window spanning
+ *  several days reads as scrambled, because rows ARE ordered by full timestamp
+ *  and a column showing only the clock makes 09:17 (today) look misplaced above
+ *  14:22 (yesterday). */
 function clock(ts: string): string {
   return ts.slice(11, 23) || ts;
+}
+
+function day(ts: string): string {
+  return ts.slice(0, 10);
 }
 
 /** A distribution table. One component for `by_task`, `by_model` and `by_day`,
@@ -173,8 +180,14 @@ function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
   if (rows.length === 0) return <p className="empty-state"><span className="empty-what">{empty}</span></p>;
   return (
     <ol className="stats-log">
-      {keyed(rows).map(({ row: r, key }) => (
-        <li key={key} className={`stats-log-row level-${r.level}`}>
+      {keyed(rows).map(({ row: r, key }, i, all) => (
+        <Fragment key={key}>
+          {/* The day, whenever it changes. Rows are newest first, so this is
+              the head of each day's block. */}
+          {(i === 0 || day(all[i - 1].row.ts) !== day(r.ts)) && (
+            <li className="stats-log-day" aria-hidden={false}>{day(r.ts)}</li>
+          )}
+        <li className={`stats-log-row level-${r.level}`}>
           <span className="stats-log-level">{r.level.toUpperCase()}</span>
           <span className="stats-log-time">{clock(r.ts)}</span>
           <span className="stats-log-module">{r.module}</span>
@@ -198,6 +211,7 @@ function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
             )}
           </span>
         </li>
+        </Fragment>
       ))}
     </ol>
   );
@@ -329,11 +343,15 @@ export default function StatsView() {
   // other option from the control you picked it with.
   const errorModules = stats?.errors.modules.map((m) => m.module) ?? [];
 
-  const counts = useMemo(() => ({
+  // `null` is "still reading" and renders as a dash; `undefined` is "nobody
+  // has asked yet" and renders as nothing. The log is only read when its
+  // section is opened, so a dash beside it on arrival would claim a read that
+  // was never started.
+  const counts = useMemo((): Record<SectionKey, number | null | undefined> => ({
     performance: stats ? stats.totals.calls : null,
     errors: errors ? errors.total : null,
-    log: page ? page.total : null,
-  }), [stats, errors, page]);
+    log: page ? page.total : (section === "log" ? null : undefined),
+  }), [stats, errors, page, section]);
 
   const column = (
     <>
@@ -350,7 +368,7 @@ export default function StatsView() {
             {/* A dash is "still reading"; a 0 would claim the section is
                 empty, which is a different and possibly wrong statement. */}
             <span className="column-row-count">
-              {counts[s.key] === null ? "—" : counts[s.key]}
+              {counts[s.key] === undefined ? "" : counts[s.key] ?? "—"}
             </span>
           </button>
         ))}

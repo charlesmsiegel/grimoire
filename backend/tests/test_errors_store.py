@@ -147,6 +147,15 @@ def test_a_silly_window_is_clamped_rather_than_refused(home):
     assert out["days"] == logs.MAX_DAYS
 
 
+def test_the_error_page_is_ordered_by_timestamp_like_every_other_log_view(home):
+    for day in ("2026-08-21", "2026-08-18", "2026-08-20"):
+        logs.record("error", "llm", day, kind="network", ts=f"{day}T10:00:00.000Z")
+
+    out = errors.summary(366, rows=2)
+    assert [r["message"] for r in out["rows"]] == ["2026-08-21", "2026-08-20"]
+    assert out["total"] == 3 and out["truncated"] is True
+
+
 def test_each_module_carries_its_most_recent_failure(home):
     logs.record("error", "llm", "older", kind="network", ts="2026-08-14T01:00:00.000Z")
     logs.record("error", "llm", "newer", kind="network", ts="2026-08-15T01:00:00.000Z")
