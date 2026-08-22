@@ -264,6 +264,31 @@ test("a move forgets the connection and world recorded in the previous store", a
   expect(screen.queryByText(/connected to openrouter/i)).not.toBeInTheDocument();
 });
 
+test("a move forgets the verdict recorded about the previous store's connection", async () => {
+  // A check is about one connection in one store (#146). Carrying its warning
+  // across a move would put the old store's rejected key beside the new
+  // store's untested one.
+  (api.checkConnection as any).mockResolvedValue({
+    ok: false, kind: "auth", detail: "No auth credentials found",
+    checked_at: "2026-08-21T09:00:00Z",
+  });
+  renderWizard();
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "OpenRouter" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-or-dead" } });
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+  expect(await screen.findByText(/No auth credentials found/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /^back$/i }));
+  fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+  await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
+
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+  expect(await screen.findByLabelText("Name")).toBeInTheDocument();
+  expect(screen.queryByText(/No auth credentials found/)).not.toBeInTheDocument();
+});
+
 test("Skip setup is locked while a connection is being activated", async () => {
   let settle: (v: any) => void = () => {};
   (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));

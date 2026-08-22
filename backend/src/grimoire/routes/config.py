@@ -385,15 +385,18 @@ def put_connection(id: str, body: ConnectionUpdate,
     fields = {k: v for k, v in _dump(body).items() if v is not None}
     try:
         store.llm_connections.update_connection(id, **fields)
+        # An edit invalidates the verdict as surely as a delete does: the
+        # failure on record was this connection's *previous* key, base URL or
+        # model, and keeping it would report the setting the reader just
+        # changed as still broken -- exactly when they are watching to see
+        # whether their fix took.
+        registry.forget(id)
+        # Inside the `try`, where it has always been: a connection deleted
+        # between the write and this read is a 404, not a 500.
+        return {**_with_effective(store.llm_connections.read_connection(id)),
+                "health": registry.status(id)}
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
-    # An edit invalidates the verdict as surely as a delete does: the failure
-    # on record was this connection's *previous* key, base URL or model, and
-    # keeping it would report the setting the reader just changed as still
-    # broken -- exactly when they are watching to see whether their fix took.
-    registry.forget(id)
-    return {**_with_effective(store.llm_connections.read_connection(id)),
-            "health": registry.status(id)}
 
 
 @router.delete("/llm-connections/{id}")

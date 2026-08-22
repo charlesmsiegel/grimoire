@@ -362,6 +362,23 @@ def test_editing_a_connection_clears_the_verdict_its_old_settings_earned(client)
     assert client.get("/api/config").json()["health"]["state"] == "unknown"
 
 
+def test_a_connection_deleted_mid_update_is_still_a_404(client, monkeypatch):
+    """Clearing the verdict added a step between the write and the read-back.
+    Putting that step outside the `try` would turn "somebody deleted this while
+    you were saving" from the 404 it has always been into a 500."""
+    real_forget = client.app.state.health.forget
+
+    def delete_it_too(cid):
+        real_forget(cid)
+        store.llm_connections.delete_connection(cid)
+
+    monkeypatch.setattr(client.app.state.health, "forget", delete_it_too)
+
+    r = client.put("/api/llm-connections/openrouter", json={"name": "Renamed"})
+
+    assert r.status_code == 404
+
+
 def test_a_recreated_connection_does_not_inherit_the_dead_ones_failure(client):
     """Ids are slugs and slugs are reusable, so "delete and make another one
     with the same name" lands on the same key in the registry."""

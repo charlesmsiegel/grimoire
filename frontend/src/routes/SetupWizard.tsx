@@ -121,6 +121,9 @@ export default function SetupWizard(
    *  step with no world to pick. */
   const recheckStore = useCallback(async () => {
     setConnected(null);
+    // With the verdict that belonged to it: a check is about one connection in
+    // one store, and the new store's connections have not been tested at all.
+    setHealth(null);
     setCreatedId(null);
     setWorldId(null);
     setWorldName("");
