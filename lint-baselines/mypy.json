@@ -255,7 +255,6 @@
     "union-attr": 3
   },
   "backend/src/grimoire/store/usage.py": {
-    "assignment": 4,
     "exit-return": 1
   },
   "backend/src/grimoire/store/weather/overrides.py": {
