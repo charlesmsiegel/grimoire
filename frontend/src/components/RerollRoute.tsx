@@ -43,6 +43,14 @@ export default function RerollRoutePicker({
   // redundant row. This mounts only when the popover opens, which is exactly
   // when the answer is needed, so there is no window in which it can be wrong.
   const [active, setActive] = useState<ActiveConnection | null>(null);
+  // Whether the read above has SETTLED, which `active === null` cannot say on
+  // its own: it is both "not asked yet" and "asked, nothing is active". The
+  // model box below is refused until this is true, so a model typed before the
+  // answer arrives cannot be stored with no route attached (Codex review). A
+  // read that FAILS still settles — we then genuinely do not know the active
+  // connection, and disabling the control forever over that would be worse
+  // than letting an unpinned model through.
+  const [activeSettled, setActiveSettled] = useState(false);
   const [connections, setConnections] = useState<LLMConnection[]>([]);
   const [orModels, setOrModels] = useState<Model[]>([]);
   const [orError, setOrError] = useState(false);
@@ -59,8 +67,8 @@ export default function RerollRoutePicker({
     // all for the cross-tab repoint it was moved here to handle. The popover
     // opens rarely and this is the one moment the answer has to be current.
     api.getConfig({ fresh: true })
-      .then((c) => { if (live) setActive(c.active_connection); })
-      .catch(() => { if (live) setActive(null); });
+      .then((c) => { if (live) { setActive(c.active_connection); setActiveSettled(true); } })
+      .catch(() => { if (live) { setActive(null); setActiveSettled(true); } });
     return () => { live = false; };
   }, []);
 
@@ -176,6 +184,11 @@ export default function RerollRoutePicker({
         })}
         models={models}
         error={kind === "openrouter" && orError}
+        // Only while BOTH are unknown. An explicitly named connection is its
+        // own pin and needs nothing from the config read; it is the Default
+        // row, whose meaning is "whichever is active", that has nothing to
+        // attribute a typed model to until the answer lands.
+        disabled={!value.connection_id && !activeSettled}
       />
     </span>
   );

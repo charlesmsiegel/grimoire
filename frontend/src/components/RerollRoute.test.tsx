@@ -65,6 +65,50 @@ test("the config read is not served from the cache another tab left behind", asy
   await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
 });
 
+test("the model box refuses input until the route it would attribute to is known", async () => {
+  // Codex review: the config read is async, so `active` is null on the first
+  // render — and a model typed in that window would be stored with no
+  // connection, which is the cross-provider mismatch the pin exists to stop.
+  let settle: (c: unknown) => void = () => {};
+  (api.getConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  const onChange = vi.fn();
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={onChange} />);
+  const box = await screen.findByLabelText("Reroll model");
+
+  // `toBeDisabled` is the assertion that means anything here: a real browser
+  // delivers no input to a disabled control, while `fireEvent.change`
+  // dispatches synthetically and ignores the attribute (unlike
+  // `fireEvent.click`, which RTL does gate).
+  expect(box).toBeDisabled();
+
+  settle({ active_connection: ACTIVE });
+
+  await waitFor(() => expect(box).not.toBeDisabled());
+  fireEvent.change(box, { target: { value: "vendor/big" } });
+  expect(onChange).toHaveBeenCalledWith({ connection_id: "openrouter", model: "vendor/big" });
+});
+
+test("a config read that fails still releases the model box", async () => {
+  // "not asked yet" and "asked, nothing active" are both `active === null`;
+  // only the first should refuse input. Disabling forever over a failed read
+  // would be worse than letting an unpinned model through.
+  (api.getConfig as any).mockRejectedValue(new Error("offline"));
+  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
+
+  await waitFor(() => expect(screen.getByLabelText("Reroll model")).not.toBeDisabled());
+});
+
+test("an explicitly named connection needs no config read to accept a model", async () => {
+  // That connection is its own pin; only the Default row depends on the read.
+  let settle: (c: unknown) => void = () => {};
+  (api.getConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  render(<RerollRoutePicker value={{ connection_id: "local", model: "" }}
+                            onChange={() => {}} />);
+
+  expect(await screen.findByLabelText("Reroll model")).not.toBeDisabled();
+  settle({ active_connection: ACTIVE });
+});
+
 test("choosing a model under Default pins the connection it was chosen against", async () => {
   // The placeholder and the catalog both describe whichever connection is
   // active right now; leaving the route dynamic would apply a model chosen
