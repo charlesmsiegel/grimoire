@@ -329,9 +329,11 @@ reinforce rather than compete.
   **`transient_tracker.j2` still needs one word changed.** It currently opens
   *"After the last line of narration, and only there"* — an instruction that
   presumes the reply ends in narration, which is the thing this rule now
-  forbids. It becomes "after the last character block". Small, but leaving it
-  tells the model to place a block after something that is no longer allowed
-  to be there.
+  forbids. It becomes **"after the final speaker block"** — not "after the last
+  character block", which would have no valid placement at all in the three
+  cases this spec creates where the last block is legitimately narration: a
+  wrap reply, a roll request, and a zero-NPC scene. Naming the speaker block
+  keeps one wording valid under every gate.
 
   The opener gate matters despite `response_format` having no
   `except_opener`. `opener_shape.j2` normally puts character blocks last, so
@@ -399,7 +401,7 @@ held at `:492`:
 | A send carrying `/end` | set |
 | The wrap reply persists | **left set** |
 | A later send *without* `/end` | cleared |
-| a turn errors (**either branch**) | cleared |
+| a turn errors | **stays `pending`** — see below |
 | `delete_from` (rewind) | cleared |
 
 Leaving it set through the reply is what makes regenerate work — the durability
@@ -418,7 +420,15 @@ scene write of its own. Clearing only where a post is appended would leave a
 wrapped scene wrapping every subsequent NPC round. The clear hangs off the
 send, not off the append, inside the campaign-lock hold at `:492`.
 
-*On failure.* Error cleanup cannot be assigned to `_take_the_post_back`
+*On failure the state is KEPT, not cleared.* An earlier draft cleared it, which
+contradicted this spec's own promise that `post_retry` reproduces the wrap:
+retry has no other link to the failed turn, so clearing on failure means
+pressing Retry after an LLM error silently composes an ordinary continuation.
+The state stays `pending` across a failed generation and is cleared by the
+next ordinary send, exactly as it would have been anyway. What failure cleanup
+still owes is the *post* rollback, and that hook has a placement problem:
+
+*Where the cleanup runs.* It cannot be assigned to `_take_the_post_back`
 alone. That undo is wired only into the persisted-post branch
 (`undo_user_post=` at `:571-574`); the ephemeral branch (`:526-548`) builds
 its stream with no undo hook at all. So a bare `/end` — which scrubs to `""`
@@ -432,10 +442,13 @@ carry an `on_error`: `compose_turn` / `compose_director_turn` raising, a
 template failing to render, and `_chat_stream`'s synchronous claim, which the
 route's own comment notes "claims the turn under the campaign lock before it
 returns, so a contended campaign raises `StoreBusy` at this line and the route
-answers 409 having sent nothing". Each of those unwinds the reservation while
-leaving the scene marked to wrap over a reply that never existed. The tests
-therefore cover a **composition failure and a claim failure**, not only an LLM
-streaming error.
+answers 409 having sent nothing". But a route-level `try` is not sufficient
+either, and for the opposite reason: an upstream `LLMError` is caught *inside*
+the async iterators (`streaming.py:466`, `:918`) and emitted as an error frame
+after the route has already returned. So the same cleanup is invoked from
+both places — the outer route span for composition and claim failures, and
+both streams' error paths for the asynchronous ones. The tests cover a
+composition failure, a claim failure and a streaming failure.
 
 Two accepted losses, both stated rather than solved: a turn that errors clears
 a flag that a *previous* `/end` may have set, and a rewind clears it
@@ -571,7 +584,16 @@ each route passes the value it snapshotted under its setup lock. Two
 independent overrides rather than one overloaded dict, which also keeps the
 response-preset cascade free of a flag that has nothing to do with presets.
 
-**`post_retry` needs it too.** `_retry_run` closes its setup lock at `:619`
+**The inventory is CLAUDE.md's five, not a list grown one review at a time.**
+This spec added `post_roll_proposal`, then `post_retry`, then
+`post_replay_turn`, each after a reviewer named it — while CLAUDE.md has
+listed all five detached-turn handlers throughout: `post_chat`, `post_retry`,
+`post_regenerate`, `post_replay_turn`, `post_roll_proposal`. Every one takes
+the snapshot and every one is in the race tests. `post_replay_turn` is not
+hypothetical: a replay session coexists with the composer and `post_chat` has
+no replay refusal, so a player can send `/end` between replay steps.
+
+**`post_retry` specifically.** `_retry_run` closes its setup lock at `:619`
 and composes at `:621-622`, the same shape as chat and regenerate, so a cancel
 in that window turns an already-starting retry of a wrap reply into an
 ordinary continuation. It is in the inventory and in the race tests.
@@ -741,7 +763,12 @@ at all.
 the `response_format` edits, the `transient_tracker` rewording, the
 `post_history` line, `Section.removable` and the layout change, the precedence
 hierarchy, the behavioral grader, and the eval/cassette/snapshot fallout. No
-new routes and no new stored state. It **does** carry frontend work — §6's
+new routes and no new stored state — but it **must still pass `wrap=False`**
+to `response_format.j2`. Phase 1 edits that template to branch on `wrap`
+while Phase 2 supplies the accessor and the override, and the Jinja env runs
+with `StrictUndefined`, so a Phase 1 that renders without the variable fails
+outright. A fixed `False` during Phase 1, replaced by the real snapshot in
+Phase 2. It **does** carry frontend work — §6's
 `removable` has to reach `layout.describe`, the API type and
 `PromptLayoutEditor`, with a test, or Phase 1 ships the misleading checkbox it
 exists to remove. This alone answers both problems
@@ -887,6 +914,27 @@ be measured. Whether "advance one beat" is obeyed remains a question only
 - **Replay.** `post_replay_turn` and `store/alternates.py` reconstruct turns.
   With a scene-level boolean there are no indices to keep in step, so replay
   simply sees whatever the flag currently says.
+
+## Open at implementation time
+
+Real, verified, and deliberately not resolved in this document — each is a
+mechanism detail that the implementation will settle against actual code
+faster than another round of prose. Listed so none is lost:
+
+- **`describe` should report the *effective* enabled state** for a
+  non-removable section, not the stored one. `_ordered` reads `enabled`
+  straight from the stored entry, so a layout written by an older client or a
+  direct API caller with `player_character.enabled=false` renders in
+  generation but comes back as an unchecked, disabled row.
+- **`consumed` must return to `pending` when a regeneration stops at a roll
+  fence**, or the indicator claims a closed scene mid-check.
+- **`wrap_note.j2` must be selected from the captured snapshot**, not a fresh
+  read — otherwise a cancel between snapshot and note selection restores the
+  "Continue the scene." contradiction the note exists to remove.
+- **`/end` alongside prose is inert when `turn_scope` is disabled**: the wrap
+  variant is gone, the closing rule is gated off with it, and the prose
+  suppresses `wrap_note.j2`. The wrap instruction probably needs to be
+  independent of the pacing opt-out.
 
 ## Out of scope
 
