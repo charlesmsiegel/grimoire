@@ -3331,3 +3331,59 @@ test("a discovery that failed is not read as nothing running", async () => {
   expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
   expect(api.pendingReview).not.toHaveBeenCalled();
 });
+
+test("an absorb that failed does not hand back the review it was replacing", async () => {
+  // The scene is holding an older review nobody saved, and this tab adopts a
+  // fresh absorb over it. When that run fails, the store still answers with the
+  // OLD record — opening it presents last time's summary as this run's result
+  // and suppresses the failure, and because its watermark can still match, the
+  // reader can go on to save the very review they were replacing.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-old", stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r5", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", kind: "absorb", review_generation: "gen-new" });
+  (api.awaitRun as any).mockRejectedValue(new Error("the extractor blew up"));
+  renderCampaign();
+
+  expect(await screen.findByText(/the extractor blew up/)).toBeInTheDocument();
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+});
+
+test("an absorb whose own review landed is still opened", async () => {
+  // The counterweight: matching on the generation must not stop this tab
+  // seeing the review its own run produced.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-new", stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r5", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", kind: "absorb", review_generation: "gen-new" });
+  (api.awaitRun as any).mockResolvedValue({ id: "r5", state: "landed" });
+  renderCampaign();
+
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+});
+
+test("a run that landed without publishing does not open the older record", async () => {
+  // The same hazard on the success path, which the failure path's version is
+  // easier to picture: the run reached a terminal state, but its publish was
+  // refused — the reviewer cancelled it, so the record on disk is still the
+  // older review nobody saved. Opening that presents it as this run's result,
+  // and its watermark can still match, so it is savable.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-old", stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r6", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", kind: "absorb", review_generation: "gen-new" });
+  (api.awaitRun as any).mockResolvedValue({ id: "r6", state: "landed" });
+  renderCampaign();
+
+  await screen.findByText("hi");
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+  // ...and the scene is released, so End scene is the way back.
+  expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeEnabled();
+});
