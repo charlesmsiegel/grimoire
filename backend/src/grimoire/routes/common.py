@@ -516,7 +516,7 @@ def _routing_body(scope: str, campaign_meta: dict) -> dict:
     list (keys, base URLs and all) to render ten option labels.
     """
     conns = store.llm_connections.list_connections()
-    known = {c["id"]: c for c in conns}
+    known = {c["id"] for c in conns}
     bundle = store.routing.bundle(campaign_meta=campaign_meta, cfg=store.read_config(),
                                   exists=lambda conn_id: conn_id in known, scope=scope)
     active = store.llm_connections.get_active()  # routing-ok: names the cascade's base
@@ -560,10 +560,19 @@ def _routing_fields(scope: str, body) -> dict:
 
 
 def _connection_exists(conn_id: str) -> bool:
+    """Whether this id names a connection, for the WRITE path only.
+
+    Narrower than the read path's predicate on purpose, and the difference is
+    which failures are allowed to look like a typo. A busy store or an
+    unreadable file is not "no such connection": answering False would report a
+    transient condition as a mistake in what the user typed, and the app already
+    turns `StoreBusy` into a 409 that says what actually happened. Resolution
+    swallows both because degrading to the next scope is better than failing a
+    turn; a settings write has no turn to protect.
+    """
     try:
         store.llm_connections.read_connection_raw(conn_id)
-    except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy,
-            OSError, UnicodeDecodeError):
+    except store.llm_connections.ConnectionNotFound:
         return False
     return True
 
