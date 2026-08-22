@@ -400,11 +400,6 @@ def undetach(cid: str, ref: str) -> None:
     _undetach(cid, ref)
 
 
-def dependent_campaigns(wroot: Path) -> list[str]:
-    """Ids of the campaigns that inherit from `wroot`. See `_dependent_campaigns`."""
-    return _dependent_campaigns(wroot)
-
-
 def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
     """Give this campaign its own copy of everything filed beside a world
     record — its `assets/`, and for a greeting its localized images.
@@ -1728,7 +1723,7 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
             # abort the sweep for every campaign after it and 500 a delete that
             # has already happened -- reintroducing, by a new route, exactly the
             # failure the paragraph above records fixing. Skipping one campaign
-            # leaves it at the pre-#225 behaviour, which `_dependent_campaigns`
+            # leaves it at the pre-#225 behaviour, which `dependent_campaigns`
             # already names as the acceptable direction for a sweep that cannot
             # run.
             log.warning("could not finish sweeping campaign %s after %s/%s was deleted "

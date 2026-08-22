@@ -1681,7 +1681,7 @@ def test_a_busy_campaign_does_not_cost_the_other_dependents_their_sweep(monkeypa
     for cid in (first_cid, second_cid):
         overlay.materialize_actor(cid, "characters", aid)
     # Lock whichever the sweep reaches first, so "the ones after it" is real.
-    busy = overlay._dependent_campaigns(wroot)[0]
+    busy = overlay.dependent_campaigns(wroot)[0]
     other = second_cid if busy == first_cid else first_cid
 
     monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
