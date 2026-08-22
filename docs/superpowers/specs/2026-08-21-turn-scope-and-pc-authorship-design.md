@@ -151,6 +151,21 @@ always-on blocks with no ordering between them would be that finding, tripled.
    for the ordinary chat turn, which has no appended messages; the paths that
    do get it last.
 
+   **The opener is the third such path, and it was missed twice.**
+   `compose_opener` appends `opener_shape.j2` after `post_history`
+   (`assemble.py:76`) precisely so the shape rules "outrank everything above" —
+   and that template carries no PC guard whatsoever. The opener path's only
+   boundary text is `opener_instruction/standard.j2`'s *"Do not speak or act
+   for the player"*, which sits near the top of the system prompt and is the
+   weak one-liner this spec exists to replace. So an opener currently ends on
+   an instruction that says nothing about wants, conclusions, judgments or
+   movement. The boundary is emitted after the shape rules there too.
+
+   One mechanical consequence: `compose_opener` renders both trailing messages
+   before packing *"so their tokens can be reserved: neither is droppable, so
+   neither may go uncounted"*. A third non-droppable trailing message joins
+   that reserve, or the budget silently under-counts the opener.
+
    It is also made non-removable in the layout editor — see §6.
 3. **`turn_scope` outranks the prose style.** This is the one place the
    hierarchy differs from `natural_prose.j2`, which yields its rhythm guidance
