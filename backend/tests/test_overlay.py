@@ -225,6 +225,22 @@ def test_greeting_update_materializes(monkeypatch, tmp_path):
     assert f"greetings/{gid}" in campaigns.read_manifest(cid)
 
 
+def test_materializing_an_inherited_greeting_keeps_its_location(monkeypatch, tmp_path):
+    """Copy-on-write carries the whole record, the location included (#218).
+    The first campaign-side edit rewrites the copy from its own parsed
+    frontmatter, so a key the patch says nothing about has to survive that
+    round trip rather than being dropped on the way through."""
+    wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
+    greetings.update_greeting(wroot, gid, location="counting-house")
+    assert overlay.read_greeting(cid, gid)["meta"]["location"] == "counting-house"  # inherited
+    overlay.update_greeting(cid, gid, body="campaign body")                         # materializes
+    assert overlay.read_greeting(cid, gid)["meta"]["location"] == "counting-house"
+    # and the campaign can then set its own without touching the world's
+    overlay.update_greeting(cid, gid, location="the-quay")
+    assert overlay.read_greeting(cid, gid)["meta"]["location"] == "the-quay"
+    assert greetings.read_greeting(wroot, gid)["meta"]["location"] == "counting-house"
+
+
 def test_set_edges_materializes_plotmap(monkeypatch, tmp_path):
     wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
     overlay.set_edges(cid, gid, leads_to=["other"])
