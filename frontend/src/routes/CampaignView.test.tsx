@@ -148,6 +148,46 @@ test("a post nothing could price carries no chip rather than a $0.00 one", async
   expect(screen.queryByText("unpriced")).toBeNull();
 });
 
+test("cost chips never land on the transcript they were not read for", async () => {
+  // The race: this view keeps scene A's messages on screen until B's
+  // transcript read lands, and the usage read is a separate request that can
+  // land first. Index-keyed alone, B's costs appeared beside A's posts — and
+  // stayed there if B's transcript read never landed at all.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "First", model: "", created: "", updated: "2026-01-02" },
+    { id: "s2", title: "Second", model: "", created: "", updated: "2026-01-01" },
+  ]);
+  (api.getScene as any).mockImplementation(async (_cid: string, sid: string) => {
+    if (sid === "s1") {
+      return { meta: { id: "s1", title: "First" },
+               messages: [{ role: "user", content: "the first scene" }] };
+    }
+    return new Promise(() => {});          // B's transcript never arrives
+  });
+  (api.getSceneUsage as any).mockImplementation(async (_cid: string, sid: string) => {
+    const empty = { campaign: "run", scene: sid, since: "", until: "", clamped: false,
+      generated_at: "",
+      totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
+                total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+                cost_usd: 0, estimated_usd: 0, modelled_usd: 0, priced_calls: 0,
+                unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
+                unmetered_calls: 0, duration_ms: 0 },
+      by_task: [], by_post: [] as any[], turns: [], listed: 0, truncated: false };
+    // Only the SECOND scene has spend, and its read resolves at once.
+    return sid === "s2"
+      ? { ...empty, by_post: [postBucket(0, { cost_usd: 9.99, priced_calls: 1 })] }
+      : empty;
+  });
+  renderCampaign();
+  await screen.findByText("the first scene");
+
+  await openScene(/Second/);
+
+  // A's message is still what is rendered, and B's figure is not beside it.
+  expect(screen.getByText("the first scene")).toBeInTheDocument();
+  expect(screen.queryByText(/\$9\.99/)).toBeNull();
+});
+
 test("a failed cost read leaves the transcript alone", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [

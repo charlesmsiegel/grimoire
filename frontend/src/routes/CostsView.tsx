@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type CampaignSceneCosts, type SceneCostRow } from "../api/client";
-import { Footnotes, about, bound, bucketPrice, money } from "../components/cost";
+import {
+  Footnotes, about, bound, bucketPrice, headlineIsEstimate, money,
+} from "../components/cost";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
@@ -230,12 +232,12 @@ export function CostsView() {
                           evidence (the provider's own arithmetic vs the user's
                           table), so a merged figure reconciles to neither
                           column. `bucketPrice` refuses the same merge above. */}
-                      {row.estimated_usd > 0 && (
+                      {!headlineIsEstimate(row) && row.estimated_usd > 0 && (
                         <div className="field-hint">
                           + {about(row.estimated_usd)} subscription
                         </div>
                       )}
-                      {row.modelled_usd > 0 && (
+                      {!headlineIsEstimate(row) && row.modelled_usd > 0 && (
                         <div className="field-hint">
                           + {about(row.modelled_usd)} estimated
                         </div>

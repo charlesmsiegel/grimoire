@@ -1288,27 +1288,42 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   }, [cid, ctxKey]);
 
   // What each player post in this scene has cost, keyed by transcript index
-  // (#153). Read on the same `ctxKey` beat as the budget above and cleared on a
-  // scene change, so a chip can never be left standing over another scene's
-  // post while the new read is in flight.
+  // (#153). Read on the same `ctxKey` beat as the budget above.
+  //
+  // Held WITH the scene it was read for, and that is load-bearing rather than
+  // tidy. This view deliberately keeps scene A's messages on screen until B's
+  // transcript read lands, and the usage read is a separate request that can
+  // land FIRST — so a plain index-keyed map put B's costs beside A's posts, and
+  // left them there for good if B's transcript read then failed. Matching the
+  // costs to `loaded` (the transcript actually rendered) rather than to `cid`/
+  // `activeId` (the one requested) is what closes that window.
   //
   // Swallowed to "no chips" on failure, the rule this view follows everywhere:
   // an accounting read that failed is not a reason to put an error over a
   // transcript. The inspector's Cost section is where a reader who wants the
   // figure and an explanation goes.
-  const [postCosts, setPostCosts] = useState<Record<number, UsagePostBucket>>({});
+  const [postCosts, setPostCosts] =
+    useState<{ cid: string; sid: string; byPost: Record<number, UsagePostBucket> } | null>(null);
   useEffect(() => {
-    if (!activeId) { setPostCosts({}); return; }
+    if (!activeId) { setPostCosts(null); return; }
     let live = true;
-    setPostCosts({});
-    api.getSceneUsage(cid, activeId)
+    setPostCosts(null);
+    const forCid = cid;
+    const forSid = activeId;
+    api.getSceneUsage(forCid, forSid)
       .then((u) => {
         if (!live) return;
-        setPostCosts(Object.fromEntries(u.by_post.map((b) => [b.post, b])));
+        setPostCosts({ cid: forCid, sid: forSid,
+                       byPost: Object.fromEntries(u.by_post.map((b) => [b.post, b])) });
       })
-      .catch(() => { if (live) setPostCosts({}); });
+      .catch(() => { if (live) setPostCosts(null); });
     return () => { live = false; };
   }, [cid, activeId, ctxKey]);
+
+  /** The chips, but only where they describe the transcript on screen. */
+  const postChips =
+    postCosts && loaded && postCosts.cid === loaded.cid && postCosts.sid === loaded.sid
+      ? postCosts.byPost : null;
 
   // A dismissal belongs to the campaign it was made in, to the level it was
   // made at, and to the budget it was made against. Without the campaign, "I
@@ -3830,8 +3845,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                           text it paid for. Suppressed while the post is being
                           edited, where the row is a form and not a message. */}
                       {m.role === "user" && editing?.index !== index
-                        && postCosts[index] !== undefined && (
-                        <PostCost bucket={postCosts[index]} />
+                        && postChips?.[index] !== undefined && (
+                        <PostCost bucket={postChips[index]} />
                       )}
                       {editing?.index === index ? (
                         <div className="msg-edit-form">

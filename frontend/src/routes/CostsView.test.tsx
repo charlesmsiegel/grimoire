@@ -190,6 +190,21 @@ test("a scene row never totals its two kinds of estimate", async () => {
   expect(within(only).queryByText(/\$1\.00/)).toBeNull();
 });
 
+test("a row whose headline IS the estimate does not print it twice", async () => {
+  // `bucketPrice` renders the single estimate as the headline; a "+ ≈ $X"
+  // line under it reads as two amounts where the ledger holds one.
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT,
+    scenes: [row("002--market", "The Market", {
+      calls: 2, priced_calls: 2, subscription_calls: 2, estimated_usd: 0.90 })],
+  });
+  renderCosts();
+
+  const [only] = await screen.findAllByRole("row").then((r) => r.slice(1));
+  expect(within(only).getByText("≈ $0.90")).toBeInTheDocument();
+  expect(within(only).queryByText(/\+ ≈ \$0\.90/)).toBeNull();
+});
+
 test("subscription and modelled spend are reported apart from the bill", async () => {
   (api.getCampaignSceneCosts as any).mockResolvedValue({
     ...REPORT,
