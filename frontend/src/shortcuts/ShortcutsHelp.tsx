@@ -33,6 +33,11 @@ export default function ShortcutsHelp() {
   // strands the reader on `<body>` afterwards.
   const cameFrom = useRef<HTMLElement | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  // Set when the sheet closes because the palette took over, so the focus
+  // effect below knows not to put focus back: the palette has just taken it,
+  // and restoring would leave a visible palette whose typing goes to whatever
+  // was behind the sheet (PR #400 review).
+  const yielded = useRef(false);
 
   const self = useHotkeys([
     // `global`, so the sheet opens over an overlay too: a reader who cannot
@@ -62,7 +67,11 @@ export default function ShortcutsHelp() {
   // BENEATH this one. Two of them stacked is a palette nobody can see taking
   // the keys, so this yields: ⌘K reaches past the sheet and replaces it.
   const { open: paletteOpen } = usePalette();
-  useEffect(() => { if (paletteOpen) setOpen(false); }, [paletteOpen]);
+  useEffect(() => {
+    if (!paletteOpen || !open) return;
+    yielded.current = true;
+    setOpen(false);
+  }, [paletteOpen, open]);
 
   useEffect(() => {
     if (open) {
@@ -72,6 +81,9 @@ export default function ShortcutsHelp() {
     }
     const back = cameFrom.current;
     cameFrom.current = null;
+    // Nothing to give back when the palette took it: it focused its own search
+    // box on the way in, and this would take it straight off again.
+    if (yielded.current) { yielded.current = false; return; }
     // Only if it is still on the page: the reader may have opened this from a
     // control that has since unmounted.
     if (back?.isConnected) back.focus();

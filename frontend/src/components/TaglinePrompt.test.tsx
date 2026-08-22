@@ -59,15 +59,20 @@ test("any other Generate failure still shows the endpoint's own message", async 
   expect(screen.queryByRole("link")).toBeNull();
 });
 
-test("Escape skips, and is refused while a generation is in flight", async () => {
+// Escape mirrors Skip, and Skip is not disabled mid-generation -- only
+// Generate is. An Escape refused there would leave keyboard users the only
+// ones who could not leave a prompt the mouse can still dismiss (PR #400
+// review, correcting my own reading of which button `busy` disables).
+test("Escape skips mid-generation, exactly as Skip does", async () => {
   const onClose = vi.fn();
   // A generate that never settles, so the dialog stays `busy`.
   (api.generateCharacterTagline as any).mockImplementation(() => new Promise(() => {}));
   render(<TaglinePrompt wid="w" cid="mara" name="Mara" onClose={onClose} />);
   fireEvent.click(screen.getByRole("button", { name: /generate/i }));
   await screen.findByRole("button", { name: /generating/i });
+  expect(screen.getByRole("button", { name: /^skip$/i })).not.toBeDisabled();
   fireEvent.keyDown(window, { key: "Escape" });
-  expect(onClose).not.toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalledTimes(1);
 });
 
 test("Escape skips while idle", () => {

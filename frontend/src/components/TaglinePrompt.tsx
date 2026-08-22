@@ -11,11 +11,13 @@ export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
   // not be reached at all, and stringifying here would throw it away (#210).
   const [error, setError] = useState<unknown>(null);
 
-  // Escape is Skip: the same dismissal the button offers, refused while a
-  // generation is in flight for the same reason the button is disabled then.
+  // Escape is Skip: the same dismissal that button offers, and unconditional
+  // because Skip is. `busy` disables Generate, not the way out -- a key that
+  // read it as "cannot leave" would leave keyboard users the only ones stuck
+  // in a prompt the mouse can still dismiss (PR #400 review).
   useHotkeys(
     [{ keys: "escape", label: "Skip the tagline", group: "THIS PANEL",
-       enabled: !busy, whileTyping: true, run: onClose }],
+       whileTyping: true, run: onClose }],
     { modal: true },
   );
 
