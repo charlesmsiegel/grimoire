@@ -76,22 +76,6 @@ def _require_char(root: Path, cid: str) -> Path:
     return d
 
 
-def character_exists(root: Path, cid: str) -> bool:
-    """Is `cid` still a real character here? Two stats, no read.
-
-    `read_character` answers the same question but parses every version's card
-    to do it, which is the wrong price for a caller that only needs to know
-    whether writing a sidecar would resurrect a deleted actor as a directory
-    holding nothing else (the bulk tagline derive, whose model call is long
-    enough for a delete to land inside it).
-    """
-    try:
-        _require_char(root, cid)
-    except CharacterNotFound:
-        return False
-    return True
-
-
 def create_character(root: Path, name: str, version_name: str = "default", card: dict | None = None,
                      taken=None) -> tuple[str, str]:
     _chars_dir(root).mkdir(parents=True, exist_ok=True)

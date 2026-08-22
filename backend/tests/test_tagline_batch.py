@@ -240,6 +240,63 @@ def test_a_tagline_written_during_the_call_is_not_overwritten(client, monkeypatc
     assert frames[1]["skipped"] == "already set"
 
 
+def test_a_character_replaced_under_the_same_name_keeps_its_own_blank(client, monkeypatch):
+    """A delete frees the slug, so a character recreated under the same name
+    takes it back, and no existence check can tell the two apart. The card can:
+    the sentence belongs to the text it was derived from, and that text is what
+    the write is fenced on.
+
+    A replacement whose card is byte-identical is deliberately NOT
+    distinguished. Nothing in the store carries an identity beyond the id, and
+    inventing one for this would buy nothing: a sentence derived from exactly
+    the text the new card holds describes it exactly as well.
+    """
+    wid = _world(client)
+    _character(client, wid, "Mara")
+    root = store.worlds.world_root(wid)
+    _answers(client, ["A courier with cold hands."])
+    real_parse = store.taglines.parse_output
+
+    def replacing_parse(text):
+        store.characters.delete_character(root, "mara")
+        card = store.characters.blank_card("Mara")
+        card["data"]["description"] = "somebody else entirely"
+        cid, _ = store.characters.create_character(root, "Mara", "main", card)
+        assert cid == "mara", "the slug has to come back for this to be the case it means"
+        return real_parse(text)
+
+    monkeypatch.setattr(store.taglines, "parse_output", replacing_parse)
+
+    _, frames = _derive(client, wid)
+
+    assert _tagline(client, wid, "mara") == "", "the old character's sentence landed on the new one"
+    assert frames[1]["skipped"] == "changed"
+
+
+def test_a_card_edited_during_the_call_is_not_described_by_the_stale_sentence(client, monkeypatch):
+    """Same fence, gentler case: the card moved while the model was answering,
+    so the sentence describes text that is no longer there. Left blank, which is
+    what makes a re-run derive it from what the card says now."""
+    wid = _world(client)
+    cid = _character(client, wid, "Mara")
+    root = store.worlds.world_root(wid)
+    _answers(client, ["A courier with cold hands."])
+    real_parse = store.taglines.parse_output
+
+    def editing_parse(text):
+        card = store.characters.read_card(root, "mara", "main")
+        card.setdefault("data", {})["description"] = "a locksmith now"
+        store.characters.update_version(root, "mara", "main", card)
+        return real_parse(text)
+
+    monkeypatch.setattr(store.taglines, "parse_output", editing_parse)
+
+    _, frames = _derive(client, wid)
+
+    assert _tagline(client, wid, cid) == ""
+    assert frames[1]["skipped"] == "changed"
+
+
 def test_a_character_deleted_during_the_call_is_not_resurrected(client, monkeypatch):
     """`taglines.write` creates the parent directory, so writing to a character
     who has just been deleted would rebuild `characters/<cid>/` holding nothing

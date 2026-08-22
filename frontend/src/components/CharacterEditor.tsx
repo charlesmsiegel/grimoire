@@ -393,7 +393,17 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // construction: a re-run targets whatever is still blank.
   useEffect(() => () => taglineAbort.current?.abort(), [scope.kind, scope.id]);
 
-  const reload = useCallback(() => api.listCharacters(scope).then(setChars), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // `adopt`'s rule, for the roster rather than the open character: the read is
+  // async, so the editor can be showing another library by the time it lands,
+  // and installing A's cards under B's handlers is how an action on a shared
+  // slug mutates one while displaying the other. Guarded here rather than at
+  // the ten call sites, because the hazard is the read, not any one caller.
+  const reload = useCallback(() => {
+    const from = scope;
+    return api.listCharacters(from).then((rows) => {
+      if (liveScope.current.kind === from.kind && liveScope.current.id === from.id) setChars(rows);
+    });
+  }, [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   /** Re-read the backlog. Failure leaves it empty, which hides the button —
    *  the right answer for a count nobody can trust, and the same posture the
    *  greeting rail takes with its untagged list.
@@ -982,9 +992,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     } finally {
       taglineAbort.current = null;
       setTaglineBatch(null);
-      // `reload` is the closure this render captured, so it reads `from` --
-      // right while the editor is still there, wrong the moment it is not.
-      if (liveScope.current.kind === from.kind && liveScope.current.id === from.id) await reload();
+      // Swallowed, not surfaced: the taglines are already written, and letting
+      // a failed roster GET throw out of `finally` would take the report with
+      // it -- leaving the run that just spent a call per character with nothing
+      // to show, and an unhandled rejection out of the click handler. A stale
+      // grid is the smaller loss, and the next read fixes it.
+      if (liveScope.current.kind === from.kind && liveScope.current.id === from.id) {
+        await reload().catch(() => {});
+      }
     }
     if (liveScope.current.kind !== from.kind || liveScope.current.id !== from.id) return;
     const parts = [`Derived ${run.written} tagline${run.written === 1 ? "" : "s"}`];
