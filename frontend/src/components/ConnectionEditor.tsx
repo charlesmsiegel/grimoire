@@ -60,6 +60,19 @@ export function ConnectionEditor() {
   // response describes an endpoint this connection no longer points at.
   const openRev = useRef<string>("");
 
+  /** Is the New-connection form still showing the draft this answer is about?
+   *
+   *  Read through refs rather than the `form`/`key` state, because a closure
+   *  created when the request went out captures the values it went out with —
+   *  which is the very thing being tested against. */
+  const draftRef = useRef("");
+  const isDraft = (asked: string) => openId.current === null && draftRef.current === asked;
+
+  // Kept in step with the form on every render: cheap, and the alternative is
+  // threading it through every `setForm`/`setKey` call site.
+  draftRef.current = JSON.stringify(
+    { kind: form.kind, base_url: form.base_url, api_key: key });
+
   const reload = useCallback(() => api.listConnections().then(setConnections), []);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => { api.getConfig().then((c) => setActiveId(c.active_connection_id)); }, []);
@@ -121,8 +134,13 @@ export function ConnectionEditor() {
     // local server that is switched off, where the same courtesy is a stall on
     // merely *looking* at a connection — so that kind keeps its explicit
     // button, exactly as it had before.
-    if (d.kind === "openrouter" && d.models.length === 0 && !fetchedOnce.current.has(cid)) {
-      fetchedOnce.current.add(cid);
+    // Keyed by revision, not just id: an edit from another tab or a synced
+    // client bumps the rev and clears the cached sidecar, and a suppression
+    // keyed on the id alone would then skip the fetch for a connection whose
+    // picker really is empty — leaving it empty until a manual refresh.
+    const attempt = `${cid}:${d.rev}`;
+    if (d.kind === "openrouter" && d.models.length === 0 && !fetchedOnce.current.has(attempt)) {
+      fetchedOnce.current.add(attempt);
       await refreshModels(cid, { quiet: true });
     }
   }
@@ -137,10 +155,9 @@ export function ConnectionEditor() {
         };
         if (key) patch.api_key = key;
         await api.updateConnection(id, patch);
-        // The saved settings are new ones, so whatever their predecessors
-        // fetched is not this connection's catalog any more — let the reselect
-        // below fetch it again rather than showing the old endpoint's models.
-        fetchedOnce.current.delete(id);
+        // Nothing to clear: a save bumps the revision, so the reselect below
+        // asks under a key this set has never seen and fetches again rather
+        // than showing the old endpoint's models.
         await reload();
         await select(id);
       } else {
@@ -156,7 +173,6 @@ export function ConnectionEditor() {
   async function remove(c: LLMConnection) {
     if (!window.confirm(`Delete connection '${c.name}'?`)) return;
     await api.deleteConnection(c.id);
-    fetchedOnce.current.delete(c.id);
     if (id === c.id) resetForm();
     await reload();
   }
@@ -219,16 +235,21 @@ export function ConnectionEditor() {
   /** The same fetch for a connection that has not been saved: the credentials
    *  come off the form rather than off disk, and nothing is cached. */
   async function previewModels() {
+    const asked = { kind: form.kind, base_url: form.base_url, api_key: key };
+    // The draft this answer will be about. An unsaved form has no revision to
+    // compare, and the fields ARE its identity: edit the base URL while the
+    // fetch is out and the catalog that lands describes the endpoint that was
+    // typed before, which the reader could then pick a model from and save
+    // against the new one.
+    const forDraft = JSON.stringify(asked);
     setRefreshing(true);
     setModelsError(false);
     try {
-      const r = await api.previewModels({
-        kind: form.kind, base_url: form.base_url, api_key: key,
-      });
-      if (openId.current !== null) return;   // a saved connection is open now
+      const r = await api.previewModels(asked);
+      if (!isDraft(forDraft)) return;        // saved connection, or a changed draft
       setModels(r.models);
     } catch (err: unknown) {
-      if (openId.current !== null) return;
+      if (!isDraft(forDraft)) return;
       setModelsError(true);
       setError(err);
     } finally {
@@ -242,13 +263,17 @@ export function ConnectionEditor() {
    *  banner: "your key is rejected" is the answer to the question that was
    *  asked, not a failure of the app to answer it. */
   async function check(forId: string) {
+    const forRev = openRev.current;
     setChecking(true);
     setChecked(null);
     try {
       const result = await api.checkConnection(forId);
       // A verdict about a connection nobody is looking at any more belongs in
-      // the registry (where the server already put it), not on this panel.
-      if (openId.current !== forId) return;
+      // the registry (where the server already put it), not on this panel —
+      // and one about a revision the reader has since saved past belongs
+      // nowhere: the server already refuses to hand that verdict back, and
+      // this panel must not be the place it survives.
+      if (openId.current !== forId || openRev.current !== forRev) return;
       setChecked(result);
       // The rail badges a failing connection, and it is drawn from the list —
       // so a check whose verdict only reached this panel would leave the two

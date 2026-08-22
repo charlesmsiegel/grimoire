@@ -249,7 +249,7 @@ async def post_character_tagline_generate(wid: str, cid: str,
     try:
         with store.usage.meter("tagline") as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn))
+                                       on_timeout=_noting(client, conn, m.usage))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
@@ -496,7 +496,7 @@ async def post_character_voice_anchor_generate(wid: str, cid: str,
     try:
         with store.usage.meter("voice-anchor") as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn))
+                                       on_timeout=_noting(client, conn, m.usage))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     # Preview only, like tagline/generate — the caller persists via PUT on Save,

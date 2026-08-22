@@ -366,6 +366,100 @@ class FakeCatalog(FakeLLM):
                          models_error=error, health_error=health_error)
 
 
+class StallingGateway(FakeCatalog):
+    """A gateway whose call never answers — for the ceilings that exist to cut
+    one off (#146, #272).
+
+    `where` names which call hangs, because the two ceilings are different
+    things: `check` is bounded by the health route's own constant, and
+    `complete` by `llm_call_budget`. Bounded rather than forever so a
+    regression in either fails the suite in seconds instead of hanging it.
+    """
+
+    def __init__(self, where="check", seconds=STALL_SECONDS):
+        super().__init__()
+        self.where = where
+        self.seconds = seconds
+
+    async def check(self, conn) -> None:
+        if self.where == "check":
+            await asyncio.sleep(self.seconds)
+        await super().check(conn)
+
+    async def complete(self, messages, conn, usage=None) -> str:
+        if self.where == "complete":
+            await asyncio.sleep(self.seconds)
+        return await super().complete(messages, conn, usage)
+
+
+# ---- provider doubles ----
+# Below the facade rather than in place of it: these stand in for one of the
+# three clients `LLMClient` dispatches to, for the tests that need a REAL
+# facade (retries, fallback, the health observer) with fake providers under it.
+# Shared for the same reason the gateway fakes are -- a provider contract
+# written inline in a suite drifts the moment the facade changes, and the suite
+# goes on passing.
+class ScriptedProvider:
+    """Streams `chunks`, then raises `error` if it was given one."""
+
+    def __init__(self, chunks=("hi",), error=None):
+        self.chunks = list(chunks)
+        self.error = error
+        self.calls = 0
+
+    async def stream(self, messages, *args, **kwargs):
+        self.calls += 1
+        for chunk in self.chunks:
+            yield chunk
+        if self.error is not None:
+            raise self.error
+
+
+class FlakyProvider:
+    """Fails the first attempt and serves every one after it — the shape a
+    retry and a fallback are both tested against."""
+
+    def __init__(self, error, chunks=("hi",)):
+        self.error = error
+        self.chunks = list(chunks)
+        self.calls = 0
+
+    async def stream(self, messages, *args, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise self.error
+            yield  # pragma: no cover - unreachable; makes this a generator
+        for chunk in self.chunks:
+            yield chunk
+
+
+class RecordingProvider:
+    """Answers the two non-generating calls and records what it was asked.
+
+    Whole argument tuples, because which *provider* was asked with which
+    credential is the entire question #149 turns on — a double that kept only
+    the answer could not tell an OpenRouter fetch from a custom endpoint's.
+    """
+
+    def __init__(self, models=(), list_error=None, probe_error=None):
+        self.models = list(models)
+        self.list_error = list_error
+        self.probe_error = probe_error
+        self.listed: list[tuple] = []
+        self.probed: list[tuple] = []
+
+    async def list_models(self, *args):
+        self.listed.append(args)
+        if self.list_error is not None:
+            raise self.list_error
+        return list(self.models)
+
+    async def probe(self, *args):
+        self.probed.append(args)
+        if self.probe_error is not None:
+            raise self.probe_error
+
+
 class StallingOpenRouter(FakeLLM):
     """Streams `deltas`, then holds the connection open — the model still
     talking when the client walks away."""

@@ -17,12 +17,16 @@ from __future__ import annotations
 def entry(raw: dict) -> dict:
     """One provider's model record, normalized.
 
-    `pricing` is read defensively -- `or {}` rather than `.get("pricing", {})`
-    -- because an endpoint that sends `"pricing": null` is not hypothetical
-    and would otherwise raise inside a listing that has nothing else wrong
-    with it.
+    `pricing` is read defensively, and the test is `isinstance` rather than
+    truthiness: `"pricing": null` is not hypothetical, and neither is
+    `"pricing": "free"` -- a truthy non-mapping, which survives an `or {}` and
+    then raises `AttributeError` on `.get`. Both callers normalize *outside*
+    their exception funnels, so either one arrives as a 500 for a row the rest
+    of the catalog had nothing wrong with.
     """
-    pricing = raw.get("pricing") or {}
+    pricing = raw.get("pricing")
+    if not isinstance(pricing, dict):
+        pricing = {}
     return {"id": raw["id"], "name": raw.get("name") or raw["id"],
             "context": raw.get("context_length"),
             "prompt": pricing.get("prompt"), "completion": pricing.get("completion")}

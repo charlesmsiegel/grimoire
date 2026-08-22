@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import math
 import os
 import tempfile
@@ -22,11 +23,13 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import store
+from .. import llm, store
 from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
+
+log = logging.getLogger(__name__)
 
 
 def _fresh_or_409(expected: str | None, current: str | None) -> None:
@@ -448,16 +451,34 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
         raise LLMError("timeout", str(exc) or "the call timed out") from exc
 
 
-def _noting(client: LLMClient, conn: dict):
+def _noting(client: LLMClient, conn: dict, usage: dict | None = None):
     """`on_timeout` for a bounded generation: file the overrun against the
-    connection it was imposed on (#146).
+    connection that was actually running when the ceiling fired (#146).
 
-    A function rather than a lambda at each of the six call sites, because the
-    thing worth reading at those sites is the generation, not the bookkeeping —
-    `_bounded_call(client.complete(...), on_timeout=_noting(client, conn))`
-    says which connection is being watched and stops there.
+    A function rather than a lambda at each call site, because the thing worth
+    reading at those sites is the generation, not the bookkeeping.
+
+    `conn` is the route's connection and `usage` is the holder the facade
+    stamps per attempt, which is the more accurate of the two: a generation
+    that failed over is being served by the *fallback* by the time it overruns,
+    and blaming the primary would both overwrite its real failure with a
+    timeout it did not cause and leave the connection that did cause one
+    looking healthy. The route's own connection is the fallback for a caller
+    that threads no holder.
     """
-    return lambda exc: client.note_outcome(conn, exc)
+    def note(exc: LLMError) -> None:
+        # Guarded for the same reason `llm._observe` is, and it took a broken
+        # test suite to prove the point: this runs on the failure path, and an
+        # exception here does not merely lose a status update — it REPLACES the
+        # error the caller is about to raise. A gateway double with no
+        # `note_outcome` turned "the budget stopped this phase" into an
+        # AttributeError, and the phase stopped reporting why it died.
+        try:
+            client.note_outcome((usage or {}).get(llm.ATTEMPTED) or conn, exc)
+        except Exception as exc2:  # noqa: BLE001 - see above
+            log.warning("could not record a ceiling timeout: %s", exc2)
+
+    return note
 
 
 def get_llm(request: Request) -> LLMClient:
@@ -528,7 +549,7 @@ async def _draft_description(client, path, subject: str) -> dict:
     try:
         with store.usage.meter("image-description") as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn))
+                                       on_timeout=_noting(client, conn, m.usage))
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     return {"description": store.image_drafts.parse_output(text)}

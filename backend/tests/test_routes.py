@@ -8930,12 +8930,12 @@ def test_a_refused_dossier_call_is_skipped_rather_than_failed(
     cid, sid = npc_module_scene
     real_run = routes.scenes._Budget.run
 
-    async def refuse_after_the_first(self, coro, on_start=None):
+    async def refuse_after_the_first(self, coro, on_start=None, on_timeout=None):
         if getattr(self, "_seen", 0):       # the extraction goes through; the dossier does not
             coro.close()
             raise routes.scenes.BudgetRefused("timeout", routes.scenes.BUDGET_EXHAUSTED)
         self._seen = 1
-        return await real_run(self, coro, on_start)
+        return await real_run(self, coro, on_start, on_timeout)
 
     monkeypatch.setattr(routes.scenes._Budget, "run", refuse_after_the_first)
     client.app.dependency_overrides[routes.get_llm] = \
