@@ -20,6 +20,13 @@ Honest about its reach, in the house style:
   every existing call site uses, and `test_the_only_way_into_a_provider_is_the_
   seam` below pins it so a second seam has to be declared rather than
   discovered.
+- **A campaign override only reaches a call that hands over a campaign id**,
+  and `cid` is not proof of one: `routes/characters.py` spells a CHARACTER id
+  `cid`, so `_require_connection("tagline", cid)` there would apply some other
+  record's routing and read perfectly naturally. The check below is the
+  decorated half -- a route handler passing a second argument must be mounted
+  under `/campaigns/{cid}`. A helper with no decorator (`_draft_description`)
+  is checked only for the argument's spelling, and its callers are on a human.
 - **The task inventory is the literals in `routes/`**: a `_require_connection`
   first argument, a `store.usage.meter(...)` first argument, and any `task=`
   keyword (which is how `_chat_stream` and `_ephemeral_stream` are told what
@@ -30,6 +37,10 @@ Honest about its reach, in the house style:
   scene-break route passes `"scene-break"` rather than `"rolling-summary"`; both
   are known tasks and both are in the `summary` route. What it catches is the
   unrouted call and the unclassified task.
+- **A `task=` keyword that is not a generation's task would be miscounted.**
+  Every one in `routes/` today names a task; a future keyword argument of that
+  name meaning something else would have to be renamed or the inventory
+  narrowed, and the failure says which literal it could not place.
 - **A non-literal task is a failure**, not a pass: `_require_connection(task)`
   where `task` is a variable cannot be checked here, so it has to be argued in
   review and marked `# routing-ok: <reason>` on the line, like every other guard
@@ -101,6 +112,53 @@ def test_every_generation_names_a_task_and_every_task_has_a_route():
         f"the task to the route it belongs to: {unknown}")
 
 
+#: Both function forms. Nearly every generation route is `async def`, which is
+#: an `AsyncFunctionDef` and not a subclass of `FunctionDef` -- checking only the
+#: latter made the check below walk the handful of sync helpers and silently skip
+#: every route it exists for. Caught by mutating a call site and watching the
+#: guard stay green.
+_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _route_paths(fn) -> list[str]:
+    """The URL paths `fn` is mounted at, from its `@router.<method>("...")`."""
+    out = []
+    for dec in fn.decorator_list:
+        if isinstance(dec, ast.Call) and dec.args:
+            first = dec.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                out.append(first.value)
+    return out
+
+
+def test_a_campaign_override_only_reaches_calls_that_pass_a_campaign():
+    """The second argument is the campaign whose routing applies.
+
+    A route not mounted under `/campaigns/{cid}` has no campaign to hand over,
+    and the id it does have is something else wearing the same name -- which is
+    how `routes/characters.py`, where `cid` is a character, would silently apply
+    another record's settings.
+    """
+    wrong = []
+    for path, text in _sources():
+        tree = ast.parse(text)
+        for fn in [n for n in ast.walk(tree) if isinstance(n, _FUNCTIONS)]:
+            for call in _calls(fn, "_require_connection"):
+                if len(call.args) < 2:
+                    continue
+                second = call.args[1]
+                where = f"{path.name}:{call.lineno} ({fn.name})"
+                if not (isinstance(second, ast.Name) and second.id == "cid"):
+                    wrong.append(f"{where}: second argument is not `cid`")
+                    continue
+                mounted = _route_paths(fn)
+                if mounted and not any("/campaigns/{cid}" in p for p in mounted):
+                    wrong.append(f"{where}: mounted at {mounted}, so `cid` is not a campaign")
+    assert not wrong, (
+        "these calls hand a campaign id to the routing cascade that is not one: "
+        f"{wrong}")
+
+
 def test_the_walk_finds_the_call_sites_and_not_the_definition():
     """A guard that passed because it found nothing is the failure mode here.
 
@@ -114,7 +172,7 @@ def test_the_walk_finds_the_call_sites_and_not_the_definition():
         tree = ast.parse(text)
         seen += sum(1 for _ in _calls(tree, "_require_connection"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "_require_connection":
+            if isinstance(node, _FUNCTIONS) and node.name == "_require_connection":
                 definitions += 1
                 assert not any(c.lineno == node.lineno
                                for c in _calls(tree, "_require_connection")), (
