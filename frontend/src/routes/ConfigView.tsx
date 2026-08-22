@@ -502,6 +502,19 @@ export default function ConfigView() {
               files stay small and turning it up is what you do before reproducing a
               bug. <strong>Errors are recorded whatever this says.</strong>
             </p>
+            {/* Said here, where sharing the file is decided. No API key can
+                reach it — only grimoire's own loggers are recorded, never the
+                HTTP client's — but campaign and scene ids are how a failure is
+                located, and a failed character refresh names the character. So
+                it is safe to hand over in the sense that matters for
+                credentials, and not blank about your library. */}
+            <p className="config-copy">
+              It holds <strong>no API keys</strong> — only grimoire's own messages are
+              recorded, never the HTTP client's request URLs. It does name the campaign
+              and scene a failure happened in, and occasionally a character, because
+              that is what makes a failure findable. Worth a read before you attach it
+              to anything.
+            </p>
             <div className="config-fields">
               <div className="config-field">
                 <label htmlFor="cfg-log-level">Record</label>

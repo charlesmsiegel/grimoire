@@ -238,7 +238,10 @@ Four rules that are easy to undo by accident:
   logger.** `logs.install()` (from `create_app`) puts one on the `grimoire`
   logger, and that boundary is a privacy rule, not a preference: `httpx` logs
   full request URLs at DEBUG, an OpenAI-compatible endpoint can carry its key
-  in one, and this is a file users are asked to attach to bug reports.
+  in one, and this is a file a user may hand to someone else. What it *does*
+  carry is campaign and scene ids, and occasionally a character name — that is
+  what makes a failure findable, and Configuration says so where sharing it is
+  decided, rather than leaving the file to look emptier than it is.
 - **`logs.record` may not raise and may not re-enter itself.** It runs beside a
   turn and inside exception handlers, and writing a row resolves the store root
   — which reads the bootstrap pointer through `failsoft`, which *logs*. The
