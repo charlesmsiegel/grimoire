@@ -1,7 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import AppHeader from "./AppHeader";
+import type { ProviderHealth } from "../api/types";
 import { ShellStatusProvider, usePublishSceneModel } from "./ShellStatus";
+
+/** What the provider last actually did (#146). `null` is "nothing has been
+ *  recorded", which is the state the dot is green-but-unproven in — so a test
+ *  about ROUTING passes it and says nothing about health, and the one test
+ *  that wants the word "connected" supplies the outcome that earns it. */
+const WORKED: ProviderHealth = { state: "ok", kind: "", detail: "", at: "" };
 
 /** A page that knows which model its turns run on, standing in for CampaignView. */
 function Publisher({ model, ready }: { model: string | null; ready?: boolean | null }) {
@@ -9,12 +16,13 @@ function Publisher({ model, ready }: { model: string | null; ready?: boolean | n
   return null;
 }
 
-function renderHeader(published?: string | null, ready: boolean | null = null) {
+function renderHeader(published?: string | null, ready: boolean | null = null,
+                      health: ProviderHealth | null = null) {
   return render(
     <MemoryRouter>
       <ShellStatusProvider>
         {published !== undefined && <Publisher model={published} ready={ready} />}
-        <AppHeader model="vendor/active" connection="OpenRouter" ready />
+        <AppHeader model="vendor/active" connection="OpenRouter" ready health={health} />
       </ShellStatusProvider>
     </MemoryRouter>,
   );
@@ -44,7 +52,7 @@ test("leaving the campaign restores the global model", async () => {
   rerender(
     <MemoryRouter>
       <ShellStatusProvider>
-        <AppHeader model="vendor/active" connection="OpenRouter" ready />
+        <AppHeader model="vendor/active" connection="OpenRouter" ready health={null} />
       </ShellStatusProvider>
     </MemoryRouter>,
   );
@@ -67,6 +75,10 @@ test("the dot reports the routed connection, not the active one", async () => {
 });
 
 test("a page with no opinion about readiness leaves the global verdict alone", async () => {
-  renderHeader("vendor/cheap");
-  expect(await screen.findByTitle(/OpenRouter · connected/)).toBeInTheDocument();
+  // The health outcome is supplied so the verdict has something to say beyond
+  // "not checked yet" (#146): what is under test is that `ready` still governs
+  // when the page publishes no opinion, and a green-but-unproven dot would
+  // pass whether it did or not.
+  renderHeader("vendor/cheap", null, WORKED);
+  expect(await screen.findByTitle(/OpenRouter, connected/)).toBeInTheDocument();
 });
