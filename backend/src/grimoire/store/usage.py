@@ -388,6 +388,11 @@ class Meter:
             # label a non-LLM failure has.
             self.done("error", getattr(exc, "kind", None) or type(exc).__name__,
                       detail=str(exc).strip())
+            # `done` has written the error row. Marking the exception stops the
+            # call site that catches it next -- absorb's phase handlers turn
+            # one into a status -- from recording the same failure again and
+            # doubling it in every per-kind count (`errors.record_exception`).
+            errors.mark_recorded(exc)
         else:
             self.done("aborted")
         return False

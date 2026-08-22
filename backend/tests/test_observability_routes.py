@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from unittest import mock
 
 import httpx
 import pytest
 
+from grimoire import routes
 from grimoire.routes import observability
 from grimoire.store import logs, usage
 
@@ -144,6 +146,50 @@ def test_a_route_error_reaches_the_log_through_the_meter(client):
     body = client.get("/api/logs?level=error").json()
     assert body["rows"][0]["module"] == "suggestions"
     assert body["rows"][0]["kind"] == "rate_limit"
+
+
+def test_a_dossier_that_fails_during_absorb_leaves_a_trace(client):
+    """#156's headline case: "today an NPC dossier can fail with zero trace
+    anywhere". The phase status reports it to the review that is open right
+    now and dies with it; this is the half that outlives the review.
+
+    The failure here is raised OUTSIDE the meter -- it is the store read, not
+    the provider -- so nothing else in the app records it.
+    """
+    from grimoire import store
+    from tests.test_routes import _campaign, _cast_npc
+
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    _cast_npc(client, wid, cid, sid, "Winifred", "winifred")
+    store.scenes.append_message(cid, sid, "user", "hi")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+
+    def unreadable(*a, **k):
+        raise ValueError("the dossier file is corrupt")
+
+    fake = _AbsorbFake()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    with mock.patch.object(store.dossiers, "read", unreadable):
+        body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["dossiers"]["status"] == "failed"          # still reported live...
+    errors = client.get("/api/errors").json()              # ...and now written down
+    assert errors["total"] == 1
+    assert errors["modules"][0]["module"] == "dossier"
+    assert errors["modules"][0]["kinds"] == [{"kind": "ValueError", "count": 1}]
+    assert errors["rows"][0]["scene"] == sid
+
+
+class _AbsorbFake:
+    """The extraction call succeeds; the dossier loop is where this test's
+    failure comes from, and it is raised before any call is made."""
+
+    async def stream(self, m, cfg, usage=None):
+        yield "{}"
+
+    async def complete(self, m, cfg, usage=None):
+        return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
 
 
 # ---- the level, and the one writer that moves it ----
