@@ -4884,6 +4884,40 @@ test("a Speak turn does not inherit the previous turn's director note", async ()
   await waitFor(() => expect(screen.queryByText(/🎬 the storm intensifies/)).toBeNull());
 });
 
+test("a held Speak draft says so too, not only a held note", async () => {
+  // Codex review. The hold rule is symmetric, so the notice has to be: a
+  // rolled-back post waits behind a note being drafted exactly as a note waits
+  // behind dialogue. Firing only for notes left the player's own words waiting
+  // somewhere nothing named — the failure the notice exists to prevent.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  let fail: () => void = () => {};
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) =>
+      new Promise<void>((resolve) => {
+        fail = () => {
+          onEvent({ error: { detail: "the provider gave up", post_returned: true } });
+          resolve();
+        };
+      }));
+  renderCampaign();
+  const box = await screen.findByPlaceholderText(/speak your intent/i);
+  fireEvent.change(box, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  // the player switches to Direct and starts a note while that turn is live
+  await waitFor(() => expect(screen.getByRole("button", { name: "Direct" })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "the storm intensifies" } });
+  fail();
+
+  await screen.findByText(/post held/i);
+  expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies");
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "" } });
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the
