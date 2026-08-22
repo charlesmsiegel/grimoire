@@ -94,7 +94,7 @@ function postBucket(post: number, over: Record<string, number> = {}) {
            total_tokens: 900, cache_read_tokens: 0, cache_write_tokens: 0,
            cost_usd: 0.02, estimated_usd: 0, modelled_usd: 0, priced_calls: 1,
            unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
-           duration_ms: 0, ...over };
+           unmetered_calls: 0, duration_ms: 0, ...over };
 }
 
 function withPostCosts(buckets: ReturnType<typeof postBucket>[]) {
@@ -105,7 +105,7 @@ function withPostCosts(buckets: ReturnType<typeof postBucket>[]) {
               total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
               cost_usd: 0, estimated_usd: 0, modelled_usd: 0, priced_calls: 0,
               unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
-              duration_ms: 0 },
+              unmetered_calls: 0, duration_ms: 0 },
     by_task: [], by_post: buckets, turns: [], listed: 0, truncated: false });
 }
 

@@ -142,10 +142,20 @@ export function Footnotes({ bucket, showRatesHint = true }: {
       )}
       {n(bucket.unpriced_calls) > 0 && (
         <div className="field-hint">
-          At least: {plural(bucket.unpriced_calls, "call")} came back with no
-          price{showRatesHint
-            ? ", and no rate here can price them. Set per-token rates in Configuration."
-            : "."}
+          At least: {plural(n(bucket.unpriced_calls), "call")} came back with no
+          price.{" "}
+          {/* Only offered where it would actually help. A call whose provider
+              reported no token counts cannot be priced by any rate, and telling
+              a reader to go and set one sends them to an action that cannot
+              resolve the warning they are reading. */}
+          {showRatesHint && n(bucket.unpriced_calls) > n(bucket.unmetered_calls)
+            && "Set per-token rates in Configuration to estimate them. "}
+          {n(bucket.unmetered_calls) > 0 && (
+            n(bucket.unmetered_calls) === n(bucket.unpriced_calls)
+              ? "No rate can price these — their provider reported no token counts."
+              : `${n(bucket.unmetered_calls)} of them reported no token counts, `
+                + "which no rate can price."
+          )}
         </div>
       )}
     </>

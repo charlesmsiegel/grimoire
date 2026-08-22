@@ -702,6 +702,11 @@ export type UsageBucket = {
   cost_usd: number; estimated_usd: number; modelled_usd: number;
   priced_calls: number; unpriced_calls: number;
   subscription_calls: number; modelled_calls: number;
+  /** The slice of `unpriced_calls` that NO rate could ever price, because the
+   *  provider reported no token counts either. The split is what lets a view
+   *  tell a reader whether typing a rate would help — for these it would not,
+   *  and saying so anyway sends them to an action that cannot succeed. */
+  unmetered_calls: number;
   duration_ms: number;
 };
 /** A bucket with the thing it buckets — a task name, a model, a day. */
@@ -758,6 +763,12 @@ export type PricingEntry = {
 };
 export type PricingTable = {
   rates: Record<string, PricingEntry>;
+  /** The file is there and could not be parsed. Carried as a 200 flag rather
+   *  than an error status because the two mean opposite things to an editor:
+   *  no rates is a form to fill in, unreadable is a form that must not be
+   *  offered — saving it would replace the real file with nothing. */
+  unreadable?: boolean;
+  detail?: string;
   fields: string[]; default_key: string; max_entries: number;
 };
 /** What one scene's turns cost. `since`/`until` is the window actually scanned

@@ -79,6 +79,23 @@ FIELDS = (PROMPT, COMPLETION, CACHE_READ, CACHE_WRITE)
 MAX_ENTRIES = 500
 
 
+class PricingUnreadableError(Exception):
+    """The rate table is there but cannot be read or parsed.
+
+    Named with the `Error` suffix ruff's N818 asks for, unlike its older sibling
+    `response_presets.PresetUnreadable` — that one predates the rule's selection
+    and is grandfathered in the lint baseline; a new one is not.
+
+    Raised only for a caller that has asked for it (`read_pricing(strict=True)`).
+    The distinction is the same one `PresetUnreadable` draws
+    and exists for the same reason, sharpened by what this file is for: a
+    *rollup* that cannot read the table should draw its report with no
+    estimates in it, but an *editor* that cannot read the table must not offer
+    an empty form, because saving that form replaces rates the user still has
+    with the nothing this side managed to read.
+    """
+
+
 def pricing_path() -> Path:
     return paths.home() / "pricing.json"
 
@@ -132,24 +149,33 @@ def _entry(value: object) -> dict | None:
     return kept if PROMPT in kept and COMPLETION in kept else None
 
 
-def read_pricing() -> dict[str, dict]:
-    """The rate table, normalized. `{}` when there is none, or when the file
-    cannot be read or parsed.
+def read_pricing(strict: bool = False) -> dict[str, dict]:
+    """The rate table, normalized. `{}` when there is none.
 
-    Fail-soft, unlike a record read: this runs inside rollups whose whole job is
-    to draw a report, and a hand-edited comma in `pricing.json` must cost the
+    **Fail-soft by default, and strict on request.** A rollup's whole job is to
+    draw a report, so a hand-edited comma in `pricing.json` must cost the
     estimates rather than the page that would have shown the real spend beside
-    them. A dropped entry is visible — its model reads "unpriced" again, which
-    is what it read before anyone typed a rate.
+    them; a dropped entry is visible anyway, because its model reads "unpriced"
+    again, which is what it read before anyone typed a rate.
+
+    `strict=True` raises `PricingUnreadableError` instead, and the editor is the
+    caller that needs it: a malformed file read as `{}` becomes an empty
+    editable form, and one Save then replaces the user's real rates with the
+    nothing this side could parse. Absent is still `{}` in both modes — there
+    is nothing to lose in a file that does not exist.
     """
     path = pricing_path()
     if not path.exists():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if strict:
+            raise PricingUnreadableError(str(exc)) from exc
         return {}
     if not isinstance(data, dict):
+        if strict:
+            raise PricingUnreadableError("pricing.json is not an object")
         return {}
     table: dict[str, dict] = {}
     for key, value in data.items():
@@ -238,7 +264,9 @@ def estimate(entry: dict | None, *, prompt_tokens: int | None,
       rate cannot rescue: rates times nothing is zero, and a scene of those
       rendered as `$0.00` is the claim this whole feature exists not to make.
       Absent counts are `None` here (the ledger omits them rather than writing
-      zero), which is what makes the two distinguishable at all.
+      zero), which is what makes the two distinguishable at all. **Both** counts
+      are required, for the reason both rates are: half a call counted is half a
+      call priced, and the other half valued at nothing.
 
     The cache pair is subtracted OUT of the prompt subtotal, not added beside
     it: both counts are slices of `prompt_tokens` (#148), so pricing them
@@ -249,7 +277,14 @@ def estimate(entry: dict | None, *, prompt_tokens: int | None,
     """
     if not entry:
         return None
-    if prompt_tokens is None and completion_tokens is None:
+    # BOTH counts, not either — the exact mirror of the rate rule below, and
+    # missing it left the same hole one level down. `from_openai_chunk` reads
+    # `prompt_tokens` and `completion_tokens` independently, so a usage block
+    # carrying only one is a shape a real provider can send; `int(None or 0)`
+    # would then price the uncounted side at zero, mark the call modelled, take
+    # it out of `unpriced_calls`, and render `$0.00` when the counted side is
+    # empty. Nobody counted that half, so nobody can price the call.
+    if prompt_tokens is None or completion_tokens is None:
         return None
     # Belt and braces with `_entry`'s rule, because `_entry` is not the only
     # door in: this is a public function, and a caller handing it a half-entry

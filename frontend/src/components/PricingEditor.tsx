@@ -94,6 +94,32 @@ function toTable(rows: Row[]): Record<string, PricingEntry> {
   return table;
 }
 
+/** The normalized key a row will be saved under — what `toTable` uses, so the
+ *  duplicate check below asks the same question the save does. */
+function keyOf(row: Row): string {
+  return row.isDefault ? DEFAULT_KEY : row.id.trim();
+}
+
+/** The keys claimed by more than one row.
+ *
+ *  Two rows with the same id — or ids that become equal once trimmed — collapse
+ *  in `toTable`, and the whole-table PUT then removes one of them while
+ *  reporting a successful save. Detected rather than resolved: which of the two
+ *  the user meant is not something this component can know. */
+function duplicates(rows: Row[]): Set<string> {
+  const seen = new Set<string>();
+  const twice = new Set<string>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    // A row nobody has named yet is not a duplicate of the next unnamed one —
+    // neither is saved at all (`toTable`), so neither can displace anything.
+    if (!row.isDefault && !key) continue;
+    if (seen.has(key)) twice.add(key);
+    seen.add(key);
+  }
+  return twice;
+}
+
 /** Whether this row will survive a save. Both base rates, per `toTable`. */
 function complete(row: Row): boolean {
   return ["prompt_usd_per_1k", "completion_usd_per_1k"].every((key) => {
@@ -130,7 +156,14 @@ export function PricingEditor() {
   useEffect(() => {
     let live = true;
     api.getPricing()
-      .then((t) => { if (!live) return; setRows(toRows(t.rates)); setUnread(false); })
+      .then((t) => {
+        if (!live) return;
+        // `unreadable` is a 200 carrying no rates: the file is there and could
+        // not be parsed. Same refusal as a rejected request, because saving an
+        // empty form would replace what is in that file with nothing.
+        setRows(t.unreadable ? [] : toRows(t.rates));
+        setUnread(Boolean(t.unreadable));
+      })
       .catch(() => { if (!live) return; setRows([]); setUnread(true); });
     return () => { live = false; };
   }, [reload]);
@@ -159,6 +192,8 @@ export function PricingEditor() {
       setBusy(false);
     }
   }
+
+  const clashes = rows === null ? new Set<string>() : duplicates(rows);
 
   if (rows === null) return <p className="field-hint">Reading rates…</p>;
 
@@ -195,6 +230,7 @@ export function PricingEditor() {
               <span className="chip on">Every other model</span>
             ) : (
               <input aria-label={`Model id for row ${i + 1}`} value={row.id}
+                     disabled={busy}
                      placeholder="provider/model, or provider/*"
                      onChange={(e) => {
                        setSaved(false);
@@ -209,6 +245,12 @@ export function PricingEditor() {
               ✕
             </button>
           </div>
+          {clashes.has(keyOf(row)) && (
+            <div className="field-hint error">
+              Two rows claim this model. Saving would keep only one of them —
+              rename or remove one first.
+            </div>
+          )}
           {!complete(row) && (
             <div className="field-hint">
               Input and output are both needed — a rate for one prices the other
@@ -221,7 +263,12 @@ export function PricingEditor() {
                 <span className="pricing-rate-label">
                   {field.label}{field.required ? " *" : ""}
                 </span>
+                {/* Frozen while the PUT is in flight, like the buttons beside
+                    it: the answer re-seeds every row from what the server kept,
+                    so anything typed after Save was clicked would be discarded
+                    by a response that never saw it. */}
                 <input type="number" step="0.0001" min="0" inputMode="decimal"
+                       disabled={busy}
                        aria-label={`${field.label} rate for ${row.isDefault ? "every other model" : row.id || "a new model"}`}
                        value={row.rates[field.key] ?? ""}
                        onChange={(e) => edit(i, field.key, e.target.value)} />
@@ -253,7 +300,11 @@ export function PricingEditor() {
         )}
         {/* `void`: an async handler returns a promise, and a click handler
             that returns one is a floating promise nothing awaits. */}
-        <button className="primary" onClick={() => void save()} disabled={busy}>
+        <button className="primary" onClick={() => void save()}
+                disabled={busy || clashes.size > 0}
+                title={clashes.size > 0
+                  ? "Two rows claim the same model; saving would drop one"
+                  : undefined}>
           Save rates
         </button>
       </div>

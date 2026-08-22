@@ -159,14 +159,26 @@ def get_pricing():
     """The user's per-model rate table (#158).
 
     Answers `{}` when there is none, which is the default state: the table is
-    opt-in, and every rollup treats an empty one as "model nothing". A file that
-    cannot be parsed answers `{}` too — see `store.pricing.read_pricing` for why
-    a broken table costs the estimates rather than the page.
+    opt-in, and every rollup treats an empty one as "model nothing".
+
+    A file that exists but cannot be parsed answers `unreadable: true` and no
+    rates — a **strict** read, unlike the one rollups take. The editor is the
+    caller, and for it the two cases are opposites: an empty table is a form to
+    fill in, while an unreadable one is a form that must not be offered at all,
+    because saving it would replace rates the user still has with the nothing
+    this side could read.
     """
-    return {"rates": store.pricing.read_pricing(),
-            "fields": list(store.pricing.FIELDS),
-            "default_key": store.pricing.DEFAULT_KEY,
-            "max_entries": store.pricing.MAX_ENTRIES}
+    shape = {"fields": list(store.pricing.FIELDS),
+             "default_key": store.pricing.DEFAULT_KEY,
+             "max_entries": store.pricing.MAX_ENTRIES}
+    try:
+        return {"rates": store.pricing.read_pricing(strict=True),
+                "unreadable": False, **shape}
+    except store.pricing.PricingUnreadableError as exc:
+        # 200 with a flag rather than a 500: the file is the user's own, this is
+        # a state they can fix by hand, and the editor has something specific to
+        # say about it. A 500 would reach the same view as a network failure.
+        return {"rates": {}, "unreadable": True, "detail": str(exc), **shape}
 
 
 @router.put("/pricing")

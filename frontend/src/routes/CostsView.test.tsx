@@ -15,7 +15,7 @@ const ZERO = {
   calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
   cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
   modelled_usd: 0, priced_calls: 0, unpriced_calls: 0,
-  subscription_calls: 0, modelled_calls: 0, duration_ms: 0,
+  subscription_calls: 0, modelled_calls: 0, unmetered_calls: 0, duration_ms: 0,
 };
 
 const row = (scene: string, title: string, over: Partial<typeof ZERO> & {
@@ -148,6 +148,23 @@ test("the scanned window is reported in the reader's own calendar", async () => 
     .toBeInTheDocument();
 });
 
+test("a scene row never totals its two kinds of estimate", async () => {
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT,
+    scenes: [row("002--market", "The Market", {
+      calls: 5, priced_calls: 3, cost_usd: 0.40, subscription_calls: 2,
+      estimated_usd: 0.90, modelled_calls: 1, modelled_usd: 0.10 })],
+  });
+  renderCosts();
+
+  const [only] = await screen.findAllByRole("row").then((r) => r.slice(1));
+  expect(within(only).getByText("$0.40")).toBeInTheDocument();
+  expect(within(only).getByText(/≈ \$0\.90 subscription/)).toBeInTheDocument();
+  expect(within(only).getByText(/≈ \$0\.10 estimated/)).toBeInTheDocument();
+  // $1.00 would be the merged figure, and it reconciles to neither column.
+  expect(within(only).queryByText(/\$1\.00/)).toBeNull();
+});
+
 test("subscription and modelled spend are reported apart from the bill", async () => {
   (api.getCampaignSceneCosts as any).mockResolvedValue({
     ...REPORT,
@@ -175,12 +192,45 @@ test("a campaign that has generated nothing says so rather than showing $0.00", 
     .toBeInTheDocument();
 });
 
-test("a failed read degrades to the empty report rather than a stuck spinner", async () => {
+test("a failed read says so rather than reporting a measured zero", async () => {
+  // Degrading to an empty report printed "$0.00" and "Nothing has been
+  // generated" over a campaign with real spend — this feature's cardinal
+  // error wearing a different hat.
   (api.getCampaignSceneCosts as any).mockRejectedValue(new Error("no"));
   renderCosts();
 
-  expect(await screen.findByText(/Nothing has been generated in this campaign yet/))
+  expect(await screen.findByText(/Could not read this campaign's costs/))
     .toBeInTheDocument();
+  expect(screen.queryByText("$0.00")).toBeNull();
+  expect(screen.queryByText(/Nothing has been generated/)).toBeNull();
+});
+
+test("a failed read can be retried", async () => {
+  (api.getCampaignSceneCosts as any)
+    .mockRejectedValueOnce(new Error("no")).mockResolvedValue(REPORT);
+  renderCosts();
+
+  fireEvent.click(await screen.findByText("Try again"));
+
+  expect(await column().findByText("$1.50")).toBeInTheDocument();
+});
+
+test("the heading describes the order that came back, not the one just clicked", async () => {
+  // An all-time rescan can be slow, and until it lands the rows are still in
+  // the previous order.
+  renderCosts();
+  await column().findByText("$1.50");
+  let release: (v: unknown) => void = () => {};
+  (api.getCampaignSceneCosts as any).mockReturnValue(
+    new Promise((res) => { release = res; }));
+  fireEvent.click(column().getByRole("button", { name: /most recent/i }));
+
+  // Still the cost-ordered answer on screen, and the eyebrow still says so.
+  expect(screen.getByText(/WHERE THE MONEY WENT/)).toBeInTheDocument();
+  expect(screen.getByText(/REORDERING/)).toBeInTheDocument();
+
+  release({ ...REPORT, order: "recent" });
+  expect(await screen.findByText(/NEWEST ACTIVITY FIRST/)).toBeInTheDocument();
 });
 
 test("the way back to the campaign is a link", async () => {
