@@ -18,12 +18,14 @@ import { ENTITY_KINDS } from "../api/types";
  *  `EntityKind[]`, because the server is allowed to know a kind this build does
  *  not — which is the one case the endpoint exists for.
  *
- *  `enabled` means "there is a review table on screen". Both dialogs sit inside
+ *  `enabled` means "there are rows on screen to file". Both dialogs sit inside
  *  a collapsed `<details>` that React mounts with the page, so an
  *  unconditional read would fire on every world Overview and Lore section for
- *  an importer nobody opened. Nothing is cached across mounts either: the
- *  answer is a handful of bytes, it is asked for only while a table is up, and
- *  a module-level promise would outlive the tests that set what it resolves to.
+ *  an importer nobody opened — and a parse that yields no entries has no
+ *  Category column either, so it does not ask. Nothing is cached across mounts
+ *  either: the answer is a handful of bytes, it is asked for only while a table
+ *  is up, and a module-level promise would outlive the tests that set what it
+ *  resolves to.
  *
  *  A build whose own list has fallen behind the server's is a separate failure
  *  with its own guard (`test_entities_store.py::

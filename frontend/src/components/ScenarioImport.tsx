@@ -65,7 +65,7 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
   const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const kinds = useEntityKinds(proposal !== null);
+  const kinds = useEntityKinds((proposal?.entries.length ?? 0) > 0);
 
   async function run(load: () => Promise<ScenarioProposal>) {
     setError(null);
