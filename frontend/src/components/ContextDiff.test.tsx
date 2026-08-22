@@ -13,7 +13,7 @@ function facts(over: Partial<NonNullable<PromptDiffSection["base"]>> = {}) {
 }
 
 function section(over: Partial<PromptDiffSection> = {}): PromptDiffSection {
-  return { id: "world", label: "World info", status: "unchanged",
+  return { id: "world", label: "World info", status: "unchanged", moved: false,
            base: facts(), head: facts(), diff: [], ...over };
 }
 
@@ -168,4 +168,38 @@ test("a comparison the live side has moved under says so rather than blanking", 
 test("a settled comparison carries no such notice", () => {
   render(<ContextDiff diff={diff()} />);
   expect(screen.queryByText(/recomputing/)).toBeNull();
+});
+
+
+test("a section that was only dragged elsewhere is still reported", () => {
+  // Its CONTENT is unchanged, so filtering on status alone made a layout
+  // reorder invisible — and order is not decoration: the packer drops from the
+  // bottom of a tier and the model reads the prompt in sequence.
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "unchanged", moved: true })],
+  })} />);
+  screen.getByText("World info");
+  screen.getByText("moved");
+  screen.getByText(/Moved to a different position/);
+  expect(screen.queryByText(/Nothing changed/)).toBeNull();
+});
+
+test("a section that moved AND changed carries both marks", () => {
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed", moved: true,
+                         diff: [{ op: "insert", text: "new line" }] })],
+  })} />);
+  screen.getByText("changed");
+  screen.getByText("moved");
+  screen.getByText("new line");
+});
+
+test("a settled section carries no status chip at all", () => {
+  // "unchanged" was rendered as a chip beside the rows that had really moved,
+  // which made the one word doing the work easy to miss.
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed", diff: [{ op: "insert", text: "x" }] }),
+               section({ id: "b", label: "Other" })],
+  })} />);
+  expect(screen.queryByText("unchanged")).toBeNull();
 });

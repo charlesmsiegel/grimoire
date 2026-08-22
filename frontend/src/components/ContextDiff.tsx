@@ -21,7 +21,10 @@ const LIVE = "live";
  */
 export function ContextDiff({ diff, recomputing = false }:
                              { diff: PromptDiff; recomputing?: boolean }) {
-  const moved = diff.sections.filter((s) => s.status !== "unchanged");
+  // `s.moved` as well as the status: a section that was only dragged elsewhere
+  // is `unchanged` in its content and is still a change to the prompt, so
+  // filtering on status alone made a layout reorder invisible.
+  const moved = diff.sections.filter((s) => s.status !== "unchanged" || s.moved);
   const same = diff.sections.length - moved.length;
   const delta = diff.head.total_tokens - diff.base.total_tokens;
 
@@ -111,7 +114,10 @@ function DiffSection({ section }: { section: PromptDiffSection }) {
       <summary>
         <span className="ctx-dot" />
         <span className="ctx-label">{section.label}</span>
-        <span className={"ctx-status " + section.status}>{section.status}</span>
+        {section.status !== "unchanged" && (
+          <span className={"ctx-status " + section.status}>{section.status}</span>
+        )}
+        {section.moved && <span className="ctx-status moved">moved</span>}
         <span className="ctx-meta">{signed(after - before)}</span>
       </summary>
       {section.base && section.head && section.base.label !== section.head.label && (
@@ -162,6 +168,11 @@ function flagNotes(section: PromptDiffSection): string[] {
   if (!base || !head)
     return only?.dropped ? [DROPPED] : [];
   const notes: string[] = [];
+  if (section.moved)
+    // Order is not decoration: the packer drops from the bottom of a tier and
+    // the model reads the prompt in sequence, so where a section sits is part
+    // of what was sent.
+    notes.push("Moved to a different position in the prompt.");
   if (base.dropped && head.dropped)
     // Equal flags, and still the first thing to say: the words below moved and
     // NEITHER version reached the model. Without it the panel shows a textual

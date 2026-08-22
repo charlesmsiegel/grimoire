@@ -918,6 +918,11 @@ export type PromptDiffFacts = {
 export type PromptDiffSection = {
   id: string; label: string;
   status: "added" | "removed" | "changed" | "unchanged";
+  /** The section sits at a different point in the prompt than it did — the
+   *  layout editor (#29) moved it. Beside `status` rather than inside it,
+   *  because a drag and a rewrite are different things and one section can do
+   *  both; a pure move is `unchanged` and `moved`. */
+  moved: boolean;
   base: PromptDiffFacts | null; head: PromptDiffFacts | null;
   diff: ContextDiffLine[];
 };
