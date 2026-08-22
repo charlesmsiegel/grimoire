@@ -1004,7 +1004,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // turn fails, and text handed back into a Speak composer is posted as
   // dialogue by the next Send. That is the "never posted" contract broken by
   // the recovery meant to protect it.
+  // Keyed by CAMPAIGN AND SCENE (Codex review, round 4). Scene ids are
+  // campaign-local — `s1` names a different scene in every campaign — and this
+  // component is reused across campaign routes, so a scene-only key both
+  // collides between campaigns and hands A's words to B's composer. The
+  // durable registry has always been campaign-keyed; this half had not caught
+  // up, and since #83 getting it wrong also flips the wrong composer's mode.
   const parkedPrompts = useRef<Map<string, { text: string; director: boolean }>>(new Map());
+  const parkKey = (c: string, sid: string) => `${c}\u0000${sid}`;
   // Mirrors of the composer's two live facts, for the same reason
   // `activeIdRef` exists: `recoverPrompt` runs from a callback that outlives
   // the render it started in, and a captured `input`/`directing` would answer
@@ -1017,7 +1024,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // Read off the ref during render rather than mirrored into state: every
   // trigger that can change the answer — parking, switching scene, typing,
   // flipping the mode — is already a re-render.
-  const heldForScene = activeId ? parkedPrompts.current.get(activeId) : undefined;
+  const heldForScene = activeId
+    ? parkedPrompts.current.get(parkKey(cid, activeId)) : undefined;
   const heldNote = !!heldForScene && heldForScene.director && !!input.trim()
     && heldForScene.director !== directing;
   const [parkedTick, setParkedTick] = useState(0);
@@ -1036,28 +1044,29 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // failure.
   useEffect(() => {
     if (!activeId) return;
-    const held = parkedPrompts.current.get(activeId);
+    const held = parkedPrompts.current.get(parkKey(cid, activeId));
     if (held === undefined) return;
     // Same rule as `recoverPrompt`: a draft of the other kind still owns the
     // box, so the held text waits rather than merging into it. `input` is a
     // dependency for exactly this — clearing or sending the draft is what
     // releases it, and that is the moment it comes back.
     if (input.trim() && held.director !== directing) return;
-    parkedPrompts.current.delete(activeId);
+    parkedPrompts.current.delete(parkKey(cid, activeId));
     giveBackPrompt(held.text);
     // Restored HERE rather than when the note was parked: the player may have
     // been writing something of their own in another scene in the meantime,
     // and flipping the shared composer's mode under that draft would mis-stage
     // it. The mode arrives with the words it belongs to.
     if (held.director) setDirectMode(true);
-  }, [activeId, parkedTick, giveBackPrompt, input, directing]);
+  }, [cid, activeId, parkedTick, giveBackPrompt, input, directing]);
 
   // Where a recovered prompt goes: the composer if the player is still on the
   // scene it belongs to, the parking map otherwise. `activeIdRef`, not
   // `activeId` — this runs from a callback that outlives the render it started
   // in, and a captured `activeId` would be the scene the turn began on, which
   // is exactly the stale answer this exists to avoid.
-  const recoverPrompt = useCallback((sid: string, text: string, director = false) => {
+  const recoverPrompt = useCallback((pcid: string, sid: string, text: string,
+                                     director = false) => {
     // Merged only into a draft of the SAME kind (Codex review, round 3).
     // `giveBackPrompt` prepends, and one composer carries one mode — so
     // folding a recovered note into dialogue typed since would give the
@@ -1066,13 +1075,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // note is posted as dialogue. Neither is acceptable, and discarding either
     // text is worse than both. So the odd one out waits: it stays parked until
     // the box is free, and `heldNote` says so on screen meanwhile.
-    if (activeIdRef.current === sid
+    if (activeCidRef.current === pcid && activeIdRef.current === sid
         && (!inputRef.current.trim() || director === directingRef.current)) {
       giveBackPrompt(text);
       if (director) setDirectMode(true);
       return;
     }
-    parkedPrompts.current.set(sid, { text, director });
+    parkedPrompts.current.set(parkKey(pcid, sid), { text, director });
     setParkedTick((n) => n + 1);
   }, [giveBackPrompt]);
   // Words the registry is still holding for a resolved-but-undurable send, put
@@ -1091,7 +1100,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const held = registry.parked(cid, activeId);
     if (held === undefined) return;
     reparked.current.add(once);
-    recoverPrompt(activeId, held);
+    recoverPrompt(cid, activeId, held);
   }, [cid, activeId, registry, recoverPrompt]);
 
   // Set on the way in as well as cleared on the way out. StrictMode runs the
@@ -1683,10 +1692,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setSeedPrompt((p) =>
       (p && p.cid === cid && p.sid === oldId ? { ...p, sid: newId } : p));
     reviewSceneRenamed(oldId, newId);
-    const parked = parkedPrompts.current.get(oldId);
+    // Campaign-scoped like the seed prompt just above, and for the same
+    // sentence: the renamed scene is THIS handler's campaign's, so a bare
+    // scene id would move a park belonging to whichever campaign shares that
+    // number (Codex review, round 4).
+    const parked = parkedPrompts.current.get(parkKey(cid, oldId));
     if (parked !== undefined) {
-      parkedPrompts.current.delete(oldId);
-      parkedPrompts.current.set(newId, parked);
+      parkedPrompts.current.delete(parkKey(cid, oldId));
+      parkedPrompts.current.set(parkKey(cid, newId), parked);
       setParkedTick((n) => n + 1);   // it may now be the scene on screen
     }
     const again = rerollToRetryRef.current;
@@ -2059,7 +2072,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           // text has already been handed back.
           if (e.error.post_returned) {
             const held = registry.pending(cid, sid)?.text;
-            if (held) recoverPrompt(sid, held);
+            if (held) recoverPrompt(cid, sid, held);
           }
         } else if (e.proposal) {
           setProposalNow({ id: e.proposal.id, status: "pending",
@@ -2249,7 +2262,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // resolves toward the recoverable error every time: wrong this way costs
       // one duplicate they can see and delete, wrong the other way costs them
       // their words with no trace at all.
-      if (held.text) recoverPrompt(sid, held.text);
+      if (held.text) recoverPrompt(cid, sid, held.text);
     }
   }, [registry, recoverPrompt]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2769,15 +2782,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // false for a note that WORKED exactly as loudly as for one that died. Arm
     // it and every successful director turn hands its note back afterwards.
     // In-session recovery can tell those apart; the durable one cannot.
+    // Identity is the ownership token (Codex review, round 3). `runStream`
+    // unlocks the composer before it returns -- the flush poll it awaits runs
+    // after `setBusy(false)` -- so a SECOND turn can be under way while this
+    // `send` is still awaiting, and an unconditional clear in the finally below
+    // would wipe that turn's note off the screen for the rest of its
+    // generation. Cleared only if what is on screen is still this one.
+    //
+    // Assigned BEFORE the branch, so an ordinary post says so too (round 4).
+    // With the clear made ownership-safe, a stale note otherwise outlived its
+    // own generation and rendered beside the NEXT turn's reply, claiming to
+    // have steered something it never saw. Every send now states what note is
+    // in force, and for a Speak post that statement is "none".
+    const note = directing && content ? { cid, sid: id, text: content } : null;
+    setDirectorNote(note);
     if (directing || !content) {
-      // Identity is the ownership token (Codex review, round 3). `runStream`
-      // unlocks the composer before it returns -- the flush poll it awaits runs
-      // after `setBusy(false)` -- so a SECOND Direct turn can be under way while
-      // this `send` is still awaiting. An unconditional clear in the finally
-      // below then wipes that turn's note off the screen for the rest of its
-      // generation. Cleared only if the note on screen is still this one.
-      const note = content ? { cid, sid: id, text: content } : null;
-      if (directing) setDirectorNote(note);
       try {
         const landed = await runStream(id,
           (onEvent, signal, attempt, onIndex) =>
@@ -2785,11 +2804,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                      signal, attempt, onIndex, directing),
           // An empty send has nothing to give back — it is the "next NPC round"
           // fast path, not words anyone typed.
-          content ? () => recoverPrompt(id, content, true) : undefined,
+          content ? () => recoverPrompt(cid, id, content, true) : undefined,
           false, "", true);
         if (landed) setPendingResponse(null);
       } finally {
-        if (directing) setDirectorNote((cur) => (cur === note ? null : cur));
+        setDirectorNote((cur) => (cur === note ? null : cur));
       }
       return;
     }
@@ -2814,7 +2833,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // it is the one send that can never be a note.
         api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
                  signal, attempt, onIndex, false),
-      () => recoverPrompt(id!, content), false,
+      () => recoverPrompt(cid, id!, content), false,
       // The words the player typed, held until the outcome proves them durable.
       content);
     if (landed) setPendingResponse(null);
