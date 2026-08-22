@@ -660,13 +660,27 @@ write.
 
 Two changes, both following doctrine the codebase already states.
 
-**A line in `post_history.j2`.** The template already exists to carry
-counterweights and already orders them by kind — voice ahead of length,
-because *"length is about trimming what was written, voice is about who is
-writing it."* Ownership extends that axis one step further: who the words
-*belong to* outranks who is writing them. Order becomes card instructions →
-**PC boundary** → voice → length, so the boundary answers the card blocks
-rather than being answered by them.
+**Its own trailing message — not a line inside `post_history.j2`.** An
+earlier draft put the sentence in that template, which cannot satisfy the
+final-position requirement above. `a["post_history"]` is one rendered string
+appended as a single system message, so a composer can only move the *whole*
+block: relocating it after `appended` would drag the card instructions, the
+voice corrective and the length corrective past the roll-result and
+regeneration guidance too — changing where three unrelated counterweights
+land — while leaving it in place fails the requirement outright. One template
+cannot be both.
+
+So the boundary is a **standalone trailing system message**, rendered from its
+own small template and appended last on every composition path: after
+`post_history`, after `appended`, and after `opener_shape.j2` on the opener.
+It carries its own token reservation — `compose_opener` renders trailing
+messages before packing *"so their tokens can be reserved: neither is
+droppable, so neither may go uncounted"*, and this is a third such message —
+and its own entry in the inspector breakdown, so the prompt log shows it
+rather than hiding it inside another block.
+
+`post_history.j2` is left exactly as it is: card instructions, then voice,
+then length, ordered as its own docstring explains.
 
 One sentence, static, no detection required:
 
@@ -965,6 +979,16 @@ faster than another round of prose. Listed so none is lost:
 - **`wrap_note.j2` must be selected from the captured snapshot**, not a fresh
   read — otherwise a cancel between snapshot and note selection restores the
   "Continue the scene." contradiction the note exists to remove.
+- **`/end` sent with prose is lost across a failed-turn retry.** When the
+  turn fails, `_take_the_post_back` removes the persisted post; `/retry` then
+  composes with the wrap state but without the prose that accompanied it, so
+  it closes the scene without the player's instruction. Either the scrubbed
+  prose needs a durable retry carrier, or that failure should require
+  resending from the restored composer rather than offering Retry.
+- **Phase 2's documentation scope is unstated.** `/end` has no composer
+  control by design, so discovery rests entirely on docs, and the phase list
+  names neither the README change nor a concrete release-note artifact — the
+  repo appears to have no changelog file for one to live in.
 - **A wrap must stay `pending` across *chained* roll proposals.**
   `_continuation_stream` supports a continuation that itself ends in another
   fence (`streaming.py:879-886`), so consuming after the first continuation
