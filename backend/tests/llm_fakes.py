@@ -190,9 +190,11 @@ class FakeLLM:
         self.health_error = health_error
         self.requests: list[dict] = []
         self.calls = 0
-        #: The connections `list_models`/`check` were asked about, in order.
+        #: The connections `list_models`/`check` were asked about, in order,
+        #: and the outcomes a route filed back through `note_outcome`.
         self.listed: list[dict] = []
         self.checked: list[dict] = []
+        self.noted: list[tuple] = []
 
     # ---- the LLMClient surface ----
     async def stream(self, messages, conn, usage=None):
@@ -252,6 +254,11 @@ class FakeLLM:
         self.checked.append(conn)
         if self.health_error is not None:
             raise self.health_error
+
+    def note_outcome(self, conn, error) -> None:
+        """The outcome a route hands back because the facade could not see it —
+        a generation cancelled by its total-duration ceiling (#146)."""
+        self.noted.append((conn, error))
 
     # ---- inspection ----
     @property

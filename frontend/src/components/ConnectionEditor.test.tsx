@@ -318,6 +318,33 @@ test("a catalog that lands after the reader has moved on does not fill the wrong
   expect(screen.queryByText("openrouter-only/model")).toBeNull();
 });
 
+test("a catalog for a revision the connection has moved past is discarded", async () => {
+  // Not the same guard as the one above: this response IS about the connection
+  // on screen, but about the settings it had before the reader saved. Its
+  // models describe an endpoint this connection no longer points at, and
+  // nothing would replace them.
+  let landSlow: (v: any) => void;
+  (api.refreshConnectionModels as any).mockReturnValue(
+    new Promise((res) => { landSlow = res; }));
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  fireEvent.click(await screen.findByRole("button", { name: /refresh models/i }));
+
+  // the reader saves an edit; the reselect below picks up the new revision
+  (api.readConnection as any).mockResolvedValue({
+    ...CUSTOM, rev: "r3", base_url: "https://new/v4", models: [], fetched_at: "",
+    health: UNCHECKED });
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  await waitFor(() => expect(api.readConnection).toHaveBeenCalledTimes(2));
+  landSlow!({ models: [{ id: "old-endpoint/model", name: "Old", context: null, prompt: null, completion: null }],
+              fetched_at: "2026-08-21", rev: "r2" });
+
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.focus(await screen.findByDisplayValue("glm-4.6"));
+  expect(screen.queryByText("old-endpoint/model")).toBeNull();
+});
+
 test("a stored failure is shown when the connection is opened, not only after a click", async () => {
   (api.readConnection as any).mockResolvedValue({
     ...CUSTOM, models: [], fetched_at: "",

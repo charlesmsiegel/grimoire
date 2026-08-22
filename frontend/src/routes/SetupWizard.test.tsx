@@ -264,6 +264,36 @@ test("a move forgets the connection and world recorded in the previous store", a
   expect(screen.queryByText(/connected to openrouter/i)).not.toBeInTheDocument();
 });
 
+test("Fetch models re-lists with the key that has been typed", async () => {
+  // The automatic fetch is keyless by design — it runs before there is a key —
+  // so an account whose catalog differs from the public one, and a custom
+  // endpoint that has nothing to list until its URL is typed, both need a way
+  // to ask again (#149).
+  await goToStep(2);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "OpenRouter" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-or-mine" } });
+  (api.previewModels as any).mockClear();
+
+  fireEvent.click(screen.getByRole("button", { name: /fetch models/i }));
+
+  await waitFor(() => expect(api.previewModels).toHaveBeenCalledWith(
+    { kind: "openrouter", base_url: "", api_key: "sk-or-mine" }));
+});
+
+test("a custom endpoint can list its models before the connection is saved", async () => {
+  (api.previewModels as any).mockResolvedValue({ models: [] });
+  await goToStep(2);
+  fireEvent.change(await screen.findByLabelText("Kind"), { target: { value: "openai_compatible" } });
+  fireEvent.change(await screen.findByLabelText("Base URL"),
+                   { target: { value: "http://127.0.0.1:8080/v1" } });
+  (api.previewModels as any).mockClear();
+
+  fireEvent.click(screen.getByRole("button", { name: /fetch models/i }));
+
+  await waitFor(() => expect(api.previewModels).toHaveBeenCalledWith(
+    { kind: "openai_compatible", base_url: "http://127.0.0.1:8080/v1", api_key: "" }));
+});
+
 test("a move forgets the verdict recorded about the previous store's connection", async () => {
   // A check is about one connection in one store (#146). Carrying its warning
   // across a move would put the old store's rejected key beside the new

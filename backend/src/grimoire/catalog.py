@@ -28,6 +28,29 @@ def entry(raw: dict) -> dict:
             "prompt": pricing.get("prompt"), "completion": pricing.get("completion")}
 
 
+def rows(body: object) -> list | None:
+    """The `data` array of a catalog response, or None if this is not one.
+
+    None rather than an exception, and rather than an empty list, because the
+    two callers are the two providers and each raises its *own* error class —
+    keeping that raise at the call site is what lets this module go on
+    importing nothing at all (see the docstring above).
+
+    Empty is not the same answer: a provider that legitimately serves no models
+    returns `{"data": []}`, and reporting that as a malformed body would tell
+    the reader to check their URL over a perfectly good one. The shapes this
+    rejects are the ones that would otherwise crash the normalizer — a
+    successful 200 whose body is `{"data": null}`, a bare array, a string, a
+    captive portal's JSON — and every one of them reaches the reader as
+    `bad_response`, which is what the picker turns into "couldn't load model
+    list — type a model id".
+    """
+    if not isinstance(body, dict):
+        return None
+    data = body.get("data")
+    return data if isinstance(data, list) else None
+
+
 def entries(raw: list) -> list[dict]:
     """A whole `data` array, normalized and sorted by id.
 

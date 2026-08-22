@@ -89,6 +89,39 @@ def test_a_connection_with_no_id_is_not_filed_under_a_shared_slot():
     assert registry.status("")["state"] == "unknown"
 
 
+def test_a_verdict_about_an_older_revision_is_not_handed_back():
+    """`forget` is a write, so it only orders itself against writes: an attempt
+    that STARTED before an edit can settle after it and file a verdict about
+    the old key against the new settings — from a second tab, or from the very
+    request the edit interrupted. Comparing revisions on the way out makes
+    those unreadable rather than merely unlikely."""
+    registry = health.ProviderHealth()
+    registry.record(_conn(rev="r1"), LLMError("auth", "bad key"))
+
+    assert registry.status("openrouter", "r1")["state"] == "error"
+    assert registry.status("openrouter", "r2")["state"] == "unknown"
+
+
+def test_a_reader_who_does_not_care_about_revisions_still_gets_an_answer():
+    """The facade files whole connection dicts and every route reads one beside
+    the connection it describes, but the argument stays optional: a caller with
+    no revision in hand is asking a coarser question, not a wrong one."""
+    registry = health.ProviderHealth()
+    registry.record(_conn(rev="r1"))
+
+    assert registry.status("openrouter")["state"] == "ok"
+
+
+def test_the_revision_a_verdict_is_filed_under_is_not_part_of_the_answer():
+    """It is bookkeeping — "is this still about the connection you are looking
+    at" — and a response body carrying it would invite a client to reason about
+    it."""
+    registry = health.ProviderHealth()
+
+    assert "rev" not in registry.record(_conn(rev="r1"))
+    assert "rev" not in registry.status("openrouter", "r1")
+
+
 def test_forget_drops_a_verdict():
     registry = health.ProviderHealth()
     registry.record(_conn(), LLMError("auth", "bad key"))
@@ -244,21 +277,51 @@ def test_check_short_circuits_a_connection_with_no_credential(client):
     assert fake.checked == []
 
 
-def test_a_check_that_never_answers_becomes_a_verdict_rather_than_a_held_request(client):
+def test_a_check_that_never_answers_becomes_a_verdict_rather_than_a_held_request(
+        client, monkeypatch):
     """The HTTP probes carry their own bound, but the Claude path is a
     subprocess with no client to configure — and an unbounded check is the one
-    that hangs on exactly the connection the reader already suspects."""
+    that hangs on exactly the connection the reader already suspects.
+
+    The ceiling is deliberately NOT `llm_call_budget`, which is set here to the
+    `0` that means "no ceiling at all". That is a reasonable thing to ask of a
+    slow local model and an unreasonable thing to ask of a button, so this
+    route carries a bound nobody can switch off."""
     class _NeverAnswers(FakeCatalog):
         async def check(self, conn):
             await asyncio.sleep(30)      # bounded, so a regression fails fast
 
-    store.write_config(llm_call_budget="0.05")
+    store.write_config(llm_call_budget="0")
+    monkeypatch.setattr(routes.config, "HEALTH_CHECK_CEILING", 0.05)
     stalled = _NeverAnswers()
     client.app.dependency_overrides[routes.get_llm] = lambda: stalled
 
     r = client.post("/api/llm-connections/claude/health")
 
     assert (r.status_code, r.json()["ok"], r.json()["kind"]) == (200, False, "timeout")
+
+
+def test_a_generation_cut_off_by_its_ceiling_is_recorded_against_its_connection(client):
+    """The one failure the facade cannot see: the ceiling *cancels* the stream
+    from outside, so `_resilient` unwinds through `GeneratorExit` rather than
+    its `except LLMError` and the attempt that held the request past its budget
+    would be the one nobody hears about — a 504 under a green dot."""
+    class _Stalls(FakeCatalog):
+        async def complete(self, messages, conn, usage=None):
+            await asyncio.sleep(30)
+
+    store.write_config(llm_call_budget="0.05")
+    stalled = _Stalls()
+    client.app.dependency_overrides[routes.get_llm] = lambda: stalled
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.post(f"/api/worlds/{wid}/characters",
+                json={"name": "Mara", "version_name": "main"})
+
+    r = client.post(f"/api/worlds/{wid}/characters/mara/tagline/generate")
+
+    assert r.status_code == 504
+    assert [(c["id"], e.kind) for c, e in stalled.noted] == [("openrouter", "timeout")]
 
 
 def test_check_404s_for_a_connection_that_does_not_exist(client):
@@ -377,6 +440,24 @@ def test_a_connection_deleted_mid_update_is_still_a_404(client, monkeypatch):
     r = client.put("/api/llm-connections/openrouter", json={"name": "Renamed"})
 
     assert r.status_code == 404
+
+
+def test_a_verdict_from_a_request_that_outlived_an_edit_is_not_shown(client):
+    """The route-level half of the revision guard. `forget` on an edit cannot
+    catch an attempt that was already in flight; the reader must not be told
+    their new key is broken because the old one was."""
+    fake = FakeCatalog(health_error=LLMError("auth", "bad key"))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-dead"})
+    stale = store.llm_connections.read_connection_raw("openrouter")   # revision r1
+    client.post("/api/llm-connections/openrouter/health")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-fresh"})
+
+    # ...and now the in-flight attempt from before the edit settles.
+    client.app.state.health.record(stale, LLMError("auth", "bad key"))
+
+    assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "unknown"
+    assert client.get("/api/config").json()["health"]["state"] == "unknown"
 
 
 def test_a_recreated_connection_does_not_inherit_the_dead_ones_failure(client):

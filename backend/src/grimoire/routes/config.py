@@ -37,6 +37,13 @@ from .models import (
 
 router = APIRouter()
 
+#: How long a health check may take, whatever `llm_call_budget` says (#146).
+#: Generous enough for the Claude path, which spawns a CLI and generates a
+#: word, and short enough that a wedged one gives the reader an answer rather
+#: than a spinner. Not a setting: the thing it protects against is a setting
+#: that can be turned off.
+HEALTH_CHECK_CEILING = 45.0
+
 
 # ---- config ----
 def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict:
@@ -121,7 +128,7 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             # navigation, and a network call per navigation is a poller nobody
             # asked for. `unknown` until something -- a real turn, or the
             # reader pressing Test connection -- has an answer.
-            "health": registry.status(active["id"]) if active else None,
+            "health": registry.status(active["id"], active["rev"]) if active else None,
             "setup_done": setup_done,
             "first_run": first_run,
             # Which store this config describes. `first_run` is a statement
@@ -354,7 +361,7 @@ def get_connections(registry: health.ProviderHealth = Depends(get_health)):
     # between connections -- the Connections rail and the Configuration page's
     # picker -- both have a list and neither has a detail, and "key set" is
     # exactly the claim #146 is about.
-    return [{**_with_effective(conn), "health": registry.status(conn["id"])}
+    return [{**_with_effective(conn), "health": registry.status(conn["id"], conn["rev"])}
             for conn in store.llm_connections.list_connections()]
 
 
@@ -376,7 +383,7 @@ def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health
     # a reader can act on it. Riding on the detail read rather than a route of
     # its own because it is never wanted without the rest: the panel that would
     # ask for it has already asked for this.
-    return {**conn, "health": registry.status(id)}
+    return {**conn, "health": registry.status(id, conn["rev"])}
 
 
 @router.put("/llm-connections/{id}")
@@ -393,8 +400,8 @@ def put_connection(id: str, body: ConnectionUpdate,
         registry.forget(id)
         # Inside the `try`, where it has always been: a connection deleted
         # between the write and this read is a 404, not a 500.
-        return {**_with_effective(store.llm_connections.read_connection(id)),
-                "health": registry.status(id)}
+        fresh = store.llm_connections.read_connection(id)
+        return {**_with_effective(fresh), "health": registry.status(id, fresh["rev"])}
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
 
@@ -496,13 +503,16 @@ async def post_connection_health(
     if problem is not None:
         return _health_body(registry.record(conn, LLMError("missing_key", problem)))
     try:
-        # Under the same total-duration ceiling the one-shot generation routes
-        # take (#272). The HTTP probes carry a tighter bound of their own, but
-        # the Claude path is a subprocess with no httpx client to configure —
-        # and an unbounded check is the one that holds a request open forever
-        # on exactly the connection the reader already suspects. An overrun
-        # arrives as `timeout`, which is a health verdict like any other.
-        await _bounded_call(client.check(conn))
+        # A ceiling of its own, NOT the one-shot generation budget (#272).
+        # `llm_call_budget` supports `0` for "no ceiling at all", which is a
+        # reasonable thing to ask of a slow local model and an unreasonable
+        # thing to ask of a button: the HTTP probes carry a tight transport
+        # bound, but the Claude path is a subprocess with no httpx client to
+        # configure, so on that setting a wedged CLI would hold this request —
+        # and the reader's spinner — open forever, on exactly the connection
+        # they already suspect. Bounded here at a value nobody can switch off,
+        # and an overrun arrives as `timeout`: a health verdict like any other.
+        await _bounded_call(client.check(conn), ceiling=HEALTH_CHECK_CEILING)
     except LLMError as exc:
         return _health_body(registry.record(conn, exc))
     return _health_body(registry.record(conn))

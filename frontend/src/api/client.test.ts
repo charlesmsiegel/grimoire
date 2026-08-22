@@ -624,6 +624,21 @@ test("a rejected store move announces nothing", async () => {
   off();
 });
 
+test("refreshing a catalog announces, so a cached model list is dropped", async () => {
+  // `models.ts` keeps a page-load copy of the ACTIVE connection's catalog and
+  // drops it on this signal. Without it, a refresh on the Connections page
+  // updates the store and the editor while every scene inspector goes on
+  // sizing prompts against the list this request replaced (#149).
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    jsonOk({ models: [], fetched_at: "2026-08-21", rev: "r1" })) as any;
+
+  await api.refreshConnectionModels("openrouter");
+  expect(seen).toEqual(["config"]);
+  off();
+});
+
 test("a provider failure announces on the config channel — the status bar is stale", async () => {
   // The server records what a provider did as it happens (#146); the client
   // only finds out by reading the config again, and nothing else would tell it

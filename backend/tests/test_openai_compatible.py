@@ -232,6 +232,31 @@ async def test_list_models_keeps_its_own_read_bound():
     assert seen["read"] is not None
 
 
+@pytest.mark.parametrize("body", [{"data": None}, ["m"], "text", 3])
+async def test_a_body_that_is_json_but_not_a_catalog_is_a_bad_response(body):
+    """A local server with nothing loaded answers `{"data": null}`, and that
+    used to reach the normalizer and raise a TypeError out of the route — a 500
+    for a reply the endpoint was entitled to send."""
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(OpenAICompatibleError) as exc:
+        await make_client(handler).list_models("https://x/v1", "")
+    assert exc.value.kind == "bad_response"
+
+
+async def test_a_malformed_catalog_is_not_reported_as_a_network_failure():
+    """The funnel around the request turns every stray exception into
+    `network`; this check has to sit outside it, or "your endpoint sent
+    nonsense" arrives as "your endpoint is unreachable"."""
+    def handler(request):
+        return httpx.Response(200, json={"data": None})
+
+    with pytest.raises(OpenAICompatibleError) as exc:
+        await make_client(handler).probe("https://x/v1", "")
+    assert exc.value.kind != "network"
+
+
 async def test_the_probe_imposes_its_own_bound_where_the_catalog_inherits_one():
     """The same request, asked for two different reasons (#146). A catalog is a
     download and keeps the client's generation-sized bound; a health check is

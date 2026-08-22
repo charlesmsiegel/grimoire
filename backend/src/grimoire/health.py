@@ -47,6 +47,14 @@ OK = "ok"
 ERROR = "error"
 
 
+def _public(status: dict) -> dict:
+    """One record as callers see it: a copy, minus the revision it is filed
+    under. The rev is this module's bookkeeping — the answer to "is this
+    verdict still about the connection you are looking at" — and putting it in
+    a response body would invite a client to start reasoning about it."""
+    return {k: v for k, v in status.items() if k != "rev"}
+
+
 class ProviderHealth:
     """Per-connection health, keyed by connection id.
 
@@ -67,13 +75,10 @@ class ProviderHealth:
         collide with every other anonymous connection in one shared slot.
 
         What is filed describes the connection **as it was when the call ran**,
-        which is not quite the same as the connection now. Edit a key while a
-        turn is streaming on it and that turn's failure — the old key's — is
-        recorded against the new settings a moment after the route cleared the
-        verdict for them. The window is one call wide and closes on the next
-        one, and narrowing it would mean carrying a revision token through the
-        facade for a status dot; a wrong verdict for one turn is the cheaper
-        of the two.
+        so it is filed under that connection's revision — see `status`, which
+        will not hand a verdict back for a revision the connection has since
+        moved past. The facade is given whole connection dicts and those carry
+        `rev` already, so this costs a key rather than a mechanism.
         """
         cid = conn.get("id") or ""
         if not cid:
@@ -81,17 +86,38 @@ class ProviderHealth:
         status = {"state": OK if error is None else ERROR,
                   "kind": "" if error is None else getattr(error, "kind", "bad_response"),
                   "detail": "" if error is None else getattr(error, "detail", str(error)),
-                  "at": paths.now_iso()}
+                  "at": paths.now_iso(),
+                  "rev": conn.get("rev", "")}
         self._by_id[cid] = status
-        return dict(status)
+        return _public(status)
 
-    def status(self, cid: str) -> dict:
+    def status(self, cid: str, rev: str | None = None) -> dict:
         """What is known about `cid`. Never raises and never returns None: an
-        unknown connection has a status, and it is `unknown`."""
+        unknown connection has a status, and it is `unknown`.
+
+        `rev` is the revision of the connection being *asked about*, which
+        every caller already holds — a status is only ever read beside the
+        connection it describes. Given one, a verdict recorded against a
+        different revision answers `unknown` rather than itself.
+
+        That is not the same thing as `forget`, and it covers what `forget`
+        cannot. Clearing on an edit is a write, so it only orders itself
+        against writes: an attempt that STARTED before the edit can settle
+        after it and install a verdict about the old key on the new settings —
+        from a second tab, or from the request that the edit interrupted. Ids
+        are reusable slugs, so the same applies to a delete-and-recreate.
+        Comparing revisions on the way out makes those verdicts unreadable
+        rather than merely unlikely.
+
+        The window this still leaves is one call wide and cannot be closed from
+        here: an attempt that starts and ends within one revision describes
+        that revision correctly, even if the reader has since changed their
+        mind about it.
+        """
         known = self._by_id.get(cid)
-        if known is None:
+        if known is None or (rev is not None and known.get("rev", "") != rev):
             return {"state": UNKNOWN, "kind": "", "detail": "", "at": ""}
-        return dict(known)
+        return _public(known)
 
     def forget(self, cid: str) -> None:
         """Drop what is known about `cid`.

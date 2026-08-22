@@ -2447,6 +2447,55 @@ test("a turn that the provider refused tells the shell its status is stale", asy
   off();
 });
 
+test("a turn that works after one that failed says so, without a navigation", async () => {
+  // Recovery has to be announced too, or the dot the failure turned red stays
+  // red until an unrelated navigation — the Retry that fixed it is the moment
+  // the reader is watching (#146).
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "No auth credentials found", kind: "auth" } });
+    });
+  renderCampaign();
+  await screen.findByRole("textbox");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "onward" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/No auth credentials found/);
+  expect(seen).toEqual(["config"]);
+
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ delta: "The tide turns." });
+      onEvent({ done: true });
+    });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "again" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  await waitFor(() => expect(seen).toEqual(["config", "config"]));
+  off();
+});
+
+test("an ordinary turn does not re-read the config every time", async () => {
+  // The counterpart to the test above: announcing on every success would put a
+  // config read behind every message in the game.
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ delta: "The tide turns." });
+      onEvent({ done: true });
+    });
+  renderCampaign();
+  await screen.findByRole("textbox");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "onward" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  await screen.findByText("The tide turns.");
+  expect(seen).toEqual([]);
+  off();
+});
+
 test("a turn that failed for a reason of ours leaves the status alone", async () => {
   // A scene that is busy, a stale write, a 404 — none of them are a statement
   // about the provider, and re-reading the config over one is noise. `busy` is

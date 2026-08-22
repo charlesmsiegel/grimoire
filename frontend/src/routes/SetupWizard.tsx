@@ -62,6 +62,7 @@ export default function SetupWizard(
   const [key, setKey] = useState("");
   const [models, setModels] = useState<Model[]>([]);
   const [modelsError, setModelsError] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
   const [connected, setConnected] = useState<string | null>(null);
   /** What the provider said when the finished connection was tested (#146).
    *  Null while nothing has been checked — including the whole time before the
@@ -159,6 +160,32 @@ export default function SetupWizard(
       .catch(() => alive && setModelsError(true));
     return () => { alive = false; };
   }, [form.kind]);
+
+  /** List this provider's models using what has been typed so far.
+   *
+   *  The automatic fetch above is keyless, and deliberately: it runs before
+   *  there is a key to send, so that the model field is usable on the step
+   *  where the key is still being entered. That leaves two cases it cannot
+   *  answer — an OpenRouter account whose catalog differs from the public one,
+   *  and a custom endpoint, which has nothing to list until its base URL is
+   *  typed — and neither is worth refetching on every keystroke of a
+   *  credential. So they get a button (#149).
+   */
+  async function fetchModels() {
+    if (fetchingModels) return;
+    setFetchingModels(true);
+    setModelsError(false);
+    try {
+      const r = await api.previewModels({
+        kind: form.kind, base_url: form.base_url, api_key: key,
+      });
+      setModels(r.models);
+    } catch {
+      setModelsError(true);       // the combobox falls back to free text
+    } finally {
+      setFetchingModels(false);
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -352,6 +379,17 @@ export default function SetupWizard(
                 value={form} onChange={setForm}
                 apiKey={key} onApiKey={setKey}
                 models={models} modelsError={modelsError}
+                modelsHint={form.kind === "claude" ? undefined : (
+                  <p className="field-hint">
+                    {form.kind === "openrouter"
+                      ? "Showing the public catalog. "
+                      : "Models are listed from this endpoint. "}
+                    <button className="link" disabled={fetchingModels}
+                            onClick={() => { void fetchModels(); }}>
+                      {fetchingModels ? "Fetching…" : "Fetch models"}
+                    </button>
+                  </p>
+                )}
               />
             )}
             <div className="wizard-footer">
