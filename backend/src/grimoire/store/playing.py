@@ -118,9 +118,9 @@ def player_tags(cid: str) -> set[str]:
 def _resolve_locations(cid: str, rows: list[dict]) -> None:
     """Blank any `location` these rows name that this campaign no longer has.
 
-    The read-side policy `suggest.validate_ideas` applies to a saved idea's
-    refs, for the same reason: a greeting is authored in a world and read
-    through a campaign that may since have deleted the location it names, and
+    This is the read-side policy `suggest.validate_ideas` applies to a saved
+    idea's refs, and for the same reason: a greeting is authored in a world and
+    read through a campaign that may since have deleted the location it names, and
     every consumer downstream -- the confirm form's pre-filled picker, the
     ledger card's caption -- would otherwise be handed an id that resolves to
     nothing. `greetings.availability` cannot do this itself: it is pure and
@@ -225,9 +225,9 @@ def _seed_location(cid: str, sid: str, eid: str, *, seed: bool) -> None:
     call site: the caller opting out, the greeting naming nowhere, and the scene
     already being somewhere. Only a scene with no location yet is touched, and
     only for a caller that has made no location decision of its own -- see
-    `StartFromGreeting`
-    .seed_location for why the confirm pane opts out entirely rather than
-    relying on this guard. A location already on the scene is a choice someone
+    `StartFromGreeting.seed_location` for why the confirm pane opts out
+    entirely rather than relying on this guard. A location already on the scene
+    is a choice someone
     made about *this* scene, and re-imposing the greeting's over it would make
     every location picker upstream a decoration. On an empty history
     `set_location` is silent, which is what keeps the opener from being preceded

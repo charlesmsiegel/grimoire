@@ -59,9 +59,9 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     api.listTags(wid).then(setTags);  // tag vocabulary stays a world concern
     // Not in the `listsReady` gate above: that gate exists so the rail's "no
     // matches" verdict waits for what it SEARCHES (names and characters), and
-    // locations are neither. A failed read leaves the picker empty and the
-    // stored id still renders as its raw slug, which is the same thing a
-    // deleted location does.
+    // locations are neither. A failed read leaves the picker empty; the stored
+    // id still renders, as its raw slug and without the "(missing)" the
+    // picker has not earned the right to say.
     setLocationsRead(false);
     api.listEntities(scope, "locations")
       .then((ls) => { setLocations(ls); setLocationsRead(true); })
@@ -468,7 +468,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
               </button>
             </div>
           </Field>
-          <Field label="Location" hint="where the scene starts — seeded onto the scene unless you pick another">
+          <Field label="Location"
+                 hint="where a scene from this greeting opens — the new-scene form starts here, and can be changed or cleared there">
             <select value={form.location} aria-label="Location"
                     onChange={(e) => setForm({ ...form, location: e.target.value })}>
               <option value="">— no location —</option>
