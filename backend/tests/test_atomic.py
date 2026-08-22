@@ -100,6 +100,40 @@ def test_temp_files_are_invisible_to_the_record_listers(tmp_path):
     assert all(n.startswith(".") and n.endswith(".tmp") for n in seen["names"])
 
 
+def test_is_write_temp_recognizes_the_temps_this_module_actually_makes(tmp_path):
+    """The predicate is pinned to the generator, not to a remembered spelling.
+
+    It exists for the walks that copy or pack a directory of records -- a world
+    export, a world fork -- and it used to live in one of them, where a change
+    to `_mkstemp_beside`'s prefix would have gone unnoticed until a half-written
+    record turned up inside somebody's bundle. Asserting against names this
+    module really produced is what makes that impossible: hand-writing an
+    example here would only re-create the drift one file over.
+    """
+    seen = {}
+    real_fsync = atomic.os.fsync
+
+    def peek(fd):                       # after the write, before the replace
+        seen.setdefault("names", []).extend(q.name for q in tmp_path.iterdir()
+                                            if q.name.endswith(".tmp"))
+        return real_fsync(fd)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(atomic.os, "fsync", peek)
+        atomic.write_text(tmp_path / "scene.md", "x")
+        atomic.write_bytes(tmp_path / "portrait.png", b"x")
+        atomic.write_text(tmp_path / ("a" * 200 + ".md"), "x")   # the truncated hint
+
+    assert len(seen["names"]) == 3, seen
+    assert all(atomic.is_write_temp(tmp_path / n) for n in seen["names"]), seen
+
+    # And a record that merely looks like one is not swallowed: a user's
+    # `.notes.tmp` is a file they wrote, and skipping it would drop it from
+    # every copy of the world silently (Codex review).
+    for innocent in (".notes.tmp", "notes.tmp", ".scene.md.tmp", "scene.md"):
+        assert not atomic.is_write_temp(tmp_path / innocent), innocent
+
+
 def test_missing_parent_still_raises_file_not_found(tmp_path):
     """Callers relied on this from write_text; several guard on it."""
     with pytest.raises(FileNotFoundError):
