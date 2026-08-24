@@ -6,12 +6,31 @@ something a campaign owns, so every campaign compares against the same reference
 and a fix made once holds everywhere. Campaign-side reads go through
 `overlay.voice_anchor()`, which resolves campaign-over-world per file.
 
-Stored at <root>/characters/<char_id>/voice_anchor.md as plain prose. Deliberately a
-separate file from the card's `mes_example`: that field is *injected into every
-scene* as few-shot dialogue, so editing it to sharpen a comparison changes what
-the model is told to imitate. The anchor is read-only reference material — it is
-never sent as part of a scene — which is what lets it describe a voice ("clipped,
-never uses contractions") as well as demonstrate it.
+Stored at <root>/characters/<char_id>/voice_anchor.md as plain prose. A separate
+file from the card's `mes_example` because the two do different work: the
+examples DEMONSTRATE a voice and the anchor DESCRIBES it, which is what lets it
+state a rule ("clipped, never uses contractions") that a sample can only imply.
+Both are sent, each in its own scene section, capped through `effective()`.
+
+That is a reversal. This docstring used to say the anchor "is never sent as part
+of a scene", and the property it protected was real: an anchor could be edited to
+sharpen the COMPARISON without changing what the model was told to imitate. It
+was spent deliberately. A voice system that can only report failure after a scene
+is played does not solve the problem it exists for -- the reader wants different
+voices, not a report that they were the same -- and while the anchor was
+judge-only, nothing in the app ever wrote one.
+
+What that costs is worth stating plainly, because the code no longer implies it:
+**the drift check is an approximate second opinion, not a proof.** It compares a
+played scene against the character's CURRENT anchor, which may differ from what
+any turn actually received -- `{{user}}` is substituted in the prompt copy only,
+the packer may drop the anchors section under a budget, the reader may disable it
+in the layout, the anchor may be edited between playing and absorbing, and
+`templates/` is user-editable. A `drift` verdict means "worth looking at". Making
+it exact would mean snapshotting the delivered brief with every accepted turn,
+co-committed under the campaign lock; that is priced and not taken. What IS held
+exactly: the judge and the generator receive the same `effective()` text, so a
+rule past the cap is enforced against neither.
 
 No staleness hash, for the same reason taglines.py has none: a hand-written
 anchor must not silently expire when a card changes.
@@ -28,7 +47,6 @@ from pathlib import Path
 from .. import prompts
 from . import atomic, paths
 from .frontmatter import dump_frontmatter, parse_frontmatter
-
 
 VOICE_ANCHOR_CAP = 1200
 """Longest anchor text the prompt or the drift judge ever sees, in characters.

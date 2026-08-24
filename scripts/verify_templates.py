@@ -99,6 +99,7 @@ from grimoire.store import (  # noqa: E402
     chronicle,
     context,
     dossiers,
+    overlay,
     relationships,
     rolling_summary,
     scenario,
@@ -186,7 +187,19 @@ anchor = "Clipped. Never uses contractions.\nAnswers questions with questions."
 exp = voice_drift.build_prompt("Seraphine Vale", anchor, transcript)
 check("voice drift system", exp[0]["content"], render("voice_drift/system.j2"))
 check("voice drift user", exp[1]["content"],
-      render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor, transcript=transcript))
+      render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor,
+             transcript=transcript, correction=""))
+
+# BOTH branches of the optional correction, because they are different prompts
+# and only one of them is the ordinary case. The scene prompt tells the writer a
+# correction outranks the anchor, so a judge that could not see it would flag the
+# model for obeying its instructions -- the block exists for that, and a
+# verifier that only rendered the empty branch would not notice it disappearing.
+correction = "Use contractions; the last scene was too stiff."
+exp = voice_drift.build_prompt("Seraphine Vale", anchor, transcript, correction=correction)
+check("voice drift user with a correction", exp[1]["content"],
+      render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor,
+             transcript=transcript, correction=correction))
 
 # Both folds, because the user template branches on `prior` and the two branches
 # label the transcript differently -- a from-scratch fold that said "posts since
@@ -502,6 +515,28 @@ def _secrecy_of(meta: dict) -> str:
     return level if level in ("public", "secret", "gm-only") else "public"
 
 
+
+def _cast_blocks(cid, npc_cards, npc_ids):
+    """Mirror of context.assemble's cast_blocks. Kept here rather than imported
+    for the reason this whole script exists: an independent reconstruction is
+    what makes "the builder and the template agree" mean something."""
+    def _str(card, key):
+        v = card.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    shown = context.cast.display_names([_str(d, "name") for d in npc_cards])
+    out = []
+    for name, card, char_id in zip(shown, npc_cards, npc_ids, strict=True):
+        parts = [_str(card, "description"), _str(card, "personality"), _str(card, "scenario")]
+        out.append({
+            "name": name,
+            "description": "\n".join(p for p in parts if p),
+            "anchor": voice_anchors.effective(overlay.voice_anchor_record(cid, char_id)["text"]),
+            "example": voice_anchors.truncate(_str(card, "mes_example"),
+                                              voice_anchors.VOICE_EXAMPLE_CAP),
+        })
+    return out
+
 def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) -> dict:
     """Mirror context._assemble's data gathering through public store reads —
     this is the data contract documented in templates/README.md."""
@@ -509,12 +544,13 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     scene = scenes.read_scene(cid, scene_id)
     cast = ap.scene_cast(cid, scene_id)
 
-    npc_cards, states = [], []
+    npc_cards, npc_ids, states = [], [], []
     for a in cast:
         if a["role"] != "npc":
             continue
         vid = ap.locked_version(cid, a["kind"], a["id"])
         npc_cards.append(characters.read_card(croot, a["id"], vid)["data"])
+        npc_ids.append(a["id"])
         st = playstate.read_state(croot, a["id"])
         if st and (st["current_state"] or st["knows"] or st["suspects"]):
             name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
@@ -769,6 +805,11 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
             "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
             "npc_cards": npc_cards,
+            # Mirror of context.assemble's cast_blocks -- the one structure
+            # character_descriptions and the three voice sections all read.
+            "cast_blocks": _cast_blocks(cid, npc_cards, npc_ids),
+            "named_npc_count": sum(
+                1 for b in _cast_blocks(cid, npc_cards, npc_ids) if b["name"]),
             "states": states, "transient_states": transient_states,
             # Mirrors context._assemble: derived from the present NPCs' card
             # names and the raw transcript, and None while the toggle is off.
@@ -816,6 +857,11 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/natural_prose.j2",
               "scene/sections/card_system_prompts.j2",
               "scene/sections/character_descriptions.j2",
+              # Catalog order: the voice block sits between who a character IS
+              # and what is true of them right now (context.assemble.SECTIONS).
+              "scene/sections/voice_policy.j2",
+              "scene/sections/voice_anchors.j2",
+              "scene/sections/voice_examples.j2",
               "scene/sections/character_state.j2",
               "scene/sections/transient_state.j2",
               "scene/sections/active_speaker.j2",
@@ -823,7 +869,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/player_personas.j2"]
     if data["pcless"]:
         names += ["scene/sections/offscreen_scene.j2", "scene/sections/absent_players.j2"]
-    names += ["scene/sections/message_examples.j2",
+    names += [
               "scene/sections/story_so_far/" + ("full" if data["story_full"] else "compact") + ".j2",
               "scene/sections/archive.j2",
               "scene/sections/plot_threads.j2",

@@ -605,9 +605,16 @@ record["id"])` check `_voice_notes` applies must therefore run **before**
   cap and reads as 2,200 in a naive frontend check. The editor counts
   `[...text].length`, and a test covers an astral-character anchor rather
   than only asserting the threshold value.
-- **`evals/run.py`** requires §3's canonical policy text verbatim, alongside
-  the budget, reply-format, roll-protocol, active-speaker and available-art
-  sections.
+- **`evals/run.py`** pins §3's policy through `grade_prompt_section`,
+  alongside the budget, reply-format, roll-protocol, active-speaker and
+  available-art sections. Note what that grader actually buys, because this
+  line previously overstated it: it renders the template and requires the
+  result in the assembled prompt, so both sides move together and it cannot
+  catch a **reword**. What it catches is the section ceasing to be
+  DELIVERED — emptied, switched off, dropped, or its feeding variable broken.
+  Attached to the several-NPCs fixture rather than required suite-wide,
+  because the policy renders conditionally and a global check would reject
+  the single-bare-NPC prompts it is designed not to clutter.
 - **`scripts/verify_templates.py`** must agree with the new templates.
 - **`CLAUDE.md`** gains a line recording that the anchor is now a prompt
   input and not only a judge input.

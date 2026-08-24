@@ -181,7 +181,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
     raw_names = [_str(d, "name") for d in npc_cards]
     cast_blocks = []
-    for shown, card, char_id in zip(cast_data.display_names(raw_names), npc_cards, npc_ids):
+    # strict=True is doing real work: `npc_ids` is appended only after its card
+    # read succeeds, so the two lists staying aligned is an invariant rather
+    # than an assumption, and a silent truncation here would attach one
+    # character's anchor to another's name.
+    for shown, card, char_id in zip(cast_data.display_names(raw_names), npc_cards, npc_ids,
+                                    strict=True):
         parts = [_str(card, "description"), _str(card, "personality"),
                  _str(card, "scenario")]
         anchor = overlay.voice_anchor_record(cid, char_id)["text"]

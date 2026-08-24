@@ -109,17 +109,18 @@ def _migrate(stored: list) -> list:
         if not isinstance(entry, dict):
             continue
         sid = entry.get("id")
+        renamed = entry
         if sid in _RENAMED:
             new_id = _RENAMED[sid]
             if new_id in have:
                 continue          # the newer entry is authoritative
-            entry = {k: v for k, v in entry.items() if k != "label"}
-            entry["id"] = new_id
+            renamed = {k: v for k, v in entry.items() if k != "label"}
+            renamed["id"] = new_id
             sid = new_id
         if sid in seen:
             continue
         seen.add(sid)
-        out.append(entry)
+        out.append(renamed)
     return out
 
 

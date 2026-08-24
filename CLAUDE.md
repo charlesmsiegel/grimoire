@@ -410,6 +410,16 @@ would answer neither question.
   / `# paths-ok: <reason>` / `# lock-order-ok: <reason>` /
   `# lock-domain-ok: <reason>` — a marker with no
   reason fails, deliberately, and each guard caps how many exist.
+- **The voice anchor is a PROMPT input now, not only a judge input.** It
+  renders per present character in `voice_anchors.j2` and is also what
+  `voice_drift` judges a played scene against — both through
+  `voice_anchors.effective()`, so a rule past the cap is enforced against
+  neither. The drift check is therefore an approximate second opinion rather
+  than a proof: it compares against the character's *current* anchor, which
+  may differ from what a turn received (substitution, a packer drop, a layout
+  disable, an edit between playing and absorbing, a local template edit). A
+  `drift` verdict means "worth looking at". `store/voice_anchors.py`'s
+  docstring carries the reasoning, including what was given up to get here.
 - **Adding an LLM call site?** Resolve its connection with
   `_require_connection(<task>, cid)` and name the task the call meters under.
   `store/routing.py` maps that task to a route the user can point at a
