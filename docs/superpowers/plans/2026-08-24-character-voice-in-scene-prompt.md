@@ -17,7 +17,17 @@
 - **Imports at module scope, module graph acyclic** (`test_import_guard.py`). Inside `store/`, cross-package imports bind a *submodule*: `from ..campaigns import read` then `read.world_refs()`.
 - **pydantic stays v1/v2-agnostic** — plain `BaseModel` fields, dump via `routes.common._dump`.
 - **The three lint gates are ratcheted.** Resolving a finding makes the recorded count stale, so run `make baseline` and commit the smaller `lint-baselines/<tool>.json` with the fix.
-- **Run the gate with `make check`.** Backend alone: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest <path>` (Windows) or `.venv/bin/python` (macOS/Linux). Frontend tests run **from** `frontend/`.
+- **Run the gate with `make check`.** Backend tests are written below as
+  `<PYTEST> <path>`. Substitute for your shell — the POSIX form below is
+  **not** valid in PowerShell, which has no inline env-var prefix:
+  - PowerShell: `cd backend; $env:PYTHONPATH="src"; .venv\Scripts\python.exe -m pytest`
+  - Git Bash (Windows): `<PYTEST>`
+  - macOS/Linux: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest`
+
+  `PYTHONPATH` is load-bearing: `backend/.venv` holds an editable install whose
+  `.pth` points at whichever checkout created it, so a bare `pytest` in a
+  worktree silently tests the *other* tree's sources. Frontend tests run
+  **from** `frontend/`.
 - **After editing anything in `templates/`**, `make check` must pass — it runs both `scripts/verify_templates.py` and the offline eval suite.
 - Caps: `VOICE_ANCHOR_CAP = 1200`, `VOICE_EXAMPLE_CAP = 3000` (characters).
 
@@ -84,7 +94,7 @@ def test_effective_strips_and_passes_short_anchors_through():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_voice_anchors_store.py -q`
+Run: `<PYTEST> tests/test_voice_anchors_store.py -q`
 Expected: FAIL with `AttributeError: module 'grimoire.store.voice_anchors' has no attribute 'truncate'`
 
 - [ ] **Step 3: Write the implementation**
@@ -155,7 +165,7 @@ def effective(text: str) -> str:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_voice_anchors_store.py -q`
+Run: `<PYTEST> tests/test_voice_anchors_store.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -231,7 +241,7 @@ def test_display_names_never_collides_among_non_empty_results():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -k display_names -q`
+Run: `<PYTEST> tests/test_context.py -k display_names -q`
 Expected: FAIL with `AttributeError: module ... has no attribute 'display_names'`
 
 - [ ] **Step 3: Write the implementation**
@@ -277,7 +287,7 @@ def display_names(names: list[str]) -> list[str]:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -k display_names -q`
+Run: `<PYTEST> tests/test_context.py -k display_names -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -305,7 +315,7 @@ One resolved structure feeds all four affected sections, so name attribution and
 
 ```python
 # backend/tests/test_context.py  (append)
-def test_cast_blocks_keeps_every_present_npc_and_filters_nothing(tmp_path, monkeypatch):
+def test_cast_blocks_keeps_every_present_npc_and_filters_nothing(tmp_path):
     """Two named NPCs with no anchor and no mes_example still produce two
     entries -- the cast-size rule reads `named_npc_count`, and filtering here
     would silently switch the voice policy off in exactly the case it is for."""
@@ -369,10 +379,15 @@ second scaffold. What each must guarantee:
 - `_packed_sections(cid, sid)` → the inspector's rows, each with `id` and
   `dropped`. `context.context_sections` is the existing entry point; check its
   real shape and match it.
+- `_prompt_text(cid, sid)` → the assembled system message as one string, so a
+  budget can be **derived** from it rather than guessed. Build it from
+  `context.build_messages(cid, sid)` — the same call `sweep.py:197` uses.
+  `tokens.count` (`store/tokens.py`) is what `pack` measures with, so budgets
+  derived through it cannot drift from the packer.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -k cast_blocks -q`
+Run: `<PYTEST> tests/test_context.py -k cast_blocks -q`
 Expected: FAIL with `KeyError: 'cast_blocks'`
 
 - [ ] **Step 3: Write the implementation**
@@ -432,7 +447,7 @@ Add both to the `data` dict beside `"npc_cards"`:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -q`
+Run: `<PYTEST> tests/test_context.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -534,10 +549,11 @@ def test_the_newcomers_follow_a_disabled_or_repositioned_predecessor():
     """`_ordered` anchors newcomers to their catalog neighbour wherever the
     layout put it, enabled or not -- its docstring says so, and this pins it."""
     stored = [{"id": "plot_threads"}, {"id": "character_descriptions", "enabled": False}]
-    order = [s.id for s in layout.describe(assemble.SECTIONS, stored)]
-    order_ids = [r["id"] if isinstance(r, dict) else r for r in order]
-    i = order_ids.index("character_descriptions")
-    assert order_ids[i + 1:i + 4] == ["voice_policy", "voice_anchors", "voice_examples"]
+    # `describe` returns list[dict] (it shows the switched-off sections too, so
+    # there is a way back on) -- NOT Section tuples like `merge`.
+    order = [row["id"] for row in layout.describe(assemble.SECTIONS, stored)]
+    i = order.index("character_descriptions")
+    assert order[i + 1:i + 4] == ["voice_policy", "voice_anchors", "voice_examples"]
 
 
 def test_the_policy_survives_a_budget_that_drops_both_other_sections(tmp_path):
@@ -549,7 +565,12 @@ def test_the_policy_survives_a_budget_that_drops_both_other_sections(tmp_path):
     """
     cid, sid = _campaign_with_npc(tmp_path, name="Mara", anchor="Clipped.",
                                   mes_example="Mara: Fine." * 200)
-    _set_context_budget(tiny_enough_to_drop_spotlight)
+    # Derive the budget from the assembled prompt rather than guessing a
+    # constant: measure it unbounded, then set a budget below the LOCK_IN
+    # floor's neighbourhood so SPOTLIGHT must give way. `tokens.count` is what
+    # `pack` itself measures with, so this cannot drift from the packer.
+    full = tokens.count(_prompt_text(cid, sid))
+    _set_context_budget(full // 2)
     sections = {r["id"]: r for r in _packed_sections(cid, sid)}
     assert not sections["voice_policy"]["dropped"]
     assert sections["voice_examples"]["dropped"]
@@ -560,7 +581,14 @@ def test_examples_drop_before_anchors_when_examples_are_actually_larger(tmp_path
     and nothing more."""
     cid, sid = _campaign_with_npc(tmp_path, name="Mara", anchor="Clipped.",
                                   mes_example="Mara: Fine." * 500)
-    _set_context_budget(just_tight_enough_for_one_drop)
+    # One drop's worth: the examples section is far and away the largest here,
+    # so shaving just over its size forces exactly it out. Derived, not a
+    # magic number -- and if a future change makes anchors the larger section
+    # this test SHOULD fail, because the ordering it documents is a tendency
+    # of largest-first packing rather than a property of the tiers.
+    full = tokens.count(_prompt_text(cid, sid))
+    examples = tokens.count(_section_text(cid, sid, "voice_examples"))
+    _set_context_budget(full - examples - 10)
     sections = {r["id"]: r for r in _packed_sections(cid, sid)}
     assert sections["voice_examples"]["dropped"]
     assert not sections["voice_anchors"]["dropped"]
@@ -573,7 +601,7 @@ def test_message_examples_section_is_gone():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -k voice -q`
+Run: `<PYTEST> tests/test_context.py -k voice -q`
 Expected: FAIL — the templates do not exist
 
 - [ ] **Step 3: Write the templates and edit the catalog**
@@ -673,31 +701,8 @@ Delete `templates/scene/sections/message_examples.j2`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -q`
+Run: `<PYTEST> tests/test_context.py -q`
 Expected: PASS
-
-- [ ] **Step 5: Regenerate the frozen-campaign snapshot, and READ the diff**
-
-This task changes the assembled prompt, and `sweep.py:197-198` captures
-`context.build_messages` plus the inspector's section rows — so the fixture
-moves **now**, not in a later task. Leaving it stale would hand every
-subsequent task's author a knowingly red tree, which is exactly the state that
-makes a real regression invisible.
-
-```bash
-cd backend
-$env:PYTHONPATH="src"; .venv\Scripts\python.exe -m tests.fixtures.frozen_campaign.sweep
-git diff backend/tests/fixtures/frozen_campaign/snapshot.json
-```
-
-Read the diff. Expect: `message_examples` rows gone, three `voice_*` rows
-present, examples now under `## <Name>` headings. Anything else is a bug in
-this task. `home/` is never regenerated.
-
-- [ ] **Step 6: Run the backend suite to confirm the tree is green**
-
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest -q`
-Expected: PASS — including `test_frozen_campaign.py` and `test_docs_guard.py`.
 
 #### The layout migration (same task, same commit)
 
@@ -711,7 +716,7 @@ A stored entry naming the retired id must not silently return as an enabled sect
 - Consumes: nothing.
 - Produces: `layout._migrate(stored: list[dict]) -> list[dict]` — pure, applied at the head of both `merge` and `describe`.
 
-- [ ] **Step 8: Write the failing tests**
+- [ ] **Step 5: Write the failing tests**
 
 ```python
 # backend/tests/test_context_layout.py  (append)
@@ -759,12 +764,12 @@ def test_describe_and_merge_agree_about_the_migrated_entry():
 
 Check `layout.describe`'s actual return shape before writing the last test and match it.
 
-- [ ] **Step 9: Run tests to verify they fail**
+- [ ] **Step 6: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context_layout.py -q`
+Run: `<PYTEST> tests/test_context_layout.py -q`
 Expected: FAIL — the legacy entry is ignored and `voice_examples` enters enabled
 
-- [ ] **Step 10: Write the implementation**
+- [ ] **Step 7: Write the implementation**
 
 ```python
 #: Section ids that were renamed, old -> new. A stored layout naming the old id
@@ -815,16 +820,46 @@ def _migrate(stored: list) -> list:
 
 Call it at the top of `merge` and `describe`: `stored = _migrate(stored)`.
 
-- [ ] **Step 11: Run tests to verify they pass**
+- [ ] **Step 8: Run tests to verify they pass**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context_layout.py -q`
+Run: `<PYTEST> tests/test_context_layout.py -q`
 Expected: PASS
 
-- [ ] **Step 12: Commit**
+The migration must land **before** the snapshot is regenerated below. It turns
+an ignored legacy entry into a recognised `voice_examples` one, preserving its
+stored position and `enabled` state — which changes the assembled prompt.
+Regenerating first would capture a prompt the finished task does not produce.
+
+- [ ] **Step 9: Regenerate the frozen-campaign snapshot, and READ the diff**
+
+This task changes the assembled prompt, and `sweep.py:197-198` captures
+`context.build_messages` plus the inspector's section rows — so the fixture
+moves **now**, not in a later task. Leaving it stale would hand every
+subsequent task's author a knowingly red tree, which is exactly the state that
+makes a real regression invisible.
 
 ```bash
-git add templates/scene/sections/ backend/src/grimoire/store/context/ backend/tests
+cd backend
+$env:PYTHONPATH="src"; .venv\Scripts\python.exe -m tests.fixtures.frozen_campaign.sweep
+git diff backend/tests/fixtures/frozen_campaign/snapshot.json
+```
+
+Read the diff. Expect: `message_examples` rows gone, three `voice_*` rows
+present, examples now under `## <Name>` headings. Anything else is a bug in
+this task. `home/` is never regenerated.
+
+- [ ] **Step 10: Run the backend suite to confirm the tree is green**
+
+Run: `<PYTEST> -q`
+Expected: PASS — including `test_frozen_campaign.py` and `test_docs_guard.py`.
+
+- [ ] **Step 11: Commit**
+
+```bash
+# `git rm` FIRST: `git add <dir>` already stages the deletion, after which
+# `git rm` on the same path fails because it is no longer in the index.
 git rm templates/scene/sections/message_examples.j2
+git add templates/scene/sections/ backend/src/grimoire/store/context/ backend/tests
 git commit -m "Voice reaches the prompt, and a retired section stays retired"
 ```
 
@@ -862,7 +897,7 @@ def test_a_nameless_card_keeps_its_description_without_a_heading(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -k descriptions -q`
+Run: `<PYTEST> tests/test_context.py -k descriptions -q`
 Expected: FAIL — no `## Mara` heading
 
 - [ ] **Step 3: Rewrite the template**
@@ -890,7 +925,7 @@ Expected: FAIL — no `## Mara` heading
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_context.py -q`
+Run: `<PYTEST> tests/test_context.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Regenerate the snapshot again and read the diff**
@@ -903,7 +938,7 @@ $env:PYTHONPATH="src"; .venv\Scripts\python.exe -m tests.fixtures.frozen_campaig
 git diff backend/tests/fixtures/frozen_campaign/snapshot.json
 ```
 
-Expect only description headings to appear. Then: `PYTHONPATH=src .venv/Scripts/python.exe -m pytest -q` → PASS.
+Expect only description headings to appear. Then: `<PYTEST> -q` → PASS.
 
 - [ ] **Step 6: Commit**
 
@@ -1010,7 +1045,7 @@ Match `renderEditor`'s real signature in that suite rather than the sketch above
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_characters_store.py tests/test_routes.py -q`
+Run: `<PYTEST> tests/test_characters_store.py tests/test_routes.py -q`
 Then, **from `frontend/`** (running vitest from the repo root skips
 `vitest.config.ts` and disables `globals`, failing every mock-based test):
 `cd frontend && npx vitest run src/components/CharacterEditor.test.tsx`
@@ -1055,7 +1090,13 @@ required field would fail `tsc` in files this task does not otherwise touch.
   // `untagged` — an anchor is a world-level property of the character.
   // REPORTED, never bulk-filled: an inferred anchor now steers every scene,
   // so a roster-wide unattended derive would write voices nobody reviewed.
-  const anchorless = worldScope ? chars.filter((c) => !c.has_voice_anchor) : [];
+  // `=== false`, NOT `!c.has_voice_anchor`: the field is optional, so an
+  // older response or a fixture that predates it would otherwise report the
+  // whole roster as anchorless — a backlog that is loudest when it knows
+  // least.
+  const anchorless = worldScope
+    ? chars.filter((c) => c.has_voice_anchor === false)
+    : [];
 ```
 
 **3. The count** — in the same toolbar as the tagline button (~line 1613), a
@@ -1165,45 +1206,72 @@ def test_no_correction_leaves_the_user_message_as_it_was():
 ```
 
 ```python
-# backend/tests/test_voice_drift_store.py  (append — a unit test of the rule,
-# not the route, so it runs under this task's own commands)
-def test_a_correction_whose_anchor_was_replaced_is_not_in_force(tmp_path):
-    """The rule `_stage_voice_drift` must apply before building the judge
-    prompt. `context/cast.py` already applies it before putting the note in
-    the SCENE prompt; unchecked on the judge side, a retired note would be
-    presented as overriding the anchor that replaced it -- and would mint a
-    fresh flag against that new anchor.
+# backend/tests/test_routes.py  (append to the voice-drift section, ~line 6391)
+#
+# A ROUTE test, not a unit test on `fingerprint_matches`. The wiring is the
+# change: a unit test of the helper passes even if `_stage_voice_drift` never
+# calls it, still sends the raw anchor, or drops the correction entirely.
+# `_voice_scene(client, anchor=..., prior=...)` already exists here for exactly
+# this shape, and `review_runs.absorb` drives the stage.
 
-    Asserted on `fingerprint_matches` directly, which is the whole decision:
-    the route reduces to `prior if (not prior_fp or fingerprint_matches(...))
-    else ""`.
-    """
-    root = tmp_path
-    voice_anchors.write(root, "mara", "Never uses contractions.")
-    first = voice_anchors.read_record(root, "mara")
-    stale_fp = voice_drift.anchor_fingerprint(first["text"], first["id"])
+def _captured_drift_prompt(client, monkeypatch):
+    """Run absorb and return the kwargs `build_prompt` was actually called with."""
+    seen = {}
+    real = store.voice_drift.build_prompt
 
-    # the user replaces the anchor outright: cleared, then rewritten, which
-    # mints a NEW anchor id (see voice_anchors.write)
-    voice_anchors.write(root, "mara", "")
-    voice_anchors.write(root, "mara", "Contractions are habitual.")
-    second = voice_anchors.read_record(root, "mara")
+    def spy(name, anchor, transcript, correction=""):
+        seen.update(name=name, anchor=anchor, correction=correction)
+        return real(name, anchor, transcript, correction)
 
-    assert not voice_drift.fingerprint_matches(stale_fp, second["text"], second["id"])
-    # and the still-current case is honoured, or the rule would suppress
-    # every correction
-    live_fp = voice_drift.anchor_fingerprint(second["text"], second["id"])
-    assert voice_drift.fingerprint_matches(live_fp, second["text"], second["id"])
+    monkeypatch.setattr(store.voice_drift, "build_prompt", spy)
+    return seen
+
+
+def test_the_judge_is_sent_the_effective_anchor_not_the_stored_one(client, monkeypatch):
+    """One transformation, two consumers — asserted where it can actually
+    break, at the route that feeds the judge."""
+    over = "Clipped. " + ("x" * store.voice_anchors.VOICE_ANCHOR_CAP) + " NEVER CONTRACTS."
+    cid, sid = _voice_scene(client, anchor=over)
+    seen = _captured_drift_prompt(client, monkeypatch)
+    review_runs.absorb(client, cid, sid)
+    assert len(seen["anchor"]) == store.voice_anchors.VOICE_ANCHOR_CAP
+    assert "NEVER CONTRACTS." not in seen["anchor"]
+
+
+def test_a_live_correction_reaches_the_judge(client, monkeypatch):
+    cid, sid = _voice_scene(client, anchor="Never uses contractions.",
+                            prior="Use contractions; the last scene was too stiff.")
+    seen = _captured_drift_prompt(client, monkeypatch)
+    review_runs.absorb(client, cid, sid)
+    assert seen["correction"] == "Use contractions; the last scene was too stiff."
+
+
+def test_a_correction_whose_anchor_was_replaced_never_reaches_the_judge(client, monkeypatch):
+    """`context/cast.py` already suppresses this flag for the GENERATOR.
+    Unchecked on the judge side, a retired note would be presented as
+    overriding the anchor that replaced it — and would mint a fresh flag
+    against that new anchor."""
+    cid, sid = _voice_scene(client, anchor="Never uses contractions.",
+                            prior="Avoid contractions.")
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    root = store.worlds.world_root(wid)
+    # Cleared then rewritten mints a NEW anchor id, which is what retires the
+    # flag (see voice_anchors.write).
+    store.voice_anchors.write(root, "aese", "")
+    store.voice_anchors.write(root, "aese", "Contractions are habitual.")
+    seen = _captured_drift_prompt(client, monkeypatch)
+    review_runs.absorb(client, cid, sid)
+    assert seen["correction"] == ""
 ```
 
-Confirm `voice_drift.anchor_fingerprint`'s real name and arity before writing
-this — it is referenced in `voice_drift.py` and `cast.py:282`. If the helper is
-private, assert through `stage_edit`/`read_record` instead rather than reaching
-past the module's surface.
+Read `_voice_scene` and the absorb-call matcher above it before writing these —
+the fake LLM answers by matching a phrase from each system prompt, so adding a
+correction block to `voice_drift/user.j2` must not break that match. If it
+does, `test_llm_fakes.py` fails first and tells you so.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_voice_drift_store.py -q`
+Run: `<PYTEST> tests/test_voice_drift_store.py -q`
 Expected: FAIL — `build_prompt() got an unexpected keyword argument 'correction'`
 
 - [ ] **Step 3: Write the implementation**
@@ -1288,12 +1356,12 @@ pass with the implementation absent):
 
 ```bash
 cd backend
-PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_voice_drift_store.py -q
-PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_routes.py -q
+<PYTEST> tests/test_voice_drift_store.py -q
+<PYTEST> tests/test_routes.py -q
 ```
 
 Expected: PASS. Then the whole backend suite, since this task edits a route:
-`PYTHONPATH=src .venv/Scripts/python.exe -m pytest -q`
+`<PYTEST> -q`
 
 - [ ] **Step 5: Commit**
 
