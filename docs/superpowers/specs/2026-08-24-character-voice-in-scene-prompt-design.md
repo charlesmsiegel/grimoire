@@ -346,22 +346,15 @@ accepts arbitrary prose, so both per-character values are capped at render:
   `VOICE_ANCHOR_CAP` (1,200 characters, ~300 tokens). It is used by **both**
   `_assemble` and the drift-judge prompt builder. One transformation, two
   consumers: otherwise the generator receives a truncated anchor while the
-  judge reads the full one, and §7's "did it follow the brief it received"
-  reading becomes false — a rule past character 1,200 would be invisible to
-  the writer and enforced against it.
+  judge reads the full one, so a rule past character 1,200 would be
+  invisible to the writer and still enforced against it.
 
-  **`effective()` is necessary but NOT sufficient for that reading**, and an
-  earlier draft wrongly claimed it settled the matter. It guarantees identity
-  at `_assemble`; it guarantees nothing about the prompt that was actually
-  sent. Three things break the identity downstream, all of them ordinary:
-  the packer may drop `voice_anchors` under budget pressure; the user may
-  disable it in the layout; and `{{user}}` substitution is applied per
-  rendered section (`assemble.py:572`), so an anchor reading `Never addresses
-  {{user}} by name.` reaches the generator substituted and the judge raw.
-  So `effective()` gives the two consumers the same *starting text*, not the
-  same delivered text. §7 is where that is accounted for: the judge is
-  explicitly an approximate check rather than a compliance proof, which is
-  what makes the remaining divergence a documented limit instead of a bug.
+  Capping is therefore **not** a source of generator/judge divergence: both
+  copies come from this one function. The divergences that do remain —
+  `{{user}}` substitution applied per rendered section (`assemble.py:572`),
+  a packer drop, a layout disable, an edit between play and absorb, a local
+  template edit — are listed in §7, along with the advisory framing that
+  makes them documented limits rather than defects.
 - **`VOICE_EXAMPLE_CAP`** — 3,000 characters, chosen so that a card's
   examples have room for several full exchanges before anything is cut. It is
   a ceiling on the outliers, not a target: a typical card's examples pass
@@ -385,8 +378,9 @@ it opened is discarded. Two fallbacks, both required:
   5,000-character sample to nothing.
 - A chosen **blank-line** boundary cuts *after* the last non-blank line and
   the trailing blank is not retained; a chosen **`<START>`** cuts immediately
-  *before* the marker. Both are exact slice positions, because the
-  byte-identity test in §7 cannot tolerate an off-by-one convention.
+  *before* the marker. Both are exact slice positions so that the prompt's
+  copy and the judge's copy — which come from the same function — cannot
+  drift apart on an off-by-one convention.
 
 All truncation happens while `cast_blocks` is built, so the inspector's token
 breakdown measures what was actually sent.
@@ -465,7 +459,6 @@ judgement. That is withdrawn. The claim was the problem, not the machinery —
 once the spec asserts exactness, every ordinary divergence becomes a defect
 requiring more mechanism, and there are at least six:
 
-- the anchor is capped at render (§3) but stored uncapped;
 - `{{user}}` is substituted in the prompt copy only;
 - the packer may drop `voice_anchors` under a budget;
 - the layout may disable it;
@@ -490,25 +483,51 @@ was given". `store/voice_anchors.py`'s rewritten docstring says exactly that,
 so the next reader does not reconstruct the stronger claim from the fact that
 the anchor is now in the prompt.
 
-`templates/voice_drift/system.j2` needs **no rewrite**: it already describes
-comparing dialogue against the anchor, which is still precisely what it does.
-An earlier revision required it to be reframed for compliance; with that
-claim gone, the existing wording is accurate, and its "be conservative, a
-false alarm costs the next scene a correction it did not need" instruction
-matters more than before, not less.
-
 **One real bug is fixed here regardless of framing: the judge must see the
 standing correction.** §3 tells the generator that an outstanding voice
-correction *outranks* the anchor. But `voice_drift/user.j2` supplies only the
-anchor and the transcript. Given an anchor saying "never uses contractions"
-and a standing correction saying "use contractions, the last scene was too
-stiff", the generator is instructed to obey the correction and the judge then
-flags it for obeying — a false positive that is self-reinforcing, since the
-flag mints another correction. So the judge's prompt gains the character's
-outstanding correction beside the anchor, and is told the correction is the
-more recent instruction where the two disagree. This is a contradiction
-inside this spec, not a pre-existing one, and it ships with the change that
-creates it.
+correction *outranks* the anchor, but `voice_drift/user.j2` supplies only
+`name`, `anchor` and `transcript`. Given an anchor saying "never uses
+contractions" and a standing correction saying "use contractions, the last
+scene was too stiff", `voice_correction.j2` tells the writer to obey the
+correction "before anything else in this reply" — and the judge then flags it
+for obeying. The flag mints another correction, so the false positive is
+self-reinforcing. This contradiction is created by this spec and ships fixed
+in it.
+
+The fix is three coordinated changes, and an earlier revision got it wrong by
+attempting only the second:
+
+1. **`system.j2` does need a rewrite.** It currently defines drift
+   *absolutely* against the anchor — drift is a register "the anchor rules
+   out", and lines "consistent with the anchor" are `in_voice`. Adding an
+   overriding correction to the user message alone produces a contradictory
+   evaluator: the system message says anchor-forbidden contractions are
+   drift, the user message says prefer the correction that requires them. It
+   must instead define the standard as **the anchor as modified by any valid
+   outstanding correction**, with the correction controlling where the two
+   conflict.
+2. **`user.j2` gains an optional `correction`**, rendered in its own block
+   and omitted entirely when absent — the existing three-variable contract is
+   extended, not replaced, so a character with no correction produces the
+   same prompt it does today.
+3. **`build_prompt` takes the correction as a parameter, and the CALLER
+   validates it.** `voice_drift.py` states a "prompt/parse only" boundary, so
+   it must not read the flag itself.
+
+**Only a correction that would actually be in force may reach the judge.**
+`_stage_voice_drift` already reads `prior, prior_fp = flag["note"],
+flag["anchor"]` (`routes/scenes.py:1966`) and hands `prior_fp` to
+`stage_edit` — but it passes neither to `build_prompt` at line 1967. So the
+provenance rule lives downstream of the prompt, and a correction fingerprinted
+to a *replaced* anchor would be presented to the judge as current. Concretely:
+anchor A forbids contractions and a flag fingerprints A; the user replaces it
+with anchor B saying contractions are habitual. `context/cast.py:282` already
+suppresses that flag for the generator via `fingerprint_matches`, so the
+writer sees anchor B and no correction — while the judge would be told the
+retired "avoid contractions" note overrides B, and would mint a fresh flag
+against it. The same `fingerprint_matches(prior_fp, record["text"],
+record["id"])` check `_voice_notes` applies must therefore run **before**
+`build_prompt`, and a correction that fails it is omitted.
 
 ### 8. Known limits, stated
 
@@ -533,10 +552,16 @@ creates it.
   `inferred` flag ships, because no generator ships that would set one.
 - **The drift judge is approximate and its verdicts are advisory** (§7). It
   compares against the character's *current* anchor, which may differ from
-  what any turn actually received — capped, substituted, dropped under
-  budget, disabled in the layout, edited between play and absorb, or omitted
-  by a locally-edited template. A `drift` verdict means "worth looking at".
+  what any turn actually received — substituted, dropped under budget,
+  disabled in the layout, edited between play and absorb, or omitted by a
+  locally-edited template. (Capping is *not* on that list: §3 applies the
+  same cap to both copies.) A `drift` verdict means "worth looking at".
   Making it exact is a real option, priced in §7; it is not taken.
+- **A locally-edited `voice_correction.j2` has the same asymmetry as
+  `voice_anchors.j2`.** The judge is now told a standing correction is
+  authoritative (§7); a user who edits that correction out of the generation
+  template leaves the judge weighing an instruction the writer never got.
+  Accepted on the same advisory grounds, recorded so it is not a surprise.
 
 ### 9. Documentation and guards that move with the code
 
@@ -555,11 +580,16 @@ creates it.
   anchor requiring frequent murmuring, a signature repetitive construction,
   or the word "indeed" collides head-on with a block saying its bans hold
   regardless. The amendment adds the voice policy to that exception list.
-- **`templates/voice_drift/user.j2`** — gains the character's outstanding
-  voice correction beside the anchor, with a line saying the correction is
-  the more recent instruction where the two disagree (§7). Without it the
-  judge flags the model for obeying the instruction this spec tells it to
-  prioritise. `system.j2` itself needs no change.
+- **`templates/voice_drift/system.j2` and `user.j2`, and
+  `voice_drift.build_prompt`'s signature** — the judge is given the
+  character's valid outstanding correction, and `system.j2` redefines the
+  standard as the anchor *as modified by* that correction rather than the
+  anchor absolutely (§7). All three move together; changing only `user.j2`
+  produces an evaluator whose two messages disagree.
+- **`routes/scenes.py:1967`** — validates the correction's provenance with
+  `voice_drift.fingerprint_matches` before passing it to `build_prompt`,
+  mirroring `context/cast.py:282`. `voice_drift.py` keeps its "prompt/parse
+  only" boundary, so the caller does the store read, not the builder.
 - **`CharacterEditor.tsx:2198`'s field hint** ("absorb checks each scene
   against this and flags drift") becomes incomplete: the anchor now steers
   every turn. The editor should also warn above `VOICE_ANCHOR_CAP`, which is
@@ -606,10 +636,18 @@ creates it.
 - **One effective anchor**: an over-cap anchor is capped identically for the
   prompt and for the judge, so a rule past the cap is enforced against
   neither.
-- **The judge sees the standing correction**: a character with an outstanding
-  correction has it in the drift prompt beside the anchor. Without this the
-  contradiction case (anchor forbids contractions, correction requires them)
-  produces a false `drift`, so the test is written around that pair.
+- **The judge sees a valid standing correction**, and the two prompt halves
+  agree: written around the contradiction pair (anchor forbids contractions,
+  correction requires them), asserting the assembled judge prompt states the
+  correction supersedes the conflicting anchor line — not merely that both
+  strings are present, which a contradictory evaluator would also pass.
+- **A stale correction never reaches the judge**: a flag fingerprinted to a
+  replaced anchor is omitted from the drift prompt, exactly as
+  `_voice_notes` omits it from the scene prompt. Same fixture, two consumers,
+  one expectation.
+- **No correction, no change**: a character without a flag produces the drift
+  prompt it produces today, so the extended contract costs nothing in the
+  ordinary case.
 - **Tiering**: `voice_policy` survives a budget that drops both other
   sections. The examples-before-anchors ordering is asserted **only** for a
   manufactured case where the examples section is genuinely larger — it is a
