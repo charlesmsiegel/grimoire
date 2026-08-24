@@ -588,7 +588,20 @@ def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
     section = graders.grade_prompt_section(ctx["messages"], "active_speaker",
                                            "scene/sections/active_speaker.j2",
                                            speaker=nomination)
-    return [control] + section + graders.grade_turn_taking(
+    # The voice policy is pinned HERE rather than as a suite-wide requirement,
+    # and the reason is that it renders conditionally: a scene with one bare NPC
+    # correctly carries no voice section at all, so a global check would reject
+    # exactly the prompts the section is designed not to clutter. This case is
+    # the natural host rather than merely a convenient one -- it is the
+    # several-NPCs-in-a-scene fixture, which is the condition the differentiation
+    # rule exists for. Rendered from the same assembly the prompt came from, so
+    # rewording the template fails here rather than silently everywhere else.
+    data = context._assemble(ctx["cid"], ctx["sid"])["data"]
+    voice = graders.grade_prompt_section(ctx["messages"], "voice_policy",
+                                         "scene/sections/voice_policy.j2",
+                                         cast_blocks=data["cast_blocks"],
+                                         named_npc_count=data["named_npc_count"])
+    return [control] + section + voice + graders.grade_turn_taking(
         output, nomination, ctx["players"], ctx["npc_names"])
 
 

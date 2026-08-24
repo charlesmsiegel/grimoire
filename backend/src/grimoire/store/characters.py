@@ -13,8 +13,18 @@ import json
 import shutil
 from pathlib import Path
 
-from . import (assets, atomic, cards, chub, fetch, image_descriptions, lorebook, statcache,
-               taglines, voice_anchors)
+from . import (
+    assets,
+    atomic,
+    cards,
+    chub,
+    fetch,
+    image_descriptions,
+    lorebook,
+    statcache,
+    taglines,
+    voice_anchors,
+)
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
