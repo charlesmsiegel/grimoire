@@ -32,8 +32,8 @@ scene has been played; it can never prevent it during one.
 
 `store/voice_anchors.py`'s module docstring states this as a deliberate
 choice: the anchor "is never sent as part of a scene — which is what lets it
-describe a voice". This spec reverses that decision. §7 treats what that
-costs, and records it as an open decision rather than a settled one.
+describe a voice". This spec reverses that decision deliberately; §7 sets
+out what it costs and what is done about it.
 
 ### 2. The strongest available voice signal sits in the third-dropped tier
 
@@ -358,8 +358,10 @@ accepts arbitrary prose, so both per-character values are capped at render:
   disable it in the layout; and `{{user}}` substitution is applied per
   rendered section (`assemble.py:572`), so an anchor reading `Never addresses
   {{user}} by name.` reaches the generator substituted and the judge raw.
-  In every case the judge enforces something the writer did not receive. See
-  §7, which cannot be resolved without deciding this.
+  In every case the judge would enforce something the writer did not
+  receive. §7 resolves this: substitution is equalised for the judge, and a
+  drop or a layout disable suppresses that character's judgement for the
+  scene rather than being silently enforced.
 - **`VOICE_EXAMPLE_CAP`** — 3,000 characters, chosen so that a card's
   examples have room for several full exchanges before anything is cut. It is
   a ceiling on the outliers, not a target: a typical card's examples pass
@@ -445,56 +447,71 @@ delivers the differentiation rule and precedence order (§3), name-labelled
 descriptions and examples (§3), and examples promoted out of the third
 droppable tier (§1).
 
-### 7. OPEN DECISION: the independent judge
+### 7. DECIDED: the judge becomes a compliance check, and says so
 
 Once the anchor is sent to the generator, the drift check no longer compares
 a played scene against an *independent* reference. It compares it against an
 instruction the model was just given. Drift detection changes from "does this
 sound like the character?" to "did the model follow the brief it received?"
 
-The rev-1 justification — "the property has no value while the feature is
-inert" — **does not follow** and is withdrawn: §6 exists precisely to
-populate anchors, which is when the property would acquire value.
+**The decision is to spend the guarantee.** A voice system that can only
+report failure after a scene is played does not solve the problem that
+prompted this work: the player wants different voices, not a report that they
+were the same. What remains as an independent check is the player reading the
+scene, which is what surfaced this issue in the first place. The alternative
+— a generation directive stored separately from the judge's reference —
+preserves independence at the cost of a second hand-authored artifact per
+character across the whole roster, to protect a check that has never run.
 
-The case for spending it anyway: a voice system that can only report failure
-after a scene is played does not solve the problem that prompted this work.
-The player wants different voices, not a report that they were the same.
-What remains as an independent check is the player reading the scene, which
-is what surfaced this issue.
+Two consequences follow, and both are requirements rather than notes.
 
-**This is not resolved by this spec.** The two readings:
+**`voice_drift/system.j2` must say what it is now judging.** Its current
+opening — "checking one character's dialogue in a played scene against their
+voice anchor — the reference description of how that character speaks" —
+describes an independent reference. It is now checking whether the writer
+followed a brief it was handed. The `in_voice` verdict means *complied*, not
+*sounded right*, and the prompt should frame the question that way so the
+judge is not being asked one thing and read as answering another.
 
-- *Spend it* — as designed above. The drift judge's `in_voice` verdict is
-  thereafter read as compliance, not fidelity, and `voice_drift/system.j2`'s
-  wording should say so.
+**A character whose anchor did not reach the generator is not judged against
+it.** This is what keeps "compliance with the brief it received" true rather
+than merely stated. Three things can break delivery (§3): the packer may drop
+`voice_anchors` under budget pressure, the user may disable it in the layout,
+and `{{user}}` substitution is applied to the prompt copy only. They are
+handled differently, because only two of them are absences:
 
-  **This branch has a sub-decision that must be answered with it**, because
-  "compliance with the brief it received" is only honest if the judge is fed
-  what the generator actually got (§3). The options, cheapest first:
+- **Substitution is equalised, not suppressed.** The judge's anchor gets the
+  same `effective()` cap *and* the same `{{user}}` substitution the rendered
+  section received, so an anchor reading `Never addresses {{user}} by name.`
+  is compared in the form the writer actually saw. This is a change to the
+  judge's prompt builder, not new persistence.
+- **Drop and disable suppress the judgement.** Where the section did not
+  reach a turn at all, the character's voice is not judged for that scene:
+  the stage reports `not_enough`, which already means "I cannot hear the
+  voice here" and is documented as a real answer rather than a fallback. A
+  standing correction stays in force, which is `voice_drift`'s existing
+  behaviour for `not_enough` and the right one here.
 
-  - *Suppress* — when a character's anchor did not reach that scene's
-    prompts, do not judge that character's voice against it; report
-    `not_enough`, which already means "I cannot hear the voice here" and is
-    documented as a real answer rather than a fallback. Costs a per-scene
-    record of whether the section survived packing and was enabled.
-  - *Replay* — feed the judge the anchor text exactly as it appeared in the
-    sent prompt, substitutions applied. Strictly more faithful, and needs the
-    delivered text retained per scene rather than re-derived.
-  - *Ignore it* — accept that the judge sometimes enforces an unsent anchor.
-    Cheapest, and the least defensible now that it is written down.
-- *Keep it* — the prompt carries a generation directive derived from, but
-  stored separately to, the judge's anchor.
+**What that costs: one negative record per scene.** As each turn is
+generated, any present character whose anchor was expected but absent from
+that turn's packed, enabled prompt is added to a per-scene set. The set is
+**normally empty** — no budget set, section enabled, nothing to record — so
+the common case costs nothing on disk. At absorb, `_stage_voice_drift`
+(`routes/scenes.py:1832`) skips anchor judging for any character in it.
 
-***Keep it* is not a small change.** It touches at least: §2, where
-`cast_blocks.anchor` becomes a separate artifact from a different file; §3,
-where `effective()` loses its second consumer and the judge needs its own
-comparison contract; §5, where `has_voice_anchor` stops identifying whether
-*generation* material exists, so a character with a judge reference but no
-directive would vanish from the backlog while contributing nothing to any
-prompt — it would need to become two fields; §6, where the content work
-tracks two completeness states per character across the whole roster; and the
-"one effective anchor" test, which becomes meaningless. That cost belongs in the
-decision rather than hidden behind a claim of independence.
+The record is deliberately the *negative*: storing "delivered" would mean a
+write on every turn for every character, while storing "not delivered" writes
+only when something was actually dropped. It is also per-scene rather than
+per-turn, and the rule is strict — absent from **any** turn suppresses the
+scene's judgement for that character, because a partially-briefed character
+cannot be assessed for compliance with a brief they intermittently received.
+
+Two obligations this creates, both enforced by existing guards:
+
+- The new writer is campaign-scoped state, so it must be classified in
+  `store/locks.py` or `test_lock_domain_guard.py` fails naming the module,
+  and its public `cid`-taking mutators take `locks.campaign_lock(cid)`.
+- Every write goes through `store.atomic` (`test_atomic_guard.py`).
 
 ### 8. Known limits, stated
 
@@ -523,7 +540,8 @@ decision rather than hidden behind a claim of independence.
 - **`store/voice_anchors.py`'s module docstring** asserts the anchor "is
   never sent as part of a scene" and builds a paragraph on why it differs
   from `mes_example`. Both are falsified. The rewritten distinction is
-  *describe* vs *demonstrate*, and it must record §7's outcome.
+  *describe* vs *demonstrate*, and it must record §7's outcome — that the
+  anchor now steers generation and the drift check reads as compliance.
 - **`natural_prose.j2`'s precedence paragraph must be amended, and this is
   not optional.** It ends "Everything else here holds regardless", after
   excepting only the reply format, established facts and the prose style
@@ -532,8 +550,10 @@ decision rather than hidden behind a claim of independence.
   anchor requiring frequent murmuring, a signature repetitive construction,
   or the word "indeed" collides head-on with a block saying its bans hold
   regardless. The amendment adds the voice policy to that exception list.
-- **`templates/voice_drift/system.j2`** — if §7 resolves to *spend it*, the
-  judge's framing changes from fidelity to compliance and the prompt says so.
+- **`templates/voice_drift/system.j2`** — the judge's framing changes from
+  fidelity to compliance (§7) and the prompt must say so: it opens by calling
+  the anchor "the reference description of how that character speaks", which
+  is no longer what the verdict means.
 - **`CharacterEditor.tsx:2198`'s field hint** ("absorb checks each scene
   against this and flags drift") becomes incomplete: the anchor now steers
   every turn. The editor should also warn above `VOICE_ANCHOR_CAP`, which is
@@ -578,8 +598,14 @@ decision rather than hidden behind a claim of independence.
   hard-cuts mid-line; **an example whose only boundary is a leading `<START>`
   hard-cuts rather than truncating to empty**.
 - **One effective anchor**: the anchor text in the prompt and the text the
-  drift judge receives are byte-identical for an over-cap anchor. With no
-  aggregate cap there is no second path that could break this.
+  drift judge receives are byte-identical for an over-cap anchor, **and for
+  an anchor containing `{{user}}`** — the judge's copy is substituted the
+  same way the rendered section was (§7).
+- **Suppression on non-delivery**: a character whose `voice_anchors` section
+  was dropped by the packer, and one whose section was disabled in the
+  layout, are reported `not_enough` rather than judged; a standing correction
+  survives that verdict. The per-scene record is **empty and writes nothing**
+  when every turn delivered the section, which is the ordinary case.
 - **Tiering**: `voice_policy` survives a budget that drops both other
   sections. The examples-before-anchors ordering is asserted **only** for a
   manufactured case where the examples section is genuinely larger — it is a
