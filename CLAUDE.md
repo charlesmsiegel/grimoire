@@ -33,6 +33,22 @@ structurally. That boundary holds in both directions:
   codebase's existing placeholder names (e.g. Seraphine, Mara, Winifred,
   Realm, Saltmarch) rather than inventing a new one that might coincidentally
   match something real.
+- **Never describe the store's *contents*, not even in aggregate.** The
+  rule above is about names; this one is about data, and it is the easier of
+  the two to talk yourself past. A design doc may not report how many
+  characters or cards a library holds, what proportion of them fill in a
+  given field, a size distribution (median/p90/max), how many campaigns set
+  some setting, what a real `config.md` contains, or whether a given file
+  exists in the store — in a spec, a commit message, a code comment, a test
+  fixture, or an appendix explaining how to measure any of it. Anonymised
+  counts still describe somebody's private library, and once committed they
+  are in history. **Qualitative is the acceptable form**: "many cards have no
+  `mes_example`" is fine; "N of M cards" is not. Argue from what the code,
+  the templates and the shipped defaults do — those are repo facts. Where a
+  constant seems to need a measurement to justify it, justify it
+  structurally and say it should be tuned against real prompts later. If
+  measuring the live store genuinely helps a decision, do it in conversation
+  and keep the result out of every committed file.
 - **Personal/homebrew calendars follow the same split as any other private
   content**: only `gregorian` and `hebrew` (real-world, real holidays) ship
   in `store/calendars/`; anything else — a fictional calendar, a custom
