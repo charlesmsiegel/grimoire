@@ -1,9 +1,24 @@
-{#- One block per NPC card: description / personality / scenario, non-empty
-    fields joined by newlines, cards separated by blank lines.
-    Vars: npc_cards ([card data dict]). -#}
+{#- One block per present NPC: their description / personality / scenario,
+    under their name. Reads `cast_blocks` rather than `npc_cards` so that
+    disambiguation and nameless handling are defined once, in `_assemble`, for
+    this section and the three voice sections alike -- two implementations of
+    "which name goes on this block" would be free to disagree.
+
+    A card with no name renders its description with NO heading rather than an
+    empty one: suppress rather than address a stranger, the same call cast.py
+    makes. That leaves those descriptions unattributed, which is the defect
+    this section otherwise fixes -- but there is no name to attribute them to,
+    and synthesising one from the character id would put a slug in the prompt
+    as if it were a name.
+
+    Vars: cast_blocks. -#}
 {%- set blocks = [] -%}
-{%- for d in npc_cards -%}
-{%- set parts = [d.get("description", "").strip(), d.get("personality", "").strip(), d.get("scenario", "").strip()] | select | list -%}
-{%- if parts -%}{%- set _ = blocks.append(parts | join("\n")) -%}{%- endif -%}
+{%- for b in cast_blocks -%}
+{%- if b.description -%}
+{%- set _ = blocks.append(("## " ~ b.name ~ "
+" ~ b.description) if b.name else b.description) -%}
+{%- endif -%}
 {%- endfor -%}
-{{ blocks | join("\n\n") }}
+{{ blocks | join("
+
+") }}

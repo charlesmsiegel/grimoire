@@ -4429,3 +4429,20 @@ def test_a_malformed_card_field_costs_only_its_own_voice_block(monkeypatch, tmp_
     assert len(blocks) == 2
     assert blocks[0]["name"] == "Mara" and blocks[0]["example"] == "Mara: Fine."
     assert blocks[1]["name"] == "" and blocks[1]["example"] == ""
+
+
+def test_character_descriptions_are_name_labelled(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Mara", {"description": "A courier with debts."}, "")])
+    text = _sections(cid, sid)["character_descriptions"]
+    assert "## Mara" in text and "A courier with debts." in text
+
+
+def test_a_nameless_card_keeps_its_description_without_a_heading(monkeypatch, tmp_path):
+    """Dropping it would remove content the model gets today. There is no name
+    to attribute it to, and a slug in the prompt would read as one."""
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("", {"description": "A courier with debts."}, "")])
+    text = _sections(cid, sid)["character_descriptions"]
+    assert "A courier with debts." in text
+    assert "##" not in text
