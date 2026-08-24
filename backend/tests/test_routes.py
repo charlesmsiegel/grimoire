@@ -6575,8 +6575,8 @@ def test_the_judge_is_told_the_locked_card_name(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     seen = []
     real = store.voice_drift.build_prompt
-    store.voice_drift.build_prompt = lambda name, anchor, transcript: (
-        seen.append(name) or real(name, anchor, transcript))
+    store.voice_drift.build_prompt = lambda name, anchor, transcript, correction="": (
+        seen.append(name) or real(name, anchor, transcript, correction))
     try:
         review_runs.absorb(client, cid, sid)
     finally:
@@ -14693,3 +14693,59 @@ def test_creating_a_pc_with_any_version_name_leaves_one_the_reader_can_open(clie
         # appeared. Membership, not equality -- a campaign's rail unions the
         # world's PCs with its own.
         assert pid in [p["id"] for p in client.get(url).json()], url
+
+
+def _spy_on_drift_prompt(monkeypatch):
+    """Capture the kwargs `build_prompt` is actually called with during absorb.
+
+    A ROUTE-level spy, not a unit test of `fingerprint_matches`: the wiring is
+    the change, and a helper test passes even if the stage never calls it,
+    still sends the raw anchor, or drops the correction entirely."""
+    seen = {}
+    real = store.voice_drift.build_prompt
+
+    def spy(name, anchor, transcript, correction=""):
+        seen.update(name=name, anchor=anchor, correction=correction)
+        return real(name, anchor, transcript, correction)
+
+    monkeypatch.setattr(store.voice_drift, "build_prompt", spy)
+    return seen
+
+
+def test_the_judge_is_sent_the_effective_anchor_not_the_stored_one(client, monkeypatch):
+    """One transformation, two consumers -- asserted where it can break."""
+    over = "Clipped. " + ("x" * store.voice_anchors.VOICE_ANCHOR_CAP) + " NEVER CONTRACTS."
+    cid, sid = _voice_scene(client, anchor=over)
+    seen = _spy_on_drift_prompt(monkeypatch)
+    review_runs.absorb(client, cid, sid)
+    assert len(seen["anchor"]) == store.voice_anchors.VOICE_ANCHOR_CAP
+    assert "NEVER CONTRACTS." not in seen["anchor"]
+
+
+def test_a_live_correction_reaches_the_judge(client, monkeypatch):
+    cid, sid = _voice_scene(client, anchor="Never uses contractions.",
+                            prior="Use contractions; the last scene was too stiff.")
+    seen = _spy_on_drift_prompt(monkeypatch)
+    review_runs.absorb(client, cid, sid)
+    assert seen["correction"] == "Use contractions; the last scene was too stiff."
+
+
+def test_a_correction_whose_anchor_was_replaced_never_reaches_the_judge(client, monkeypatch):
+    """`context/cast.py` already suppresses this flag for the GENERATOR. Left
+    unchecked here the judge would be told a retired note overrides the anchor
+    that replaced it, and would mint a fresh flag against that new anchor."""
+    cid, sid = _voice_scene(client, anchor="Never uses contractions.")
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    root = store.worlds.world_root(wid)
+    # The flag must carry the fingerprint of the anchor it was judged against --
+    # `_voice_scene`'s bare `prior` records none, and "" means "provenance not
+    # recorded", which counts as STILL VALID by design (a pre-nonce flag).
+    first = store.voice_anchors.read_record(root, "aese")
+    store.voice_drift.write(store.campaigns.campaign_root(cid), "aese", "Avoid contractions.",
+                            store.voice_drift.anchor_fingerprint(first["text"], first["id"]))
+    # cleared then rewritten mints a NEW anchor id, which is what retires the flag
+    store.voice_anchors.write(root, "aese", "")
+    store.voice_anchors.write(root, "aese", "Contractions are habitual.")
+    seen = _spy_on_drift_prompt(monkeypatch)
+    review_runs.absorb(client, cid, sid)
+    assert seen["correction"] == ""

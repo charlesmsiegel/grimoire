@@ -220,10 +220,22 @@ def fingerprint_matches(stored: str, anchor: str, anchor_id: str = "") -> bool:
 MAX_NOTE = 1000
 
 
-def build_prompt(name: str, anchor: str, transcript: str) -> list[dict]:
+def build_prompt(name: str, anchor: str, transcript: str, correction: str = "") -> list[dict]:
+    """The judge's messages.
+
+    `correction` is the character's outstanding drift note, and the CALLER owns
+    deciding whether it is still in force -- this module is prompt/parse only
+    and does not read the store. Handing over a note whose fingerprint no longer
+    matches the anchor would tell the judge that a retired instruction overrides
+    the current one, and mint a fresh flag against the anchor that replaced it.
+
+    Optional because it usually is not there: a character with no flag produces
+    the user message this function always produced.
+    """
     return [{"role": "system", "content": prompts.render("voice_drift/system.j2")},
             {"role": "user", "content": prompts.render("voice_drift/user.j2", name=name,
-                                                       anchor=anchor, transcript=transcript)}]
+                                                       anchor=anchor, transcript=transcript,
+                                                       correction=correction)}]
 
 
 #: The judge's verdicts. Deliberately FOUR values, not a boolean, because

@@ -1,10 +1,21 @@
 {#- Vars: name (str), anchor (str, never empty -- the judge only runs for
     characters that have one), transcript (str, rendered via
-    snippets/transcript.j2). -#}
+    snippets/transcript.j2), correction (str, optional).
+
+    `correction` is the character's OUTSTANDING drift note, and the caller is
+    responsible for having checked that it is still in force -- see
+    `_stage_voice_drift`. The scene prompt tells the writer a correction
+    outranks the anchor, so a judge that could not see it would flag the model
+    for obeying the instruction it was given, and the flag would mint another
+    correction. Omitted entirely when there is none, so a character without one
+    produces the user message this template always produced. -#}
 Character: {{ name }}
 
 Voice anchor:
 {{ anchor }}
-
+{% if correction %}
+Outstanding correction (more recent than the anchor; supersedes it on conflict):
+{{ correction }}
+{% endif %}
 Scene transcript:
 {{ transcript }}
