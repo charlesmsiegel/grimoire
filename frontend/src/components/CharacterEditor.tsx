@@ -227,6 +227,21 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // was issued under and so can never notice that it has moved on.
   const scopeRef = useRef(scope);
   useEffect(() => { scopeRef.current = scope; }, [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // The anchor cap, read once. Failure is silent and leaves it null, which
+  // simply renders no warning -- a soft hint must not be able to break the
+  // editor, and the backend truncates either way.
+  useEffect(() => {
+    // try/catch around the AWAIT, not a .catch(): a test double lacking
+    // getConfig throws synchronously, which a promise handler never sees. A
+    // soft hint must not be able to take the editor down, and the backend
+    // truncates whether or not this number ever arrives.
+    void (async () => {
+      try {
+        const c = await api.getConfig();
+        setVoiceAnchorCap(c.voice_anchor_cap ?? null);
+      } catch { /* no warning, which is the correct degradation */ }
+    })();
+  }, []);
   const [vid, setVid] = useState("");
   const [card, setCard] = useState<Card | null>(null);
   const [greetings, setGreetings] = useState<string[]>([]);
@@ -261,6 +276,20 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // count its button offers. World scope only — a tagline is a world-level
   // property of the character, and a campaign's roster is a view of one.
   const untagged = worldScope ? chars.filter((c) => !c.tagline) : [];
+  // The world's voice-anchor backlog. World scope only, exactly like
+  // `untagged` -- an anchor is a world-level property of the character.
+  //
+  // REPORTED, never bulk-filled, and that is deliberate rather than an
+  // omission: an anchor now steers every scene it appears in, so a roster-wide
+  // unattended derive would write inferred voices into the prompt with the same
+  // authority as hand-written ones, at a volume nobody will review afterwards.
+  //
+  // `=== false`, NOT `!c.has_voice_anchor`: the field is optional, so a
+  // response or fixture predating it would otherwise report the whole roster as
+  // anchorless -- a backlog that is loudest when it knows least.
+  const anchorless = worldScope
+    ? chars.filter((c) => c.has_voice_anchor === false)
+    : [];
   // The world-wide derive (#57): progress while it runs, its report afterwards.
   const [taglineBatch, setTaglineBatch] =
     useState<{ done: number; total: number; name: string } | null>(null);
@@ -269,6 +298,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // an imperative act on an object the render does not otherwise care about.
   const taglineAbort = useRef<AbortController | null>(null);
   const [voiceAnchor, setVoiceAnchor] = useState("");
+  // The cap the backend truncates at, so the warning below cannot drift from
+  // it. Fetched rather than duplicated as a literal; `api.getConfig()` direct
+  // from a component is the pattern CampaignView already uses.
+  const [voiceAnchorCap, setVoiceAnchorCap] = useState<number | null>(null);
   const [anchorBusy, setAnchorBusy] = useState(false);
   const [anchorSaving, setAnchorSaving] = useState(false);
   const [anchorState, setAnchorState] = useState<"loading" | "ready" | "error">("loading");
@@ -1616,6 +1649,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
               ▶ Derive taglines ({untagged.length})
             </button>
           )}
+          {/* Reported, with no button beside it. See `anchorless`. */}
+          {worldScope && anchorless.length > 0 && (
+            <span className="field-hint">
+              {anchorless.length === 1
+                ? "1 character has no voice anchor"
+                : `${anchorless.length} characters have no voice anchor`}
+            </span>
+          )}
           {taglineBatch && (<>
             <span className="field-hint">
               Deriving taglines {taglineBatch.done}/{taglineBatch.total}
@@ -2195,7 +2236,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             </div>
           </>}
             <Field label="Voice anchor"
-                   hint="how they SOUND — absorb checks each scene against this and flags drift; clear it to skip the check">
+                   hint="how they SOUND — sent with every turn so the model writes them this way, and absorb checks each played scene against it; clear it to opt out of both">
               {/* Disabled while BUSY as well as while loading: a generation in
                   flight will overwrite this box when it lands, so edits made
                   meanwhile would be silently discarded. */}
@@ -2203,6 +2244,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                         disabled={anchorState === "loading" || anchorBusy}
                         onChange={(e) => setVoiceAnchor(e.target.value)} />
             </Field>
+            {/* `[...text].length`, not `.length`: the backend counts CODE
+                POINTS and JavaScript counts UTF-16 units, so an anchor of
+                astral characters reads as double here and would warn at half
+                the real cap. Advisory only -- the backend truncates. */}
+            {voiceAnchorCap !== null && [...voiceAnchor].length > voiceAnchorCap && (
+              <p className="field-hint">
+                Over {voiceAnchorCap} characters — the rest is not sent to the model.
+              </p>
+            )}
             {anchorState === "error" && (
               <p className="field-hint">Could not load the voice anchor — reopen this
                 character to try again. Saving is disabled so a failed read cannot

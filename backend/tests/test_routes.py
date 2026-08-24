@@ -14749,3 +14749,10 @@ def test_a_correction_whose_anchor_was_replaced_never_reaches_the_judge(client, 
     seen = _spy_on_drift_prompt(monkeypatch)
     review_runs.absorb(client, cid, sid)
     assert seen["correction"] == ""
+
+
+def test_config_exposes_the_voice_anchor_cap(client):
+    """The editor warns above it, so the number has one source. A duplicated
+    TypeScript literal would drift from the backend's truncation in silence."""
+    assert client.get("/api/config").json()["voice_anchor_cap"] == \
+        store.voice_anchors.VOICE_ANCHOR_CAP

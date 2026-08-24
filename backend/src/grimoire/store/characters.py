@@ -13,7 +13,8 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, atomic, cards, chub, fetch, image_descriptions, lorebook, statcache, taglines
+from . import (assets, atomic, cards, chub, fetch, image_descriptions, lorebook, statcache,
+               taglines, voice_anchors)
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
@@ -320,6 +321,16 @@ def list_characters(root: Path) -> list[dict]:
                 "localized_count": sum(1 for n in names if n.startswith("embed-")),
                 "greeting_count": greeting_count,
                 "tagline": taglines.read(root, cid),
+                # A BOOLEAN, not the body: the listing has no use for the text,
+                # and this call already stats every version and every image of
+                # every character. One added read, and it answers one question.
+                #
+                # At world level a tombstone and an absence are the same state
+                # -- `voice_anchors.read_record` says so, and there is nothing
+                # beneath a world to inherit from -- so `read` covering both is
+                # correct rather than a simplification. Tombstones only carry
+                # meaning in a campaign, which this world-scoped listing is not.
+                "has_voice_anchor": bool(voice_anchors.read(root, cid)),
                 "versions": [{"id": v, "name": _card_summary(root, cid, v)["label"]}
                              for v in version_ids],
             })

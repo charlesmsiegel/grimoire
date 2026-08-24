@@ -94,6 +94,10 @@ export type Config = {
    *  tried once; "" = no fallback. */
   fallback_connection_id: string;
   context_budget: string;
+  /** Longest anchor text the prompt and the drift judge see, in CODE
+   *  POINTS. Server-owned so the editor's warning cannot drift from the
+   *  backend's truncation; count it with [...text].length, not .length. */
+  voice_anchor_cap?: number;
   /** Recent transcript messages every keyword scan reads — world info, chronicle
    *  recall, keyed mechanics rules and the semantic-recall query all share this
    *  window. "0" empties it; a scene opener's prompt and a director's note seed
@@ -441,7 +445,12 @@ export type CharacterSummary = {
    *  server answers immutable — so it must name the BYTES, never a counter. */
   avatar_v?: string | null;
   avatar_focus?: number | null; gallery_count?: number; localized_count?: number;
-  greeting_count?: number; tagline?: string; versions: VersionRef[];
+  greeting_count?: number; tagline?: string;
+  /** Whether a world-level voice anchor exists. OPTIONAL, so a response or
+   *  fixture predating it reads as unknown rather than as "no anchor" —
+   *  the backlog filters on `=== false`, never on falsiness. */
+  has_voice_anchor?: boolean;
+  versions: VersionRef[];
 };
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
