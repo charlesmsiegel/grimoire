@@ -1468,3 +1468,35 @@ git commit -m "The docs say what the anchor now does, and the gate agrees"
 **Green at every task boundary.** Tasks 4 and 5 change the assembled prompt, so each regenerates `snapshot.json` and runs the full backend suite *within the task* — the fixture is not left stale for a later task's author to trip over.
 
 **Known gaps carried deliberately.** Anchors are *not* guaranteed to outlive examples (same tier; `pack` drops the largest actual section, and a pin never drops) — Task 4 asserts the ordering only for a manufactured larger-examples case and says so. Neither voice section is bounded in aggregate, which is safe only because both are droppable. Nameless cards' descriptions stay unattributed. All three are recorded in spec §8.
+
+---
+
+## Review notes carried into implementation
+
+Plan review stopped here deliberately: the remaining findings are the kind that
+running the code settles faster than reading it. Fix each when you reach its
+task, and let the test tell you.
+
+- **Task 4, packing budgets — the algebra is wrong.** `full - examples - 10`
+  leaves the prompt at roughly `full - examples`, still over budget, so the
+  packer must drop something else and the "anchors survive" assertion fails.
+  Use a budget just under `full` so exactly one section must go, and let
+  largest-first pick it. Separately, the first packing test's name claims both
+  SPOTLIGHT sections drop while it asserts only `voice_examples` — narrow the
+  name or assert both.
+- **Task 6, `voiceAnchorCap` is undeclared.** The JSX references it; nothing
+  creates it. Add the state/destructuring that pulls `voice_anchor_cap` off the
+  loaded config.
+- **Task 7, the spy needs an LLM script.** Every existing test here installs
+  `_absorb_script(...)` on `routes.get_llm` before `review_runs.absorb`.
+  `_captured_drift_prompt` installs only the spy, so absorb has no scripted
+  extraction/dossier/voice response. Install one in the helper.
+- **Task 8, the eval literal must not be global.** `voice_policy` is
+  conditional — a lone bare NPC renders no voice section at all, by design. A
+  universally-required literal would reject those valid prompts. Attach the
+  assertion to a fixture that activates the section.
+- **Task 8, `git add -A` overreaches.** Stage the enumerated paths instead, so
+  unrelated dirty-tree work is preserved.
+- **Shell forms.** `<PYTEST>` already implies `cd backend`, so do not `cd
+  backend` before it. Run `git diff` from the repo root, not from inside
+  `backend/`, or the path resolves to `backend/backend/...`.
