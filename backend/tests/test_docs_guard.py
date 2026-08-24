@@ -237,7 +237,12 @@ def test_no_orphan_documents(doc: pathlib.Path):
     at -- the document-shaped version of the orphan capture below, and just as
     invisible.
     """
-    rel = str(doc.relative_to(ROOT))
+    # `as_posix`, not `str`: on Windows `str` renders the separator as a
+    # backslash, so `docs/store-guarantees.md` -- linked from README.md twice
+    # -- was looked up as `docs\store-guarantees.md` and never found. The two
+    # root-level documents have no separator to differ over, so this failed on
+    # exactly one of the three and only off Linux: green on CI, red locally.
+    rel = doc.relative_to(ROOT).as_posix()
     assert rel in _read(README), f"README.md does not link to {rel}"
 
 
