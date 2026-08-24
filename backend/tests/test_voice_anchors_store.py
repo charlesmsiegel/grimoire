@@ -188,3 +188,39 @@ def test_clearing_an_already_cleared_anchor_succeeds(monkeypatch, tmp_path):
     voice_anchors.write(root, "winifred", "")
     voice_anchors.write(root, "winifred", "")          # must not raise
     assert voice_anchors.read(root, "winifred") == ""
+
+
+# ---- render caps (#voice) ----
+def test_truncate_leaves_short_text_alone():
+    assert voice_anchors.truncate("short", 100) == "short"
+
+
+def test_truncate_cuts_before_a_start_marker():
+    text = "<START>\nalpha line\n<START>\nbeta line that runs past the cap"
+    assert voice_anchors.truncate(text, 30) == "<START>\nalpha line"
+
+
+def test_truncate_prefers_the_latest_boundary_in_the_prefix():
+    text = "<START>\nalpha\n\nbeta\ngamma runs past the cap here"
+    assert voice_anchors.truncate(text, 20) == "<START>\nalpha"
+
+
+def test_truncate_hard_cuts_when_the_prefix_has_no_boundary():
+    assert voice_anchors.truncate("x" * 50, 20) == "x" * 20
+
+
+def test_truncate_hard_cuts_rather_than_returning_almost_nothing():
+    """The only boundary is a leading <START>: cutting before it yields "",
+    so the hard cut is used instead."""
+    out = voice_anchors.truncate("<START>" + ("y" * 200), 100)
+    assert len(out) == 100
+    assert out.startswith("<START>")
+
+
+def test_effective_applies_the_anchor_cap():
+    long_anchor = "z" * (voice_anchors.VOICE_ANCHOR_CAP + 500)
+    assert len(voice_anchors.effective(long_anchor)) == voice_anchors.VOICE_ANCHOR_CAP
+
+
+def test_effective_strips_and_passes_short_anchors_through():
+    assert voice_anchors.effective("  Clipped. Never contracts.  ") == "Clipped. Never contracts."

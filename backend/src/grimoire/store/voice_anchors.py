@@ -30,6 +30,70 @@ from . import atomic, paths
 from .frontmatter import dump_frontmatter, parse_frontmatter
 
 
+VOICE_ANCHOR_CAP = 1200
+"""Longest anchor text the prompt or the drift judge ever sees, in characters.
+
+An anchor is 3-6 short lines by construction, so this is headroom rather than a
+limit on the author -- but `write` enforces nothing at all, and the anchor now
+renders once per present character on every turn, so an unbounded value would
+be multiplied by the cast.
+"""
+
+VOICE_EXAMPLE_CAP = 3000
+"""Longest `mes_example` the prompt ever sees, in characters.
+
+Room for several full exchanges before anything is cut: a ceiling on outliers,
+not a target. Tune it against real prompts once the section is live rather than
+treating the number as settled.
+"""
+
+
+def truncate(text: str, cap: int) -> str:
+    """`text` shortened to at most `cap` characters, cut at a boundary.
+
+    The boundary is a `<START>` marker or a blank line, whichever falls LATEST
+    inside the capped prefix. A chosen `<START>` is cut *before* the marker, so
+    the partial block it opened is discarded rather than left headerless.
+
+    Two fallbacks, both deliberate:
+
+    - No boundary in the prefix -> a hard character cut, which MAY land
+      mid-line. A single-line example longer than the cap has nowhere else to
+      go, and half a line beats nothing.
+    - The boundary rule would keep less than half the cap -> the hard cut
+      again. This is the leading-`<START>` case: cutting before a marker at
+      position 0 leaves the empty string, and truncating a long sample to
+      nothing because it opens with a marker is the worse failure.
+    """
+    text = text.strip()
+    if len(text) <= cap:
+        return text
+    prefix = text[:cap]
+    cut = -1
+    marker = prefix.rfind("<START>")
+    if marker > 0:
+        cut = marker
+    blank = prefix.rfind("\n\n")
+    if blank > cut:
+        cut = blank
+    if cut > 0 and cut >= cap // 2:
+        return prefix[:cut].rstrip()
+    return prefix
+
+
+def effective(text: str) -> str:
+    """The anchor as BOTH the scene prompt and the drift judge see it.
+
+    One transformation, two consumers, and that is the whole point of it being
+    a function rather than an inline slice: if the generator were handed a
+    truncated anchor while the judge read the stored one, a rule past the cap
+    would be invisible to the writer and still enforced against it. Capping is
+    therefore not a source of generator/judge divergence -- both copies come
+    from here.
+    """
+    return truncate(text, VOICE_ANCHOR_CAP)
+
+
 class BadAnchorId(Exception):
     """An id that could escape the characters directory."""
 
