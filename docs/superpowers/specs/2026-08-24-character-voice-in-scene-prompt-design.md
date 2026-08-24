@@ -457,7 +457,7 @@ brief it received", and specified machinery to make that true: a per-scene
 record of characters whose anchor failed to reach a turn, suppressing their
 judgement. That is withdrawn. The claim was the problem, not the machinery —
 once the spec asserts exactness, every ordinary divergence becomes a defect
-requiring more mechanism, and there are at least six:
+requiring more mechanism, and there are five:
 
 - `{{user}}` is substituted in the prompt copy only;
 - the packer may drop `voice_anchors` under a budget;
@@ -509,7 +509,10 @@ attempting only the second:
 2. **`user.j2` gains an optional `correction`**, rendered in its own block
    and omitted entirely when absent — the existing three-variable contract is
    extended, not replaced, so a character with no correction produces the
-   same prompt it does today.
+   same **user message** it does today. Not the same *prompt*: `system.j2`
+   is rewritten for every invocation, correction or not, so no character's
+   drift prompt is byte-identical to today's. The unchanged half is the user
+   message alone.
 3. **`build_prompt` takes the correction as a parameter, and the CALLER
    validates it.** `voice_drift.py` states a "prompt/parse only" boundary, so
    it must not read the flag itself.
@@ -637,17 +640,24 @@ record["id"])` check `_voice_notes` applies must therefore run **before**
   prompt and for the judge, so a rule past the cap is enforced against
   neither.
 - **The judge sees a valid standing correction**, and the two prompt halves
-  agree: written around the contradiction pair (anchor forbids contractions,
-  correction requires them), asserting the assembled judge prompt states the
-  correction supersedes the conflicting anchor line — not merely that both
-  strings are present, which a contradictory evaluator would also pass.
+  agree. Written around the contradiction pair (anchor forbids contractions,
+  correction requires them), and it must assert **both directions**:
+  positively, that the assembled prompt states the correction supersedes a
+  conflicting anchor line; and negatively, that `system.j2` no longer defines
+  drift against the anchor *absolutely* — the phrases "the anchor rules out"
+  and "consistent with the anchor" must be gone. A positive-only assertion
+  passes an implementation that bolts a precedence sentence onto the existing
+  absolute wording, which is the contradictory evaluator this fix exists to
+  prevent.
 - **A stale correction never reaches the judge**: a flag fingerprinted to a
   replaced anchor is omitted from the drift prompt, exactly as
   `_voice_notes` omits it from the scene prompt. Same fixture, two consumers,
   one expectation.
-- **No correction, no change**: a character without a flag produces the drift
-  prompt it produces today, so the extended contract costs nothing in the
-  ordinary case.
+- **No correction, no user-message change**: a character without a valid
+  flag produces the same drift *user message* as today, so the extended
+  contract costs nothing in the ordinary case. The system message differs by
+  design, so the assertion is scoped to the user half — asserting the whole
+  prompt is unchanged is unsatisfiable and would have to be deleted later.
 - **Tiering**: `voice_policy` survives a budget that drops both other
   sections. The examples-before-anchors ordering is asserted **only** for a
   manufactured case where the examples section is genuinely larger — it is a
