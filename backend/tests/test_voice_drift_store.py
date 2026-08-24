@@ -330,3 +330,27 @@ def test_an_oversized_note_is_not_a_usable_corrective():
     assert voice_drift.MAX_NOTE > 200        # room for the two sentences asked for
     long_note = "She hedged. " * 500
     assert len(long_note) > voice_drift.MAX_NOTE
+
+
+# ---- the judge is shown the correction the writer was actually given ----
+def test_the_judge_is_told_the_correction_supersedes_the_anchor():
+    msgs = voice_drift.build_prompt(
+        "Mara", "Never uses contractions.", "Mara: I'm fine.",
+        correction="Use contractions; the last scene was too stiff.")
+    blob = "\n".join(m["content"] for m in msgs)
+    assert "Use contractions; the last scene was too stiff." in blob
+    assert "supersede" in blob.lower()
+
+
+def test_the_judge_prompt_no_longer_defines_drift_against_the_anchor_alone():
+    """The NEGATIVE half, and the reason this test exists: an implementation
+    that bolts a precedence sentence onto the old absolute wording satisfies
+    the positive assertion while still contradicting itself."""
+    system = voice_drift.build_prompt("Mara", "Never uses contractions.", "x")[0]["content"]
+    assert "the anchor rules out" not in system
+    assert "consistent with the anchor" not in system
+
+
+def test_no_correction_leaves_the_user_message_as_it_was():
+    user = voice_drift.build_prompt("Mara", "Clipped.", "Mara: Fine.")[1]["content"]
+    assert "correction" not in user.lower()

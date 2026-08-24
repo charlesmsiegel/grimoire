@@ -1964,7 +1964,22 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # always describe the same committed flag (voice_drift.read_record).
             flag = store.voice_drift.read_record(croot, aid)
             prior, prior_fp = flag["note"], flag["anchor"]
-            msgs = store.voice_drift.build_prompt(name, record["text"], transcript)
+            # Only a correction that is STILL IN FORCE may reach the judge.
+            # `context/cast.py` applies exactly this test before putting a note
+            # in the SCENE prompt; without it here, a note fingerprinted to a
+            # REPLACED anchor is suppressed for the writer and handed to the
+            # judge as current -- which mints a fresh flag against the anchor
+            # that replaced it. "" is a pre-nonce flag, which counts as valid
+            # for the reason `anchor_fingerprint` documents.
+            live = prior if (not prior_fp or store.voice_drift.fingerprint_matches(
+                prior_fp, record["text"], record["id"])) else ""
+            # The judge is sent the EFFECTIVE anchor, because that is all the
+            # generator ever saw: a rule past the cap is enforced against
+            # neither. The FINGERPRINT above still uses the raw stored text --
+            # capping it would retire every correction whose anchor is long.
+            msgs = store.voice_drift.build_prompt(
+                name, store.voice_anchors.effective(record["text"]), transcript,
+                correction=live)
             # The loop's own check is stale by now, so the attempt is recorded
             # by `run`, which alone can decide it atomically with the deadline.
             with store.usage.meter("voice-drift", campaign=cid, scene=sid) as m:
