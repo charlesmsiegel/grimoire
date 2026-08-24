@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from grimoire.store import config
-from grimoire.store.context import layout
+from grimoire.store.context import assemble, layout
 
 
 class _Sec(SimpleNamespace):
@@ -273,3 +273,57 @@ def test_describe_and_merge_agree_about_a_repeated_id():
     stored = [{"id": "a", "label": "First"}, {"id": "a", "label": "Second"}]
     assert {s.id: s.label for s in layout.merge(CATALOG, stored)}["a"] == "First"
     assert {r["id"]: r["label"] for r in layout.describe(CATALOG, stored)}["a"] == "First"
+
+
+# ---- the message_examples -> voice_examples rename (voice sections) ----
+def test_a_malformed_layout_still_merges_as_empty():
+    """`_migrate` runs ahead of `_ordered`, so it owns the promise that a
+    malformed file merges as empty rather than raising."""
+    for bad in (None, 17, "nonsense", {}):
+        assert [s.id for s in layout.merge(assemble.SECTIONS, bad)] == \
+            [s.id for s in assemble.SECTIONS]
+
+
+def test_a_disabled_message_examples_stays_disabled_as_voice_examples():
+    merged = layout.merge(assemble.SECTIONS, [{"id": "message_examples", "enabled": False}])
+    assert not any(s.id == "voice_examples" for s in merged)
+
+
+def test_the_migrated_entry_keeps_its_position():
+    stored = [{"id": "message_examples"}, {"id": "character_descriptions"}]
+    order = [s.id for s in layout.merge(assemble.SECTIONS, stored)]
+    assert order.index("voice_examples") < order.index("character_descriptions")
+
+
+def test_the_legacy_label_is_dropped():
+    merged = layout.merge(assemble.SECTIONS,
+                          [{"id": "message_examples", "label": "My examples"}])
+    sec = next(s for s in merged if s.id == "voice_examples")
+    assert sec.label == "Voice · example dialogue"
+
+
+def test_a_newer_voice_examples_entry_wins_over_the_legacy_one():
+    stored = [{"id": "message_examples", "enabled": False}, {"id": "voice_examples"}]
+    merged = layout.merge(assemble.SECTIONS, stored)
+    assert any(s.id == "voice_examples" for s in merged)
+
+
+def test_describe_and_merge_agree_about_the_migrated_entry():
+    """Same migration on both paths, or the editor reverses the disable on save."""
+    rows = {r["id"]: r for r in
+            layout.describe(assemble.SECTIONS, [{"id": "message_examples", "enabled": False}])}
+    assert rows["voice_examples"]["enabled"] is False
+
+
+def test_the_three_newcomers_land_after_character_descriptions():
+    order = [s.id for s in layout.merge(assemble.SECTIONS, [])]
+    i = order.index("character_descriptions")
+    assert order[i + 1:i + 4] == ["voice_policy", "voice_anchors", "voice_examples"]
+
+
+def test_the_newcomers_follow_a_disabled_predecessor():
+    """`_ordered`'s anchor search reads the disabled entries too, by design."""
+    stored = [{"id": "plot_threads"}, {"id": "character_descriptions", "enabled": False}]
+    order = [row["id"] for row in layout.describe(assemble.SECTIONS, stored)]
+    i = order.index("character_descriptions")
+    assert order[i + 1:i + 4] == ["voice_policy", "voice_anchors", "voice_examples"]

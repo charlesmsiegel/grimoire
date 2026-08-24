@@ -1,0 +1,30 @@
+{#- The standing voice rule and the precedence order. FIXED text: no
+    per-character content, which is what lets it sit at LOCK_IN while the two
+    per-cast voice sections cannot.
+
+    Renders when a NAMED entry has an anchor, a NAMED entry has an example, or
+    at least two entries are named. "Named" is load-bearing: the voice sections
+    skip nameless entries, so a condition counting ANY entry would render this
+    policy over a subject that is then entirely suppressed.
+
+    It says "a character's voice description" rather than "the section below"
+    because voice_anchors.j2 is SPOTLIGHT and may legitimately be dropped under
+    a budget, or switched off in the layout, while this survives.
+
+    Vars: cast_blocks, named_npc_count. -#}
+{%- set named = cast_blocks | selectattr("name") | list -%}
+{%- if (named | selectattr("anchor") | list) or (named | selectattr("example") | list)
+       or named_npc_count >= 2 %}# Voice
+
+Each character present must be distinguishable by their dialogue alone. If
+two of their lines could be exchanged without a reader noticing, the reply
+has failed, whatever else it got right. Differences in diction, rhythm,
+formality and what a person will not say are the point, not decoration.
+
+Where a character's voice description and their example dialogue disagree,
+the description wins — it is maintained, the examples are a snapshot. Where
+either disagrees with a general prose rule elsewhere in this prompt, the
+character's voice wins: those rules exist to stop generic writing, not to
+flatten a specific person. An outstanding voice correction outranks all of
+it — it is the most recent and most specific feedback about this character.
+{%- endif -%}

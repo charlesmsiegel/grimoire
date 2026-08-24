@@ -43,6 +43,20 @@ would show up as a diff even where nothing changed.
 `test_the_builder_still_mints_a_fixture` keeps the script honest by running it
 into a scratch directory — it never touches `home/`.
 
+**One deliberate edit to `home/` is on the record.** Seraphine's card gained a
+`mes_example` when the voice sections landed. It is recorded here because the
+rule above says `home/` is not edited to add coverage, and the distinction
+being claimed is fidelity rather than coverage: a card of this vintage
+essentially always carries example dialogue, in the `<START>`-separated
+`{{char}}`/`{{user}}` idiom used here, so its absence made the fixture
+unrepresentative of the data it exists to stand for. The practical symptom was
+that the voice sections rendered nothing against it, and a snapshot showing no
+diff is indistinguishable from a feature that silently does not work. Nothing
+else in `home/` was touched, and in particular **no `voice_anchor.md` was
+added** -- no store of this age has one, and that would have been the
+coverage-grab the rule forbids. The anchor path is covered in `test_context.py`
+instead.
+
 **`snapshot.json` is regenerated deliberately.** It is the expected output of
 the read-only sweep, so it legitimately moves when a template or a render
 changes on purpose. Then, and only then:

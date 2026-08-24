@@ -1,0 +1,21 @@
+{#- Example dialogue, name-labelled. The retired message_examples.j2
+    concatenated these with no name attached, so a SillyTavern-style card whose
+    samples lean on {{char}} and unattributed narration was attributed by
+    guesswork -- which is a large part of why a cast reads as interchangeable.
+
+    Its own heading, for the reason voice_anchors.j2 gives.
+
+    Vars: cast_blocks. -#}
+{%- set blocks = [] -%}
+{%- for b in cast_blocks -%}
+{%- if b.name and b.example -%}
+{%- set _ = blocks.append("## " ~ b.name ~ "
+" ~ b.example) -%}
+{%- endif -%}
+{%- endfor -%}
+{%- if blocks %}# Voice — example dialogue
+
+{{ blocks | join("
+
+") }}
+{%- endif -%}
