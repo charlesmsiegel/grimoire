@@ -4216,3 +4216,39 @@ def test_the_packer_drops_by_tier_not_by_the_reader_s_order(monkeypatch, tmp_pat
     assert kept[0] == "response_budget"          # the reader's order held
     assert "response_format" in kept             # ...and lock-in was not dropped
     assert all(r["tier"] != context.LOCK_IN for r in rows if r["dropped"])
+
+
+# ---- display-name disambiguation (voice sections) ----
+def test_display_names_leaves_distinct_names_alone():
+    assert context_cast.display_names(["Mara", "Winifred"]) == ["Mara", "Winifred"]
+
+
+def test_display_names_leaves_merely_similar_names_alone():
+    """Two headings a reader can already tell apart are not a collision."""
+    assert context_cast.display_names(["Winifred Vance", "Winifred Vale"]) == \
+        ["Winifred Vance", "Winifred Vale"]
+
+
+def test_display_names_ordinals_every_member_of_a_collision():
+    assert context_cast.display_names(["Winifred", "Winifred"]) == \
+        ["Winifred #1", "Winifred #2"]
+
+
+def test_display_names_skips_an_ordinal_that_collides_with_a_literal_name():
+    out = context_cast.display_names(["Winifred", "Winifred", "Winifred #2"])
+    assert out == ["Winifred #1", "Winifred #3", "Winifred #2"]
+    assert len(set(out)) == 3
+
+
+def test_display_names_matches_case_insensitively():
+    assert context_cast.display_names(["Mara", "mara"]) == ["Mara #1", "mara #2"]
+
+
+def test_display_names_keeps_nameless_entries_empty():
+    assert context_cast.display_names(["", "Mara", ""]) == ["", "Mara", ""]
+
+
+def test_display_names_never_collides_among_non_empty_results():
+    out = context_cast.display_names(["Mara", "Mara", "Mara #1", ""])
+    named = [n for n in out if n]
+    assert len(set(named)) == len(named)

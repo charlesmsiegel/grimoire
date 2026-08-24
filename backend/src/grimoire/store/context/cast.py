@@ -337,3 +337,42 @@ def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
         except calendars.CalendarError:
             continue
     return out
+
+
+def display_names(names: list[str]) -> list[str]:
+    """Per-entry heading names for the present cast, pairwise distinct.
+
+    `names` arrive stripped, `""` for a card with no name. Nameless entries
+    stay `""` and are EXCLUDED from the uniqueness requirement -- they render
+    no heading, so there is nothing to collide over, and demanding two empty
+    strings be distinct is unsatisfiable.
+
+    Plain case-folded equality, deliberately NOT `serialize.confusable`. That
+    function answers whether a transcript speaker label resolves to exactly one
+    cast member, which is a different question with an inverted argument
+    convention -- it takes the whole roster, the name included, so
+    `confusable("Mara", ["Winifred"])` is True. It also cannot be satisfied by
+    what this does: "Winifred #1" and "Winifred #2" stay confusable, because
+    the bare label "Winifred" still prefixes both. Using it here would fire on
+    "Winifred Vance" beside "Winifred Vale" -- two headings a reader can tell
+    apart -- and never converge.
+
+    The ordinal is appended to the ORIGINAL name and incremented past anything
+    already taken, never appended to an already-suffixed display name (which
+    would produce "Winifred #1 #2"). A card literally named "Winifred #2" is
+    stepped over rather than duplicated, and keeps its own name, because it is
+    not itself one of the duplicates.
+    """
+    folded = [n.casefold() for n in names]
+    dupes = {f for f in folded if f and folded.count(f) > 1}
+    taken = {n.casefold() for n in names if n}
+    out = list(names)
+    for i, name in enumerate(names):
+        if not name or folded[i] not in dupes:
+            continue
+        k = 1
+        while f"{name} #{k}".casefold() in taken:
+            k += 1
+        out[i] = f"{name} #{k}"
+        taken.add(out[i].casefold())
+    return out
