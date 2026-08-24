@@ -66,6 +66,13 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "fallback_connection_id": cfg.get("fallback_connection_id",
                                               store.config.DEFAULT_FALLBACK_CONNECTION_ID),
             "context_budget": cfg.get("context_budget", store.config.DEFAULT_CONTEXT_BUDGET),
+            # A CONSTANT, not a setting: the character editor warns above it,
+            # and a duplicated TypeScript literal would drift from the
+            # backend's truncation silently. Counted in CODE POINTS, which the
+            # editor must match with [...text].length rather than .length --
+            # JavaScript counts UTF-16 units, so an anchor of astral characters
+            # reads as double and would warn at half the real cap.
+            "voice_anchor_cap": store.voice_anchors.VOICE_ANCHOR_CAP,
             "context_scan_depth": cfg.get("context_scan_depth", store.config.DEFAULT_SCAN_DEPTH),
             "archive_depth": cfg.get("archive_depth", store.config.DEFAULT_ARCHIVE_DEPTH),
             "prompt_log_depth": cfg.get("prompt_log_depth",

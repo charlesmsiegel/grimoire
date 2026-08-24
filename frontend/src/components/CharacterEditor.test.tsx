@@ -31,6 +31,7 @@ vi.mock("../api/client", async () => {
       findChubUnlinked: vi.fn(),
       getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
       generateWorldTaglines: vi.fn(),
+      getConfig: vi.fn().mockResolvedValue({}),
       getCharacterVoiceAnchor: vi.fn(), setCharacterVoiceAnchor: vi.fn(),
       generateCharacterVoiceAnchor: vi.fn(),
       listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
@@ -2714,4 +2715,43 @@ test("campaign scope offers a delete, and says which library it removes from (#6
   expect(confirm).toHaveBeenCalledWith("Delete character 'Seraphine' from this campaign?");
   await waitFor(() => expect(api.deleteCharacter)
     .toHaveBeenCalledWith({ kind: "campaign", id: "run" }, "seraphine"));
+});
+
+// ---- the voice-anchor backlog (#voice) ----
+test("world scope counts the characters with no voice anchor", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "default", has_voice_anchor: false, versions: [] },
+    { id: "winifred", name: "Winifred", default_version: "default", has_voice_anchor: true, versions: [] },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  expect(await screen.findByText("1 character has no voice anchor")).toBeTruthy();
+});
+
+test("the backlog pluralises", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "default", has_voice_anchor: false, versions: [] },
+    { id: "winifred", name: "Winifred", default_version: "default", has_voice_anchor: false, versions: [] },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  expect(await screen.findByText("2 characters have no voice anchor")).toBeTruthy();
+});
+
+test("a row that predates the field is not counted as anchorless", async () => {
+  // `has_voice_anchor` absent means UNKNOWN, not "no anchor" -- a backlog that
+  // is loudest when it knows least is worse than one that is quiet.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "default", versions: [] },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Mara");
+  expect(screen.queryByText(/no voice anchor/i)).toBeNull();
+});
+
+test("no bulk-generate button is offered for anchors", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "default", has_voice_anchor: false, versions: [] },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("1 character has no voice anchor");
+  expect(screen.queryByRole("button", { name: /anchors \(/i })).toBeNull();
 });

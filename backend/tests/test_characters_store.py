@@ -1,7 +1,7 @@
 import pytest
 
 from grimoire.store import characters as ch
-from grimoire.store import fetch
+from grimoire.store import fetch, voice_anchors
 
 
 def test_create_and_read_single_card(tmp_path):
@@ -1525,3 +1525,26 @@ def test_a_hand_edited_non_object_data_does_not_take_out_the_roster(tmp_path):
     assert [r["id"] for r in rows] == [cid]
     assert rows[0]["greeting_count"] == 0
     assert ch.read_character(tmp_path, cid)["meta"]["id"] == cid
+
+
+# ---- the voice-anchor backlog (world scope) ----
+def test_list_characters_reports_a_written_anchor(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Mara")
+    voice_anchors.write(tmp_path, cid, "Clipped. Never contracts.")
+    row = next(c for c in ch.list_characters(tmp_path) if c["id"] == cid)
+    assert row["has_voice_anchor"] is True
+
+
+def test_list_characters_reports_a_missing_anchor(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Mara")
+    row = next(c for c in ch.list_characters(tmp_path) if c["id"] == cid)
+    assert row["has_voice_anchor"] is False
+
+
+def test_a_world_level_tombstone_reads_as_no_anchor(tmp_path):
+    """At world level a tombstone and an absence are the same state -- nothing
+    beneath to inherit from -- so both are a gap the backlog should show."""
+    cid, _ = ch.create_character(tmp_path, "Mara")
+    voice_anchors.disable(tmp_path, cid)
+    row = next(c for c in ch.list_characters(tmp_path) if c["id"] == cid)
+    assert row["has_voice_anchor"] is False
