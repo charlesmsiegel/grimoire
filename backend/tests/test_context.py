@@ -4252,3 +4252,180 @@ def test_display_names_never_collides_among_non_empty_results():
     out = context_cast.display_names(["Mara", "Mara", "Mara #1", ""])
     named = [n for n in out if n]
     assert len(set(named)) == len(named)
+
+
+from grimoire.store import overlay  # noqa: E402
+
+
+# ---- cast_blocks: one resolved structure for every section that names somebody ----
+def _voice_campaign(monkeypatch, tmp_path, *, npcs):
+    """`npcs` is a list of (name, fields, anchor). Returns (wid, cid, sid).
+
+    The character RECORD always gets a usable label; the card's `data.name` is
+    whatever the case under test needs, including blank or whitespace -- which
+    is the point of several of these.
+    """
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    for i, (name, fields, anchor) in enumerate(npcs):
+        label = name.strip() or f"Nameless{i}"
+        card = _npc_card(name, **{k: v for k, v in fields.items() if k != "name"})
+        if "name" in fields:            # a deliberately malformed data.name
+            card["data"]["name"] = fields["name"]
+        slug, vid = characters.create_character(wroot, label, "default", card)
+        if anchor:
+            voice_anchors.write(wroot, slug, anchor)
+        ap.appear(cid, sid, "characters", slug, vid, "npc")
+    scenes.append_message(cid, sid, "user", "hello")
+    return wid, cid, sid
+
+
+def test_cast_blocks_keeps_every_present_npc_and_filters_nothing(monkeypatch, tmp_path):
+    """Two named NPCs with no anchor and no mes_example still produce two
+    entries. The voice policy renders on `named_npc_count`, and filtering here
+    would silently switch it off in exactly the case it exists for."""
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Mara", {}, ""), ("Winifred", {}, "")])
+    data = context._assemble(cid, sid)["data"]
+    assert len(data["cast_blocks"]) == 2
+    assert data["named_npc_count"] == 2
+    assert all(b["anchor"] == "" and b["example"] == "" for b in data["cast_blocks"])
+
+
+def test_cast_blocks_strips_a_whitespace_only_name(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[("   ", {}, "")])
+    data = context._assemble(cid, sid)["data"]
+    assert data["cast_blocks"][0]["name"] == ""
+    assert data["named_npc_count"] == 0
+
+
+def test_cast_blocks_carries_anchor_description_and_example(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {"description": "A courier with debts.", "mes_example": "Mara: Fine."},
+         "Clipped. Never contracts.")])
+    block = context._assemble(cid, sid)["data"]["cast_blocks"][0]
+    assert block["name"] == "Mara"
+    assert "A courier with debts." in block["description"]
+    assert block["anchor"] == "Clipped. Never contracts."
+    assert block["example"] == "Mara: Fine."
+
+
+def test_cast_blocks_caps_the_anchor_and_the_example(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {"mes_example": "b" * (voice_anchors.VOICE_EXAMPLE_CAP + 200)},
+         "a" * (voice_anchors.VOICE_ANCHOR_CAP + 200))])
+    block = context._assemble(cid, sid)["data"]["cast_blocks"][0]
+    assert len(block["anchor"]) == voice_anchors.VOICE_ANCHOR_CAP
+    assert len(block["example"]) == voice_anchors.VOICE_EXAMPLE_CAP
+
+
+def test_cast_blocks_resolves_a_campaign_tombstone_to_no_anchor(monkeypatch, tmp_path):
+    """A campaign that cleared an inherited anchor means 'none here', not
+    'show me the world's again'."""
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Mara", {}, "World anchor.")])
+    overlay.set_voice_anchor(cid, "mara", "")
+    assert overlay.voice_anchor_record(cid, "mara")["text"] == ""
+    assert context._assemble(cid, sid)["data"]["cast_blocks"][0]["anchor"] == ""
+
+
+def test_cast_blocks_disambiguates_two_present_npcs_sharing_a_name(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Winifred", {}, ""), ("Winifred", {}, "")])
+    names = [b["name"] for b in context._assemble(cid, sid)["data"]["cast_blocks"]]
+    assert len(set(names)) == 2
+    assert all(n.startswith("Winifred #") for n in names)
+
+
+# ---- the three voice sections ----
+def _sections(cid, sid):
+    """{section_id: rendered text} for everything that rendered."""
+    a = context._assemble(cid, sid)
+    return {s["id"]: s["text"] for s in context.assemble._render_sections(a, cid, sid)}
+
+
+def test_voice_policy_renders_on_cast_size_with_no_anchors(monkeypatch, tmp_path):
+    """The day-one case: nobody has an anchor yet, and the differentiation
+    rule is the whole benefit until they do."""
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Mara", {}, ""), ("Winifred", {}, "")])
+    assert "distinguishable by their dialogue alone" in _sections(cid, sid)["voice_policy"]
+
+
+def test_voice_policy_renders_for_an_examples_only_scene(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Mara", {"mes_example": "Mara: Fine."}, "")])
+    assert "distinguishable by their dialogue alone" in _sections(cid, sid)["voice_policy"]
+
+
+def test_voice_policy_is_silent_for_a_lone_bare_npc(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[("Mara", {}, "")])
+    assert "voice_policy" not in _sections(cid, sid)
+
+
+def test_a_nameless_npc_triggers_no_voice_section(monkeypatch, tmp_path):
+    """Render conditions must read the same filtered set the blocks do, or a
+    nameless anchored NPC renders a policy whose subject is then suppressed."""
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("", {"mes_example": "..."}, "Hushed.")])
+    rendered = _sections(cid, sid)
+    for sec in ("voice_policy", "voice_anchors", "voice_examples"):
+        assert sec not in rendered
+
+
+def test_voice_anchors_names_each_character(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Mara", {}, "Clipped. Never contracts.")])
+    text = _sections(cid, sid)["voice_anchors"]
+    assert text.startswith("# Voice — how they sound")
+    assert "## Mara" in text and "Clipped. Never contracts." in text
+
+
+def test_voice_examples_labels_the_sample(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
+                                  npcs=[("Mara", {"mes_example": "Mara: Fine."}, "")])
+    text = _sections(cid, sid)["voice_examples"]
+    assert text.startswith("# Voice — example dialogue")
+    assert "## Mara" in text and "Mara: Fine." in text
+
+
+def test_message_examples_section_is_gone():
+    ids = {s.id for s in context.assemble.SECTIONS}
+    assert "message_examples" not in ids
+    assert {"voice_policy", "voice_anchors", "voice_examples"} <= ids
+
+
+def test_the_packer_can_drop_examples_and_keep_the_policy(monkeypatch, tmp_path):
+    """The tier split's whole point: the policy is LOCK_IN and undroppable
+    while the per-cast sections are SPOTLIGHT and give way.
+
+    It deliberately does NOT assert examples-before-anchors in general. `pack`
+    drops the largest ACTUAL section within a tier, so that ordering is a
+    tendency of largest-first packing -- here forced by making the examples
+    much the larger -- and not a property of the tiers.
+    """
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {"mes_example": "Mara: Fine. " * 400}, "Clipped."),
+        ("Winifred", {"mes_example": "Winifred: Quite. " * 400}, "Dry."),
+    ])
+    rows = {s["label"]: s for s in context.context_sections(cid, sid)}
+    after = _squeeze_out(cid, sid, rows["Voice · example dialogue"])
+    assert after["Voice · example dialogue"]["dropped"] is True
+    assert after["Voice · the rule"]["dropped"] is False
+    assert after["Voice · how they sound"]["dropped"] is False
+
+
+def test_a_malformed_card_field_costs_only_its_own_voice_block(monkeypatch, tmp_path):
+    """A card is hand-editable and importable, so any of these fields can arrive
+    as a non-string. It must cost that character its block, not take the whole
+    assembly down -- the same per-actor policy `_character_states` applies."""
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {"mes_example": "Mara: Fine."}, "Clipped."),
+        # malformed at creation, which is how an import delivers one
+        ("Winifred", {"name": ["Winifred", "The Harbourmaster's Daughter"],
+                      "mes_example": {"nope": 1}}, "Dry."),
+    ])
+    blocks = context._assemble(cid, sid)["data"]["cast_blocks"]
+    assert len(blocks) == 2
+    assert blocks[0]["name"] == "Mara" and blocks[0]["example"] == "Mara: Fine."
+    assert blocks[1]["name"] == "" and blocks[1]["example"] == ""

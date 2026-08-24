@@ -35,6 +35,7 @@ from .. import (
     styles,
     tokens,
     turnstate,
+    voice_anchors,
 )
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
@@ -127,6 +128,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             if f"{a['kind']}:{a['id']}" not in excluded_refs]
 
     npc_cards: list[dict] = []
+    npc_ids: list[str] = []
     for a in cast:
         if a["role"] != "npc":
             continue
@@ -135,6 +137,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             npc_cards.append(characters.read_card(aroot, a["id"], vid)["data"])
         except (characters.CharacterNotFound, characters.VersionNotFound):
             continue
+        # Appended only after the read SUCCEEDS, so the two lists stay aligned
+        # for the `zip` below -- an unreadable card drops out of both.
+        npc_ids.append(a["id"])
 
     players: list[dict] = []
     player_names: list[str] = []
@@ -153,6 +158,43 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                 player_names.append(data.get("name", a["id"]))
         except (pcs.PCNotFound, pcs.PCVersionNotFound, characters.CharacterNotFound, characters.VersionNotFound):
             continue
+
+    # ONE resolved structure for every section that names a character:
+    # `character_descriptions`, `voice_policy`, `voice_anchors`,
+    # `voice_examples`. Built here rather than per-template because
+    # disambiguation and nameless handling must not be able to diverge between
+    # them, and because a template resolving an anchor would be doing store IO
+    # from a render.
+    #
+    # NOTHING is filtered out. Filtering is each template's business, per
+    # block: `named_npc_count` is what the voice policy renders on, and
+    # dropping the anchorless here would switch that policy off in exactly the
+    # case it exists for -- a cast with no anchors yet.
+    # A card is hand-editable and importable, so every one of these fields can
+    # arrive as a non-string -- `test_a_malformed_card_name_costs_only_its_own_actor`
+    # hand-edits `data.name` to a LIST. `_str` keeps a malformed field costing
+    # only its own block rather than raising out of the whole assembly, which is
+    # the same per-actor failure policy `_character_states` already applies.
+    def _str(card: dict, key: str) -> str:
+        v = card.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    raw_names = [_str(d, "name") for d in npc_cards]
+    cast_blocks = []
+    for shown, card, char_id in zip(cast_data.display_names(raw_names), npc_cards, npc_ids):
+        parts = [_str(card, "description"), _str(card, "personality"),
+                 _str(card, "scenario")]
+        anchor = overlay.voice_anchor_record(cid, char_id)["text"]
+        cast_blocks.append({
+            "name": shown,
+            "description": "\n".join(p for p in parts if p),
+            "anchor": voice_anchors.effective(anchor),
+            "example": voice_anchors.truncate(_str(card, "mes_example"),
+                                              voice_anchors.VOICE_EXAMPLE_CAP),
+        })
+    # A COUNT, not a length: reading `len(cast_blocks)` at render time would let
+    # a per-block filter move the policy's render condition.
+    named_npc_count = sum(1 for b in cast_blocks if b["name"])
 
     npc_names = [d.get("name", "") for d in npc_cards if d.get("name")]
     pcless = scene["meta"].get("pcless") == "true"
@@ -232,6 +274,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
         "budget": {k: budget[k] for k in lengths.KNOBS},
         "npc_cards": npc_cards,
+        "cast_blocks": cast_blocks,
+        "named_npc_count": named_npc_count,
         # The POV filter (#116) resolves the present cast's names itself, from
         # the cast record: `npc_names`/`player_names` here are one name each and
         # the wrong one for it (see `world_state._actor_aliases`).
@@ -433,6 +477,23 @@ SECTIONS = [
             "scene/sections/card_system_prompts.j2", pack.LOCK_IN),
     Section("character_descriptions", "Character descriptions",
             "scene/sections/character_descriptions.j2", pack.LOCK_IN),
+    # Three sections rather than one, because they are three kinds of thing and
+    # pack.py's tiers already name the difference. The policy is fixed-length
+    # instruction text -- LOCK_IN's own description, "the instructions that
+    # define the reply itself" -- and is bounded by construction. The other two
+    # are per-character information, which is SPOTLIGHT's description and is
+    # cast-sized, so exactly what must not be pinned.
+    #
+    # Anchors are NOT guaranteed to outlive examples. `pack` drops the largest
+    # ACTUAL section within a tier, not the one with the larger per-item cap,
+    # and a pinned section never drops at all. Examples are usually the larger
+    # and so usually go first; that is a tendency, and nothing may depend on it.
+    Section("voice_policy", "Voice · the rule",
+            "scene/sections/voice_policy.j2", pack.LOCK_IN),
+    Section("voice_anchors", "Voice · how they sound",
+            "scene/sections/voice_anchors.j2", pack.SPOTLIGHT),
+    Section("voice_examples", "Voice · example dialogue",
+            "scene/sections/voice_examples.j2", pack.SPOTLIGHT),
     Section("character_state", "Character state",
             "scene/sections/character_state.j2", pack.SPOTLIGHT),
     # Beside the standing state and at the same tier: the same kind of claim
@@ -451,8 +512,6 @@ SECTIONS = [
             pack.LOCK_IN, pcless_only=True),
     Section("absent_players", "Absent player characters", "scene/sections/absent_players.j2",
             pack.LOCK_IN, pcless_only=True),
-    Section("message_examples", "Message examples",
-            "scene/sections/message_examples.j2", pack.BACKGROUND),
     Section("story_so_far", "Story so far", "scene/sections/story_so_far", pack.BACKGROUND),
     Section("archive", "Earlier scenes", "scene/sections/archive.j2", pack.ARCHIVE),
     Section("plot_threads", "Plot threads", "scene/sections/plot_threads.j2", pack.SPOTLIGHT),

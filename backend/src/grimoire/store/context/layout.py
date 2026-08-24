@@ -70,6 +70,59 @@ def _clean_label(entry: dict, default: str) -> str:
     return default
 
 
+#: Section ids that were RENAMED, old -> new. A stored layout naming the old id
+#: is rewritten before the merge sees it.
+_RENAMED = {"message_examples": "voice_examples"}
+
+
+def _migrate(stored: list) -> list:
+    """`stored` with renamed section ids rewritten, position and `enabled` kept.
+
+    The ordinary upgrade rule retires an unknown id silently, which is right for
+    a section that was REMOVED and wrong for one that was renamed: it would
+    discard a stored `enabled: false`, and the section would come back switched
+    on. That is a change to what the model receives, not a preference to
+    re-toggle.
+
+    Applied at the head of BOTH `merge` and `describe`, which share `_ordered`.
+    Migrating on one path only would let the renderer honour the disable while
+    the editor showed the new section enabled -- and reversed the reader's
+    choice the moment they saved.
+
+    The stored LABEL is dropped with the rename. A label is the reader's name
+    for a section whose meaning has now narrowed, so carrying it forward would
+    caption the new section with a description of the old one.
+
+    A read-time alias, not a persisted rewrite: nothing here writes the file.
+    When both ids are present the NEW one wins -- it is what the current editor
+    produced, so it is the more recent statement of intent.
+
+    Returns `[]` for anything that is not a list, because `merge` and
+    `describe` promise a malformed file merges as empty rather than raising,
+    and running ahead of `_ordered` moves that promise here.
+    """
+    if not isinstance(stored, list):
+        return []
+    have = {e.get("id") for e in stored if isinstance(e, dict)}
+    out, seen = [], set()
+    for entry in stored:
+        if not isinstance(entry, dict):
+            continue
+        sid = entry.get("id")
+        if sid in _RENAMED:
+            new_id = _RENAMED[sid]
+            if new_id in have:
+                continue          # the newer entry is authoritative
+            entry = {k: v for k, v in entry.items() if k != "label"}
+            entry["id"] = new_id
+            sid = new_id
+        if sid in seen:
+            continue
+        seen.add(sid)
+        out.append(entry)
+    return out
+
+
 def _ordered(catalog: list, stored: list) -> list[tuple]:
     """`(section, enabled)` for every catalog section, in render order.
 
@@ -128,6 +181,7 @@ def merge(catalog: list, stored: list) -> list:
     survivors only would drag every newcomer up the message each time the
     reader switched something off above it.
     """
+    stored = _migrate(stored)
     return [s for s, on in _ordered(catalog, stored) if on]
 
 
@@ -147,6 +201,7 @@ def describe(catalog: list, stored: list) -> list[dict]:
     save would pin all thirty sections to labels the reader never typed. A
     pinned label then survives a release that renames the section.
     """
+    stored = _migrate(stored)
     defaults = {s.id: s.label for s in catalog}
     #: The overrides as stored, so a blank stays blank. `_ordered` deliberately
     #: does not carry this: it answers "what renders", and merge wants the
