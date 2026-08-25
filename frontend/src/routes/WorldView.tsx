@@ -9,6 +9,7 @@ import { PCEditor } from "../components/PCEditor";
 import { TagEditor } from "../components/TagEditor";
 import { EntityEditor } from "../components/EntityEditor";
 import { GreetingEditor } from "../components/GreetingEditor";
+import { PlotMapEditor } from "../components/PlotMapEditor";
 import { LorebookImport } from "../components/LorebookImport";
 import { ScenarioImport } from "../components/ScenarioImport";
 import { WorldOverview } from "../components/WorldOverview";
@@ -90,6 +91,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [loreReset, setLoreReset] = useState(0);
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
   const [focusGreeting, setFocusGreeting] = useState<string | null>(null);
+  /** Which way the Greetings section is showing its records: the chip-list
+   *  editor, or the same edges as a graph (#9). A view of one set of records
+   *  rather than a second place to keep them -- both write through
+   *  `api.setEdges`, so neither is the source of truth for the other. */
+  const [greetingView, setGreetingView] = useState<"list" | "graph">("list");
   /** A pending "open this entity" for whichever EntityEditor is mounted. Keyed
    *  by kind so a nav aimed at Lore cannot be consumed by Items: all six
    *  editors are the same component, and only the kind tells them apart. */
@@ -212,9 +218,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     setSection("characters");
   }
 
-  // a world-greeting link from a character page jumps to that greeting
+  // a world-greeting link from a character page jumps to that greeting -- as
+  // does a node on the plot map, which is why this also drops back to the list:
+  // opening a greeting means its editor, and the graph has no detail pane.
   function openGreeting(gid: string) {
     setFocusGreeting(gid);
+    setGreetingView("list");
     setSection("greetings");
   }
 
@@ -458,8 +467,23 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                                           onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
         {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" nav={navFor("creatures")}
                                           onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
-        {section === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
-                                          onOpenLocation={(id) => openEntity("locations", id)} focus={focusGreeting} />}
+        {section === "greetings" && (
+          <>
+            <div className="chips section-views" role="group" aria-label="Greetings view">
+              {([["list", "List"], ["graph", "Plot map"]] as const).map(([key, label]) => (
+                <button key={key} className={"chip" + (greetingView === key ? " on" : "")}
+                        aria-pressed={greetingView === key}
+                        onClick={() => setGreetingView(key)}>{label}</button>
+              ))}
+            </div>
+            {greetingView === "list" ? (
+              <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
+                              onOpenLocation={(id) => openEntity("locations", id)} focus={focusGreeting} />
+            ) : (
+              <PlotMapEditor scope={scope} onOpenGreeting={openGreeting} />
+            )}
+          </>
+        )}
       </div>
     </PageShell>
   );

@@ -471,3 +471,32 @@ test("Images is offered in the command palette, like every other world section",
   expect(images.label).toBe("Images");
   expect(items.map((i) => i.id)).toContain("world-section:push");
 });
+
+test("Greetings switches between the chip list and the plot map, and a node opens the greeting", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "sol-2", name: "SoL 2", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+    meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [],
+    edges: gid === "dawn" ? { leads_to: ["sol-2"], excludes: [] } : { leads_to: [], excludes: [] },
+  }));
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+
+  // the chip-list editor is what a section opens on; the graph is the alternate
+  await screen.findByRole("button", { name: /new greeting/i });
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+
+  const node = await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+  expect(screen.getByRole("button", { name: "Unlocks: Saltmarch Dawn → SoL 2" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /new greeting/i })).toBeNull();
+
+  // a node is a way into the editor, so it lands back on the list with that
+  // greeting open rather than opening a second detail pane on the graph
+  fireEvent.click(node);
+  await screen.findByRole("button", { name: /new greeting/i });
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "dawn"));
+});
