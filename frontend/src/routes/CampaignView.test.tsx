@@ -7410,6 +7410,30 @@ test("the scene bar opens the composition overview, and its banner opens the rev
   expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Saltmarch Harbor");
 });
 
+test("accepting in the review re-reads the composition open beside it", async () => {
+  // Both panels are open and both read `/incoming`, so a resolve that only
+  // refreshed the review would leave the composition rows and its pending count
+  // describing a change that no longer exists.
+  (api.getIncoming as any).mockResolvedValue([
+    { ref: { kind: "locations", id: "saltmarch-harbor" }, status: "update",
+      world: { name: "Saltmarch Harbor", body: "The harbour is blockaded." },
+      mine: { name: "Saltmarch Harbor", body: "The harbour is blockaded." } },
+  ]);
+  (api.acceptIncoming as any).mockResolvedValue({ ok: true });
+  renderCampaign();
+  await screen.findByRole("button", { name: "Composition" });
+  fireEvent.click(screen.getByRole("button", { name: "Composition" }));
+  expect(await screen.findByText(/1 update pending/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Review world updates" }));
+  await screen.findByRole("heading", { name: "Incoming world changes" });
+
+  (api.getIncoming as any).mockResolvedValue([]);
+  fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+  await waitFor(() =>
+    expect(screen.queryByText(/1 update pending/)).not.toBeInTheDocument());
+  expect(await screen.findByText(/Nothing outstanding/)).toBeInTheDocument();
+});
+
 // ---- the campaign budget banner (#153) ----
 const OVER_BUDGET = {
   limit_usd: 10, period: "monthly", level: "over", warn_fraction: 0.8,

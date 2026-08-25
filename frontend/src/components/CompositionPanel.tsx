@@ -188,8 +188,13 @@ function Detail({ row, onReview }: { row: Row; onReview: (ref: IncomingRef) => v
  *  undo, and the panel that owns that decision shows the diff it turns on; a
  *  second Accept button next to a status word would be the same irreversible
  *  call made with less in front of the reader. */
-export function CompositionPanel({ cid, onReview }: {
+export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
   cid: string; onReview: (ref: IncomingRef) => void;
+  /** Bumped when something this panel reports has been resolved elsewhere —
+   *  today, an accept or reject landing in the World updates panel beside it.
+   *  A number rather than a callback handed the other way because the two
+   *  panels never meet: their common parent is the route. */
+  refreshKey?: number;
 }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
@@ -230,7 +235,10 @@ export function CompositionPanel({ cid, onReview }: {
     }
   }, [cid]);
 
-  useEffect(() => { void load(); }, [load]);
+  // `refreshKey` belongs to the EFFECT, not to `load`: the function it names
+  // does not read it, and hanging it off the callback is a dependency lint can
+  // see is unused. Bumping it re-runs the read without rebuilding the reader.
+  useEffect(() => { void load(); }, [load, refreshKey]);
 
   const all = rows ?? [];
   const pending = all.filter((r) => r.state === "conflict" || r.state === "update"
@@ -268,8 +276,10 @@ export function CompositionPanel({ cid, onReview }: {
       )}
       {rows !== null && all.length === 0 && !err && (
         <p className="field-hint">
-          Nothing outstanding: no world change waiting, no record changed here,
-          and no actor pinned to a version.
+          Nothing outstanding: no world change waiting, no flat record changed
+          here, and no actor pinned to a version. A character or PC this
+          campaign has edited without pinning is not among the three reads —
+          see below.
         </p>
       )}
       {rows !== null && all.length > 0 && (
@@ -299,9 +309,13 @@ export function CompositionPanel({ cid, onReview }: {
             {active
               ? <Detail row={active} onReview={onReview} />
               : <p className="field-hint">
-                  Select a record to see where it stands. Records this campaign
-                  follows with nothing pending are not listed — no read this
-                  panel makes enumerates them (#71).
+                  Select a record to see where it stands. Two things are absent
+                  rather than in-sync, because no read this panel makes reports
+                  them: a record the campaign follows with nothing pending, and
+                  a character or PC edited here but never pinned —
+                  <code>/diverged</code> covers flat records only, and an actor
+                  carries its base in the appearance record instead. #71’s
+                  endpoint is what closes both.
                 </p>}
           </div>
         </div>

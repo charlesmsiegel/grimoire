@@ -85,6 +85,19 @@ def set_image_subjects(root: Path, gid: str, name: str, cids: list[str]) -> None
     write_subjects(root, gid, cur)
 
 
+def reviewed_names(root: Path, gid: str) -> set[str]:
+    """Which of this greeting's images have been ANSWERED — key presence alone.
+
+    Public, and shared by the two listings that turn on it, because they must
+    agree: the tagging queue offers what is not here, and the world gallery
+    (#200) marks what is not here as unfinished. `read_subjects` cannot answer
+    it, and that is the point -- it drops an entry whose value is not a list, so
+    a hand-edited or half-synced sidecar reads there as untagged while the queue
+    considers it done, leaving an unfinished tile with no way to resolve it.
+    """
+    return set(_read_raw(root, gid))
+
+
 def untagged(root: Path) -> list[dict]:
     """Every stored greeting image with NO sidecar entry — the tagging queue.
     Key absent = unreviewed; an explicit [] counts as reviewed."""
@@ -94,7 +107,7 @@ def untagged(root: Path) -> list[dict]:
         return out
     for d in sorted(p for p in gdir.iterdir() if p.is_dir()):
         gid = d.name
-        reviewed = set(_read_raw(root, gid))  # key presence alone marks 'reviewed'
+        reviewed = reviewed_names(root, gid)
         for name in sorted(_image_names(root, gid)):
             if name not in reviewed:
                 out.append({"gid": gid, "name": name})
