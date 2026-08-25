@@ -188,7 +188,6 @@ test("a save in the queue re-reads the gallery, so a tile stops being unfinished
   await act(async () => {});
   (api.listWorldImages as any).mockResolvedValue([
     AVATAR, SKETCH, QUAY, TAGGED, { ...UNTAGGED, subjects: ["seraphine"] }]);
-  (api.listUntaggedImages as any).mockResolvedValue([]);
   fireEvent.click(screen.getByRole("button", { name: "No subjects" }));
   await act(async () => {});
   expect(api.listWorldImages).toHaveBeenCalledTimes(2);
@@ -198,16 +197,56 @@ test("a save in the queue re-reads the gallery, so a tile stops being unfinished
     .toContain("1");
 });
 
-test("a failed read is reported, because an empty gallery is the one wrong answer", async () => {
+test("a save does not re-read the backlog the queue is still walking", async () => {
+  // `TaggingQueue` copies the backlog on mount and measures progress against
+  // the prop. Refreshing it underneath a running queue leaves its internal list
+  // at the original length while `total` shrinks -- so the second of two images
+  // announces itself as "1 / 1", and a skipped image reappears in a prop the
+  // local list has already walked past.
+  (api.listUntaggedImages as any).mockResolvedValue([
+    { gid: "dusk", greeting_name: "Saltmarch dusk", name: "art_1", url: "/img/dusk?v=1" },
+    { gid: "noon", greeting_name: "Saltmarch noon", name: "art_1", url: "/img/noon?v=1" },
+  ]);
+  await renderView();
+  fireEvent.click(screen.getByRole("tab", { name: /Tagging queue/ }));
+  await act(async () => {});
+  expect(screen.getByText(/Tagging 1 \/ 2 — Saltmarch dusk/)).toBeInTheDocument();
+
+  (api.listUntaggedImages as any).mockResolvedValue([
+    { gid: "noon", greeting_name: "Saltmarch noon", name: "art_1", url: "/img/noon?v=1" }]);
+  fireEvent.click(screen.getByRole("button", { name: "No subjects" }));
+  await act(async () => {});
+  expect(screen.getByText(/Tagging 2 \/ 2 — Saltmarch noon/)).toBeInTheDocument();
+  expect(api.listUntaggedImages).toHaveBeenCalledTimes(1);
+
+  // Closing is when it IS re-read -- nothing is measuring progress any more.
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await act(async () => {});
+  expect(api.listUntaggedImages).toHaveBeenCalledTimes(2);
+});
+
+test("a failed read is reported, and reports nothing else", async () => {
+  // An empty gallery is the one wrong answer this view must never give, and a
+  // failure rendered NEXT TO "this world has no art yet" gives it anyway -- in
+  // a second voice, which is the one the reader believes.
   (api.listWorldImages as any).mockRejectedValue(new Error("world not found"));
   await renderView();
   expect(screen.getByRole("alert").textContent).toContain("world not found");
   expect(tiles()).toHaveLength(0);
+  expect(screen.queryByText(/no art yet/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Reading the world/)).not.toBeInTheDocument();
+
+  // ...and the queue tab must not claim the backlog is empty either.
+  fireEvent.click(screen.getByRole("tab", { name: /Tagging queue/ }));
+  await act(async () => {});
+  expect(screen.queryByText(/has been tagged/)).not.toBeInTheDocument();
 
   (api.listWorldImages as any).mockResolvedValue([AVATAR]);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await act(async () => {});
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: /Gallery/ }));
+  await act(async () => {});
   expect(tiles()).toHaveLength(1);
 });
 

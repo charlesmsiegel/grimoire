@@ -147,6 +147,26 @@ export function ImagesView({ wid }: { wid: string }) {
 
   const scope: EntityScope = useMemo(() => ({ kind: "world", id: wid }), [wid]);
 
+  /** Re-read the gallery only.
+   *
+   *  Split from the full read because `TaggingQueue` holds its own copy of the
+   *  backlog and measures progress against the prop it was handed: refreshing
+   *  `untagged` underneath a running queue leaves its internal list at the
+   *  original length while `total` shrinks, so the second of two images
+   *  announces itself as "1 / 1" — and a skipped image comes back in the
+   *  refreshed prop the local list has already walked past. The backlog is
+   *  re-read when the queue closes instead, which is what `GreetingEditor` has
+   *  always done with the same component. */
+  const loadGallery = useCallback(async () => {
+    try {
+      const got = await api.listWorldImages(wid);
+      if (liveWid.current === wid) setImages(got);
+    } catch {
+      // Deliberately quiet: the tile this refreshes is a detail beside a save
+      // that has already landed, and the next full read reports the failure.
+    }
+  }, [wid]);
+
   const load = useCallback(async () => {
     setErr(null);
     try {
@@ -163,7 +183,9 @@ export function ImagesView({ wid }: { wid: string }) {
       if (liveWid.current !== wid) return;
       // Reported rather than swallowed: a failed read here looks exactly like a
       // world with no art in it, which is the one wrong answer this view must
-      // never give.
+      // never give. `err` also SUPPRESSES the empty states below — without that
+      // the failure is rendered next to "this world has no art yet", which is
+      // the same wrong answer in a second voice.
       setErr(e instanceof Error ? e.message : String(e));
       setImages([]);
       setUntagged([]);
@@ -204,23 +226,25 @@ export function ImagesView({ wid }: { wid: string }) {
           <button className="retry" onClick={() => void load()}>Retry</button>
         </p>
       )}
-      {images === null && <p className="field-hint">Reading the world’s art…</p>}
-      {images !== null && tab === "queue" && (
+      {images === null && !err && <p className="field-hint">Reading the world’s art…</p>}
+      {images !== null && !err && tab === "queue" && (
         untagged && untagged.length > 0 ? (
           <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}
-                        onClose={() => setTab("gallery")}
-                        // A save changes both halves of this view — the queue
-                        // shrinks and the tile it was about stops being
-                        // unfinished — so the read is the whole read, not a
-                        // patch of the row.
-                        onSaved={() => void load()} />
+                        // Closing is when the backlog is re-read: the queue has
+                        // finished stepping, so nothing is measuring progress
+                        // against the list any more.
+                        onClose={() => { setTab("gallery"); void load(); }}
+                        // A save makes the tile it was about stop being
+                        // unfinished, so the gallery is refreshed — but NOT the
+                        // backlog this queue is still walking. See `loadGallery`.
+                        onSaved={() => void loadGallery()} />
         ) : (
           <p className="field-hint">
             Every greeting image in this world has been tagged.
           </p>
         )
       )}
-      {images !== null && tab === "gallery" && (
+      {images !== null && !err && tab === "gallery" && (
         <div className="editor">
           <div className="editor-list">
             <button className={"row" + (kind === null ? " active" : "")}
