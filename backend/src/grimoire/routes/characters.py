@@ -14,6 +14,7 @@ from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (
+    THUMB_W,
     _bounded_call,
     _card_data,
     _display_name_or_400,
@@ -660,6 +661,88 @@ def list_undescribed_images(wid: str):
     return out
 
 
+#: Every base a whole-world image sweep walks: `list_undescribed_images`' list,
+#: plus greetings. `ENTITY_KINDS` is spread rather than spelled out, so a sixth
+#: entity kind reaches the gallery by existing.
+#:
+#: The describe backlog above does not walk greetings; this does. Greeting art is
+#: real, browsable art, and the sidecar that governs it is `image_subjects` (who
+#: is in the picture) rather than `image_descriptions` (what it depicts) -- so a
+#: greeting image is something the gallery has to show and something the describe
+#: queue has nothing to ask about.
+GALLERY_BASES = ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS, "greetings")
+
+
+@router.get("/worlds/{wid}/gallery")
+def list_world_gallery(wid: str):
+    """Every image this world holds, in one response — the browser #200 asks for.
+
+    A route rather than a client-side fan-out because art hangs off a record AND
+    a version: a gallery assembled in the browser is one request per character,
+    per PC, per entity of five kinds and per greeting, and then one more per
+    version of each actor. The sweep is the same directory walk
+    `/images/undescribed` already pays for (see its note on the cost), over one
+    more base.
+
+    Registered here, beside that route, for the same route-ordering reason:
+    `entities.router` is included last so `/worlds/{wid}/{kind}` cannot swallow
+    a named path in another module.
+
+    World-scoped. A campaign reaches most of its art through its world, and the
+    art it has diverged is listed in its own editors — the same split
+    `/images/undescribed` draws.
+    """
+    root = _world_root_or_404(wid)
+    out = []
+    # One record read per RECORD, not per image, and one map of greeting
+    # subjects per WORLD -- the mistake `list_undescribed_images` documents
+    # right above, which a listing over every image in the world would pay for
+    # even harder.
+    seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
+    subjects: dict[str, dict[str, list[str]]] = {}
+    for base in GALLERY_BASES:
+        for item in store.image_descriptions.catalog(root, base):
+            key = (base, item["id"])
+            if key not in seen:
+                seen[key] = _record_name_and_versions(root, base, item["id"])
+            found = seen[key]
+            if found is None or (found[1] and item["vid"] not in found[1]):
+                # An asset folder whose record -- or whose VERSION -- is gone.
+                # Skipped for `list_undescribed_images`' reason turned around:
+                # there is no route that serves these bytes, so a tile over them
+                # is a broken image the reader cannot clear.
+                continue
+            row = {"kind": base, "id": item["id"], "vid": item["vid"],
+                   "name": item["name"], "record_name": found[0],
+                   "described": item["described"], "description": item["description"],
+                   **_gallery_urls(wid, base, item)}
+            if base == "greetings":
+                # Who is in the picture, which for greeting art is the sidecar
+                # that governs it. Carried here so the gallery can say which
+                # tiles the tagging queue is still going to ask about, without a
+                # second sweep of the same tree. `read_subjects` is tolerant of
+                # a missing file, so an untagged greeting is `{}`.
+                if item["id"] not in subjects:
+                    subjects[item["id"]] = store.image_subjects.read_subjects(root, item["id"])
+                row["subjects"] = subjects[item["id"]].get(item["name"])
+            out.append(row)
+    return out
+
+
+def _gallery_urls(wid: str, base: str, item: dict) -> dict:
+    """Full and thumbnail URLs for one gallery tile, both carrying the `?v=`
+    token the catalog resolved.
+
+    Versioned on purpose: a bare URL is served `no-cache` and revalidates, which
+    for a grid of every image in a world is a request per tile on every render.
+    The thumb is the `?w=` downscale `store.thumbs` does on the fly — a gallery
+    of full-resolution art is tens of megabytes for pictures drawn at 154px.
+    """
+    base_url = _undescribed_url(wid, base, item)
+    v = quote(item["v"], safe="")
+    return {"url": f"{base_url}?v={v}", "thumb": f"{base_url}?w={THUMB_W}&v={v}"}
+
+
 def _record_name_and_versions(root, base: str, rid: str) -> tuple[str, set[str]] | None:
     """What to call the record an undescribed image hangs off, and which version
     ids it still has — or None when there is no such record any more.
@@ -681,9 +764,15 @@ def _record_name_and_versions(root, base: str, rid: str) -> tuple[str, set[str]]
         if base == store.pcs.ASSET_BASE:
             d = store.pcs.read_pc(root, rid)
             return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
+        # Greeting art hangs off the greeting, which has no versions -- the same
+        # fixed `default` an entity's art uses, so the empty set says the same
+        # thing here: the record existing is the whole question.
+        if base == "greetings":
+            return str(store.greetings.read_greeting(root, rid)["meta"]["name"]), set()
         return str(store.entities.read_entity(root, base, rid)["meta"]["name"]), set()
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
-            store.entities.EntityNotFound, KeyError, OSError, UnicodeDecodeError):
+            store.entities.EntityNotFound, store.greetings.GreetingNotFound,
+            KeyError, OSError, UnicodeDecodeError):
         return None
 
 

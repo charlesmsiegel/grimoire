@@ -13,6 +13,7 @@ import { LorebookImport } from "../components/LorebookImport";
 import { ScenarioImport } from "../components/ScenarioImport";
 import { WorldOverview } from "../components/WorldOverview";
 import { WorldPushPanel } from "../components/WorldPushPanel";
+import { ImagesView } from "../components/ImagesView";
 
 type IndexKey =
   | "characters" | "pcs" | "creatures" | "groups"
@@ -22,8 +23,10 @@ type IndexKey =
 /** Overview is not a kind of record, so it is not in the index: it sits above
  *  the groups, as the world itself rather than as something inside it. Push is
  *  the other one: the campaigns fed by this world are not records in it either,
- *  and it is the only screen here that looks outward. */
-type SectionKey = IndexKey | "overview" | "push";
+ *  and it is the only screen here that looks outward. Images is a third: art
+ *  hangs off a record of one of eight kinds rather than being a kind of its own,
+ *  so it cuts across the index instead of sitting in it (#200). */
+type SectionKey = IndexKey | "overview" | "push" | "images";
 
 /** The index that replaced the ten-tab strip.
  *
@@ -294,8 +297,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const rows = groups.flatMap((g) => g.rows);
   const groupOf = (key: SectionKey) =>
     groups.find((g) => g.rows.some((r) => r.key === key))?.group ?? "World";
-  const labelOf = (key: SectionKey) =>
-    rows.find((r) => r.key === key)?.label ?? (key === "push" ? "Push to campaigns" : "Overview");
+  const labelOf = (key: SectionKey) => {
+    const row = rows.find((r) => r.key === key)?.label;
+    if (row) return row;
+    if (key === "push") return "Push to campaigns";
+    return key === "images" ? "Images" : "Overview";
+  };
   // Undefined is "still loading", null is "that read failed" — both genuinely
   // unknown, and a dash says so where a 0 would claim the section is empty.
   const dash = (n: number | null | undefined) => (n === null || n === undefined ? "—" : n);
@@ -336,6 +343,18 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                 onClick={() => select("push")}>
           <span className="column-row-label">Push to campaigns</span>
           <span className="column-row-count">{dash(campaignCount)}</span>
+        </button>
+      )}
+
+      {/* World shape only, for the same reason the greeting tagger it carries
+          is: the subjects sidecar is written world-side, and a campaign's fork
+          browses its own diverged art in the editor that owns it. No count —
+          "how many pictures" is not a number anyone navigates by, and the two
+          reads behind it are the ones this view exists to make once. */}
+      {!campaign && (
+        <button className={"column-row" + (section === "images" ? " active" : "")}
+                onClick={() => select("images")}>
+          <span className="column-row-label">Images</span>
         </button>
       )}
 
@@ -407,6 +426,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           </>
         )}
         {!campaign && section === "push" && <WorldPushPanel wid={wid} />}
+        {!campaign && section === "images" && <ImagesView wid={wid} />}
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}

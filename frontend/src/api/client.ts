@@ -25,7 +25,7 @@ import {
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
   type EntityScope,
-  type EntitySummary, type ErrorSummary, type Greeting, type GreetingDetail, type GreetingDraft,
+  type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
   type GroupState, type HealthCheckResult,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
@@ -1192,6 +1192,13 @@ export const api = {
    *  which hangs off no record, and art it has diverged. */
   listUndescribedImages: (scope: EntityScope) =>
     request<UndescribedImage[]>("GET", `${entityBase(scope)}/images/undescribed`),
+  /** Every image in a world, from all eight bases, in one response (#200).
+   *  World-scoped only: a campaign reaches most of its art through its world,
+   *  and the art it has diverged is listed in its own editors — the same split
+   *  `listUndescribedImages` draws. One request rather than one per record per
+   *  version, which is the whole reason the route exists. */
+  listWorldImages: (wid: string) =>
+    request<GalleryImage[]>("GET", `/api/worlds/${wid}/gallery`),
   /** Describe one image. `description: ""` is meaningful and is NOT the same as
    *  never having described it: it means "reviewed, nothing to say", which
    *  takes the image out of the describe queue without offering it to the

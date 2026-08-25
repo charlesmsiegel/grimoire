@@ -2039,6 +2039,21 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .tagging-queue { display: grid; gap: 10px; max-width: 640px; }
 .tagging-queue .queue-image { max-width: 100%; border-radius: 8px; }
 
+/* the world Images view (#200): a browser over every picture the world holds,
+   with the tagging queue above as its second tab. The tile is the same shape
+   the per-post image picker uses -- a button wrapping a square crop and its
+   labels -- rather than a fourth spelling of it, but it lives in an
+   `.editor-body` and sizes off that rather than off a modal. */
+.images-view { display: grid; gap: 10px; }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(154px, 1fr)); gap: 10px; }
+.gallery-tile { display: flex; flex-direction: column; gap: 4px; align-items: stretch; padding: 6px; background: transparent; border: 1px solid var(--muted); color: inherit; cursor: pointer; text-align: left; }
+.gallery-tile:hover { border-color: var(--accent); }
+/* A square crop, so a grid of portraits and landscapes still reads as a grid.
+   The detail view shows the picture whole. */
+.gallery-tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.gallery-tile span { font-size: 11px; overflow-wrap: anywhere; }
+.gallery-full { max-width: 100%; border-radius: 8px; display: block; }
+
 /* campaign greeting mark badges in the editor rail */
 .mark-badge {
   margin-left: 0.5em;

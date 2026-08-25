@@ -721,6 +721,24 @@ export type UndescribedImage = {
   kind: string; id: string; vid: string; name: string;
   record_name: string; url: string;
 };
+/** One tile in the world gallery (#200) — every image the world holds, from
+ *  whichever of the eight bases it hangs off.
+ *
+ *  `url` and `thumb` both carry the `?v=` token, so a grid caches immutable
+ *  instead of revalidating a request per tile. `described` is key presence and
+ *  `description` is the text, the distinction the sidecar turns on: an image
+ *  reviewed and deliberately left blank is described with `""`.
+ *
+ *  `subjects` reaches only greeting art, whose sidecar is who-is-in-the-picture
+ *  rather than what-it-depicts. `undefined` on every other kind (it has no such
+ *  sidecar) AND on a greeting image nobody has tagged yet — which is what the
+ *  tagging queue is still going to ask about. `[]` is an answered "nobody". */
+export type GalleryImage = {
+  kind: string; id: string; vid: string; name: string; record_name: string;
+  url: string; thumb: string; ext: string;
+  described: boolean; description: string;
+  subjects?: string[] | null;
+};
 export type CampaignImage = {
   name: string; ext: string; v: string;
   /** What the picture shows. `described` is separate on purpose: `description`
