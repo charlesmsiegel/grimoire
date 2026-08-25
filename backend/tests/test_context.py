@@ -4218,43 +4218,41 @@ def test_the_packer_drops_by_tier_not_by_the_reader_s_order(monkeypatch, tmp_pat
     assert all(r["tier"] != context.LOCK_IN for r in rows if r["dropped"])
 
 
-# ---- display-name disambiguation (voice sections) ----
-def test_display_names_leaves_distinct_names_alone():
-    assert context_cast.display_names(["Mara", "Winifred"]) == ["Mara", "Winifred"]
-
-
-def test_display_names_leaves_merely_similar_names_alone():
-    """Two headings a reader can already tell apart are not a collision."""
-    assert context_cast.display_names(["Winifred Vance", "Winifred Vale"]) == \
-        ["Winifred Vance", "Winifred Vale"]
-
-
-def test_display_names_ordinals_every_member_of_a_collision():
-    assert context_cast.display_names(["Winifred", "Winifred"]) == \
-        ["Winifred #1", "Winifred #2"]
-
-
-def test_display_names_skips_an_ordinal_that_collides_with_a_literal_name():
-    out = context_cast.display_names(["Winifred", "Winifred", "Winifred #2"])
-    assert out == ["Winifred #1", "Winifred #3", "Winifred #2"]
-    assert len(set(out)) == 3
-
-
-def test_display_names_matches_case_insensitively():
-    assert context_cast.display_names(["Mara", "mara"]) == ["Mara #1", "mara #2"]
-
-
-def test_display_names_keeps_nameless_entries_empty():
-    assert context_cast.display_names(["", "Mara", ""]) == ["", "Mara", ""]
-
-
-def test_display_names_never_collides_among_non_empty_results():
-    out = context_cast.display_names(["Mara", "Mara", "Mara #1", ""])
-    named = [n for n in out if n]
-    assert len(set(named)) == len(named)
-
-
 from grimoire.store import overlay  # noqa: E402
+
+
+# ---- names the voice blocks may safely carry ----
+def test_voice_safe_names_leaves_distinct_names_alone():
+    assert context_cast.voice_safe_names(["Mara", "Winifred"]) == ["Mara", "Winifred"]
+
+
+def test_voice_safe_names_keeps_distinguishable_similar_names():
+    """`confusable` says these collide, but each resolves EXACTLY through
+    match_name -- and the full name is what a heading shows. Blanking them
+    would cost two tellable-apart characters their voices to prevent nothing."""
+    assert context_cast.voice_safe_names(["Winifred Vance", "Winifred Vale"]) ==         ["Winifred Vance", "Winifred Vale"]
+
+
+def test_voice_safe_names_blanks_an_exact_duplicate():
+    """Unroutable either way -- match_name returns None for the shared label --
+    so the honest answer is no heading, not an invented one that could be
+    copied into the transcript."""
+    assert context_cast.voice_safe_names(["Winifred", "Winifred"]) == ["", ""]
+
+
+def test_voice_safe_names_blanks_case_insensitively():
+    assert context_cast.voice_safe_names(["Mara", "mara"]) == ["", ""]
+
+
+def test_voice_safe_names_leaves_nameless_entries_empty():
+    assert context_cast.voice_safe_names(["", "Mara", ""]) == ["", "Mara", ""]
+
+
+def test_voice_safe_names_never_invents_a_label():
+    """The property that matters: nothing this returns is absent from the
+    input, so no synthetic string can reach a heading and be echoed back."""
+    for out in context_cast.voice_safe_names(["Winifred", "Winifred", "Mara"]):
+        assert out in ("", "Winifred", "Mara")
 
 
 # ---- cast_blocks: one resolved structure for every section that names somebody ----
@@ -4329,12 +4327,20 @@ def test_cast_blocks_resolves_a_campaign_tombstone_to_no_anchor(monkeypatch, tmp
     assert context._assemble(cid, sid)["data"]["cast_blocks"][0]["anchor"] == ""
 
 
-def test_cast_blocks_disambiguates_two_present_npcs_sharing_a_name(monkeypatch, tmp_path):
-    _, cid, sid = _voice_campaign(monkeypatch, tmp_path,
-                                  npcs=[("Winifred", {}, ""), ("Winifred", {}, "")])
-    names = [b["name"] for b in context._assemble(cid, sid)["data"]["cast_blocks"]]
-    assert len(set(names)) == 2
-    assert all(n.startswith("Winifred #") for n in names)
+def test_two_present_npcs_sharing_a_name_get_no_voice_blocks(monkeypatch, tmp_path):
+    """Their descriptions still render, headerless. Their anchors and examples
+    do not: no heading can attribute them, and an invented one could be copied
+    into the transcript."""
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Winifred", {"description": "Keeps the ledger.", "mes_example": "W: Quite."}, "Dry."),
+        ("Winifred", {"description": "Runs the quay.", "mes_example": "W: Aye."}, "Clipped."),
+    ])
+    blocks = context._assemble(cid, sid)["data"]["cast_blocks"]
+    assert [b["name"] for b in blocks] == ["", ""]
+    assert all(b["description"] for b in blocks)          # content is not lost
+    rendered = _sections(cid, sid)
+    assert "voice_anchors" not in rendered and "voice_examples" not in rendered
+    assert "Keeps the ledger." in rendered["character_descriptions"]
 
 
 # ---- the three voice sections ----

@@ -139,16 +139,7 @@
       "description": "The drowned keeper of the tide ledger.",
       "extensions": {},
       "first_mes": "The ledger is open. Say your name to it.",
-      "mes_example": {
-        "__text__": [
-          "<START>",
-          "{{user}}: You kept the ledger through all of it.",
-          "{{char}}: Someone had to. The tide does not care who counts.",
-          "<START>",
-          "{{user}}: And if the quay floods again?",
-          "{{char}}: Then it floods, and I count what is left. That is the work."
-        ]
-      },
+      "mes_example": "",
       "name": "Seraphine",
       "personality": "Patient, exacting, unhurried by weather or grief.",
       "scenario": "",
@@ -339,30 +330,6 @@
           "The drowned keeper of the tide ledger.",
           "Patient, exacting, unhurried by weather or grief.",
           "",
-          "# Voice",
-          "",
-          "Each character present must be distinguishable by their dialogue alone. If",
-          "two of their lines could be exchanged without a reader noticing, the reply",
-          "has failed, whatever else it got right. Differences in diction, rhythm,",
-          "formality and what a person will not say are the point, not decoration.",
-          "",
-          "Where a character's voice description and their example dialogue disagree,",
-          "the description wins \u2014 it is maintained, the examples are a snapshot. Where",
-          "either disagrees with a general prose rule elsewhere in this prompt, the",
-          "character's voice wins: those rules exist to stop generic writing, not to",
-          "flatten a specific person. An outstanding voice correction outranks all of",
-          "it \u2014 it is the most recent and most specific feedback about this character.",
-          "",
-          "# Voice \u2014 example dialogue",
-          "",
-          "## Seraphine",
-          "<START>",
-          "Winifred: You kept the ledger through all of it.",
-          "{{char}}: Someone had to. The tide does not care who counts.",
-          "<START>",
-          "Winifred: And if the quay floods again?",
-          "{{char}}: Then it floods, and I count what is left. That is the work.",
-          "",
           "# Relationships",
           "Winifred \u2192 Seraphine: trust 1, affection 0, tension 2 (Owes her a page.)",
           "Seraphine & Winifred: creditor",
@@ -545,18 +512,6 @@
       "dropped": false,
       "label": "Character descriptions",
       "tier": "lock-in",
-      "trimmed": 0
-    },
-    {
-      "dropped": false,
-      "label": "Voice \u00b7 the rule",
-      "tier": "lock-in",
-      "trimmed": 0
-    },
-    {
-      "dropped": false,
-      "label": "Voice \u00b7 example dialogue",
-      "tier": "spotlight",
       "trimmed": 0
     },
     {

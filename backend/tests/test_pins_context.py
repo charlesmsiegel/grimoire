@@ -439,3 +439,14 @@ def test_a_pinned_secret_entry_is_still_pinned(monkeypatch, tmp_path):
     secs = {s["label"]: s for s in context.context_sections(cid, sid)}
     assert secs["World info"]["dropped"] is False
     assert secs["World info"]["pinned"] is True
+
+
+def test_a_pinned_character_holds_their_voice_blocks(monkeypatch, tmp_path):
+    """A pin is a promise about content, and the voice sections carry
+    per-character content. Without this a reader could pin a character and
+    still watch the packer drop that character's anchor."""
+    from grimoire.store.context import assemble
+    assert "voice_anchors" in assemble._CAST_SECTIONS
+    assert "voice_examples" in assemble._CAST_SECTIONS
+    # voice_policy is LOCK_IN, so it is never dropped and needs no pin
+    assert "voice_policy" not in assemble._CAST_SECTIONS

@@ -43,19 +43,23 @@ would show up as a diff even where nothing changed.
 `test_the_builder_still_mints_a_fixture` keeps the script honest by running it
 into a scratch directory — it never touches `home/`.
 
-**One deliberate edit to `home/` is on the record.** Seraphine's card gained a
-`mes_example` when the voice sections landed. It is recorded here because the
-rule above says `home/` is not edited to add coverage, and the distinction
-being claimed is fidelity rather than coverage: a card of this vintage
-essentially always carries example dialogue, in the `<START>`-separated
-`{{char}}`/`{{user}}` idiom used here, so its absence made the fixture
-unrepresentative of the data it exists to stand for. The practical symptom was
-that the voice sections rendered nothing against it, and a snapshot showing no
-diff is indistinguishable from a feature that silently does not work. Nothing
-else in `home/` was touched, and in particular **no `voice_anchor.md` was
-added** -- no store of this age has one, and that would have been the
-coverage-grab the rule forbids. The anchor path is covered in `test_context.py`
-instead.
+**A `mes_example` was once added here, and reverted.** When the voice sections
+landed, this fixture's card carried no example dialogue, so those sections
+rendered nothing against it and the snapshot showed no diff -- which looks
+exactly like a feature that silently does not work. Adding one was tried, on
+the argument that a card of this vintage essentially always carries examples,
+so its absence made the fixture unrepresentative rather than old.
+
+It was reverted, and the reasoning is worth keeping because the argument will
+recur. The rule above does not distinguish fidelity from coverage, and it is
+right not to: every edit to `home/` has a good story, and the moment one is
+accepted the fixture stops being a store today's code did not write. The
+coverage that edit was after belongs in an ordinary test built by the code
+under test -- `test_context.py::test_an_anchor_reaches_the_assembled_prompt`
+is where it lives now, asserting an anchor survives layout merge, packing and
+the join. A frozen snapshot showing no diff for a new section is not a
+failure; it means this old store does not exercise it, which is a fact about
+the store rather than a gap to engineer away.
 
 **`snapshot.json` is regenerated deliberately.** It is the expected output of
 the read-only sweep, so it legitimately moves when a template or a render

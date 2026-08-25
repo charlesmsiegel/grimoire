@@ -189,7 +189,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # read succeeds, so the two lists staying aligned is an invariant rather
     # than an assumption, and a silent truncation here would attach one
     # character's anchor to another's name.
-    for shown, card, char_id in zip(cast_data.display_names(raw_names), npc_cards, npc_ids,
+    for shown, card, char_id in zip(cast_data.voice_safe_names(raw_names), npc_cards, npc_ids,
                                     strict=True):
         parts = [_str(card, "description"), _str(card, "personality"),
                  _str(card, "scenario")]
@@ -393,7 +393,13 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 #: their persona), so naming those here would say nothing; these two are the
 #: droppable claims about that character, and a pin on someone is a request to
 #: keep the model told who they currently are.
-_CAST_SECTIONS = ("character_state", "transient_state")
+_CAST_SECTIONS = ("character_state", "transient_state",
+                  # The voice sections are per-character content too, so a
+                  # reader who pinned a character and then watched the packer
+                  # drop that character's anchor would have been told their pin
+                  # meant something it did not. `voice_policy` is LOCK_IN and
+                  # needs no pin; these two are SPOTLIGHT and do.
+                  "voice_anchors", "voice_examples")
 
 #: What a pinned world-info entry holds up: the section its body renders into,
 #: plus — for a group — the campaign state that activation pulls in beside it.
