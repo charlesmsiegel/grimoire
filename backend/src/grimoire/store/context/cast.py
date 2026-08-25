@@ -372,8 +372,16 @@ def voice_safe_names(names: list[str], players=()) -> list[str]:
     unattributed narration with the speaker gone. The test is
     `serialize.match_name` against the present players, which is exactly the
     predicate `_speaker_and_role` applies when deciding that, so this cannot
-    disagree with the persistence path about who a label names. `RESERVED_LABELS`
-    goes the same way for the same reason.
+    disagree with the persistence path about who a label names.
+
+    So is a name the SERIALIZER cannot write back, which is the same failure
+    once more and wider than a reserved-label check catches. `label_preserved`
+    is the predicate for it, and its docstring names this caller: a label
+    holding `*` or a newline, longer than 64 characters, or colliding with a
+    reserved label in its sub-speaker form -- `You (Mara)` is stored and read
+    back as plain "Mara" with the USER role, filing an NPC's dialogue under the
+    player. Asking `n in RESERVED_LABELS` caught only the bare form and missed
+    every one of those.
 
     EXACT duplication for the NPC-vs-NPC case, deliberately NOT
     `serialize.confusable` -- which is the
@@ -389,8 +397,10 @@ def voice_safe_names(names: list[str], players=()) -> list[str]:
     for i, n in enumerate(names):
         if not n or folded.count(folded[i]) > 1:
             out.append("")                      # nameless, or shared with another NPC
-        elif scenes_serialize.match_name(n, players) or n in scenes_serialize.RESERVED_LABELS:
-            out.append("")                      # would be read as the player or the narrator
+        elif scenes_serialize.match_name(n, players):
+            out.append("")                      # the player's label would swallow it
+        elif not scenes_serialize.label_preserved(n):
+            out.append("")                      # the transcript cannot carry it back
         else:
             out.append(n)
     return out

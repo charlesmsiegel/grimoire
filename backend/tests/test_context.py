@@ -4538,3 +4538,16 @@ def test_voice_safe_names_blanks_a_reserved_label():
 
 def test_voice_safe_names_keeps_an_npc_a_player_does_not_shadow():
     assert context_cast.voice_safe_names(["Mara"], ["Winifred"]) == ["Mara"]
+
+
+def test_voice_safe_names_blanks_a_label_the_serializer_cannot_write_back():
+    """`label_preserved` is the predicate, and its docstring names this caller.
+    A reserved label in SUB-SPEAKER form is the sharp case: "You (Mara)" is
+    read back as plain "Mara" with the USER role, filing an NPC's dialogue
+    under the player -- the round-3 failure in a form a bare reserved-label
+    check misses entirely."""
+    assert context_cast.voice_safe_names(["You (Mara)"], []) == [""]
+    assert context_cast.voice_safe_names(["Grimoire (Mara)"], []) == [""]
+    assert context_cast.voice_safe_names(["Mara*"], []) == [""]
+    assert context_cast.voice_safe_names(["M" * 65], []) == [""]
+    assert context_cast.voice_safe_names(["Mara"], []) == ["Mara"]

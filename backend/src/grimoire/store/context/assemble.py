@@ -231,6 +231,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # A COUNT, not a length: reading `len(cast_blocks)` at render time would let
     # a per-block filter move the policy's render condition.
     named_npc_count = sum(1 for b in cast_blocks if b["name"])
+    # Who actually PUT something in the voice sections, for the pin rule: a pin
+    # on an actor that selected nothing protects nothing (`_pinned_sections`).
+    voiced_ids = frozenset(cid_ for cid_, b in zip(npc_ids, cast_blocks, strict=True)
+                           if b["name"] and (b["anchor"] or b["example"]))
 
     depth = config.scan_depth()
     # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
@@ -397,7 +401,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     return {"data": data, "subs": subs, "history": sub_history,
             "post_history": post_history, "npc_names": npc_names,
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
-                                                current_loc if not loc_excluded else None)}
+                                                current_loc if not loc_excluded else None, voiced_ids)}
 
 
 #: Which sections a pinned cast member holds up, BY `Section.id`. Not by label:
@@ -444,7 +448,7 @@ def _section_on(section_id: str) -> bool:
 
 
 def _pinned_sections(pinned_refs: frozenset, cast: list[dict], activated_wi: list[dict],
-                     current_loc: str | None) -> frozenset:
+                     current_loc: str | None, voiced_ids: frozenset = frozenset()) -> frozenset:
     """The section ids a pin is holding up, for this assembly (#129).
 
     A pin is a promise about CONTENT, and the packer drops SECTIONS — so the
@@ -466,7 +470,12 @@ def _pinned_sections(pinned_refs: frozenset, cast: list[dict], activated_wi: lis
     # otherwise make every NPC's anchor and examples undroppable -- and on a
     # large cast that is enough to push a budgeted prompt over on its own, for
     # a pin the reader made about themselves.
-    if any(a["role"] == "npc" for a in pinned_cast):
+    # ...and only when that NPC actually PUT something in them. This function's
+    # own rule is that a pin on something which selected nothing protects
+    # nothing, and sections drop whole -- so pinning an anchorless NPC would
+    # otherwise make every OTHER character's anchors and examples undroppable,
+    # on the strength of content the pinned actor did not contribute.
+    if any(a["role"] == "npc" and a["id"] in voiced_ids for a in pinned_cast):
         out.update(_VOICE_CAST_SECTIONS)
     for e in activated_wi:
         if f"{e['kind']}:{e['id']}" not in pinned_refs:
