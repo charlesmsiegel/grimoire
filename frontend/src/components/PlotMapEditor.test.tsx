@@ -171,7 +171,7 @@ test("an exclusion recorded from both sides is one line, and deleting it clears 
     SCOPE, "ledger", { leads_to: [], excludes: [] }));
 });
 
-test("writes to different greetings are serialized too, not just per greeting", async () => {
+test("only one write is on the wire at a time, whichever greeting it is for", async () => {
   // `store.greetings.set_edges` is an unlocked read-modify-write of one
   // plotmap.json holding every greeting's edges, so two requests in flight at
   // once -- even for different greetings -- can lose one of the two.
@@ -185,39 +185,51 @@ test("writes to different greetings are serialized too, not just per greeting", 
   fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to A Quiet Word" }));
   await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(1));
 
+  // while it is out, no second one can be started
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Link from The Ledger" })).toBeDisabled());
+  gate[0]();
+
+  // ...and once it lands, the map is writable again
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Link from The Ledger" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Link from The Ledger" }));
   fireEvent.click(screen.getByRole("button", { name: "Link The Ledger to Vow of Silence" }));
-  // a different source, and still only one request on the wire
-  await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(1));
-  gate[0]();
   await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(2));
   expect((api.setEdges as any).mock.calls[1][1]).toBe("ledger");
   gate.forEach((res) => res());
 });
 
-test("a failed write discards what was queued behind it and re-reads", async () => {
-  const gate: ((ok: boolean) => void)[] = [];
-  // An ApiError carries its message on `detail`, which is what the banner
-  // renders; an Error subclass keeps it a rejection reason lint will accept.
-  const refused = Object.assign(new Error("refused"), { detail: "plot map is locked" });
-  (api.setEdges as any).mockImplementation(() => new Promise<void>((res, rej) => {
-    gate.push((ok) => (ok ? res() : rej(refused)));
-  }));
-  plot4();
+test("both directions of one exclusion cannot be converted at once", async () => {
+  plot({
+    dawn: { leads_to: [], excludes: ["ledger"] },
+    ledger: { leads_to: [], excludes: ["dawn"] },
+    word: { leads_to: [], excludes: [] },
+  });
+  const gate: (() => void)[] = [];
+  (api.setEdges as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
   render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+  fireEvent.click(edge("Excludes: Saltmarch Dawn ↮ The Ledger"));
 
-  fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
-  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to A Quiet Word" }));
+  fireEvent.click(screen.getByRole("button", { name: "Unlock: Saltmarch Dawn → The Ledger" }));
   await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(1));
-  // a second edit, queued behind the first
-  fireEvent.click(screen.getByRole("button", { name: "Link from The Ledger" }));
-  fireEvent.click(screen.getByRole("button", { name: "Link The Ledger to Vow of Silence" }));
+  // Starting the opposite conversion mid-flight would interleave two
+  // optimistic states and end with BOTH directions stored -- a second link
+  // between one pair, which nothing else here permits.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Unlock: The Ledger → Saltmarch Dawn" })).toBeDisabled());
+  gate.forEach((res) => res());
+});
 
-  gate[0](false);
+test("a failed write re-reads the map rather than keeping what it guessed", async () => {
+  const refused = Object.assign(new Error("refused"), { detail: "plot map is locked" });
+  (api.setEdges as any).mockRejectedValue(refused);
+  render(<PlotMapEditor scope={SCOPE} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Unlocks: Saltmarch Dawn → The Ledger" }));
+  fireEvent.click(screen.getByRole("button", { name: /delete link/i }));
+
   await screen.findByText("plot map is locked");
-  // The queued payload describes a map that never existed, so it is dropped
-  // rather than sent -- and the map is re-read instead of guessed at.
   await waitFor(() => expect(api.listGreetings).toHaveBeenCalledTimes(2));
   expect(api.setEdges).toHaveBeenCalledTimes(1);
 });
@@ -287,38 +299,6 @@ test("a greeting whose edges cannot be read is a node, but not a link source", a
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Link from A Quiet Word" })).toBeEnabled());
   expect(screen.queryByText(/could not be read/i)).toBeNull();
-});
-
-test("a second edit to one greeting builds on the first rather than racing it", async () => {
-  // setEdges that does not resolve until the test lets it: without that the
-  // first write has landed before the second is made, and the bug this covers
-  // -- two whole-record payloads derived from the same stale map -- cannot
-  // happen at all.
-  const gate: (() => void)[] = [];
-  (api.setEdges as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
-  (api.listGreetings as any).mockResolvedValue([
-    greeting("dawn", "Saltmarch Dawn"), greeting("ledger", "The Ledger"),
-    greeting("word", "A Quiet Word"), greeting("vow", "Vow of Silence"),
-  ]);
-  render(<PlotMapEditor scope={SCOPE} />);
-  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
-
-  fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
-  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to A Quiet Word" }));
-  await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(1));
-  fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
-  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to Vow of Silence" }));
-
-  // The second write waits for the first to land rather than racing it, so
-  // the server sees the two replacements in the order they were made.
-  expect(api.setEdges).toHaveBeenCalledTimes(1);
-  gate[0]();
-
-  await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(2));
-  // ...and its payload carries the first edge, instead of deleting it
-  expect((api.setEdges as any).mock.calls[1][2])
-    .toEqual({ leads_to: ["ledger", "word", "vow"], excludes: [] });
-  gate.forEach((res) => res());
 });
 
 test("a scope change clears the map instead of leaving the old one clickable", async () => {

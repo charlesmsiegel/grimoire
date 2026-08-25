@@ -222,8 +222,17 @@ const ARROW: Record<Kind, string> = { leads_to: "→", excludes: "↮" };
  *  reload that invalidated it is what the reader sees. */
 class Skipped extends Error {}
 
-export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
-  { scope: EntityScope; onOpenGreeting?: (gid: string) => void; reloadKey?: number }) {
+export function PlotMapEditor({ scope, onOpenGreeting, onChanged, reloadKey = 0, busy = false }:
+  { scope: EntityScope; onOpenGreeting?: (gid: string) => void;
+    /** Fired after a write lands here, so the chip-list editor -- which stays
+     *  mounted behind this view and holds its own copy of a greeting's edges --
+     *  can re-read rather than save over what was just drawn. */
+    onChanged?: () => void;
+    reloadKey?: number;
+    /** True while the chip-list editor is mid-write. Both views send WHOLE
+     *  arrays, so a graph edit that lands between that save's body write and
+     *  its edge write is one the older payload overwrites. */
+    busy?: boolean }) {
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [edges, setEdgeMap] = useState<Record<string, Edges>>({});
   const [ready, setReady] = useState(false);
@@ -239,6 +248,12 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
   /** Which kind that link will be. Unlock is the common one and the default. */
   const [kind, setKind] = useState<Kind>("leads_to");
   const [picked, setPicked] = useState<string | null>(null); // a selected line's key
+  /** A mutation of this map is in flight. Both unlock directions of one
+   *  exclusion stay on screen while the first is running, and clicking the
+   *  second starts a conversion whose optimistic state interleaves with it --
+   *  ending with both directions stored, which nothing here would otherwise
+   *  allow. */
+  const [mutating, setMutating] = useState(false);
 
   /** The edge map as the mutations see it, updated synchronously.
    *
@@ -274,7 +289,11 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
     setReady(false);
     setListed(false);
     if (!keepError) setError(null);
-    api.listGreetings(scope).then(async (list) => {
+    // Behind whatever is already on the wire. A read that overtakes an
+    // in-flight write comes back describing the map without it, and this
+    // replaces `edgesRef` with that -- so the next whole-array write deletes
+    // an edit the server had already accepted.
+    chain.current.then(() => api.listGreetings(scope)).then(async (list) => {
       // Edges live in the plot map, and only the per-greeting read carries
       // them -- the list endpoint returns summaries. One read each, and a
       // greeting whose read fails is still a node: a map that silently omits
@@ -293,6 +312,13 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
       setReady(true);
     }).catch((err: unknown) => {
       if (loadId.current !== mine) return;
+      // Cleared, not kept: on a same-scope re-read the retained nodes are the
+      // optimistic ones this reload was called to confirm, and leaving them
+      // drawn makes them writable again from state nobody has confirmed.
+      setGreetings([]);
+      setEdgeMap({});
+      edgesRef.current = {};
+      setUnread([]);
       setError(errorText(err));
       setReady(true);
     });
@@ -350,8 +376,10 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
       await api.setEdges(scope, gid, { leads_to: next.leads_to, excludes: next.excludes });
     });
     chain.current = task.catch(() => undefined);
+    setMutating(true);
     try {
       await task;
+      onChanged?.();
       return true;
     } catch (err: unknown) {
       if (err instanceof Skipped) return false;
@@ -364,6 +392,8 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
       setError(errorText(err));
       load(true);
       return false;
+    } finally {
+      setMutating(false);
     }
   }
 
@@ -379,6 +409,13 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
    *  the course of failing to replace it. */
   function unwritable(...gids: string[]): string[] {
     return [...new Set(gids)].filter((g) => unread.includes(g));
+  }
+
+  /** Why a mutation cannot start now, or null. */
+  function held(): string | null {
+    if (busy) return "The greeting editor is saving. Its save writes these same links, so the map waits for it.";
+    if (mutating) return "A link is still being written. Wait for it before changing another.";
+    return null;
   }
 
   function refuse(bad: string[]): void {
@@ -399,6 +436,8 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
     const from = linking;
     if (!from) return;
     setLinking(null);
+    const hold = held();
+    if (hold) { setError(hold); return; }
     if (from === to) return;               // handled by the source node itself
     const existing = linkBetween(from, to);
     if (existing) {
@@ -416,6 +455,8 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
 
   async function remove(line: Line) {
     setError(null);
+    const hold = held();
+    if (hold) { setError(hold); return; }
     // Both endpoints when the exclusion is mutual: the second write is as much
     // a part of this delete as the first.
     const bad = unwritable(line.from, ...(line.both ? [line.to] : []));
@@ -437,6 +478,8 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
   /** An unlock becomes an exclusion: one record, one write. */
   async function toExclusion(line: Line) {
     setError(null);
+    const hold = held();
+    if (hold) { setError(hold); return; }
     const bad = unwritable(line.from);
     if (bad.length) { refuse(bad); return; }
     const cur = edgesOf(line.from);
@@ -458,8 +501,14 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
    *  would block the greeting it claims to open. */
   async function toUnlock(line: Line, from: string) {
     setError(null);
+    const hold = held();
+    if (hold) { setError(hold); return; }
     const to = from === line.from ? line.to : line.from;
-    const bad = unwritable(from, ...(edgesOf(to).excludes.includes(from) ? [to] : []));
+    // BOTH endpoints, always. An unread endpoint's edges read as empty, which
+    // cannot tell a pair that only A records apart from one B records too --
+    // and converting the second kind leaves B's exclusion standing, still
+    // blocking the greeting the new arrow claims to open.
+    const bad = unwritable(from, to);
     if (bad.length) { refuse(bad); return; }
     const gen = loadId.current;
     const back = edgesOf(to);
@@ -504,7 +553,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
               ? `${nameOf(unread[0])}'s links could not be read, so the map may be missing lines. Its own links cannot be edited until the read succeeds.`
               : `${unread.length} greetings' links could not be read, so the map may be missing lines. Their own links cannot be edited until the read succeeds.`}
           </span>
-          <button className="retry" onClick={() => load()} disabled={!ready}>Retry</button>
+          <button className="retry" onClick={() => load()} disabled={!ready || mutating}>Retry</button>
         </div>
       )}
       {/* Only while the map it describes is on screen. A reload replaces every
@@ -512,20 +561,23 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
           against the old ones -- during a Retry, say -- would be overwritten by
           a snapshot that predates it. */}
       {ready && selected && (
-        <div className="plotmap-selected">
+        <div className="plotmap-selected" aria-busy={mutating || busy}>
           <span className="chip on">
             {KIND_LABEL[selected.kind]}: {nameOf(selected.from)} {ARROW[selected.kind]} {nameOf(selected.to)}
           </span>
           {selected.kind === "leads_to" ? (
-            <button className="chip" onClick={() => void toExclusion(selected)}>Make exclusion</button>
+            <button className="chip" disabled={!!held()}
+                    onClick={() => void toExclusion(selected)}>Make exclusion</button>
           ) : (
             [selected.from, selected.to].map((from) => (
-              <button key={from} className="chip" onClick={() => void toUnlock(selected, from)}>
+              <button key={from} className="chip" disabled={!!held()}
+                      onClick={() => void toUnlock(selected, from)}>
                 Unlock: {nameOf(from)} → {nameOf(from === selected.from ? selected.to : selected.from)}
               </button>
             ))
           )}
-          <button className="chip" onClick={() => void remove(selected)}>Delete link</button>
+          <button className="chip" disabled={!!held()}
+                  onClick={() => void remove(selected)}>Delete link</button>
           <button className="chip" onClick={() => setPicked(null)}>Done</button>
         </div>
       )}
@@ -587,8 +639,8 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
                       aria-pressed={linking === p.id}
                       // A node whose own edges never loaded cannot be a source:
                       // the write would send the arrays this never read.
-                      disabled={unread.includes(p.id)}
-                      title={unread.includes(p.id) ? "Links could not be read" : `Link from ${p.name}`}
+                      disabled={unread.includes(p.id) || !!held()}
+                      title={unread.includes(p.id) ? "Links could not be read" : (held() ?? `Link from ${p.name}`)}
                       onClick={() => { setPicked(null); setLinking(linking === p.id ? null : p.id); }}>
                 ⇢
               </button>

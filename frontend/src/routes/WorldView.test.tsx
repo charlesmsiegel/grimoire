@@ -559,3 +559,64 @@ test("a save that lands after the map is open makes the map re-read", async () =
   await waitFor(() =>
     expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
 });
+
+test("the map holds still while a list save is in flight", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+    meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  }));
+  let landSave = () => {};
+  (api.updateGreeting as any) = vi.fn(() => new Promise<void>((res) => { landSave = res; }));
+  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+
+  const rail = await waitFor(() => document.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
+  await waitFor(() => expect(api.updateGreeting).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+  // That save still owes a whole-array setEdges of its own; a graph write
+  // landing first would be the older payload's to overwrite.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeDisabled());
+  landSave();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeEnabled());
+});
+
+test("a graph edit re-reads the chip list behind it", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+    meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  }));
+  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+
+  const rail = await waitFor(() => document.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));   // open it in the list
+  fireEvent.click(await screen.findByRole("button", { name: "Plot map" }));
+  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+  const readsBefore = (api.readGreeting as any).mock.calls.length;
+
+  fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
+  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to Vow of Silence" }));
+
+  // The chip list is still mounted with this greeting's edges as they were.
+  // Left alone, Edit-then-Save there would send that stale array back.
+  await waitFor(() =>
+    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
+});

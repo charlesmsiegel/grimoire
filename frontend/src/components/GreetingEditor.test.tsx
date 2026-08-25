@@ -849,3 +849,36 @@ test("a demoted world greeting is cleared, not left as a pre-filled new draft", 
   expect(container.querySelector("textarea")).toHaveValue("");
   expect(screen.getByLabelText("Name")).toHaveValue("");
 });
+
+test("a save whose chips were never touched does not resend the edges", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    greeting("dawn", "Saltmarch Dawn", "seraphine", []),
+    greeting("vow", "Vow of Silence", "seraphine", []),
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
+            present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: ["vow"], excludes: [] }, predecessors: [], rev: "r1",
+  });
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Saltmarch Dusk" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
+
+  await waitFor(() => expect(api.updateGreeting).toHaveBeenCalled());
+  // The write replaces the greeting's WHOLE pair of arrays, so a body edit
+  // that resent an untouched chip list would revert whatever the plot map drew
+  // after this record was loaded (#9).
+  expect(api.setEdges).not.toHaveBeenCalled();
+
+  // ...and a touched one still writes
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  // the "Leads to" chip, not the rail row of the same name
+  const leadsTo = screen.getByText("Leads to").parentElement as HTMLElement;
+  fireEvent.click(within(leadsTo).getByRole("button", { name: "Vow of Silence" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
+  await waitFor(() => expect(api.setEdges).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "dawn", { leads_to: [], excludes: [] }));
+});
