@@ -154,6 +154,26 @@ def test_greeting_tiles_carry_their_subjects_and_nothing_else_does(client, world
     assert "subjects" not in char_row
 
 
+def test_a_malformed_subjects_entry_is_answered_here_because_the_queue_says_so(client, world):
+    """The gallery's "unfinished" and the tagging queue's backlog have to be the
+    same set, or a tile is flagged that the queue will never offer -- unfinished
+    forever, with nothing the reader can do about it.
+
+    `read_subjects` drops an entry whose value is not a list, and `untagged`
+    counts raw key presence. Answered follows the QUEUE; the rendered list
+    follows the tolerant read, so a value nothing can render comes back as
+    "answered: nobody" rather than as a broken chip."""
+    cid, vid = _character(client, world)
+    gid = _greeting(client, world, cid, vid, images=("gallery_1",))
+    store.image_subjects.subjects_path(store.worlds.world_root(world), gid).write_text(
+        '{"gallery_1": "not-a-list"}', encoding="utf-8")
+
+    (row,) = [r for r in _gallery(client, world) if r["kind"] == "greetings"]
+    assert row["subjects"] == []
+    # ...which is exactly what the queue thinks, and the two must not disagree.
+    assert client.get(f"/api/worlds/{world}/subjects/untagged").json() == []
+
+
 def test_art_whose_record_is_gone_is_not_offered(client, world):
     """An asset folder can outlive the record it hung off. There is no route
     that serves those bytes, so a tile over them is a broken image with nothing

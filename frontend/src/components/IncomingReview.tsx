@@ -231,7 +231,15 @@ function BulkActions({ items, busy, onResolve }: {
  *  Accept copies the world's content in; Reject keeps the campaign's and
  *  advances the base so the same change stops being offered. Both are the same
  *  route with a list, so "all of them" is one call rather than a loop. */
-export function IncomingReview({ cid, focus }: { cid: string; focus?: IncomingRef | null }) {
+export function IncomingReview({ cid, focus, onResolved }: {
+  cid: string; focus?: IncomingRef | null;
+  /** Fired after an accept or reject has LANDED and this panel has re-read.
+   *  The composition panel (#199) is mounted beside this one and reads the same
+   *  `/incoming`, so without it a resolved change stays on its rows and in its
+   *  pending count until the reader refreshes by hand -- and one accept can
+   *  resolve several of its rows at once. */
+  onResolved?: () => void;
+}) {
   const [items, setItems] = useState<IncomingItem[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -288,12 +296,15 @@ export function IncomingReview({ cid, focus }: { cid: string; focus?: IncomingRe
       // locked version of that actor was diffed against), so the server's list
       // is the only one that knows what is left.
       await load();
+      // After the re-read, not before: a listener re-reading on the announcement
+      // should see the same server state this panel just took.
+      if (liveCid.current === cid) onResolved?.();
     } catch (e) {
       if (liveCid.current === cid) setErr(e instanceof Error ? e.message : String(e));
     } finally {
       if (liveCid.current === cid) setBusy(false);
     }
-  }, [cid, load]);
+  }, [cid, load, onResolved]);
 
   // The selection survives a refetch while its row does, and falls back to the
   // first row when it does not -- which is what resolving the selected item

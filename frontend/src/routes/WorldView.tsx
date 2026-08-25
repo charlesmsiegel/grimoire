@@ -279,6 +279,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                  meta: `${name} · setup`, run: () => select("overview") });
       out.push({ id: "world-section:push", group: "IN THIS WORLD", label: "Push to campaigns",
                  meta: `${name} · pending changes`, run: () => select("push") });
+      out.push({ id: "world-section:images", group: "IN THIS WORLD", label: "Images",
+                 meta: `${name} · art`, run: () => select("images") });
     }
     for (const g of groups) {
       for (const r of g.rows) {
@@ -426,7 +428,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           </>
         )}
         {!campaign && section === "push" && <WorldPushPanel wid={wid} />}
-        {!campaign && section === "images" && <ImagesView wid={wid} />}
+        {/* Keyed by wid: `/worlds/:wid` keeps this route's instance across a
+            world switch, so an unkeyed gallery would go on showing the previous
+            world's art -- and its tagging queue -- until four reads settle, or
+            indefinitely if one stalls. */}
+        {!campaign && section === "images" && <ImagesView key={wid} wid={wid} />}
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}

@@ -694,12 +694,18 @@ def list_world_gallery(wid: str):
     """
     root = _world_root_or_404(wid)
     out = []
-    # One record read per RECORD, not per image, and one map of greeting
-    # subjects per WORLD -- the mistake `list_undescribed_images` documents
-    # right above, which a listing over every image in the world would pay for
-    # even harder.
+    # One record read per RECORD, not per image, and one subjects read per
+    # GREETING -- the mistake `list_undescribed_images` documents right above,
+    # which a listing over every image in the world would pay for even harder.
     seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
     subjects: dict[str, dict[str, list[str]]] = {}
+    answered: dict[str, set[str]] = {}
+    # The world's character ids, enumerated ONCE. `read_subjects` filters
+    # deleted characters out of every entry it returns, and without this it
+    # rescans the character directory to learn them per greeting -- an
+    # O(greetings x characters) walk on a store that may sit in a synced folder.
+    # Its own docstring asks sweeps to pass this; the gallery is a sweep.
+    known_cids: set[str] | None = None
     for base in GALLERY_BASES:
         for item in store.image_descriptions.catalog(root, base):
             key = (base, item["id"])
@@ -720,11 +726,24 @@ def list_world_gallery(wid: str):
                 # Who is in the picture, which for greeting art is the sidecar
                 # that governs it. Carried here so the gallery can say which
                 # tiles the tagging queue is still going to ask about, without a
-                # second sweep of the same tree. `read_subjects` is tolerant of
-                # a missing file, so an untagged greeting is `{}`.
+                # second sweep of the same tree.
+                #
+                # ANSWERED is key presence (`reviewed_names`), the same test the
+                # queue offers by; the LIST is the filtered read, which drops an
+                # entry whose value is not a list. Asking one function both
+                # questions is what let a hand-edited sidecar read as untagged
+                # here while the queue considered it done -- an unfinished tile
+                # with no way to resolve it. Null means "not answered"; `[]`
+                # means "answered: nobody", including when what was stored was
+                # not a list this can render.
                 if item["id"] not in subjects:
-                    subjects[item["id"]] = store.image_subjects.read_subjects(root, item["id"])
-                row["subjects"] = subjects[item["id"]].get(item["name"])
+                    if known_cids is None:
+                        known_cids = set(store.characters.character_refs(root))
+                    subjects[item["id"]] = store.image_subjects.read_subjects(
+                        root, item["id"], known_cids=known_cids)
+                    answered[item["id"]] = store.image_subjects.reviewed_names(root, item["id"])
+                row["subjects"] = (subjects[item["id"]].get(item["name"], [])
+                                   if item["name"] in answered[item["id"]] else None)
             out.append(row)
     return out
 

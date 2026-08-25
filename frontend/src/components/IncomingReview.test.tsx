@@ -330,3 +330,33 @@ test("a focus naming a ref this panel has no row for changes nothing", async () 
   await act(async () => {});
   expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Saltmarch Harbor");
 });
+
+test("a landed resolve is announced, after this panel has re-read", async () => {
+  // The composition panel (#199) sits beside this one reading the same
+  // `/incoming`, so it has to hear about an accept -- and hear about it late
+  // enough that its own re-read sees what this one just took.
+  (api.getIncoming as any).mockResolvedValue([HARBOR]);
+  (api.acceptIncoming as any).mockResolvedValue({ ok: true });
+  const onResolved = vi.fn(() => {
+    expect(api.getIncoming).toHaveBeenCalledTimes(2);
+  });
+  render(<IncomingReview cid="c1" onResolved={onResolved} />);
+  await act(async () => {});
+
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Accept" })); });
+  expect(onResolved).toHaveBeenCalledTimes(1);
+});
+
+test("a resolve that failed announces nothing", async () => {
+  // Nothing changed server-side, so a listener re-reading would spend three
+  // requests to learn that.
+  (api.getIncoming as any).mockResolvedValue([HARBOR]);
+  (api.acceptIncoming as any).mockRejectedValue(new Error("world is gone"));
+  const onResolved = vi.fn();
+  render(<IncomingReview cid="c1" onResolved={onResolved} />);
+  await act(async () => {});
+
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Accept" })); });
+  expect(await screen.findByText("world is gone")).toBeInTheDocument();
+  expect(onResolved).not.toHaveBeenCalled();
+});

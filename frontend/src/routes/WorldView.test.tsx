@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import WorldView from "./WorldView";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
+import { PaletteProvider, usePalette, type PaletteItem } from "../components/palette";
 
 vi.mock("../api/client", () => ({
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
@@ -50,11 +52,23 @@ vi.mock("../api/client", () => ({
     listModules: vi.fn(), setWorldModule: vi.fn(),
     getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
     getCampaignModule: vi.fn(), readModule: vi.fn(), getWorldSheetsIndex: vi.fn(), getSheet: vi.fn(),
-    worldCampaigns: vi.fn(),
+    worldCampaigns: vi.fn(), listWorldImages: vi.fn(),
   },
 }));
 import { api } from "../api/client";
 import type { ModuleDetail } from "../api/client";
+
+/** Reads back what the page under test offered the palette.
+ *
+ *  A source is registered rather than returned, so the only way to see one
+ *  page's items is to share its provider and read the registry — which is
+ *  exactly what `CommandPalette` does. `rev` is the registry's own "something
+ *  registered" signal, so this re-reads when the page's source lands. */
+function PaletteSpy({ onItems }: { onItems: (items: PaletteItem[]) => void }) {
+  const { sources, rev } = usePalette();
+  useEffect(() => { onItems([...sources].flatMap((s) => s(""))); }, [sources, rev, onItems]);
+  return null;
+}
 
 const POOL_BASIC: ModuleDetail = {
   id: "pool-basic",
@@ -108,6 +122,7 @@ beforeEach(() => {
   });
   (api.getGreetingSubjects as any).mockResolvedValue({});
   (api.listUntaggedImages as any).mockResolvedValue([]);
+  (api.listWorldImages as any).mockResolvedValue([]);
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: false, stale_after_days: 30 });
@@ -418,4 +433,41 @@ test("a campaign's fork of a world is not offered the push panel", async () => {
   renderCampaign();
   await screen.findByText(/Campaign view/);
   expect(screen.queryByRole("button", { name: /^Push to campaigns/ })).not.toBeInTheDocument();
+});
+
+// ---- Images (#200) ----
+
+test("the world index opens the Images view", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Images"));
+  expect(await screen.findByRole("tab", { name: /Gallery/ })).toBeInTheDocument();
+  expect(api.listWorldImages).toHaveBeenCalledWith("w");
+});
+
+test("the campaign fork has no Images row", async () => {
+  // The subjects sidecar the queue writes is world-side, and a fork browses its
+  // own diverged art in the editor that owns it.
+  renderCampaign();
+  await screen.findByText(/World Copy/);
+  expect(screen.queryByRole("button", { name: /^Images\b/ })).toBeNull();
+});
+
+test("Images is offered in the command palette, like every other world section", async () => {
+  // The column is not the only way in: a reader on ⌘K should reach Images the
+  // way they reach Overview and Push.
+  const items: PaletteItem[] = [];
+  render(
+    <PaletteProvider>
+      <PaletteSpy onItems={(got) => items.splice(0, items.length, ...got)} />
+      <MemoryRouter initialEntries={["/worlds/w"]}>
+        <Routes><Route path="/worlds/:wid" element={<WorldView />} /></Routes>
+      </MemoryRouter>
+    </PaletteProvider>,
+  );
+  await screen.findByText("Drowned Realm");
+  await waitFor(() => expect(items.some((i) => i.id === "world-section:images")).toBe(true));
+  const images = items.find((i) => i.id === "world-section:images")!;
+  expect(images.label).toBe("Images");
+  expect(items.map((i) => i.id)).toContain("world-section:push");
 });
