@@ -13,8 +13,16 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
-from grimoire.store import (appearances, campaigns, characters, modules, paths, scenes,
-                            sheets, worlds)
+from grimoire.store import (
+    appearances,
+    campaigns,
+    characters,
+    modules,
+    paths,
+    scenes,
+    sheets,
+    worlds,
+)
 from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 
 
