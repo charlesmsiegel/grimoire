@@ -224,7 +224,8 @@ def test_an_unrecognized_level_leaves_the_threshold_where_it_was(client):
     assert client.get("/api/logs/level").json()["level"] == "info"
 
 
-def test_repointing_the_store_re_reads_that_librarys_own_threshold(client, tmp_path):
+def test_repointing_the_store_re_reads_that_librarys_own_threshold(client, tmp_path,
+                                                                   monkeypatch):
     """`log_level` lives in the config of whichever library is open, so it
     moves with the root. Without this the process kept writing at the old
     tree's floor while `GET /config` reported the new tree's -- two endpoints
@@ -235,8 +236,9 @@ def test_repointing_the_store_re_reads_that_librarys_own_threshold(client, tmp_p
 
     moved = tmp_path / "other-library"
     moved.mkdir()
-    import os
-    os.environ["GRIMOIRE_HOME"] = str(moved)      # the new root's own config
+    # `monkeypatch`, not `os.environ[...]`: a bare assignment here outlives the
+    # test and every later one in the process runs against this directory.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(moved))   # the new root's own config
     config.write_config(log_level="debug")
     client.put("/api/config/data-dir", json={"data_dir": str(moved)})
 

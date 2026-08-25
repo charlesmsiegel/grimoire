@@ -13,8 +13,31 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
-from grimoire.store import appearances, campaigns, characters, modules, scenes, sheets, worlds
+from grimoire.store import (appearances, campaigns, characters, modules, paths, scenes,
+                            sheets, worlds)
 from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
+    """Keep every test off the developer's REAL `~/.grimoire.json`.
+
+    `GRIMOIRE_HOME` isolates the data root, and almost everything here sets it
+    -- but the bootstrap pointer is not under that root, by construction: it is
+    what NAMES the root, so it lives beside it at a fixed path in the user's
+    home. `PUT /config/data-dir` writes it. Three tests call that route and
+    expect it to succeed, so a plain `pytest` run rewrote the pointer of
+    whoever ran it and their app opened an empty library on next launch. The
+    data was never touched and the symptom is invisible from inside the suite,
+    which is what let it stand.
+
+    Autouse rather than a helper each test remembers: `test_data_dir` and
+    `test_where` already isolate it correctly and are unaffected (a test's own
+    `monkeypatch.setattr` runs later and wins). The failure mode being fixed is
+    precisely a test that does not know it needs to.
+    """
+    monkeypatch.setattr(paths, "pointer_path",
+                        lambda: tmp_path / "bootstrap" / ".grimoire.json")
 
 
 @pytest.fixture
