@@ -1120,7 +1120,13 @@ def get_relationship_history(cid: str, a: str | None = None, b: str | None = Non
     entries = (store.relationship_history.for_pair(cid, a, b)
                if a and b else store.relationship_history.read(cid))
     entries = entries[-RELATIONSHIP_HISTORY_PAGE:]
-    scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    try:
+        scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    except Exception:  # noqa: BLE001 — one unreadable scene header: titles degrade, no 500
+        # `list_scenes` opens every scene's header, so a single file a sync
+        # client mangled raises out of it — and would take this whole timeline
+        # with it, including the rows of every healthy scene, over a label.
+        scenes_by_id = {}
     try:
         chron = store.chronicle.read_chronicle(cid)
     except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500

@@ -2996,6 +2996,15 @@ a.column-back { text-decoration: none; }
 }
 .ledger-toggle:hover { color: var(--ink); }
 .ledger-toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+/* Same slot, a different control: the relationship timeline narrows by pair on
+   the SERVER (the route caps what it returns), so this is a read selector
+   rather than a view toggle. Sized to the column it sits under. */
+.ledger-pair {
+  flex: 1; min-width: 0; max-width: 190px; background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 4px 6px;
+  color: var(--ink); font-family: var(--fm); font-size: 11px; letter-spacing: 0.04em;
+  text-transform: none;
+}
 
 /* The table scrolls inside its own box rather than pushing the page sideways. */
 .ledger-table-wrap { overflow-x: auto; }

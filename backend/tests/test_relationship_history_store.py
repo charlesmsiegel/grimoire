@@ -503,3 +503,30 @@ def test_forget_scene_is_idempotent_and_leaves_other_scenes_alone(monkeypatch, t
     assert relationship_history.forget_scene(cid, "001--s") == 0   # already marked
     kept = relationship_history.read(cid)
     assert kept[0]["scene_gone"] is True and "scene_gone" not in kept[1]
+
+
+def test_a_reversal_after_the_scene_was_deleted_is_marked_gone(monkeypatch, tmp_path):
+    """`forget_scene` can only mark what exists when it runs. A journal entry a
+    deleted scene left behind stays undoable, so its reversal lands afterwards
+    citing an id `scenes.lifecycle` may already have handed on."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "The crypt")
+    absorb.apply_edits(cid, [_feeling(cid, A, B, 2, 1, 3, "wary")], sid=sid)
+    jid = journal.read(cid)[-1]["id"]
+    scenes.delete_scene(cid, sid)
+    undo.undo(cid, jid)
+
+    landed, reversal = relationship_history.read(cid)
+    assert landed["scene_gone"] is True        # marked at delete time
+    assert reversal["source"] == "undo" and reversal["scene"] == sid
+    assert reversal["scene_gone"] is True      # and this one from the file's absence
+
+
+def test_a_reversal_inside_a_live_scene_carries_no_gone_flag(monkeypatch, tmp_path):
+    """Absent rather than False: a row that carries the key at all is one
+    somebody established is unresolvable."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    absorb.apply_edits(cid, [_feeling(cid, A, B, 2, 1, 3)], sid=sid)
+    undo.undo(cid, journal.read(cid)[-1]["id"])
+    assert all("scene_gone" not in r for r in relationship_history.read(cid))

@@ -322,6 +322,57 @@ test("relationship history is the arc the current standing overwrote", async () 
   expect(first).not.toHaveTextContent(/REVERSED/);   // an absorb is unbadged
 });
 
+test("the timeline narrows to one pair through the server, not the page", async () => {
+  // The route caps what it returns, so filtering here would search what the cap
+  // already threw away — a long campaign's older arc for one pair would be
+  // unreachable in the app while the store still held every row of it.
+  (api.campaignLedger as any).mockResolvedValue({
+    ...EMPTY,
+    relationships: [{ id: "characters:mara->characters:reeve", kind: "feeling",
+                      a: "characters:mara", b: "characters:reeve",
+                      a_name: "Sister Mara", b_name: "The Reeve",
+                      trust: 1, affection: 0, tension: 4, note: "",
+                      type: "", since_scene: "", scene: scene("", "") }],
+  });
+  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
+  renderLedger();
+  fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
+  await screen.findByRole("table");
+  expect(api.campaignRelationshipHistory).toHaveBeenCalledWith("run", undefined);
+
+  const picker = screen.getByRole("combobox", { name: /narrow the timeline/i });
+  fireEvent.change(picker, { target: { value: "characters:mara->characters:reeve" } });
+  await waitFor(() => expect(api.campaignRelationshipHistory).toHaveBeenCalledWith(
+    "run", { a: "characters:mara", b: "characters:reeve" }));
+
+  // and back to everyone, which is a read of its own rather than a re-filter
+  (api.campaignRelationshipHistory as any).mockClear();
+  fireEvent.change(picker, { target: { value: "" } });
+  await waitFor(() => expect(api.campaignRelationshipHistory)
+    .toHaveBeenCalledWith("run", undefined));
+});
+
+test("a narrowed timeline with nothing in it says so rather than sending you to play",
+  async () => {
+    (api.campaignLedger as any).mockResolvedValue({
+      ...EMPTY,
+      relationships: [{ id: "characters:mara->characters:reeve", kind: "feeling",
+                        a: "characters:mara", b: "characters:reeve",
+                        a_name: "Sister Mara", b_name: "The Reeve",
+                        trust: 1, affection: 0, tension: 4, note: "",
+                        type: "", since_scene: "", scene: scene("", "") }],
+    });
+    (api.campaignRelationshipHistory as any).mockResolvedValue([]);
+    renderLedger();
+    fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
+    fireEvent.change(await screen.findByRole("combobox", { name: /narrow the timeline/i }),
+                     { target: { value: "characters:mara->characters:reeve" } });
+
+    expect(await screen.findByText(/Nothing has passed between these two yet/))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /back to play/i })).not.toBeInTheDocument();
+  });
+
 test("a broken relationship-history read costs its section and nothing else", async () => {
   (api.campaignRelationshipHistory as any).mockRejectedValue(new Error("nope"));
   (api.campaignLedger as any).mockResolvedValue(CHAIN);

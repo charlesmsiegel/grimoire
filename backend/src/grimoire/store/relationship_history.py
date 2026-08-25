@@ -50,7 +50,11 @@ stop. Two consequences worth stating:
   happened. ``scene_refs.repoint`` keeps the ``scene`` field pointing at the
   right scene while it exists.
 
-- A DELETED scene's rows keep their ``scene`` too, and gain ``scene_gone``.
+- A DELETED scene's rows keep their ``scene`` too, and gain ``scene_gone``. So
+  does a row APPENDED after that deletion -- a reversal of a journal entry the
+  cut scene left behind, which stays undoable -- since ``forget_scene`` can only
+  mark what existed when it ran. ``store/undo.py`` sets it from the scene file's
+  own absence.
   Scene ids are recycled -- ``scenes.lifecycle`` reuses the highest deleted
   number, which is why ``delete_scene`` drops the prompt snapshots, the commit
   ledger's state, the turn state and the reader's pins rather than letting the
@@ -170,7 +174,7 @@ def _write(cid: str, doc: dict) -> None:
 
 
 def row(kind: str, a: str, b: str, *, label: str, before: str, after: str,
-        scene: str = "", source: str = "absorb") -> dict:
+        scene: str = "", source: str = "absorb", scene_gone: bool = False) -> dict:
     """One entry, minus the id and timestamp `append` stamps on.
 
     A constructor rather than a dict literal at each of the two call sites: they
@@ -178,8 +182,15 @@ def row(kind: str, a: str, b: str, *, label: str, before: str, after: str,
     of them forgot would be a row the view renders as a blank rather than an
     error anybody sees.
     """
-    return {"scene": scene, "source": source, "kind": kind, "a": a, "b": b,
-            "label": label, "before": before, "after": after}
+    out: dict = {"scene": scene, "source": source, "kind": kind, "a": a, "b": b,
+                 "label": label, "before": before, "after": after}
+    # Absent rather than False when the scene is alive: `forget_scene` writes
+    # this key only onto the rows it marks, so a row that carries it at all is
+    # one somebody has established is unresolvable. A False would make every
+    # row claim to have been checked.
+    if scene_gone:
+        out["scene_gone"] = True
+    return out
 
 
 def append(cid: str, rows: list[dict]) -> list[dict]:

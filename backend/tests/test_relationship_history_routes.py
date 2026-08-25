@@ -182,3 +182,20 @@ def test_a_deleted_scenes_row_is_not_labelled_with_the_scene_that_took_its_id(cl
     assert len(rows) == 1
     assert rows[0]["scene"] == {"id": sid, "title": sid, "date": ""}
     assert rows[0]["after"] == "trust 1, affection 1, tension 4"
+
+
+def test_an_unreadable_scene_header_costs_titles_not_the_request(client, cid):
+    """`list_scenes` opens every scene's header, so one file a sync client
+    mangled raises out of it — and would take the whole timeline with it,
+    including the rows of every healthy scene, over a label."""
+    mara, winifred = _char(cid, "Mara"), _char(cid, "Winifred")
+    a, b = f"characters:{mara}", f"characters:{winifred}"
+    sid = store.scenes.create_scene(cid, "The crypt")
+    store.absorb.apply_edits(cid, [_feeling(cid, a, b, 1, 1, 4)], sid)
+    other = store.campaigns.campaign_root(cid) / "scenes" / "002--the-pier.md"
+    other.write_bytes(b"---\ntitle: \xff\xfe not utf-8\n---\n")
+
+    rows = client.get(f"/api/campaigns/{cid}/relationships/history").json()
+    assert len(rows) == 1
+    assert rows[0]["after"] == "trust 1, affection 1, tension 4"
+    assert rows[0]["scene"] == {"id": sid, "title": sid, "date": ""}   # the id, not a 500

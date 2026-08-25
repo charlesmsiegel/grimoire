@@ -258,6 +258,11 @@ export default function LedgerView() {
   const [changes, setChanges] = useState<{ cid: string; data: RecordChange[] } | null>(null);
   const [standings, setStandings] =
     useState<{ cid: string; data: RelationshipChange[] } | null>(null);
+  /** Which pair the timeline is narrowed to, as the id of a `relationships`
+   *  row (`a->b` or `a|b`) — "" for all of them. Held as the row's id rather
+   *  than the token pair so the `<select>` has a value it can round-trip; the
+   *  tokens come back off the row when the read is made. */
+  const [pairId, setPairId] = useState("");
 
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
 
@@ -279,18 +284,40 @@ export default function LedgerView() {
     api.campaignChanges(cid)
       .then((c) => { if (live) setChanges({ cid, data: c }); })
       .catch(() => { if (live) setChanges({ cid, data: [] }); });
-    // And its own again, for the same reason: the relationship timeline (#63)
-    // is a third file behind a third route, and a broken one must cost its
-    // section rather than the six the other two answer for.
-    api.campaignRelationshipHistory(cid)
-      .then((h) => { if (live) setStandings({ cid, data: h }); })
-      .catch(() => { if (live) setStandings({ cid, data: [] }); });
     return () => { live = false; };
   }, [cid]);
 
   const ledger = loaded && loaded.cid === cid ? loaded.data : null;
   const changeRows = changes && changes.cid === cid ? changes.data : null;
   const standingRows = standings && standings.cid === cid ? standings.data : null;
+
+  /** The pair the timeline is narrowed to, resolved from the ledger's own
+   *  relationships rows — so a stale id (a campaign switch, a pair the ledger
+   *  no longer carries) reads as no filter rather than as an empty one. */
+  const pair = useMemo(() => {
+    const row = ledger?.relationships.find((r) => r.id === pairId);
+    return row ? { a: row.a, b: row.b } : null;
+  }, [ledger, pairId]);
+
+  useEffect(() => { setPairId(""); }, [cid]);
+
+  // Its own read, its own failure, and — unlike the other two — its own
+  // dependency, because the SERVER does the narrowing. It has to: the route
+  // answers with the newest `RELATIONSHIP_HISTORY_PAGE` rows, so filtering the
+  // page here would search what the cap has already thrown away, and a long
+  // campaign's older arc for one pair would be unreachable in the app while the
+  // store still held every row of it.
+  useEffect(() => {
+    let live = true;
+    api.campaignRelationshipHistory(cid, pair ?? undefined)
+      .then((h) => { if (live) setStandings({ cid, data: h }); })
+      .catch(() => { if (live) setStandings({ cid, data: [] }); });
+    return () => { live = false; };
+    // `pair` itself rather than its two fields: it is memoized on the ledger
+    // and the selected id, so its identity moves only when one of those does —
+    // and null when nothing is selected, which is the same null across the
+    // ledger's own load, so no read is repeated for it.
+  }, [cid, pair]);
 
   /** How many rows each section stands for, counted the way the section will
    *  actually render — so the facts count follows SHOW RETIRED rather than
@@ -341,7 +368,24 @@ export default function LedgerView() {
     </>
   );
 
-  const footer = (
+  // Narrowing the timeline is a read, not a view filter, so it belongs beside
+  // the section rather than inside the table: the options are the pairs the
+  // ledger currently carries, which is the only list of them the client has.
+  const footer = section === "standings" ? (
+    <label className="ledger-toggle">
+      <span>Pair</span>
+      <select className="ledger-pair" value={pairId}
+              onChange={(e) => setPairId(e.target.value)}
+              aria-label="Narrow the timeline to one pair">
+        <option value="">Everyone</option>
+        {(ledger?.relationships ?? []).map((r) => (
+          <option key={r.id} value={r.id}>
+            {`${r.a_name} ${r.kind === "bond" ? "↔" : "→"} ${r.b_name}`}
+          </option>
+        ))}
+      </select>
+    </label>
+  ) : (
     <label className="ledger-toggle">
       <input type="checkbox" checked={showRetired}
              onChange={(e) => setShowRetired(e.target.checked)} />
@@ -363,8 +407,17 @@ export default function LedgerView() {
 
         {ledger !== null && rows.length === 0 && (
           <p className="empty-state">
-            <span className="empty-what">{NOTHING[section]}</span>{" "}
-            <Link to={`/campaigns/${cid}`}>Back to play →</Link>
+            {/* A narrowed timeline with nothing in it is a different sentence
+                from a campaign that has recorded nothing: pointing the reader
+                back to play would be answering a question they did not ask. */}
+            <span className="empty-what">
+              {section === "standings" && pair
+                ? "Nothing has passed between these two yet. Pick Everyone to see "
+                  + "the whole timeline."
+                : NOTHING[section]}
+            </span>{" "}
+            {!(section === "standings" && pair)
+              && <Link to={`/campaigns/${cid}`}>Back to play →</Link>}
           </p>
         )}
 

@@ -99,6 +99,7 @@ from . import (
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import paths as campaigns_paths
+from .scenes import paths as scenes_paths
 
 log = logging.getLogger(__name__)
 
@@ -488,6 +489,16 @@ def _log_relationship_reversal(cid: str, target: dict, row: dict, stored) -> Non
     value the compare-and-swap just verified (so, what this reversal moved
     FROM) and the record is read once more afterwards for what it moved TO.
 
+    `scene_gone` is set here for the case `relationship_history.forget_scene`
+    structurally cannot reach: it marks the rows that exist when a scene is
+    deleted, and a journal entry that scene left behind stays undoable
+    afterwards -- so this append lands later, citing an id whose scene is gone
+    and which `scenes.lifecycle` may already have handed to a replacement. The
+    file's absence is the test. What it cannot see is an id that has ALREADY
+    been reissued, where the row is labelled with the new scene; that residual
+    is the tree-wide consequence of joining on a reusable id, which every store
+    `scene_refs` fans out to shares.
+
     `source` is the journal's word for the same thing and carries no direction,
     which is deliberate rather than an omission. Undoing an undo is a redo (this
     function's caller says so in its own docstring), and the direction is the
@@ -511,12 +522,14 @@ def _log_relationship_reversal(cid: str, target: dict, row: dict, stored) -> Non
             else (target.get("a"), target.get("b")))
     if not isinstance(a, str) or not isinstance(b, str):
         return
+    sid = _display(row.get("scene"))
     try:
         relationship_history.append(cid, [relationship_history.row(
             kind, a, b, label=_display(row.get("label")),
             before=relationships.render_standing(kind, stored),
             after=relationships.render_standing(kind, read_value(cid, target)),
-            scene=_display(row.get("scene")), source="undo")])
+            scene=sid, source="undo",
+            scene_gone=bool(sid) and not scenes_paths._scene_path(cid, sid).exists())])
     except Exception:  # the reversal landed; only the timeline is short a row
         log.warning("could not record the relationship reversal for %s in %s", target, cid,
                     exc_info=True)
