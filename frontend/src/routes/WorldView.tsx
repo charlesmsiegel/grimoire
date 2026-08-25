@@ -90,7 +90,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
-  const [focusGreeting, setFocusGreeting] = useState<string | null>(null);
+  /** The greeting a cross-navigation asked for, with a nonce: opening the same
+   *  node twice has to reach the editor twice. */
+  const [focusGreeting, setFocusGreeting] = useState<{ gid: string; n: number } | null>(null);
   /** Which way the Greetings section is showing its records: the chip-list
    *  editor, or the same edges as a graph (#9). A view of one set of records
    *  rather than a second place to keep them -- both write through
@@ -105,6 +107,13 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   /** True while the chip-list editor is mid-write. Both views send whole edge
    *  arrays, so the map holds still until that save settles. */
   const [listSaving, setListSaving] = useState(false);
+  /** True while the chip-list editor holds unsaved edge changes: its save
+   *  replaces the greeting's whole arrays, so the map must not write in the
+   *  meantime -- the draft would undo it on the next Save. */
+  const [listEdgeDraft, setListEdgeDraft] = useState(false);
+  /** ...and the mirror image: the map's own write may still be on the wire
+   *  after the reader has switched back to the list. */
+  const [mapWriting, setMapWriting] = useState(false);
   /** A pending "open this entity" for whichever EntityEditor is mounted. Keyed
    *  by kind so a nav aimed at Lore cannot be consumed by Items: all six
    *  editors are the same component, and only the kind tells them apart. */
@@ -231,7 +240,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // does a node on the plot map, which is why this also drops back to the list:
   // opening a greeting means its editor, and the graph has no detail pane.
   function openGreeting(gid: string) {
-    setFocusGreeting(gid);
+    setFocusGreeting((prev) => ({ gid, n: (prev?.n ?? 0) + 1 }));
     setGreetingView("list");
     setSection("greetings");
   }
@@ -490,13 +499,22 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                 take it with no Save, no Cancel and no warning. */}
             <div hidden={greetingView !== "list"}>
               <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
-                              onOpenLocation={(id) => openEntity("locations", id)} focus={focusGreeting}
+                              onOpenLocation={(id) => openEntity("locations", id)}
+                              focus={focusGreeting?.gid ?? null} focusNonce={focusGreeting?.n ?? 0}
                               onChanged={() => setGreetingEpoch((n) => n + 1)}
-                              onBusy={setListSaving} refreshKey={mapEpoch} />
+                              onBusy={setListSaving} onEdgeDraft={setListEdgeDraft}
+                              hold={mapWriting ? "The plot map is still writing these links. Wait for it before saving." : null}
+                              refreshKey={mapEpoch} />
             </div>
             {greetingView === "graph" && (
               <PlotMapEditor scope={scope} onOpenGreeting={openGreeting}
-                             reloadKey={greetingEpoch} busy={listSaving}
+                             reloadKey={greetingEpoch}
+                             hold={listSaving
+                               ? "The greeting editor is saving. Its save writes these same links, so the map waits for it."
+                               : listEdgeDraft
+                                 ? "The greeting editor has unsaved link changes. Save or cancel them first — its save replaces these same links."
+                                 : null}
+                             onBusy={setMapWriting}
                              onChanged={() => setMapEpoch((n) => n + 1)} />
             )}
           </>

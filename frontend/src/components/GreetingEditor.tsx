@@ -17,11 +17,15 @@ const sameEdges = (a: Edges, b: Edges) =>
   && a.excludes.join("\u0000") === b.excludes.join("\u0000");
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus,
-                                 onChanged, onBusy, refreshKey = 0 }:
+export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus, focusNonce = 0,
+                                 onChanged, onBusy, onEdgeDraft, hold = null, refreshKey = 0 }:
   { scope: EntityScope; wid: string;
     onOpenCharacter?: (cid: string, vid: string) => void;
     onOpenLocation?: (eid: string) => void; focus?: string | null;
+    /** Bumped per navigation, so opening the same greeting twice is two
+     *  events rather than one no-op (a node on the plot map can be reopened
+     *  after the reader picked something else in the rail). */
+    focusNonce?: number;
     /** Fired once a write here has landed, so a second view of the same
      *  records can re-read (#9: the plot map draws these greetings' edges,
      *  and a save that lands while it is open would leave it holding a
@@ -31,6 +35,13 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
      *  of these same edges, and both send WHOLE arrays -- so one has to hold
      *  still while the other is mid-write (#9). */
     onBusy?: (busy: boolean) => void;
+    /** True while this form holds edge changes it has not saved. The plot map
+     *  has to hold still for those: this save replaces the greeting's whole
+     *  arrays, so a draft that predates a graph edit would undo it. */
+    onEdgeDraft?: (dirty: boolean) => void;
+    /** Why this editor may not write right now -- the map has a request of its
+     *  own still on the wire, and the two would overlap. */
+    hold?: string | null;
     /** Bumped when that other view writes. A greeting open in `view` mode is
      *  re-read; a draft in `edit` mode is never touched. */
     refreshKey?: number }) {
@@ -58,6 +69,9 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
   // land on top of an edit made outside the app (#35).
   const [rev, setRev] = useState<string | null>(null);
   const [stale, setStale] = useState<{ rev: string | null } | null>(null);
+  /** Bumped by anything that means "the reader is looking at something else
+   *  now", so an answer to an older question can tell that it is stale. */
+  const intent = useRef(0);
   const [subjects, setSubjects] = useState<Record<string, string[]>>({});
   const [picking, setPicking] = useState<string | null>(null); // image name being edited
   const [untagged, setUntagged] = useState<Appearance[]>([]);
@@ -113,9 +127,12 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
 
   // arrived via a character page's world-greeting link: open that greeting
   useEffect(() => {
-    if (focus) select(focus);
+    if (focus) void select(focus);
+    // `focusNonce` is what makes opening the SAME greeting twice two events:
+    // the id alone does not change, so a reader who wandered off to another
+    // record and came back to this node would be sent nowhere.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, wid]);
+  }, [focus, focusNonce, wid]);
 
   // The other view of these records wrote (#9). A greeting being READ is
   // re-read, so its chips say what the store now says; a greeting being
@@ -124,9 +141,25 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
   const firstRefresh = useRef(true);
   useEffect(() => {
     if (firstRefresh.current) { firstRefresh.current = false; return; }
-    if (gid && mode === "view") { void reload(); void select(gid); }
+    // Checked again when the READ COMES BACK, not only before it is sent: a
+    // slow refresh that started while the greeting was being read would
+    // otherwise land on a draft the reader began in the meantime -- replacing
+    // the form and dropping `mode` back to view, which is exactly the loss
+    // this branch exists to prevent.
+    const mine = ++intent.current;
+    if (gid && mode === "view") {
+      void reload();
+      void select(gid, () => intent.current === mine);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
+
+  // Every deliberate move by the reader -- opening a record, starting an edit,
+  // starting a new greeting -- invalidates a refresh already in flight.
+  useEffect(() => { intent.current++; }, [gid, mode]);
+
+  useEffect(() => { onEdgeDraft?.(!!gid && !sameEdges(edges, loadedEdges)); },
+            [gid, edges, loadedEdges, onEdgeDraft]);
 
   function resetForm() {
     setGid(null);
@@ -139,10 +172,11 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     setMode("edit"); // a brand-new greeting goes straight to the form
   }
 
-  async function select(id: string) {
+  async function select(id: string, still: () => boolean = () => true) {
     setError(null);
     setStale(null);
     const g = await api.readGreeting(scope, id);
+    if (!still()) return;   // the reader moved on while this was in flight
     setGid(id);
     setRev(g.rev);
     setForm({
@@ -165,6 +199,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
    *  loaded, and on an explicit overwrite the one the 409 reported. */
   async function save(base: string | null = rev) {
     if (!form.name.trim() || (form.character && !form.version)) return;
+    if (hold) { setError(hold); return; }
     setError(null);
     setStale(null);
     onBusy?.(true);
@@ -620,8 +655,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
           <div className="form-actions">
             {gid && <button className="subtle" onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
             {gid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
-            <button className="primary" onClick={() => save()}
-                    disabled={!form.name.trim() || (!!form.character && !form.version)}>
+            <button className="primary" onClick={() => save()} title={hold ?? undefined}
+                    disabled={!form.name.trim() || (!!form.character && !form.version) || !!hold}>
               {gid ? "Save greeting" : "Create greeting"}
             </button>
           </div>
