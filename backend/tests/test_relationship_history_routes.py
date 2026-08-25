@@ -58,8 +58,8 @@ def test_empty_campaign_has_an_empty_timeline(client, cid):
 
 
 def test_rows_carry_names_and_the_scene_label_newest_first(client, cid):
-    ann, bo = _char(cid, "Ann"), _char(cid, "Bo")
-    a, b = f"characters:{ann}", f"characters:{bo}"
+    mara, winifred = _char(cid, "Mara"), _char(cid, "Winifred")
+    a, b = f"characters:{mara}", f"characters:{winifred}"
     sid = store.scenes.create_scene(cid, "The crypt")
     store.absorb.apply_edits(cid, [_feeling(cid, a, b, 1, 1, 4, "wary")], sid)
     store.absorb.apply_edits(cid, [_feeling(cid, a, b, 4, 3, 1, "warm")], sid)
@@ -68,22 +68,22 @@ def test_rows_carry_names_and_the_scene_label_newest_first(client, cid):
     assert [r["after"] for r in rows] == [
         "trust 4, affection 3, tension 1 (warm)", "trust 1, affection 1, tension 4 (wary)"]
     assert rows[0]["before"] == "trust 1, affection 1, tension 4 (wary)"
-    assert rows[0]["a_name"] == "Ann" and rows[0]["b_name"] == "Bo"
+    assert rows[0]["a_name"] == "Mara" and rows[0]["b_name"] == "Winifred"
     assert rows[0]["kind"] == "feeling" and rows[0]["source"] == "absorb"
     assert rows[0]["scene"] == {"id": sid, "title": "The crypt", "date": ""}
     assert rows[0]["id"] and rows[0]["ts"]
 
 
 def test_pair_filter_matches_unordered_and_returns_both_directions(client, cid):
-    ann, bo, win = _char(cid, "Ann"), _char(cid, "Bo"), _char(cid, "Winifred")
-    a, b, c = f"characters:{ann}", f"characters:{bo}", f"characters:{win}"
+    mara, winifred, seraphine = _char(cid, "Mara"), _char(cid, "Winifred"), _char(cid, "Seraphine")
+    a, b, c = f"characters:{mara}", f"characters:{winifred}", f"characters:{seraphine}"
     sid = store.scenes.create_scene(cid, "S")
     store.absorb.apply_edits(cid, [
         _feeling(cid, a, b, 1, 1, 4),
         _feeling(cid, b, a, 3, 3, 0),
         _feeling(cid, a, c, 5, 0, 0),
         {"id": "bond", "kind": "bond", "target": {"kind": "relationships", "id": "x"},
-         "field": "bond", "label": "Ann & Bo", "before": "", "after": "allies",
+         "field": "bond", "label": "Mara & Winifred", "before": "", "after": "allies",
          "payload": {"a": a, "b": b, "type": "allies"}}], sid)
 
     rows = client.get(f"/api/campaigns/{cid}/relationships/history",
@@ -98,8 +98,8 @@ def test_pair_filter_matches_unordered_and_returns_both_directions(client, cid):
 
 
 def test_an_undone_delta_shows_as_its_own_row(client, cid):
-    ann, bo = _char(cid, "Ann"), _char(cid, "Bo")
-    a, b = f"characters:{ann}", f"characters:{bo}"
+    mara, winifred = _char(cid, "Mara"), _char(cid, "Winifred")
+    a, b = f"characters:{mara}", f"characters:{winifred}"
     sid = store.scenes.create_scene(cid, "S")
     store.absorb.apply_edits(cid, [_feeling(cid, a, b, 1, 1, 4, "wary")], sid)
     jid = store.journal.read(cid)[-1]["id"]
@@ -112,14 +112,14 @@ def test_an_undone_delta_shows_as_its_own_row(client, cid):
 
 
 def test_a_deleted_character_costs_a_name_not_the_row(client, cid):
-    ann, bo = _char(cid, "Ann"), _char(cid, "Bo")
-    a, b = f"characters:{ann}", f"characters:{bo}"
+    mara, winifred = _char(cid, "Mara"), _char(cid, "Winifred")
+    a, b = f"characters:{mara}", f"characters:{winifred}"
     sid = store.scenes.create_scene(cid, "S")
     store.absorb.apply_edits(cid, [_feeling(cid, a, b, 1, 1, 4)], sid)
-    store.characters.delete_character(store.campaigns.campaign_root(cid), bo)
+    store.characters.delete_character(store.campaigns.campaign_root(cid), winifred)
 
     rows = client.get(f"/api/campaigns/{cid}/relationships/history").json()
-    assert rows[0]["a_name"] == "Ann" and rows[0]["b_name"] == bo
+    assert rows[0]["a_name"] == "Mara" and rows[0]["b_name"] == winifred
 
 
 def test_a_hand_edited_row_degrades_field_by_field(client, cid):
@@ -128,7 +128,7 @@ def test_a_hand_edited_row_degrades_field_by_field(client, cid):
     must come back as "" rather than blanking the view."""
     p = store.campaigns.campaign_root(cid) / "relationship_history.json"
     p.write_text(json.dumps({"seq": 1, "entries": [
-        {"id": "rh1", "ts": "t", "kind": "feeling", "a": {"oops": 1}, "b": "characters:bo",
+        {"id": "rh1", "ts": "t", "kind": "feeling", "a": {"oops": 1}, "b": "characters:winifred",
          "label": ["nope"], "before": None, "after": "trust 1", "scene": 3,
          "source": "absorb"}]}), encoding="utf-8")
     rows = client.get(f"/api/campaigns/{cid}/relationships/history").json()
@@ -145,3 +145,17 @@ def test_the_listing_is_capped(client, cid, monkeypatch):
         for n in range(5)])
     rows = client.get(f"/api/campaigns/{cid}/relationships/history").json()
     assert [r["after"] for r in rows] == ["4", "3"]   # newest first, capped
+
+
+def test_a_malformed_chronicle_costs_the_date_not_the_request(client, cid):
+    """`read_chronicle` hands back whatever `json.loads` returned, so a
+    hand-edited list parses fine and then raises past the handler that only
+    catches a read failure — turning a date label nobody would miss into a 500."""
+    p = store.campaigns.campaign_root(cid) / "chronicle.json"
+    store.relationship_history.append(cid, [
+        store.relationship_history.row("feeling", "characters:mara", "pcs:seraphine",
+                                       label="", before="", after="trust 1", scene="s1")])
+    for garbled in ("[]", '{"s1": "not an object"}'):
+        p.write_text(garbled, encoding="utf-8")
+        rows = client.get(f"/api/campaigns/{cid}/relationships/history").json()
+        assert rows[0]["scene"] == {"id": "s1", "title": "s1", "date": ""}

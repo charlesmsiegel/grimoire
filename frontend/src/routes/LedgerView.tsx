@@ -205,9 +205,13 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       what: `${r.a_name} ${r.kind === "bond" ? "↔" : "→"} ${r.b_name}`,
       // The new standing on the note line and the old one in the AS OF column:
       // the reader is here for what changed, and reading it as "now X, was Y"
-      // puts the answer first. An undone row says so — it is a change like any
-      // other, and one the reader is likeliest to be looking for.
-      note: joinNote(r.source === "undo" ? "UNDONE" : "", r.after || "NOTHING"),
+      // puts the answer first. A reversal is badged, since it is the one row
+      // that did not come from play — but REVERSED rather than UNDONE, because
+      // undoing an undo is a redo and the store deliberately does not claim
+      // which of the two this was (store/relationship_history.py). The row's
+      // own two standings say which way it ran. Absorb is unbadged: a badge on
+      // every row is no badge at all.
+      note: joinNote(r.source === "undo" ? "REVERSED" : "", r.after || "NOTHING"),
       asOf: r.before || "—",
       scene: r.scene.title,
     }));

@@ -114,6 +114,34 @@ def _render_feeling(f: dict) -> str:
     return f"trust {f['trust']}, affection {f['affection']}, tension {f['tension']}{note}"
 
 
+def render_standing(kind: str, record: dict | None) -> str:
+    """A STORED feeling or bond as the one-line standing the review shows, and
+    "" when there is none (#63).
+
+    `_render_feeling` renders a feeling from its four fields and a bond's
+    standing is simply its type, so this is a thin dispatch -- but it is the one
+    the relationship timeline needs, because that ledger describes records
+    rather than staged edits. Its rows are built from what
+    `relationships.json` holds either side of a write, never from the `after`
+    string an edit travelled with: those agree for anything `materialize`
+    staged, and a client-supplied PUT body can carry an `after` that disagrees
+    with the payload the write actually used -- which would leave an
+    append-only row permanently claiming a standing this store does not hold.
+
+    Tolerant of a record missing an axis, which `_render_feeling` is not: this
+    reads records off disk, where a hand edit can leave one out, and a row with
+    no text is a smaller loss than a KeyError out of a write that has landed.
+    """
+    if not isinstance(record, dict):
+        return ""
+    if kind == "bond":
+        return record["type"] if isinstance(record.get("type"), str) else ""
+    if any(not isinstance(record.get(axis), int) or isinstance(record.get(axis), bool)
+           for axis in ("trust", "affection", "tension")):
+        return ""
+    return _render_feeling(record)
+
+
 def render_present(cid: str, tokens: list[str], name_of) -> list[str]:
     data = read(cid)
     lines: list[str] = []

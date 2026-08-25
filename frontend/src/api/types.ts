@@ -1426,7 +1426,9 @@ export type LedgerRelationship = {
  *  `before`/`after` are rendered standings, not values: the numbers live in
  *  `relationships.json`, and this row is the sentence about them changing.
  *  `source` is "absorb" or "undo" — a reversal appends its own row rather than
- *  deleting the one it put back. */
+ *  deleting the one it put back. It says a reversal happened and not which
+ *  direction, since undoing an undo is a redo; `before`/`after` say which way
+ *  this one ran. */
 export type RelationshipChange = {
   id: string; ts: string; source: string; kind: string;
   a: string; b: string; a_name: string; b_name: string;

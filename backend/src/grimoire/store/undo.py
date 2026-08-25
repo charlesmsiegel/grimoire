@@ -482,6 +482,14 @@ def _log_relationship_reversal(cid: str, target: dict, row: dict) -> None:
     `row`'s `before`/`after` are already the reversed pair (`undo` builds them
     from the entry read backwards), so this row reads forwards like every other.
 
+    `source` is the journal's word for the same thing and carries no direction,
+    which is deliberate rather than an omission. Undoing an undo is a redo (this
+    function's caller says so in its own docstring), and the direction is the
+    PARITY of a chain of `reverted` links that journal retention can truncate --
+    so a row claiming it would be wrong exactly when the chain got long, which
+    is when a reader would rely on it. The row's own `before` and `after` say
+    which way this one ran, and the view badges it neutrally.
+
     Never fatal, for `_roll_back_panels`' reason: the reversal has landed by the
     time this runs, and a gap in the timeline is the smaller harm.
     """

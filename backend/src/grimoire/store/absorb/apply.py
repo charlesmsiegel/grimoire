@@ -175,13 +175,19 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
     try:
         kind, target, after = e["kind"], e["target"], e.get("after", "")
         extra_fields: list[dict] = []
-        # Which two actors this edit moved, for the relationship timeline (#63).
-        # Set by the two branches that write `relationships.json` and left None
-        # by every other kind. Taken from the PAYLOAD, which is what the write
-        # below uses, rather than from `target` -- the two name the same pair for
-        # anything `materialize` staged, but an edit reaches here from a
-        # client-supplied PUT body, and a timeline row must describe the write
-        # that happened rather than the label it travelled under.
+        # Which two actors this edit moved and what it left them at, for the
+        # relationship timeline (#63). Set by the two branches that write
+        # `relationships.json` and left None by every other kind.
+        #
+        # Every field of it comes from the RECORD rather than from the staged
+        # edit: the tokens from the payload the write used (not `target`), and
+        # the standing read back after the write (not `after`). They agree for
+        # anything `materialize` staged -- it renders `after` from the same
+        # payload -- but an edit reaches here from a client-supplied PUT body
+        # typed as an unrestricted dict, where the two can disagree. The journal
+        # can carry that disagreement as display text and lose nothing; an
+        # append-only timeline would carry it forever, claiming a standing
+        # `relationships.json` does not hold and never will.
         pair: dict | None = None
         if kind == "weather":
             if not weather._apply_weather(cid, e, after):
@@ -330,11 +336,15 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             p = e["payload"]
             relationships.set_feeling(cid, p["from"], p["to"], p["trust"], p["affection"],
                                       p["tension"], p.get("note", ""))
-            pair = {"kind": "feeling", "a": p["from"], "b": p["to"]}
+            pair = {"kind": "feeling", "a": p["from"], "b": p["to"],
+                    "after": relationships.render_standing(
+                        "feeling", relationships.get_feeling(cid, p["from"], p["to"]))}
         elif kind == "bond":
             p = e["payload"]
             relationships.set_bond(cid, p["a"], p["b"], p["type"])
-            pair = {"kind": "bond", "a": p["a"], "b": p["b"]}
+            pair = {"kind": "bond", "a": p["a"], "b": p["b"],
+                    "after": relationships.render_standing(
+                        "bond", relationships.get_bond(cid, p["a"], p["b"]))}
         elif kind == "plot":
             p = e["payload"]
             # An absorb never renames an existing thread: `materialize` stages
@@ -598,13 +608,16 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             "before": _display(conflicts.replaced_value(e)), "after": _display(after),
             "undo": undo_store.seal(cid, reversal, prior) if reversal is not None else None}
         journalled["why"] = "" if journalled["undo"] else undo_store.why(kind)
-        # The timeline row for the same write, built off the journal row rather
-        # than beside it so the two cannot describe different text: `before` is
-        # `replaced_value`, the standing the reviewer was actually shown being
-        # replaced, and not the staged one a conflict answer superseded.
+        # The timeline row for the same write. The two ends come from different
+        # places on purpose, because only one of them is checked:
+        # `conflicts._REASONS` covers `relationship` and `bond`, so the one-pass
+        # gate in `apply_edits` has already refused this row unless its staged
+        # `before` matched the stored standing -- and an answered conflict makes
+        # `replaced_value` the stored one. Nothing checks `after` against the
+        # payload, so that end is read back off the record above.
         history = relationship_history.row(
             pair["kind"], pair["a"], pair["b"], label=journalled["label"],
-            before=journalled["before"], after=journalled["after"]) if pair else None
+            before=journalled["before"], after=pair["after"]) if pair else None
     except entities.EntityNotFound:
         # Named apart from the generic handler because its message would
         # otherwise be the bare ref: this is the commonest way an approved edit

@@ -1117,6 +1117,13 @@ def get_relationship_history(cid: str, a: str | None = None, b: str | None = Non
         chron = store.chronicle.read_chronicle(cid)
     except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
         chron = {}
+    # And a chronicle.json that PARSES but is not an object degrades the same
+    # way. `read_chronicle` hands back whatever `json.loads` returned, so a
+    # hand-edited list reaches the `.get` below and raises past the handler
+    # above — a date label nobody would miss, turning a valid request into a
+    # 500. Each record is re-checked at the row for the same reason.
+    if not isinstance(chron, dict):
+        chron = {}
     names: dict[str, str] = {}
 
     def _name(token: str) -> str:
@@ -1131,7 +1138,9 @@ def get_relationship_history(cid: str, a: str | None = None, b: str | None = Non
     for e in reversed(entries):
         atok, btok = _ledger_text(e.get("a")), _ledger_text(e.get("b"))
         sid = _ledger_text(e.get("scene"))
-        sc, c = scenes_by_id.get(sid, {}), chron.get(sid, {})
+        sc = scenes_by_id.get(sid, {})
+        c = chron.get(sid)
+        c = c if isinstance(c, dict) else {}
         out.append({
             "id": _ledger_text(e.get("id")), "ts": _ledger_text(e.get("ts")),
             "source": _ledger_text(e.get("source")),

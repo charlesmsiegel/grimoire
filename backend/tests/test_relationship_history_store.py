@@ -281,13 +281,13 @@ def test_the_arc_of_two_scenes_reads_as_a_timeline(monkeypatch, tmp_path):
     from grimoire.store import appearances
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    ann, bo = _char(croot, "Ann"), _char(croot, "Bo")
-    atok, btok = f"characters:{ann}", f"characters:{bo}"
+    mara, winifred = _char(croot, "Mara"), _char(croot, "Winifred")
+    atok, btok = f"characters:{mara}", f"characters:{winifred}"
     first = scenes.create_scene(cid, "The crypt")
     second = scenes.create_scene(cid, "The pier")
     for sid in (first, second):
-        appearances.appear(cid, sid, "characters", ann, "main", "npc")
-        appearances.appear(cid, sid, "characters", bo, "main", "npc")
+        appearances.appear(cid, sid, "characters", mara, "main", "npc")
+        appearances.appear(cid, sid, "characters", winifred, "main", "npc")
 
     def absorb_scene(sid, trust, affection, tension, note, bond):
         parsed = {"relationship_deltas": [{"from": atok, "to": btok, "trust": trust,
@@ -307,7 +307,7 @@ def test_the_arc_of_two_scenes_reads_as_a_timeline(monkeypatch, tmp_path):
     assert rows[2]["after"] == "trust 4, affection 3, tension 1 (warm)"
     assert (rows[1]["before"], rows[1]["after"]) == ("", "wary allies")
     assert (rows[3]["before"], rows[3]["after"]) == ("wary allies", "sworn")
-    assert rows[2]["label"] == "Ann → Bo" and rows[3]["label"] == "Ann & Bo"
+    assert rows[2]["label"] == "Mara → Winifred" and rows[3]["label"] == "Mara & Winifred"
     # The current-value store kept only the far end of that arc.
     assert relationships.get_feeling(cid, atok, btok)["trust"] == 4
     assert relationships.get_bond(cid, atok, btok)["type"] == "sworn"
@@ -358,3 +358,80 @@ def test_for_pair_skips_a_garbled_row_rather_than_raising(monkeypatch, tmp_path)
                            "before": "", "after": "garbled", "scene": "", "source": "absorb"})
     p.write_text(json.dumps(doc), encoding="utf-8")
     assert [e["after"] for e in relationship_history.for_pair(cid, A, B)] == ["real"]
+
+
+# ---- the row describes the RECORD, not the edit that travelled with it -----
+
+def test_a_forged_after_cannot_make_the_timeline_claim_a_standing(monkeypatch, tmp_path):
+    """The write goes from the payload and the row is read back off the record,
+    so an `after` string that disagrees with the payload cannot leave an
+    append-only row permanently claiming a standing nothing holds."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    forged = _feeling(cid, A, B, 4, 3, 1, "warm")
+    forged["after"] = "trust 0, affection 0, tension 5 (nothing like the payload)"
+    absorb.apply_edits(cid, [forged], sid=sid)
+
+    row = relationship_history.read(cid)[-1]
+    assert row["after"] == "trust 4, affection 3, tension 1 (warm)"
+    assert row["after"] == relationships._render_feeling(
+        relationships.get_feeling(cid, A, B))
+
+
+def test_a_stale_before_never_reaches_the_timeline_at_all(monkeypatch, tmp_path):
+    """The other end of the row is checked before the write rather than after
+    it: `relationship` and `bond` are both in `conflicts._REASONS`, so a row
+    whose staged `before` is not the stored standing is refused and no timeline
+    row is written — which is why `before` can be the journal's."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    absorb.apply_edits(cid, [_feeling(cid, A, B, 1, 1, 4, "wary")], sid=sid)
+    stale = _feeling(cid, A, B, 4, 3, 1, "warm")
+    stale["before"] = "trust 5, affection 5, tension 0 (never stored)"
+    applied, failures = absorb.apply_edits(cid, [stale], sid=sid)
+
+    assert applied == [] and [f["kind"] for f in failures] == ["conflict"]
+    rows = relationship_history.for_pair(cid, A, B)
+    assert [r["after"] for r in rows] == ["trust 1, affection 1, tension 4 (wary)"]
+    assert relationships.get_feeling(cid, A, B)["trust"] == 1
+
+
+def test_a_forged_bond_type_is_recorded_as_written(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    forged = _bond(cid, A, B, "allies")
+    forged["after"] = "sworn enemies"
+    absorb.apply_edits(cid, [forged], sid=sid)
+    assert relationship_history.read(cid)[-1]["after"] == "allies"
+    assert relationships.get_bond(cid, A, B)["type"] == "allies"
+
+
+def test_invalid_utf8_costs_the_timeline_rather_than_the_next_append(monkeypatch, tmp_path):
+    """A file a sync client mangled raises out of `read_text` before json sees a
+    character. Uncaught it would sink every later append from inside the absorb
+    block that has already moved `relationships.json`."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "relationship_history.json").write_bytes(
+        b'{"seq": 1, "entries": [{"id": "rh1", "after": "\xff\xfe not utf-8"}]}')
+    assert relationship_history.read(cid) == []
+    absorb.apply_edits(cid, [_feeling(cid, A, B, 2, 1, 3)], sid=sid)
+    assert [r["a"] for r in relationship_history.read(cid)] == [A]
+
+
+def test_a_redo_appends_a_row_that_reads_forwards(monkeypatch, tmp_path):
+    """Undoing an undo is a redo. `source` does not claim which of the two a
+    reversal was — the direction is the parity of a chain retention can truncate
+    — so each row is read from its own two standings, and those are right for
+    every step."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    absorb.apply_edits(cid, [_feeling(cid, A, B, 2, 1, 3, "wary")], sid=sid)
+    undone = undo.undo(cid, journal.read(cid)[-1]["id"])
+    undo.undo(cid, undone["id"])   # the redo: it puts the absorbed standing back
+
+    standing = "trust 2, affection 1, tension 3 (wary)"
+    assert [(r["source"], r["before"], r["after"])
+            for r in relationship_history.for_pair(cid, A, B)] == [
+        ("absorb", "", standing), ("undo", standing, ""), ("undo", "", standing)]
+    assert relationships.get_feeling(cid, A, B)["trust"] == 2

@@ -309,13 +309,17 @@ test("relationship history is the arc the current standing overwrote", async () 
 
   const [newest, older, first] = rows();
   expect(cells(newest)).toEqual(
-    ["↔", "Sister Mara ↔ The Reeve" + "UNDONE · wary allies", "sworn", "The Long Tide"]);
+    ["↔", "Sister Mara ↔ The Reeve" + "REVERSED · wary allies", "sworn", "The Long Tide"]);
   expect(cells(older)).toEqual([
     "→", "Sister Mara → The Reeve" + "trust 1, affection 0, tension 4 (he took the money)",
     "trust 3, affection 2, tension 1", "The Long Tide"]);
   // The first delta on a pair replaced nothing, and says so rather than
   // rendering an empty cell that reads as a missing value.
   expect(cells(first)[2]).toBe("—");
+  // REVERSED, never UNDONE: undoing an undo is a redo, and the store does not
+  // claim which of the two a reversal was.
+  expect(older).not.toHaveTextContent(/UNDONE/);
+  expect(first).not.toHaveTextContent(/REVERSED/);   // an absorb is unbadged
 });
 
 test("a broken relationship-history read costs its section and nothing else", async () => {

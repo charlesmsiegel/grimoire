@@ -38,7 +38,10 @@ stop. Two consequences worth stating:
 - A reversal (``store/undo.py``) appends a row of its own rather than deleting
   the one it put back. "This was undone" is part of the history, and a ledger
   that quietly loses its last entry is one nobody can reconcile against
-  ``relationships.json``.
+  ``relationships.json``. ``source`` says a reversal happened and deliberately
+  not which direction: undoing an undo is a redo, and the direction is the
+  parity of a chain journal retention can truncate. The row's own ``before``
+  and ``after`` say which way it ran.
 - A cut scene keeps its rows, like ``journal.py`` and unlike
   ``changes.forget_scene``. That log is rolling, so a row describing a reverted
   write had no earlier row to fall back on and *had* to go; here the earlier
@@ -108,7 +111,14 @@ def _load(cid: str) -> dict:
         return empty
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        # `UnicodeDecodeError` explicitly, and it is not covered by the other
+        # two: a file a sync client mangled or an editor saved in another
+        # encoding raises it out of `read_text` before json sees a character.
+        # Left uncaught it would 500 the route AND, worse, sink every later
+        # append from inside the absorb block that has already written to
+        # `relationships.json` -- so the standing would move with nothing in the
+        # timeline to say it did.
         return empty
     if not isinstance(data, dict):
         return empty
