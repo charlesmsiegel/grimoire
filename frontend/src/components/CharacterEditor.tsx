@@ -2236,7 +2236,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             </div>
           </>}
             <Field label="Voice anchor"
-                   hint="how they SOUND — sent with every turn so the model writes them this way, and absorb checks each played scene against it; clear it to opt out of both">
+                   hint="how they SOUND — sent with the scene so the model writes them this way, and absorb checks each played scene against it; clear it to opt out of both">
               {/* Disabled while BUSY as well as while loading: a generation in
                   flight will overwrite this box when it lands, so edits made
                   meanwhile would be silently discarded. */}

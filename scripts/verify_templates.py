@@ -524,7 +524,7 @@ def _cast_blocks(cid, npc_cards, npc_ids):
         v = card.get(key)
         return v.strip() if isinstance(v, str) else ""
 
-    shown = context.cast.display_names([_str(d, "name") for d in npc_cards])
+    shown = context.cast.voice_safe_names([_str(d, "name") for d in npc_cards])
     out = []
     for name, card, char_id in zip(shown, npc_cards, npc_ids, strict=True):
         parts = [_str(card, "description"), _str(card, "personality"), _str(card, "scenario")]

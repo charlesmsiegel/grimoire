@@ -339,40 +339,39 @@ def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
     return out
 
 
-def display_names(names: list[str]) -> list[str]:
-    """Per-entry heading names for the present cast, pairwise distinct.
+def voice_safe_names(names: list[str]) -> list[str]:
+    """Display names for the cast blocks, blanked where they cannot attribute.
 
-    `names` arrive stripped, `""` for a card with no name. Nameless entries
-    stay `""` and are EXCLUDED from the uniqueness requirement -- they render
-    no heading, so there is nothing to collide over, and demanding two empty
-    strings be distinct is unsatisfiable.
+    `names` arrive stripped, `""` for a card with no name. A name shared
+    EXACTLY (case-folded) with another present card is blanked too, which
+    suppresses that character's anchor and example blocks -- the voice
+    templates skip nameless entries -- while their description still renders,
+    headerless, exactly as it did before any of this.
 
-    Plain case-folded equality, deliberately NOT `serialize.confusable`. That
-    function answers whether a transcript speaker label resolves to exactly one
-    cast member, which is a different question with an inverted argument
-    convention -- it takes the whole roster, the name included, so
-    `confusable("Mara", ["Winifred"])` is True. It also cannot be satisfied by
-    what this does: "Winifred #1" and "Winifred #2" stay confusable, because
-    the bare label "Winifred" still prefixes both. Using it here would fire on
-    "Winifred Vance" beside "Winifred Vale" -- two headings a reader can tell
-    apart -- and never converge.
+    Why blank rather than disambiguate. An earlier revision invented labels
+    here (`Winifred #1`, `Winifred #2`) and that is worse than it looks: the
+    transcript identifies speakers by card name and nothing else, so a model
+    copying a heading into its `**<Name>:**` marker would persist `Winifred #1`
+    into the scene -- and a transcript is the one artifact in this app that
+    cannot be regenerated. The ordinals bought nothing to set against that,
+    because `match_name("Winifred", ["Winifred", "Winifred"])` is already
+    `None`: the duplicate case was never routable, and an alias would have made
+    an unroutable label a synthetic one as well.
 
-    The ordinal is appended to the ORIGINAL name and incremented past anything
-    already taken, never appended to an already-suffixed display name (which
-    would produce "Winifred #1 #2"). A card literally named "Winifred #2" is
-    stepped over rather than duplicated, and keeps its own name, because it is
-    not itself one of the duplicates.
+    It also matches how the rest of the codebase treats this case. Two present
+    NPCs wearing one name cannot be told apart in the prose, so `_voice_notes`
+    suppresses a corrective addressed to them and the absorb stage reports the
+    clash instead of judging it. Saying nothing beats saying it under a name
+    that means both of them.
+
+    EXACT duplication, deliberately NOT `serialize.confusable` -- which is the
+    wrong tool here for the second distinct reason. It answers whether some
+    label that could name this actor is ambiguous, so it is `True` for
+    "Winifred Vance" beside "Winifred Vale". But those are the headings that
+    actually render, and `match_name` resolves each of them exactly; only the
+    bare "Winifred" is ambiguous, and nothing writes that. Blanking them would
+    cost two distinguishable characters their voices to prevent nothing.
     """
     folded = [n.casefold() for n in names]
-    dupes = {f for f in folded if f and folded.count(f) > 1}
-    taken = {n.casefold() for n in names if n}
-    out = list(names)
-    for i, name in enumerate(names):
-        if not name or folded[i] not in dupes:
-            continue
-        k = 1
-        while f"{name} #{k}".casefold() in taken:
-            k += 1
-        out[i] = f"{name} #{k}"
-        taken.add(out[i].casefold())
-    return out
+    return ["" if not n or folded.count(folded[i]) > 1 else n
+            for i, n in enumerate(names)]
