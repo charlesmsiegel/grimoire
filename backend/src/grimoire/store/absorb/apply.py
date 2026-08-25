@@ -26,6 +26,7 @@ from .. import (
     playstate,
     plot,
     provenance,
+    relationship_history,
     relationships,
     voice_drift,
 )
@@ -103,10 +104,12 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
     The outcome is the unit the commit journals and the reviewer is shown, so it
     is a value rather than three side effects:
 
-    - ``{"state": "applied", "id", "recorded": {ref: [rows]}, "journalled": row}``
-      -- it landed; `recorded` is its write-back delta when the kind is
-      browsable, and `journalled` is its change-journal row, which every kind
-      gets and which carries the reversal when the kind has one (#31).
+    - ``{"state": "applied", "id", "recorded": {ref: [rows]}, "journalled": row,
+      "relationship": row | None}`` -- it landed; `recorded` is its write-back
+      delta when the kind is browsable, `journalled` is its change-journal row,
+      which every kind gets and which carries the reversal when the kind has one
+      (#31), and `relationship` is its relationship-timeline row for the two
+      kinds that move `relationships.json` and None for the rest (#63).
     - ``{"state": "skipped"}`` -- nothing was written and nothing was lost: a
       re-guard rejecting a forged row, a blank reply that must not erase a good
       record, a weather span with no usable date.
@@ -172,6 +175,20 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
     try:
         kind, target, after = e["kind"], e["target"], e.get("after", "")
         extra_fields: list[dict] = []
+        # Which two actors this edit moved and what it left them at, for the
+        # relationship timeline (#63). Set by the two branches that write
+        # `relationships.json` and left None by every other kind.
+        #
+        # Every field of it comes from the RECORD rather than from the staged
+        # edit: the tokens from the payload the write used (not `target`), and
+        # the standing read back after the write (not `after`). They agree for
+        # anything `materialize` staged -- it renders `after` from the same
+        # payload -- but an edit reaches here from a client-supplied PUT body
+        # typed as an unrestricted dict, where the two can disagree. The journal
+        # can carry that disagreement as display text and lose nothing; an
+        # append-only timeline would carry it forever, claiming a standing
+        # `relationships.json` does not hold and never will.
+        pair: dict | None = None
         if kind == "weather":
             if not weather._apply_weather(cid, e, after):
                 return {"state": "skipped"}   # skipped, not applied: nothing was written
@@ -319,9 +336,15 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             p = e["payload"]
             relationships.set_feeling(cid, p["from"], p["to"], p["trust"], p["affection"],
                                       p["tension"], p.get("note", ""))
+            pair = {"kind": "feeling", "a": p["from"], "b": p["to"],
+                    "after": relationships.render_standing(
+                        "feeling", relationships.get_feeling(cid, p["from"], p["to"]))}
         elif kind == "bond":
             p = e["payload"]
             relationships.set_bond(cid, p["a"], p["b"], p["type"])
+            pair = {"kind": "bond", "a": p["a"], "b": p["b"],
+                    "after": relationships.render_standing(
+                        "bond", relationships.get_bond(cid, p["a"], p["b"]))}
         elif kind == "plot":
             p = e["payload"]
             # An absorb never renames an existing thread: `materialize` stages
@@ -585,6 +608,32 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             "before": _display(conflicts.replaced_value(e)), "after": _display(after),
             "undo": undo_store.seal(cid, reversal, prior) if reversal is not None else None}
         journalled["why"] = "" if journalled["undo"] else undo_store.why(kind)
+        # The timeline row for the same write. Both ends are the RECORD: `after`
+        # was read back after the write above, and `before` is `prior`, the
+        # reading `undo_store.snapshot` took at the last moment the replaced
+        # value still existed -- per edit, and inside this function.
+        #
+        # Not the staged `before`, and the conflict gate is not a substitute for
+        # this even though `relationship` and `bond` are both in
+        # `conflicts._REASONS`. That gate is ONE PASS OVER THE WHOLE BATCH
+        # BEFORE THE FIRST WRITE, so it says nothing about a batch that moves
+        # one pair twice: nothing dedupes `relationship_deltas` by pair the way
+        # `plot_movements` are deduped by id, both rows are staged with the same
+        # `before`, both pass the gate against the untouched record, and the
+        # second then writes over the first. The staged pair would record
+        # `original -> first` and `original -> second`, and the arc -- the whole
+        # point of this ledger -- would have a break in it that nothing later
+        # can find.
+        #
+        # `prior` is trustworthy only when the probe produced a reversal: a
+        # probe that could not read its target yields `(None, None)`, which is
+        # indistinguishable from "there was no record". The staged text is the
+        # fallback there, being what the journal shows.
+        history = relationship_history.row(
+            pair["kind"], pair["a"], pair["b"], label=journalled["label"],
+            before=(relationships.render_standing(pair["kind"], prior)
+                    if reversal is not None else journalled["before"]),
+            after=pair["after"]) if pair else None
     except entities.EntityNotFound:
         # Named apart from the generic handler because its message would
         # otherwise be the bare ref: this is the commonest way an approved edit
@@ -598,7 +647,8 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
         # so an approved change vanished with nothing on screen to say so.
         return {"state": "failed", "id": eid, "kind": "error",
                 "reason": f"could not apply this change: {exc}"}
-    return {"state": "applied", "id": eid, "recorded": recorded, "journalled": journalled}
+    return {"state": "applied", "id": eid, "recorded": recorded,
+            "journalled": journalled, "relationship": history}
 
 
 #: What a resumed commit says about a step it journalled and never confirmed.
@@ -661,6 +711,11 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # Accepted rather than optimised: the alternative to carrying the snapshot is
     # not carrying it, and it cannot be recomputed after the write it describes.
     journalled: list = journal.setdefault("journalled", [])
+    # And the relationship timeline's (#63), carried here for the same reason:
+    # it is append-only, so a resumed commit replaying it would duplicate the
+    # arc rather than stale it -- the same failure `journalled` guards against,
+    # settled by the same flag below.
+    timeline: list = journal.setdefault("relationships", [])
     applied: list[str] = []
     failures: list[dict] = []
     # One pass over the whole batch before the first write (#111): applying one
@@ -707,6 +762,9 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
             row = prior.pop("journalled", None)
             if row:
                 journalled.append({"scene": sid or "", "source": "absorb", **row})
+            moved = prior.pop("relationship", None)
+            if moved:
+                timeline.append({**moved, "scene": sid or "", "source": "absorb"})
             if prior.get("state") == "applied":
                 # Journalled with the outcome: what the target reads now this
                 # edit has landed is how a LATER slot, resuming after a crash,
@@ -750,7 +808,7 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # settles both. A resume that cannot tell whether the block ran reports it
     # and writes neither.
     prior_changes = journal.get("changes")
-    logs = bool(recorded or cited or journalled)
+    logs = bool(recorded or cited or journalled or timeline)
     if logs and prior_changes is None:
         journal["changes"] = "pending"
     if checkpoint:
@@ -773,10 +831,17 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
                 # upserts, and a failure of either is the same class of loss —
                 # the record is right and the panel explaining it is stale.
                 provenance.record(cid, cited)
-                # Last of the three, and the only one that is append-only: it
-                # goes after the two upserts so a failure here cannot leave the
-                # panel showing a delta the history has no row for.
+                # After the two upserts, and the first of the two append-only
+                # logs: it goes last of the three that existed before #63 so a
+                # failure here cannot leave the panel showing a delta the
+                # history has no row for.
                 change_journal.append(cid, journalled)
+                # Last, after the history it is a projection of: both are
+                # append-only, and a failure here must not be able to leave a
+                # timeline row standing for a change the journal has no entry
+                # for. The reverse order is recoverable -- the journal row is
+                # the fuller record -- and this one is not.
+                relationship_history.append(cid, timeline)
             except Exception as exc:  # noqa: BLE001 — the edits landed; the delta log did not
                 reason = f"the changes panel could not be updated: {exc}"
                 # Settled, not left pending: if this commit also fails to record

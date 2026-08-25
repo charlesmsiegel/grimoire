@@ -21,6 +21,7 @@ from .. import (
     pending_reviews,
     pins,
     prompt_log,
+    relationship_history,
     scene_ids,
     scene_refs,
     turnstate,
@@ -234,6 +235,14 @@ def delete_scene(cid: str, sid: str) -> None:
     # another's prompt. Campaign-scoped rules stay; they were never about this
     # scene. Before the unlink, same as the two above.
     pins.drop_scene(cid, sid)
+    # The relationship timeline's rows for this scene are MARKED rather than
+    # dropped (#63), which is the same recycled-id reason pointing the other
+    # way. They are history and cannot go -- a delta that happened still
+    # happened -- but left resolvable they would be labelled with the
+    # replacement scene's title and date, and carried along by its next rename.
+    # `forget_scene` keeps the id as a historical string and takes it out of
+    # both joins. Before the unlink, like the three above.
+    relationship_history.forget_scene(cid, sid)
     # The two per-scene sidecars go FIRST. Deleting the transcript is what frees
     # the id for reuse, so a crash between the unlinks must not be able to leave
     # a sidecar without one: that orphan would be adopted by the next scene to

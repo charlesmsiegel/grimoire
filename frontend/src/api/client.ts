@@ -38,7 +38,7 @@ import {
   type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
   type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
-  type RecordChange, type RegenerateOverrides, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
+  type RecordChange, type RegenerateOverrides, type RelationshipChange, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
   type ResponsePresetUsage, type RollEntry, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type RoutingBundle, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
@@ -609,6 +609,17 @@ export const api = {
     request<Provenance>("GET", `/api/campaigns/${cid}/provenance`),
   campaignLedger: (cid: string) =>
     request<Ledger>("GET", `/api/campaigns/${cid}/ledger`, undefined, { fresh: true }),
+  /** The relationship timeline (#63), optionally narrowed to one pair — both
+   *  actor tokens or neither, since half a pair names no pair. `fresh` for the
+   *  ledger's reason: this is re-read precisely when an absorb or an undo has
+   *  just added a row, and a shared in-flight promise would answer with the
+   *  list from before it. */
+  campaignRelationshipHistory: (cid: string, pair?: { a: string; b: string }) =>
+    request<RelationshipChange[]>(
+      "GET",
+      `/api/campaigns/${cid}/relationships/history`
+        + (pair ? `?a=${encodeURIComponent(pair.a)}&b=${encodeURIComponent(pair.b)}` : ""),
+      undefined, { fresh: true }),
   // `fresh`, for the reason the ledger opts out of sharing: the timeline is
   // re-read precisely when the records behind it have moved — a scene ended, a
   // beat recorded, a scene renamed — and the dedupe would answer that with the

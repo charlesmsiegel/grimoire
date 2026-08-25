@@ -1431,6 +1431,28 @@ export type LedgerRelationship = {
   trust: number; affection: number; tension: number;
   note: string; type: string; since_scene: string; scene: LedgerScene;
 };
+/** One applied relationship delta (#63): how a standing on the ledger got
+ *  where it is.
+ *
+ *  `LedgerRelationship` is the current-value view — what `relationships.json`
+ *  holds now — and this is the append-only account behind it, newest first. The
+ *  pair is unjoined and ORDERED for a feeling (`a` feels toward `b`) and
+ *  unordered for a bond, the same asymmetry the store's two key formats carry;
+ *  `label` is how the absorb named the pair at the time, which survives a
+ *  rename that `a_name`/`b_name` follow.
+ *
+ *  `before`/`after` are rendered standings, not values: the numbers live in
+ *  `relationships.json`, and this row is the sentence about them changing.
+ *  `source` is "absorb" or "undo" — a reversal appends its own row rather than
+ *  deleting the one it put back. It says a reversal happened and not which
+ *  direction, since undoing an undo is a redo; `before`/`after` say which way
+ *  this one ran. */
+export type RelationshipChange = {
+  id: string; ts: string; source: string; kind: string;
+  a: string; b: string; a_name: string; b_name: string;
+  label: string; before: string; after: string;
+  scene: LedgerScene;
+};
 export type LedgerFact = { id: string; one_line: string; date: string; title: string };
 export type Ledger = {
   plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];

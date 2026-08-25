@@ -8,9 +8,10 @@ to take a scene back, not a hand-rolled truncation.
 
 Why this is a copy and nothing cleverer. A campaign directory is the campaign:
 `campaign.md`, `sync.md`, `scenes/`, the play state (`chronicle.json`,
-`plot.json`, `changes.json`, `relationships.json`, `timeline.md`, per-NPC
-`state.md` and dossiers) and whatever records have materialized out of the
-world. Everything it does *not* hold it inherits from its world through
+`plot.json`, `changes.json`, `relationships.json`,
+`relationship_history.json`, `timeline.md`, per-NPC `state.md` and dossiers)
+and whatever records have materialized out of the world. Everything it does
+*not* hold it inherits from its world through
 `store/overlay.py`, keyed by the `world` line in `campaign.md` and the bases in
 `sync.md` — both of which the copy carries verbatim, so the fork inherits from
 the same world in the same way and nothing has to be re-resolved. The version

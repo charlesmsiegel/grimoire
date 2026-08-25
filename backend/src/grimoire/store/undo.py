@@ -92,12 +92,14 @@ from . import (
     playstate,
     plot,
     provenance,
+    relationship_history,
     relationships,
     voice_drift,
 )
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import paths as campaigns_paths
+from .scenes import paths as scenes_paths
 
 log = logging.getLogger(__name__)
 
@@ -463,7 +465,74 @@ def undo(cid: str, jid: str) -> dict:
         written = journal.append(cid, [row])[0]
         journal.mark_undone(cid, jid, written["id"])
         _roll_back_panels(cid, entry, row)
+        _log_relationship_reversal(cid, target, row, stored)
         return written
+
+
+def _log_relationship_reversal(cid: str, target: dict, row: dict, stored) -> None:
+    """Append the reversal to the relationship timeline (#63), when the record
+    put back was a feeling or a bond.
+
+    APPENDED, not deleted -- the opposite of what `_roll_back_panels` does to
+    the two rolling logs, and for the opposite reason. Those describe "what this
+    record holds now" and a reversal moves that backward, so the row has to be
+    rewritten. The timeline describes what happened, and a reversal happened:
+    dropping the row it undid would leave the arc claiming a standing that was
+    taken back, with nothing to say so.
+
+    Both standings are RECORDS, not `row`'s text. `row` carries the journal
+    entry's `after`/`before` read backwards, and those are display strings a
+    client-supplied edit supplied -- the very thing `absorb.apply` stopped
+    trusting when it started reading this ledger's `after` back off the record.
+    Taking them here would put the untrusted pair back in through the reversal
+    and break the arc at the one row that exists to close it. `stored` is the
+    value the compare-and-swap just verified (so, what this reversal moved
+    FROM) and the record is read once more afterwards for what it moved TO.
+
+    `scene_gone` is set here for the case `relationship_history.forget_scene`
+    structurally cannot reach: it marks the rows that exist when a scene is
+    deleted, and a journal entry that scene left behind stays undoable
+    afterwards -- so this append lands later, citing an id whose scene is gone
+    and which `scenes.lifecycle` may already have handed to a replacement. The
+    file's absence is the test. What it cannot see is an id that has ALREADY
+    been reissued, where the row is labelled with the new scene; that residual
+    is the tree-wide consequence of joining on a reusable id, which every store
+    `scene_refs` fans out to shares.
+
+    `source` is the journal's word for the same thing and carries no direction,
+    which is deliberate rather than an omission. Undoing an undo is a redo (this
+    function's caller says so in its own docstring), and the direction is the
+    PARITY of a chain of `reverted` links that journal retention can truncate --
+    so a row claiming it would be wrong exactly when the chain got long, which
+    is when a reader would rely on it. The row's own `before` and `after` say
+    which way this one ran, and the view badges it neutrally.
+
+    Never fatal, for `_roll_back_panels`' reason: the reversal has landed by the
+    time this runs, and a gap in the timeline is the smaller harm.
+    """
+    # `w` is this module's writer tag and `KINDS` is the timeline's vocabulary.
+    # The two words coincide for these two writers, so this is a membership test
+    # rather than a mapping -- and it is against `KINDS` rather than a literal
+    # pair so a writer tag added here cannot quietly log under a kind the
+    # timeline does not know.
+    kind = target.get("w")
+    if kind not in relationship_history.KINDS:
+        return
+    a, b = ((target.get("from"), target.get("to")) if kind == "feeling"
+            else (target.get("a"), target.get("b")))
+    if not isinstance(a, str) or not isinstance(b, str):
+        return
+    sid = _display(row.get("scene"))
+    try:
+        relationship_history.append(cid, [relationship_history.row(
+            kind, a, b, label=_display(row.get("label")),
+            before=relationships.render_standing(kind, stored),
+            after=relationships.render_standing(kind, read_value(cid, target)),
+            scene=sid, source="undo",
+            scene_gone=bool(sid) and not scenes_paths._scene_path(cid, sid).exists())])
+    except Exception:  # the reversal landed; only the timeline is short a row
+        log.warning("could not record the relationship reversal for %s in %s", target, cid,
+                    exc_info=True)
 
 
 def _roll_back_panels(cid: str, entry: dict, row: dict) -> None:

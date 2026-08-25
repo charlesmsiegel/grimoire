@@ -9,6 +9,7 @@ vi.mock("../api/client", () => ({
     getCampaign: vi.fn(),
     campaignLedger: vi.fn(),
     campaignChanges: vi.fn(),
+    campaignRelationshipHistory: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -53,7 +54,28 @@ beforeEach(() => {
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
   (api.campaignLedger as any).mockResolvedValue(EMPTY);
   (api.campaignChanges as any).mockResolvedValue([]);
+  (api.campaignRelationshipHistory as any).mockResolvedValue([]);
 });
+
+/** The relationship timeline (#63) as the route returns it: newest first, with
+ *  the standing each delta replaced. */
+const STANDINGS = [
+  { id: "rh3", ts: "2026-07-04T10:00:00Z", source: "undo", kind: "bond",
+    a: "characters:mara", b: "characters:reeve", a_name: "Sister Mara",
+    b_name: "The Reeve", label: "Sister Mara & The Reeve",
+    before: "sworn", after: "wary allies", scene: scene("009", "The Long Tide") },
+  { id: "rh2", ts: "2026-07-03T10:00:00Z", source: "absorb", kind: "feeling",
+    a: "characters:mara", b: "characters:reeve", a_name: "Sister Mara",
+    b_name: "The Reeve", label: "Sister Mara → The Reeve",
+    before: "trust 3, affection 2, tension 1",
+    after: "trust 1, affection 0, tension 4 (he took the money)",
+    scene: scene("009", "The Long Tide") },
+  { id: "rh1", ts: "2026-07-01T10:00:00Z", source: "absorb", kind: "feeling",
+    a: "characters:mara", b: "characters:reeve", a_name: "Sister Mara",
+    b_name: "The Reeve", label: "Sister Mara → The Reeve",
+    before: "", after: "trust 3, affection 2, tension 1",
+    scene: scene("004", "The Priory Door") },
+];
 
 function renderLedger(entry = "/campaigns/run/ledger") {
   return render(
@@ -84,7 +106,7 @@ const rowById = (id: string) =>
 
 // ---- the column ------------------------------------------------------------
 
-test("the column lists the six sections with a live count each", async () => {
+test("the column lists the seven sections with a live count each", async () => {
   (api.campaignLedger as any).mockResolvedValue({
     ...CHAIN,
     plot: [{ id: "t", title: "The sea wall", status: "open", last_scene: "009",
@@ -104,6 +126,7 @@ test("the column lists the six sections with a live count each", async () => {
       scene: scene("009", "The Long Tide"), fields: [{ field: "current_state",
         label: "Current state", diff: [] }] },
   ]);
+  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
   renderLedger();
 
   const facts = await column().findByRole("button", { name: /standing facts/i });
@@ -114,6 +137,8 @@ test("the column lists the six sections with a live count each", async () => {
   expect(column().getByRole("button", { name: /relationships/i })).toHaveTextContent("1");
   expect(column().getByRole("button", { name: /recent changes/i })).toHaveTextContent("1");
   expect(column().getByRole("button", { name: /timeline/i })).toHaveTextContent("1");
+  expect(column().getByRole("button", { name: /relationship history/i }))
+    .toHaveTextContent("3");
 });
 
 test("the campaign is named, and the way back to it is a link", async () => {
@@ -268,6 +293,98 @@ test("relationships show both shapes: a directed meter and a dated bond", async 
   const bond = rowFor(/Sister Mara ↔ Ferrant Wyle/);
   expect(bond).toHaveTextContent(/KIN/);
   expect(cells(bond)[3]).toBe("The Priory Door");
+});
+
+test("relationship history is the arc the current standing overwrote", async () => {
+  // The section's reason to exist: `relationships.json` keeps only the far end
+  // of this, and the two feeling rows are the same pair a scene apart.
+  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
+  renderLedger();
+  fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
+
+  expect(await screen.findByRole("heading", { level: 1, name: "Relationship history" }))
+    .toBeInTheDocument();
+  expect(screen.getAllByRole("columnheader").map((h) => h.textContent))
+    .toEqual(["Row", "BETWEEN", "WAS", "SCENE"]);
+
+  const [newest, older, first] = rows();
+  expect(cells(newest)).toEqual(
+    ["↔", "Sister Mara ↔ The Reeve" + "REVERSED · wary allies", "sworn", "The Long Tide"]);
+  expect(cells(older)).toEqual([
+    "→", "Sister Mara → The Reeve" + "trust 1, affection 0, tension 4 (he took the money)",
+    "trust 3, affection 2, tension 1", "The Long Tide"]);
+  // The first delta on a pair replaced nothing, and says so rather than
+  // rendering an empty cell that reads as a missing value.
+  expect(cells(first)[2]).toBe("—");
+  // REVERSED, never UNDONE: undoing an undo is a redo, and the store does not
+  // claim which of the two a reversal was.
+  expect(older).not.toHaveTextContent(/UNDONE/);
+  expect(first).not.toHaveTextContent(/REVERSED/);   // an absorb is unbadged
+});
+
+test("the timeline narrows to one pair through the server, not the page", async () => {
+  // The route caps what it returns, so filtering here would search what the cap
+  // already threw away — a long campaign's older arc for one pair would be
+  // unreachable in the app while the store still held every row of it.
+  (api.campaignLedger as any).mockResolvedValue({
+    ...EMPTY,
+    relationships: [{ id: "characters:mara->characters:reeve", kind: "feeling",
+                      a: "characters:mara", b: "characters:reeve",
+                      a_name: "Sister Mara", b_name: "The Reeve",
+                      trust: 1, affection: 0, tension: 4, note: "",
+                      type: "", since_scene: "", scene: scene("", "") }],
+  });
+  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
+  renderLedger();
+  fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
+  await screen.findByRole("table");
+  expect(api.campaignRelationshipHistory).toHaveBeenCalledWith("run", undefined);
+
+  const picker = screen.getByRole("combobox", { name: /narrow the timeline/i });
+  fireEvent.change(picker, { target: { value: "characters:mara->characters:reeve" } });
+  await waitFor(() => expect(api.campaignRelationshipHistory).toHaveBeenCalledWith(
+    "run", { a: "characters:mara", b: "characters:reeve" }));
+
+  // and back to everyone, which is a read of its own rather than a re-filter
+  (api.campaignRelationshipHistory as any).mockClear();
+  fireEvent.change(picker, { target: { value: "" } });
+  await waitFor(() => expect(api.campaignRelationshipHistory)
+    .toHaveBeenCalledWith("run", undefined));
+});
+
+test("a narrowed timeline with nothing in it says so rather than sending you to play",
+  async () => {
+    (api.campaignLedger as any).mockResolvedValue({
+      ...EMPTY,
+      relationships: [{ id: "characters:mara->characters:reeve", kind: "feeling",
+                        a: "characters:mara", b: "characters:reeve",
+                        a_name: "Sister Mara", b_name: "The Reeve",
+                        trust: 1, affection: 0, tension: 4, note: "",
+                        type: "", since_scene: "", scene: scene("", "") }],
+    });
+    (api.campaignRelationshipHistory as any).mockResolvedValue([]);
+    renderLedger();
+    fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
+    fireEvent.change(await screen.findByRole("combobox", { name: /narrow the timeline/i }),
+                     { target: { value: "characters:mara->characters:reeve" } });
+
+    expect(await screen.findByText(/Nothing has passed between these two yet/))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /back to play/i })).not.toBeInTheDocument();
+  });
+
+test("a broken relationship-history read costs its section and nothing else", async () => {
+  (api.campaignRelationshipHistory as any).mockRejectedValue(new Error("nope"));
+  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  renderLedger();
+  await screen.findByRole("table");
+
+  fireEvent.click(column().getByRole("button", { name: /relationship history/i }));
+  expect(await screen.findByText(/Every feeling and bond an absorb applies is kept here/))
+    .toBeInTheDocument();
+  // the ledger's own sections are untouched
+  fireEvent.click(column().getByRole("button", { name: /standing facts/i }));
+  expect(await waitFor(() => rowFor(/sea wall/))).toBeInTheDocument();
 });
 
 test("recent changes and the timeline come from their own reads", async () => {

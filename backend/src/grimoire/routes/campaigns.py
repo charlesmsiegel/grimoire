@@ -1082,6 +1082,100 @@ def _ledger_relationships(cid: str) -> list[dict]:
     return rows
 
 
+#: How many timeline rows a listing returns, newest first, after any pair
+#: filter. A cap rather than paging, for `JOURNAL_PAGE`'s reason: this is a
+#: "how did these two get here" view, and the store retains by age and by bytes
+#: (`relationship_history.RETENTION` / `MAX_BYTES`), so what falls off its end
+#: is not something a bare offset could name either. Higher than the journal's
+#: because a row here carries two short standings rather than a rendered diff of
+#: a record body, and because narrowing to one pair is the intended use.
+RELATIONSHIP_HISTORY_PAGE = 200
+
+
+@router.get("/campaigns/{cid}/relationships/history")
+def get_relationship_history(cid: str, a: str | None = None, b: str | None = None):
+    """How each standing on the ledger got there: one row per applied feeling or
+    bond delta, newest first (#63).
+
+    `_ledger_relationships` above answers where two people stand *now*; this
+    answers what moved them, which `relationships.json` overwrites and cannot
+    say. Pass `a` and `b` (actor tokens) for one pair — matched unordered, so a
+    directed feeling is returned in both directions along with the bond, since
+    "what has passed between these two" is one question. Both or neither: one
+    alone is a 400 rather than a quiet fall back to everything.
+
+    Every field is coerced and the names are resolved tolerantly, the two rules
+    `_journal_row` and `_ledger_relationships` respectively state: the file is
+    hand-editable and read by a bare `json.loads`, and a card that will not
+    parse must cost a name rather than the view.
+    """
+    _campaign_root_or_404(cid)
+    # A pair is both tokens or neither. One alone would silently answer with the
+    # unfiltered timeline -- up to `RELATIONSHIP_HISTORY_PAGE` rows for pairs the
+    # caller did not ask about, looking exactly like a filtered response.
+    if bool(a) != bool(b):
+        raise HTTPException(status_code=400,
+                            detail="filtering by pair needs both actor tokens, "
+                                   "`a` and `b` — half a pair names no pair")
+    entries = (store.relationship_history.for_pair(cid, a, b)
+               if a and b else store.relationship_history.read(cid))
+    entries = entries[-RELATIONSHIP_HISTORY_PAGE:]
+    try:
+        scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    except Exception:  # noqa: BLE001 — one unreadable scene header: titles degrade, no 500
+        # `list_scenes` opens every scene's header, so a single file a sync
+        # client mangled raises out of it — and would take this whole timeline
+        # with it, including the rows of every healthy scene, over a label.
+        scenes_by_id = {}
+    try:
+        chron = store.chronicle.read_chronicle(cid)
+    except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
+        chron = {}
+    # And a chronicle.json that PARSES but is not an object degrades the same
+    # way. `read_chronicle` hands back whatever `json.loads` returned, so a
+    # hand-edited list reaches the `.get` below and raises past the handler
+    # above — a date label nobody would miss, turning a valid request into a
+    # 500. Each record is re-checked at the row for the same reason.
+    if not isinstance(chron, dict):
+        chron = {}
+    names: dict[str, str] = {}
+
+    def _name(token: str) -> str:
+        if token not in names:
+            try:
+                names[token] = store.relationships.actor_name(cid, token)
+            except Exception:  # noqa: BLE001 — an unreadable card costs a name, not the row
+                names[token] = token.partition(":")[2] or token
+        return names[token]
+
+    out: list[dict] = []
+    for e in reversed(entries):
+        atok, btok = _ledger_text(e.get("a")), _ledger_text(e.get("b"))
+        sid = _ledger_text(e.get("scene"))
+        # A row whose scene has been DELETED is not resolved against either
+        # join: ids are recycled, so whatever holds this one now is a different
+        # scene, and lending the row its title and date would be the plainest
+        # possible lie about where a standing came from. The id itself is kept
+        # and shown, which is what an unresolvable id has always rendered as.
+        gone = bool(e.get("scene_gone"))
+        sc = {} if gone else scenes_by_id.get(sid, {})
+        c = None if gone else chron.get(sid)
+        c = c if isinstance(c, dict) else {}
+        out.append({
+            "id": _ledger_text(e.get("id")), "ts": _ledger_text(e.get("ts")),
+            "source": _ledger_text(e.get("source")),
+            # Anything but the two known kinds renders as a feeling would read
+            # wrong; an unknown kind is passed through so the row still says
+            # what the file says rather than being silently relabelled.
+            "kind": _ledger_text(e.get("kind")),
+            "a": atok, "b": btok, "a_name": _name(atok), "b_name": _name(btok),
+            "label": _ledger_text(e.get("label")),
+            "before": _ledger_text(e.get("before")), "after": _ledger_text(e.get("after")),
+            "scene": {"id": sid, "title": sc.get("title", sid), "date": c.get("date", "")},
+        })
+    return out
+
+
 @router.get("/campaigns/{cid}/provenance")
 def get_provenance(cid: str):
     """Why each continuity line is there: the quote, speaker and certainty
