@@ -620,3 +620,35 @@ test("a graph edit re-reads the chip list behind it", async () => {
   await waitFor(() =>
     expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
 });
+
+test("a map remounted mid-write is held behind the write the last one left", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+    meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  }));
+  const gate: (() => void)[] = [];
+  (api.setEdges as any) = vi.fn(() => new Promise<void>((res) => gate.push(res)));
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+  fireEvent.click(await screen.findByRole("button", { name: "Plot map" }));
+
+  fireEvent.click(await screen.findByRole("button", { name: "Link from Saltmarch Dawn" }));
+  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to Vow of Silence" }));
+  await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(1));
+
+  // away and straight back: the first map is gone, its PUT is not
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+
+  // A fresh map with an empty queue of its own would happily write over it.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeDisabled());
+  gate.forEach((res) => res());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeEnabled());
+});

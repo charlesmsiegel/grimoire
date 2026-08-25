@@ -62,7 +62,10 @@ test("every greeting is a node, and the two edge kinds render distinctly", async
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
   expect(screen.getByRole("button", { name: "Open The Ledger" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Open A Quiet Word" })).toBeInTheDocument();
-  expect(api.readGreeting).toHaveBeenCalledWith(SCOPE, "dawn");
+  // `fresh`, because this map reads a greeting's edges in order to write them
+  // back: a shared in-flight GET issued before someone else's write answers
+  // from before it, and the next whole-array write would send that back.
+  expect(api.readGreeting).toHaveBeenCalledWith(SCOPE, "dawn", { fresh: true });
 
   // An unlock is directed and an exclusion is not, so they are not the same
   // line with a different colour -- they carry different classes and say

@@ -957,3 +957,84 @@ test("an unsaved edge change is reported, so the map can hold still for it", asy
   // chips move, this save WILL replace the arrays, so the map must wait.
   await waitFor(() => expect(onEdgeDraft).toHaveBeenLastCalledWith(true));
 });
+
+test("Delete is held while the map is writing, as Save is", async () => {
+  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
+            present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
+  });
+  const { container } = render(
+    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w"
+                    hold="The plot map is still writing these links." />);
+  const rail = await waitFor(() => railOf(container));
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+
+  // `delete_greeting` sweeps this id out of every other greeting's edges, so
+  // it and an in-flight map write are two unlocked rewrites of one plotmap.
+  expect(screen.getByRole("button", { name: /^delete$/i })).toBeDisabled();
+  expect(api.deleteGreeting).not.toHaveBeenCalled();
+});
+
+test("busy stays true until the second of two overlapping saves settles", async () => {
+  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
+            present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
+  });
+  const gate: (() => void)[] = [];
+  (api.updateGreeting as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
+  const onBusy = vi.fn();
+  const { container } = render(
+    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onBusy={onBusy} />);
+  const rail = await waitFor(() => railOf(container));
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+
+  const save = screen.getByRole("button", { name: "Save greeting" });
+  fireEvent.click(save);
+  await waitFor(() => expect(onBusy).toHaveBeenCalledWith(true));
+  // the button is held while its own write is out, so a second cannot start
+  await waitFor(() => expect(save).toBeDisabled());
+  expect(api.updateGreeting).toHaveBeenCalledTimes(1);
+
+  gate[0]();
+  await waitFor(() => expect(onBusy).toHaveBeenLastCalledWith(false));
+});
+
+test("a graph write rebases a clean draft's chips without touching the form", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    greeting("dawn", "Saltmarch Dawn", "seraphine", []),
+    greeting("vow", "Vow of Silence", "seraphine", []),
+  ]);
+  const before = {
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
+            present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
+  };
+  (api.readGreeting as any).mockResolvedValue(before);
+  const { container, rerender } = render(
+    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} />);
+  const rail = await waitFor(() => railOf(container));
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Half-written" } });
+
+  // the map draws an edge on this greeting while the draft sits open
+  (api.readGreeting as any).mockResolvedValue({
+    ...before, edges: { leads_to: ["vow"], excludes: [] },
+  });
+  rerender(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} />);
+
+  // The typing survives -- and the chips catch up, so touching one later does
+  // not send a pre-map array back over the edge that was just drawn.
+  await waitFor(() => {
+    const leadsTo = screen.getByText("Leads to").parentElement as HTMLElement;
+    expect(within(leadsTo).getByRole("button", { name: "Vow of Silence" }))
+      .toHaveClass("chip", "on");
+  });
+  expect(screen.getByLabelText("Name")).toHaveValue("Half-written");
+});

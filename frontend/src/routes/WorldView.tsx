@@ -509,11 +509,17 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             {greetingView === "graph" && (
               <PlotMapEditor scope={scope} onOpenGreeting={openGreeting}
                              reloadKey={greetingEpoch}
+                             // `mapWriting` is here as well as on the editor: a
+                             // map unmounted mid-write keeps its PUT alive, and
+                             // switching straight back mounts a NEW map with an
+                             // empty queue of its own, free to write over it.
                              hold={listSaving
                                ? "The greeting editor is saving. Its save writes these same links, so the map waits for it."
                                : listEdgeDraft
                                  ? "The greeting editor has unsaved link changes. Save or cancel them first — its save replaces these same links."
-                                 : null}
+                                 : mapWriting
+                                   ? "A link from this map is still being written. Wait for it before changing another."
+                                   : null}
                              onBusy={setMapWriting}
                              onChanged={() => setMapEpoch((n) => n + 1)} />
             )}

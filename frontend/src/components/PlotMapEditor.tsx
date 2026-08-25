@@ -310,7 +310,11 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, onBusy, reload
       // an opening is worse than one that admits it is missing some lines.
       const missed: string[] = [];
       const pairs = await Promise.all(list.map((g) =>
-        api.readGreeting(scope, g.id)
+        // `fresh`: identical in-flight GETs are shared, and this load may be
+        // verifying a write that another view just made -- a promise started
+        // before it answers from before it, and this map would install that
+        // and let the next whole-array write send it back.
+        api.readGreeting(scope, g.id, { fresh: true })
           .then((d) => [g.id, d.edges ?? NO_EDGES] as const)
           .catch(() => { missed.push(g.id); return [g.id, NO_EDGES] as const })));
       if (loadId.current !== mine) return;
