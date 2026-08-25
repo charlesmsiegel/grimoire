@@ -142,6 +142,49 @@ def test_undescribed_empty_when_no_base_dir(tmp_path):
     assert image_descriptions.undescribed(tmp_path, "characters") == []
 
 
+def test_catalog_lists_every_image_with_its_review_state(tmp_path):
+    """The gallery's listing (#200) is the describe queue's walk without the
+    filter: described, reviewed-empty and unreviewed art all appear, and each
+    row says which it is."""
+    cid, vid = _chars(tmp_path, images=("avatar", "gallery_1", "gallery_2"))
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"avatar": "In half-plate.", "gallery_1": ""})
+    rows = image_descriptions.catalog(tmp_path, "characters")
+    assert [(r["name"], r["described"], r["description"]) for r in rows] == [
+        ("avatar", True, "In half-plate."),
+        ("gallery_1", True, ""),      # reviewed, deliberately blank
+        ("gallery_2", False, ""),     # never looked at
+    ]
+    # The cache-busting token comes along, so a tile can request `?v=` and be
+    # served immutable rather than revalidating every image in the gallery.
+    assert all(r["v"] and r["ext"] == "png" for r in rows)
+
+
+def test_catalog_reads_a_non_string_description_as_empty(tmp_path):
+    """Same tolerance `read_in` has, for the same reason: a hand-edited or
+    half-synced sidecar must not hand a list to a caller expecting text. The
+    key is still present, so the image is still *reviewed*."""
+    cid, vid = _chars(tmp_path, images=("avatar",))
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.path_in(d).write_text('{"avatar": ["not", "text"]}', encoding="utf-8")
+    (row,) = image_descriptions.catalog(tmp_path, "characters")
+    assert (row["id"], row["vid"], row["name"]) == (cid, vid, "avatar")
+    assert (row["described"], row["description"]) == (True, "")
+
+
+def test_catalog_empty_when_no_base_dir(tmp_path):
+    assert image_descriptions.catalog(tmp_path, "characters") == []
+
+
+def test_catalog_skips_stranded_promotion_residue(tmp_path):
+    """A gallery tile links to the serve route, and nothing serves
+    `promote-tmp` -- the same filter the describe queue takes."""
+    cid, vid = _chars(tmp_path)
+    (_dir_of(tmp_path, cid, vid) / "promote-tmp.png").write_bytes(b"png")
+    assert {r["name"] for r in image_descriptions.catalog(tmp_path, "characters")} == {
+        "avatar", "gallery_1"}
+
+
 def test_promotion_moves_descriptions_with_the_bytes(tmp_path):
     """A description is a claim about particular bytes, so it travels with them.
     Without this the swap left each picture wearing the other's sentence."""

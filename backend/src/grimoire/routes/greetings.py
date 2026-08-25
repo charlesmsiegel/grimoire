@@ -10,6 +10,7 @@ from .. import store
 from ..llm import LLMClient
 from . import runs
 from .common import (
+    THUMB_W,
     _campaign_root_or_404,
     _fresh_or_409,
     _record_prompt,
@@ -163,9 +164,6 @@ def put_world_greeting_image_subjects(wid: str, gid: str, name: str, body: Subje
     return {"ok": True}
 
 
-_THUMB_W = 320  # tiles render at 96-154px; 320 covers retina
-
-
 def _greeting_image_urls(root, wid: str, a: dict) -> dict:
     """Versioned full + thumbnail URLs for one greeting image: both cache
     immutable, and the thumb keeps a 70-tile gallery from pulling 100MB+
@@ -175,7 +173,7 @@ def _greeting_image_urls(root, wid: str, a: dict) -> dict:
     if p is None:  # vanished between sweep and stat: bare URLs, still renderable
         return {"url": base, "thumb": base}
     v = store.assets.image_version(p)
-    return {"url": f"{base}?v={v}", "thumb": f"{base}?w={_THUMB_W}&v={v}"}
+    return {"url": f"{base}?v={v}", "thumb": f"{base}?w={THUMB_W}&v={v}"}
 
 
 @router.get("/worlds/{wid}/subjects/untagged")

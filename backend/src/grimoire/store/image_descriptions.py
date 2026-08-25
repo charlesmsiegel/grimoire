@@ -203,11 +203,24 @@ def set_description(root: Path, aid: str, vid: str, name: str, text: str,
     set_in(_dir(root, aid, vid, base), name, text, names)
 
 
-def undescribed(root: Path, base: str = "characters") -> list[dict]:
-    """Every stored image of `base` with NO sidecar key — the authoring queue.
+def catalog(root: Path, base: str = "characters") -> list[dict]:
+    """Every stored image of `base`, whether described or not — the gallery's
+    listing (#200), and the walk ``undescribed`` filters.
 
-    Key absent = unreviewed; an explicit ``""`` counts as reviewed. Sorted by
-    (id, vid, name), which is the order the editors list versions and images in.
+    One entry per logical image: ``id``, ``vid``, ``name``, the ``ext`` and
+    cache-busting ``v`` token ``assets.list_in`` resolves, and the two facts the
+    sidecar holds. ``described`` is key PRESENCE, the distinction this module's
+    docstring turns on — an image reviewed and deliberately left blank IS
+    described, and its ``description`` is then ``""``. A non-string value reads
+    as ``""`` here for the reason ``read_in`` drops it: a hand-edited or
+    half-synced store must not hand a list to a caller expecting text.
+
+    Sorted by (id, vid, name), which is the order the editors list versions and
+    images in.
+
+    The whole-tree walk lives here, in one function, rather than once per
+    listing: "where the images of a base live" said twice is how a base gets
+    added to the gallery and not to the describe queue, or the other way round.
     """
     out: list[dict] = []
     bdir = root / base
@@ -218,7 +231,31 @@ def undescribed(root: Path, base: str = "characters") -> list[dict]:
         if not adir.is_dir():
             continue
         for vdir in sorted(p for p in adir.iterdir() if p.is_dir()):
-            reviewed = set(read_raw(vdir))  # key presence alone marks 'reviewed'
-            out.extend({"id": rec.name, "vid": vdir.name, "name": name}
-                       for name in sorted(_names(vdir)) if name not in reviewed)
+            reviewed = read_raw(vdir)
+            for img in assets.list_in(vdir):
+                # `assets.storable`, the same filter `_names` applies and for
+                # the same reason: a stranded `promote-tmp` is shown in the
+                # editor it belongs to on purpose, but it is a name no serve
+                # route answers, so a gallery tile over it is a broken image.
+                if not assets.storable(img["name"]):
+                    continue
+                text = reviewed.get(img["name"])
+                out.append({"id": rec.name, "vid": vdir.name, "name": img["name"],
+                            "ext": img["ext"], "v": img["v"],
+                            "described": img["name"] in reviewed,
+                            "description": text if isinstance(text, str) else ""})
     return out
+
+
+def undescribed(root: Path, base: str = "characters") -> list[dict]:
+    """Every stored image of `base` with NO sidecar key — the authoring queue.
+
+    Key absent = unreviewed; an explicit ``""`` counts as reviewed. Sorted by
+    (id, vid, name), which is the order the editors list versions and images in.
+
+    Only the three keys the queue reads, not `catalog`'s row whole: widening a
+    response nobody asked to widen is how a second, quieter contract grows on a
+    route that already has one.
+    """
+    return [{"id": i["id"], "vid": i["vid"], "name": i["name"]}
+            for i in catalog(root, base) if not i["described"]]

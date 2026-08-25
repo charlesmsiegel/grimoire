@@ -693,6 +693,14 @@ def _upload_image_ext(data: bytes) -> str:
     return ext
 
 
+#: The width a gallery tile requests through `?w=`, which `store.thumbs` honours
+#: with an on-the-fly WebP downscale. Tiles render at 96-154px and 320 covers
+#: retina. Here rather than in each listing route because two routes now build
+#: thumbnail URLs -- the greeting tagger's and the world gallery's -- and a
+#: width that drifts between them is two cache keys for one picture.
+THUMB_W = 320
+
+
 def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
                  request: Request | None = None):
     p = store.assets.image_path(root, cid, vid, name, base)
