@@ -1695,3 +1695,30 @@ def test_a_busy_campaign_does_not_cost_the_other_dependents_their_sweep(monkeypa
 
     assert f"characters/{aid}" in overlay.detached(other)       # swept anyway
     assert f"characters/{aid}" not in overlay.detached(busy)    # skipped, not corrupted
+
+
+def test_a_campaign_row_reports_an_inherited_voice_anchor(monkeypatch, tmp_path):
+    """`characters.list_characters` computes the flag against ONE root, so a
+    campaign-local card inheriting its anchor from the world would report having
+    none. Patched through the overlay, exactly like `tagline`."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    char, _ = characters.create_character(worlds.world_root(wid), "Mara")
+    voice_anchors.write(worlds.world_root(wid), char, "Clipped. Never contracts.")
+    cid = campaigns.create_campaign("Run", wid)
+    overlay.copy_record_dir_down(cid, "characters", char)   # campaign-local copy
+    row = next(c for c in overlay.list_characters(cid) if c["id"] == char)
+    assert row["has_voice_anchor"] is True
+
+
+def test_a_campaign_tombstone_reports_no_voice_anchor(monkeypatch, tmp_path):
+    """The inverse: a campaign that cleared an inherited anchor means 'none
+    here', which a bare campaign-root read also cannot see."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    char, _ = characters.create_character(worlds.world_root(wid), "Mara")
+    voice_anchors.write(worlds.world_root(wid), char, "Clipped. Never contracts.")
+    cid = campaigns.create_campaign("Run", wid)
+    overlay.set_voice_anchor(cid, char, "")
+    row = next(c for c in overlay.list_characters(cid) if c["id"] == char)
+    assert row["has_voice_anchor"] is False

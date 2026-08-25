@@ -10,7 +10,8 @@ Stored at <root>/characters/<char_id>/voice_anchor.md as plain prose. A separate
 file from the card's `mes_example` because the two do different work: the
 examples DEMONSTRATE a voice and the anchor DESCRIBES it, which is what lets it
 state a rule ("clipped, never uses contractions") that a sample can only imply.
-Both are sent, each in its own scene section, capped through `effective()`.
+Both are sent, each in its own scene section: the anchor capped through
+`effective()`, the examples through `truncate(..., VOICE_EXAMPLE_CAP)`.
 
 That is a reversal. This docstring used to say the anchor "is never sent as part
 of a scene", and the property it protected was real: an anchor could be edited to

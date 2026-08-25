@@ -594,8 +594,13 @@ def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
     # exactly the prompts the section is designed not to clutter. This case is
     # the natural host rather than merely a convenient one -- it is the
     # several-NPCs-in-a-scene fixture, which is the condition the differentiation
-    # rule exists for. Rendered from the same assembly the prompt came from, so
-    # rewording the template fails here rather than silently everywhere else.
+    # rule exists for.
+    #
+    # What this buys, stated exactly: `grade_prompt_section` renders the CURRENT
+    # template and requires the result in the assembled prompt, so both sides
+    # move together and a REWORD cannot fail it. It catches the section ceasing
+    # to be DELIVERED -- emptied, switched off, dropped, or its feeding variable
+    # broken. Emptying voice_policy.j2 fails four cases here immediately.
     data = context._assemble(ctx["cid"], ctx["sid"])["data"]
     voice = graders.grade_prompt_section(ctx["messages"], "voice_policy",
                                          "scene/sections/voice_policy.j2",

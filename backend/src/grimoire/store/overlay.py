@@ -1036,7 +1036,13 @@ def _patch_char_item(cid: str, item: dict) -> dict:
             "avatar_focus": read_focus(cid, item["id"], item["default_version"]),
             "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
             "localized_count": sum(1 for n in names if n.startswith("embed-")),
-            "tagline": tagline(cid, item["id"])}
+            "tagline": tagline(cid, item["id"]),
+            # Resolved through the overlay for the same reason `tagline` is:
+            # `characters.list_characters` computed this against ONE root, so a
+            # campaign-local card inheriting its anchor from the world would
+            # report having none. The campaign tombstone is honoured here too,
+            # which a bare campaign-root read cannot see either.
+            "has_voice_anchor": bool(voice_anchor(cid, item["id"]))}
 
 
 def list_characters(cid: str) -> list[dict]:
