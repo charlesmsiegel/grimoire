@@ -352,5 +352,16 @@ def test_the_judge_prompt_no_longer_defines_drift_against_the_anchor_alone():
 
 
 def test_no_correction_leaves_the_user_message_as_it_was():
+    """Byte-for-byte against the pre-change shape, not merely "the word
+    'correction' is absent" -- that weaker assertion is satisfied by a user
+    message which has lost the name, the anchor or the transcript entirely."""
     user = voice_drift.build_prompt("Mara", "Clipped.", "Mara: Fine.")[1]["content"]
-    assert "correction" not in user.lower()
+    assert user.splitlines() == [
+        "Character: Mara",
+        "",
+        "Voice anchor:",
+        "Clipped.",
+        "",
+        "Scene transcript:",
+        "Mara: Fine.",
+    ]

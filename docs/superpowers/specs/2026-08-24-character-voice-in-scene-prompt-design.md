@@ -238,7 +238,10 @@ cast_blocks:     [ {"name": str,        # "" when the card has none
 named_npc_count: int   # entries with a non-empty name
 ```
 
-**Every present NPC gets an entry. Nothing is filtered out here.** An earlier
+**Every present NPC whose card can be READ gets an entry, and nothing is
+filtered out beyond that.** The card read is the pre-existing filter — a
+present NPC whose card or locked version is missing already drops out of
+`npc_cards`, and cannot contribute a block it has no data for. An earlier
 revision dropped entries whose anchor and example were both empty, which
 silently defeated the cast-size rule below — two NPCs with neither would have
 produced an empty list and no differentiation instruction. Filtering is each
@@ -257,9 +260,19 @@ template's business, per-block.
   and **guaranteeing uniqueness among non-empty names only** — nameless
   entries all keep `""` and are excluded from the uniqueness requirement,
   which is not a loophole but the point: they render no heading to collide.
-  When two named entries are **confusable** (`scenes.confusable`, the test
-  absorb and `cast.py` already use), every member of the group — not just
-  the later ones — gains a 1-based ordinal: `Winifred #1`, `Winifred #2`.
+  Collision is **case-folded string equality**, and every member of a
+  colliding group — not just the later ones — gains a 1-based ordinal:
+  `Winifred #1`, `Winifred #2`.
+
+  An earlier revision of this section mandated `scenes.confusable` here, and
+  implementation showed that to be wrong twice over. Its `names` argument is
+  the whole roster *including* the name, so `confusable("Mara", ["Winifred"])`
+  is `True` — inverted from what heading uniqueness wants. And suffixing
+  cannot satisfy it: `confusable("Winifred #1", ["Winifred #1", "Winifred
+  #2"])` stays `True`, because the bare label still prefixes both. It answers
+  whether a transcript speaker label resolves to one cast member, which is a
+  parsing question. Using it would also have fired on "Winifred Vance" beside
+  "Winifred Vale" — two headings a reader can already tell apart.
   The ordinal is always appended to the **original** name, never to an
   already-suffixed display name, and on a collision with a literal card name
   the ordinal is **incremented** rather than a second suffix appended. So
@@ -401,8 +414,8 @@ not have satisfied it.
 bool`** beside `tagline`, meaning `bool(world-level anchor text)` — `true`
 means the character **has** an anchor.
 
-`CharacterEditor.tsx` derives `anchorless = chars.filter(c =>
-!c.has_voice_anchor)`, beside the existing `untagged` (line 263), and
+derives `anchorless = chars.filter(c =>
+c.has_voice_anchor === false)`, beside the existing `untagged` (line 263), and
 surfaces its count in **world scope only**, as `untagged` does.
 
 | world `voice_anchor.md` | `has_voice_anchor` | in `anchorless` |

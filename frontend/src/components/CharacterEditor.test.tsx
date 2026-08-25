@@ -2755,3 +2755,46 @@ test("no bulk-generate button is offered for anchors", async () => {
   await screen.findByText("1 character has no voice anchor");
   expect(screen.queryByRole("button", { name: /anchors \(/i })).toBeNull();
 });
+
+test("the over-cap warning uses the cap the server reported", async () => {
+  (api.getConfig as any).mockResolvedValue({ voice_anchor_cap: 10 });
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "x".repeat(11) });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByDisplayValue("x".repeat(11));
+  expect(await screen.findByText(/Over 10 characters/)).toBeTruthy();
+});
+
+test("astral characters count as one each, not two", async () => {
+  // Six emoji: six code points, twelve UTF-16 units. A naive `.length` warns
+  // here, and would fire at half the real cap on any anchor containing emoji.
+  const emoji = String.fromCodePoint(0x1F600).repeat(6);
+  (api.getConfig as any).mockResolvedValue({ voice_anchor_cap: 10 });
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: emoji });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByDisplayValue(emoji);
+  expect(screen.queryByText(/Over 10 characters/)).toBeNull();
+});
+
+test("the backlog count is refreshed by the trip back to the roster", async () => {
+  // The count renders only in grid mode, and `backToGrid` reloads the roster --
+  // so it cannot be observed stale, and patching the row locally after a save
+  // would duplicate that. This pins the property the absence of that patch
+  // relies on: leave the character, and the count reflects the server again.
+  (api.listCharacters as any)
+    .mockResolvedValueOnce([{ id: "seraphine", name: "Seraphine", default_version: "default",
+                              has_voice_anchor: false, versions: [] }])
+    .mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default",
+                          has_voice_anchor: true, versions: [] }]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "" });
+  (api.setCharacterVoiceAnchor as any).mockResolvedValue({ ok: true });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("1 character has no voice anchor");
+  await openEditForm();
+  fireEvent.change(await screen.findByLabelText("Voice anchor"),
+                   { target: { value: "Clipped. Never contracts." } });
+  fireEvent.click(screen.getByText("Save voice anchor"));
+  fireEvent.click(await screen.findByText("‹ All characters"));
+  await waitFor(() => expect(screen.queryByText(/no voice anchor/i)).toBeNull());
+});

@@ -4446,3 +4446,45 @@ def test_a_nameless_card_keeps_its_description_without_a_heading(monkeypatch, tm
     text = _sections(cid, sid)["character_descriptions"]
     assert "A courier with debts." in text
     assert "##" not in text
+
+
+def test_an_anchor_reaches_the_assembled_prompt(monkeypatch, tmp_path):
+    """END TO END, through layout merge, packing and the join -- not just into
+    `cast_blocks` or a rendered section.
+
+    Every other test here stops at `_assemble` or `_render_sections`. A
+    regression that dropped the voice sections after that point would leave all
+    of them green, which is the whole reason this one reads `build_messages`.
+    """
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {"description": "A courier with debts.", "mes_example": "Mara: Fine."},
+         "Clipped. Never uses contractions."),
+        ("Winifred", {}, "Dry, and slow to answer."),
+    ])
+    prompt = context.build_messages(cid, sid)[0]["content"]
+    assert "# Voice" in prompt
+    assert "distinguishable by their dialogue alone" in prompt
+    assert "## Mara" in prompt and "Clipped. Never uses contractions." in prompt
+    assert "## Winifred" in prompt and "Dry, and slow to answer." in prompt
+    assert "# Voice — example dialogue" in prompt and "Mara: Fine." in prompt
+
+
+def test_headings_survive_a_layout_that_disables_and_reorders(monkeypatch, tmp_path):
+    """Each section owns its heading, so no arrangement can strand one. The
+    off-scene directory's shared-macro approach fails exactly here (#423)."""
+    from grimoire.store import config
+    from grimoire.store.context import layout as ctx_layout
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {"mes_example": "Mara: Fine."}, "Clipped."),
+        ("Winifred", {}, "Dry."),
+    ])
+    config.write_config(prompt_layout_enabled="on")   # the merge is off by default
+    ctx_layout.write_layout([                       # examples FIRST, anchors off
+        {"id": "voice_examples"},
+        {"id": "character_state"},
+        {"id": "voice_anchors", "enabled": False},
+    ])
+    prompt = context.build_messages(cid, sid)[0]["content"]
+    assert "# Voice — example dialogue" in prompt
+    assert "# Voice — how they sound" not in prompt      # disabled, not orphaned
+    assert "Clipped." not in prompt

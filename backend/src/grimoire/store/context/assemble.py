@@ -166,10 +166,14 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # them, and because a template resolving an anchor would be doing store IO
     # from a render.
     #
-    # NOTHING is filtered out. Filtering is each template's business, per
+    # Nothing is filtered out HERE. Filtering is each template's business, per
     # block: `named_npc_count` is what the voice policy renders on, and
     # dropping the anchorless here would switch that policy off in exactly the
     # case it exists for -- a cast with no anchors yet.
+    #
+    # "Here" is doing work: a present NPC whose card or locked version cannot be
+    # read already dropped out of `npc_cards` above, and cannot contribute a
+    # block it has no data for. That is the pre-existing filter, not a new one.
     # A card is hand-editable and importable, so every one of these fields can
     # arrive as a non-string -- `test_a_malformed_card_name_costs_only_its_own_actor`
     # hand-edits `data.name` to a LIST. `_str` keeps a malformed field costing
