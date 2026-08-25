@@ -446,7 +446,8 @@ def test_a_pinned_character_holds_their_voice_blocks(monkeypatch, tmp_path):
     per-character content. Without this a reader could pin a character and
     still watch the packer drop that character's anchor."""
     from grimoire.store.context import assemble
-    assert "voice_anchors" in assemble._CAST_SECTIONS
-    assert "voice_examples" in assemble._CAST_SECTIONS
+    assert assemble._VOICE_CAST_SECTIONS == ("voice_anchors", "voice_examples")
     # voice_policy is LOCK_IN, so it is never dropped and needs no pin
-    assert "voice_policy" not in assemble._CAST_SECTIONS
+    assert "voice_policy" not in assemble._VOICE_CAST_SECTIONS
+    # and they are NOT in the general cast set, which a pinned player also holds
+    assert "voice_anchors" not in assemble._CAST_SECTIONS

@@ -1036,13 +1036,7 @@ def _patch_char_item(cid: str, item: dict) -> dict:
             "avatar_focus": read_focus(cid, item["id"], item["default_version"]),
             "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
             "localized_count": sum(1 for n in names if n.startswith("embed-")),
-            "tagline": tagline(cid, item["id"]),
-            # Resolved through the overlay for the same reason `tagline` is:
-            # `characters.list_characters` computed this against ONE root, so a
-            # campaign-local card inheriting its anchor from the world would
-            # report having none. The campaign tombstone is honoured here too,
-            # which a bare campaign-root read cannot see either.
-            "has_voice_anchor": bool(voice_anchor(cid, item["id"]))}
+            "tagline": tagline(cid, item["id"])}
 
 
 def list_characters(cid: str) -> list[dict]:
@@ -1051,9 +1045,33 @@ def list_characters(cid: str) -> list[dict]:
     # characters.list_characters itself (it requires the meta file)
     have = {c["id"] for c in mine}
     gone = deleted(cid)
-    inherited = [c for c in characters.list_characters(wroot_of(cid))
+    world_rows = characters.list_characters(wroot_of(cid))
+    inherited = [c for c in world_rows
                  if c["id"] not in have and _flat_ref("characters", c["id"]) not in gone]
-    return sorted([_patch_char_item(cid, c) for c in mine + inherited], key=lambda c: c["id"])
+    rows = [_patch_char_item(cid, c) for c in mine + inherited]
+
+    # `has_voice_anchor` is resolved from what the two scans ALREADY read, not
+    # by asking the overlay again. Each scan does one anchor read per row, so
+    # re-resolving in `_patch_char_item` cost three or four reads per returned
+    # character on a listing that is already the expensive one -- and this store
+    # may sit in a synced folder, where per-file latency is the whole cost.
+    #
+    # ONE directory scan settles which rows even have a campaign-side anchor
+    # file, and only those are read. `set_voice_anchor` writes that file
+    # WITHOUT copying the card down, so an inherited row can carry a campaign
+    # tombstone -- which is why "no campaign card, therefore no campaign
+    # anchor" would be wrong, and is the case this got wrong first.
+    world = {c["id"]: c.get("has_voice_anchor", False) for c in world_rows}
+    cdir = croot_of(cid) / "characters"
+    campaign_side = ({p.parent.name for p in cdir.glob("*/voice_anchor.md")}
+                     if cdir.is_dir() else set())          # paths-ok: sibling of anchor_path
+    for row in rows:
+        if row["id"] in campaign_side:
+            rec = voice_anchors.read_record(croot_of(cid), row["id"])
+            row["has_voice_anchor"] = bool(rec["text"])    # tombstone reads as none
+        else:
+            row["has_voice_anchor"] = world.get(row["id"], False)
+    return sorted(rows, key=lambda c: c["id"])
 
 
 def _patch_pc_item(cid: str, item: dict) -> dict:
