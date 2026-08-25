@@ -11,10 +11,15 @@ import { TaggingQueue } from "./TaggingQueue";
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false, location: "" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus }:
+export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus, onChanged }:
   { scope: EntityScope; wid: string;
     onOpenCharacter?: (cid: string, vid: string) => void;
-    onOpenLocation?: (eid: string) => void; focus?: string | null }) {
+    onOpenLocation?: (eid: string) => void; focus?: string | null;
+    /** Fired once a write here has landed, so a second view of the same
+     *  records can re-read (#9: the plot map draws these greetings' edges,
+     *  and a save that lands while it is open would leave it holding a
+     *  snapshot its next whole-array write would send back). */
+    onChanged?: () => void }) {
   const worldScope = scope.kind === "world";
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -148,6 +153,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
       await api.setEdges(scope, id, { leads_to: edges.leads_to, excludes: edges.excludes });
       await reload();
       await select(id);
+      onChanged?.();
     } catch (err: any) {
       if (err instanceof ApiError && err.kind === "stale_record") {
         setStale({ rev: (err.body?.rev as string | null) ?? null });
@@ -172,6 +178,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     if (!form.character || !form.version) return;
     await api.importGreetings(wid, { character: form.character, version: form.version });
     await reload();
+    onChanged?.();
   }
 
   async function remove(g: Greeting) {
@@ -179,6 +186,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     await api.deleteGreeting(scope, g.id);
     if (gid === g.id) resetForm();
     await reload();
+    onChanged?.();   // a delete takes the greeting's edges with it
   }
 
   function toggle(list: "leads_to" | "excludes", id: string) {

@@ -500,3 +500,62 @@ test("Greetings switches between the chip list and the plot map, and a node open
   await screen.findByRole("button", { name: /new greeting/i });
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "dawn"));
 });
+
+test("switching to the plot map keeps a half-written greeting, and a save reloads the map", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  });
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+
+  // start a new greeting, then look at the graph without saving
+  fireEvent.click(await screen.findByRole("button", { name: /new greeting/i }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Half-written" } });
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+
+  // Unmounting the editor would take the draft with it -- no Save, no Cancel,
+  // no warning. It is hidden, so coming back finds the words still there.
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  await waitFor(() => expect(screen.getByLabelText("Name")).toHaveValue("Half-written"));
+});
+
+test("a save that lands after the map is open makes the map re-read", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  });
+  // The save is still in flight when the reader switches views -- which is the
+  // whole race: the map mounts and reads the edges as they were, and the save
+  // lands afterwards with nothing to tell it.
+  let landSave = () => {};
+  (api.updateGreeting as any) = vi.fn(() => new Promise<void>((res) => { landSave = res; }));
+  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+
+  const rail = await waitFor(() => document.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
+  await waitFor(() => expect(api.updateGreeting).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+  const readsBefore = (api.readGreeting as any).mock.calls.length;
+
+  landSave();
+  // Without the re-read the map would keep serving a snapshot from before the
+  // save, and its next whole-array write would send those edges back.
+  await waitFor(() =>
+    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
+});
