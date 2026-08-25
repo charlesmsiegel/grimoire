@@ -193,7 +193,12 @@ function pathOf(a: Placed, b: Placed, lift = 0): string {
     const y1 = down ? a.y + NODE_H : a.y;
     const y2 = down ? b.y : b.y + NODE_H;
     const rows = Math.max(1, Math.round(Math.abs(b.y - a.y) / ROW));
-    const bow = x + 20 + 44 * (rows - 1) + Math.abs(lift);
+    // The SIGN of the lift, not its size: `Math.abs` here gave the two
+    // relationships of one pair the same bow and so the same path, which is
+    // the very overlap the lift exists to undo -- one hit target covering the
+    // other, one line unselectable. Opposite signs bow to opposite sides.
+    const reach = 20 + 44 * (rows - 1) + Math.abs(lift);
+    const bow = x + (lift < 0 ? -reach : reach);
     return `M ${x} ${y1} C ${bow} ${y1}, ${bow} ${y2}, ${x} ${y2}`;
   }
   const rightwards = b.x > a.x;
@@ -222,17 +227,22 @@ const ARROW: Record<Kind, string> = { leads_to: "→", excludes: "↮" };
  *  reload that invalidated it is what the reader sees. */
 class Skipped extends Error {}
 
-export function PlotMapEditor({ scope, onOpenGreeting, onChanged, reloadKey = 0, busy = false }:
+export function PlotMapEditor({ scope, onOpenGreeting, onChanged, onBusy, reloadKey = 0, hold = null }:
   { scope: EntityScope; onOpenGreeting?: (gid: string) => void;
     /** Fired after a write lands here, so the chip-list editor -- which stays
      *  mounted behind this view and holds its own copy of a greeting's edges --
      *  can re-read rather than save over what was just drawn. */
     onChanged?: () => void;
+    /** True while a write from here is in flight -- reported outward because
+     *  the OTHER view has to hold still for it, and because this component can
+     *  be unmounted (List, or a node opened) while its request is still on the
+     *  wire. */
+    onBusy?: (busy: boolean) => void;
     reloadKey?: number;
-    /** True while the chip-list editor is mid-write. Both views send WHOLE
-     *  arrays, so a graph edit that lands between that save's body write and
-     *  its edge write is one the older payload overwrites. */
-    busy?: boolean }) {
+    /** Why the map may not be written right now, from the other view's side:
+     *  it is mid-save, or it is holding an edge draft whose save would replace
+     *  these same arrays. Null when the map is free. */
+    hold?: string | null }) {
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [edges, setEdgeMap] = useState<Record<string, Edges>>({});
   const [ready, setReady] = useState(false);
@@ -377,6 +387,10 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, reloadKey = 0,
     });
     chain.current = task.catch(() => undefined);
     setMutating(true);
+    // Reported to the parent as well as held locally: this component may be
+    // gone before the request settles (List, or a node opened), and the other
+    // writer must stay locked until it does.
+    onBusy?.(true);
     try {
       await task;
       onChanged?.();
@@ -394,6 +408,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, reloadKey = 0,
       return false;
     } finally {
       setMutating(false);
+      onBusy?.(false);
     }
   }
 
@@ -413,7 +428,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, reloadKey = 0,
 
   /** Why a mutation cannot start now, or null. */
   function held(): string | null {
-    if (busy) return "The greeting editor is saving. Its save writes these same links, so the map waits for it.";
+    if (hold) return hold;
     if (mutating) return "A link is still being written. Wait for it before changing another.";
     return null;
   }
@@ -561,7 +576,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, reloadKey = 0,
           against the old ones -- during a Retry, say -- would be overwritten by
           a snapshot that predates it. */}
       {ready && selected && (
-        <div className="plotmap-selected" aria-busy={mutating || busy}>
+        <div className="plotmap-selected" aria-busy={mutating || !!hold}>
           <span className="chip on">
             {KIND_LABEL[selected.kind]}: {nameOf(selected.from)} {ARROW[selected.kind]} {nameOf(selected.to)}
           </span>

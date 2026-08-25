@@ -139,7 +139,7 @@
   },
   "frontend/src/components/GreetingEditor.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-floating-promises": 2,
+    "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 13,
     "@typescript-eslint/no-unsafe-argument": 2,
     "@typescript-eslint/no-unsafe-member-access": 2,

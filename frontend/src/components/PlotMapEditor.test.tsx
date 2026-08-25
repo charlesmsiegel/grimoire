@@ -492,3 +492,52 @@ test("a list that failed is not reported as a map with nothing in it", async () 
   // "no greetings" and "we could not ask" are different answers
   expect(screen.queryByText(/no greetings to map/i)).toBeNull();
 });
+
+test("two links between one pair in the same column bow to opposite sides", async () => {
+  // The pair sits in one column (nothing unlocks either), so both lines take
+  // the same-column route -- where taking the lift's SIZE but not its sign
+  // gave them one path again, and with it one hit target covering the other.
+  plot({
+    dawn: { leads_to: [], excludes: ["ledger"] },
+    ledger: { leads_to: [], excludes: [] },
+    word: { leads_to: [], excludes: [] },
+  });
+  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+    meta: greeting(gid, gid), body: "", rev: "r1", predecessors: [],
+    edges: gid === "dawn" ? { leads_to: ["ledger"], excludes: ["ledger"] }
+                          : { leads_to: [], excludes: [] },
+  }));
+  const { container } = render(<PlotMapEditor scope={SCOPE} />);
+  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+  await waitFor(() => expect(container.querySelectorAll(".pm-edge")).toHaveLength(2));
+
+  const paths = [...container.querySelectorAll(".pm-edge .pm-line")].map((p) => p.getAttribute("d"));
+  expect(paths[0]).not.toEqual(paths[1]);
+});
+
+test("the map holds still while the other view says to, and says which", async () => {
+  render(<PlotMapEditor scope={SCOPE} hold="The greeting editor has unsaved link changes." />);
+  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+
+  expect(screen.getByRole("button", { name: "Link from Saltmarch Dawn" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Unlocks: Saltmarch Dawn → The Ledger" }));
+  expect(screen.getByRole("button", { name: /delete link/i })).toBeDisabled();
+  expect(api.setEdges).not.toHaveBeenCalled();
+});
+
+test("a write in flight is reported outward, so it outlives this view", async () => {
+  const gate: (() => void)[] = [];
+  (api.setEdges as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
+  const onBusy = vi.fn();
+  const { unmount } = render(<PlotMapEditor scope={SCOPE} onBusy={onBusy} />);
+  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+  fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
+  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to A Quiet Word" }));
+  await waitFor(() => expect(onBusy).toHaveBeenCalledWith(true));
+
+  // The reader switches away with the request still on the wire. The other
+  // writer must stay locked until it settles, which only the parent can know.
+  unmount();
+  gate[0]();
+  await waitFor(() => expect(onBusy).toHaveBeenLastCalledWith(false));
+});
