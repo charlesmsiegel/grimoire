@@ -64,7 +64,7 @@ const tiles = () => screen.getAllByRole("button").filter((b) => b.className.incl
 
 test("the gallery is one request for the whole world, and shows a tile per image", async () => {
   await renderView();
-  expect(api.listWorldImages).toHaveBeenCalledWith("realm");
+  expect(api.listWorldImages).toHaveBeenCalledWith("realm", false);
   expect(tiles()).toHaveLength(5);
   // The tile draws the `?w=` downscale, never the original: a world's art at
   // full resolution is tens of megabytes for pictures rendered at 154px.
@@ -195,6 +195,26 @@ test("a save in the queue re-reads the gallery, so a tile stops being unfinished
   await act(async () => {});
   expect(screen.getByRole("button", { name: /Needs a description or subjects/ }).textContent)
     .toContain("1");
+});
+
+test("a read taken after a write is issued fresh, not shared with an older one", async () => {
+  // The client shares an in-flight GET by path. A refresh that follows a
+  // subjects PUT is asking what the store holds NOW, and a promise issued
+  // before that write answers a question nobody asked -- leaving the tile just
+  // tagged marked unfinished until the view is remounted.
+  await renderView();
+  expect(api.listWorldImages).toHaveBeenLastCalledWith("realm", false);   // mount shares
+
+  fireEvent.click(screen.getByRole("tab", { name: /Tagging queue/ }));
+  await act(async () => {});
+  fireEvent.click(screen.getByRole("button", { name: "No subjects" }));
+  await act(async () => {});
+  expect(api.listWorldImages).toHaveBeenLastCalledWith("realm", true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await act(async () => {});
+  expect(api.listWorldImages).toHaveBeenLastCalledWith("realm", true);
+  expect(api.listUntaggedImages).toHaveBeenLastCalledWith("realm", true);
 });
 
 test("a save does not re-read the backlog the queue is still walking", async () => {

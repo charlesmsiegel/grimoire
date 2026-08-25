@@ -442,7 +442,7 @@ test("the world index opens the Images view", async () => {
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Images"));
   expect(await screen.findByRole("tab", { name: /Gallery/ })).toBeInTheDocument();
-  expect(api.listWorldImages).toHaveBeenCalledWith("w");
+  expect(api.listWorldImages).toHaveBeenCalledWith("w", false);
 });
 
 test("the campaign fork has no Images row", async () => {

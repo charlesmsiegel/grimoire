@@ -1196,9 +1196,14 @@ export const api = {
    *  World-scoped only: a campaign reaches most of its art through its world,
    *  and the art it has diverged is listed in its own editors — the same split
    *  `listUndescribedImages` draws. One request rather than one per record per
-   *  version, which is the whole reason the route exists. */
-  listWorldImages: (wid: string) =>
-    request<GalleryImage[]>("GET", `/api/worlds/${wid}/gallery`),
+   *  version, which is the whole reason the route exists.
+   *
+   *  `fresh` for a read taken AFTER a write, which is the case the coalescing
+   *  above cannot serve: handed a promise issued before the subjects PUT, the
+   *  caller gets a pre-write answer and leaves the tile it just tagged marked
+   *  unfinished. Same reasoning, and the same flag, as `campaignChanges`. */
+  listWorldImages: (wid: string, fresh = false) =>
+    request<GalleryImage[]>("GET", `/api/worlds/${wid}/gallery`, undefined, { fresh }),
   /** Describe one image. `description: ""` is meaningful and is NOT the same as
    *  never having described it: it means "reviewed, nothing to say", which
    *  takes the image out of the describe queue without offering it to the
@@ -1241,8 +1246,12 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/images/${name}/subjects`, { subjects }),
   listImageAppearances: (wid: string, cid: string) =>
     request<Appearance[]>("GET", `/api/worlds/${wid}/characters/${cid}/appearances`),
-  listUntaggedImages: (wid: string) =>
-    request<Appearance[]>("GET", `/api/worlds/${wid}/subjects/untagged`),
+  /** The greeting-image tagging backlog. `fresh` for the same reason
+   *  `listWorldImages` takes it: a re-read after the queue has written is
+   *  asking what the store holds NOW, and a promise issued before those PUTs
+   *  answers a question nobody asked. */
+  listUntaggedImages: (wid: string, fresh = false) =>
+    request<Appearance[]>("GET", `/api/worlds/${wid}/subjects/untagged`, undefined, { fresh }),
   copyGreetingImage: (scope: EntityScope, cid: string, vid: string,
                       body: { gid: string; name: string; slot: "avatar" | "gallery" }) =>
     request<{ name: string; ext: string }>(
