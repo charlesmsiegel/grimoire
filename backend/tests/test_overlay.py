@@ -1722,3 +1722,36 @@ def test_a_campaign_tombstone_reports_no_voice_anchor(monkeypatch, tmp_path):
     overlay.set_voice_anchor(cid, char, "")
     row = next(c for c in overlay.list_characters(cid) if c["id"] == char)
     assert row["has_voice_anchor"] is False
+
+
+def test_a_campaign_listing_reads_one_anchor_per_campaign_side_file(monkeypatch, tmp_path):
+    """The roster is already the expensive listing, and this store may sit in a
+    synced folder where per-file latency is the whole cost. Resolving the flag
+    through the overlay per row cost three or four reads each; the scans have
+    the answer for every row without a campaign-side anchor file."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    for name in ("Mara", "Winifred", "Seraphine"):
+        char, _ = characters.create_character(wroot, name)
+        voice_anchors.write(wroot, char, "Clipped.")
+    cid = campaigns.create_campaign("Run", wid)
+    overlay.set_voice_anchor(cid, "mara", "")          # one campaign-side file
+
+    seen = []
+    real = voice_anchors.read_record
+
+    def spy(root, char_id):
+        seen.append(char_id)
+        return real(root, char_id)
+
+    monkeypatch.setattr(voice_anchors, "read_record", spy)
+    rows = {c["id"]: c["has_voice_anchor"] for c in overlay.list_characters(cid)}
+    assert rows == {"mara": False, "winifred": True, "seraphine": True}
+    # One read per character for the world scan, which is what computes its own
+    # `has_voice_anchor`, plus ONE for the single campaign-side file. Not three
+    # or four per character, which is what re-resolving through the overlay in
+    # `_patch_char_item` cost.
+    assert len(seen) == 3 + 1
+    assert seen.count("mara") == 2          # world scan, then its campaign file
+    assert seen.count("winifred") == 1 and seen.count("seraphine") == 1

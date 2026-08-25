@@ -339,7 +339,7 @@ def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
     return out
 
 
-def voice_safe_names(names: list[str]) -> list[str]:
+def voice_safe_names(names: list[str], players=()) -> list[str]:
     """Display names for the cast blocks, blanked where they cannot attribute.
 
     `names` arrive stripped, `""` for a card with no name. A name shared
@@ -364,7 +364,19 @@ def voice_safe_names(names: list[str]) -> list[str]:
     clash instead of judging it. Saying nothing beats saying it under a name
     that means both of them.
 
-    EXACT duplication, deliberately NOT `serialize.confusable` -- which is the
+    A name the PLAYER's would swallow is blanked too, and that case is worse
+    than the duplicate one rather than merely similar. `split_reply` routes a
+    block whose label resolves to a player straight to the narrator -- "never
+    store a forged player line" -- so an NPC sharing the player's name, given a
+    heading the model then echoed, would have its dialogue persisted as
+    unattributed narration with the speaker gone. The test is
+    `serialize.match_name` against the present players, which is exactly the
+    predicate `_speaker_and_role` applies when deciding that, so this cannot
+    disagree with the persistence path about who a label names. `RESERVED_LABELS`
+    goes the same way for the same reason.
+
+    EXACT duplication for the NPC-vs-NPC case, deliberately NOT
+    `serialize.confusable` -- which is the
     wrong tool here for the second distinct reason. It answers whether some
     label that could name this actor is ambiguous, so it is `True` for
     "Winifred Vance" beside "Winifred Vale". But those are the headings that
@@ -373,5 +385,12 @@ def voice_safe_names(names: list[str]) -> list[str]:
     cost two distinguishable characters their voices to prevent nothing.
     """
     folded = [n.casefold() for n in names]
-    return ["" if not n or folded.count(folded[i]) > 1 else n
-            for i, n in enumerate(names)]
+    out = []
+    for i, n in enumerate(names):
+        if not n or folded.count(folded[i]) > 1:
+            out.append("")                      # nameless, or shared with another NPC
+        elif scenes_serialize.match_name(n, players) or n in scenes_serialize.RESERVED_LABELS:
+            out.append("")                      # would be read as the player or the narrator
+        else:
+            out.append(n)
+    return out

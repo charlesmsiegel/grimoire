@@ -4266,7 +4266,10 @@ def _voice_campaign(monkeypatch, tmp_path, *, npcs):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     for i, (name, fields, anchor) in enumerate(npcs):
-        label = name.strip() or f"Nameless{i}"
+        # An approved placeholder for the container label even when the CARD
+        # name under test is blank -- committed fixture names are restricted
+        # to the codebase's own set (AGENTS.md, "Privacy").
+        label = name.strip() or ["Seraphine", "Mara", "Winifred"][i % 3]
         card = _npc_card(name, **{k: v for k, v in fields.items() if k != "name"})
         if "name" in fields:            # a deliberately malformed data.name
             card["data"]["name"] = fields["name"]
@@ -4515,3 +4518,23 @@ def test_the_caps_bound_the_text_after_macro_expansion(monkeypatch, tmp_path):
     block = context._assemble(cid, sid)["data"]["cast_blocks"][0]
     assert len(block["example"]) <= voice_anchors.VOICE_EXAMPLE_CAP
     assert "{{user}}" not in block["example"]      # expanded, then capped
+
+
+def test_voice_safe_names_blanks_a_name_the_player_would_swallow():
+    """`split_reply` routes a player-labelled block to the narrator -- "never
+    store a forged player line" -- so an NPC sharing the player's name would
+    have its dialogue persisted with the speaker gone."""
+    assert context_cast.voice_safe_names(["Mara"], ["Mara"]) == [""]
+
+
+def test_voice_safe_names_blanks_a_name_a_player_name_would_resolve():
+    """Prefix resolution too, since that is what `_speaker_and_role` applies."""
+    assert context_cast.voice_safe_names(["Winifred"], ["Winifred Vance"]) == [""]
+
+
+def test_voice_safe_names_blanks_a_reserved_label():
+    assert context_cast.voice_safe_names(["Grimoire", "You"], []) == ["", ""]
+
+
+def test_voice_safe_names_keeps_an_npc_a_player_does_not_shadow():
+    assert context_cast.voice_safe_names(["Mara"], ["Winifred"]) == ["Mara"]
