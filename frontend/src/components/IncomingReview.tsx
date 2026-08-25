@@ -231,7 +231,7 @@ function BulkActions({ items, busy, onResolve }: {
  *  Accept copies the world's content in; Reject keeps the campaign's and
  *  advances the base so the same change stops being offered. Both are the same
  *  route with a list, so "all of them" is one call rather than a loop. */
-export function IncomingReview({ cid }: { cid: string }) {
+export function IncomingReview({ cid, focus }: { cid: string; focus?: IncomingRef | null }) {
   const [items, setItems] = useState<IncomingItem[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -265,6 +265,17 @@ export function IncomingReview({ cid }: { cid: string }) {
   }, [cid]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Opened on one ref by the composition panel (#199), which is where a reader
+  // reads "conflict" and asks what the conflict IS. A ref that is not in the
+  // list still selects nothing rather than clearing the selection: the two
+  // panels read `/incoming` separately and the other one's list can be a moment
+  // older, and a stale deep link should be a no-op, not a reset. Depends on the
+  // whole `focus` object, so pointing at the same ref twice re-selects it after
+  // the reader has clicked elsewhere.
+  useEffect(() => {
+    if (focus) setSel(`${focus.kind}/${focus.id}`);
+  }, [focus]);
 
   const resolve = useCallback(async (refs: IncomingRef[], accept: boolean) => {
     setBusy(true);

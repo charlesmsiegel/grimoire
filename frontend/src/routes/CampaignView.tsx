@@ -10,6 +10,7 @@ import {
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
   type CampaignBudget,
+  type IncomingRef,
   type UsagePostBucket,
 } from "../api/client";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
@@ -25,6 +26,7 @@ import { PostImagePicker, type PickerTarget } from "../components/PostImagePicke
 import { ChangesPanel } from "../components/ChangesPanel";
 import { ReplayPanel } from "../components/ReplayPanel";
 import { IncomingReview } from "../components/IncomingReview";
+import { CompositionPanel } from "../components/CompositionPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CampaignCover";
 import { SceneInspector } from "../components/SceneInspector";
@@ -562,6 +564,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  this is what the world changed underneath it — the same shape of question
    *  about a different author. */
   const [showIncoming, setShowIncoming] = useState(false);
+  /** The composition overview (#199): where every piece of this campaign stands
+   *  relative to the world it came from. Its own toggle beside World updates
+   *  rather than a tab inside it, for the reason that panel is its own toggle
+   *  beside Changes — three different questions about the same records, and
+   *  a reader mid-turn opens the one they mean. */
+  const [showComposition, setShowComposition] = useState(false);
+  /** The ref the composition panel sent to World updates, so the review opens on
+   *  the change the reader just read a status word for. Held here because it
+   *  crosses two panels, and re-boxed on every hand-off so pointing at the same
+   *  ref twice re-selects it. */
+  const [reviewRef, setReviewRef] = useState<IncomingRef | null>(null);
   // The post a reader asked to replay FROM (#79) -- the one after the retcon,
   // since the retconned post itself stands. Held here rather than in the panel
   // because the transcript gutter is what sets it.
@@ -3876,6 +3889,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           <button className="scene-action" onClick={() => setShowIncoming((v) => !v)}>
             {showIncoming ? "Close" : "World updates"}
           </button>
+          <button className="scene-action" onClick={() => setShowComposition((v) => !v)}>
+            {showComposition ? "Close" : "Composition"}
+          </button>
           <button className="scene-action" onClick={() => setShowMechanics((v) => !v)}>
             {showMechanics ? "Close" : "Mechanics"}
           </button>
@@ -4057,7 +4073,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           {/* Keyed by cid for the reason MechanicsConfig is: this route keeps
               its instance across a campaign switch, so an unkeyed panel would
               show one campaign's pending list while another is on screen. */}
-          {!focus && showIncoming && <IncomingReview key={cid} cid={cid} />}
+          {!focus && showIncoming && <IncomingReview key={cid} cid={cid} focus={reviewRef} />}
+          {/* Keyed by cid for `IncomingReview`'s reason: this route keeps its
+              instance across a campaign switch, so an unkeyed panel would show
+              one campaign's composition while another is on screen. */}
+          {!focus && showComposition && (
+            <CompositionPanel key={cid} cid={cid}
+                              // Re-boxed rather than passed through: the panel hands back the
+                              // same `row.ref` object each time, and `IncomingReview`'s focus
+                              // effect keys on identity -- so without this, returning to a row
+                              // already reviewed once would not re-select it.
+                              onReview={(ref) => { setReviewRef({ ...ref }); setShowIncoming(true); }} />
+          )}
           {review.editFailures.length > 0 && (
             <div className="mechanics-notice">
               <p>{review.editFailures.length} change{review.editFailures.length === 1 ? "" : "s"} did not apply</p>

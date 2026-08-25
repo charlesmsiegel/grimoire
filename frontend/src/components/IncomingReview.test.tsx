@@ -306,3 +306,27 @@ test("a read for one campaign cannot land in another campaign's panel", async ()
   expect(screen.queryByRole("button", { name: /Saltmarch Harbor/ })).not.toBeInTheDocument();
   expect(await screen.findByRole("button", { name: /Seraphine/ })).toBeInTheDocument();
 });
+
+test("a focus ref from the composition panel opens the review on that change", async () => {
+  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  const { rerender } = render(<IncomingReview cid="c1" />);
+  await act(async () => {});
+  // Without a focus the panel falls back to the first row, which is not the one
+  // a reader clicked "conflict" on two panels up.
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Saltmarch Harbor");
+
+  rerender(<IncomingReview cid="c1" focus={{ kind: "characters", id: "seraphine" }} />);
+  await act(async () => {});
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Seraphine");
+});
+
+test("a focus naming a ref this panel has no row for changes nothing", async () => {
+  // The two panels read `/incoming` separately, so the other one's list can be
+  // a moment older. A stale deep link is a no-op, not a cleared selection.
+  (api.getIncoming as any).mockResolvedValue([HARBOR]);
+  const { rerender } = render(<IncomingReview cid="c1" />);
+  await act(async () => {});
+  rerender(<IncomingReview cid="c1" focus={{ kind: "lore", id: "long-gone" }} />);
+  await act(async () => {});
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Saltmarch Harbor");
+});

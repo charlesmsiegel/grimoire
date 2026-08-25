@@ -7391,6 +7391,25 @@ test("the scene bar opens the incoming-changes review, and closes it again", asy
   expect(screen.queryByRole("heading", { name: "Incoming world changes" })).toBeNull();
 });
 
+test("the scene bar opens the composition overview, and its banner opens the review on that ref", async () => {
+  (api.getIncoming as any).mockResolvedValue([
+    { ref: { kind: "locations", id: "saltmarch-harbor" }, status: "conflict",
+      world: { name: "Saltmarch Harbor", body: "The harbour is blockaded." },
+      mine: { name: "Saltmarch Harbor", body: "A busy port town." } },
+  ]);
+  renderCampaign();
+  await screen.findByRole("button", { name: "Composition" });
+
+  fireEvent.click(screen.getByRole("button", { name: "Composition" }));
+  expect(await screen.findByRole("heading", { name: "Composition" })).toBeInTheDocument();
+
+  // The banner does not accept anything: it opens the panel that shows what the
+  // change actually is, already on the ref the reader was looking at.
+  fireEvent.click(screen.getByRole("button", { name: "Review world updates" }));
+  expect(await screen.findByRole("heading", { name: "Incoming world changes" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Saltmarch Harbor");
+});
+
 // ---- the campaign budget banner (#153) ----
 const OVER_BUDGET = {
   limit_usd: 10, period: "monthly", level: "over", warn_fraction: 0.8,

@@ -93,7 +93,7 @@ export async function campaignApiMock() {
       listModules: vi.fn(), getCampaignSheets: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
-      getIncoming: vi.fn(),
+      getIncoming: vi.fn(), listDiverged: vi.fn(),
       campaignLedger: vi.fn(),
       campaignProvenance: vi.fn(),
       getCasefile: vi.fn(),
