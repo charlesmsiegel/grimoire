@@ -2,14 +2,16 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { Link, useParams } from "react-router-dom";
 import { agingLabel } from "../aging";
 import {
-  api, type Ledger, type RecordChange, type RetiredFact, type StandingFact,
+  api, type Ledger, type RecordChange, type RelationshipChange, type RetiredFact,
+  type StandingFact,
 } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
 
 type SectionKey =
-  | "facts" | "threads" | "commitments" | "relationships" | "changes" | "timeline";
+  | "facts" | "threads" | "commitments" | "relationships" | "standings"
+  | "changes" | "timeline";
 
 /** One row of the table, whatever section built it.
  *
@@ -45,6 +47,8 @@ const SECTIONS: { key: SectionKey; label: string; eyebrow: string;
     columns: ["", "COMMITMENT", "DUE", "SCENE"] },
   { key: "relationships", label: "Relationships", eyebrow: "FEELINGS AND BONDS · 0–5 METERS",
     columns: ["", "BETWEEN", "STANDING", "SINCE"] },
+  { key: "standings", label: "Relationship history", eyebrow: "EVERY DELTA, NEWEST FIRST",
+    columns: ["", "BETWEEN", "WAS", "SCENE"] },
   { key: "changes", label: "Recent changes", eyebrow: "WHAT THE LAST ABSORB MOVED",
     columns: ["", "RECORD", "FIELD", "SCENE"] },
   { key: "timeline", label: "Timeline", eyebrow: "THE CHRONICLE, NEWEST FIRST",
@@ -151,7 +155,7 @@ function joinNote(...parts: string[]): string {
 }
 
 function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
-                 showRetired: boolean): Row[] {
+                 standings: RelationshipChange[], showRetired: boolean): Row[] {
   if (section === "facts") return factRows(ledger, showRetired);
   // The aging badge (#103) leads the note on both sections: "overdue by 12
   // days" is the reason to read the row, and a reader scanning for what the
@@ -191,6 +195,22 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       asOf: r.kind === "bond" ? "" : `${r.trust}/${r.affection}/${r.tension}`,
       scene: r.scene.title,
     }));
+  if (section === "standings")
+    return standings.map((r) => ({
+      key: r.id,
+      // The same two glyphs the section above uses, and they mean the same
+      // thing: a feeling runs one way, a bond runs both. A row that borrowed
+      // the other section's arrow would be describing a different fact.
+      mark: r.kind === "bond" ? "↔" : "→",
+      what: `${r.a_name} ${r.kind === "bond" ? "↔" : "→"} ${r.b_name}`,
+      // The new standing on the note line and the old one in the AS OF column:
+      // the reader is here for what changed, and reading it as "now X, was Y"
+      // puts the answer first. An undone row says so — it is a change like any
+      // other, and one the reader is likeliest to be looking for.
+      note: joinNote(r.source === "undo" ? "UNDONE" : "", r.after || "NOTHING"),
+      asOf: r.before || "—",
+      scene: r.scene.title,
+    }));
   if (section === "changes")
     return changes.map((c) => ({
       key: `${c.ref.kind}/${c.ref.id}`, mark: "✎", what: c.name,
@@ -214,6 +234,8 @@ const NOTHING: Record<SectionKey, string> = {
     + "scenes make them.",
   relationships: "No feelings or bonds recorded yet. They arrive with the "
     + "absorb pass, once two actors have shared a scene.",
+  standings: "No relationship deltas yet. Every feeling and bond an absorb "
+    + "applies is kept here, so the arc survives the standing that replaced it.",
   changes: "Nothing has moved yet. This lists what the last absorbs rewrote, "
     + "record by record.",
   timeline: "No scenes absorbed yet. The chronicle fills in as you end scenes.",
@@ -230,6 +252,8 @@ export default function LedgerView() {
   // game's facts under the other's name until the new request settled.
   const [loaded, setLoaded] = useState<{ cid: string; data: Ledger } | null>(null);
   const [changes, setChanges] = useState<{ cid: string; data: RecordChange[] } | null>(null);
+  const [standings, setStandings] =
+    useState<{ cid: string; data: RelationshipChange[] } | null>(null);
 
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
 
@@ -251,11 +275,18 @@ export default function LedgerView() {
     api.campaignChanges(cid)
       .then((c) => { if (live) setChanges({ cid, data: c }); })
       .catch(() => { if (live) setChanges({ cid, data: [] }); });
+    // And its own again, for the same reason: the relationship timeline (#63)
+    // is a third file behind a third route, and a broken one must cost its
+    // section rather than the six the other two answer for.
+    api.campaignRelationshipHistory(cid)
+      .then((h) => { if (live) setStandings({ cid, data: h }); })
+      .catch(() => { if (live) setStandings({ cid, data: [] }); });
     return () => { live = false; };
   }, [cid]);
 
   const ledger = loaded && loaded.cid === cid ? loaded.data : null;
   const changeRows = changes && changes.cid === cid ? changes.data : null;
+  const standingRows = standings && standings.cid === cid ? standings.data : null;
 
   /** How many rows each section stands for, counted the way the section will
    *  actually render — so the facts count follows SHOW RETIRED rather than
@@ -263,14 +294,15 @@ export default function LedgerView() {
    *  campaign has. */
   const counts = useMemo(() => {
     if (!ledger) return null;
-    const rows = (k: SectionKey) => rowsFor(k, ledger, changeRows ?? [], showRetired).length;
+    const rows = (k: SectionKey) =>
+      rowsFor(k, ledger, changeRows ?? [], standingRows ?? [], showRetired).length;
     return Object.fromEntries(SECTIONS.map((s) => [s.key, rows(s.key)])) as
       Record<SectionKey, number>;
-  }, [ledger, changeRows, showRetired]);
+  }, [ledger, changeRows, standingRows, showRetired]);
 
-  /** What this page contributes to ⌘K: its six sections, so "commitments" is a
-   *  thing you can type from anywhere rather than a row you have to be here to
-   *  click. */
+  /** What this page contributes to ⌘K: its seven sections, so "commitments" is
+   *  a thing you can type from anywhere rather than a row you have to be here
+   *  to click. */
   const paletteSource = useCallback((): PaletteItem[] =>
     SECTIONS.map((s) => ({
       id: `ledger:${s.key}`, group: "IN THIS CAMPAIGN", label: s.label,
@@ -280,7 +312,8 @@ export default function LedgerView() {
   usePaletteSource(paletteSource);
 
   const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
-  const rows = ledger ? rowsFor(section, ledger, changeRows ?? [], showRetired) : [];
+  const rows = ledger
+    ? rowsFor(section, ledger, changeRows ?? [], standingRows ?? [], showRetired) : [];
 
   const column = (
     <>
@@ -343,7 +376,7 @@ export default function LedgerView() {
               <thead>
                 <tr>
                   {current.columns.map((c, i) => (
-                    // The mark column's heading is empty for five of the six
+                    // The mark column's heading is empty for six of the seven
                     // sections, and an empty <th> is a column with no name for
                     // a screen reader rather than one it can skip.
                     <th key={i} scope="col">{c || <span className="sr-only">Row</span>}</th>

@@ -2,10 +2,11 @@
 
 A scene's id is its filename stem, so file renames (title renames, first-date
 stamps, width re-pads, legacy migration) must be followed by every persisted
-reference. Eighteen stores hold scene ids: appearances (per-actor scenes lists),
+reference. Nineteen stores hold scene ids: appearances (per-actor scenes lists),
 audit (sheet baselines keyed by scene id), chronicle (record keys + id
-fields), changes (per-record scene field), plot and commitments (both
-beats[].scene + last_scene), facts (each fact's recording scene and, once it
+fields), changes (per-record scene field), relationship_history (the
+append-only relationship timeline's per-entry scene field), plot and
+commitments (both beats[].scene + last_scene), facts (each fact's recording scene and, once it
 is retired, the scene that ended it), journal (the append-only change history's
 per-entry scene field), provenance (each citation's scene field, the post it was
 quoted from), rolls (per-entry scene field), prompt_log
@@ -27,7 +28,7 @@ review is ordinary use rather than an exotic race — and left behind, the durab
 review sits orphaned under the old id while `GET .../{new_sid}/pending-review`
 answers 404 for a scene whose review demonstrably exists.
 
-A nineteenth, `usage`, joins the fan-out without rewriting anything: the cost
+A twentieth, `usage`, joins the fan-out without rewriting anything: the cost
 ledger is append-only and its writes take no lock, so a rewrite would race
 them. It appends a row saying the rename happened and its readers follow the
 trail (`store.usage.KIND_RENAME`).
@@ -48,6 +49,7 @@ from . import (
     plot,
     prompt_log,
     provenance,
+    relationship_history,
     replay,
     rolls,
     scene_ideas,
@@ -64,5 +66,6 @@ def repoint(cid: str, mapping: dict[str, str]) -> None:
         return
     for mod in (alternates, appearances_paths, audit_baselines, changes, chronicle,
                 commitments, commits, facts, journal, pending_reviews, pins, plot,
-                prompt_log, provenance, replay, rolls, scene_ideas, turnstate, usage):
+                prompt_log, provenance, relationship_history, replay, rolls,
+                scene_ideas, turnstate, usage):
         mod.repoint_scenes(cid, mapping)

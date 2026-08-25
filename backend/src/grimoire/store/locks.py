@@ -205,6 +205,13 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # `delete_image` verifies the removal under it. New module, so it starts
     # inside the exclusion rather than joining the frozen `UNREVIEWED` backlog.
     "store.campaign_images",
+    # `relationship_history.json` is rewritten whole by every append, and the
+    # append that loses the race loses the only account of a standing that has
+    # already changed -- `relationships.json` keeps the new value and nothing
+    # left says what it replaced, which is the loss this store exists to stop.
+    # New module (#63), so it starts inside the exclusion rather than joining
+    # the frozen `UNREVIEWED` backlog.
+    "store.relationship_history",
     # `journal.json` is rewritten whole by every append, and an append that
     # loses the race loses the only record of a write that already landed --
     # which is worse than a stale panel, because the reversal it carries is the

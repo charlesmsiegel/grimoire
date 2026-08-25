@@ -92,6 +92,7 @@ from . import (
     playstate,
     plot,
     provenance,
+    relationship_history,
     relationships,
     voice_drift,
 )
@@ -463,7 +464,47 @@ def undo(cid: str, jid: str) -> dict:
         written = journal.append(cid, [row])[0]
         journal.mark_undone(cid, jid, written["id"])
         _roll_back_panels(cid, entry, row)
+        _log_relationship_reversal(cid, target, row)
         return written
+
+
+def _log_relationship_reversal(cid: str, target: dict, row: dict) -> None:
+    """Append the reversal to the relationship timeline (#63), when the record
+    put back was a feeling or a bond.
+
+    APPENDED, not deleted -- the opposite of what `_roll_back_panels` does to
+    the two rolling logs, and for the opposite reason. Those describe "what this
+    record holds now" and a reversal moves that backward, so the row has to be
+    rewritten. The timeline describes what happened, and a reversal happened:
+    dropping the row it undid would leave the arc claiming a standing that was
+    taken back, with nothing to say so.
+
+    `row`'s `before`/`after` are already the reversed pair (`undo` builds them
+    from the entry read backwards), so this row reads forwards like every other.
+
+    Never fatal, for `_roll_back_panels`' reason: the reversal has landed by the
+    time this runs, and a gap in the timeline is the smaller harm.
+    """
+    # `w` is this module's writer tag and `KINDS` is the timeline's vocabulary.
+    # The two words coincide for these two writers, so this is a membership test
+    # rather than a mapping -- and it is against `KINDS` rather than a literal
+    # pair so a writer tag added here cannot quietly log under a kind the
+    # timeline does not know.
+    kind = target.get("w")
+    if kind not in relationship_history.KINDS:
+        return
+    a, b = ((target.get("from"), target.get("to")) if kind == "feeling"
+            else (target.get("a"), target.get("b")))
+    if not isinstance(a, str) or not isinstance(b, str):
+        return
+    try:
+        relationship_history.append(cid, [relationship_history.row(
+            kind, a, b, label=_display(row.get("label")),
+            before=_display(row.get("before")), after=_display(row.get("after")),
+            scene=_display(row.get("scene")), source="undo")])
+    except Exception:  # the reversal landed; only the timeline is short a row
+        log.warning("could not record the relationship reversal for %s in %s", target, cid,
+                    exc_info=True)
 
 
 def _roll_back_panels(cid: str, entry: dict, row: dict) -> None:
