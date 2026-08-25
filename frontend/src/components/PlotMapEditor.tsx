@@ -227,6 +227,9 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [edges, setEdgeMap] = useState<Record<string, Edges>>({});
   const [ready, setReady] = useState(false);
+  /** Whether the LIST came back. "No greetings" and "the list request failed"
+   *  are different answers, and only this one licenses the first. */
+  const [listed, setListed] = useState(false);
   /** Greetings the list named but whose edges never arrived. They are nodes,
    *  and they are not writable — see `write`. */
   const [unread, setUnread] = useState<string[]>([]);
@@ -269,6 +272,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
   const load = useCallback((keepError = false) => {
     const mine = ++loadId.current;
     setReady(false);
+    setListed(false);
     if (!keepError) setError(null);
     api.listGreetings(scope).then(async (list) => {
       // Edges live in the plot map, and only the per-greeting read carries
@@ -285,6 +289,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
       setGreetings(list);
       setEdgeMap(edgesRef.current);
       setUnread(missed);
+      setListed(true);
       setReady(true);
     }).catch((err: unknown) => {
       if (loadId.current !== mine) return;
@@ -301,6 +306,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
     // greeting id, and its edges, into the new one.
     setGreetings([]);
     setEdgeMap({});
+    setListed(false);
     edgesRef.current = {};
     chain.current = Promise.resolve();
     setUnread([]);
@@ -364,6 +370,22 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
   const edgesOf = (gid: string): Edges => edgesRef.current[gid] ?? NO_EDGES;
   const without = (list: string[], id: string) => list.filter((x) => x !== id);
 
+  /** Every greeting a mutation is going to write, checked BEFORE its first
+   *  write rather than at each one.
+   *
+   *  A two-step mutation refused halfway is worse than one refused outright:
+   *  converting an exclusion whose chosen source is unread would clear the far
+   *  half, then be refused on the near one -- deleting an authored exclusion in
+   *  the course of failing to replace it. */
+  function unwritable(...gids: string[]): string[] {
+    return [...new Set(gids)].filter((g) => unread.includes(g));
+  }
+
+  function refuse(bad: string[]): void {
+    setError(`${bad.map(nameOf).join(" and ")}: links could not be read, so they `
+             + "cannot be changed without erasing whatever they are. Retry the read first.");
+  }
+
   /** What already ties two greetings together, in either direction. */
   function linkBetween(a: string, b: string): Kind | null {
     for (const [x, y] of [[a, b], [b, a]] as const) {
@@ -394,6 +416,10 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
 
   async function remove(line: Line) {
     setError(null);
+    // Both endpoints when the exclusion is mutual: the second write is as much
+    // a part of this delete as the first.
+    const bad = unwritable(line.from, ...(line.both ? [line.to] : []));
+    if (bad.length) { refuse(bad); return; }
     const gen = loadId.current;
     const cur = edgesOf(line.from);
     const ok = await write(line.from, { leads_to: without(cur.leads_to, line.to),
@@ -411,6 +437,8 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
   /** An unlock becomes an exclusion: one record, one write. */
   async function toExclusion(line: Line) {
     setError(null);
+    const bad = unwritable(line.from);
+    if (bad.length) { refuse(bad); return; }
     const cur = edgesOf(line.from);
     const ok = await write(line.from, { leads_to: without(cur.leads_to, line.to),
                                         excludes: [...without(cur.excludes, line.to), line.to] });
@@ -430,8 +458,10 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
    *  would block the greeting it claims to open. */
   async function toUnlock(line: Line, from: string) {
     setError(null);
-    const gen = loadId.current;
     const to = from === line.from ? line.to : line.from;
+    const bad = unwritable(from, ...(edgesOf(to).excludes.includes(from) ? [to] : []));
+    if (bad.length) { refuse(bad); return; }
+    const gen = loadId.current;
     const back = edgesOf(to);
     if (back.excludes.includes(from)) {
       if (!await write(to, { ...back, excludes: without(back.excludes, from) }, gen)) return;
@@ -477,7 +507,11 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
           <button className="retry" onClick={() => load()} disabled={!ready}>Retry</button>
         </div>
       )}
-      {selected && (
+      {/* Only while the map it describes is on screen. A reload replaces every
+          greeting's edges with what the server says, so a mutation started
+          against the old ones -- during a Retry, say -- would be overwritten by
+          a snapshot that predates it. */}
+      {ready && selected && (
         <div className="plotmap-selected">
           <span className="chip on">
             {KIND_LABEL[selected.kind]}: {nameOf(selected.from)} {ARROW[selected.kind]} {nameOf(selected.to)}
@@ -495,7 +529,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
           <button className="chip" onClick={() => setPicked(null)}>Done</button>
         </div>
       )}
-      {ready && greetings.length === 0 ? (
+      {ready && listed && greetings.length === 0 ? (
         <div className="editor-empty">No greetings to map yet.</div>
       ) : ready && greetings.length > 0 ? (
         <div className="plotmap-canvas pm-canvas" style={{ width, height }}>

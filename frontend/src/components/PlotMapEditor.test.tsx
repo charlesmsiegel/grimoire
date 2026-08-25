@@ -459,3 +459,56 @@ test("a campaign's marks ride along on the nodes", async () => {
   expect(within(node).getByText("Saltmarch Dawn")).toBeInTheDocument();
   expect(container.querySelector(".pm-node.skipped")).not.toBeNull();
 });
+
+test("a conversion whose source is unread is refused before it deletes anything", async () => {
+  // dawn and ledger exclude each other; ledger's edges never arrive.
+  plot({
+    dawn: { leads_to: [], excludes: ["ledger"] },
+    ledger: { leads_to: [], excludes: ["dawn"] },
+    word: { leads_to: [], excludes: [] },
+  });
+  const real = (api.readGreeting as any).getMockImplementation();
+  (api.readGreeting as any).mockImplementation(async (s: unknown, gid: string) => {
+    if (gid === "ledger") throw new Error("boom");
+    return real(s, gid);
+  });
+  render(<PlotMapEditor scope={SCOPE} />);
+  await screen.findByText(/could not be read/i);
+
+  fireEvent.click(edge("Excludes: Saltmarch Dawn ↮ The Ledger"));
+  fireEvent.click(screen.getByRole("button", { name: "Unlock: The Ledger → Saltmarch Dawn" }));
+
+  // Clearing the far half and then being refused on the near one would delete
+  // an authored exclusion in the course of failing to replace it.
+  await screen.findByText(/The Ledger: links could not be read/i);
+  expect(api.setEdges).not.toHaveBeenCalled();
+  expect(edge("Excludes: Saltmarch Dawn ↮ The Ledger")).toBeInTheDocument();
+});
+
+test("the edge toolbar is gone while the map is re-reading", async () => {
+  const real = (api.readGreeting as any).getMockImplementation();
+  (api.readGreeting as any).mockImplementation(async (sc: unknown, gid: string) => {
+    if (gid === "word") throw new Error("boom");
+    return real(sc, gid);
+  });
+  render(<PlotMapEditor scope={SCOPE} />);
+  await screen.findByText(/could not be read/i);
+  fireEvent.click(edge("Unlocks: Saltmarch Dawn → The Ledger"));
+  expect(screen.getByRole("button", { name: /delete link/i })).toBeInTheDocument();
+
+  // Retry, held open: the reload will replace every greeting's edges with what
+  // the server says, so an edit made against the old ones in the meantime is
+  // one the snapshot would silently undo.
+  (api.listGreetings as any).mockImplementation(() => new Promise(() => {}));
+  fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: /delete link/i })).toBeNull());
+});
+
+test("a list that failed is not reported as a map with nothing in it", async () => {
+  (api.listGreetings as any).mockRejectedValue({ detail: "world not found" });
+  render(<PlotMapEditor scope={SCOPE} />);
+
+  await screen.findByText("world not found");
+  // "no greetings" and "we could not ask" are different answers
+  expect(screen.queryByText(/no greetings to map/i)).toBeNull();
+});
