@@ -451,3 +451,19 @@ def test_a_pinned_character_holds_their_voice_blocks(monkeypatch, tmp_path):
     assert "voice_policy" not in assemble._VOICE_CAST_SECTIONS
     # and they are NOT in the general cast set, which a pinned player also holds
     assert "voice_anchors" not in assemble._CAST_SECTIONS
+
+
+def test_pinning_an_anchorless_npc_does_not_hold_everyone_elses_voice(monkeypatch, tmp_path):
+    """`_pinned_sections`' own rule: a pin on something that selected nothing
+    protects nothing. Sections drop whole, so pinning a voiceless NPC would
+    otherwise make every OTHER character's anchors undroppable."""
+    from grimoire.store.context import assemble
+    cast = [{"kind": "characters", "id": "mara", "role": "npc"},
+            {"kind": "characters", "id": "winifred", "role": "npc"}]
+    pinned = frozenset({"characters:mara"})
+    # Mara is pinned but contributed nothing; Winifred has the voice content
+    out = assemble._pinned_sections(pinned, cast, [], None, frozenset({"winifred"}))
+    assert "voice_anchors" not in out and "voice_examples" not in out
+    # and when the pinned NPC IS the contributor, the sections are held
+    out = assemble._pinned_sections(pinned, cast, [], None, frozenset({"mara"}))
+    assert "voice_anchors" in out and "voice_examples" in out

@@ -633,10 +633,17 @@ record["id"])` check `_voice_notes` applies must therefore run **before**
   filtered**; nameless entries keep their description and lose their voice
   blocks; a whitespace-only name counts as nameless and does not raise
   `named_npc_count`.
-- **Disambiguation terminates and is unique among non-empty names**: a
-  confusable pair gets `#1` and `#2` (both members); a card literally named
-  `Winifred #2` sharing a scene with two `Winifred`s ends with three distinct
-  names; **two nameless entries are legal and both keep `""`**.
+- **Names the voice blocks may safely carry**: a name shared exactly with
+  another present card is blanked, and so is one a present PLAYER's label
+  would resolve to, one the serializer cannot write back
+  (`label_preserved` — reserved labels including their sub-speaker form,
+  over-long names, `*` or newlines), and a nameless card. A merely *similar*
+  name is kept: "Winifred Vance" beside "Winifred Vale" resolves exactly
+  through `match_name`, and blanking those would cost two distinguishable
+  characters their voices to prevent nothing.
+- **Nothing returned is absent from the input.** The property that matters,
+  asserted directly: no synthetic string can reach a heading and be echoed
+  into a transcript. An earlier revision's `#1`/`#2` ordinals are withdrawn.
 - **Render conditions read the same filtered set as the blocks**: one
   nameless NPC with an anchor, alone, renders no voice section at all — not a
   policy block with nothing under it.

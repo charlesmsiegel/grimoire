@@ -1065,10 +1065,18 @@ def list_characters(cid: str) -> list[dict]:
     cdir = croot_of(cid) / "characters"
     campaign_side = ({p.parent.name for p in cdir.glob("*/voice_anchor.md")}
                      if cdir.is_dir() else set())          # paths-ok: sibling of anchor_path
+    # A DETACHED actor does not inherit, and this has to agree with
+    # `voice_anchor_record`, which suppresses the world fallback for exactly
+    # these refs. Without it a campaign whose character id has since been
+    # reused world-side would report has_voice_anchor: true off an unrelated
+    # row, while reading that character's effective anchor returned "".
+    off = detached(cid)
     for row in rows:
         if row["id"] in campaign_side:
             rec = voice_anchors.read_record(croot_of(cid), row["id"])
             row["has_voice_anchor"] = bool(rec["text"])    # tombstone reads as none
+        elif _flat_ref("characters", row["id"]) in off:
+            row["has_voice_anchor"] = False
         else:
             row["has_voice_anchor"] = world.get(row["id"], False)
     return sorted(rows, key=lambda c: c["id"])
