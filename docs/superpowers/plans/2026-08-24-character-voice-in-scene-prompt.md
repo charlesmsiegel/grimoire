@@ -179,6 +179,17 @@ git commit -m "One capped anchor, for the prompt and the judge alike"
 
 ### Task 2: Display-name disambiguation
 
+> **SUPERSEDED — see the implementation and the spec.** This task shipped as
+> `cast.voice_safe_names`, which does not disambiguate at all: a name shared
+> exactly with another present card is **blanked**, suppressing that
+> character's voice blocks while their description still renders. PR review
+> found that an invented heading (`Winifred #1`) can be copied by the model
+> into a `**<Name>:**` speaker marker and persisted into the transcript — the
+> one artifact here that cannot be regenerated — while buying nothing, since
+> `match_name("Winifred", ["Winifred", "Winifred"])` was already `None`. The
+> ordinal design below is kept as the record of what was tried; do not build
+> it.
+
 Two present NPCs with the same name produce two indistinguishable `## Winifred` headings, which attribute nothing. A cast-order ordinal is guaranteed unique; a version label is not (two characters can both be `Winifred` with both selected versions labelled `Default`) and would need `characters._card_summary`, a private cross-module helper.
 
 **Do NOT use `scenes.serialize.confusable` here.** It was the obvious candidate and it is wrong for two reasons, both verified against the real function:

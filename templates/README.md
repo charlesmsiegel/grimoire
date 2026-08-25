@@ -77,7 +77,15 @@ Mirrors `store/voice_drift.py:build_prompt` (one call per present NPC **that
 has a voice anchor** — an anchorless character is never judged, which is what
 keeps the extra calls opt-in).
 `user.j2` vars: `name`, `anchor` (never ""), `transcript` (render
-`snippets/transcript.j2` over the scene's messages).
+`snippets/transcript.j2` over the scene's messages), and `correction`
+(optional, `""` when there is none). The correction is the character's
+outstanding drift note, and the CALLER owns deciding it is still in force --
+`_stage_voice_drift` checks its fingerprint against the current anchor first,
+because a note judged against a REPLACED anchor is suppressed for the writer
+and must not be shown to the judge as current. `system.j2` treats it as
+superseding the anchor wherever the two conflict, which is what the scene
+prompt tells the writer, so a judge that could not see it would flag the model
+for obeying its instructions.
 The reply is one JSON object, `{"verdict": str, "note": str}`, parsed by
 `voice_drift.parse_output` through `absorb.extract_object`. `note` becomes the
 corrective `scene/voice_correction.j2` renders on the next turn.

@@ -84,7 +84,13 @@ def truncate(text: str, cap: int) -> str:
       position 0 leaves the empty string, and truncating a long sample to
       nothing because it opens with a marker is the worse failure.
     """
-    text = text.strip()
+    # Newlines normalised FIRST, or the blank-line boundary is invisible in
+    # exactly the text most likely to have one: a card imported or hand-edited
+    # on Windows separates paragraphs with a carriage-return pair, which the
+    # bare two-newline search below never matches. Such a value fell through
+    # to the hard cut and was sent mid-line, which is the one thing the
+    # boundary rule exists to avoid.
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if len(text) <= cap:
         return text
     prefix = text[:cap]
