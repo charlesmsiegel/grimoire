@@ -2099,6 +2099,10 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .plotmap-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .plotmap-hint { margin: 0; }
 .plotmap-selected { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+/* The notice for greetings whose edges never arrived. A banner rather than
+   a hint because it says something is *disabled*: those nodes cannot be a
+   link's source until the read succeeds, so the retry lives in it. */
+.plotmap-unread { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; }
 .plotmap-canvas {
   position: relative; border: 1px solid var(--rule); background: var(--surface);
   /* The map is as wide as the plot is deep, which is wider than the column it

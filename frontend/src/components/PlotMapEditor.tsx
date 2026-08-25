@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Edges, type EntityScope, type Greeting, type GreetingMark } from "../api/client";
 import { errorText } from "../api/errors";
 import { useHotkeys } from "../shortcuts/useHotkeys";
@@ -24,6 +24,13 @@ import { useHotkeys } from "../shortcuts/useHotkeys";
  *  columns of boxes and a bezier per edge, which is a page of code, and a plot
  *  map is not a force-directed cloud — depth in the unlock order is the one
  *  thing the reader wants the x axis to mean.
+ *
+ *  The route REPLACES a greeting's arrays rather than merging, which is what
+ *  makes every write here a whole-record write and gives this component its
+ *  two hard rules: a greeting whose edges never loaded may not be written at
+ *  all (guessed-empty arrays would delete what the failed read did not see),
+ *  and a write applies to local state BEFORE it is sent, so a second edit to
+ *  the same greeting builds on the first instead of racing it.
  */
 
 /** Box geometry, in px. `COL`/`ROW` are strides, so the gap between two boxes
@@ -37,30 +44,79 @@ const PAD = 16;
 
 type Kind = "leads_to" | "excludes";
 
-/** One line as drawn. `both` marks an exclusion the two greetings each record
- *  about the other: exclusion bites in both directions whoever wrote it down
- *  (see `store.greetings.availability`), so it is one line, and deleting it has
- *  to clear both sides or half of it survives invisibly. */
-type Line = { key: string; kind: Kind; from: string; to: string; both: boolean };
+/** One line as drawn.
+ *
+ *  `both` marks an exclusion the two greetings each record about the other:
+ *  exclusion bites in both directions whoever wrote it down (see
+ *  `store.greetings.availability`), so it is one line, and deleting it has to
+ *  clear both sides or half of it survives invisibly.
+ *
+ *  `lift` separates lines that would otherwise be drawn on top of each other.
+ *  This view refuses to create a second link between a pair, but the chip
+ *  editor never did: a map authored there can hold a→b and b→a, or an unlock
+ *  and an exclusion for one pair, and a curve depends only on its endpoints —
+ *  so without this the later line's hit target covers the earlier one and one
+ *  of the two can never be selected. */
+type Line = { key: string; kind: Kind; from: string; to: string; both: boolean; lift: number };
 
 type Placed = { id: string; name: string; mark: GreetingMark; col: number; x: number; y: number };
 
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-/** Depth = the longest chain of unlocks that has to be played first, which is
- *  what the columns mean. Relaxation rather than a topological sort because a
- *  plot map is not guaranteed acyclic — nothing stops an author drawing a loop,
- *  and a layout that hangs on one would be a worse bug than the loop. Each pass
- *  can only push a node right, and the cap means a cycle settles rather than
- *  spins. */
-function depths(ids: string[], edges: Record<string, Edges>): Record<string, number> {
+/** A key for an unordered pair of ids that cannot be forged by an id.
+ *
+ *  `join(" ")` cannot do this job: `safe_id` permits internal spaces, so
+ *  ("a", "b c") and ("a b", "c") would key alike and the second exclusion
+ *  would vanish from the map. Length-prefixing the first id makes the split
+ *  unambiguous whatever the ids contain. */
+const pairKey = (a: string, b: string) => {
+  const [x, y] = a <= b ? [a, b] : [b, a];
+  return `${x.length}:${x}:${y}`;
+};
+
+/** The unlock edges with every cycle broken, as a DAG.
+ *
+ *  A plot map is not guaranteed acyclic — nothing stops an author drawing a
+ *  loop through the chip lists — and both halves of the layout need one that
+ *  is: a depth pass over a cycle has no fixed point, and stopping it after a
+ *  bounded number of passes bounds the running time without bounding the
+ *  answer (an n-node loop can walk itself out to n² columns of empty canvas).
+ *  So the cycle is cut here instead, at the one edge that closes it: a DFS
+ *  drops each back edge — the arrow still draws, it just stops voting on
+ *  which column its target belongs in. */
+function forwardEdges(ids: string[], edges: Record<string, Edges>): Map<string, string[]> {
   const known = new Set(ids);
+  const kept = new Map<string, string[]>(ids.map((id) => [id, []]));
+  const OPEN = 1, DONE = 2;
+  const state = new Map<string, number>();
+  for (const root of ids) {
+    if (state.has(root)) continue;
+    state.set(root, OPEN);
+    const stack: { id: string; i: number }[] = [{ id: root, i: 0 }];
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      const outs = (edges[top.id] ?? NO_EDGES).leads_to;
+      if (top.i >= outs.length) { state.set(top.id, DONE); stack.pop(); continue; }
+      const tgt = outs[top.i++];
+      if (!known.has(tgt) || tgt === top.id) continue;
+      if (state.get(tgt) === OPEN) continue;   // the back edge that closes a cycle
+      kept.get(top.id)!.push(tgt);
+      if (!state.has(tgt)) { state.set(tgt, OPEN); stack.push({ id: tgt, i: 0 }); }
+    }
+  }
+  return kept;
+}
+
+/** Depth = the longest chain of unlocks that has to be played first, which is
+ *  what the columns mean. Over a DAG this settles, and in at most one column
+ *  per greeting. */
+function depths(ids: string[], edges: Record<string, Edges>): Record<string, number> {
+  const kept = forwardEdges(ids, edges);
   const depth: Record<string, number> = Object.fromEntries(ids.map((id) => [id, 0]));
   for (let pass = 0; pass < ids.length; pass++) {
     let moved = false;
     for (const src of ids) {
-      for (const tgt of (edges[src] ?? NO_EDGES).leads_to) {
-        if (!known.has(tgt) || tgt === src) continue;
+      for (const tgt of kept.get(src) ?? []) {
         if (depth[tgt] < depth[src] + 1) { depth[tgt] = depth[src] + 1; moved = true; }
       }
     }
@@ -89,33 +145,45 @@ function layout(greetings: Greeting[], edges: Record<string, Edges>): Placed[] {
   return out;
 }
 
-/** The lines to draw, with each exclusion pair collapsed to one. */
+/** The lines to draw: each exclusion pair collapsed to one, and every line
+ *  that shares a pair with another lifted clear of it. */
 function lines(greetings: Greeting[], edges: Record<string, Edges>): Line[] {
   const known = new Set(greetings.map((g) => g.id));
-  const out: Line[] = [];
+  const out: Omit<Line, "lift">[] = [];
   const seen = new Set<string>();
   for (const g of greetings) {
     const e = edges[g.id] ?? NO_EDGES;
     for (const to of e.leads_to) {
       if (!known.has(to) || to === g.id) continue;
-      out.push({ key: `leads_to:${g.id}:${to}`, kind: "leads_to", from: g.id, to, both: false });
+      out.push({ key: `leads_to:${g.id.length}:${g.id}:${to}`, kind: "leads_to",
+                 from: g.id, to, both: false });
     }
     for (const to of e.excludes) {
       if (!known.has(to) || to === g.id) continue;
-      const pair = [g.id, to].sort().join(" ");
+      const pair = pairKey(g.id, to);
       if (seen.has(pair)) continue;
       seen.add(pair);
       out.push({ key: `excludes:${pair}`, kind: "excludes", from: g.id, to,
                  both: (edges[to] ?? NO_EDGES).excludes.includes(g.id) });
     }
   }
-  return out;
+  const crowd = new Map<string, number>();
+  for (const l of out) crowd.set(pairKey(l.from, l.to), (crowd.get(pairKey(l.from, l.to)) ?? 0) + 1);
+  const taken = new Map<string, number>();
+  return out.map((l) => {
+    const pair = pairKey(l.from, l.to);
+    const n = crowd.get(pair) ?? 1;
+    const i = taken.get(pair) ?? 0;
+    taken.set(pair, i + 1);
+    return { ...l, lift: (i - (n - 1) / 2) * 26 };
+  });
 }
 
 /** A curve between two boxes, leaving and arriving on whichever sides face
  *  each other — including the column a back-edge has to reach behind it, and
- *  the sideways loop two nodes in the same column need. */
-function pathOf(a: Placed, b: Placed): string {
+ *  the sideways loop two nodes in the same column need. `lift` pushes it clear
+ *  of another line between the same pair. */
+function pathOf(a: Placed, b: Placed, lift = 0): string {
   if (a.col === b.col) {
     // Down the column and out to the right, by enough to clear whatever rows
     // it passes -- neighbours barely bow at all, and only a line that has to
@@ -125,7 +193,7 @@ function pathOf(a: Placed, b: Placed): string {
     const y1 = down ? a.y + NODE_H : a.y;
     const y2 = down ? b.y : b.y + NODE_H;
     const rows = Math.max(1, Math.round(Math.abs(b.y - a.y) / ROW));
-    const bow = x + 20 + 44 * (rows - 1);
+    const bow = x + 20 + 44 * (rows - 1) + Math.abs(lift);
     return `M ${x} ${y1} C ${bow} ${y1}, ${bow} ${y2}, ${x} ${y2}`;
   }
   const rightwards = b.x > a.x;
@@ -142,7 +210,7 @@ function pathOf(a: Placed, b: Placed): string {
   // two solid ones. Dip it below the row instead, by enough to clear a box and
   // not so far that it lands in the row beneath.
   const span = Math.abs(b.col - a.col);
-  const dip = span > 1 ? Math.min(68, 26 + 14 * (span - 1)) : 0;
+  const dip = (span > 1 ? Math.min(68, 26 + 14 * (span - 1)) : 0) + lift;
   return `M ${x1} ${y1} C ${c1} ${y1 + dip}, ${c2} ${y2 + dip}, ${x2} ${y2}`;
 }
 
@@ -154,7 +222,9 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [edges, setEdgeMap] = useState<Record<string, Edges>>({});
   const [ready, setReady] = useState(false);
-  const [partial, setPartial] = useState(false);
+  /** Greetings the list named but whose edges never arrived. They are nodes,
+   *  and they are not writable — see `write`. */
+  const [unread, setUnread] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   /** The greeting a new link starts at, once the reader has armed one. */
   const [linking, setLinking] = useState<string | null>(null);
@@ -162,35 +232,66 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
   const [kind, setKind] = useState<Kind>("leads_to");
   const [picked, setPicked] = useState<string | null>(null); // a selected line's key
 
-  useEffect(() => {
-    let live = true;
+  /** The edge map as the mutations see it, updated synchronously.
+   *
+   *  React state is a render behind, and these payloads are whole records: two
+   *  edits to one greeting in quick succession would both derive from the map
+   *  as it was before either, and the second would send the first's edge back
+   *  to the server as deleted. */
+  const edgesRef = useRef<Record<string, Edges>>({});
+  /** One promise chain per greeting, so its whole-record writes reach the
+   *  server in the order they were made rather than in the order they finish. */
+  const pending = useRef(new Map<string, Promise<unknown>>());
+  /** Which load is current: a scope change or a retry makes every earlier one
+   *  stale, including one already in flight. */
+  const loadId = useRef(0);
+
+  const putEdges = useCallback((gid: string, next: Edges) => {
+    edgesRef.current = { ...edgesRef.current, [gid]: next };
+    setEdgeMap(edgesRef.current);
+  }, []);
+
+  const load = useCallback(() => {
+    const mine = ++loadId.current;
     setReady(false);
-    setPartial(false);
     setError(null);
-    setLinking(null);
-    setPicked(null);
     api.listGreetings(scope).then(async (list) => {
       // Edges live in the plot map, and only the per-greeting read carries
       // them -- the list endpoint returns summaries. One read each, and a
       // greeting whose read fails is still a node: a map that silently omits
       // an opening is worse than one that admits it is missing some lines.
-      let missed = false;
+      const missed: string[] = [];
       const pairs = await Promise.all(list.map((g) =>
         api.readGreeting(scope, g.id)
           .then((d) => [g.id, d.edges ?? NO_EDGES] as const)
-          .catch(() => { missed = true; return [g.id, NO_EDGES] as const })));
-      if (!live) return;
+          .catch(() => { missed.push(g.id); return [g.id, NO_EDGES] as const })));
+      if (loadId.current !== mine) return;
+      edgesRef.current = Object.fromEntries(pairs);
       setGreetings(list);
-      setEdgeMap(Object.fromEntries(pairs));
-      setPartial(missed);
+      setEdgeMap(edgesRef.current);
+      setUnread(missed);
       setReady(true);
     }).catch((err: unknown) => {
-      if (!live) return;
+      if (loadId.current !== mine) return;
       setError(errorText(err));
       setReady(true);
     });
-    return () => { live = false; };
   }, [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps -- scope is two scalars
+
+  useEffect(() => {
+    // Cleared rather than left standing while the next scope loads: this
+    // component is reused across a scope change, and a node still on screen is
+    // a node that can be clicked -- which would write the previous world's
+    // greeting id, and its edges, into the new one.
+    setGreetings([]);
+    setEdgeMap({});
+    edgesRef.current = {};
+    pending.current = new Map();
+    setUnread([]);
+    setLinking(null);
+    setPicked(null);
+    load();
+  }, [load]);
 
   const placed = useMemo(() => layout(greetings, edges), [greetings, edges]);
   const drawn = useMemo(() => lines(greetings, edges), [greetings, edges]);
@@ -204,19 +305,33 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
 
   /** Every write is the source greeting's WHOLE pair of arrays: the route
    *  replaces what it is given rather than merging, so a partial body would
-   *  drop the edges it did not mention. */
+   *  drop the edges it did not mention.
+   *
+   *  Which is also why it applies locally first and queues behind whatever is
+   *  already in flight for that greeting, and why a greeting whose edges never
+   *  loaded is refused outright rather than written from a guess. */
   async function write(gid: string, next: Edges): Promise<boolean> {
+    if (unread.includes(gid)) {
+      setError(`${nameOf(gid)}'s links could not be read, so they cannot be `
+               + "changed without erasing whatever they are. Retry the read first.");
+      return false;
+    }
+    const before = edgesRef.current[gid] ?? NO_EDGES;
+    putEdges(gid, next);
+    const run = (pending.current.get(gid) ?? Promise.resolve())
+      .then(() => api.setEdges(scope, gid, { leads_to: next.leads_to, excludes: next.excludes }));
+    pending.current.set(gid, run.catch(() => undefined));
     try {
-      await api.setEdges(scope, gid, { leads_to: next.leads_to, excludes: next.excludes });
-      setEdgeMap((m) => ({ ...m, [gid]: next }));
+      await run;
       return true;
     } catch (err: unknown) {
+      putEdges(gid, before);
       setError(errorText(err));
       return false;
     }
   }
 
-  const edgesOf = (gid: string): Edges => edges[gid] ?? NO_EDGES;
+  const edgesOf = (gid: string): Edges => edgesRef.current[gid] ?? NO_EDGES;
   const without = (list: string[], id: string) => list.filter((x) => x !== id);
 
   /** What already ties two greetings together, in either direction. */
@@ -253,8 +368,8 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
     const ok = await write(line.from, { leads_to: without(cur.leads_to, line.to),
                                         excludes: without(cur.excludes, line.to) });
     // The far half of a mutual exclusion. Second, and only if the first
-    // landed: a half-deleted pair still excludes, and one that failed on the
-    // near side should not lose the far one either.
+    // landed: a half-deleted pair still excludes, which is the state the
+    // reader already had, so an interrupted delete cannot invent a rule.
     if (ok && line.both) {
       const back = edgesOf(line.to);
       await write(line.to, { ...back, excludes: without(back.excludes, line.from) });
@@ -262,27 +377,42 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
     setPicked(null);
   }
 
-  async function flip(line: Line) {
+  /** An unlock becomes an exclusion: one record, one write. */
+  async function toExclusion(line: Line) {
     setError(null);
-    const to: Kind = line.kind === "leads_to" ? "excludes" : "leads_to";
     const cur = edgesOf(line.from);
-    const next: Edges = { leads_to: without(cur.leads_to, line.to),
-                          excludes: without(cur.excludes, line.to) };
-    next[to] = [...next[to], line.to];
-    const ok = await write(line.from, next);
-    // An exclusion the other side also records cannot become an unlock while
-    // that half stands -- it would still block the greeting it now unlocks.
-    if (ok && line.both && to === "leads_to") {
-      const back = edgesOf(line.to);
-      await write(line.to, { ...back, excludes: without(back.excludes, line.from) });
-    }
-    setPicked(line.kind === "leads_to"
-      ? `excludes:${[line.from, line.to].sort().join(" ")}`
-      : `leads_to:${line.from}:${line.to}`);
+    const ok = await write(line.from, { leads_to: without(cur.leads_to, line.to),
+                                        excludes: [...without(cur.excludes, line.to), line.to] });
+    if (ok) setPicked(`excludes:${pairKey(line.from, line.to)}`);
   }
 
-  const width = PAD * 2 + Math.max(...placed.map((p) => p.x + NODE_W), NODE_W);
-  const height = PAD * 2 + Math.max(...placed.map((p) => p.y + NODE_H), NODE_H);
+  /** An exclusion becomes an unlock, in the direction the reader picked.
+   *
+   *  An exclusion is undirected and an unlock is not, so the direction is
+   *  asked for rather than inherited from whichever greeting happened to
+   *  record the exclusion -- the map's own iteration order is not plot.
+   *
+   *  Ordered so no intermediate state is a rule nobody wrote: the far half of
+   *  a mutual exclusion goes first (leaving a one-sided exclusion, which still
+   *  excludes exactly as before), and the unlock lands in the same write that
+   *  clears the near half. An unlock that coexisted with a live exclusion
+   *  would block the greeting it claims to open. */
+  async function toUnlock(line: Line, from: string) {
+    setError(null);
+    const to = from === line.from ? line.to : line.from;
+    const back = edgesOf(to);
+    if (back.excludes.includes(from)) {
+      if (!await write(to, { ...back, excludes: without(back.excludes, from) })) return;
+    }
+    const cur = edgesOf(from);
+    const ok = await write(from, { leads_to: [...without(cur.leads_to, to), to],
+                                   excludes: without(cur.excludes, to) });
+    if (ok) setPicked(`leads_to:${from.length}:${from}:${to}`);
+  }
+
+  // `x`/`y` already start at PAD, so one more of it is the far margin.
+  const width = PAD + Math.max(...placed.map((p) => p.x + NODE_W), NODE_W);
+  const height = PAD + Math.max(...placed.map((p) => p.y + NODE_H), NODE_H);
 
   return (
     <div className="plotmap">
@@ -305,9 +435,14 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
         </div>
       </div>
       {error && <div className="banner">{error}</div>}
-      {partial && (
-        <div className="field-hint">
-          Some greetings could not be read, so the map may be missing links.
+      {unread.length > 0 && (
+        <div className="banner plotmap-unread">
+          <span>
+            {unread.length === 1
+              ? `${nameOf(unread[0])}'s links could not be read, so the map may be missing lines. Its own links cannot be edited until the read succeeds.`
+              : `${unread.length} greetings' links could not be read, so the map may be missing lines. Their own links cannot be edited until the read succeeds.`}
+          </span>
+          <button className="retry" onClick={load} disabled={!ready}>Retry</button>
         </div>
       )}
       {selected && (
@@ -315,16 +450,22 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
           <span className="chip on">
             {KIND_LABEL[selected.kind]}: {nameOf(selected.from)} {ARROW[selected.kind]} {nameOf(selected.to)}
           </span>
-          <button className="chip" onClick={() => void flip(selected)}>
-            {selected.kind === "leads_to" ? "Make exclusion" : "Make unlock"}
-          </button>
+          {selected.kind === "leads_to" ? (
+            <button className="chip" onClick={() => void toExclusion(selected)}>Make exclusion</button>
+          ) : (
+            [selected.from, selected.to].map((from) => (
+              <button key={from} className="chip" onClick={() => void toUnlock(selected, from)}>
+                Unlock: {nameOf(from)} → {nameOf(from === selected.from ? selected.to : selected.from)}
+              </button>
+            ))
+          )}
           <button className="chip" onClick={() => void remove(selected)}>Delete link</button>
           <button className="chip" onClick={() => setPicked(null)}>Done</button>
         </div>
       )}
       {ready && greetings.length === 0 ? (
         <div className="editor-empty">No greetings to map yet.</div>
-      ) : greetings.length > 0 ? (
+      ) : ready && greetings.length > 0 ? (
         <div className="plotmap-canvas pm-canvas" style={{ width, height }}>
           <svg className="pm-edges" width={width} height={height}>
             <defs>
@@ -337,14 +478,15 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
               const a = at.get(line.from);
               const b = at.get(line.to);
               if (!a || !b) return null;
-              const d = pathOf(a, b);
+              const d = pathOf(a, b, line.lift);
+              const select = () => { setLinking(null); setPicked(line.key); };
               return (
                 <g key={line.key} role="button" tabIndex={0}
                    className={`pm-edge ${line.kind}` + (picked === line.key ? " picked" : "")}
                    aria-label={`${KIND_LABEL[line.kind]}: ${a.name} ${ARROW[line.kind]} ${b.name}`}
-                   onClick={() => { setLinking(null); setPicked(line.key); }}
+                   onClick={select}
                    onKeyDown={(e) => {
-                     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPicked(line.key); }
+                     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); }
                    }}>
                   {/* A 2px curve is not a click target, so a fat invisible
                       twin under it is what the pointer actually hits. */}
@@ -377,6 +519,10 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
               </button>
               <button className="pm-link" aria-label={`Link from ${p.name}`}
                       aria-pressed={linking === p.id}
+                      // A node whose own edges never loaded cannot be a source:
+                      // the write would send the arrays this never read.
+                      disabled={unread.includes(p.id)}
+                      title={unread.includes(p.id) ? "Links could not be read" : `Link from ${p.name}`}
                       onClick={() => { setPicked(null); setLinking(linking === p.id ? null : p.id); }}>
                 ⇢
               </button>
