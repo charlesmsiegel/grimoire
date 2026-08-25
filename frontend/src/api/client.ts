@@ -1182,8 +1182,12 @@ export const api = {
   listGreetings: (scope: EntityScope) => request<Greeting[]>("GET", `${entityBase(scope)}/greetings`),
   createGreeting: (scope: EntityScope, draft: GreetingDraft) =>
     request<{ id: string }>("POST", `${entityBase(scope)}/greetings`, draft),
-  readGreeting: (scope: EntityScope, gid: string) =>
-    request<GreetingDetail>("GET", `${entityBase(scope)}/greetings/${gid}`),
+  /** `fresh` for a caller reading to find out whether a write landed: identical
+   *  in-flight GETs are shared, and a shared promise started before that write
+   *  answers from before it (see `retireInflight`). The plot map reads every
+   *  greeting's edges in order to write them back, so it asks that way (#9). */
+  readGreeting: (scope: EntityScope, gid: string, opts?: { fresh?: boolean }) =>
+    request<GreetingDetail>("GET", `${entityBase(scope)}/greetings/${gid}`, undefined, opts),
   updateGreeting: (scope: EntityScope, gid: string,
                    patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[];
                             predecessor_join?: string; pcless?: boolean; location?: string;

@@ -72,6 +72,26 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
   /** Bumped by anything that means "the reader is looking at something else
    *  now", so an answer to an older question can tell that it is stale. */
   const intent = useRef(0);
+  /** How many writes from here are in flight. A COUNT rather than a flag: two
+   *  overlapping saves both report busy, and the first to finish would
+   *  otherwise report the pair done -- freeing the plot map to write while the
+   *  second is still approaching its own `setEdges`. */
+  const writes = useRef(0);
+  const [writing, setWriting] = useState(false);
+
+  function beginWrite() {
+    writes.current += 1;
+    setWriting(true);
+    onBusy?.(true);
+  }
+  function endWrite() {
+    writes.current -= 1;
+    if (writes.current <= 0) {
+      writes.current = 0;
+      setWriting(false);
+      onBusy?.(false);
+    }
+  }
   const [subjects, setSubjects] = useState<Record<string, string[]>>({});
   const [picking, setPicking] = useState<string | null>(null); // image name being edited
   const [untagged, setUntagged] = useState<Appearance[]>([]);
@@ -147,9 +167,25 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     // the form and dropping `mode` back to view, which is exactly the loss
     // this branch exists to prevent.
     const mine = ++intent.current;
-    if (gid && mode === "view") {
+    if (!gid) return;
+    if (mode === "view") {
       void reload();
       void select(gid, () => intent.current === mine);
+      return;
+    }
+    // A draft whose chips are still untouched is not an opinion about the plot
+    // map, and leaving it on a pre-write snapshot is how touching one chip
+    // later sends the whole stale pair of arrays back -- undoing the graph edit
+    // without ever showing it. So the EDGES are rebased and the form is not:
+    // nothing the reader typed moves, and what they did not touch stops being
+    // a stale claim.
+    if (sameEdges(edges, loadedEdges)) {
+      void api.readGreeting(scope, gid).then((g) => {
+        if (intent.current !== mine) return;
+        setEdges(g.edges);
+        setLoadedEdges(g.edges);
+        setPredecessors(g.predecessors ?? []);
+      }).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
@@ -202,7 +238,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     if (hold) { setError(hold); return; }
     setError(null);
     setStale(null);
-    onBusy?.(true);
+    beginWrite();
     try {
       let id = gid;
       if (id) {
@@ -236,7 +272,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
       }
       setError(err.detail ?? String(err));
     } finally {
-      onBusy?.(false);
+      endWrite();
     }
   }
 
@@ -253,26 +289,31 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
 
   async function importFromCharacter() {
     if (!form.character || !form.version) return;
-    onBusy?.(true);
+    if (hold) { setError(hold); return; }
+    beginWrite();
     try {
       await api.importGreetings(wid, { character: form.character, version: form.version });
       await reload();
       onChanged?.();
     } finally {
-      onBusy?.(false);
+      endWrite();
     }
   }
 
   async function remove(g: Greeting) {
+    // Held for the same reason Save is, and more sharply: `delete_greeting`
+    // sweeps the greeting out of every OTHER greeting's edges, so it and a map
+    // write in flight are two unlocked read-modify-writes of one plotmap.json.
+    if (hold) { setError(hold); return; }
     if (!window.confirm(`Delete greeting '${g.name}'?`)) return;
-    onBusy?.(true);
+    beginWrite();
     try {
       await api.deleteGreeting(scope, g.id);
       if (gid === g.id) resetForm();
       await reload();
       onChanged?.();   // a delete takes the greeting's edges with it
     } finally {
-      onBusy?.(false);
+      endWrite();
     }
   }
 
@@ -653,10 +694,12 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
             </div>
           </Field>
           <div className="form-actions">
-            {gid && <button className="subtle" onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
+            {gid && <button className="subtle" title={hold ?? undefined} disabled={!!hold || writing}
+                            onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
             {gid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
             <button className="primary" onClick={() => save()} title={hold ?? undefined}
-                    disabled={!form.name.trim() || (!!form.character && !form.version) || !!hold}>
+                    disabled={!form.name.trim() || (!!form.character && !form.version)
+                              || !!hold || writing}>
               {gid ? "Save greeting" : "Create greeting"}
             </button>
           </div>
