@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { Field } from "./Field";
 import { DemotePanel } from "./DemotePanel";
@@ -9,9 +9,16 @@ import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
 
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false, location: "" };
+
+/** Same edges, order included: these are stored as written, and a reorder is a
+ *  change this form has no way to have made by accident. */
+const sameEdges = (a: Edges, b: Edges) =>
+  a.leads_to.join("\u0000") === b.leads_to.join("\u0000")
+  && a.excludes.join("\u0000") === b.excludes.join("\u0000");
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus, onChanged }:
+export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus,
+                                 onChanged, onBusy, refreshKey = 0 }:
   { scope: EntityScope; wid: string;
     onOpenCharacter?: (cid: string, vid: string) => void;
     onOpenLocation?: (eid: string) => void; focus?: string | null;
@@ -19,7 +26,14 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
      *  records can re-read (#9: the plot map draws these greetings' edges,
      *  and a save that lands while it is open would leave it holding a
      *  snapshot its next whole-array write would send back). */
-    onChanged?: () => void }) {
+    onChanged?: () => void;
+    /** True while a write here is in flight. The plot map is the other writer
+     *  of these same edges, and both send WHOLE arrays -- so one has to hold
+     *  still while the other is mid-write (#9). */
+    onBusy?: (busy: boolean) => void;
+    /** Bumped when that other view writes. A greeting open in `view` mode is
+     *  re-read; a draft in `edit` mode is never touched. */
+    refreshKey?: number }) {
   const worldScope = scope.kind === "world";
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -33,6 +47,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
   const [gid, setGid] = useState<string | null>(null); // null = new
   const [form, setForm] = useState(BLANK);
   const [edges, setEdges] = useState<Edges>(NO_EDGES);
+  /** The edges as `select` read them. A save resends the whole pair of arrays,
+   *  which is how a chip list nobody touched can undo an edge the plot map
+   *  wrote after it was loaded -- so an unchanged list is not sent at all. */
+  const [loadedEdges, setLoadedEdges] = useState<Edges>(NO_EDGES);
   const [predecessors, setPredecessors] = useState<string[]>([]);
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing greetings open in view
   const [error, setError] = useState<string | null>(null);
@@ -99,12 +117,24 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, wid]);
 
+  // The other view of these records wrote (#9). A greeting being READ is
+  // re-read, so its chips say what the store now says; a greeting being
+  // EDITED is left exactly as it is -- a draft is the one thing here that
+  // exists nowhere else, and its save no longer resends untouched edges.
+  const firstRefresh = useRef(true);
+  useEffect(() => {
+    if (firstRefresh.current) { firstRefresh.current = false; return; }
+    if (gid && mode === "view") { void reload(); void select(gid); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
   function resetForm() {
     setGid(null);
     setRev(null);
     setStale(null);
     setForm(BLANK);
     setEdges(NO_EDGES);
+    setLoadedEdges(NO_EDGES);
     setPredecessors([]);
     setMode("edit"); // a brand-new greeting goes straight to the form
   }
@@ -122,6 +152,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
       location: g.meta.location ?? "",
     });
     setEdges(g.edges);
+    setLoadedEdges(g.edges);
     setPredecessors(g.predecessors ?? []);
     setMode("view"); // existing greetings are read-only until Edit
     setPicking(null);
@@ -136,6 +167,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     if (!form.name.trim() || (form.character && !form.version)) return;
     setError(null);
     setStale(null);
+    onBusy?.(true);
     try {
       let id = gid;
       if (id) {
@@ -150,7 +182,15 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
       // Edges live in plotmap.json, not the greeting file, so they are outside
       // what `rev` describes -- and they are only written once the body has
       // landed, so a refused save leaves the plot map untouched too.
-      await api.setEdges(scope, id, { leads_to: edges.leads_to, excludes: edges.excludes });
+      //
+      // Only when this form actually changed them. The write replaces the
+      // greeting's whole pair of arrays, so resending a list nobody touched is
+      // how a save of the BODY silently reverts an edge the plot map drew
+      // after this record was loaded (#9). A new greeting still writes: there
+      // is nothing behind it to revert.
+      if (!gid || !sameEdges(edges, loadedEdges)) {
+        await api.setEdges(scope, id, { leads_to: edges.leads_to, excludes: edges.excludes });
+      }
       await reload();
       await select(id);
       onChanged?.();
@@ -160,6 +200,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
         return;
       }
       setError(err.detail ?? String(err));
+    } finally {
+      onBusy?.(false);
     }
   }
 
@@ -176,17 +218,27 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
 
   async function importFromCharacter() {
     if (!form.character || !form.version) return;
-    await api.importGreetings(wid, { character: form.character, version: form.version });
-    await reload();
-    onChanged?.();
+    onBusy?.(true);
+    try {
+      await api.importGreetings(wid, { character: form.character, version: form.version });
+      await reload();
+      onChanged?.();
+    } finally {
+      onBusy?.(false);
+    }
   }
 
   async function remove(g: Greeting) {
     if (!window.confirm(`Delete greeting '${g.name}'?`)) return;
-    await api.deleteGreeting(scope, g.id);
-    if (gid === g.id) resetForm();
-    await reload();
-    onChanged?.();   // a delete takes the greeting's edges with it
+    onBusy?.(true);
+    try {
+      await api.deleteGreeting(scope, g.id);
+      if (gid === g.id) resetForm();
+      await reload();
+      onChanged?.();   // a delete takes the greeting's edges with it
+    } finally {
+      onBusy?.(false);
+    }
   }
 
   function toggle(list: "leads_to" | "excludes", id: string) {

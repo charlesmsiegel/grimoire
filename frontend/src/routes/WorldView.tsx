@@ -99,6 +99,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   /** Bumped when the chip-list editor writes, so the graph re-reads. The two
    *  views draw the same records, and the switch does not wait for a save. */
   const [greetingEpoch, setGreetingEpoch] = useState(0);
+  /** ...and the other way: the graph writes the same edges the chip list holds
+   *  a copy of, and that copy stays mounted behind it. */
+  const [mapEpoch, setMapEpoch] = useState(0);
+  /** True while the chip-list editor is mid-write. Both views send whole edge
+   *  arrays, so the map holds still until that save settles. */
+  const [listSaving, setListSaving] = useState(false);
   /** A pending "open this entity" for whichever EntityEditor is mounted. Keyed
    *  by kind so a nav aimed at Lore cannot be consumed by Items: all six
    *  editors are the same component, and only the kind tells them apart. */
@@ -485,10 +491,13 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             <div hidden={greetingView !== "list"}>
               <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
                               onOpenLocation={(id) => openEntity("locations", id)} focus={focusGreeting}
-                              onChanged={() => setGreetingEpoch((n) => n + 1)} />
+                              onChanged={() => setGreetingEpoch((n) => n + 1)}
+                              onBusy={setListSaving} refreshKey={mapEpoch} />
             </div>
             {greetingView === "graph" && (
-              <PlotMapEditor scope={scope} onOpenGreeting={openGreeting} reloadKey={greetingEpoch} />
+              <PlotMapEditor scope={scope} onOpenGreeting={openGreeting}
+                             reloadKey={greetingEpoch} busy={listSaving}
+                             onChanged={() => setMapEpoch((n) => n + 1)} />
             )}
           </>
         )}
