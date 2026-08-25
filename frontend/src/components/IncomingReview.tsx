@@ -275,15 +275,29 @@ export function IncomingReview({ cid, focus, onResolved }: {
   useEffect(() => { void load(); }, [load]);
 
   // Opened on one ref by the composition panel (#199), which is where a reader
-  // reads "conflict" and asks what the conflict IS. A ref that is not in the
-  // list still selects nothing rather than clearing the selection: the two
-  // panels read `/incoming` separately and the other one's list can be a moment
-  // older, and a stale deep link should be a no-op, not a reset. Depends on the
-  // whole `focus` object, so pointing at the same ref twice re-selects it after
-  // the reader has clicked elsewhere.
+  // reads "conflict" and asks what the conflict IS.
+  //
+  // CHECKED AGAINST THE LIST before it is stored, because `sel` naming nothing
+  // is not inert: `active` below falls back to `items[0]`, so a ref that is not
+  // here would silently open an UNRELATED change with its Accept and Reject
+  // enabled. The two panels read `/incoming` separately and the other one's
+  // list can be a moment older, so a stale deep link is reachable and has to
+  // leave the current selection alone.
+  //
+  // Applied once per `focus` object, tracked by identity rather than by value:
+  // `items` is in the dependency list so a focus arriving before the first read
+  // lands still gets applied when it does, and without the latch every later
+  // refetch would drag the selection back off whatever the reader has since
+  // clicked. Re-boxing the same ref (`CampaignView` does) is a new object, so
+  // pointing at it twice deliberately re-selects.
+  const appliedFocus = useRef<IncomingRef | null>(null);
   useEffect(() => {
-    if (focus) setSel(`${focus.kind}/${focus.id}`);
-  }, [focus]);
+    if (!focus || !items || focus === appliedFocus.current) return;
+    const key = refKey(focus);
+    if (!items.some((i) => refKey(i.ref) === key)) return;
+    appliedFocus.current = focus;
+    setSel(key);
+  }, [focus, items]);
 
   const resolve = useCallback(async (refs: IncomingRef[], accept: boolean) => {
     setBusy(true);

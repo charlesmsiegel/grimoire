@@ -51,7 +51,13 @@ def read_subjects(root: Path, gid: str, known_cids: set[str] | None = None) -> d
     for name, subs in raw.items():
         if name not in names or not isinstance(subs, list):
             continue
-        out[name] = [c for c in subs if c in cids]
+        # `isinstance(c, str)` FIRST, and not for tidiness: `c in cids` against a
+        # set raises TypeError for an unhashable member, so a hand-edited or
+        # half-synced sidecar holding a nested list or object took the caller
+        # down. That was survivable while every caller read one greeting; the
+        # world gallery reads them all, so one malformed member 500'd the whole
+        # Images view. Same tolerance the rest of this module reads with.
+        out[name] = [c for c in subs if isinstance(c, str) and c in cids]
     return out
 
 

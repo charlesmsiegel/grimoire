@@ -719,7 +719,7 @@ def list_world_gallery(wid: str):
                 # is a broken image the reader cannot clear.
                 continue
             row = {"kind": base, "id": item["id"], "vid": item["vid"],
-                   "name": item["name"], "record_name": found[0],
+                   "name": item["name"], "ext": item["ext"], "record_name": found[0],
                    "described": item["described"], "description": item["description"],
                    **_gallery_urls(wid, base, item)}
             if base == "greetings":

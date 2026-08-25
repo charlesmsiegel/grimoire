@@ -320,15 +320,49 @@ test("a focus ref from the composition panel opens the review on that change", a
   expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Seraphine");
 });
 
-test("a focus naming a ref this panel has no row for changes nothing", async () => {
+test("a focus naming a ref this panel has no row for leaves the selection alone", async () => {
   // The two panels read `/incoming` separately, so the other one's list can be
-  // a moment older. A stale deep link is a no-op, not a cleared selection.
-  (api.getIncoming as any).mockResolvedValue([HARBOR]);
+  // a moment older and a stale deep link is reachable.
+  //
+  // Asserted against a selection that is NOT the first row, because `sel`
+  // naming nothing is not inert: `active` falls back to `items[0]`, so a focus
+  // stored without checking would silently open an unrelated change with its
+  // Accept and Reject enabled.
+  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
   const { rerender } = render(<IncomingReview cid="c1" />);
   await act(async () => {});
+  fireEvent.click(screen.getByRole("button", { name: /Seraphine/ }));
+  await act(async () => {});
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Seraphine");
+
   rerender(<IncomingReview cid="c1" focus={{ kind: "lore", id: "long-gone" }} />);
   await act(async () => {});
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Seraphine");
+});
+
+test("a focus does not drag the selection back on every later refetch", async () => {
+  // The deep link is a one-shot: once the reader has moved on, a refetch (which
+  // every accept triggers) must not haul them back to where they arrived.
+  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  const focus = { kind: "locations", id: "saltmarch-harbor" };
+  const { rerender } = render(<IncomingReview cid="c1" focus={focus} />);
+  await act(async () => {});
   expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Saltmarch Harbor");
+
+  fireEvent.click(screen.getByRole("button", { name: /Seraphine/ }));
+  await act(async () => {});
+  rerender(<IncomingReview cid="c1" focus={focus} />);
+  await act(async () => {});
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Seraphine");
+});
+
+test("a focus arriving before the first read lands is applied when it does", async () => {
+  let settle: (v: unknown) => void = () => {};
+  (api.getIncoming as any).mockReturnValue(new Promise((res) => { settle = res; }));
+  render(<IncomingReview cid="c1" focus={{ kind: "characters", id: "seraphine" }} />);
+  await act(async () => {});
+  await act(async () => { settle([HARBOR, SERAPHINE]); });
+  expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Seraphine");
 });
 
 test("a landed resolve is announced, after this panel has re-read", async () => {

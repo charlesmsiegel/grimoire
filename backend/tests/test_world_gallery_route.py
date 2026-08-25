@@ -7,6 +7,7 @@ listing can offer a tile nothing will serve.
 """
 
 import importlib
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -100,6 +101,10 @@ def test_a_row_carries_what_it_takes_to_render_and_place_the_tile(client, world)
     _upload(client, f"/api/worlds/{world}/characters/{cid}/versions/{vid}/images/gallery_1")
     (row,) = _gallery(client, world)
     assert (row["kind"], row["id"], row["vid"], row["name"]) == ("characters", cid, vid, "gallery_1")
+    # The stored format, which the detail sidebar renders as a chip. Catalogued
+    # and then dropped on the way out once, so it is asserted at the boundary
+    # that actually serves it rather than only in the store test.
+    assert row["ext"] == "png"
     # The record's display name, so a tile can say whose picture it is without
     # a second request per record.
     assert row["record_name"] == "Seraphine"
@@ -172,6 +177,21 @@ def test_a_malformed_subjects_entry_is_answered_here_because_the_queue_says_so(c
     assert row["subjects"] == []
     # ...which is exactly what the queue thinks, and the two must not disagree.
     assert client.get(f"/api/worlds/{world}/subjects/untagged").json() == []
+
+
+def test_one_malformed_subject_member_cannot_take_down_the_whole_gallery(client, world):
+    """`read_subjects` tests membership against a SET, and an unhashable member
+    raises rather than comparing false. That was survivable while every caller
+    read one greeting; this route reads every greeting in the world, so one
+    nested list in one sidecar would 500 the entire Images view."""
+    cid, vid = _character(client, world)
+    gid = _greeting(client, world, cid, vid, images=("gallery_1",))
+    store.image_subjects.subjects_path(store.worlds.world_root(world), gid).write_text(
+        json.dumps({"gallery_1": [["not"], {"a": "string"}, cid]}), encoding="utf-8")
+
+    (row,) = [r for r in _gallery(client, world) if r["kind"] == "greetings"]
+    # The members it can read survive; the ones it cannot are dropped, not fatal.
+    assert row["subjects"] == [cid]
 
 
 def test_art_whose_record_is_gone_is_not_offered(client, world):
