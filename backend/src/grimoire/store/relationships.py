@@ -114,7 +114,7 @@ def _render_feeling(f: dict) -> str:
     return f"trust {f['trust']}, affection {f['affection']}, tension {f['tension']}{note}"
 
 
-def render_standing(kind: str, record: dict | None) -> str:
+def render_standing(kind: str, record) -> str:
     """A STORED feeling or bond as the one-line standing the review shows, and
     "" when there is none (#63).
 
@@ -131,6 +131,10 @@ def render_standing(kind: str, record: dict | None) -> str:
     Tolerant of a record missing an axis, which `_render_feeling` is not: this
     reads records off disk, where a hand edit can leave one out, and a row with
     no text is a smaller loss than a KeyError out of a write that has landed.
+    `record` is untyped for the same reason it is `isinstance`-checked: two of
+    the three callers hand it a value that reached them as `object` (an
+    `undo.snapshot` reading, an `undo.read_value` one), and narrowing at each of
+    them would be three copies of the check below.
     """
     if not isinstance(record, dict):
         return ""

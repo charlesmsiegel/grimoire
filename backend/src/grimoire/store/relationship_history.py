@@ -13,7 +13,8 @@ Shape, per entry::
 
     {"id": "rh12", "ts": ..., "scene": "003--the-crypt", "source": "absorb"|"undo",
      "kind": "feeling"|"bond", "a": "characters:mara", "b": "pcs:seraphine",
-     "label": "Mara → Seraphine", "before": "...", "after": "..."}
+     "label": "Mara → Seraphine", "before": "...", "after": "...",
+     "scene_gone": True}    # only once that scene has been deleted
 
 ``a`` and ``b`` are actor tokens (``"<kind>:<id>"``), and their *order carries
 meaning for a feeling and none for a bond* -- the same asymmetry
@@ -48,6 +49,17 @@ stop. Two consequences worth stating:
   rows are all still present, and the reversal appended beside them says what
   happened. ``scene_refs.repoint`` keeps the ``scene`` field pointing at the
   right scene while it exists.
+
+- A DELETED scene's rows keep their ``scene`` too, and gain ``scene_gone``.
+  Scene ids are recycled -- ``scenes.lifecycle`` reuses the highest deleted
+  number, which is why ``delete_scene`` drops the prompt snapshots, the commit
+  ledger's state, the turn state and the reader's pins rather than letting the
+  replacement adopt them. A retained row cannot be dropped (that is the history
+  this store exists to keep) and must not be resolved either, or the next scene
+  to take the number lends it a title and a date it never had, and a rename of
+  THAT scene drags these rows along with it. So the id stays as written, as a
+  historical string, and the flag says: do not join this, and do not repoint
+  it.
 
 Retention is bounded the two ways ``journal.py``'s is, and for a weaker version
 of the same reason. A row here is small by construction -- two rendered meters,
@@ -221,13 +233,44 @@ def _trim(entries: list[dict], keep: int) -> list[dict]:
     return entries[first:]
 
 
+def forget_scene(cid: str, sid: str) -> int:
+    """Mark this scene's rows as citing a scene that is gone. Returns how many.
+
+    NOT a drop, unlike `changes.forget_scene`: those rows say "this is what the
+    last write-back did to this record", and a reverted one describes a change
+    the record no longer holds with no earlier row to fall back on. These rows
+    say what happened, and it still did.
+
+    Not a no-op either, which is the part scene deletion forces. A scene id is
+    recycled -- `scenes.lifecycle` hands the highest deleted number back out --
+    so a row left resolvable would be labelled with the replacement scene's
+    title and date, and repointed by the replacement's next rename. The id is
+    kept as the historical string it is and the flag takes it out of both
+    joins.
+    """
+    hit: list[dict] = []
+    with locks.campaign_lock(cid):
+        doc = _load(cid)
+        hit = [e for e in doc["entries"]
+               if e.get("scene") == sid and not e.get("scene_gone")]
+        for entry in hit:
+            entry["scene_gone"] = True
+        if hit:
+            _write(cid, doc)
+    return len(hit)   # outside the hold, for `append`'s reason
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
-    """Follow renamed scene ids in each entry's scene field."""
+    """Follow renamed scene ids in each entry's scene field.
+
+    A row whose scene is gone is left alone: its id names a scene that no longer
+    exists, so a rename of whatever holds that id now is not this row's rename.
+    """
     with locks.campaign_lock(cid):
         doc = _load(cid)
         hit = False
         for entry in doc["entries"]:
-            if entry.get("scene") in mapping:
+            if entry.get("scene") in mapping and not entry.get("scene_gone"):
                 entry["scene"] = mapping[entry["scene"]]
                 hit = True
         if hit:

@@ -1101,7 +1101,8 @@ def get_relationship_history(cid: str, a: str | None = None, b: str | None = Non
     answers what moved them, which `relationships.json` overwrites and cannot
     say. Pass `a` and `b` (actor tokens) for one pair — matched unordered, so a
     directed feeling is returned in both directions along with the bond, since
-    "what has passed between these two" is one question.
+    "what has passed between these two" is one question. Both or neither: one
+    alone is a 400 rather than a quiet fall back to everything.
 
     Every field is coerced and the names are resolved tolerantly, the two rules
     `_journal_row` and `_ledger_relationships` respectively state: the file is
@@ -1109,6 +1110,13 @@ def get_relationship_history(cid: str, a: str | None = None, b: str | None = Non
     parse must cost a name rather than the view.
     """
     _campaign_root_or_404(cid)
+    # A pair is both tokens or neither. One alone would silently answer with the
+    # unfiltered timeline -- up to `RELATIONSHIP_HISTORY_PAGE` rows for pairs the
+    # caller did not ask about, looking exactly like a filtered response.
+    if bool(a) != bool(b):
+        raise HTTPException(status_code=400,
+                            detail="filtering by pair needs both actor tokens, "
+                                   "`a` and `b` — half a pair names no pair")
     entries = (store.relationship_history.for_pair(cid, a, b)
                if a and b else store.relationship_history.read(cid))
     entries = entries[-RELATIONSHIP_HISTORY_PAGE:]
@@ -1138,8 +1146,14 @@ def get_relationship_history(cid: str, a: str | None = None, b: str | None = Non
     for e in reversed(entries):
         atok, btok = _ledger_text(e.get("a")), _ledger_text(e.get("b"))
         sid = _ledger_text(e.get("scene"))
-        sc = scenes_by_id.get(sid, {})
-        c = chron.get(sid)
+        # A row whose scene has been DELETED is not resolved against either
+        # join: ids are recycled, so whatever holds this one now is a different
+        # scene, and lending the row its title and date would be the plainest
+        # possible lie about where a standing came from. The id itself is kept
+        # and shown, which is what an unresolvable id has always rendered as.
+        gone = bool(e.get("scene_gone"))
+        sc = {} if gone else scenes_by_id.get(sid, {})
+        c = None if gone else chron.get(sid)
         c = c if isinstance(c, dict) else {}
         out.append({
             "id": _ledger_text(e.get("id")), "ts": _ledger_text(e.get("ts")),

@@ -464,11 +464,11 @@ def undo(cid: str, jid: str) -> dict:
         written = journal.append(cid, [row])[0]
         journal.mark_undone(cid, jid, written["id"])
         _roll_back_panels(cid, entry, row)
-        _log_relationship_reversal(cid, target, row)
+        _log_relationship_reversal(cid, target, row, stored)
         return written
 
 
-def _log_relationship_reversal(cid: str, target: dict, row: dict) -> None:
+def _log_relationship_reversal(cid: str, target: dict, row: dict, stored) -> None:
     """Append the reversal to the relationship timeline (#63), when the record
     put back was a feeling or a bond.
 
@@ -479,8 +479,14 @@ def _log_relationship_reversal(cid: str, target: dict, row: dict) -> None:
     dropping the row it undid would leave the arc claiming a standing that was
     taken back, with nothing to say so.
 
-    `row`'s `before`/`after` are already the reversed pair (`undo` builds them
-    from the entry read backwards), so this row reads forwards like every other.
+    Both standings are RECORDS, not `row`'s text. `row` carries the journal
+    entry's `after`/`before` read backwards, and those are display strings a
+    client-supplied edit supplied -- the very thing `absorb.apply` stopped
+    trusting when it started reading this ledger's `after` back off the record.
+    Taking them here would put the untrusted pair back in through the reversal
+    and break the arc at the one row that exists to close it. `stored` is the
+    value the compare-and-swap just verified (so, what this reversal moved
+    FROM) and the record is read once more afterwards for what it moved TO.
 
     `source` is the journal's word for the same thing and carries no direction,
     which is deliberate rather than an omission. Undoing an undo is a redo (this
@@ -508,7 +514,8 @@ def _log_relationship_reversal(cid: str, target: dict, row: dict) -> None:
     try:
         relationship_history.append(cid, [relationship_history.row(
             kind, a, b, label=_display(row.get("label")),
-            before=_display(row.get("before")), after=_display(row.get("after")),
+            before=relationships.render_standing(kind, stored),
+            after=relationships.render_standing(kind, read_value(cid, target)),
             scene=_display(row.get("scene")), source="undo")])
     except Exception:  # the reversal landed; only the timeline is short a row
         log.warning("could not record the relationship reversal for %s in %s", target, cid,

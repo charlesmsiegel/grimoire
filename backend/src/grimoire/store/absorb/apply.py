@@ -608,16 +608,32 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             "before": _display(conflicts.replaced_value(e)), "after": _display(after),
             "undo": undo_store.seal(cid, reversal, prior) if reversal is not None else None}
         journalled["why"] = "" if journalled["undo"] else undo_store.why(kind)
-        # The timeline row for the same write. The two ends come from different
-        # places on purpose, because only one of them is checked:
-        # `conflicts._REASONS` covers `relationship` and `bond`, so the one-pass
-        # gate in `apply_edits` has already refused this row unless its staged
-        # `before` matched the stored standing -- and an answered conflict makes
-        # `replaced_value` the stored one. Nothing checks `after` against the
-        # payload, so that end is read back off the record above.
+        # The timeline row for the same write. Both ends are the RECORD: `after`
+        # was read back after the write above, and `before` is `prior`, the
+        # reading `undo_store.snapshot` took at the last moment the replaced
+        # value still existed -- per edit, and inside this function.
+        #
+        # Not the staged `before`, and the conflict gate is not a substitute for
+        # this even though `relationship` and `bond` are both in
+        # `conflicts._REASONS`. That gate is ONE PASS OVER THE WHOLE BATCH
+        # BEFORE THE FIRST WRITE, so it says nothing about a batch that moves
+        # one pair twice: nothing dedupes `relationship_deltas` by pair the way
+        # `plot_movements` are deduped by id, both rows are staged with the same
+        # `before`, both pass the gate against the untouched record, and the
+        # second then writes over the first. The staged pair would record
+        # `original -> first` and `original -> second`, and the arc -- the whole
+        # point of this ledger -- would have a break in it that nothing later
+        # can find.
+        #
+        # `prior` is trustworthy only when the probe produced a reversal: a
+        # probe that could not read its target yields `(None, None)`, which is
+        # indistinguishable from "there was no record". The staged text is the
+        # fallback there, being what the journal shows.
         history = relationship_history.row(
             pair["kind"], pair["a"], pair["b"], label=journalled["label"],
-            before=journalled["before"], after=pair["after"]) if pair else None
+            before=(relationships.render_standing(pair["kind"], prior)
+                    if reversal is not None else journalled["before"]),
+            after=pair["after"]) if pair else None
     except entities.EntityNotFound:
         # Named apart from the generic handler because its message would
         # otherwise be the bare ref: this is the commonest way an approved edit

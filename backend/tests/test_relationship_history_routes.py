@@ -91,10 +91,12 @@ def test_pair_filter_matches_unordered_and_returns_both_directions(client, cid):
     assert [(r["kind"], r["a"], r["b"]) for r in rows] == [
         ("bond", a, b), ("feeling", b, a), ("feeling", a, b)]
     assert all(r["a_name"] and r["b_name"] for r in rows)
-    # Half a pair names no pair, so it falls back to the whole timeline rather
-    # than filtering on one actor — which is a different question.
-    assert len(client.get(f"/api/campaigns/{cid}/relationships/history",
-                          params={"a": a}).json()) == 4
+    # Half a pair names no pair, and answering it with the unfiltered timeline
+    # would look exactly like a filtered response.
+    for half in ({"a": a}, {"b": b}, {"a": a, "b": ""}):
+        refused = client.get(f"/api/campaigns/{cid}/relationships/history", params=half)
+        assert refused.status_code == 400
+        assert "both actor tokens" in refused.json()["detail"]
 
 
 def test_an_undone_delta_shows_as_its_own_row(client, cid):
@@ -159,3 +161,24 @@ def test_a_malformed_chronicle_costs_the_date_not_the_request(client, cid):
         p.write_text(garbled, encoding="utf-8")
         rows = client.get(f"/api/campaigns/{cid}/relationships/history").json()
         assert rows[0]["scene"] == {"id": "s1", "title": "s1", "date": ""}
+
+
+def test_a_deleted_scenes_row_is_not_labelled_with_the_scene_that_took_its_id(client, cid):
+    """`scenes.lifecycle` hands the highest deleted number back out, so the join
+    has to refuse a row whose scene is gone — or it reports a standing as having
+    come from a scene that never touched it."""
+    mara, winifred = _char(cid, "Mara"), _char(cid, "Winifred")
+    a, b = f"characters:{mara}", f"characters:{winifred}"
+    sid = store.scenes.create_scene(cid, "The crypt")
+    store.absorb.apply_edits(cid, [_feeling(cid, a, b, 1, 1, 4)], sid)
+    store.scenes.delete_scene(cid, sid)
+    # The number is recycled and the id carries the title slug, so remaking a
+    # scene under the same title hands back this very id — `delete_scene` says
+    # so where it drops the other id-keyed state.
+    replacement = store.scenes.create_scene(cid, "The crypt")
+    assert replacement == sid
+
+    rows = client.get(f"/api/campaigns/{cid}/relationships/history").json()
+    assert len(rows) == 1
+    assert rows[0]["scene"] == {"id": sid, "title": sid, "date": ""}
+    assert rows[0]["after"] == "trust 1, affection 1, tension 4"

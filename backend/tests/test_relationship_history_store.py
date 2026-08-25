@@ -435,3 +435,71 @@ def test_a_redo_appends_a_row_that_reads_forwards(monkeypatch, tmp_path):
             for r in relationship_history.for_pair(cid, A, B)] == [
         ("absorb", "", standing), ("undo", standing, ""), ("undo", "", standing)]
     assert relationships.get_feeling(cid, A, B)["trust"] == 2
+
+
+def test_two_deltas_on_one_pair_in_one_absorb_chain(monkeypatch, tmp_path):
+    """Nothing dedupes `relationship_deltas` by pair, and the conflict gate is
+    one pass over the whole batch BEFORE the first write — so both rows are
+    staged against the untouched record and both pass. The second row's
+    `before` has to be what the FIRST one left, or the arc has a break in it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    first = _feeling(cid, A, B, 1, 1, 4, "wary")
+    second = _feeling(cid, A, B, 4, 3, 1, "warm")
+    second["before"] = first["before"]     # what materialize stages: both read the
+    second["id"] = "feeling:second"        # same record, before either has landed
+    applied, failures = absorb.apply_edits(cid, [first, second], sid=sid)
+
+    assert len(applied) == 2 and failures == []
+    rows = relationship_history.for_pair(cid, A, B)
+    assert [(r["before"], r["after"]) for r in rows] == [
+        ("", "trust 1, affection 1, tension 4 (wary)"),
+        ("trust 1, affection 1, tension 4 (wary)", "trust 4, affection 3, tension 1 (warm)")]
+
+
+def test_a_reversal_reads_the_records_not_the_journals_text(monkeypatch, tmp_path):
+    """An undo builds its row from the record the compare-and-swap verified and
+    the one it restored — never from the journal's display strings, which carry
+    whatever `after` a client-supplied edit supplied."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    forged = _feeling(cid, A, B, 2, 1, 3, "wary")
+    forged["after"] = "trust 0, affection 0, tension 5 (nothing like the payload)"
+    absorb.apply_edits(cid, [forged], sid=sid)
+    undo.undo(cid, journal.read(cid)[-1]["id"])
+
+    landed, reversal = relationship_history.for_pair(cid, A, B)
+    assert landed["after"] == "trust 2, affection 1, tension 3 (wary)"
+    assert reversal["before"] == landed["after"]   # the arc joins up
+    assert reversal["after"] == ""                 # there was no prior standing
+    assert relationships.get_feeling(cid, A, B) is None
+
+
+def test_a_deleted_scenes_rows_stay_but_stop_resolving(monkeypatch, tmp_path):
+    """Scene ids are recycled, so a retained row must not be joinable: the next
+    scene to take the number would lend it a title it never had, and that
+    scene's next rename would drag the row along."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "The crypt")
+    absorb.apply_edits(cid, [_feeling(cid, A, B, 2, 1, 3, "wary")], sid=sid)
+    scenes.delete_scene(cid, sid)
+
+    rows = relationship_history.read(cid)
+    assert len(rows) == 1                       # kept: the delta still happened
+    assert rows[0]["scene"] == sid and rows[0]["scene_gone"] is True
+    # And a rename of whatever holds that id now leaves the row alone.
+    scene_refs.repoint(cid, {sid: "001--2026-07-04--the-crypt"})
+    assert relationship_history.read(cid)[0]["scene"] == sid
+
+
+def test_forget_scene_is_idempotent_and_leaves_other_scenes_alone(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    relationship_history.append(cid, [
+        relationship_history.row("feeling", A, B, label="", before="", after="x",
+                                 scene="001--s"),
+        relationship_history.row("bond", A, B, label="", before="", after="allies",
+                                 scene="002--t")])
+    assert relationship_history.forget_scene(cid, "001--s") == 1
+    assert relationship_history.forget_scene(cid, "001--s") == 0   # already marked
+    kept = relationship_history.read(cid)
+    assert kept[0]["scene_gone"] is True and "scene_gone" not in kept[1]
