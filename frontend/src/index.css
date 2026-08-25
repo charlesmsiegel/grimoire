@@ -1287,6 +1287,27 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .incoming-badge { margin-left: 6px; cursor: inherit; }
 .incoming-conflict { background: var(--accent); color: var(--on-accent); }
 
+/* Composition (#199) — the overview that sits in front of the review above.
+   Same panel chrome and the same two-pane shape, because it is the same
+   question one step back: not "what is waiting" but "where does each piece of
+   this campaign stand". */
+.composition-panel {
+  background: var(--panel2); border-bottom: 1px solid var(--rule); color: var(--ink);
+  padding: 12px 22px; font-size: 14px; line-height: 1.7; flex: none;
+  max-height: 40vh; overflow-y: auto;
+}
+.composition-panel .editor-list { position: static; max-height: none; }
+.composition-panel .form-actions { margin-bottom: 6px; }
+.composition-panel .banner { margin: 0 0 10px; }
+.composition-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* Accented only for conflict, exactly as .incoming-badge is and for the same
+   reason: the badge exists to pick out the rows that cannot simply be taken,
+   and painting all five leaves those looking like the rest. `insync` is quieter
+   still -- it is the absence of news. */
+.composition-badge { margin-left: 6px; cursor: inherit; }
+.composition-conflict { background: var(--accent); color: var(--on-accent); }
+.composition-insync { opacity: 0.7; }
+
 /* Push to campaigns (#8) — the world side of the same pair. Read-only: each
    row links to the campaign, which is where accepting happens. */
 .push-panel { font-size: 14px; line-height: 1.7; }

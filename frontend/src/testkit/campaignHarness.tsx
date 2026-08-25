@@ -257,6 +257,7 @@ export function installCampaignMocks() {
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
   (api.getIncoming as any).mockResolvedValue([]);
+  (api.listDiverged as any).mockResolvedValue([]);
   (api.campaignProvenance as any).mockResolvedValue({});
   (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.listResponsePresets as any).mockResolvedValue([]);
