@@ -217,8 +217,13 @@ function pathOf(a: Placed, b: Placed, lift = 0): string {
 const KIND_LABEL: Record<Kind, string> = { leads_to: "Unlocks", excludes: "Excludes" };
 const ARROW: Record<Kind, string> = { leads_to: "→", excludes: "↮" };
 
-export function PlotMapEditor({ scope, onOpenGreeting }:
-  { scope: EntityScope; onOpenGreeting?: (gid: string) => void }) {
+/** Thrown by a queued write the map has already moved past — a scope change,
+ *  or an earlier write in the queue that failed. Not an error to report: the
+ *  reload that invalidated it is what the reader sees. */
+class Skipped extends Error {}
+
+export function PlotMapEditor({ scope, onOpenGreeting, reloadKey = 0 }:
+  { scope: EntityScope; onOpenGreeting?: (gid: string) => void; reloadKey?: number }) {
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [edges, setEdgeMap] = useState<Record<string, Edges>>({});
   const [ready, setReady] = useState(false);
@@ -239,9 +244,16 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
    *  as it was before either, and the second would send the first's edge back
    *  to the server as deleted. */
   const edgesRef = useRef<Record<string, Edges>>({});
-  /** One promise chain per greeting, so its whole-record writes reach the
-   *  server in the order they were made rather than in the order they finish. */
-  const pending = useRef(new Map<string, Promise<unknown>>());
+  /** One chain for the whole map, not one per greeting.
+   *
+   *  Per-greeting was enough for this component's own arithmetic, and not
+   *  enough for the file underneath it: `store.greetings.set_edges` is an
+   *  unlocked read-modify-write of one `plotmap.json` holding every greeting's
+   *  edges (`store.greetings` is not in `locks.DOMAIN_MODULES`), so two
+   *  requests for *different* greetings can read the same map and the second
+   *  write drops the first. That race is the backend's and predates this view;
+   *  what this view owes is not to be the thing that provokes it. */
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
   /** Which load is current: a scope change or a retry makes every earlier one
    *  stale, including one already in flight. */
   const loadId = useRef(0);
@@ -251,10 +263,13 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
     setEdgeMap(edgesRef.current);
   }, []);
 
-  const load = useCallback(() => {
+  /** Re-read the scope. `keepError` is for the one caller that is reporting a
+   *  failure *by* re-reading -- clearing the banner it just set would leave the
+   *  map silently rearranging itself. */
+  const load = useCallback((keepError = false) => {
     const mine = ++loadId.current;
     setReady(false);
-    setError(null);
+    if (!keepError) setError(null);
     api.listGreetings(scope).then(async (list) => {
       // Edges live in the plot map, and only the per-greeting read carries
       // them -- the list endpoint returns summaries. One read each, and a
@@ -276,7 +291,8 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
       setError(errorText(err));
       setReady(true);
     });
-  }, [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps -- scope is two scalars
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- scope is two scalars
+  }, [scope.kind, scope.id, reloadKey]);
 
   useEffect(() => {
     // Cleared rather than left standing while the next scope loads: this
@@ -286,7 +302,7 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
     setGreetings([]);
     setEdgeMap({});
     edgesRef.current = {};
-    pending.current = new Map();
+    chain.current = Promise.resolve();
     setUnread([]);
     setLinking(null);
     setPicked(null);
@@ -310,23 +326,37 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
    *  Which is also why it applies locally first and queues behind whatever is
    *  already in flight for that greeting, and why a greeting whose edges never
    *  loaded is refused outright rather than written from a guess. */
-  async function write(gid: string, next: Edges): Promise<boolean> {
+  async function write(gid: string, next: Edges, gen = loadId.current): Promise<boolean> {
     if (unread.includes(gid)) {
       setError(`${nameOf(gid)}'s links could not be read, so they cannot be `
                + "changed without erasing whatever they are. Retry the read first.");
       return false;
     }
-    const before = edgesRef.current[gid] ?? NO_EDGES;
+    // A mutation that spans two writes captures `gen` before the first, so its
+    // second half cannot land in a scope the reader has since left: `edgesRef`
+    // by then holds the new scope's edges, while `scope` here is still the old
+    // render's -- which is how a greeting id absent from the new map would be
+    // sent back to the old one with empty arrays.
+    if (loadId.current !== gen) return false;
     putEdges(gid, next);
-    const run = (pending.current.get(gid) ?? Promise.resolve())
-      .then(() => api.setEdges(scope, gid, { leads_to: next.leads_to, excludes: next.excludes }));
-    pending.current.set(gid, run.catch(() => undefined));
+    const task = chain.current.then(async () => {
+      if (loadId.current !== gen) throw new Skipped();
+      await api.setEdges(scope, gid, { leads_to: next.leads_to, excludes: next.excludes });
+    });
+    chain.current = task.catch(() => undefined);
     try {
-      await run;
+      await task;
       return true;
     } catch (err: unknown) {
-      putEdges(gid, before);
+      if (err instanceof Skipped) return false;
+      // Re-read rather than revert. The optimistic map may already carry a
+      // later edit whose payload was built on this one, and that write is
+      // still queued behind this failure -- restoring a snapshot would leave
+      // the screen claiming one thing and the store holding another. `load`
+      // bumps the generation, which is also what discards those queued
+      // payloads: they describe a map that never existed.
       setError(errorText(err));
+      load(true);
       return false;
     }
   }
@@ -364,15 +394,16 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
 
   async function remove(line: Line) {
     setError(null);
+    const gen = loadId.current;
     const cur = edgesOf(line.from);
     const ok = await write(line.from, { leads_to: without(cur.leads_to, line.to),
-                                        excludes: without(cur.excludes, line.to) });
+                                        excludes: without(cur.excludes, line.to) }, gen);
     // The far half of a mutual exclusion. Second, and only if the first
     // landed: a half-deleted pair still excludes, which is the state the
     // reader already had, so an interrupted delete cannot invent a rule.
     if (ok && line.both) {
       const back = edgesOf(line.to);
-      await write(line.to, { ...back, excludes: without(back.excludes, line.from) });
+      await write(line.to, { ...back, excludes: without(back.excludes, line.from) }, gen);
     }
     setPicked(null);
   }
@@ -399,14 +430,15 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
    *  would block the greeting it claims to open. */
   async function toUnlock(line: Line, from: string) {
     setError(null);
+    const gen = loadId.current;
     const to = from === line.from ? line.to : line.from;
     const back = edgesOf(to);
     if (back.excludes.includes(from)) {
-      if (!await write(to, { ...back, excludes: without(back.excludes, from) })) return;
+      if (!await write(to, { ...back, excludes: without(back.excludes, from) }, gen)) return;
     }
     const cur = edgesOf(from);
     const ok = await write(from, { leads_to: [...without(cur.leads_to, to), to],
-                                   excludes: without(cur.excludes, to) });
+                                   excludes: without(cur.excludes, to) }, gen);
     if (ok) setPicked(`leads_to:${from.length}:${from}:${to}`);
   }
 
@@ -442,7 +474,7 @@ export function PlotMapEditor({ scope, onOpenGreeting }:
               ? `${nameOf(unread[0])}'s links could not be read, so the map may be missing lines. Its own links cannot be edited until the read succeeds.`
               : `${unread.length} greetings' links could not be read, so the map may be missing lines. Their own links cannot be edited until the read succeeds.`}
           </span>
-          <button className="retry" onClick={load} disabled={!ready}>Retry</button>
+          <button className="retry" onClick={() => load()} disabled={!ready}>Retry</button>
         </div>
       )}
       {selected && (
