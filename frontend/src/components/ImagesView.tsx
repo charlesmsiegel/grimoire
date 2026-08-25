@@ -159,7 +159,11 @@ export function ImagesView({ wid }: { wid: string }) {
    *  always done with the same component. */
   const loadGallery = useCallback(async () => {
     try {
-      const got = await api.listWorldImages(wid);
+      // `fresh`: this runs immediately after a subjects PUT, and the client
+      // shares an in-flight GET by path. Handed one issued before that write,
+      // the tile just tagged comes back still unfinished — and stays that way
+      // until the view is remounted.
+      const got = await api.listWorldImages(wid, true);
       if (liveWid.current === wid) setImages(got);
     } catch {
       // Deliberately quiet: the tile this refreshes is a detail beside a save
@@ -167,12 +171,17 @@ export function ImagesView({ wid }: { wid: string }) {
     }
   }, [wid]);
 
-  const load = useCallback(async () => {
+  /** `fresh` when this read follows writes — closing the queue, or a Retry the
+   *  reader asked for. Not on mount, where sharing an in-flight GET with
+   *  whatever else asked for the same path is free and is the point of it.
+   *  Only the two reads a tagging save can move take the flag; a character or
+   *  greeting listing is not changed by writing subjects. */
+  const load = useCallback(async (fresh = false) => {
     setErr(null);
     try {
       const [got, cs, gs, ut] = await Promise.all([
-        api.listWorldImages(wid), api.listCharacters(scope),
-        api.listGreetings(scope), api.listUntaggedImages(wid),
+        api.listWorldImages(wid, fresh), api.listCharacters(scope),
+        api.listGreetings(scope), api.listUntaggedImages(wid, fresh),
       ]);
       if (liveWid.current !== wid) return;
       setImages(got);
@@ -223,7 +232,7 @@ export function ImagesView({ wid }: { wid: string }) {
           <span>{err}</span>
           {/* Without this a failed read is a dead view: nothing else here asks
               again, so the only retry would be leaving the section. */}
-          <button className="retry" onClick={() => void load()}>Retry</button>
+          <button className="retry" onClick={() => void load(true)}>Retry</button>
         </p>
       )}
       {images === null && !err && <p className="field-hint">Reading the world’s art…</p>}
@@ -233,7 +242,7 @@ export function ImagesView({ wid }: { wid: string }) {
                         // Closing is when the backlog is re-read: the queue has
                         // finished stepping, so nothing is measuring progress
                         // against the list any more.
-                        onClose={() => { setTab("gallery"); void load(); }}
+                        onClose={() => { setTab("gallery"); void load(true); }}
                         // A save makes the tile it was about stop being
                         // unfinished, so the gallery is refreshed — but NOT the
                         // backlog this queue is still walking. See `loadGallery`.
