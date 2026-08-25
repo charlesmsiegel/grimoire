@@ -53,24 +53,54 @@ def test_read_rejects_ids_that_escape_the_characters_dir(monkeypatch, tmp_path):
     assert voice_anchors.read(root, "../../anything") == ""
 
 
-def test_build_prompt_reads_the_speech_bearing_fields_only(monkeypatch, tmp_path):
-    """An anchor describes how a character SOUNDS. Feeding it the description or
-    scenario is how anchors turn into biographies, which drift judging cannot
-    use."""
+def test_build_prompt_mines_the_description_but_not_the_scenario(monkeypatch, tmp_path):
+    """The description is a SOURCE; the scenario is not.
+
+    This reverses half of an earlier rule that excluded both. The reasoning for
+    excluding the description was that an anchor must describe speech rather
+    than the person -- true about the OUTPUT, but it was enforced on the INPUT,
+    where it starves the generator. A large share of authored cards carry their
+    speech evidence nowhere else: no `mes_example`, a one-line `personality`,
+    and everything about how the character talks sitting in a long description.
+    Fed only the fields this used to allow, the generator saw a sentence and
+    invented the rest.
+
+    The scenario stays out, and that half of the rule was always right: it
+    describes the situation, which is the same for every character in it and so
+    can only produce anchors that do not distinguish anybody.
+    """
     msgs = voice_anchors.build_prompt({
         "name": "Winifred", "personality": "Wry and wary.",
         "mes_example": "**Winifred:** Try me.",
         "system_prompt": "Voice her with dry wit.",
-        "description": "Tall, sharp-eyed smuggler.", "scenario": "Runs the night dock."})
+        "description": "Tall, sharp-eyed smuggler who never finishes a sentence.",
+        "scenario": "Runs the night dock."})
     assert msgs[0]["role"] == "system"
     body = msgs[1]["content"]
     assert "Wry and wary" in body and "Try me" in body and "dry wit" in body
-    assert "sharp-eyed" not in body and "night dock" not in body
+    assert "never finishes a sentence" in body
+    assert "night dock" not in body
 
 
 def test_build_prompt_marks_missing_fields(monkeypatch, tmp_path):
     msgs = voice_anchors.build_prompt({"name": "Winifred"})
-    assert msgs[1]["content"].count("(none)") == 3
+    assert msgs[1]["content"].count("(none)") == 4
+
+
+def test_build_prompt_clips_an_overlong_description(monkeypatch, tmp_path):
+    """A card description is the largest free-text field on a V3 card and is
+    routinely thousands of characters. It is clipped for the same reason
+    `scenario` clips the card text it prompts with -- unbounded card text in a
+    prompt is a cost nobody chose -- and through `truncate`, so the cut lands on
+    a boundary rather than mid-word.
+    """
+    tail = "She drops her voice to finish a threat."
+    body = voice_anchors.build_prompt({
+        "name": "Winifred",
+        "description": ("A. " * voice_anchors.VOICE_SOURCE_CAP) + tail,
+    })[1]["content"]
+    assert tail not in body
+    assert len(body) < voice_anchors.VOICE_SOURCE_CAP + 500
 
 
 def test_campaign_reads_inherit_the_world_anchor(monkeypatch, tmp_path):

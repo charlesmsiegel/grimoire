@@ -58,6 +58,21 @@ renders once per present character on every turn, so an unbounded value would
 be multiplied by the cast.
 """
 
+VOICE_SOURCE_CAP = 6000
+"""Longest card `description` the anchor GENERATOR is shown, in characters.
+
+Not a prompt-section cap like the two below -- nothing renders this into a
+scene. It bounds one user-initiated drafting call, whose input is the largest
+free-text field a V3 card has and which routinely runs to thousands of
+characters. `scenario` already clips the card text it prompts with, for the
+same reason: unbounded card text in a prompt is a cost nobody chose.
+
+Sized structurally rather than measured -- generous enough that a normal
+description passes through whole, low enough that an outlier cannot dominate
+the call. Tune it against real drafting prompts rather than treating the number
+as settled.
+"""
+
 VOICE_EXAMPLE_CAP = 3000
 """Longest `mes_example` the prompt ever sees, in characters.
 
@@ -241,9 +256,27 @@ def build_prompt(card_data: dict) -> list[dict]:
     """Draft an anchor from the character's own card — the bootstrap path, so a
     library that has never had anchors can acquire them without hand-writing
     each one. Preview only: the route returns the draft and the caller persists
-    it through PUT, so Generate-then-cancel leaves nothing written."""
+    it through PUT, so Generate-then-cancel leaves nothing written.
+
+    The `description` is passed CLIPPED and the `scenario` is not passed at all.
+    Both halves of that are deliberate and they used to be one rule -- neither
+    field was sent, on the grounds that an anchor describes speech rather than
+    the person. That is right about the OUTPUT and was being enforced on the
+    INPUT, which is a different thing and starves the generator: a card whose
+    author wrote no `mes_example` and a one-line `personality` keeps everything
+    it knows about how the character talks inside the description, and this
+    prompt was handed a sentence and asked for six lines about a voice.
+
+    The scenario stays out. It describes the SITUATION, which is shared by
+    every character standing in it, so it can only push anchors toward each
+    other -- and anchors that do not distinguish anybody are precisely the
+    failure this feature exists to fix.
+    """
+    card = {**card_data,
+            "description": truncate(str(card_data.get("description") or ""),
+                                    VOICE_SOURCE_CAP)}
     return [{"role": "system", "content": prompts.render("voice_anchor/system.j2")},
-            {"role": "user", "content": prompts.render("voice_anchor/user.j2", card=card_data)}]
+            {"role": "user", "content": prompts.render("voice_anchor/user.j2", card=card)}]
 
 
 def parse_output(text: str) -> str:

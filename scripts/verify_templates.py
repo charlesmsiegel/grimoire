@@ -173,15 +173,36 @@ for prior in ("", "She ran the dock and owed the Guild."):
     check(f"dossier user (prior={bool(prior)})", exp[1]["content"],
           render("dossier/user.j2", name="Seraphine Vale", prior=prior, transcript=transcript))
 
+# `build_prompt` clips the description before rendering, so the comparison has to
+# mirror that transformation. Rendering the RAW card here would compare the
+# builder's clipped output against an unclipped render — and for a fixture short
+# enough that the clip does nothing, would pass either way.
+def _voice_user(c):
+    return render("voice_anchor/user.j2",
+                  card={**c, "description": voice_anchors.truncate(
+                      str(c.get("description") or ""), voice_anchors.VOICE_SOURCE_CAP)})
+
+
 voice_card = {**card, "mes_example": "<START>\n**Seraphine Vale:** Try me.",
               "system_prompt": "Voice Seraphine with dry wit."}
 exp = voice_anchors.build_prompt(voice_card)
 check("voice anchor system", exp[0]["content"], render("voice_anchor/system.j2"))
-check("voice anchor user", exp[1]["content"], render("voice_anchor/user.j2", card=voice_card))
+check("voice anchor user", exp[1]["content"], _voice_user(voice_card))
 # The sparse card exercises the "(none)" fallbacks — a card with no example
 # dialogue is the common case for a character that has never been played.
 exp = voice_anchors.build_prompt(sparse)
-check("voice anchor user (sparse)", exp[1]["content"], render("voice_anchor/user.j2", card=sparse))
+check("voice anchor user (sparse)", exp[1]["content"], _voice_user(sparse))
+# An over-cap description proves the clip is real, for the same reason the
+# scenario fixture asserts its own two clips: a comparison whose fixture always
+# fits cannot tell a working clip from a deleted one.
+long_card = {**voice_card,
+             "description": "She never finishes a sentence. " * 400 + "TAIL-SENTINEL"}
+long_user = voice_anchors.build_prompt(long_card)[1]["content"]
+check("voice anchor user (clipped)", long_user, _voice_user(long_card))
+MSG1 = "the voice-anchor fixture no longer exercises VOICE_SOURCE_CAP"
+assert "TAIL-SENTINEL" not in long_user, MSG1
+MSG2 = "voice anchor user is unbounded again -- a long description dominates the call"
+assert len(long_user) < voice_anchors.VOICE_SOURCE_CAP + 1000, MSG2
 
 anchor = "Clipped. Never uses contractions.\nAnswers questions with questions."
 exp = voice_drift.build_prompt("Seraphine Vale", anchor, transcript)

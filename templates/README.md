@@ -68,9 +68,12 @@ Mirrors `store/dossiers.py:build_prompt` (one call per present NPC).
 
 ### `voice_anchor/` — POST /worlds/{wid}/characters/{cid}/voice-anchor/generate
 Mirrors `store/voice_anchors.py:build_prompt`. Messages: system, user.
-`user.j2` vars: `card` (the resolved card's `data` dict — reads the
-speech-bearing fields only: `name`, `personality`, `mes_example`,
-`system_prompt`). Preview only; the caller persists via PUT.
+`user.j2` vars: `card` (the resolved card's `data` dict — reads `name`,
+`personality`, `mes_example`, `system_prompt`, and `description` as raw
+material to mine for speech evidence, already clipped to
+`voice_anchors.VOICE_SOURCE_CAP` by the builder). `scenario` is deliberately
+not read: it describes the situation every character in it shares, so it can
+only push anchors toward each other. Preview only; the caller persists via PUT.
 
 ### `voice_drift/` — the per-NPC voice check inside POST …/absorb
 Mirrors `store/voice_drift.py:build_prompt` (one call per present NPC **that

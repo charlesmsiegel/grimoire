@@ -1,8 +1,14 @@
-{#- Vars: card (the V3 card `data` dict). Mirrors tagline/user.j2's shape, but
-    reads the speech-bearing fields only -- description/scenario describe the
-    person and the situation, which is exactly what an anchor must not be
-    about. -#}
+{#- Vars: card (the V3 card `data` dict), with `description` already clipped to
+    voice_anchors.VOICE_SOURCE_CAP by build_prompt.
+
+    Reads the speech-bearing fields, plus the description as raw material to
+    mine. `scenario` is deliberately absent: it describes the situation, which
+    every character in it shares, so it can only make anchors resemble each
+    other. See voice_anchors.build_prompt for the whole reasoning. -#}
 Name: {{ card.get("name", "") }}
 Personality: {{ card.get("personality", "") or "(none)" }}
 Example dialogue: {{ card.get("mes_example", "") or "(none)" }}
 Author's speech notes: {{ card.get("system_prompt", "") or "(none)" }}
+
+Character sheet — mine for speech evidence only, ignore the rest:
+{{ card.get("description", "") or "(none)" }}
