@@ -256,38 +256,33 @@ template's business, per-block.
   regress (it renders those descriptions today); the voice sections skip
   nameless entries, because an unattributed anchor or sample is exactly
   Problem §3's defect.
-- **Disambiguation** is by **cast-order ordinal**, applied to display names
-  and **guaranteeing uniqueness among non-empty names only** — nameless
-  entries all keep `""` and are excluded from the uniqueness requirement,
-  which is not a loophole but the point: they render no heading to collide.
-  Collision is **case-folded string equality**, and every member of a
-  colliding group — not just the later ones — gains a 1-based ordinal:
-  `Winifred #1`, `Winifred #2`.
+- **A name shared exactly with another present card is BLANKED**, which
+  suppresses that character's anchor and example blocks while their
+  description still renders, headerless. Comparison is case-folded equality.
 
-  An earlier revision of this section mandated `scenes.confusable` here, and
-  implementation showed that to be wrong twice over. Its `names` argument is
-  the whole roster *including* the name, so `confusable("Mara", ["Winifred"])`
-  is `True` — inverted from what heading uniqueness wants. And suffixing
-  cannot satisfy it: `confusable("Winifred #1", ["Winifred #1", "Winifred
-  #2"])` stays `True`, because the bare label still prefixes both. It answers
-  whether a transcript speaker label resolves to one cast member, which is a
-  parsing question. Using it would also have fired on "Winifred Vance" beside
-  "Winifred Vale" — two headings a reader can already tell apart.
-  The ordinal is always appended to the **original** name, never to an
-  already-suffixed display name, and on a collision with a literal card name
-  the ordinal is **incremented** rather than a second suffix appended. So
-  `Winifred`, `Winifred`, and a card literally named `Winifred #2` resolve to
-  `Winifred #1`, `Winifred #3`, `Winifred #2` — the first two take the next
-  free ordinals around the literal. Termination is by exhaustion of a finite
-  candidate set (the cast is finite and each pass consumes one unused
-  ordinal), not by the earlier draft's appeal to "appending to a finite set",
-  which was not a proof.
+  Two earlier revisions of this bullet were wrong, and both mistakes are worth
+  keeping because each looks right. It first required `scenes.confusable`;
+  implementation showed that predicate cannot be satisfied by disambiguation
+  at all — `confusable("Winifred #1", ["Winifred #1", "Winifred #2"])` stays
+  `True` — and that its argument convention is inverted for this question. It
+  then required a cast-order ordinal, `Winifred #1` / `Winifred #2`, and
+  review showed that reaches past the prompt: the transcript identifies
+  speakers by card name and nothing else, so a model copying a heading into
+  its `**<Name>:**` marker persists a synthetic label into the scene, which is
+  the one artifact in this app that cannot be regenerated.
 
-  Version labels were considered and rejected: they are not unique (two
-  characters can both be `Winifred` with both selected versions labelled
-  `Default`), and reaching them from assembly means calling
-  `characters._card_summary`, a private cross-module helper, for a string
-  that solves nothing an ordinal does not.
+  Nothing was lost by withdrawing it. `match_name("Winifred", ["Winifred",
+  "Winifred"])` is already `None`, so the duplicate case was never routable;
+  the ordinals would only have made an unroutable label synthetic as well.
+  Blanking matches what the codebase already does here — `_voice_notes`
+  suppresses a corrective addressed to such a name, and the absorb stage
+  reports the clash rather than judging it.
+
+  Exact duplication rather than `confusable` for a second reason: `confusable`
+  reports "Winifred Vance" beside "Winifred Vale" as colliding, but those are
+  the headings that render and `match_name` resolves each exactly. Only the
+  bare "Winifred" is ambiguous and nothing writes it, so blanking them would
+  cost two distinguishable characters their voices to prevent nothing.
 - `anchor` is the **effective anchor** (§3) of
   `overlay.voice_anchor_record(cid, a["id"])["text"]`. The overlay resolver
   makes a campaign anchor override the world's, and a campaign tombstone

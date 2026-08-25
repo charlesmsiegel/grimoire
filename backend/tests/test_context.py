@@ -4494,3 +4494,24 @@ def test_headings_survive_a_layout_that_disables_and_reorders(monkeypatch, tmp_p
     assert "# Voice — example dialogue" in prompt
     assert "# Voice — how they sound" not in prompt      # disabled, not orphaned
     assert "Clipped." not in prompt
+
+
+def test_the_caps_bound_the_text_after_macro_expansion(monkeypatch, tmp_path):
+    """`{{user}}` is eight characters that become the player's name. Capping
+    before expansion let the SENT text exceed the ceiling by the difference;
+    the constants are documented as the longest the prompt sees."""
+    long_player = "Winifred Vance of the Saltmarch Ledgers"
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    croot = campaigns.campaign_root(cid)
+    pid, _ = pcs.create_pc(croot, long_player, [], persona=pcs.blank_persona(long_player))
+    ap.appear(cid, sid, "pcs", pid, "default", "player")
+    # an example that is under the cap unexpanded and over it once expanded
+    body = ("{{user}}: " * 400)
+    slug, vid = characters.create_character(wroot, "Mara", "default",
+                                            _npc_card("Mara", mes_example=body))
+    ap.appear(cid, sid, "characters", slug, vid, "npc")
+    scenes.append_message(cid, sid, "user", "hello")
+    block = context._assemble(cid, sid)["data"]["cast_blocks"][0]
+    assert len(block["example"]) <= voice_anchors.VOICE_EXAMPLE_CAP
+    assert "{{user}}" not in block["example"]      # expanded, then capped

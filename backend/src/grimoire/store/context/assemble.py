@@ -159,6 +159,33 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         except (pcs.PCNotFound, pcs.PCVersionNotFound, characters.CharacterNotFound, characters.VersionNotFound):
             continue
 
+
+    npc_names = [d.get("name", "") for d in npc_cards if d.get("name")]
+    pcless = scene["meta"].get("pcless") == "true"
+    refs: list[dict] = []
+    ref_names: list[str] = []
+    if pcless:
+        refs, ref_names = cast_data._campaign_player_refs(cid, aroot)
+    # {{char}} is not resolved here (#137): baked at creation time instead, see
+    # scene_substitutions.
+    subs = {"{{user}}": ", ".join(player_names or ref_names)}
+
+    # Macros are expanded BEFORE the caps, not after, because the caps are
+    # documented as the longest text the prompt sees and `{{user}}` is eight
+    # characters that become the joined player names. Capping first left the
+    # sent text free to exceed the ceiling by however much that expansion
+    # added. `_render_sections` expands again on the way out; that pass finds
+    # nothing left in these fields, since `expand_macros` leaves no tokens
+    # behind for the ones it resolves.
+    #
+    # It does widen the generator/judge gap by one step: the judge reads the
+    # stored anchor, so an anchor containing `{{user}}` is capped from
+    # different text. That divergence is already documented in
+    # `voice_anchors.py` -- substitution is on its list -- and a cap that does
+    # not bound what is sent is the worse of the two.
+    def _expanded(text: str) -> str:
+        return macros.expand_macros(text, subs, cid, sid) if text else text
+
     # ONE resolved structure for every section that names a character:
     # `character_descriptions`, `voice_policy`, `voice_anchors`,
     # `voice_examples`. Built here rather than per-template because
@@ -197,23 +224,13 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         cast_blocks.append({
             "name": shown,
             "description": "\n".join(p for p in parts if p),
-            "anchor": voice_anchors.effective(anchor),
-            "example": voice_anchors.truncate(_str(card, "mes_example"),
+            "anchor": voice_anchors.effective(_expanded(anchor)),
+            "example": voice_anchors.truncate(_expanded(_str(card, "mes_example")),
                                               voice_anchors.VOICE_EXAMPLE_CAP),
         })
     # A COUNT, not a length: reading `len(cast_blocks)` at render time would let
     # a per-block filter move the policy's render condition.
     named_npc_count = sum(1 for b in cast_blocks if b["name"])
-
-    npc_names = [d.get("name", "") for d in npc_cards if d.get("name")]
-    pcless = scene["meta"].get("pcless") == "true"
-    refs: list[dict] = []
-    ref_names: list[str] = []
-    if pcless:
-        refs, ref_names = cast_data._campaign_player_refs(cid, aroot)
-    # {{char}} is not resolved here (#137): baked at creation time instead, see
-    # scene_substitutions.
-    subs = {"{{user}}": ", ".join(player_names or ref_names)}
 
     depth = config.scan_depth()
     # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)

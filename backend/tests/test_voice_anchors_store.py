@@ -224,3 +224,19 @@ def test_effective_applies_the_anchor_cap():
 
 def test_effective_strips_and_passes_short_anchors_through():
     assert voice_anchors.effective("  Clipped. Never contracts.  ") == "Clipped. Never contracts."
+
+
+def test_truncate_finds_a_blank_line_written_with_crlf():
+    """A card imported or hand-edited on Windows separates paragraphs with a
+    carriage-return pair, so the blank line is invisible to a bare two-newline
+    search. Such a value used to fall through to the hard cut and be sent
+    mid-line, which is the one thing the boundary rule exists to avoid."""
+    # the boundary must also clear the half-cap floor, or the hard cut wins
+    first = "alpha line that fills the prefix"
+    text = first + "\r\n\r\n" + "beta line that runs well past the cap"
+    assert voice_anchors.truncate(text, 40) == first
+
+
+def test_truncate_normalises_lone_carriage_returns():
+    out = voice_anchors.truncate("a" + "\r\n" + "b", 100)
+    assert "\r" not in out
