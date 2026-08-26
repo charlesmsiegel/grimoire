@@ -629,10 +629,11 @@ test("what the fork could not put back is reported, and outlives the navigation"
   fireEvent.click(screen.getByLabelText("Fork campaign at this scene"));
   await screen.findByText(/The Pact — lore/);
   expect(document.body.textContent).toMatch(/still holds what a removed scene wrote/i);
-  // The note is about the FORK, so it has to survive the navigation that opens
-  // it — which it does only because the campaign-scoped effect clears the
-  // review state and deliberately not `error`.
-  await waitFor(() => expect(here()).toMatch(/^\/campaigns\/branch\/scenes/));
+  // A fork with refusals does NOT carry the reader off to it. The note is the
+  // reason to look at the fork before playing on in it, and leaving for the
+  // fork would unmount the only thing reporting it. The fork exists either
+  // way -- the shelf and the rail both have it.
+  expect(here()).toBe("/campaigns/run/scenes/0001--old");
   expect(document.body.textContent).toMatch(/The Pact — lore/);
 });
 
@@ -1063,16 +1064,10 @@ test("a failed stream keeps the override, and retry carries it", async () => {
     expect.any(String), expect.any(Function)));
 });
 
-test("sending with no scene creates one first", async () => {
-  (api.listScenes as any).mockResolvedValue([]);
-  renderCampaign();
-  await waitFor(() => expect(api.listScenes).toHaveBeenCalled());
-  const ta = screen.getByRole("textbox");
-  fireEvent.change(ta, { target: { value: "hi" } });
-  fireEvent.keyDown(ta, { key: "Enter" });
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("run"));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
-});
+// "Sending with no scene creates one" is gone with the state that allowed it:
+// the play view mounts on a scene now, so there is no composer in an empty
+// campaign to type the first one into. Creation moved to the scenes list, and
+// its coverage with it (`ScenesView.test.tsx`).
 
 test("+ New Scene opens the chooser without creating a scene", async () => {
   renderCampaign();
@@ -1084,7 +1079,7 @@ test("+ New Scene opens the chooser without creating a scene", async () => {
 
 test("a chooser pick refreshes the rail, selects the scene, and seeds the prompt", async () => {
   (api.listScenes as any)
-    .mockResolvedValueOnce([])                       // initial load
+    .mockResolvedValueOnce(ONE_SCENE)                // initial load
     .mockResolvedValue([{ id: "s9", title: "New", model: "", created: "", updated: "" }]);
   renderCampaign();
   await screen.findByText(/Run One/);
@@ -1098,7 +1093,7 @@ test("a chooser pick refreshes the rail, selects the scene, and seeds the prompt
 
 test("a seeded premise survives the rename from the first date set", async () => {
   (api.listScenes as any)
-    .mockResolvedValueOnce([])                       // initial load
+    .mockResolvedValueOnce(ONE_SCENE)                // initial load
     .mockResolvedValueOnce([{ id: "s9", title: "New", model: "", created: "", updated: "" }])
     .mockResolvedValue([{ id: "s10", title: "New", model: "", created: "", updated: "" }]);
   renderCampaign();
@@ -1115,10 +1110,14 @@ test("closing the chooser creates nothing", async () => {
   renderCampaign();
   await screen.findByText(/Run One/);
   fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  // Counted from before the click, not from zero: the view has a scene open,
+  // so it has already read one. What must not happen is a SECOND read caused
+  // by dismissing the chooser.
+  const readsBefore = (api.getScene as any).mock.calls.length;
   fireEvent.click(await screen.findByText("stub-close"));
   expect(screen.queryByTestId("scene-chooser")).toBeNull();
   expect(api.createScene).not.toHaveBeenCalled();
-  expect(api.getScene).not.toHaveBeenCalled();
+  expect((api.getScene as any).mock.calls.length).toBe(readsBefore);
 });
 
 test("the edit button renames a scene", async () => {
@@ -1775,10 +1774,10 @@ test("Stop reaches the run's own campaign after the player has moved to another"
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.chat as any).mockImplementation(hangingChat());
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/elsewhere/scenes">elsewhere</Link>
+        <Link to="/campaigns/elsewhere/scenes/whichever">elsewhere</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -2007,7 +2006,7 @@ test("StrictMode's mount cycle does not switch the flush poll off", async () => 
   (api.chat as any).mockImplementation(hangingChat(["a streamed fragment"]));
   render(
     <StrictMode>
-      <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+      <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
         {withPalette(<>
           {playRoutes()}
         </>)}
@@ -2333,9 +2332,9 @@ test("Stop during the preflight read does not strand the turn", async () => {
   // The baseline read runs before the POST exists, so the turn's controller has
   // nothing to abort yet. A stalled read left `runStream` parked outside its
   // try/finally with `busy` set: no Send, no Stop that works, no prompt back.
-  // No scene selected, so Send creates one and streams into it with no read in
-  // between — the window where the baseline has to be fetched before the POST.
-  (api.listScenes as any).mockResolvedValue([]);
+  // The window is the same on any send: the baseline is fetched before the POST
+  // exists, so the turn's controller has nothing to abort yet.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockImplementation(async (_c: string, _s: string, w?: any) => {
     if (w?.limit === 1) return new Promise(() => {});   // the preflight never answers
     return { meta: {}, total: 0, messages: [] };
@@ -3758,9 +3757,9 @@ test("another campaign's alternates are not offered while its set is still loade
   (api.getAlternates as any).mockResolvedValue({
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -3792,9 +3791,9 @@ test("a swap that finishes after a campaign switch does not load the old campaig
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   (api.pickAlternate as any).mockImplementation(() => new Promise((res) => { release = res; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -4181,9 +4180,9 @@ test("a colliding scene id across campaigns does not expose B's set on A's posts
   (api.getAlternates as any).mockResolvedValue({
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -5181,9 +5180,9 @@ test("a mechanics save settling after a campaign switch answers for the campaign
   let releaseSave: (v: any) => void = () => {};
   (api.setCampaignModule as any).mockReturnValue(new Promise((r) => { releaseSave = r; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6199,7 +6198,7 @@ test("a scene born from a greeting asks whether it is already due", async () => 
   // before anyone plays a turn in it. None of this component's other triggers
   // fire here: they all hang off a write the reader made in an open scene (#85).
   (api.listScenes as any)
-    .mockResolvedValueOnce([])                       // initial load
+    .mockResolvedValueOnce(ONE_SCENE)                // initial load
     .mockResolvedValue([{ id: "s9", title: "New", model: "", created: "", updated: "" }]);
   renderCampaign();
   await screen.findByText(/Run One/);
@@ -6307,20 +6306,14 @@ test("a scene id that no longer exists falls back to the first scene", async () 
   await waitFor(() => expect(here()).toBe("/worlds"));
 });
 
-test("a campaign with no scenes at all leaves the URL alone", async () => {
-  (api.listScenes as any).mockResolvedValue([]);
-  renderCampaign();
-
-  await screen.findByText("Run One");
-  expect(here()).toBe("/campaigns/run/scenes");
-  expect(api.getScene).not.toHaveBeenCalled();
-});
+// A campaign with no scenes resolves to the scenes list, which is the page
+// that offers to create one. `ScenesView.test.tsx` owns that case.
 
 test("renaming the active scene carries the URL to its new id, replacing the old", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   render(
-    <MemoryRouter initialEntries={["/worlds", "/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/worlds", "/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
         <Back />
@@ -6403,7 +6396,7 @@ test("deleting the last scene drops it from the URL and clears the transcript", 
   (api.listScenes as any).mockResolvedValue([]);
   fireEvent.click(screen.getByRole("button", { name: /delete scene/i }));
 
-  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes"));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
   expect(screen.queryByText("transcript of s1")).toBeNull();
 });
 
@@ -6434,21 +6427,8 @@ test("a scene the URL names but the server cannot read says so", async () => {
   expect(await screen.findByText(/transcript is not valid UTF-8/)).toBeInTheDocument();
 });
 
-test("the first send into an empty campaign puts its new scene in the URL", async () => {
-  (api.listScenes as any).mockResolvedValueOnce([]).mockResolvedValue(
-    [{ id: "s1", title: "Untitled", model: "", created: "", updated: "" }]);
-  (api.createScene as any).mockResolvedValue({ id: "s1" });
-  renderCampaign();
-  const ta = await screen.findByRole("textbox");
-
-  fireEvent.change(ta, { target: { value: "we begin" } });
-  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
-
-  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
-  expect(api.chat).toHaveBeenCalledWith("run", "s1", "we begin",
-    expect.anything(), undefined, expect.anything(), expect.any(String),
-    expect.any(Function), false);
-});
+// See above: an empty campaign has no play view, so it has no first send.
+// `ScenesView.test.tsx` covers creating the first scene.
 
 test("a scene list arriving after a campaign switch does not strand the view", async () => {
   // A's list is slow; the reader moves to B, whose list lands first. A's late
@@ -6462,10 +6442,10 @@ test("a scene list arriving after a campaign switch does not strand the view", a
                 : Promise.resolve([{ id: "b1", title: "B one", model: "", created: "", updated: "" }]));
   transcriptsPerScene();
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6505,10 +6485,10 @@ test("a mutation relist landing after a campaign switch does not strand the view
   transcriptsPerScene();
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6548,10 +6528,10 @@ test("a rename finishing after a campaign switch does not drag the reader back",
   }));
   (api.renameScene as any).mockImplementation(() => new Promise((res) => { landRename = res; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6617,10 +6597,10 @@ test("a turn finishing after a campaign switch does not install its transcript u
     async (_c: string, _s: string, _t: string, onEvent: any) =>
       new Promise<void>((res) => { finishTurn = () => { onEvent({ done: true }); res(undefined); }; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6657,10 +6637,10 @@ test("a scene created just before a campaign switch does not drag the reader bac
         : Promise.resolve(ONE_SCENE));
   transcriptsPerScene();
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6723,49 +6703,7 @@ test("an older relist cannot restore a row a newer one removed", async () => {
   expect(screen.queryByRole("heading", { name: /The Saltmarch Gate/ })).toBeNull();
 });
 
-test("the first send's new scene does not follow the reader into another campaign", async () => {
-  // Same gap as the chooser's, reached the other way: the campaign check sat
-  // ABOVE the relist, so it answered what was true one request ago and the
-  // adopt-and-navigate below still ran after a switch.
-  let landRelist: (v: any) => void = () => {};
-  const nth = readCounter();
-  (api.listScenes as any).mockImplementation((c: string) =>
-    c === "other"
-      ? Promise.resolve([{ id: "b1", title: "B one", model: "", created: "", updated: "" }])
-      : nth(c) > 1
-        ? new Promise((res) => { landRelist = res; })
-        : Promise.resolve([]));            // "run" starts with no scenes at all
-  transcriptsPerScene();
-  (api.createScene as any).mockResolvedValue({ id: "s1" });
-  render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
-      {withPalette(<>
-        <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
-        {playRoutes()}
-      </>)}
-    </MemoryRouter>,
-  );
-  const ta = await screen.findByRole("textbox");
-
-  fireEvent.change(ta, { target: { value: "we begin" } });
-  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
-  await waitFor(() => expect(api.createScene).toHaveBeenCalled());
-
-  fireEvent.click(screen.getByText("switch campaign"));
-  await waitFor(() => expect(here()).toBe("/campaigns/other/scenes/b1"));
-
-  landRelist([{ id: "s1", title: "Untitled", model: "", created: "", updated: "" }]);
-  await act(async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); });
-
-  expect(here()).toBe("/campaigns/other/scenes/b1");
-  // The turn does not start: everything after the guard writes to the view,
-  // none of it campaign-scoped, so running it would render this turn into the
-  // campaign the reader moved to. The scene stays behind, created and empty…
-  expect(api.chat).not.toHaveBeenCalled();
-  // …and the words are still in the composer, not swallowed.
-  expect(screen.getByRole("textbox")).toHaveValue("we begin");
-});
+// Same retirement: there is no first send without a scene to send into.
 
 test("a mutation relist in the old campaign cannot retire the new campaign's list", async () => {
   // The stranding the sequence guard exists to prevent, reachable THROUGH it:
@@ -6787,10 +6725,10 @@ test("a mutation relist in the old campaign cannot retire the new campaign's lis
   // the PUT hangs, so the handler that resumes still carries run's `cid`
   (api.renameScene as any).mockImplementation(() => new Promise((res) => { landRenamePut = res; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6836,10 +6774,10 @@ test("a premise generated in one campaign is not offered to another's scene", as
   // every scene is empty, so CastPanel (which renders the premise) is shown
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -7059,10 +6997,10 @@ test("a creation's list failure does not raise a banner in another campaign", as
         : Promise.resolve(ONE_SCENE));
   transcriptsPerScene();
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -7292,7 +7230,7 @@ function EnterFocus() {
 
 function renderFocusable() {
   return render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       <FocusProvider>
         {withPalette(<><EnterFocus /><Here />{playRoutes()}</>)}
       </FocusProvider>

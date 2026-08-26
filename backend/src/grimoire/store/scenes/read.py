@@ -25,7 +25,8 @@ def list_scenes(cid: str) -> list[dict]:
             if not safe_id(p.stem):   # enumeration agrees with the resolvers
                 continue
             meta = parse_frontmatter_head(p)  # never reads the transcript body
-            history = histories(meta)["times"]
+            hist = histories(meta)
+            history = hist["times"]
             out.append({
                 "id": p.stem,
                 "title": meta.get("title", p.stem),
@@ -33,6 +34,12 @@ def list_scenes(cid: str) -> list[dict]:
                 "created": meta.get("created", ""),
                 "updated": meta.get("updated", ""),
                 "date": history[0] if history else "",
+                # Where the scene ended up: the last entry in the same
+                # frontmatter line `date` is read from, so the scenes list can
+                # say "when & where" without a second read per scene. "" for a
+                # scene that never set a location, which is a real state and
+                # not a missing one.
+                "place": hist["locations"][-1] if hist["locations"] else "",
                 "pcless": meta.get("pcless") == "true",
                 # Absorbed and accepted into the chronicle -- `mark_absorbed`
                 # writes it. Read with the same tolerance as

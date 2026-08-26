@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useMatch, useNavigate, useParams } from "react-router-dom";
+import { sceneNumber as numberOf } from "./sceneNumber";
 import Markdown from "react-markdown";
 import { hideArtHandles } from "../artHandles";
 import remarkGfm from "remark-gfm";
@@ -142,8 +143,7 @@ function sceneUrl(cid: string, sid: string): string {
 // filename stem is "<NNN>--<date>--<slug>"), never the list position, which
 // drifts out of story order as soon as any earlier scene is re-edited.
 function sceneNumber(id: string, fallback: number): number {
-  const m = /^(\d+)--/.exec(id);
-  return m ? parseInt(m[1], 10) : fallback;
+  return numberOf(id) ?? fallback;
 }
 
 // Where a resolved response field came from, for the composer chip. Mirrors
@@ -1947,11 +1947,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       return;
     }
     const notes = forkNotes(report);
-    if (notes) setError({ retryable: false, text: notes });
-    // The fork's play route, not its hub: forking happens AT a scene, from the
-    // transcript, in order to keep playing -- and the note about what the fork
-    // could not put back lives in this view's state, so landing on the hub
-    // would unmount the only thing reporting it.
+    if (notes) {
+      // A fork that could not put everything back stops here, in the campaign
+      // the reader is standing in, and says what did not come across. Leaving
+      // for the fork would unmount the only thing reporting it -- and the note
+      // is the reason to look at the fork before playing on in it, so carrying
+      // the reader past it defeats the point of writing it.
+      //
+      // The fork exists either way; the rail's Campaigns row and the shelf
+      // both have it. This is a pause, not a failure.
+      setError({ retryable: false, text: notes });
+      return;
+    }
+    // A clean fork takes the reader with it, to the scene it was cut at.
     navigate(`/campaigns/${report.id}/scenes`);
   }
 

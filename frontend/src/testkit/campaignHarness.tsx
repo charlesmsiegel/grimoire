@@ -112,7 +112,9 @@ export function installCampaignMocks() {
   }
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Run One", world: "w", world_name: "Saltmarch" }, body: "" });
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} });
-  (api.listScenes as any).mockResolvedValue([]);
+  // One scene, not none: the play view mounts on a scene now, so an empty list
+  // is a campaign whose play view does not exist rather than a useful default.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
   (api.createScene as any).mockResolvedValue({ id: "s1" });
   (api.renameScene as any).mockResolvedValue({ id: "s1", title: "New" });
@@ -286,15 +288,21 @@ export function installCampaignMocks() {
 export function playRoutes(ready = true) {
   return (
     <Routes>
-      {/* Mirrors `App`: the play view lives under `/scenes`, because
-          `/campaigns/:cid` is the hub. The nested child renders nothing and
-          exists only to put `:sid` in the matched path, where `useMatch` can
-          read it. */}
-      <Route path="/campaigns/:cid/scenes" element={<CampaignView ready={ready} />}>
-        <Route path=":sid" element={null} />
-      </Route>
+      {/* Mirrors `App` exactly, and that is the point: `/scenes` is the LIST
+          and `/scenes/:sid` is play. A harness that kept the old nesting would
+          go on passing against a routing shape the app no longer has, which is
+          worse than failing. `ScenesStub` stands in for the list so a test that
+          lands there says so instead of rendering nothing. */}
+      <Route path="/campaigns/:cid/scenes" element={<ScenesStub />} />
+      <Route path="/campaigns/:cid/scenes/:sid" element={<CampaignView ready={ready} />} />
     </Routes>
   );
+}
+
+/** Stands in for the scenes list: the play harness is about the transcript,
+ *  and a test that ends up on the list should be able to see that it did. */
+function ScenesStub() {
+  return <div data-testid="scenes-list" />;
 }
 
 // Reads back the URL the view has navigated itself to.
@@ -326,7 +334,14 @@ export function withPalette(children: ReactNode) {
   );
 }
 
-export function renderCampaign(initialEntry = "/campaigns/run/scenes") {
+/** Renders the play view on a scene.
+ *
+ *  The default entry names one, because that is now the only way the play view
+ *  is reached: `/campaigns/:cid/scenes` is the LIST. A test that wants the
+ *  empty-campaign case renders the list instead, and one that wants a specific
+ *  scene passes its url.
+ */
+export function renderCampaign(initialEntry = "/campaigns/run/scenes/s1") {
   return render(
     // The provider ABOVE the router, mirroring `main.tsx`. Without it
     // `useRunRegistry` falls back to its no-op stand-in and every recovery

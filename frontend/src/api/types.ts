@@ -289,7 +289,15 @@ export type ForkReport = {
  *  changes accepted, written into the scene's own frontmatter by
  *  `scenes.mark_absorbed`. It is what the rail marks and what the composer
  *  hides itself for. */
-export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean; done?: boolean };
+export type SceneMeta = {
+  id: string; title: string; model: string; created: string; updated: string;
+  date: string;
+  /** The campaign-location id the scene ended at, "" if it never set one.
+   *  Off the same frontmatter line as `date`, so the scenes list gets
+   *  "when & where" without a second read per scene. */
+  place?: string;
+  pcless?: boolean; done?: boolean;
+};
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
 export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
 // One stored variant of the generation a reroll replaces. `posts` is how many

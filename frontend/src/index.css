@@ -3692,3 +3692,45 @@ a.column-back { text-decoration: none; }
 .hub-row:last-child { border-bottom: 0; }
 .hub-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scene-home { text-decoration: none; color: var(--accent); }
+
+/* ---- the scenes list ---- */
+.scenes-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.scenes-tools { display: flex; align-items: center; gap: 12px; margin: 14px 0 6px; }
+.scenes-tools .rail-search { flex: 1; max-width: 320px; }
+.scene-list { list-style: none; margin: 0; padding: 0; }
+.scene-item {
+  display: flex; align-items: center; gap: 12px;
+  border-bottom: 1px solid var(--line); min-height: 52px;
+}
+/* A scene still in play is the one you are most likely to want. */
+.scene-item.open { background: var(--surface); }
+.scene-item-main {
+  flex: 1; min-width: 0; display: grid; gap: 0 12px; padding: 8px 10px;
+  grid-template-columns: 34px 1fr; align-items: baseline;
+  text-decoration: none; color: var(--ink);
+}
+.scene-item-n {
+  grid-row: span 2; font-family: var(--fm, monospace); font-size: 11px;
+  color: var(--muted); text-align: right;
+}
+.scene-item-title { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-item-sub {
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.scene-item-sub:empty { display: none; }
+.scene-item-act {
+  flex: none; margin-right: 10px; padding: 0 12px; min-height: 34px;
+  display: inline-flex; align-items: center; border-radius: 3px;
+  text-decoration: none; border: 1px solid var(--line-strong);
+  font-family: var(--fm, monospace); font-size: 9.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted);
+}
+.scene-item-act.accent { color: var(--accent); border-color: var(--accent); }
+.scene-item-act.alert { color: var(--alert); border-color: var(--alert); }
+@media (max-width: 1180px) {
+  /* The title and the action never give way; the rest folds into the sub-line
+     rather than being clipped. */
+  .scene-item-act { min-height: 44px; }
+  .scene-item { min-height: 60px; }
+}

@@ -961,9 +961,9 @@ test("an absorb that lands after a campaign switch is not installed", async () =
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -1054,9 +1054,9 @@ test("a scoped retry failure does not follow the reader into another campaign", 
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -1357,9 +1357,9 @@ test("switching campaigns discards the open review rather than repointing it", a
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   absorbCutShortOnDossiers();
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">to the other campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">to the other campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -2872,9 +2872,9 @@ test("a Discard settling in one campaign does not lock the same-id scene in anot
   (api.discardReview as any).mockReturnValue(
     new Promise(() => { /* the DELETE never answers */ }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -3077,9 +3077,9 @@ test("switching campaigns mid-absorb does not leave the next one stuck on Ending
       return new Promise(() => { /* A is still absorbing */ });
     });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -3136,9 +3136,9 @@ test("leaving a campaign mid-absorb does not delete the review it is preparing",
       return new Promise(() => { /* still absorbing */ });
     });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -3174,9 +3174,9 @@ test("End scene in a new campaign does not wait on the old one's Discard", async
   (api.discardReview as any).mockReturnValue(
     new Promise(() => { /* the DELETE never answers */ }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       {withPalette(<>
-        <Link to="/campaigns/other/scenes">switch campaign</Link>
+        <Link to="/campaigns/other/scenes/whichever">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,

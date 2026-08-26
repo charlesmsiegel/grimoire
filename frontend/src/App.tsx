@@ -20,6 +20,7 @@ import CampaignWizard from "./routes/CampaignWizard";
 import OpenScene from "./routes/OpenScene";
 import CampaignView from "./routes/CampaignView";
 import CampaignHub from "./routes/CampaignHub";
+import ScenesView from "./routes/ScenesView";
 import CostsView from "./routes/CostsView";
 import LedgerView from "./routes/LedgerView";
 import SheetsView from "./routes/SheetsView";
@@ -162,11 +163,14 @@ function Shell(
             the complaint the hub answers -- so play now lives one segment
             deeper and the reader arrives somewhere that says what is waiting. */}
         <Route path="/campaigns/:cid" element={<CampaignHub />} />
-        <Route path="/campaigns/:cid/scenes" element={
+        {/* The list is the route; play is one scene inside it. They are
+            separate elements rather than one component branching on `:sid`,
+            because a list read top to bottom and a transcript being written
+            into are not the same page wearing two states. */}
+        <Route path="/campaigns/:cid/scenes" element={<ScenesView ready={ready} />} />
+        <Route path="/campaigns/:cid/scenes/:sid" element={
           <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
-                        ready={ready} />}>
-          <Route path=":sid" element={null} />
-        </Route>
+                        ready={ready} />} />
         <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
         {/* The ledger is a room, not a drawer over the transcript (4e): it is a
             table read top to bottom, and the supersession chains it exists to
