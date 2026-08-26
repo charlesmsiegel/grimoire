@@ -140,22 +140,17 @@ export const APP_ROWS: RailRow[] = [
 
 export const CAMPAIGN_ROWS: RailRow[] = [
   {
-    // The design calls this Overview and points it at the campaign hub. The hub
-    // is a later slice and `/campaigns/:cid` is still the play view, so the row
-    // is labelled for where it actually lands. A row labelled "Overview" that
-    // opens a transcript is the kind of small lie a reader stops trusting the
-    // rest of the rail over.
-    id: "play", label: "Play", icon: "◈",
+    // The campaign's front door. Exact, because every other campaign row lives
+    // underneath this path -- a prefix test here would light Overview on every
+    // one of them and give two active rows at once.
+    id: "overview", label: "Overview", icon: "◈",
     to: (ctx) => campaignPath(ctx),
-    // Exact, plus its scene children, and nothing else. A prefix test here
-    // would light this row on every campaign sub-page and give two active rows.
-    match: (p, ctx) => !!ctx.cid &&
-      (p === `/campaigns/${ctx.cid}` || isUnder(p, `/campaigns/${ctx.cid}/scenes`)),
+    match: (p, ctx) => !!ctx.cid && p === `/campaigns/${ctx.cid}`,
   },
   {
     id: "scenes", label: "Scenes", icon: "☰",
-    to: () => null,   // no scenes-list page exists yet
-    match: () => false,
+    to: (ctx) => campaignPath(ctx, "/scenes"),
+    match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/scenes`),
     tail: (s) => (s?.campaign ? String(s.campaign.scenes) : undefined),
     tailLabel: (s) => (s?.campaign ? `${s.campaign.scenes} scenes` : undefined),
   },
@@ -163,6 +158,10 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     id: "wrap", label: "Wrap-up", icon: "✦",
     to: () => null,   // review lives inside CampaignView; the wrap-up slice moves it
     match: () => false,
+    // The one badge that is an alert rather than a count: proposals nobody has
+    // decided are holding the world back, and the hub says so in words.
+    tail: (s) => num(s?.campaign?.unreviewed),
+    tailLabel: (s) => lbl(s?.campaign?.unreviewed, "proposals undecided"),
   },
   {
     id: "ledger", label: "Ledger & timeline", icon: "≡",

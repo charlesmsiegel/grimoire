@@ -19,6 +19,7 @@ import CampaignsView from "./routes/CampaignsView";
 import CampaignWizard from "./routes/CampaignWizard";
 import OpenScene from "./routes/OpenScene";
 import CampaignView from "./routes/CampaignView";
+import CampaignHub from "./routes/CampaignHub";
 import CostsView from "./routes/CostsView";
 import LedgerView from "./routes/LedgerView";
 import SheetsView from "./routes/SheetsView";
@@ -156,10 +157,15 @@ function Shell(
             combination. The child renders nothing — CampaignView has no
             <Outlet /> — and exists only to put `:sid` in the matched path,
             where useMatch can read it. */}
-        <Route path="/campaigns/:cid" element={
+        {/* The campaign's front door, and it is not the transcript. Opening a
+            campaign used to resume whichever scene was played last, which is
+            the complaint the hub answers -- so play now lives one segment
+            deeper and the reader arrives somewhere that says what is waiting. */}
+        <Route path="/campaigns/:cid" element={<CampaignHub />} />
+        <Route path="/campaigns/:cid/scenes" element={
           <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
                         ready={ready} />}>
-          <Route path="scenes/:sid" element={null} />
+          <Route path=":sid" element={null} />
         </Route>
         <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
         {/* The ledger is a room, not a drawer over the transcript (4e): it is a

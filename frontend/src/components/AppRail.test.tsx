@@ -13,7 +13,7 @@ const PAYLOAD: ShellPayload = {
     open: [{ sid: "s15", title: "The lower step", turns: null }],
     ledger_open: 4,
     sheets: { sheeted: 4, total: 7 },
-    unreviewed: null,
+    unreviewed: null, pending: [],
     images_undescribed: null,
   },
   todo: null,
@@ -51,7 +51,7 @@ test("a row with nowhere to go is absent from the DOM, not disabled", () => {
   renderRail();
   expect(within(main()).queryByText("To do")).not.toBeInTheDocument();
   const camp = screen.getByRole("navigation", { name: /open campaign/i });
-  for (const gone of ["Scenes", "Wrap-up", "Images"]) {
+  for (const gone of ["Wrap-up", "Images"]) {
     expect(within(camp).queryByText(gone)).not.toBeInTheDocument();
   }
 });
@@ -89,8 +89,9 @@ test("the active row is marked for a screen reader too", () => {
   const camp = screen.getByRole("navigation", { name: /open campaign/i });
   expect(within(camp).getByRole("link", { name: /ledger & timeline/i }))
     .toHaveAttribute("aria-current", "page");
-  // ...and Play is not also lit, which one shared prefix rule would have done.
-  expect(within(camp).getByRole("link", { name: /^play$/i }))
+  // ...and Overview is not also lit, which one shared prefix rule would have
+  // done: every campaign page lives under the hub's own path.
+  expect(within(camp).getByRole("link", { name: /^overview$/i }))
     .not.toHaveAttribute("aria-current");
 });
 

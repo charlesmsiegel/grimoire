@@ -1873,8 +1873,11 @@ export type ShellCampaign = {
   /** Null when the campaign binds no mechanics module. "This module keeps no
    *  sheets" is legal, and is not "0 of 0". */
   sheets: { sheeted: number; total: number } | null;
-  /** Filled by the wrap-up slice. */
+  /** Undecided proposals across every scene holding a pending review. */
   unreviewed: number | null;
+  /** Which scenes are holding one, so the hub can link straight at it rather
+   *  than making the reader hunt for which scene was absorbed. */
+  pending: { sid: string; proposals: number }[];
   /** Images with no description text — deliberately not `untagged`, which is
    *  greeting art with no subjects recorded and stays a separate word. Filled
    *  by the images slice. */

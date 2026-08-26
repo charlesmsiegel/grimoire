@@ -73,6 +73,14 @@ vi.mock("./routes/SetupWizard", () => ({
   },
 }));
 
+/** A button that moves the router without going through the palette — the
+ *  palette's campaign rows land on the hub, and the remount hazard below is
+ *  about two PLAY urls that differ only in `:cid`. */
+function Jump({ to }: { to: string }) {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(to)}>jump</button>;
+}
+
 const READY_OPENROUTER = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
@@ -305,11 +313,19 @@ test("opening another campaign from the palette remounts the view instead of reu
     { id: "realm", name: "Realm", world: "w", updated: "2026-02-02", activity: "2026-02-02", scenes: 1, last_scene: "" },
   ]);
   campaignMounts.length = 0;
-  render(<MemoryRouter initialEntries={["/campaigns/saltmarch"]}><App /></MemoryRouter>);
+  // Driven on the PLAY route, which is where the hazard lives: `/campaigns/:cid`
+  // is the hub now, and moving between two hubs unmounts the play view anyway.
+  // Two play URLs differing only in `:cid` are the case React would happily
+  // serve from one instance.
+  render(
+    <MemoryRouter initialEntries={["/campaigns/saltmarch/scenes/s1"]}>
+      <Jump to="/campaigns/realm/scenes/s2" />
+      <App />
+    </MemoryRouter>);
   await screen.findByTestId("campaign-view");
   await waitFor(() => expect(campaignMounts).toEqual(["saltmarch"]));
 
-  await goVia("realm", /realm/i);
+  fireEvent.click(screen.getByText("jump"));
   await waitFor(() =>
     expect(screen.getByTestId("campaign-view-cid")).toHaveTextContent("realm"));
   // A reused component would record realm as a second entry from the SAME

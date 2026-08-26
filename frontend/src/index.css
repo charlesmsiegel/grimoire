@@ -3602,3 +3602,93 @@ a.column-back { text-decoration: none; }
   .rail-row { min-height: 44px; }
   .app-header .header-model, .app-header .conn-dot { display: none; }
 }
+
+/* ---- the campaign hub ---- */
+/* The campaign's front door. Leads with what to do next and only then with
+   state — opening a campaign used to resume whichever scene was last, which is
+   the complaint this page answers. */
+.hub { max-width: 1120px; }
+.hub-eyebrow {
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--accent);
+}
+.hub-lead { font-size: 15px; line-height: 1.6; color: var(--subtle); margin: 5px 0 0; }
+.hub-next {
+  border: 1px solid var(--accent); border-radius: 4px; background: var(--panel);
+  padding: 16px 18px; margin-top: 18px;
+}
+.hub-next-title {
+  font-family: var(--fd, serif); font-weight: 600; font-size: 21px;
+  letter-spacing: 0.03em; margin: 5px 0 0;
+}
+.hub-primary {
+  display: inline-flex; align-items: center; margin-top: 12px; min-height: 44px;
+  padding: 0 18px; border-radius: 3px; background: var(--accent);
+  color: var(--on-accent); text-decoration: none;
+  font-family: var(--fm, monospace); font-weight: 700; font-size: 11px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+}
+.hub-pickers { display: flex; flex-direction: column; gap: 8px; margin-top: 11px; }
+.hub-picker {
+  display: flex; align-items: center; gap: 10px; min-height: 46px;
+  padding: 0 14px; border: 1px solid var(--accent); border-radius: 3px;
+  text-decoration: none; color: var(--ink); background: transparent;
+}
+.hub-picker:hover { background: var(--surface); }
+.hub-picker-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-picker-tail {
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent);
+}
+
+.hub-waiting {
+  margin-top: 12px; padding: 14px 18px; border-radius: 4px;
+  border: 1px solid var(--alert); background: var(--banner-bg); color: var(--banner-ink);
+}
+.hub-waiting .hub-eyebrow { color: inherit; }
+.hub-waiting p { margin: 5px 0 0; font-size: 15px; line-height: 1.55; }
+.hub-waiting .hub-primary {
+  background: transparent; color: inherit; border: 1px solid currentColor;
+}
+.hub-quiet {
+  margin-top: 12px; padding: 14px 18px; border-radius: 4px;
+  border: 1px solid var(--line); background: var(--panel);
+}
+.hub-quiet .hub-eyebrow { color: var(--muted); }
+.hub-quiet p { margin: 5px 0 0; color: var(--muted); font-size: 14px; }
+
+.hub-grid { display: grid; gap: 14px; margin-top: 20px; }
+.hub-cards .hub-grid { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+.hub-two .hub-grid { grid-template-columns: 1.35fr 1fr; }
+.hub-one .hub-grid { grid-template-columns: minmax(0, 760px); }
+@media (max-width: 1180px) {
+  .hub-two .hub-grid, .hub-cards .hub-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.hub-card {
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  padding: 16px 18px; display: flex; flex-direction: column;
+}
+.hub-card-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  border-bottom: 1px solid var(--line); padding-bottom: 8px;
+}
+.hub-card-head h2 {
+  margin: 0; font-family: var(--fd, serif); font-weight: 600; font-size: 17px;
+  letter-spacing: 0.03em;
+}
+.hub-card-tail, .hub-card-foot {
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted);
+}
+.hub-card-body { flex: 1; padding-top: 10px; }
+.hub-card-foot { padding-top: 10px; }
+.hub-card-foot a { color: var(--accent); text-decoration: none; }
+.hub-prose { margin: 0; font-weight: 300; font-size: 15px; line-height: 1.68; }
+.hub-row {
+  display: flex; align-items: center; gap: 10px; min-height: 34px;
+  text-decoration: none; color: var(--ink); border-bottom: 1px solid var(--line);
+}
+.hub-row:last-child { border-bottom: 0; }
+.hub-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-home { text-decoration: none; color: var(--accent); }

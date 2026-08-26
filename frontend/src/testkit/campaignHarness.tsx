@@ -286,8 +286,12 @@ export function installCampaignMocks() {
 export function playRoutes(ready = true) {
   return (
     <Routes>
-      <Route path="/campaigns/:cid" element={<CampaignView ready={ready} />}>
-        <Route path="scenes/:sid" element={null} />
+      {/* Mirrors `App`: the play view lives under `/scenes`, because
+          `/campaigns/:cid` is the hub. The nested child renders nothing and
+          exists only to put `:sid` in the matched path, where `useMatch` can
+          read it. */}
+      <Route path="/campaigns/:cid/scenes" element={<CampaignView ready={ready} />}>
+        <Route path=":sid" element={null} />
       </Route>
     </Routes>
   );
@@ -322,7 +326,7 @@ export function withPalette(children: ReactNode) {
   );
 }
 
-export function renderCampaign(initialEntry = "/campaigns/run") {
+export function renderCampaign(initialEntry = "/campaigns/run/scenes") {
   return render(
     // The provider ABOVE the router, mirroring `main.tsx`. Without it
     // `useRunRegistry` falls back to its no-op stand-in and every recovery

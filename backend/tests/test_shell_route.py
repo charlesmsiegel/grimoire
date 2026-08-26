@@ -100,7 +100,7 @@ def test_turns_is_null_rather_than_a_number_this_slice(client, campaign):
     assert _shell(client, campaign)["campaign"]["open"][0]["turns"] is None
 
 
-@pytest.mark.parametrize("field", ["unreviewed", "images_undescribed"])
+@pytest.mark.parametrize("field", ["images_undescribed"])
 def test_deferred_counts_are_null_not_zero(client, campaign, field):
     """A count this slice does not compute says so.
 
@@ -109,6 +109,44 @@ def test_deferred_counts_are_null_not_zero(client, campaign, field):
     a tail reading 0.
     """
     assert _shell(client, campaign)["campaign"][field] is None
+
+
+def test_unreviewed_counts_proposals_across_pending_reviews(client, campaign):
+    """A scene holding a review is a scene holding the world back.
+
+    Counted off the `<sid>.review.json` sidecars beside the transcripts -- a
+    directory listing plus one small read each, and normally there is at most
+    one. The transcripts themselves are never opened.
+    """
+    sid = client.post(f"/api/campaigns/{campaign}/scenes",
+                      json={"title": "The Lower Step"}).json()["id"]
+    store.pending_reviews.publish(
+        campaign, sid, "gen-1",
+        {"edits": [{"kind": "fact"}, {"kind": "plot"}, {"kind": "commitment"}]},
+        {"posts": 0})
+    block = _shell(client, campaign)["campaign"]
+    assert block["unreviewed"] == 3
+    assert block["pending"] == [{"sid": sid, "proposals": 3}]
+
+
+def test_zero_pending_reviews_is_zero_not_null(client, campaign):
+    """Nothing waiting is an answer, and the hub says so in words.
+
+    Distinct from the fields that report `None`: those mean nobody computed it,
+    and the rail draws them differently.
+    """
+    block = _shell(client, campaign)["campaign"]
+    assert block["unreviewed"] == 0
+    assert block["pending"] == []
+
+
+def test_an_unreadable_review_sidecar_is_skipped_not_fatal(client, campaign):
+    """This feeds chrome. One malformed record must not take navigation down."""
+    sid = client.post(f"/api/campaigns/{campaign}/scenes",
+                      json={"title": "The Lower Step"}).json()["id"]
+    store.scenes.paths._review_path(campaign, sid).write_text("{ not json",
+                                                              encoding="utf-8")
+    assert _shell(client, campaign)["campaign"]["unreviewed"] == 0
 
 
 def test_todo_is_null_until_its_own_slice(client):

@@ -13,7 +13,8 @@ const withCampaign = (id: string) => ({
   campaigns: 1, todo: null,
   campaign: {
     id, name: "A Run", world_name: "Saltmarch", scenes: 1, open: [],
-    ledger_open: 0, sheets: null, unreviewed: null, images_undescribed: null,
+    ledger_open: 0, sheets: null, unreviewed: null, pending: [],
+    images_undescribed: null,
   },
 });
 

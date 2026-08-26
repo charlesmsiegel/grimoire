@@ -590,7 +590,7 @@ test("forking at a scene names it, and cuts nothing here", async () => {
   expect(api.deleteMessagesFrom).not.toHaveBeenCalled();
   // The player asked to branch, so the branch is where they land. A prefix,
   // because the branch has this scene too and its own resolver then opens one.
-  await waitFor(() => expect(here()).toMatch(/^\/campaigns\/branch(\/|$)/));
+  await waitFor(() => expect(here()).toMatch(/^\/campaigns\/branch\/scenes/));
 });
 
 test("the fork confirm counts the scenes the branch will not have", async () => {
@@ -632,7 +632,7 @@ test("what the fork could not put back is reported, and outlives the navigation"
   // The note is about the FORK, so it has to survive the navigation that opens
   // it — which it does only because the campaign-scoped effect clears the
   // review state and deliberately not `error`.
-  await waitFor(() => expect(here()).toMatch(/^\/campaigns\/branch(\/|$)/));
+  await waitFor(() => expect(here()).toMatch(/^\/campaigns\/branch\/scenes/));
   expect(document.body.textContent).toMatch(/The Pact — lore/);
 });
 
@@ -1775,10 +1775,10 @@ test("Stop reaches the run's own campaign after the player has moved to another"
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.chat as any).mockImplementation(hangingChat());
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/elsewhere">elsewhere</Link>
+        <Link to="/campaigns/elsewhere/scenes">elsewhere</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -1788,7 +1788,9 @@ test("Stop reaches the run's own campaign after the player has moved to another"
   await screen.findByRole("button", { name: /stop ■/i });
 
   fireEvent.click(screen.getByRole("link", { name: /elsewhere/i }));
-  await waitFor(() => expect(here()).toBe("/campaigns/elsewhere"));
+  // The other campaign resolves to its own newest scene, which is what landing
+  // on `/scenes` does. What this test needs is only that it is no longer `run`.
+  await waitFor(() => expect(here()).toMatch(/^\/campaigns\/elsewhere/));
   fireEvent.click(screen.getByRole("button", { name: /stop ■/i }));
 
   await waitFor(() => expect(api.cancelAttempt).toHaveBeenCalled());
@@ -2005,7 +2007,7 @@ test("StrictMode's mount cycle does not switch the flush poll off", async () => 
   (api.chat as any).mockImplementation(hangingChat(["a streamed fragment"]));
   render(
     <StrictMode>
-      <MemoryRouter initialEntries={["/campaigns/run"]}>
+      <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
         {withPalette(<>
           {playRoutes()}
         </>)}
@@ -3756,9 +3758,9 @@ test("another campaign's alternates are not offered while its set is still loade
   (api.getAlternates as any).mockResolvedValue({
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -3790,9 +3792,9 @@ test("a swap that finishes after a campaign switch does not load the old campaig
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   (api.pickAlternate as any).mockImplementation(() => new Promise((res) => { release = res; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -4179,9 +4181,9 @@ test("a colliding scene id across campaigns does not expose B's set on A's posts
   (api.getAlternates as any).mockResolvedValue({
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -5179,9 +5181,9 @@ test("a mechanics save settling after a campaign switch answers for the campaign
   let releaseSave: (v: any) => void = () => {};
   (api.setCampaignModule as any).mockReturnValue(new Promise((r) => { releaseSave = r; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -5265,20 +5267,10 @@ test("the one-shot badge is announced with the response picker", async () => {
   expect(picker).toHaveAccessibleDescription(/next reply only/i);
 });
 
-test("renders an export menu with a download link per format", async () => {
-  renderCampaign();
-  const epub = await screen.findByRole("link", { name: /^epub$/i });
-  expect(epub).toHaveAttribute("href", "/api/campaigns/run/export.epub");
-  expect(epub).toHaveAttribute("download");
-  expect(screen.getByRole("link", { name: /markdown/i }))
-    .toHaveAttribute("href", "/api/campaigns/run/export.md.zip");
-  expect(screen.getByRole("link", { name: /^html$/i }))
-    .toHaveAttribute("href", "/api/campaigns/run/export.html");
-  expect(screen.getByRole("link", { name: /plain text/i }))
-    .toHaveAttribute("href", "/api/campaigns/run/export.txt");
-  expect(screen.getByRole("link", { name: /^json$/i }))
-    .toHaveAttribute("href", "/api/campaigns/run/export.json");
-});
+// The export menu and the Ledger link moved to the campaign hub, and their
+// coverage went with them (`CampaignHub.test.tsx`). They were campaign-level
+// destinations sitting on a scene's toolbar, which is what put the same four
+// places in the chrome, on the page and in the palette at once.
 
 test("rolls dice from the input bar popover and refreshes the scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
@@ -5642,14 +5634,12 @@ test("Reroll is offered past a trailing scene transition and keeps it", async ()
   await waitFor(() => expect(api.regenerate).toHaveBeenCalled());
 });
 
-test("the Ledger is a link to its own route, not a panel over the transcript", async () => {
-  // The ledger became a screen (4e): a table read top to bottom, with
-  // supersession chains that do not fit in a drawer wedged above the scene.
+test("the play view does not read the ledger", async () => {
+  // The ledger is a screen of its own (4e), reached from the rail and the hub.
+  // What matters here is the half that stayed true: this view never fetches it.
   (api.campaignProvenance as any).mockResolvedValue({});
   renderCampaign();
-  expect(await screen.findByRole("link", { name: "Ledger" }))
-    .toHaveAttribute("href", "/campaigns/run/ledger");
-  // ...and the play view no longer reads it: that is the ledger route's job now.
+  await screen.findByText("Run One");
   expect(api.campaignLedger).not.toHaveBeenCalled();
 });
 
@@ -6322,7 +6312,7 @@ test("a campaign with no scenes at all leaves the URL alone", async () => {
   renderCampaign();
 
   await screen.findByText("Run One");
-  expect(here()).toBe("/campaigns/run");
+  expect(here()).toBe("/campaigns/run/scenes");
   expect(api.getScene).not.toHaveBeenCalled();
 });
 
@@ -6330,7 +6320,7 @@ test("renaming the active scene carries the URL to its new id, replacing the old
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   render(
-    <MemoryRouter initialEntries={["/worlds", "/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/worlds", "/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
         <Back />
@@ -6413,7 +6403,7 @@ test("deleting the last scene drops it from the URL and clears the transcript", 
   (api.listScenes as any).mockResolvedValue([]);
   fireEvent.click(screen.getByRole("button", { name: /delete scene/i }));
 
-  await waitFor(() => expect(here()).toBe("/campaigns/run"));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes"));
   expect(screen.queryByText("transcript of s1")).toBeNull();
 });
 
@@ -6472,10 +6462,10 @@ test("a scene list arriving after a campaign switch does not strand the view", a
                 : Promise.resolve([{ id: "b1", title: "B one", model: "", created: "", updated: "" }]));
   transcriptsPerScene();
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6515,10 +6505,10 @@ test("a mutation relist landing after a campaign switch does not strand the view
   transcriptsPerScene();
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6558,10 +6548,10 @@ test("a rename finishing after a campaign switch does not drag the reader back",
   }));
   (api.renameScene as any).mockImplementation(() => new Promise((res) => { landRename = res; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6627,10 +6617,10 @@ test("a turn finishing after a campaign switch does not install its transcript u
     async (_c: string, _s: string, _t: string, onEvent: any) =>
       new Promise<void>((res) => { finishTurn = () => { onEvent({ done: true }); res(undefined); }; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6667,10 +6657,10 @@ test("a scene created just before a campaign switch does not drag the reader bac
         : Promise.resolve(ONE_SCENE));
   transcriptsPerScene();
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6748,10 +6738,10 @@ test("the first send's new scene does not follow the reader into another campaig
   transcriptsPerScene();
   (api.createScene as any).mockResolvedValue({ id: "s1" });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6797,10 +6787,10 @@ test("a mutation relist in the old campaign cannot retire the new campaign's lis
   // the PUT hangs, so the handler that resumes still carries run's `cid`
   (api.renameScene as any).mockImplementation(() => new Promise((res) => { landRenamePut = res; }));
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -6846,10 +6836,10 @@ test("a premise generated in one campaign is not offered to another's scene", as
   // every scene is empty, so CastPanel (which renders the premise) is shown
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -7069,10 +7059,10 @@ test("a creation's list failure does not raise a banner in another campaign", as
         : Promise.resolve(ONE_SCENE));
   transcriptsPerScene();
   render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       {withPalette(<>
         <Here />
-        <Link to="/campaigns/other">switch campaign</Link>
+        <Link to="/campaigns/other/scenes">switch campaign</Link>
         {playRoutes()}
       </>)}
     </MemoryRouter>,
@@ -7302,7 +7292,7 @@ function EnterFocus() {
 
 function renderFocusable() {
   return render(
-    <MemoryRouter initialEntries={["/campaigns/run"]}>
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       <FocusProvider>
         {withPalette(<><EnterFocus /><Here />{playRoutes()}</>)}
       </FocusProvider>

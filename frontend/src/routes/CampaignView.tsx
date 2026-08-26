@@ -889,9 +889,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // bookmarked id goes stale on its own. Never fetch it — a dead id is a 404
     // and an error banner where a fallback belongs.
     if (scenes.length) {
+      // Landing on /scenes with no scene named is a request for "the scenes of
+      // this campaign", so the newest is a reasonable answer. Landing on a sid
+      // that no longer resolves is not -- ids are filenames and a rename mints
+      // a new one -- and the same fallback covers both.
       navigate(sceneUrl(cid, scenes[0].id), { replace: true });
+    } else if (sid) {
+      // A named scene that resolves to nothing, in a campaign with none left:
+      // back to `/scenes`, which is the empty play view rather than a 404.
+      navigate(`/campaigns/${encodeURIComponent(cid)}/scenes`, { replace: true });
+      if (activeIdRef.current) clearScene();
     } else {
-      if (sid) navigate(`/campaigns/${encodeURIComponent(cid)}`, { replace: true });
+      // An empty campaign sits here with its composer. Sending into it creates
+      // the first scene -- so bouncing to the hub would delete that path, and
+      // the hub's own "Start a scene" link lands right back here.
       if (activeIdRef.current) clearScene();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1937,7 +1948,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     }
     const notes = forkNotes(report);
     if (notes) setError({ retryable: false, text: notes });
-    navigate(`/campaigns/${report.id}`);
+    // The fork's play route, not its hub: forking happens AT a scene, from the
+    // transcript, in order to keep playing -- and the note about what the fork
+    // could not put back lives in this view's state, so landing on the hub
+    // would unmount the only thing reporting it.
+    navigate(`/campaigns/${report.id}/scenes`);
   }
 
   // How long to keep looking for a cancelled turn's partial. Aborting rejects
@@ -3862,32 +3877,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         </div>
         ) : focus ? null : (
         <div className="scene-actions">
-          <span className="eyebrow">{name}</span>
+          {/* The campaign's name is a link home, because the hub is now what
+              "this campaign" means and the scene is one thing inside it. */}
+          <Link className="eyebrow scene-home" to={`/campaigns/${cid}`}
+                aria-label={`${name} — back to the campaign`}>
+            <span aria-hidden>‹ </span><span>{name}</span>
+          </Link>
           <span className="header-spacer" />
-          <details className="sub-export-menu">
-            <summary className="sub-export">Export</summary>
-            <div className="sub-export-options">
-              <a href={`/api/campaigns/${cid}/export.epub`} download>EPUB</a>
-              <a href={`/api/campaigns/${cid}/export.md.zip`} download>Markdown</a>
-              <a href={`/api/campaigns/${cid}/export.html`} download>HTML</a>
-              <a href={`/api/campaigns/${cid}/export.txt`} download>Plain text</a>
-              <a href={`/api/campaigns/${cid}/export.json`} download>JSON</a>
-            </div>
-          </details>
-          {/* A link, not a toggle: the ledger is its own route now (4e). */}
-          <Link className="scene-action" to={`/campaigns/${cid}/ledger`}>Ledger</Link>
-          {/* Its other half (#198): the ledger is what is still open, this is
-              what happened. Beside it because that is the pair. */}
-          <Link className="scene-action" to={`/campaigns/${cid}/timeline`}>Timeline</Link>
-          {/* What the campaign has cost, scene by scene, all-time (#153). Not a
-              panel: a table of every scene a campaign has had is not something
-              to read mid-turn, and the inspector's Cost section is where the
-              scene in front of you is answered for. */}
-          <Link className="scene-action" to={`/campaigns/${cid}/costs`}>Costs</Link>
-          {/* The mechanics panel below binds the module; this is the cast-wide
-              sheet coverage that binding produces (#201), which is a list and
-              so is a route rather than a third drawer. */}
-          <Link className="scene-action" to={`/campaigns/${cid}/sheets`}>Sheets</Link>
+          {/* Ledger, Timeline, Costs and Sheets used to sit here as well.
+              They are rail rows and hub links now, and having them in three
+              places at once was the "second navigation surface" the rail was
+              built to retire -- the reader saw the same four destinations in
+              the chrome, on the page, and in the palette. What is left on this
+              bar is what is about the SCENE in front of you; what belongs to
+              the campaign moved to the hub. */}
           <button className="scene-action" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>

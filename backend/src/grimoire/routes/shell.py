@@ -35,11 +35,42 @@ covers modules that *mutate* campaign-scoped state.
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter
 
 from .. import store
 
 router = APIRouter()
+
+
+def _pending(cid: str) -> tuple[int, list[dict]]:
+    """Undecided proposals across every scene holding a pending review.
+
+    A directory glob, then one small read per sidecar -- and there is normally
+    at most one. The scenes themselves are never opened: a review lives beside
+    its transcript as ``<sid>.review.json``, so "which scenes are waiting" is a
+    listing rather than a scan.
+
+    A sidecar that cannot be read is skipped rather than fatal. This feeds
+    chrome, and one malformed record must not take the whole app's navigation
+    with it.
+    """
+    total = 0
+    scenes: list[dict] = []
+    d = store.scenes.paths._scenes_dir(cid)   # paths-ok: the resolver itself
+    if not d.exists():
+        return 0, []
+    for path in sorted(d.glob("*.review.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            edits = record.get("review", {}).get("edits", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        sid = path.name[: -len(".review.json")]
+        total += len(edits)
+        scenes.append({"sid": sid, "proposals": len(edits)})
+    return total, scenes
 
 
 def _campaign_block(cid: str) -> dict | None:
@@ -71,6 +102,8 @@ def _campaign_block(cid: str) -> dict | None:
     open_scenes = [{"sid": s["id"], "title": s["title"], "turns": None}
                    for s in scenes if not s["done"]]
 
+    unreviewed, pending = _pending(cid)
+
     # `coverage` reads one sheet per cast member, which is bounded by the cast
     # rather than by the campaign's age -- the reason it is here and the
     # ledger's lifetime rollup is not. `{}` means no mechanics module is
@@ -90,9 +123,10 @@ def _campaign_block(cid: str) -> dict | None:
         "open": open_scenes,
         "ledger_open": len(store.commitments.open_commitments(cid)),
         "sheets": sheets,
-        # Filled by the wrap-up slice. Counting undecided proposals means
-        # reading a stored review, which is not a frontmatter read.
-        "unreviewed": None,
+        "unreviewed": unreviewed,
+        # Which scenes are holding one, so the hub can name them and link
+        # straight at the wrap-up rather than making the reader hunt.
+        "pending": pending,
         # Filled by the images slice. `undescribed` is images with no
         # description text -- deliberately not `untagged`, which the design
         # keeps as a separate word for greeting art with no subjects recorded.

@@ -46,12 +46,13 @@ test("Library survives its own redirect", () => {
   expect(activeIn(APP_ROWS, "/modules-of-my-own")).toEqual([]);
 });
 
-test("a campaign child lights its own row and not Play", () => {
+test("a campaign child lights its own row and not Overview", () => {
   expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/ledger")).toEqual(["ledger"]);
   expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/sheets")).toEqual(["sheets"]);
-  // Play is the campaign itself and its scenes, which are the same page.
-  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1")).toEqual(["play"]);
-  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/scenes/s1")).toEqual(["play"]);
+  // Overview is the hub and only the hub. Every other campaign page lives
+  // under its path, so a prefix test would light it on all of them.
+  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1")).toEqual(["overview"]);
+  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/scenes/s1")).toEqual(["scenes"]);
 });
 
 test("rows whose pages do not exist yet go nowhere", () => {
@@ -59,7 +60,7 @@ test("rows whose pages do not exist yet go nowhere", () => {
   // that is not there. Each id gets a route in its own slice.
   const dead = [...APP_ROWS, ...CAMPAIGN_ROWS]
     .filter((r) => r.to(ctx) === null).map((r) => r.id);
-  expect(dead).toEqual(["todo", "scenes", "wrap", "images"]);
+  expect(dead).toEqual(["todo", "wrap", "images"]);
 });
 
 test("Costs is absent with no campaign open, present with one", () => {
@@ -91,7 +92,7 @@ describe("tails tell 0 apart from unmeasured", () => {
     campaign: {
       id: "c1", name: "A Run", world_name: "Saltmarch", scenes: 2,
       open: [], ledger_open: 0, sheets: null,
-      unreviewed: null, images_undescribed: null, ...over,
+      unreviewed: null, pending: [], images_undescribed: null, ...over,
     },
   } as any);
 
