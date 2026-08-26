@@ -15,6 +15,9 @@ absorb — works, and the app is usable day to day.
 The issue tracker is a working backlog rather than a defect list — an open issue
 usually records a design decision made and not yet acted on.
 
+Grimoire is a restart of an earlier private implementation; the architecture here 
+reflects what that version taught me, rebuilt around plain files and local-first state.
+
 ## A look at it
 
 ![A scene mid-play: the transcript, the cast rail, and the response controls](docs/screenshots/scene.png)
