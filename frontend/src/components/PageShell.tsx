@@ -10,11 +10,18 @@ const PHONE_PX = 720;
 
 /** The one shape every page is built on: a 274px context column beside main.
  *
- *  The column answers *what am I navigating*; main answers *what am I
- *  reading*. That single rule is what replaced the play view's rail plus
- *  inspector, the world view's ten-tab strip, the library's card hub and
- *  config's long scroll — so a page that wants a second navigation surface is
- *  a page that has misread its own column.
+ *  The column answers *which of this page's records am I reading*; main
+ *  answers *what am I reading right now*. That rule replaced the play view's
+ *  rail plus inspector, the world view's ten-tab strip, the library's card hub
+ *  and config's long scroll.
+ *
+ *  It used to be stated as "what am I navigating", which was two questions
+ *  wearing one name. *Which page of the app am I on* has the same answer on
+ *  every page, and one 274px column was answering it twenty different ways —
+ *  a world filter here, a section list there, a settings index on Config.
+ *  That half is `components/AppRail.tsx`'s now. What is left is the half only
+ *  a page can answer, and a page that builds a second surface to answer the
+ *  rail's question instead has misread the rail.
  *
  *  The internal structure is load-bearing, not decoration:
  *

@@ -3495,3 +3495,110 @@ a.column-back { text-decoration: none; }
   .stats-trend-day { width: 74px; }
   .stats-cards { gap: 18px; }
 }
+
+/* ---- the app rail: the app's navigation, beside the page ---- */
+/* The rail navigates the app; a page's column indexes the page. Two tiers —
+   the app, and the campaign that is open — with the second visible from
+   anywhere, because "what is waiting in my campaign" should not require
+   navigating into the campaign to ask.
+
+   1180px is duplicated from `shell/rail.ts`'s RAIL_PX, which a plain media
+   query cannot read — the same duplication PHONE_PX already has with the 720px
+   rules below. `rail.test.ts` reads this file and fails if the two drift. */
+.app-body { display: flex; flex: 1; min-height: 0; }
+
+.app-rail {
+  flex: none; width: 236px; display: flex; flex-direction: column;
+  min-height: 0; overflow-y: auto;
+  background: var(--panel); color: var(--ink);
+  border-right: 1px solid var(--line);
+  padding: 14px 0;
+}
+.rail-tier { display: flex; flex-direction: column; }
+.rail-tier + .rail-tier { margin-top: 18px; }
+.rail-eyebrow {
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--muted); padding: 0 14px 8px;
+}
+.rail-row {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 38px; padding: 0 14px; text-decoration: none;
+  color: var(--ink); background: none;
+  border: 0; border-left: 2px solid transparent;
+  font-family: var(--fb, Georgia, serif); font-size: 14.5px;
+  cursor: pointer; text-align: left;
+}
+.rail-row:hover { background: var(--panel2); }
+.rail-row.active { background: var(--surface); border-left-color: var(--accent); }
+.rail-icon { flex: none; width: 14px; color: var(--muted); font-size: 12px; }
+.rail-row.active .rail-icon { color: var(--accent); }
+.rail-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-tail {
+  flex: none; font-family: var(--fm, monospace); font-size: 9px;
+  letter-spacing: 0.1em; color: var(--muted);
+}
+.rail-scene { padding-left: 34px; font-size: 13.5px; color: var(--subtle); }
+
+.rail-campaign { padding: 0 14px 8px; }
+.rail-campaign-name {
+  font-family: var(--fd, serif); font-size: 16px; letter-spacing: 0.03em;
+}
+.rail-campaign-meta {
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.08em;
+  color: var(--muted); margin-top: 3px;
+}
+
+/* A failed read keeps the last good payload and says so, rather than blanking:
+   the rail's first job is navigation, and navigation has to survive a server
+   that stopped answering. */
+.rail-stale {
+  margin: 12px 14px 0; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 3px; font-size: 12px; color: var(--muted);
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+}
+.rail-stale button {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--fm, monospace); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--accent);
+}
+
+.rail-foot {
+  margin-top: auto; padding: 12px 14px 0; border-top: 1px solid var(--line);
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted);
+}
+.rail-root { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.header-rail, .header-theme {
+  flex: none; background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--fm, monospace); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted);
+}
+.header-rail { font-size: 15px; }
+.header-rail:hover, .header-theme:hover { color: var(--ink); }
+.header-theme[disabled] { color: var(--disabled); cursor: default; }
+
+/* The scene pill: shown where there IS a scene, and nowhere else. */
+.scene-pill {
+  flex: none; display: flex; align-items: center; min-height: 26px;
+  padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px;
+  font-family: var(--fm, monospace); font-size: 9.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted); white-space: nowrap;
+}
+
+/* ---- below RAIL_PX: the rail is a drawer ---- */
+@media (max-width: 1180px) {
+  .app-rail { display: none; }
+  /* ...except as the drawer, which is a dialog: it comes with focus entry,
+     Tab containment and focus restoration in `AppRail.tsx`, because
+     `useHotkeys({modal:true})` supplies Escape and nothing else. */
+  .app-rail.drawer {
+    display: flex; position: fixed; z-index: 40; top: 0; left: 0; bottom: 0;
+    width: 268px; box-shadow: var(--pop);
+  }
+  .rail-backdrop { position: fixed; z-index: 39; inset: 0; background: rgba(0, 0, 0, 0.35); }
+  /* 44px is the design's floor for anything a phone touches. */
+  .rail-row { min-height: 44px; }
+  .app-header .header-model, .app-header .conn-dot { display: none; }
+}

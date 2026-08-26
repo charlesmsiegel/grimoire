@@ -83,7 +83,7 @@ type Bound = {
  *
  *  The list/detail split `CLAUDE.md` describes, with the rail in the shell's
  *  context column rather than beside it: the column IS this page's rail, and a
- *  second navigation surface next to it would be the misread `PageShell`
+ *  second RECORD surface next to it would be the misread `PageShell`
  *  warns about. Picking a member opens their sheet read-only; `SheetPanel`'s
  *  own Open sheet button is the explicit edit step, so this screen reuses the
  *  single-sheet view whole instead of growing a second one that would drift.

@@ -1842,3 +1842,48 @@ export type Stats = {
 };
 
 export type LogLevelInfo = { level: LogLevel; levels: LogLevel[] };
+
+/** What the nav rail badges, in one read (`GET /api/shell`).
+ *
+ *  Every optional count is nullable from the first commit, so a later slice
+ *  filling one in is a value change and not a schema change. The distinction
+ *  the whole payload turns on: `0` means nothing is waiting, `null` means
+ *  nobody computed it — and the rail draws them differently, no tail at all
+ *  versus a tail reading 0. It is the cost rule ("a price nobody reported is
+ *  never rendered as zero") one domain over.
+ *
+ *  There is no money field, deliberately: the spend figure the design puts on
+ *  the Costs row is an all-time ledger rollup, and `store.usage.lifetime_since`
+ *  reserves that scan for the all-time view rather than the play path — which
+ *  is what the rail is, on every navigation.
+ *
+ *  There is no `library` field either: the number of library sections lives in
+ *  `librarySections.ts`, and answering it from Python as well would be one
+ *  manifest in two languages with nothing holding them level. */
+export type ShellCampaign = {
+  id: string;
+  name: string;
+  world_name: string;
+  scenes: number;
+  /** Scenes whose frontmatter `done` is not set. `turns` is null in this
+   *  slice — scene frontmatter carries no turn count, and the only cheap
+   *  candidate would undercount exactly the oldest scenes. */
+  open: { sid: string; title: string; turns: number | null }[];
+  ledger_open: number;
+  /** Null when the campaign binds no mechanics module. "This module keeps no
+   *  sheets" is legal, and is not "0 of 0". */
+  sheets: { sheeted: number; total: number } | null;
+  /** Filled by the wrap-up slice. */
+  unreviewed: number | null;
+  /** Images with no description text — deliberately not `untagged`, which is
+   *  greeting art with no subjects recorded and stays a separate word. Filled
+   *  by the images slice. */
+  images_undescribed: number | null;
+};
+
+export type ShellPayload = {
+  campaigns: number;
+  campaign: ShellCampaign | null;
+  /** Filled by the To do slice; until then that rail row does not render. */
+  todo: null;
+};

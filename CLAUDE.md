@@ -62,15 +62,33 @@ records (greetings, lore, locations, characters, …) is a two-pane editor with 
 read-only detail view and an explicit edit step. Canonical implementations:
 `components/GreetingEditor.tsx` and `components/EntityEditor.tsx`.
 
-**Where the rail goes depends on whether the page owns the screen.** An editor
-that sits *inside* another page — a library section, a world tab, a campaign
-panel — brings its own `.editor-list` rail, as below. A page that IS the screen
-(the ledger, the timeline, `routes/SheetsView.tsx`) already has a rail: the
-274px context column `components/PageShell.tsx` gives it. Put the records in
-`ColumnSection`s there and the detail in main. Building an `.editor` rail
-beside that column is the "second navigation surface" `PageShell`'s own
-docstring calls a misread of the page — the modes, the read-only-by-default
-rule and the explicit edit step are the same either way.
+**The rail navigates the app. A column indexes the page.** `components/AppRail.tsx`
+is the app's navigation: two tiers (the app, and the campaign that is open) in
+chrome that outlives every route, because *which page of the app am I on* has
+the same answer everywhere and should be asked once. A page's 274px context
+column (`components/PageShell.tsx`) answers the other half — *which of this
+page's records am I reading* — which only that page can ask. A page that builds
+a second surface to answer the rail's question has misread the rail; a page
+that puts its records in the rail has misread its column.
+
+Rows come from the tables in `src/shell/rail.ts`, and **a row whose `to()`
+returns `null` is not rendered at all** — that is how the rail ships complete in
+shape while most of the redesign's pages are still to be built. Badge counts
+come from `GET /api/shell` in one read; a count nobody can answer cheaply is
+`null` and draws no tail, which is the cost rule ("a price nobody reported is
+never rendered as zero") one domain over. The rail carries **no money**: the
+figure the design wanted is an all-time ledger rollup, and `store/usage.py`'s
+`lifetime_since` reserves that scan for the all-time view rather than the play
+path.
+
+**Where a record rail goes depends on whether the page owns the screen.** An
+editor that sits *inside* another page — a library section, a world tab, a
+campaign panel — brings its own `.editor-list` rail, as below. A page that IS
+the screen (the ledger, `routes/SheetsView.tsx`) puts its records in
+`ColumnSection`s in the context column and the detail in main. Building an
+`.editor` rail beside that column is still a misread of the page — the modes,
+the read-only-by-default rule and the explicit edit step are the same either
+way.
 
 **Structure** — `.editor` containing:
 - `.editor-list` — the rail. A `+ New …` button plus one `.row` button per record

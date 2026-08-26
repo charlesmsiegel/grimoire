@@ -46,7 +46,9 @@ function Row(
   );
 }
 
-/** ⌘K. The app's only navigation surface — there is no nav sidebar to fall
+/** ⌘K. The way to ANY of it — the rail lists the places worth a permanent row
+ *  and says what is waiting at each, and this is how you reach the rest. It was
+ *  the app's only navigation surface before the rail, so nothing to fall
  *  back to — so it has to cover scenes, campaigns, worlds, library sections,
  *  records and actions. It covers them by asking whoever is mounted: the shell
  *  registers the app-wide list, and a page registers what only it knows.

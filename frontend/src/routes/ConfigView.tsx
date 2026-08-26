@@ -15,8 +15,7 @@ import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
-import { normalizeMode } from "../theme/themes";
-import { useTheme } from "../theme/ThemeProvider";
+import { useThemeSetting } from "../theme/useThemeSetting";
 
 /** Every config field this page edits. One list, because it is what the draft
  *  is built from, what the dirty count is counted over, and what Save sends —
@@ -64,7 +63,11 @@ const DRAFT_FIELDS = [
   "advance_fork_threshold",
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "log_level",
-  "theme",
+  // `theme` is deliberately NOT here. The look is persisted the moment it is
+  // picked, by `useThemeSetting`, because three controls now offer it (this
+  // page, the first-run wizard, the header toggle) and a draft field would let
+  // this page's stale copy overwrite a choice made from one of the others on
+  // the next unrelated Save.
 ] as const;
 type DraftField = (typeof DRAFT_FIELDS)[number];
 type Draft = Record<DraftField, string>;
@@ -81,7 +84,6 @@ function draftOf(c: Config): Draft {
   // segment of the picker — normalized here so the baseline the dirty count
   // compares against is the value the control can actually show, and an
   // untouched legacy theme does not read as an unsaved change.
-  d.theme = normalizeMode(c.theme);
   d.log_level = normalizeFloor(d.log_level);
   return d;
 }
@@ -130,7 +132,11 @@ const SECTIONS: SectionDef[] = [
   { id: "playing", group: "What you see", label: "While playing",
     fields: ["rolling_summary_every", "scene_break_every", "replay_fork_threshold",
              "advance_fork_threshold"] },
-  { id: "appearance", group: "What you see", label: "Appearance", fields: ["theme"] },
+  // No draft fields: the look is persisted the moment it is picked, through
+  // `useThemeSetting`, so it is not something this page's Save writes. The
+  // section is the prose that explains the choice; the control is the pinned
+  // picker below, reachable from whichever section you happen to be reading.
+  { id: "appearance", group: "What you see", label: "Appearance", fields: [] },
 ];
 const GROUPS = SECTIONS.reduce<string[]>(
   (out, s) => (out.includes(s.group) ? out : [...out, s.group]), []);
@@ -231,7 +237,6 @@ async function lastPrompt(): Promise<Probe> {
 }
 
 export default function ConfigView() {
-  const { mode: themeMode, setTheme } = useTheme();
   const [config, setConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [connections, setConnections] = useState<LLMConnection[]>([]);
@@ -305,19 +310,15 @@ export default function ConfigView() {
     setDraft((d) => (d ? { ...d, [field]: value } : d));
   }
 
-  /** The theme is the one field that has to take effect before it is saved —
-   *  a look you cannot see until you commit it is a control you cannot use.
-   *  So it is applied to the DOM and held in the draft, and only the draft is
-   *  what Save writes; Revert puts the preview back with everything else. */
-  function pickTheme(mode: string) {
-    edit("theme", mode);
-    setTheme(mode);
-  }
+  /** The look is applied and stored in one act, through the hook every control
+   *  that offers it shares. It is not part of this page's draft, so Save never
+   *  writes it and Revert has nothing to put back — which is what stops a
+   *  choice made from the header being undone by an unrelated save here. */
+  const theme = useThemeSetting();
 
   function revert() {
     if (!saved) return;
     setDraft(saved);
-    setTheme(saved.theme);
     setLayout(layoutSaved);
     setError(null);
   }
@@ -397,15 +398,8 @@ export default function ConfigView() {
         if (d) for (const f of DRAFT_FIELDS) if (d[f] !== sent[f]) merged[f] = d[f];
         return merged;
       });
-      // Reconcile the preview with what was actually stored: if the server
-      // normalized or refused the theme, the screen must stop showing a look
-      // nothing on disk agrees with.
-      setTheme(normalizeMode(next.theme));
     } catch (e: any) {
       setError(e?.detail ?? "Could not save these settings");
-      // Same reason in the other direction — a theme left applied after a
-      // failed write looks chosen for the session and is gone at reload.
-      if (saved) setTheme(saved.theme);
     } finally {
       setBusy(false);
     }
@@ -464,7 +458,8 @@ export default function ConfigView() {
   // screen, so it wants to be reachable — and visible — from whichever section
   // you happen to be reading. A second copy inside Appearance would be the
   // same state rendered twice, one of them always off screen.
-  const footer = <ThemePicker value={draft?.theme ?? themeMode} onPick={pickTheme} disabled={busy} />;
+  const footer = <ThemePicker value={theme.mode} onPick={(m) => { void theme.pick(m); }}
+                              disabled={theme.busy} />;
 
   // `config-shell`, not the old `config`: this page's CSS is written against the
   // redesign's tokens, and the legacy `.config …` block is a whole set of input

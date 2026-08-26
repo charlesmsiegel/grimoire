@@ -2,9 +2,12 @@ import { api } from "./api/client";
 
 /** The libraries the Library hub gathers.
  *
- *  One list, two consumers: the hub renders a card per entry, and the nav rail
- *  uses the same routes to decide whether you are currently inside the
- *  library. Each section keeps the page that already owns it — the hub is a
+ *  One list, three consumers: the palette offers each as a place to go, the
+ *  library column renders a row per entry, and the nav rail uses `inLibrary`
+ *  below to decide whether you are currently inside the library — which it
+ *  cannot do with a prefix test, because `/library` is a redirect and the
+ *  pathname a moment later is `/worlds`. (This comment described that rail for
+ *  a while before one existed; it does now.) Each section keeps the page that already owns it — the hub is a
  *  landing page in front of those routes, not a replacement for them — so
  *  adding a library here is the whole change, with no aggregate backend route
  *  to invent. */

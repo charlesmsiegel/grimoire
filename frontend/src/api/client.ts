@@ -1,6 +1,6 @@
 import { isAbortError, parseSSEChunk, type ChatEvent, type LocalizeEvent,
   type ChubGalleryEvent, type RunHandle, type TaglineBatchEvent } from "./stream";
-import { campaignsChanged, configChanged } from "../appEvents";
+import { campaignsChanged, configChanged, shellChanged } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
 // `errorText` and `isOffline` used to live here, next to `ApiError`. They are
@@ -54,6 +54,7 @@ import {
   type Timeline, type TimelineEvent, type UndescribedImage,
   type WeatherOverrideBody, type WeatherRangeBody,
   type WeatherSpan,
+  type ShellPayload,
   type WorldCampaignPending, type WorldMeta,
 } from "./types";
 
@@ -73,6 +74,23 @@ function notifyCampaigns<T>(result: T): T {
  *  tells it to -- which is exactly the stale window this closes. */
 function notifyConfig<T>(result: T): T {
   configChanged();
+  return result;
+}
+
+/** Same shape again, for the nav rail's counts.
+ *
+ *  Hung off the mutators that change what a badge says WITHOUT moving the
+ *  pathname -- which is most of them: ending a scene, writing the ledger,
+ *  creating or deleting a sheet, renaming a world the rail names. Navigation
+ *  refetches the payload on its own; these are the changes navigation would
+ *  never hear about, and the rail is persistent chrome, so a stale count sits
+ *  on screen indefinitely rather than being corrected by the next click.
+ *
+ *  On the mutators rather than in their callers for the reason the other two
+ *  give: the mutators are the one place every path goes through, so no view
+ *  can forget. A rejected request never reaches here. */
+function notifyShell<T>(result: T): T {
+  shellChanged();
   return result;
 }
 
@@ -529,7 +547,8 @@ export const api = {
       return r;
     }),
   renameWorld: (wid: string, name: string) =>
-    request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`, { name }),
+    request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`,
+                                          { name }).then(notifyShell),
   deleteWorld: (wid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}`),
   /** Fork `wid` into a brand-new world called `name` (#41) — a deep copy of the
    *  whole directory, sharing nothing with the world it came from and changing
@@ -553,6 +572,16 @@ export const api = {
         invalidateConfigCache();   // same as createWorld: this changes `first_run`
         return r.json() as Promise<{ id: string }>;
       }),
+
+  /** The nav rail's badges. `cid` is the campaign the browser remembers, which
+   *  may name one that has since been deleted -- the route answers
+   *  `campaign: null` and 200 for that rather than 404, so the caller can tell
+   *  a gone campaign from a failed request. Never shared: the rail refetches
+   *  because something changed, and joining a read issued before that change is
+   *  precisely the answer it is trying to replace. */
+  getShell: (cid?: string | null) =>
+    request<ShellPayload>("GET", `/api/shell${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`,
+                          undefined, { fresh: true }),
 
   // campaigns
   // `fresh` for the caller refetching *because* a campaign just changed: the
@@ -686,7 +715,7 @@ export const api = {
     request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`, undefined, { fresh: true }),
   createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`,
-      { title, suggested_date: suggestedDate, pcless }),
+      { title, suggested_date: suggestedDate, pcless }).then(notifyShell),
   // Never shared, like the alternates and proposal reads. `selectScene` is the
   // refresh every mutating path funnels through, and a shared read is as old as
   // the request it joined — so a reroll or swap firing while an earlier refresh
@@ -706,9 +735,10 @@ export const api = {
                               undefined, { fresh: true });
   },
   renameScene: (cid: string, sid: string, title: string) =>
-    request<{ id: string; title: string }>("PUT", `/api/campaigns/${cid}/scenes/${sid}`, { title }),
+    request<{ id: string; title: string }>("PUT", `/api/campaigns/${cid}/scenes/${sid}`,
+                                           { title }).then(notifyShell),
   deleteScene: (cid: string, sid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}`),
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}`).then(notifyShell),
 
   // `response` is a one-shot, unpersisted per-turn override (the length chip
   // beside Send) — rides only this call, exactly like regenerate's guidance.
@@ -1686,7 +1716,8 @@ export const api = {
   // must not un-absorb a finished scene.
   retconMessage: (cid: string, sid: string, index: number, content: string) =>
     request<RetconReport>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}/retcon`, { content }),
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}/retcon`,
+      { content }).then(notifyShell),
   // Retcon replay (#79). `fresh` for every read here, like the alternates and
   // proposal reads: the session moves with each step of the walk, and a shared
   // read is as old as the request it joined.
@@ -1884,7 +1915,7 @@ export const api = {
                           commit_token?: string }) =>
     request<ChronicleEntry & { applied: string[];
       failures: { id: string; reason: string; kind: "conflict" | "error" }[] }>(
-      "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
+      "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body).then(notifyShell),
   getChronicle: (cid: string) =>
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),
   // Both scoped retries are detached runs of their own (#396), folded into the
@@ -2077,7 +2108,7 @@ export const api = {
     request<{ roster: SheetRoster }>("GET", `/api/campaigns/${cid}/sheets/roster`),
   createMissingSheets: (cid: string, types: Record<string, string>) =>
     request<SheetBulkResult>("POST", `/api/campaigns/${cid}/sheets/create-missing`,
-      { types }),
+      { types }).then(notifyShell),
   getWorldSheetsIndex: (wid: string) =>
     request<{ modules: string[]; default: string }>("GET", `/api/worlds/${wid}/sheets`),
   getWorldSheets: (wid: string, mid: string) =>
@@ -2096,7 +2127,7 @@ export const api = {
       scope.kind === "campaign"
         ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}`
         : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`,
-      body),
+      body).then(notifyShell),
   putSheetCreation: (scope: EntityScope, mid: string, kind: string, eid: string,
                      body: { sheet_type: string; spends: Record<string, Record<string, number>>; expected: SheetExpected }) =>
     request<{ sheet: Sheet }>(
@@ -2112,7 +2143,8 @@ export const api = {
       "DELETE",
       scope.kind === "campaign"
         ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`
-        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`),
+        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`)
+      .then(notifyShell),
 
   // ---- observability (#154/#155/#156) ----
   //

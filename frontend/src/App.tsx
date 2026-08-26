@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api, type ProviderHealth } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_MODE } from "./theme/themes";
 import AppHeader from "./components/AppHeader";
+import AppRail from "./components/AppRail";
 import AppPaletteSource from "./components/AppPaletteSource";
 import CommandPalette, { usePaletteHotkey } from "./components/CommandPalette";
 import { FocusProvider, FocusRestore, useFocus } from "./components/focus";
@@ -11,6 +12,9 @@ import { PaletteProvider } from "./components/palette";
 import { ShellStatusProvider } from "./components/ShellStatus";
 import ShortcutsHelp from "./shortcuts/ShortcutsHelp";
 import { onConfigChanged } from "./appEvents";
+import { RAIL_PX, railless } from "./shell/rail";
+import { useOpenCampaign } from "./shell/useOpenCampaign";
+import { useShellPayload } from "./shell/useShellPayload";
 import CampaignsView from "./routes/CampaignsView";
 import CampaignWizard from "./routes/CampaignWizard";
 import OpenScene from "./routes/OpenScene";
@@ -46,6 +50,35 @@ function Shell(
   usePaletteHotkey();
   const { focus } = useFocus();
 
+  // Which campaign the rail's second tier is about. A hint the payload
+  // validates -- what actually renders comes from `payload.campaign`, never
+  // from storage, so a rename cannot leave a stale name in the chrome.
+  const { cid, reconcile } = useOpenCampaign(dataDir);
+  const shell = useShellPayload(dataDir, cid, reconcile);
+
+  // `innerWidth` rather than `matchMedia`, and event-driven rather than polled
+  // -- the same reading `PageShell` takes for its own breakpoint, and the one
+  // the CSS gets. The two breakpoints stay distinct: RAIL_PX is where the rail
+  // and a page's column can no longer share a row, PHONE_PX is where a column
+  // and main cannot.
+  const [docked, setDocked] = useState(() => window.innerWidth > RAIL_PX);
+  const [railOpen, setRailOpen] = useState(false);
+  useEffect(() => {
+    const onResize = () => setDocked(window.innerWidth > RAIL_PX);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // Widening past the breakpoint docks the rail, so the drawer must not be left
+  // "open" underneath it -- and leaving focus mode must not restore one either.
+  useEffect(() => { if (docked) setRailOpen(false); }, [docked]);
+  const closeRail = useCallback(() => setRailOpen(false), []);
+
+  // The two wizards are one centred question at a time; `PlainShell`'s
+  // docstring calls a navigation surface beside them an answer of "nothing,
+  // finish this first". On a first run the rail would otherwise offer
+  // Campaigns, Library and Configuration before setup has been answered.
+  const noRail = railless(location.pathname) || focus;
+
   return (
     <>
       {/* Focus mode swaps the 52px strip for the pill that undoes it, and that
@@ -58,7 +91,8 @@ function Shell(
           viewport. */}
       {focus ? <FocusRestore />
              : <AppHeader model={model} connection={connection} ready={ready}
-                          health={health} />}
+                          health={health} railDrawer={!docked}
+                          onOpenRail={() => setRailOpen(true)} />}
       <AppPaletteSource />
       <CommandPalette />
       {/* `?`, and the sheet that lists whatever is bound where you are
@@ -66,11 +100,24 @@ function Shell(
           promise from two directions: everything is one keystroke away, and
           the keystrokes are discoverable without a manual. */}
       <ShortcutsHelp />
-      {/* Every route renders its own `PageShell`, so the 274px column belongs
-          to the page rather than to the chrome. That is the whole reason the
-          nav sidebar could be retired: a column that changes with the page can
-          answer "what am I navigating" precisely, where one shared list had to
-          answer it for all of them at once and answered it for none. */}
+      {/* Every route renders its own `PageShell`, and the 274px column still
+          belongs to the page rather than to the chrome -- but it is no longer
+          being asked to carry the app's navigation as well. "What am I
+          navigating" was two questions: which page of the app am I on, whose
+          answer is the same everywhere and now lives in the rail, and which of
+          this page's records am I reading, which only the page can answer and
+          which the column keeps. */}
+      {/* The one shape the whole app sits in now: the rail beside the page.
+          The rail navigates the app -- a question whose answer is the same on
+          every page, so it is asked once in chrome that outlives every route.
+          A page's own column still answers which of THAT page's records you are
+          reading, which is why `PageShell` is untouched by this. */}
+      <div className="app-body">
+        {!noRail && (
+          <AppRail payload={shell.payload} status={shell.status} cid={cid}
+                   dataDir={dataDir} docked={docked} open={railOpen}
+                   onClose={closeRail} onRetry={shell.retry} />
+        )}
       <Routes>
         {/* A fresh install lands on the wizard instead of an empty campaigns
             list. Only `/` is redirected: every other route stays reachable, so
@@ -149,6 +196,7 @@ function Shell(
             saved through Configuration like every other setting. */}
         <Route path="/stats" element={<StatsView />} />
       </Routes>
+      </div>
     </>
   );
 }

@@ -1,7 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+
+// The header's theme toggle persists on click, so it reaches the api client.
+vi.mock("../api/client", () => ({
+  api: { putConfig: vi.fn().mockResolvedValue({ theme: "dark" }) },
+}));
+
 import AppHeader from "./AppHeader";
 import type { ProviderHealth } from "../api/types";
+import { ThemeProvider } from "../theme/ThemeProvider";
 import { ShellStatusProvider, usePublishSceneModel } from "./ShellStatus";
 
 /** What the provider last actually did (#146). `null` is "nothing has been
@@ -20,10 +27,13 @@ function renderHeader(published?: string | null, ready: boolean | null = null,
                       health: ProviderHealth | null = null) {
   return render(
     <MemoryRouter>
+      <ThemeProvider initial="light">
       <ShellStatusProvider>
         {published !== undefined && <Publisher model={published} ready={ready} />}
-        <AppHeader model="vendor/active" connection="OpenRouter" ready health={health} />
+        <AppHeader model="vendor/active" connection="OpenRouter" ready health={health}
+                   railDrawer={false} onOpenRail={() => {}} />
       </ShellStatusProvider>
+      </ThemeProvider>
     </MemoryRouter>,
   );
 }
@@ -51,9 +61,12 @@ test("leaving the campaign restores the global model", async () => {
   // the Configuration page.
   rerender(
     <MemoryRouter>
-      <ShellStatusProvider>
-        <AppHeader model="vendor/active" connection="OpenRouter" ready health={null} />
-      </ShellStatusProvider>
+      <ThemeProvider initial="light">
+        <ShellStatusProvider>
+          <AppHeader model="vendor/active" connection="OpenRouter" ready health={null}
+                     railDrawer={false} onOpenRail={() => {}} />
+        </ShellStatusProvider>
+      </ThemeProvider>
     </MemoryRouter>,
   );
   expect(await screen.findByText("VENDOR/ACTIVE")).toBeInTheDocument();

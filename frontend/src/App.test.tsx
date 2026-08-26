@@ -7,6 +7,10 @@ import { configChanged } from "./appEvents";
 vi.mock("./api/client", () => ({
   api: {
     getConfig: vi.fn(),
+    // The rail reads this on every navigation. A campaign of `null` is the
+    // shape for "nothing open", which is what these tests are about.
+    getShell: vi.fn().mockResolvedValue({ campaigns: 0, campaign: null, todo: null }),
+    putConfig: vi.fn().mockResolvedValue({ theme: "system" }),
     listCampaigns: vi.fn().mockResolvedValue([]),
     listWorlds: vi.fn().mockResolvedValue([]),
     listModules: vi.fn().mockResolvedValue([]),
@@ -18,6 +22,16 @@ vi.mock("./api/client", () => ({
   },
 }));
 import { api } from "./api/client";
+
+/** jsdom reports 1024px, which is *below* the rail's breakpoint -- so by
+ *  default the rail is a drawer and renders nothing until it is opened. Tests
+ *  about the docked rail have to say so. Restored in `afterEach`, or a test
+ *  that widened the window would change the answer for every test after it. */
+const REAL_WIDTH = window.innerWidth;
+function widthOf(px: number) {
+  Object.defineProperty(window, "innerWidth", { value: px, configurable: true, writable: true });
+}
+afterEach(() => widthOf(REAL_WIDTH));
 
 const campaignMounts: string[] = [];
 vi.mock("./routes/CampaignView", () => ({
@@ -101,14 +115,43 @@ beforeEach(() => {
   (api.listWorlds as any).mockResolvedValue([]);
 });
 
-test("the header carries the brand and Config, and nothing else navigates", async () => {
+test("the header keeps the brand and the pill; Configuration moved to the rail", async () => {
+  widthOf(1400);
   render(<MemoryRouter><App /></MemoryRouter>);
   expect(await screen.findByText(/GRIMOIRE/)).toBeInTheDocument();
-  expect(header().getByRole("link", { name: /config/i })).toBeInTheDocument();
   expect(header().getByRole("link", { name: /grimoire/i })).toHaveAttribute("href", "/");
-  // The nav sidebar is gone. Its replacement is the pill beside the brand.
-  expect(screen.queryByRole("navigation", { name: /primary/i })).not.toBeInTheDocument();
+  // The pill still names where you are and opens the palette that goes
+  // anywhere; the rail lists the places worth a permanent row.
   expect(header().getByRole("button", { name: /go anywhere/i })).toBeInTheDocument();
+
+  // CONFIG is no longer a header link -- it is a rail row, which is the first
+  // half of "config not linking to connections is terrible": Configuration and
+  // Connections are now reachable from the same surface.
+  expect(header().queryByRole("link", { name: /^config$/i })).not.toBeInTheDocument();
+  const rail = screen.getByRole("navigation", { name: /^main$/i });
+  expect(within(rail).getByRole("link", { name: /configuration/i }))
+    .toHaveAttribute("href", "/config");
+});
+
+test("a rail row whose page does not exist yet is absent, not disabled", async () => {
+  widthOf(1400);
+  // The rail ships complete in shape and sparse in fact: most campaign-tier
+  // pages are later slices. A row with nowhere to go renders nothing at all,
+  // so the rail never offers a destination that is not there.
+  render(<MemoryRouter><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  const rail = screen.getByRole("navigation", { name: /^main$/i });
+  expect(within(rail).queryByText(/^To do$/)).not.toBeInTheDocument();
+});
+
+test("the rail is not rendered beside either wizard", async () => {
+  widthOf(1400);
+  // `PlainShell` calls these one centred question at a time. On a first run the
+  // rail would otherwise offer Campaigns, Library and Configuration before
+  // setup has been answered at all.
+  render(<MemoryRouter initialEntries={["/campaigns/new"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  expect(screen.queryByRole("navigation", { name: /^main$/i })).not.toBeInTheDocument();
 });
 
 test("the ⌘K pill and the keyboard shortcut open the same palette", async () => {

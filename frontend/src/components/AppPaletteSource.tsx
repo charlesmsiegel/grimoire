@@ -43,7 +43,8 @@ export default function AppPaletteSource() {
       });
     }
     // Home. Named as a place rather than left implicit behind the brand mark:
-    // with no nav sidebar, "get me back to the shelf" has to be typeable.
+    // the rail's Campaigns row is one way back to the shelf; this is the other,
+    // and it is the one that works with a hand on the keyboard.
     out.push({ id: "section:/", group: "ELSEWHERE", label: "Campaigns",
                meta: "the shelf", to: "/" });
     for (const s of LIBRARY_SECTIONS) {
@@ -62,7 +63,8 @@ export default function AppPaletteSource() {
                meta: "start one", action: true, to: "/campaigns/new" });
     out.push({ id: "section:/config", group: "ELSEWHERE", label: "Configuration",
                meta: "storage, model, appearance", to: "/config" });
-    // With no nav sidebar, a route that is not typeable here is a route with
+    // The rail carries the routes worth a permanent row. For everything else,
+    // a route that is not typeable here is a route with
     // no way in but the URL bar.
     out.push({ id: "section:/stats", group: "ELSEWHERE", label: "Instrumentation",
                meta: "latency, errors, the debug log", to: "/stats" });

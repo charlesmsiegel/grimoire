@@ -25,6 +25,7 @@ function channel() {
  *  forget: the mutators are the one place every path goes through. */
 const campaigns = channel();
 const config = channel();
+const shell = channel();
 
 /** The set of campaigns, or one of their names, changed. */
 export const campaignsChanged = campaigns.emit;
@@ -34,3 +35,18 @@ export const onCampaignsChanged = campaigns.subscribe;
  *  naming something other than what the next generation will actually use. */
 export const configChanged = config.emit;
 export const onConfigChanged = config.subscribe;
+
+/** A count the nav rail badges changed.
+ *
+ *  A third channel rather than a reuse of either above, because neither one
+ *  means this. `configChanged` fires for the active connection and its model;
+ *  `campaignsChanged` fires for the set of campaigns and their names. Ending a
+ *  scene, writing the ledger or creating a sheet changes what the rail says and
+ *  fires neither — and does it without moving the pathname, which is the one
+ *  thing that would otherwise have refetched.
+ *
+ *  Emitted from the api client's mutators for the reason the other two are: the
+ *  mutators are the one place every path goes through, so a view cannot
+ *  forget. */
+export const shellChanged = shell.emit;
+export const onShellChanged = shell.subscribe;

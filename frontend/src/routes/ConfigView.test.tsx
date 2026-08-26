@@ -133,15 +133,35 @@ test("main shows one section at a time", async () => {
   expect(screen.queryByLabelText(/storage location/i)).toBeNull();
 });
 
-test("the theme control is pinned under the column and previews without saving", async () => {
+test("the theme control is pinned under the column and persists on pick", async () => {
+  // The look is no longer one of this page's draft fields. Three controls offer
+  // it now -- here, the first-run wizard, and the header toggle -- and a
+  // deferred draft let this page's stale copy overwrite a choice made from one
+  // of the others on the next unrelated Save. So: applied at once, because a
+  // look you cannot see until you commit it is a control you cannot use, and
+  // written at once, because a look that lasts only the session reads as the
+  // app forgetting.
   renderView();
   fireEvent.click(await screen.findByText("DARK"));
-  expect(setTheme).toHaveBeenCalledWith("dark");        // applied, so it can be seen
-  expect(api.putConfig).not.toHaveBeenCalled();          // but not written
-  expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
-
-  save();
+  expect(setTheme).toHaveBeenCalledWith("dark");
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ theme: "dark" }));
+  // ...and it is not an unsaved change, because it is not unsaved.
+  expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
+});
+
+test("a theme the store refuses is rolled back rather than left on screen", async () => {
+  // A look left applied after a failed write looks chosen for the session and
+  // is gone at the next reload -- the same trade this page's Save already made
+  // for it, now made in the one place every control shares.
+  (api.putConfig as any).mockRejectedValueOnce({ detail: "nope" });
+  renderView();
+  await screen.findByText("LIGHT");
+  fireEvent.click(screen.getByText("DARK"));
+  // Applied first, so the pick can be seen...
+  expect(setTheme).toHaveBeenCalledWith("dark");
+  // ...then put back to what it was when the write is refused. The mocked
+  // provider holds `system`, which is what "what it was" means here.
+  await waitFor(() => expect(setTheme).toHaveBeenLastCalledWith("system"));
 });
 
 test("the stored theme survives the collapse: codex is not an unsaved change", async () => {
@@ -150,7 +170,6 @@ test("the stored theme survives the collapse: codex is not an unsaved change", a
   // edited, so the count must not read the mapping as a pending edit.
   await screen.findByText("LIGHT");
   expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
-  expect(screen.getByText("LIGHT")).toHaveAttribute("aria-pressed", "true");
 });
 
 test("editing a field marks the draft dirty and writes nothing", async () => {
@@ -201,20 +220,20 @@ test("an edit made while the write is in flight is not swallowed by it", async (
   expect(screen.getByLabelText(/narrator label/i)).toHaveValue("The Loom");  // still pending
 });
 
-test("Revert discards every edit, the theme preview included", async () => {
+test("Revert discards every edit; the theme is not one of them", async () => {
   renderView();
   await open(/^Transcript/);
   fireEvent.change(await screen.findByLabelText(/your label/i), { target: { value: "Kestrel" } });
-  fireEvent.click(screen.getByText("DARK"));
-  expect(screen.getByText("2 unsaved changes")).toBeInTheDocument();
+  expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: /^revert$/i }));
   expect(api.putConfig).not.toHaveBeenCalled();
   expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
   expect(screen.getByLabelText(/your label/i)).toHaveValue("You");
-  // The preview goes back with everything else, or the screen keeps showing a
-  // look nothing on disk agrees with. `codex` maps to light.
-  expect(setTheme).toHaveBeenLastCalledWith("light");
+  // Revert has nothing to say about the look: it was written when it was
+  // picked, so there is no preview left over to put back -- and undoing a
+  // stored setting as a side effect of discarding unrelated edits would be a
+  // surprise, not a revert.
 });
 
 test("switching the active connection waits for Save like everything else", async () => {

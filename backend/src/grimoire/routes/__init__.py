@@ -65,6 +65,7 @@ from . import (
     runs,
     scenes,
     search,
+    shell,
     streaming,
     usage,
     weather,
@@ -91,7 +92,7 @@ router = APIRouter()
 
 for _domain in (config, modules, worlds, characters, greetings,
                 runs, scenes, weather, mechanics, usage, observability,
-                campaigns, search):
+                campaigns, search, shell):
     router.include_router(_domain.router)
 
 router.include_router(entities.router)  # keep last: generic /{kind} catch-alls
