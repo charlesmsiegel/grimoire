@@ -456,6 +456,61 @@ def test_every_writable_config_key_is_reported_back(client):
         f"writable but never reported by GET /config: {sorted(writable - reported)}"
 
 
+def _other_config_value(current: str) -> str:
+    """A value that differs from `current` and stays in its shape -- a flipped
+    toggle, the next number up, a suffixed string.
+
+    Shape rather than a single sentinel for every key, because a setting the
+    page renders as a number should be round-tripped as one: the store keeps
+    strings, but the reader that parses this key back out does not, and a
+    guard that wrote "sentinel" into all of them would be exercising a value
+    no install can hold."""
+    if current in ("on", "off"):
+        return "off" if current == "on" else "on"
+    if current.isdigit():
+        return str(int(current) + 1)
+    return f"{current}x"
+
+
+def test_every_writable_config_key_reports_back_the_value_it_stored(client):
+    """A key `GET /config` names must answer with what the PUT stored (#410).
+
+    The sibling above catches a key `GET /config` never names. This catches the
+    other half of the same symptom: a key it names while answering from
+    somewhere other than what the PUT wrote -- a hardcoded default, a constant,
+    the wrong `cfg.get` key. The page looks identical in both cases (a setting
+    that saves, takes effect, and redisplays its default), so a guard that only
+    checks for the presence of the key would go green on it.
+
+    Every value is derived from what the current response says, so a key added
+    to `ConfigUpdate` tomorrow is covered without touching this test -- which is
+    the whole point, since the failure being guarded is one nobody notices
+    while writing the key that has it. The derived values need not be
+    *meaningful* (`"systemx"` is not a theme): `write_config` stores strings and
+    `_public_config` reports them, so what is under test is the plumbing
+    between the two, and every route that validates a setting does it where the
+    setting is read.
+    """
+    from grimoire.routes.models import ConfigUpdate
+
+    # `active_connection_id` is answered from the connection it names rather
+    # than the string that was stored, so an invented id reads back as "" --
+    # correctly. `claude` is the other connection every store is seeded with,
+    # which makes this a real round trip rather than an exemption.
+    live = {"active_connection_id": "claude"}
+    writable = sorted(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+    before = client.get("/api/config").json()
+    wanted = {key: live.get(key) or _other_config_value(str(before.get(key, "")))
+              for key in writable}
+
+    assert client.put("/api/config", json=wanted).status_code == 200
+
+    after = client.get("/api/config").json()
+    forgot = {key: (wanted[key], after.get(key))
+              for key in writable if after.get(key) != wanted[key]}
+    assert not forgot, f"stored, then not reported back by GET /config: {forgot}"
+
+
 def test_config_fork_thresholds_default_and_roundtrip(client):
     """Both fork nudges, and the round trip is the point. `replay_fork_threshold`
     stored fine and was never reported back (#80's half of this), so the

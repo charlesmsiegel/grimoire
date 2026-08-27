@@ -52,6 +52,17 @@ HEALTH_CHECK_CEILING = 45.0
 
 # ---- config ----
 def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict:
+    """Everything the Configuration page reads, enumerated by hand.
+
+    By hand because it is not a passthrough: some keys are derived rather than
+    stored (the active connection and its health, `first_run`, the data dir),
+    one is a constant the client must not duplicate, and the rest name the
+    default this response falls back to. What that costs is a key that is
+    writable and stored while never being reported -- a setting that saves,
+    takes effect, and redisplays its default forever (#410). Two tests in
+    `test_routes.py` hold this dict to `ConfigUpdate`: one that every writable
+    key is named here, one that each is answered from what was stored.
+    """
     active = store.llm_connections.get_active()  # routing-ok: display only, generates nothing
     setup_done, first_run = _setup_state(cfg)
     return {"theme": cfg["theme"], "system_prompt": cfg.get("system_prompt", ""),
