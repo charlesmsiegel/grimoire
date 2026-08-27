@@ -280,7 +280,7 @@ def test_an_unreadable_boundary_is_a_skipped_follow_up_not_a_failed_turn(client)
     would otherwise escape to the runner and mark a landed turn `failed`, over
     a reply that is perfectly persisted, leaving a retry free to append a
     second one."""
-    cid, sid = _scene(client, posts=2)
+    cid, _sid = _scene(client, posts=2)
     # The real function, against a scene that is not there: `read_scene` raises
     # and this must answer None rather than propagate.
     assert streaming_routes._tail_length(cid, "no-such-scene") is None

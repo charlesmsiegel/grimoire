@@ -376,3 +376,29 @@ test("a replay stream that finished properly does not", async () => {
   await act(async () => {});
   expect(unanswered).not.toHaveBeenCalled();
 });
+
+test("a reroll tells the caller its follow-ups are already scheduled", async () => {
+  // `Try again` goes through `/regenerate`, an ordinary turn producer, which
+  // schedules the rolling-summary fold and the scene-break question itself
+  // (#397). A caller that asked again would put a second scene-break question
+  // at the provider — that route has no in-flight coalescing, so both are
+  // billed and the later answer is discarded as superseded.
+  //
+  // Every other action here still reports `asked` falsy: `/replay/turn`
+  // deliberately schedules nothing, and a cut, an accept or a cancel is no turn
+  // at all.
+  (api.getReplay as any).mockResolvedValue(PENDING);
+  const onChanged = vi.fn();
+  await renderPanel({ onChanged });
+
+  fireEvent.click(screen.getByText("Try again"));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalled());
+  expect(onChanged).toHaveBeenCalledWith(true);
+
+  onChanged.mockClear();
+  (api.acceptReplay as any).mockResolvedValue(SESSION);
+  fireEvent.click(screen.getByText("Accept"));
+  await waitFor(() => expect(api.acceptReplay).toHaveBeenCalled());
+  expect(onChanged).toHaveBeenCalled();
+  expect(onChanged.mock.calls.every(([asked]: any[]) => !asked)).toBe(true);
+});

@@ -6150,6 +6150,31 @@ test("a check also asks whether the summary is due", async () => {
     "run", "s1", false, expect.anything()));
 });
 
+test("a replay reroll leaves its follow-ups to the server", async () => {
+  // `ReplayPanel.again` goes through `/regenerate`, which schedules both
+  // server-side (#397). Asking from here as well would put a second
+  // scene-break question at the provider: that route has no in-flight
+  // coalescing, so both are billed and one answer is thrown away as
+  // superseded. Every other replay action still asks — a cut, an accept and a
+  // replayed turn schedule nothing of their own.
+  twoPostScene();
+  renderCampaign();
+  await screen.findByText("a reply");
+  (api.refreshRollingSummary as any).mockClear();
+  (api.askSceneBreak as any).mockClear();
+
+  fireEvent.click(await screen.findByText("stub-replay-changed-asked"));
+
+  await waitFor(() => expect(api.getScene).toHaveBeenCalled());
+  expect(api.refreshRollingSummary).not.toHaveBeenCalled();
+  expect(api.askSceneBreak).not.toHaveBeenCalled();
+
+  // ...and the plain report still does ask, so this is about the flag rather
+  // than about the panel having stopped reporting at all.
+  fireEvent.click(screen.getByText("stub-replay-changed"));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalled());
+});
+
 test("a write whose re-read never landed asks for no fold at all", async () => {
   // The boundary passed to the fold comes from a re-read. When that read is
   // retired — a newer write superseded it, or it failed outright — there is no
