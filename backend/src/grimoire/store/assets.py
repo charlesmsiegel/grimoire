@@ -11,6 +11,7 @@ by image edits.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 from contextlib import ExitStack, contextmanager
@@ -380,6 +381,45 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
         _heal_stranded_promotion(d)
         p = path_in(d, name)
     return p
+
+
+def names_in(d: Path, also: str = "") -> tuple[set[str], bool]:
+    """Every logical image NAME in `d` — `list_in`'s stem set, and nothing else.
+
+    `list_in` additionally decides which of two files sharing a stem answers for
+    it, and that tie-break is an mtime stat per file. A caller that only counts
+    names, or asks whether one is present, never uses the answer — and on a
+    sweep over every version of every record of every base, those stats are the
+    bulk of the walk (`image_descriptions.undescribed_count`).
+
+    The filter is `list_in`'s, deliberately identical: a name this admits and
+    that one does not is a count that disagrees with the list behind it.
+
+    `also` names one extra file to report the presence of, and it is here so a
+    caller that wants both facts pays for one directory read instead of two.
+    The sidecar beside a version's images is the case (`image_descriptions`):
+    statting it separately doubles the traversals on a sweep over every version
+    folder in the store. Returns (names, whether `also` was present); with no
+    `also`, the flag is always False.
+    """
+    out: set[str] = set()
+    found = False
+    try:
+        # `os.scandir`, not `iterdir()`: the entry carries its type from the
+        # directory read, so this is one syscall for the directory rather than
+        # one more stat per file in it. On the sweep above that is the
+        # difference the function was added for.
+        with os.scandir(d) as it:
+            for e in it:
+                if also and e.name == also:
+                    found = True
+                    continue
+                stem, _, ext = e.name.rpartition(".")
+                if stem and e.is_file() and _norm_ext("." + ext) and _addressable_name(stem):
+                    out.add(stem)
+    except OSError:
+        return set(), False
+    return out, found
 
 
 def list_in(d: Path) -> list[dict]:

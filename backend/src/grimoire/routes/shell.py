@@ -150,5 +150,10 @@ def get_shell(campaign: str = ""):
         # How many things the app noticed that the user has not waved off. The
         # badge is the number they still care about, so an ignored chore is not
         # in it -- see `store.chores`.
-        "todo": todo_routes.live(campaign)["count"] if campaign else None,
+        # Not campaign-gated any more: the library chores (an undescribed
+        # image backlog, a world whose cast has no taglines) have an answer
+        # before a campaign is chosen, and that is exactly when a freshly
+        # imported world's backlog is largest. A `null` here would draw no
+        # tail over a list that has entries.
+        "todo": todo_routes.badge_count(campaign),
     }

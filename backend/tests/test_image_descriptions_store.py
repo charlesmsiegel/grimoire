@@ -371,3 +371,82 @@ def test_a_delete_that_lost_the_race_to_an_upload_keeps_its_hands_off_the_sideca
     # The delete really did happen, so its description went with it -- and the
     # re-uploaded picture is undescribed rather than wearing the old words.
     assert image_descriptions.read_raw(d) == {}
+
+# --- The cheap count, and what keeps it honest -------------------------------
+#
+# `undescribed_count` and `has_undescribed` exist because the to-do list needs
+# this number for every world on every read, and building the list to get it
+# resolves an extension and a cache-busting token per image -- a stat apiece.
+# They walk the same tree by the same two rules (`assets.storable`, and key
+# PRESENCE rather than non-empty text), and the tests below are what hold them
+# to it. A cheap count that can drift from the list behind it is the stale
+# number the whole to-do page is arranged to not have.
+
+
+def test_the_count_agrees_with_the_list_it_stands_for(tmp_path):
+    cid, vid = _chars(tmp_path, images=("avatar", "gallery_1", "gallery_2"))
+    d = _dir_of(tmp_path, cid, vid)
+
+    assert image_descriptions.undescribed_count(tmp_path) == 3
+    assert len(image_descriptions.undescribed(tmp_path)) == 3
+
+    # A reviewed-EMPTY description is described. The distinction this module
+    # turns on, and the one a count is most likely to get wrong.
+    image_descriptions.write_in(d, {"avatar": ""})
+    assert image_descriptions.undescribed_count(tmp_path) == 2
+    assert len(image_descriptions.undescribed(tmp_path)) == 2
+
+    image_descriptions.write_in(d, {"avatar": "", "gallery_1": "A lit stair.",
+                                    "gallery_2": ""})
+    assert image_descriptions.undescribed_count(tmp_path) == 0
+    assert len(image_descriptions.undescribed(tmp_path)) == 0
+
+
+def test_the_count_agrees_across_bases_and_empty_roots(tmp_path):
+    """Entity kinds and a root with nothing in it — the two ends of the walk."""
+    assert image_descriptions.undescribed_count(tmp_path, "locations") == 0
+    assert image_descriptions.undescribed(tmp_path, "locations") == []
+
+    eid = entities.create_entity(tmp_path, "locations", "Saltmarch")
+    assets.put_image(tmp_path, eid, "default", "avatar", b"png", "png", base="locations")
+    assert image_descriptions.undescribed_count(tmp_path, "locations") == 1
+    assert len(image_descriptions.undescribed(tmp_path, "locations")) == 1
+
+
+def test_presence_is_the_same_predicate_as_a_non_zero_count(tmp_path):
+    """`has_undescribed` is what the rail's badge asks, and it stops early.
+
+    The badge counts chores, not instances, so it must agree with `n > 0`
+    exactly -- a badge that can disagree with the page under it is the stale
+    number arrived at from the other side.
+    """
+    assert image_descriptions.has_undescribed(tmp_path) is False
+
+    cid, vid = _chars(tmp_path, images=("avatar", "gallery_1"))
+    d = _dir_of(tmp_path, cid, vid)
+    for mapping in ({}, {"avatar": "A lit stair."},
+                    {"avatar": "A lit stair.", "gallery_1": ""}):
+        if mapping:
+            image_descriptions.write_in(d, mapping)
+        assert (image_descriptions.has_undescribed(tmp_path)
+                is (image_descriptions.undescribed_count(tmp_path) > 0))
+
+
+def test_names_in_is_list_ins_stem_set(tmp_path):
+    """The two must admit exactly the same names.
+
+    `undescribed_count` filters on `names_in` and `undescribed` on `list_in`;
+    a name one accepts and the other does not is precisely how the count and
+    the list start to disagree.
+    """
+    cid, vid = _chars(tmp_path, images=("avatar", "gallery_1", "gallery_2"))
+    d = _dir_of(tmp_path, cid, vid)
+    names, found = assets.names_in(d)
+    assert names == {i["name"] for i in assets.list_in(d)}
+    assert found is False
+
+    # `also` reports one extra file from the SAME directory read.
+    image_descriptions.write_in(d, {"avatar": ""})
+    names, found = assets.names_in(d, image_descriptions.DESCRIPTIONS_FILE)
+    assert names == {i["name"] for i in assets.list_in(d)}
+    assert found is True

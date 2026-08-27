@@ -1909,6 +1909,12 @@ export type ShellPayload = {
  *  zero leaves the list, so a label's number is always this request's. */
 export type Chore = {
   id: string;
+  /** What the chore is about, which is what decides whether it can be answered
+   *  with no campaign open. `campaign` needs one; `world` is a fact about a
+   *  world and `library` about the whole store, so both answer either way — and
+   *  that is exactly the moment just after importing a world, when its backlog
+   *  is largest and no campaign exists yet. */
+  scope: "campaign" | "world" | "library";
   group: string;
   severity: "note" | "warn" | "alert";
   n: number;

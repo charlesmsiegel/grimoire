@@ -281,3 +281,20 @@ def build_prompt(card_data: dict) -> list[dict]:
 
 def parse_output(text: str) -> str:
     return text.strip()
+
+
+def anchorless_ids(root: Path, char_ids: list[str]) -> list[str]:
+    """Which of `char_ids` have no anchor in THIS root, by stat rather than read.
+
+    Presence of the file is the whole test, and that is only sound because of
+    what the two writers do. `write` DELETES on blank rather than storing an
+    empty one -- absence is the signal the feature keys on, as its docstring
+    says -- and `disable`, the one writer that leaves a file meaning "no
+    anchor", is called only with a campaign root (`overlay`). A world root
+    therefore holds a `voice_anchor.md` only where there is an anchor.
+
+    Pass a campaign root and that stops being true: a tombstone would read as
+    an anchor. The to-do list's world chores are the caller, and they are
+    world-scoped for this reason as much as any other.
+    """
+    return [cid for cid in char_ids if not anchor_path(root, cid).exists()]

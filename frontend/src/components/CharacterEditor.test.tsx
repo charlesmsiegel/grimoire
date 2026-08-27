@@ -2718,29 +2718,15 @@ test("campaign scope offers a delete, and says which library it removes from (#6
 });
 
 // ---- the voice-anchor backlog (#voice) ----
-test("world scope counts the characters with no voice anchor", async () => {
+//
+// The COUNT moved to the To do page (`world-anchors`), where it is one chore
+// among the rest, computed server-side over the whole library rather than
+// inferred from whichever roster this page happens to be showing. What stays
+// here is the rule that outlived it: anchors are never bulk-filled.
+test("the toolbar does not report the anchor backlog", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "default", has_voice_anchor: false, versions: [] },
     { id: "winifred", name: "Winifred", default_version: "default", has_voice_anchor: true, versions: [] },
-  ]);
-  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  expect(await screen.findByText("1 character has no voice anchor")).toBeTruthy();
-});
-
-test("the backlog pluralises", async () => {
-  (api.listCharacters as any).mockResolvedValue([
-    { id: "mara", name: "Mara", default_version: "default", has_voice_anchor: false, versions: [] },
-    { id: "winifred", name: "Winifred", default_version: "default", has_voice_anchor: false, versions: [] },
-  ]);
-  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  expect(await screen.findByText("2 characters have no voice anchor")).toBeTruthy();
-});
-
-test("a row that predates the field is not counted as anchorless", async () => {
-  // `has_voice_anchor` absent means UNKNOWN, not "no anchor" -- a backlog that
-  // is loudest when it knows least is worse than one that is quiet.
-  (api.listCharacters as any).mockResolvedValue([
-    { id: "mara", name: "Mara", default_version: "default", versions: [] },
   ]);
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Mara");
@@ -2748,12 +2734,18 @@ test("a row that predates the field is not counted as anchorless", async () => {
 });
 
 test("no bulk-generate button is offered for anchors", async () => {
+  // The one that must not be lost with the count. An anchor steers every scene
+  // the character appears in, so a roster-wide unattended derive would write
+  // inferred voices into the prompt with the same authority as hand-written
+  // ones, at a volume nobody will review afterwards. Taglines have such a
+  // button; anchors deliberately do not.
   (api.listCharacters as any).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "default", has_voice_anchor: false, versions: [] },
   ]);
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  await screen.findByText("1 character has no voice anchor");
+  await screen.findByText("Mara");
   expect(screen.queryByRole("button", { name: /anchors \(/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /derive anchors/i })).toBeNull();
 });
 
 test("the over-cap warning uses the cap the server reported", async () => {
@@ -2777,24 +2769,21 @@ test("astral characters count as one each, not two", async () => {
   expect(screen.queryByText(/Over 10 characters/)).toBeNull();
 });
 
-test("the backlog count is refreshed by the trip back to the roster", async () => {
-  // The count renders only in grid mode, and `backToGrid` reloads the roster --
-  // so it cannot be observed stale, and patching the row locally after a save
-  // would duplicate that. This pins the property the absence of that patch
-  // relies on: leave the character, and the count reflects the server again.
-  (api.listCharacters as any)
-    .mockResolvedValueOnce([{ id: "seraphine", name: "Seraphine", default_version: "default",
-                              has_voice_anchor: false, versions: [] }])
-    .mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default",
-                          has_voice_anchor: true, versions: [] }]);
+test("saving an anchor still returns to a freshly-read roster", async () => {
+  // What the removed backlog-count test was really pinning: `backToGrid`
+  // re-reads rather than patching the row it just saved. The count it used to
+  // be observed through has moved to the To do page, but the reload is what
+  // keeps every other roster-derived figure -- the tagline backlog beside it --
+  // from being observed stale.
   (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "" });
   (api.setCharacterVoiceAnchor as any).mockResolvedValue({ ok: true });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  await screen.findByText("1 character has no voice anchor");
   await openEditForm();
   fireEvent.change(await screen.findByLabelText("Voice anchor"),
                    { target: { value: "Clipped. Never contracts." } });
   fireEvent.click(screen.getByText("Save voice anchor"));
+  const before = (api.listCharacters as any).mock.calls.length;
   fireEvent.click(await screen.findByText("‹ All characters"));
-  await waitFor(() => expect(screen.queryByText(/no voice anchor/i)).toBeNull());
+  await waitFor(() => expect((api.listCharacters as any).mock.calls.length)
+    .toBeGreaterThan(before));
 });

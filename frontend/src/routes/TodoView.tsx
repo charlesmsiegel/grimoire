@@ -21,9 +21,21 @@ import { PageShell, ColumnSection } from "../components/PageShell";
  *  A dismissal that cannot be undone is one nobody dares make.
  */
 
-function Row({ chore, onIgnore, busy, restore, cid }: {
+/** What a scope reads as on a row.
+ *
+ * Two labels for three scopes, deliberately. The three-way split is what the
+ * SERVER needs — it decides which builders can answer with no campaign open —
+ * and a reader only ever asks the one question the chip is here to settle: is
+ * this about the campaign I have open, or about everything else. */
+const SCOPE_LABEL: Record<Chore["scope"], string> = {
+  campaign: "This campaign",
+  world: "Your library",
+  library: "Your library",
+};
+
+function Row({ chore, onIgnore, busy, restore, cid, showScope }: {
   chore: Chore; onIgnore: (id: string, on: boolean) => void;
-  busy: boolean; restore?: boolean; cid: string | null;
+  busy: boolean; restore?: boolean; cid: string | null; showScope?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<ChoreItems | null>(null);
@@ -52,6 +64,14 @@ function Row({ chore, onIgnore, busy, restore, cid }: {
                   aria-controls={panelId} onClick={() => setOpen((v) => !v)}>
             <span className="chore-caret" aria-hidden>{open ? "▾" : "▸"}</span>
             {chore.what}
+            {/* Inside the button, not beside it. `taglines` and
+                `world-taglines` render the same sentence — "3 characters with
+                no tagline" — so without this they are two controls with one
+                accessible name, which is the version of the collision a screen
+                reader gets and cannot see its way around. */}
+            {showScope && (
+              <span className="chore-scope">{SCOPE_LABEL[chore.scope]}</span>
+            )}
           </button>
           {/* The half a bare count cannot carry. A number with no consequence
               attached is a number the reader learns to skip. */}
@@ -137,6 +157,20 @@ export default function TodoView({ cid }: { cid: string | null }) {
   const groups: string[] = [];
   for (const c of chores) if (!groups.includes(c.group)) groups.push(c.group);
 
+  // The chip earns its place only where it tells two rows apart, so it appears
+  // exactly when both kinds are on the page. With no campaign open every row is
+  // the library's and the label would repeat down the whole list, which is the
+  // count-with-no-consequence problem in another form: a word on every row is a
+  // word the reader learns to skip.
+  //
+  // Falsy labels are dropped rather than counted: `scope` is a field a response
+  // predating it would not carry, and an `undefined` in the set would turn the
+  // chip on and then render nothing.
+  const scopeLabels = new Set(
+    [...chores, ...(data?.ignored ?? [])].map((c) => SCOPE_LABEL[c.scope]).filter(Boolean),
+  );
+  const showScope = scopeLabels.size > 1;
+
   const column = (
     <ColumnSection label="Groups" count={data?.count ?? undefined}>
       {groups.map((g) => (
@@ -166,21 +200,24 @@ export default function TodoView({ cid }: { cid: string | null }) {
           </div>
         )}
 
-        {!cid && !failed && (
-          // Every chore this page can compute is about a campaign. Saying so is
-          // better than an empty list, which would read as "nothing to do".
-          <p className="empty-state">
-            <span className="empty-what">Open a campaign first.</span>{" "}
-            What the app can notice is about the campaign you are playing.
-          </p>
-        )}
-
-        {cid && !failed && data && (
+        {!failed && data && (
           <p className="field-hint">
             {data.count === 0
               ? "Nothing outstanding. Anything ignored is below."
               : `${data.count} thing${data.count === 1 ? "" : "s"} the app noticed. `
                 + "Ignore anything you disagree with."}
+            {/* Not an empty state, and deliberately not instead of the list.
+                The library's own chores — an undescribed image backlog, a world
+                whose cast has no taglines — answer with no campaign open, so
+                there is something here to read; what is missing is the half
+                about the campaign being played. Saying only "open a campaign
+                first" here used to hide a list that had entries. */}
+            {!cid && (
+              <>
+                {" "}Chores about a campaign need one open:{" "}
+                <Link to="/">pick a campaign</Link>.
+              </>
+            )}
           </p>
         )}
 
@@ -189,7 +226,8 @@ export default function TodoView({ cid }: { cid: string | null }) {
             <h2 className="chore-group">{g}</h2>
             <ul className="chore-list">
               {chores.filter((c) => c.group === g).map((c) => (
-                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} cid={cid} />
+                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} cid={cid}
+                     showScope={showScope} />
               ))}
             </ul>
           </section>
@@ -204,7 +242,8 @@ export default function TodoView({ cid }: { cid: string | null }) {
             </p>
             <ul className="chore-list">
               {data.ignored.map((c) => (
-                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} restore cid={cid} />
+                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} restore cid={cid}
+                     showScope={showScope} />
               ))}
             </ul>
           </section>

@@ -60,6 +60,7 @@ keeps a crop that no longer frames anything. Stated rather than solved.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 from . import assets, atomic
@@ -203,6 +204,32 @@ def set_description(root: Path, aid: str, vid: str, name: str, text: str,
     set_in(_dir(root, aid, vid, base), name, text, names)
 
 
+def _walk(root: Path, base: str) -> Iterator[tuple[Path, Path]]:
+    """(record dir, version dir) for every stored version of `base`.
+
+    The traversal, in ONE place -- "where the images of a base live", which is
+    the sentence `catalog`'s docstring was written to keep from being said
+    twice. Said twice it drifts, and a base reaches the gallery but not the
+    describe queue, or the other way round.
+
+    Only the traversal. `catalog` and `undescribed_count` need very different
+    amounts of each version folder -- the gallery resolves an extension and a
+    cache-busting `v` per image, which are a stat apiece, and a count needs
+    neither -- so what they read inside a folder is theirs. What they must NOT
+    disagree on is which images count, and that is `assets.storable` plus key
+    presence in both, held to one answer by `test_image_descriptions.py`.
+    """
+    bdir = root / base
+    if not bdir.exists():
+        return
+    for rec in sorted(p for p in bdir.iterdir() if p.is_dir()):
+        adir = rec / "assets"
+        if not adir.is_dir():
+            continue
+        for vdir in sorted(p for p in adir.iterdir() if p.is_dir()):
+            yield rec, vdir
+
+
 def catalog(root: Path, base: str = "characters") -> list[dict]:
     """Every stored image of `base`, whether described or not — the gallery's
     listing (#200), and the walk ``undescribed`` filters.
@@ -223,27 +250,20 @@ def catalog(root: Path, base: str = "characters") -> list[dict]:
     added to the gallery and not to the describe queue, or the other way round.
     """
     out: list[dict] = []
-    bdir = root / base
-    if not bdir.exists():
-        return out
-    for rec in sorted(p for p in bdir.iterdir() if p.is_dir()):
-        adir = rec / "assets"
-        if not adir.is_dir():
-            continue
-        for vdir in sorted(p for p in adir.iterdir() if p.is_dir()):
-            reviewed = read_raw(vdir)
-            for img in assets.list_in(vdir):
-                # `assets.storable`, the same filter `_names` applies and for
-                # the same reason: a stranded `promote-tmp` is shown in the
-                # editor it belongs to on purpose, but it is a name no serve
-                # route answers, so a gallery tile over it is a broken image.
-                if not assets.storable(img["name"]):
-                    continue
-                text = reviewed.get(img["name"])
-                out.append({"id": rec.name, "vid": vdir.name, "name": img["name"],
-                            "ext": img["ext"], "v": img["v"],
-                            "described": img["name"] in reviewed,
-                            "description": text if isinstance(text, str) else ""})
+    for rec, vdir in _walk(root, base):
+        reviewed = read_raw(vdir)
+        for img in assets.list_in(vdir):
+            # `assets.storable`, the same filter `_names` applies and for
+            # the same reason: a stranded `promote-tmp` is shown in the
+            # editor it belongs to on purpose, but it is a name no serve
+            # route answers, so a gallery tile over it is a broken image.
+            if not assets.storable(img["name"]):
+                continue
+            text = reviewed.get(img["name"])
+            out.append({"id": rec.name, "vid": vdir.name, "name": img["name"],
+                        "ext": img["ext"], "v": img["v"],
+                        "described": img["name"] in reviewed,
+                        "description": text if isinstance(text, str) else ""})
     return out
 
 
@@ -259,3 +279,58 @@ def undescribed(root: Path, base: str = "characters") -> list[dict]:
     """
     return [{"id": i["id"], "vid": i["vid"], "name": i["name"]}
             for i in catalog(root, base) if not i["described"]]
+
+
+def undescribed_count(root: Path, base: str = "characters") -> int:
+    """How many images of `base` have no sidecar key, without building the list.
+
+    Same walk and the same two rules as `undescribed` -- `assets.storable`, and
+    key PRESENCE rather than non-empty text -- but it never asks `assets.list_in`
+    for an `ext` or a `v`, and those are a stat per image. That is the whole
+    difference, and on a whole-library sweep it is most of the cost: the to-do
+    list needs this number for every world on every read, and the list itself
+    only for the one world a reader expanded.
+
+    `test_image_descriptions.py` holds the two to the same answer. A cheap count
+    that can disagree with the list behind it is worse than no count -- it is
+    the stale number the to-do list exists to not have.
+    """
+    n = 0
+    for _rec, vdir in _walk(root, base):
+        # ONE directory read per version, answering both questions it is asked:
+        # which images are here, and is there a sidecar at all. Asking
+        # separately -- `read_raw`, which stats the sidecar before opening it,
+        # then a second scan for the names -- is two directory traversals per
+        # version folder of every record in the store, and on the whole-library
+        # sweep this exists for, that is the bulk of the time.
+        names, has_sidecar = assets.names_in(vdir, DESCRIPTIONS_FILE)
+        if not names:
+            continue
+        reviewed = read_raw(vdir) if has_sidecar else {}
+        for name in names:
+            if assets.storable(name) and name not in reviewed:
+                n += 1
+    return n
+
+
+def has_undescribed(root: Path, base: str = "characters") -> bool:
+    """Whether ANY image of `base` lacks a sidecar key — `undescribed_count`
+    stopping at the first one.
+
+    The rail's badge counts chores, not instances, so "is this backlog empty"
+    is the whole question it asks, and answering it by summing the backlog is
+    a whole-store walk per navigation to learn a bit. Where a backlog exists
+    this returns on the first record it opens.
+
+    It is only expensive in the case where it returns False, which is the case
+    where the chore does not appear at all -- and a library with no undescribed
+    art anywhere has little for the walk to visit.
+    """
+    for _rec, vdir in _walk(root, base):
+        names, has_sidecar = assets.names_in(vdir, DESCRIPTIONS_FILE)
+        if not names:
+            continue
+        reviewed = read_raw(vdir) if has_sidecar else {}
+        if any(assets.storable(n) and n not in reviewed for n in names):
+            return True
+    return False

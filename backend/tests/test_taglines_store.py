@@ -31,3 +31,31 @@ def test_build_prompt_includes_card_fields():
 
 def test_parse_output_takes_first_nonblank_line():
     assert taglines.parse_output("\n\nA silent snowleopardgirl.\nextra") == "A silent snowleopardgirl."
+
+
+# --- The stat-based sweep the to-do list counts with -------------------------
+
+
+def test_untagged_ids_matches_read_including_the_blank_write(monkeypatch, tmp_path):
+    """`untagged_ids` never opens the file, so this is what makes it sound.
+
+    `write` strips, so the only blank it can produce is a lone newline -- one
+    byte -- and that is exactly the case a size test has to get right. A
+    character written a real tagline has one; a character written "" has a file
+    and still counts as untagged, the same answer `read` gives.
+    """
+    root = _world_with_char(monkeypatch, tmp_path)
+    ids = characters.character_refs(root)
+    assert ids
+
+    def honest():
+        return {c for c in ids if not taglines.read(root, c)}
+
+    assert set(taglines.untagged_ids(root, ids)) == honest() == set(ids)
+
+    taglines.write(root, ids[0], "   ")          # strips to blank -> 1-byte file
+    assert taglines.tagline_path(root, ids[0]).exists()
+    assert set(taglines.untagged_ids(root, ids)) == honest() == set(ids)
+
+    taglines.write(root, ids[0], "Keeps the ledger, and the grudge.")
+    assert set(taglines.untagged_ids(root, ids)) == honest() == set()

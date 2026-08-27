@@ -149,8 +149,17 @@ def test_an_unreadable_review_sidecar_is_skipped_not_fatal(client, campaign):
     assert _shell(client, campaign)["campaign"]["unreviewed"] == 0
 
 
-def test_todo_is_null_until_its_own_slice(client):
-    assert _shell(client)["todo"] is None
+def test_todo_counts_the_library_with_no_campaign_open(client):
+    """A zero, not a null, and the difference is the point.
+
+    Every chore used to be about a campaign, so outside one the tail was `null`
+    -- no tail at all, which is the cost rule's answer for a number nobody can
+    answer cheaply. The library chores (an undescribed image backlog, a world
+    whose cast has no taglines) DO have an answer before a campaign is chosen,
+    so the badge now reports it. An empty store has none of them, which is a
+    real zero.
+    """
+    assert _shell(client)["todo"] == 0
 
 
 def test_sheets_is_null_when_no_module_is_bound(client, campaign):

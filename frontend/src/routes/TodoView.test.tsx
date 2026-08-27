@@ -10,7 +10,7 @@ import TodoView from "./TodoView";
 import type { Chore } from "../api/types";
 
 const chore = (over: Partial<Chore> = {}): Chore => ({
-  id: "sheets", group: "World content", severity: "warn", n: 3,
+  id: "sheets", scope: "campaign", group: "World content", severity: "warn", n: 3,
   what: "3 cast members without a sheet",
   why: "A character with no sheet cannot be rolled for.",
   fix: "/campaigns/run/sheets", fix_label: "Sheet coverage", ...over,
@@ -83,12 +83,66 @@ test("nothing outstanding reads as an answer", async () => {
   expect(await screen.findByText(/nothing outstanding/i)).toBeInTheDocument();
 });
 
-test("with no campaign open it says so rather than showing an empty list", async () => {
-  // Every chore this page computes is about a campaign; an empty list would
-  // read as "nothing to do", which is a different and wrong answer.
-  (api.getTodo as any).mockResolvedValue({ chores: [], ignored: [], count: 0 });
+test("with no campaign open the library's own chores are still listed", async () => {
+  // The page used to say "open a campaign first" INSTEAD of the list, because
+  // every chore it could compute was about a campaign. The library's own --
+  // an undescribed image backlog, a world whose cast has no taglines -- answer
+  // before a campaign is chosen, which is exactly when a freshly imported
+  // world's backlog is largest. Hiding them behind that line hid a list with
+  // entries in it.
+  (api.getTodo as any).mockResolvedValue({
+    chores: [chore({ id: "world-taglines", scope: "world", n: 4,
+                     what: "4 characters with no tagline", fix: "/worlds",
+                     fix_label: "The worlds" })],
+    ignored: [], count: 1,
+  });
   renderTodo(null);
-  expect(await screen.findByText(/open a campaign first/i)).toBeInTheDocument();
+  expect(await screen.findByText("4 characters with no tagline")).toBeInTheDocument();
+  // and the campaign half is named as missing rather than left to be inferred
+  expect(screen.getByText(/chores about a campaign need one open/i)).toBeInTheDocument();
+  // ...but not a scope chip on every row. With no campaign open they are all
+  // the library's, and a label repeated down the whole page says nothing.
+  expect(screen.queryByText(/your library/i)).toBeNull();
+});
+
+test("two chores with the same sentence are told apart by scope", async () => {
+  // `taglines` and `world-taglines` both read "N characters with no tagline".
+  // Before the chip the only thing separating them was a clause at the end of
+  // the `why` prose, and for a screen reader they were two controls with one
+  // accessible name.
+  (api.getTodo as any).mockResolvedValue({
+    chores: [
+      chore({ id: "taglines", scope: "campaign", n: 3,
+              what: "3 characters with no tagline" }),
+      chore({ id: "world-taglines", scope: "world", n: 4,
+              what: "4 characters with no tagline" }),
+    ],
+    ignored: [], count: 2,
+  });
+  renderTodo("run");
+
+  // The chip is part of each button's accessible name, which is what makes the
+  // two distinguishable rather than merely different-looking.
+  expect(await screen.findByRole("button", { name: /3 characters with no tagline this campaign/i }))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /4 characters with no tagline your library/i }))
+    .toBeInTheDocument();
+});
+
+test("the scope chip stays away when every chore is the same kind", async () => {
+  // It exists to tell two rows apart. Where there is nothing to tell apart it
+  // is a word on every row, which is a word the reader learns to skip.
+  (api.getTodo as any).mockResolvedValue({
+    chores: [
+      chore({ id: "sheets", scope: "campaign" }),
+      chore({ id: "owed", scope: "campaign", group: "Continuity", n: 2,
+              what: "2 open threads with a deadline" }),
+    ],
+    ignored: [], count: 2,
+  });
+  renderTodo("run");
+  await screen.findByText("3 cast members without a sheet");
+  expect(screen.queryByText(/this campaign/i)).toBeNull();
 });
 
 test("a failed read is not an empty list", async () => {

@@ -270,3 +270,45 @@ def test_truncate_finds_a_blank_line_written_with_crlf():
 def test_truncate_normalises_lone_carriage_returns():
     out = voice_anchors.truncate("a" + "\r\n" + "b", 100)
     assert "\r" not in out
+
+
+# --- The stat-based sweep the to-do list counts with -------------------------
+
+
+def test_anchorless_ids_matches_read_at_world_level(monkeypatch, tmp_path):
+    """`anchorless_ids` tests only that the file exists, and that is sound at
+    world level for one reason: `write` DELETES on blank rather than storing an
+    empty file, so a world root holds `voice_anchor.md` only where there is an
+    anchor."""
+    root = _root(monkeypatch, tmp_path)
+    ids = characters.character_refs(root)
+    assert ids
+
+    def honest():
+        return {c for c in ids if not voice_anchors.read(root, c)}
+
+    assert set(voice_anchors.anchorless_ids(root, ids)) == honest() == set(ids)
+
+    voice_anchors.write(root, ids[0], "Clipped. Never finishes a threat.")
+    assert set(voice_anchors.anchorless_ids(root, ids)) == honest() == set()
+
+    voice_anchors.write(root, ids[0], "   ")      # blank -> the file is removed
+    assert not voice_anchors.anchor_path(root, ids[0]).exists()
+    assert set(voice_anchors.anchorless_ids(root, ids)) == honest() == set(ids)
+
+
+def test_a_tombstone_is_why_the_sweep_is_world_scoped(monkeypatch, tmp_path):
+    """`disable` writes a file that MEANS "no anchor", and a stat cannot tell.
+
+    It is only ever called with a campaign root, which is why `anchorless_ids`
+    is sound for the world roots the to-do list hands it -- and why handing it a
+    campaign root would silently under-report. The guarantee is worth a test
+    because it is a property of the callers, not of this function.
+    """
+    root = _root(monkeypatch, tmp_path)
+    cid = characters.character_refs(root)[0]
+    voice_anchors.disable(root, cid)
+
+    assert voice_anchors.anchor_path(root, cid).exists()
+    assert voice_anchors.read(root, cid) == ""          # a tombstone: no anchor
+    assert voice_anchors.anchorless_ids(root, [cid]) == []   # the stat cannot see it

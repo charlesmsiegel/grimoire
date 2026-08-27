@@ -276,20 +276,20 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // count its button offers. World scope only — a tagline is a world-level
   // property of the character, and a campaign's roster is a view of one.
   const untagged = worldScope ? chars.filter((c) => !c.tagline) : [];
-  // The world's voice-anchor backlog. World scope only, exactly like
-  // `untagged` -- an anchor is a world-level property of the character.
+  // There is deliberately no `anchorless` beside `untagged`. The voice-anchor
+  // backlog moved to the To do page (`world-anchors`), where it is one chore
+  // among the rest and is counted server-side over the whole library rather
+  // than inferred from whichever roster this page happens to be showing --
+  // which is also what retires the `=== false` the filter here used to need, a
+  // guard against a response predating the field reporting everyone as
+  // anchorless.
   //
-  // REPORTED, never bulk-filled, and that is deliberate rather than an
-  // omission: an anchor now steers every scene it appears in, so a roster-wide
-  // unattended derive would write inferred voices into the prompt with the same
-  // authority as hand-written ones, at a volume nobody will review afterwards.
-  //
-  // `=== false`, NOT `!c.has_voice_anchor`: the field is optional, so a
-  // response or fixture predating it would otherwise report the whole roster as
-  // anchorless -- a backlog that is loudest when it knows least.
-  const anchorless = worldScope
-    ? chars.filter((c) => c.has_voice_anchor === false)
-    : [];
+  // What did NOT move is the rule that there is no button beside it: an anchor
+  // steers every scene the character appears in, so a roster-wide unattended
+  // derive would write inferred voices into the prompt with the same authority
+  // as hand-written ones, at a volume nobody will review afterwards. Taglines
+  // have such a button; anchors must not grow one.
+
   // The world-wide derive (#57): progress while it runs, its report afterwards.
   const [taglineBatch, setTaglineBatch] =
     useState<{ done: number; total: number; name: string } | null>(null);
@@ -1648,14 +1648,6 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                     onClick={() => void deriveTaglines()}>
               ▶ Derive taglines ({untagged.length})
             </button>
-          )}
-          {/* Reported, with no button beside it. See `anchorless`. */}
-          {worldScope && anchorless.length > 0 && (
-            <span className="field-hint">
-              {anchorless.length === 1
-                ? "1 character has no voice anchor"
-                : `${anchorless.length} characters have no voice anchor`}
-            </span>
           )}
           {taglineBatch && (<>
             <span className="field-hint">

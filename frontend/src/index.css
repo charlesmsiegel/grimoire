@@ -3853,6 +3853,15 @@ button.chore-what {
 }
 button.chore-what:hover { color: var(--accent); }
 .chore-caret { color: var(--muted); font-size: 10px; }
+/* Which body of content a chore is about, on the rows where that is the only
+   thing telling two of them apart. Quiet on purpose: it disambiguates the
+   sentence beside it and must not compete with it for the eye. */
+.chore-scope {
+  flex: none; font-family: var(--fm, monospace); font-size: 9.5px;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 3px; padding: 2px 7px;
+  white-space: nowrap;
+}
 .chore-items { margin: 8px 0 2px 18px; padding-left: 12px; border-left: 1px solid var(--line); }
 .chore-items ul { list-style: none; margin: 0; padding: 0; }
 .chore-items li { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; }

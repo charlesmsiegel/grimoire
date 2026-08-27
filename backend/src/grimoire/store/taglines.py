@@ -46,3 +46,42 @@ def parse_output(text: str) -> str:
         if ln.strip():
             return ln.strip()
     return ""
+
+
+def untagged_ids(root: Path, char_ids: list[str]) -> list[str]:
+    """Which of `char_ids` have no tagline, without reading a file per character.
+
+    It exists because the to-do list counts this for every character of every
+    world on every read. Opening the two sidecars per record instead costs
+    orders of magnitude more on a cold cache -- one small file per record,
+    spread across the whole store, is the worst shape a filesystem can be
+    handed, and the first read after a restart would stall the page the count
+    is drawn on.
+
+    Exact, not approximate, and the size test alone is not what makes it so.
+    A missing file is untagged; a file comfortably larger than any blank one
+    could be has content; and anything in between is opened and asked properly.
+    That third case is the one a bare threshold gets wrong -- `write` leaves a
+    lone line ending, which is one byte or two depending on the platform, and a
+    genuinely short tagline can be smaller than the bound. It is also rare, so
+    reading it costs nothing on the sweep this is here for.
+    """
+    out = []
+    for cid in char_ids:
+        try:
+            size = tagline_path(root, cid).stat().st_size
+        except OSError:
+            out.append(cid)          # no file at all
+            continue
+        if size > _AMBIGUOUS_MAX or read(root, cid):
+            continue
+        out.append(cid)
+    return out
+
+
+#: Above this, a tagline file cannot be one `write` blanked -- it leaves only a
+#: line ending. At or below it the file is read rather than guessed at, which
+#: is what keeps `untagged_ids` exact rather than nearly right. Deliberately
+#: loose: the cost of being generous is opening a handful of tiny files, and
+#: the cost of being tight is a wrong answer.
+_AMBIGUOUS_MAX = 8

@@ -106,10 +106,12 @@ export const APP_ROWS: RailRow[] = [
     id: "todo", label: "To do", icon: "✓",
     to: () => "/todo",
     match: (p) => isUnder(p, "/todo"),
-    // The count of what has NOT been waved off. `null` outside a campaign,
-    // because every chore the app can compute is about one -- and no tail is
-    // the right answer there rather than a zero that would read as "nothing
-    // to do".
+    // The count of what has NOT been waved off, campaign open or not. It used
+    // to be `null` outside one, because every chore the app could compute was
+    // about a campaign; the library's own chores -- an undescribed image
+    // backlog, a world whose cast has no taglines -- answer before a campaign
+    // is chosen, which is exactly when a freshly imported world's backlog is
+    // largest. A zero here is now a real zero rather than "cannot say".
     tail: (s) => num(s?.todo),
     tailLabel: (s) => lbl(s?.todo, "things noticed"),
   },

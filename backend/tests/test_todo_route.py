@@ -258,3 +258,188 @@ def test_a_voice_anchor_written_campaign_side_counts(client, campaign):
 
     store.overlay.set_voice_anchor(cid, aid, "Clipped. Counts aloud.")
     assert aid not in {i["id"] for i in _items(client, "anchors", cid)["items"]}
+
+
+# --- The library's own chores, and the two numbers that must not drift -------
+#
+# These arrived with the world chores (an undescribed image backlog, a world
+# whose cast has no taglines). Each of the three tests below holds a place where
+# the same fact is now computed twice, cheaply and honestly, and the cheap one
+# is what ships on the hot path.
+
+
+def _png() -> bytes:
+    """A real 2x2 PNG. `assets.put_image` sniffs the bytes for the extension."""
+    import base64
+
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGNgYGD4"
+        "z8DAwMDAAAANHQEDeuUOPQAAAABJRU5ErkJggg==")
+
+
+def _add_images(client, wid: str, chid: str, *names: str) -> None:
+    """Undescribed gallery art on a character, written through the store.
+
+    Through `assets.put_image` rather than the upload route: the route is
+    multipart and this is setting up a backlog, not exercising the upload.
+    """
+    root = store.worlds.paths.world_root(wid)
+    vid = client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["default_version"]
+    for n in names:
+        store.assets.put_image(root, chid, vid, n, _png(), "png")
+
+
+def _world_with_a_character(client, name: str = "Realm") -> tuple[str, str]:
+    wid = client.post("/api/worlds", json={"name": name}).json()["id"]
+    r = client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"})
+    assert r.status_code == 200, r.text
+    return wid, r.json()["character"]
+
+
+def test_world_chores_answer_with_no_campaign_open(client):
+    """The point of the whole scope split.
+
+    Every chore used to be about a campaign, so `/todo` outside one said "open
+    a campaign first" -- which is exactly wrong just after importing a world,
+    when its backlog is largest and no campaign exists yet.
+    """
+    _world_with_a_character(client)
+    body = _todo(client, "")
+    ids = {c["id"] for c in body["chores"]}
+    assert "world-taglines" in ids
+    assert body["count"] == len(body["chores"])
+    assert all(c["scope"] in ("world", "library") for c in body["chores"])
+
+
+def test_a_campaigns_own_world_is_reported_once_not_twice(client, campaign):
+    """`world-taglines` covers the worlds the open campaign does NOT use.
+
+    Its own world is already answered by `taglines`, over the effective
+    copy-on-write roster -- the more accurate of the two, since it can see a
+    tagline written campaign-side and a character the campaign deleted.
+    Reporting it from both sides would double-count the character and let the
+    two rows disagree.
+    """
+    cid, wid = campaign
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"})
+    body = _todo(client, cid)
+    ids = {c["id"] for c in body["chores"]}
+    assert "taglines" in ids
+    assert "world-taglines" not in ids
+
+    # A second world the campaign does not use is reported, from the world side.
+    _world_with_a_character(client, "Elsewhere")
+    ids = {c["id"] for c in _todo(client, cid)["chores"]}
+    assert {"taglines", "world-taglines"} <= ids
+
+
+def test_the_image_backlog_is_not_excluded_for_the_campaigns_world(client, campaign):
+    """The deliberate asymmetry beside the test above.
+
+    `world-describe` covers EVERY world including the open campaign's, because
+    nothing else reports an image backlog -- so excluding it there would hide
+    the backlog rather than de-duplicate it. This is the rule a later reader is
+    most likely to "fix" into consistency with `world-taglines`.
+    """
+    cid, wid = campaign
+    ch = client.post(f"/api/worlds/{wid}/characters",
+                     json={"name": "Winifred"}).json()["character"]
+    _add_images(client, wid, ch, "gallery_1")
+
+    ids = {c["id"] for c in _todo(client, cid)["chores"]}
+    assert "world-describe" in ids
+
+
+def test_the_badge_never_disagrees_with_the_page(client, campaign):
+    """`badge_count` short-circuits; `live` counts. They must still agree.
+
+    The rail reads the cheap one on every navigation and the page computes the
+    real totals. A badge saying 4 over a page showing 5 is precisely the stale
+    number this module is arranged to not have, arrived at from the other side.
+    """
+    from grimoire.routes import todo as todo_routes
+
+    cid, wid = campaign
+    ch = client.post(f"/api/worlds/{wid}/characters",
+                     json={"name": "Winifred"}).json()["character"]
+    _add_images(client, wid, ch, "gallery_1")
+    _world_with_a_character(client, "Elsewhere")
+
+    for c in (cid, "", "no-such-campaign"):
+        assert todo_routes.badge_count(c) == todo_routes.live(c)["count"], c
+
+
+def test_a_world_that_cannot_be_read_does_not_break_the_badge(client, campaign,
+                                                              monkeypatch):
+    """The page skips an unreadable world. The badge has to skip the same one.
+
+    `_world_describe_counts` wraps each world in a `try`, so a directory that
+    has gone unreadable -- permissions, a store mid-sync, a folder replaced
+    under the walk -- costs that world's backlog and nothing else. The badge
+    takes the short-circuit path instead, and if that path let the `OSError`
+    out it would not merely disagree with the page: the badge is computed for
+    `/api/shell`, so every navigation would 500 over a world the page below it
+    renders without.
+    """
+    from grimoire.routes import todo as todo_routes
+
+    cid, wid = campaign
+    ch = client.post(f"/api/worlds/{wid}/characters",
+                     json={"name": "Winifred"}).json()["character"]
+    _add_images(client, wid, ch, "gallery_1")
+    bad_wid, _ = _world_with_a_character(client, "Unreadable")
+    bad_root = store.worlds.paths.world_root(bad_wid)
+
+    real = store.image_descriptions.has_undescribed
+
+    def explode(root, base="characters"):
+        if root == bad_root:
+            raise PermissionError(f"cannot read {root}")
+        return real(root, base)
+
+    monkeypatch.setattr(store.image_descriptions, "has_undescribed", explode)
+
+    # Still the readable world's backlog, and still the same number the page
+    # would draw -- which `live` reaches without going through `explode`.
+    assert todo_routes.badge_count(cid) == todo_routes.live(cid)["count"]
+
+
+def test_expanding_a_world_chore_lists_worlds_not_images(client, campaign):
+    """A row per image would be hundreds of rows and would hit `ITEM_CAP`.
+
+    The world is the grain the fix is applied at -- the describe queue runs over
+    a whole world from its cast page -- so it is the grain the reader gets.
+    """
+    cid, wid = campaign
+    ch = client.post(f"/api/worlds/{wid}/characters",
+                     json={"name": "Winifred"}).json()["character"]
+    _add_images(client, wid, ch, "gallery_1", "gallery_2")
+
+    r = client.get("/api/todo/world-describe/items", params={"campaign": cid})
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert [i["id"] for i in items] == [wid]
+    assert items[0]["detail"] == "2 images"
+
+
+def test_a_world_chore_expands_with_no_campaign_open(client):
+    """The items route used to answer empty without a campaign. A library chore
+    has instances regardless, and an expansion that silently returns nothing is
+    a long way from the rule that caused it."""
+    _world_with_a_character(client)
+    r = client.get("/api/todo/world-taglines/items", params={"campaign": ""})
+    assert r.status_code == 200, r.text
+    labels = [i["label"] for i in r.json()["items"]]
+    assert labels == ["Winifred"]
+
+
+def test_a_world_chore_can_be_ignored(client):
+    """The ignore set is keyed by chore id and the new ids are in `KNOWN`."""
+    _world_with_a_character(client)
+    assert "world-taglines" in {c["id"] for c in _todo(client, "")["chores"]}
+    assert client.put("/api/todo/world-taglines/ignored",
+                      json={"ignored": True}).status_code == 200
+    body = _todo(client, "")
+    assert "world-taglines" not in {c["id"] for c in body["chores"]}
+    assert "world-taglines" in {c["id"] for c in body["ignored"]}
+    assert body["count"] == len(body["chores"])
