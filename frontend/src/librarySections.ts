@@ -42,6 +42,11 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
     count: () => api.listResponsePresets().then((r) => r.length),
   },
   {
+    to: "/calendars", label: "Calendars", unit: "calendar",
+    blurb: "How a world reckons time, and what each one observes.",
+    count: () => api.listCalendarProviders().then((r) => r.length),
+  },
+  {
     to: "/climates", label: "Climates", unit: "climate",
     blurb: "Weather models that regions and locations draw their seasons from.",
     count: () => api.listClimates().then((r) => r.climates.length),

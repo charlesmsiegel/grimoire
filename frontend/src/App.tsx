@@ -33,6 +33,7 @@ import WorldView from "./routes/WorldView";
 import ModulesView from "./routes/ModulesView";
 import StyleGuidesView from "./routes/StyleGuidesView";
 import ResponsePresetsView from "./routes/ResponsePresetsView";
+import CalendarsView from "./routes/CalendarsView";
 import ClimatesView from "./routes/ClimatesView";
 import ConnectionsView from "./routes/ConnectionsView";
 import ConfigView from "./routes/ConfigView";
@@ -199,6 +200,7 @@ function Shell(
         <Route path="/modules" element={<ModulesView />} />
         <Route path="/styles" element={<StyleGuidesView />} />
         <Route path="/response-presets" element={<ResponsePresetsView />} />
+        <Route path="/calendars" element={<CalendarsView />} />
         <Route path="/climates" element={<ClimatesView />} />
         <Route path="/connections" element={<ConnectionsView />} />
         <Route path="/config" element={<ConfigView />} />

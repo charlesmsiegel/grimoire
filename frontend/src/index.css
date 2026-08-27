@@ -3815,3 +3815,30 @@ a.column-back { text-decoration: none; }
   margin-top: 16px; padding: 16px 18px; border: 1px solid var(--line);
   border-radius: 4px; background: var(--panel);
 }
+
+/* ---- the library's calendars ---- */
+.cal-picker { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 12px; }
+.cal-picker .chip { cursor: pointer; }
+.cal-controls { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.cal-controls label { display: flex; flex-direction: column; gap: 4px;
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted); }
+.cal-controls input, .cal-controls select {
+  font-family: var(--fb, Georgia, serif); font-size: 14px; min-height: 34px;
+  padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px;
+  background: var(--panel); color: var(--ink);
+}
+.cal-months { list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.cal-month { border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel); padding: 12px 14px; }
+.cal-month-head { display: flex; align-items: baseline; justify-content: space-between;
+  border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.cal-month-name { font-family: var(--fd, serif); font-size: 15px; letter-spacing: 0.03em; }
+.cal-month-days { font-family: var(--fm, monospace); font-size: 9px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.cal-holidays { list-style: none; margin: 8px 0 0; padding: 0; }
+.cal-holidays li { display: flex; gap: 10px; align-items: baseline; padding: 2px 0; }
+.cal-holiday-day { flex: none; width: 22px; text-align: right;
+  font-family: var(--fm, monospace); font-size: 10px; color: var(--muted); }
+.cal-holiday-name { font-size: 13.5px; }

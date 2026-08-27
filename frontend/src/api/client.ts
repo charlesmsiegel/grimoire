@@ -54,6 +54,7 @@ import {
   type Timeline, type TimelineEvent, type UndescribedImage,
   type WeatherOverrideBody, type WeatherRangeBody,
   type WeatherSpan,
+  type CalendarYear,
   type ShellPayload, type TodoPayload,
   type WorldCampaignPending, type WorldMeta,
 } from "./types";
@@ -582,6 +583,19 @@ export const api = {
   getShell: (cid?: string | null) =>
     request<ShellPayload>("GET", `/api/shell${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`,
                           undefined, { fresh: true }),
+
+  /** Every registered calendar: the built-ins plus whatever the store's own
+   *  `calendars/` directory registers. */
+  listCalendarProviders: () =>
+    request<{ providers: { id: string; name: string }[] }>("GET", "/api/calendars/providers")
+      .then((r) => r.providers),
+  /** One calendar's months and observances for a year. `year` omitted means
+   *  the calendar's own current year, which is the only sane default when a
+   *  Hebrew year is ~5786 and a homebrew calendar's could be anything. */
+  getCalendarYear: (provider: string, year?: number, region = "") =>
+    request<CalendarYear>("GET",
+      `/api/calendars/${encodeURIComponent(provider)}/year`
+      + `?region=${encodeURIComponent(region)}${year ? `&year=${year}` : ""}`),
 
   /** Everything the app noticed, for the open campaign. */
   getTodo: (cid?: string | null) =>

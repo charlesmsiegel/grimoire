@@ -1928,3 +1928,28 @@ export type TodoPayload = {
   ignored: Chore[];
   count: number;
 };
+
+
+/** One calendar's year, as the Library's reference view reads it.
+ *
+ *  `year` is the calendar's OWN year — a Hebrew one is around 5786 — and is
+ *  what the server resolved when none was asked for, so a caller can adopt it
+ *  rather than assuming a Gregorian default that most calendars cannot
+ *  represent. */
+export type CalendarYear = {
+  id: string;
+  name: string;
+  year: number;
+  region: string;
+  months: { key: string; name: string; days: number }[];
+  holidays: {
+    name: string; fixed: number;
+    /** The key of the month it lands in, matching one of `months[].key`.
+     *  Resolved server-side, because the protocol's two halves disagree:
+     *  `months()` yields a key ("01", "Tishrei") and `describe()` a month
+     *  NUMBER (8, 12). Grouping by the number finds no month and silently
+     *  renders a year with no holidays in it. */
+    month_key: string;
+    month?: string | number; month_name?: string; day?: number; friendly?: string;
+  }[];
+};
