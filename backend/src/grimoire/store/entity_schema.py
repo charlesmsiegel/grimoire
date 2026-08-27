@@ -149,20 +149,26 @@ def referenceable(eid: str) -> bool:
     - `safe_id`: no separator, no colon, no traversal, no trailing dot or space.
     - No `REF_DELIMITER`: the field is a comma-separated list, so an id with a
       comma in it reads back as two refs.
-    - **No line break.** A ref is written into a single-line frontmatter
-      scalar, and a newline does not survive the round trip: `dump_frontmatter`
-      puts it straight into the value and `parse_frontmatter` reads the rest of
-      the line as the whole of it, so `characters:a\nb` is stored, reported
-      saved, and reads back as the truncated `'characters:a` -- stray quote
-      included, and with the record's own body boundary one line further down
-      than it was. A save that reports success and corrupts the file is the
-      worst failure on this surface, and it is why this is not simply `safe_id`
-      plus a comma check.
+    - **Nothing `str.splitlines` treats as a line boundary.** A ref is written
+      into a single-line frontmatter scalar, and such a character does not
+      survive the round trip: `dump_frontmatter` puts it straight into the
+      value and `parse_frontmatter` -- which splits with `splitlines` -- reads
+      the rest of the line as the whole of it, so `characters:a\nb` is stored,
+      reported saved, and reads back as the truncated `'characters:a`, stray
+      quote included and with the record's own body boundary one line further
+      down than it was. A save that reports success and corrupts the file is
+      the worst failure on this surface.
 
-      Line breaks ONLY, and the last test below is why: a tab round-trips
-      intact, so rejecting one would be a rule with no failure behind it. The
-      rule is exactly "what the frontmatter writer cannot carry", held against
-      the real writer rather than asserted.
+      **`splitlines` itself, not a list of characters.** That is the point of
+      writing it this way: `\n` and `\r` are the obvious two, and the first
+      draft here checked exactly those -- leaving vertical tab, form feed, the
+      three file/group/record separators, NEL and the two Unicode line/
+      paragraph separators all accepted and all corrupting. Eight ways to get
+      it wrong, and the only way not to is to ask the same question the parser
+      asks. A tab, by contrast, round-trips intact and is accepted: the rule is
+      exactly "what the frontmatter writer cannot carry", held against the real
+      writer by `test_referenceable_agrees_with_what_frontmatter_can_carry`
+      rather than asserted.
 
     Said once, here, so the picker and the save boundary cannot drift: a rule
     living in only one of them means a candidate the UI offers and the backend
@@ -173,7 +179,7 @@ def referenceable(eid: str) -> bool:
     left where it is rather than tightened from here.)
     """
     return (safe_id(eid) and REF_DELIMITER not in eid
-            and "\n" not in eid and "\r" not in eid)
+            and eid.splitlines() == [eid])
 
 
 def parse_refs(value: object) -> list[str]:

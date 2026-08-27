@@ -520,12 +520,12 @@ def test_a_field_does_not_follow_a_record_into_a_kind_it_cannot_name(monkeypatch
     # it now is: the thing it named is no longer something it can name.
     wid, wroot = _world(monkeypatch, tmp_path)
     entities.create_entity(wroot, "locations", "Tidewatch")
-    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+    entities.create_entity(wroot, "groups", "The Watch",
                            fields={"headquarters": "locations:tidewatch"})
     entities.create_entity(wroot, "creatures", "Marsh Wyrm",
                            fields={"habitat": "locations:tidewatch, locations:elsewhere"})
     reclassify.world_entity(wid, "locations", "tidewatch", "lore")
-    hq = entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+    hq = entities.read_entity(wroot, "groups", "the-watch")["meta"]["headquarters"]
     habitat = entities.read_entity(wroot, "creatures", "marsh-wyrm")["meta"]["habitat"]
     assert hq == "locations:tidewatch"
     assert habitat == "locations:tidewatch, locations:elsewhere"
@@ -560,10 +560,10 @@ def test_a_campaign_field_does_not_follow_into_a_kind_it_cannot_name(monkeypatch
     # repoint would diverge a world record from the library *and* leave the
     # copy unsaveable.
     _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
-    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+    entities.create_entity(wroot, "groups", "The Watch",
                            fields={"headquarters": "lore:tidewatch"})
     reclassify.campaign_entity(cid, "lore", "tidewatch", "creatures")
-    assert (overlay.read_entity(cid, "groups", "saltmarch-watch")["meta"]["headquarters"]
+    assert (overlay.read_entity(cid, "groups", "the-watch")["meta"]["headquarters"]
             == "lore:tidewatch")
     assert not (overlay.croot_of(cid) / "groups" / "saltmarch-watch.md").exists()
 
@@ -590,10 +590,10 @@ def test_deleting_a_target_leaves_the_ref_dangling_rather_than_scrubbing_it(
     # itself if the record is re-created under its old name.
     _wid, wroot = _world(monkeypatch, tmp_path)
     entities.create_entity(wroot, "locations", "Tidewatch")
-    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+    entities.create_entity(wroot, "groups", "The Watch",
                            fields={"headquarters": "locations:tidewatch"})
     entities.delete_entity(wroot, "locations", "tidewatch")
-    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+    assert (entities.read_entity(wroot, "groups", "the-watch")["meta"]["headquarters"]
             == "locations:tidewatch")
     # ...and re-creating it under the same name reclaims the id, so the ref resolves again
     assert entities.create_entity(wroot, "locations", "Tidewatch") == "tidewatch"
@@ -603,9 +603,39 @@ def test_a_campaign_tombstone_does_not_edit_the_worlds_ref(monkeypatch, tmp_path
     # The scope argument: the delete is one campaign's, the referring record is
     # the world's, and every other campaign shares it.
     _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
-    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+    entities.create_entity(wroot, "groups", "The Watch",
                            fields={"headquarters": "lore:tidewatch"})
     overlay.delete_entity(cid, "lore", "tidewatch")
-    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+    assert (entities.read_entity(wroot, "groups", "the-watch")["meta"]["headquarters"]
             == "lore:tidewatch")
     assert not (overlay.croot_of(cid) / "groups" / "saltmarch-watch.md").exists()
+
+
+def test_a_referring_record_deleted_mid_sweep_does_not_500_the_move(monkeypatch, tmp_path):
+    # Both sweeps read a listing and then write each record it named, with no
+    # lock over the gap: another process deleting one in between is a miss, not
+    # an error. Uncaught it is a 500 on a reclassify that ALREADY happened,
+    # with every dependent campaign skipped -- the exact duplicate/stale state
+    # this function exists to prevent.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "lore", "tidewatch")
+
+    def vanished(*_a, **_k):
+        raise entities.EntityNotFound("groups/gone")
+
+    monkeypatch.setattr(reclassify.entities, "rewrite_ref_fields", vanished)
+    out = reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert out == {"id": "tidewatch", "campaigns": [cid]}
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+    assert overlay.list_entities(cid, "lore") == []          # no stale copy left behind
+
+
+def test_a_campaign_side_sweep_survives_a_vanished_referring_record(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+
+    def vanished(*_a, **_k):
+        raise entities.EntityNotFound("groups/gone")
+
+    monkeypatch.setattr(reclassify.overlay, "rewrite_ref_fields", vanished)
+    assert reclassify.campaign_entity(cid, "lore", "tidewatch", "locations") == "tidewatch"
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]

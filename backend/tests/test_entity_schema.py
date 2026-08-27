@@ -236,14 +236,22 @@ def test_referenceable_still_carries_everything_safe_id_rejects():
         assert not entity_schema.referenceable(bad), bad
 
 
+# Every character `str.splitlines` treats as a line boundary. Enumerated rather
+# than sampled: the first version of this rule checked \n and \r, and the other
+# eight went through silently.
+LINE_BOUNDARIES = ("\n", "\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e",
+                   "\x85", "\u2028", "\u2029")
+
+
 def test_a_line_break_in_a_ref_id_is_rejected():
     # A ref lives in a single-line frontmatter scalar. A newline does not
     # survive the round trip: it is written into the value, the parser reads
     # only the first line, and the record comes back truncated -- a save that
     # reports success and corrupts the file.
-    assert not entity_schema.referenceable("a\nb")
-    assert not entity_schema.referenceable("a\rb")
-    assert entity_schema.invalid_values("items", {"holder": "characters:a\nb"}) == ["holder"]
+    for sep in LINE_BOUNDARIES:
+        assert not entity_schema.referenceable(f"a{sep}b"), repr(sep)
+        assert entity_schema.invalid_values(
+            "items", {"holder": f"characters:a{sep}b"}) == ["holder"], repr(sep)
 
 
 def test_a_character_that_survives_the_round_trip_is_not_rejected():
@@ -256,7 +264,8 @@ def test_referenceable_agrees_with_what_frontmatter_can_carry():
     # The rule stated as the property it exists for, against the real writer,
     # so a change to either side has to keep them in step.
     from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-    for eid in ("saltmarch", "salt-march", "a\nb", "a\rb", "a\tb", "a b"):
+    ok = ("saltmarch", "salt-march", "a\tb", "a b", "a.b")
+    for eid in (*ok, *(f"a{sep}b" for sep in LINE_BOUNDARIES)):
         value = f"locations:{eid}"
         back = parse_frontmatter(dump_frontmatter({"name": "X", "habitat": value}, "b"))[0]
         assert entity_schema.referenceable(eid) == (back.get("habitat") == value), eid

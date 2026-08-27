@@ -1342,3 +1342,37 @@ test("a ref really is reported as deleted once the lists have loaded", async () 
   expect(within(side).getByText("characters:mara").getAttribute("title"))
     .toMatch(/no longer exists/i);
 });
+
+test("an empty picker whose listing failed says so instead of claiming the store is empty", async () => {
+  // A single-kind field is the sharp case: its one listing failing left the
+  // picker reading "No locations yet." — a request outage presented as an
+  // empty library, with no error and nothing to retry.
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    kind === "locations" ? Promise.reject(new Error("network")) : Promise.resolve([]));
+  render(<EntityEditor wid="w" kind="creatures" />);
+  expect(await screen.findByText(/could not load the list of records/i)).toBeInTheDocument();
+  expect(screen.queryByText(/No locations yet/i)).toBeNull();
+});
+
+test("an empty picker whose listing succeeded still says the store is empty", async () => {
+  // The claim is legitimate when a listing actually arrived, so the fix must
+  // not turn every empty picker into a fake error.
+  (api.listEntities as any).mockResolvedValue([]);
+  render(<EntityEditor wid="w" kind="creatures" />);
+  expect(await screen.findByText(/No locations yet/i)).toBeInTheDocument();
+});
+
+test("a record whose id carries a line separator is not offered as a candidate", async () => {
+  // Every separator `parse_frontmatter`'s splitlines recognises, not just \n.
+  const seps = ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", " ", " "];
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations"
+      ? [...seps.map((c, i) => ({ id: `a${c}b${i}`, name: `Bad ${i}` })),
+         { id: "realm", name: "Realm" }]
+      : []));
+  render(<EntityEditor wid="w" kind="creatures" />);
+  const habitat = await screen.findByRole("group", { name: "Habitat" });
+  expect(within(habitat).getByLabelText("Realm")).toBeInTheDocument();
+  seps.forEach((_c, i) =>
+    expect(within(habitat).queryByLabelText(`Bad ${i}`)).toBeNull());
+});
