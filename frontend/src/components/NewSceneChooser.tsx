@@ -6,12 +6,39 @@ import { SceneImport } from "./SceneImport";
 import type { SceneDraft } from "./sceneDraft";
 import { useSceneSuggestions } from "./useSceneSuggestions";
 
+/** Scene suggestions are off.
+ *
+ *  Picking a scene mode used to spend a generation before the reader had asked
+ *  for anything: the ranking is an LLM call, and it fired on the way to the
+ *  picker whether or not the ideas were wanted. That is a cost the reader
+ *  neither chose nor saw coming, on the path they take to start every scene.
+ *
+ *  Off rather than deleted, because nothing here is wrong — the hook, the
+ *  ranking and the cards all work, and the question is whether the call should
+ *  be automatic. Re-enabling is this constant; making it a button the reader
+ *  presses is the better answer and is filed as its own piece of work.
+ *
+ *  `useSceneSuggestions` already draws the distinction this leans on: `null`
+ *  means "still generating" and `[]` means "nothing to offer", so a hook that
+ *  is never ready reports `[]` and the picker drops its generated section
+ *  entirely rather than waiting on a call that will not come. Greetings and a
+ *  blank scene are still offered, which is what the picker showed anyone
+ *  without a model configured all along. */
+const SUGGESTIONS_ENABLED = false;
+
 /** Mode → pick → confirm → create. Props are unchanged from the
  *  commit-on-click version, so CampaignView's usage is untouched. */
-export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
+export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated,
+                                  suggest = SUGGESTIONS_ENABLED }: {
   cid: string;
   afterSid: string | null;          // ranking reference: the selected (or latest) scene
   ready: boolean;
+  /** Whether picking a mode may spend a generation on ideas. Defaults to the
+   *  constant above, which is what production gets; it is a prop at all so the
+   *  ranking path stays under test while it is switched off — the code is
+   *  dormant, not gone, and a dormant path with no coverage is one that has
+   *  quietly stopped working by the time anyone turns it back on. */
+  suggest?: boolean;
   /** `createdSid` is set only when a scene was actually created before this
    *  dismissal (a soft-failure "salvaged" scene abandoned via Escape/backdrop
    *  rather than "Continue to scene") -- see `salvagedSid` below. */
@@ -70,7 +97,8 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // and an imported scene has a title, a cast and a transcript of its own, so
   // picking that card must not spend a call on ideas nothing will read (#92).
   const playable = mode === "pc" || mode === "offscreen";
-  const suggestionsState = useSceneSuggestions(cid, afterSid, ready && playable, mode === "offscreen");
+  const suggestionsState = useSceneSuggestions(
+    cid, afterSid, suggest && ready && playable, mode === "offscreen");
 
   // CampaignView reuses this component across a `cid` navigation -- it stays
   // mounted, `chooserOpen` is untouched by the switch, so without an explicit
