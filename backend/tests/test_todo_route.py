@@ -206,3 +206,55 @@ def test_a_capped_list_reports_that_it_was_capped(client, campaign, monkeypatch)
     assert len(body["items"]) == 2
     assert body["total"] == 4
     assert body["truncated"] is True
+
+
+# ---- the campaign is copy-on-write over its world (#248) ----
+#
+# These three are the bug this section exists to keep out, from its three
+# sides. The chore walked the WORLD root, which gets all three wrong at once:
+# it sees records the campaign deleted, and it cannot see the per-file sidecars
+# that are where a played campaign's taglines and anchors actually live.
+
+def _world_character(client, wid: str, name: str) -> str:
+    return client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": name}).json()["character"]
+
+
+def test_a_character_the_campaign_deleted_is_not_its_problem(client, campaign):
+    """A chore about somebody who is not in the campaign is one the reader can
+    neither act on nor dismiss."""
+    cid, wid = campaign
+    keep = _world_character(client, wid, "Mara Vance")
+    gone = _world_character(client, wid, "Winifred Ash")
+    store.overlay.add_deleted(cid, f"characters/{gone}")
+
+    listed = {i["id"] for i in _items(client, "taglines", cid)["items"]}
+    assert keep in listed
+    assert gone not in listed
+
+
+def test_a_tagline_written_campaign_side_counts(client, campaign):
+    """`tagline.md` is a sidecar that overlays PER FILE.
+
+    Reading the world's `character.md` frontmatter sees none of them, so every
+    character whose tagline was written inside a campaign was reported as
+    lacking one -- which, in a campaign that has been played, is most of them.
+    """
+    cid, wid = campaign
+    aid = _world_character(client, wid, "Mara Vance")
+    assert aid in {i["id"] for i in _items(client, "taglines", cid)["items"]}
+
+    store.taglines.write(store.campaigns.paths.campaign_root(cid), aid,
+                         "Harbour clerk who counts what the tide leaves.")
+    assert aid not in {i["id"] for i in _items(client, "taglines", cid)["items"]}
+
+
+def test_a_voice_anchor_written_campaign_side_counts(client, campaign):
+    """Same shape, and `set_voice_anchor` is the one writer -- it exists so
+    nothing outside the overlay hands `voice_anchors` a raw campaign root."""
+    cid, wid = campaign
+    aid = _world_character(client, wid, "Mara Vance")
+    assert aid in {i["id"] for i in _items(client, "anchors", cid)["items"]}
+
+    store.overlay.set_voice_anchor(cid, aid, "Clipped. Counts aloud.")
+    assert aid not in {i["id"] for i in _items(client, "anchors", cid)["items"]}

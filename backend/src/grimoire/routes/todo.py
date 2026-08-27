@@ -37,72 +37,51 @@ def _slugish(name: str) -> str:
 
 
 def _character_gaps(cid: str) -> tuple[list[dict], list[dict]]:
-    """(no tagline, no voice anchor) across the campaign's world roster.
+    """(no tagline, no voice anchor) across the campaign's EFFECTIVE roster.
 
-    Returns the characters, not counts. A chore's headline is `len()` of one of
-    these; expanding it shows the list. One sweep answers both, because "how
-    many" and "which ones" are the same walk and doing it twice would make
-    opening a chore cost what building the page cost.
+    Through `overlay.list_characters`, and that is the whole point of this
+    function rather than an implementation note. A campaign is copy-on-write
+    over its world, so reading the world root directly gets three things wrong
+    at once, and this got all three:
 
-    One frontmatter head read and one stat per character -- deliberately not
-    `characters.list_characters`, which also loads every card summary and image
-    listing to build a browse grid. That is the right read for a page showing
-    the roster and the wrong one for counting two fields.
+    - a character the campaign DELETED is still in the world, so it was
+      reported as missing a tagline in a campaign it is not in;
+    - `tagline.md` and `voice_anchor.md` are sidecars that overlay per file, so
+      a tagline written campaign-side did not count and the character was
+      reported as lacking one;
+    - a materialized actor is authoritative for its own meta, so a campaign
+      copy's tagline was invisible behind the world's.
+
+    `list_characters` already resolves both fields -- `tagline` per file and
+    `has_voice_anchor` off one directory scan rather than a read per row -- so
+    this is also cheaper than the walk it replaces.
     """
     try:
-        root = store.campaigns.read.world_root_of(cid)
+        rows = store.overlay.list_characters(cid)
     except (store.CampaignNotFound, OSError):
-        return [], []
-    d = root / "characters"
-    if not d.exists():
         return [], []
     no_tagline: list[dict] = []
     no_anchor: list[dict] = []
-    for cd in sorted(p for p in d.iterdir() if p.is_dir()):
-        meta_path = cd / "character.md"
-        if not meta_path.exists() or not store.paths.safe_id(cd.name):
-            continue
-        try:
-            meta = store.frontmatter.parse_frontmatter_head(meta_path)
-        except OSError:
-            continue
-        name = str(meta.get("name", cd.name))
+    for row in rows:
+        name = str(row.get("name") or row["id"])
         # The slug, when it is not just the name lowercased. It is what
         # addresses the character in a ref and what names the file, so it is
         # the one fact that turns a list of names into something you can act
         # on -- and a roster with two Maras is exactly when it matters.
-        slug = cd.name if cd.name != _slugish(name) else ""
-        if not str(meta.get("tagline", "")).strip():
-            no_tagline.append({"id": cd.name, "label": name, "detail": slug})
-        # `anchor_path` refuses an id it would not serve back; an unusable one
-        # is not a character missing an anchor, so it is skipped rather than
-        # counted.
-        try:
-            if not store.voice_anchors.anchor_path(root, cd.name).exists():
-                no_anchor.append({"id": cd.name, "label": name, "detail": slug})
-        except (ValueError, OSError):
-            pass
+        slug = row["id"] if row["id"] != _slugish(name) else ""
+        if not str(row.get("tagline") or "").strip():
+            no_tagline.append({"id": row["id"], "label": name, "detail": slug})
+        if not row.get("has_voice_anchor"):
+            no_anchor.append({"id": row["id"], "label": name, "detail": slug})
     return no_tagline, no_anchor
 
 
-def _pending_reviews(cid: str) -> tuple[int, list[str]]:
-    """Proposals waiting, and the scenes holding them. A listing, not a scan."""
-    total, sids = 0, []
-    d = store.scenes.paths._scenes_dir(cid)   # paths-ok: the resolver itself
-    if not d.exists():
-        return 0, []
-    for p in sorted(d.glob("*.review.json")):
-        try:
-            rec = json.loads(p.read_text(encoding="utf-8"))
-            total += len(rec.get("review", {}).get("edits", []))
-        except (OSError, ValueError, AttributeError):
-            continue
-        sids.append(p.name[: -len(".review.json")])
-    return total, sids
-
-
 def _chore_unreviewed(cid: str, scenes: list[dict]) -> dict | None:
-    n, sids = _pending_reviews(cid)
+    # Off the same walk the expansion uses, so the count on the row and the
+    # rows behind it cannot disagree about what is waiting.
+    waiting = _items_unreviewed(cid)
+    n = sum(int(w.get("proposals", 0)) for w in waiting)
+    sids = [w["id"] for w in waiting]
     if not n:
         return None
     return {
@@ -273,6 +252,9 @@ def _items_unreviewed(cid: str) -> list[dict]:
         detail = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
         out.append({"id": sid, "label": titles.get(sid, sid),
                     "detail": detail or f"{len(edits)} proposals",
+                    # Carried so the chore's headline count comes off this same
+                    # walk. Harmless on the wire; the page ignores it.
+                    "proposals": len(edits),
                     "fix": f"/campaigns/{cid}/scenes/{sid}"})
     return out
 
