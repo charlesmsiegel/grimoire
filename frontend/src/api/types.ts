@@ -1921,6 +1921,24 @@ export type Chore = {
   fix_label: string;
 };
 
+/** One instance behind a chore's count — the character with no tagline, the
+ *  thread that is owed. `detail` is what makes the row worth expanding to:
+ *  a list of bare names is the count again, spelled out. */
+export type ChoreItem = {
+  id: string;
+  label: string;
+  detail: string;
+  fix?: string;
+};
+
+export type ChoreItems = {
+  items: ChoreItem[];
+  total: number;
+  /** True when `items` is a capped view of `total`. Stated rather than left to
+   *  be inferred from a short list, which reads as a complete one. */
+  truncated: boolean;
+};
+
 export type TodoPayload = {
   chores: Chore[];
   /** Waved off, kept with a Restore so the decision is reversible rather than

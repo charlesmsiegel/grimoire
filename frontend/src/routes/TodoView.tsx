@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
-import type { Chore, TodoPayload } from "../api/types";
+import type { Chore, ChoreItems, TodoPayload } from "../api/types";
 import { PageShell, ColumnSection } from "../components/PageShell";
 
 /** Everything the app noticed that would make play better.
@@ -21,28 +21,82 @@ import { PageShell, ColumnSection } from "../components/PageShell";
  *  A dismissal that cannot be undone is one nobody dares make.
  */
 
-function Row({ chore, onIgnore, busy, restore }: {
+function Row({ chore, onIgnore, busy, restore, cid }: {
   chore: Chore; onIgnore: (id: string, on: boolean) => void;
-  busy: boolean; restore?: boolean;
+  busy: boolean; restore?: boolean; cid: string | null;
 }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<ChoreItems | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  // Fetched when the row is first opened, and kept afterwards. Naming every
+  // instance of every chore up front is the cost the list exists to avoid —
+  // `sheets` sweeps the cast, `taglines` walks the roster — and the reader
+  // expands one at a time.
+  useEffect(() => {
+    if (!open || items || failed) return;
+    let live = true;
+    api.getChoreItems(chore.id, cid)
+      .then((r) => { if (live) setItems(r); })
+      .catch(() => { if (live) setFailed(true); });
+    return () => { live = false; };
+  }, [open, items, failed, chore.id, cid]);
+
+  const panelId = `chore-items-${chore.id}`;
   return (
     <li className={"chore chore-" + chore.severity}>
-      <span className="chore-dot" aria-hidden />
-      <div className="chore-body">
-        <div className="chore-what">{chore.what}</div>
-        {/* The half a bare count cannot carry. A number with no consequence
-            attached is a number the reader learns to skip. */}
-        <div className="chore-why">{chore.why}</div>
+      <div className="chore-line">
+        <span className="chore-dot" aria-hidden />
+        <div className="chore-body">
+          <button type="button" className="chore-what" aria-expanded={open}
+                  aria-controls={panelId} onClick={() => setOpen((v) => !v)}>
+            <span className="chore-caret" aria-hidden>{open ? "▾" : "▸"}</span>
+            {chore.what}
+          </button>
+          {/* The half a bare count cannot carry. A number with no consequence
+              attached is a number the reader learns to skip. */}
+          <div className="chore-why">{chore.why}</div>
+        </div>
+        <div className="chore-actions">
+          {chore.fix && !restore && (
+            <Link className="chore-fix" to={chore.fix}>{chore.fix_label} →</Link>
+          )}
+          <button type="button" className="chore-ignore" disabled={busy}
+                  onClick={() => onIgnore(chore.id, !restore)}>
+            {restore ? "Restore" : "Ignore"}
+          </button>
+        </div>
       </div>
-      <div className="chore-actions">
-        {chore.fix && !restore && (
-          <Link className="chore-fix" to={chore.fix}>{chore.fix_label} →</Link>
-        )}
-        <button type="button" className="chore-ignore" disabled={busy}
-                onClick={() => onIgnore(chore.id, !restore)}>
-          {restore ? "Restore" : "Ignore"}
-        </button>
-      </div>
+
+      {open && (
+        <div className="chore-items" id={panelId}>
+          {failed && <p className="field-hint">These could not be read.</p>}
+          {!failed && !items && <p className="field-hint">…</p>}
+          {items && items.items.length === 0 && (
+            // The count said there was something. An empty expansion means the
+            // two disagree, which is worth saying rather than showing nothing.
+            <p className="field-hint">Nothing to list here.</p>
+          )}
+          {items && items.items.length > 0 && (
+            <ul>
+              {items.items.map((it) => (
+                <li key={it.id}>
+                  {it.fix
+                    ? <Link className="chore-item-label" to={it.fix}>{it.label}</Link>
+                    : <span className="chore-item-label">{it.label}</span>}
+                  {it.detail && <span className="chore-item-detail">{it.detail}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {items?.truncated && (
+            // A cap nobody mentions reads as "that is all of them".
+            <p className="field-hint">
+              Showing {items.items.length} of {items.total}.
+            </p>
+          )}
+        </div>
+      )}
     </li>
   );
 }
@@ -135,7 +189,7 @@ export default function TodoView({ cid }: { cid: string | null }) {
             <h2 className="chore-group">{g}</h2>
             <ul className="chore-list">
               {chores.filter((c) => c.group === g).map((c) => (
-                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} />
+                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} cid={cid} />
               ))}
             </ul>
           </section>
@@ -150,7 +204,7 @@ export default function TodoView({ cid }: { cid: string | null }) {
             </p>
             <ul className="chore-list">
               {data.ignored.map((c) => (
-                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} restore />
+                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} restore cid={cid} />
               ))}
             </ul>
           </section>

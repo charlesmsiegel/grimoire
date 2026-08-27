@@ -54,7 +54,7 @@ import {
   type Timeline, type TimelineEvent, type UndescribedImage,
   type WeatherOverrideBody, type WeatherRangeBody,
   type WeatherSpan,
-  type CalendarYear,
+  type CalendarYear, type ChoreItems,
   type ShellPayload, type TodoPayload,
   type WorldCampaignPending, type WorldMeta,
 } from "./types";
@@ -601,6 +601,14 @@ export const api = {
   getTodo: (cid?: string | null) =>
     request<TodoPayload>("GET", `/api/todo${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`,
                          undefined, { fresh: true }),
+  /** The instances behind one chore's count. A second call rather than part of
+   *  the list, because naming every instance of every chore is the cost the
+   *  list is built to avoid — the reader expands one. */
+  getChoreItems: (choreId: string, cid?: string | null) =>
+    request<ChoreItems>("GET",
+      `/api/todo/${encodeURIComponent(choreId)}/items`
+      + `${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`, undefined, { fresh: true }),
+
   /** Wave a chore off, or take it back. `notifyShell` because the rail's badge
    *  is the count of what is NOT ignored, and this moves it without a
    *  navigation. */

@@ -137,3 +137,72 @@ def test_no_campaign_asked_for_answers_an_empty_list(client):
     r = client.get("/api/todo")
     assert r.status_code == 200
     assert r.json() == {"chores": [], "ignored": [], "count": 0}
+
+
+def _items(client, chore_id: str, cid: str) -> dict:
+    r = client.get(f"/api/todo/{chore_id}/items", params={"campaign": cid})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_expanding_a_chore_names_its_instances(client, campaign):
+    """A count says how much is undone; it never says which.
+
+    The whole reason to expand: "2 scenes are open at once" is a number, and
+    the two titles are the thing a reader can act on.
+    """
+    cid, _ = campaign
+    made = [client.post(f"/api/campaigns/{cid}/scenes",
+                        json={"title": t}).json()["id"]
+            for t in ("The Lower Step", "The Weir")]
+    body = _items(client, "open-scenes", cid)
+    assert body["total"] == 2
+    assert {i["label"] for i in body["items"]} == {"The Lower Step", "The Weir"}
+    # Each instance can be gone to, which is what makes the list worth opening
+    # rather than reading.
+    assert {i["fix"] for i in body["items"]} == {
+        f"/campaigns/{cid}/scenes/{sid}" for sid in made}
+
+
+def test_an_instance_carries_detail_not_just_a_name(client, campaign):
+    """A list of bare names is the count again, spelled out."""
+    cid, _ = campaign
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The Lower Step"})
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The Weir"})
+    for item in _items(client, "open-scenes", cid)["items"]:
+        assert item["detail"]
+
+
+def test_the_counts_and_the_instances_agree(client, campaign):
+    """Two computations of one fact, and the page shows them together -- a
+    chore reading "2" that expands to three rows is worse than either."""
+    cid, _ = campaign
+    for t in ("A", "B", "C"):
+        client.post(f"/api/campaigns/{cid}/scenes", json={"title": t})
+    chore = next(c for c in _todo(client, cid)["chores"] if c["id"] == "open-scenes")
+    assert chore["n"] == _items(client, "open-scenes", cid)["total"]
+
+
+def test_items_for_an_unknown_chore_are_refused(client, campaign):
+    cid, _ = campaign
+    assert client.get("/api/todo/not-a-chore/items",
+                      params={"campaign": cid}).status_code == 400
+
+
+def test_items_with_no_campaign_are_empty_rather_than_an_error(client):
+    r = client.get("/api/todo/open-scenes/items")
+    assert r.status_code == 200
+    assert r.json() == {"items": [], "total": 0, "truncated": False}
+
+
+def test_a_capped_list_reports_that_it_was_capped(client, campaign, monkeypatch):
+    """A short list nobody labels reads as a complete one."""
+    from grimoire.routes import todo as todo_routes
+    monkeypatch.setattr(todo_routes, "ITEM_CAP", 2)
+    cid, _ = campaign
+    for t in ("A", "B", "C", "D"):
+        client.post(f"/api/campaigns/{cid}/scenes", json={"title": t})
+    body = _items(client, "open-scenes", cid)
+    assert len(body["items"]) == 2
+    assert body["total"] == 4
+    assert body["truncated"] is True
