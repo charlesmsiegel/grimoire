@@ -10,13 +10,15 @@ export type RecordRef = { ref: string; label: string; kind: RefKind; avatar?: st
  *  these. Identical type. */
 export type LoreOwner = RecordRef;
 
-/** A ref is `<kind>:<id>` and a field holds a comma-separated list of them, so
- *  an id containing a comma cannot be named by one — it would parse as two.
- *  Mirrors `entity_schema.referenceable`; `slugify` cannot produce such an id,
- *  but a hand-authored or imported file can, and offering it would put a
- *  candidate in the picker that the backend refuses on save with nothing
- *  anywhere saying why. */
-const referenceable = (id: string) => !id.includes(",");
+/** Mirrors `entity_schema.referenceable` for the two rules a listing can still
+ *  hand back: a field holds a comma-separated list, so an id containing a comma
+ *  reads back as two refs; and a ref lives in a single-line frontmatter scalar,
+ *  so one containing a line break is stored, reported saved, and read back
+ *  truncated. `slugify` cannot produce either, but a hand-authored or imported
+ *  file can — and offering such a candidate puts something in the picker that
+ *  the backend refuses on save with nothing anywhere saying why. */
+const referenceable = (id: string) =>
+  !id.includes(",") && !id.includes("\n") && !id.includes("\r");
 
 /** What a candidate fetch came back with. `failed` names the kinds whose
  *  listing did not load, and it is not a detail: a caller that cannot tell a

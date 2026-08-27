@@ -62,6 +62,16 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
     reload();
     if (worldScope) api.listTags(wid).then(setTags);
     setWizardOpen(false); // a scope change can reuse this instance; never carry a wizard across it
+    // ...and never carry the OPEN RECORD across it either. Reloading only the
+    // rail left the previous scope's PC on screen under the new one, where its
+    // Save and Delete act on `scope` — issuing writes against whatever
+    // unrelated PC happens to share the id here, or against nothing.
+    setDetail(null);
+    setVid("");
+    setPersona(BLANK);
+    setMode("view");
+    setImages([]);
+    setCropOpen(false);
   }, [wid, worldScope, reload]);
 
   // arrived via an owner chip or a ref field: open that PC

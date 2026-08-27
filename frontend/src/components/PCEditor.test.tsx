@@ -476,3 +476,16 @@ test("no focus prop selects nothing", async () => {
   await screen.findByText("Elara");            // the rail is populated
   expect(api.readPC).not.toHaveBeenCalled();   // ...but nothing is open
 });
+
+test("a scope change closes the open PC rather than leaving it under the new scope", async () => {
+  // Reloading only the rail left the previous scope's PC on screen, where its
+  // Save and Delete act on the NEW scope — writing to whatever unrelated PC
+  // shares the id there, or to nothing.
+  const { rerender } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  await screen.findByText("a wanderer");                       // the record is open
+  rerender(<PCEditor scope={{ kind: "world", id: "w2" }} wid="w2" />);
+  await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith({ kind: "world", id: "w2" }));
+  expect(screen.queryByText("a wanderer")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+});
