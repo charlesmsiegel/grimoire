@@ -45,25 +45,75 @@ beforeEach(() => {
   (api.sceneImport as any).mockResolvedValue({ id: "s9", messages: 1, cast: 0 });
 });
 
-test("by default picking a mode spends no generation on ideas", async () => {
-  // The one test that renders the component the way production does — every
-  // other one passes `suggest` to keep the ranking path covered while it is
-  // switched off. Without this, the default could flip back to on and nothing
-  // would notice until someone read their bill.
+test("picking a mode spends no generation on ideas", async () => {
+  // The path taken to start every scene. It used to rank ideas here — an LLM
+  // call made before the reader asked for anything and without telling them —
+  // and the answer to that is a button, not a faster call (#428).
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
 
-  // The picker still arrives, with greetings and a blank scene on it. What it
-  // does not do is call for ideas on the way there.
+  // The picker arrives whole: greetings, the saved ledger, a blank scene, and
+  // the button that would spend the generation if it were pressed.
   await screen.findByText(/blank scene/i);
+  expect(await screen.findByRole("button", { name: /suggest ideas/i })).toBeEnabled();
   expect(api.sceneSuggestions).not.toHaveBeenCalled();
-  // ...and it does not sit on "Generating…" waiting for a call that is not
-  // coming: an unready hook reports `[]`, not `null`.
+  // ...and it does not sit on "Generating…" waiting for a call nobody started.
   expect(screen.queryByText(/generating/i)).not.toBeInTheDocument();
 });
 
+test("pressing Suggest ideas is what makes the call, once, with the typed direction", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [{ title: "At sea", premise: "", cast: [], location: null }],
+      greeting_picks: [], next_date: "2026-01-01" });
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+
+  fireEvent.change(await screen.findByLabelText("Direction"),
+                   { target: { value: "something at sea" } });
+  fireEvent.click(screen.getByRole("button", { name: /suggest ideas/i }));
+
+  expect(await screen.findByText("At sea")).toBeInTheDocument();
+  // Ranked (the last argument), because this press orders the greeting cards
+  // as well as generating the ideas.
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", false, "something at sea", true);
+  // and the control is now the one that replaces what it produced
+  expect(screen.getByRole("button", { name: /regenerate/i })).toBeInTheDocument();
+});
+
+test("an offscreen chooser asks for offscreen ideas", async () => {
+  // The mode is part of the question, not a filter on the answer: an
+  // offscreen scene casts nobody the player can be.
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [], greeting_picks: [], next_date: "" });
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
+  fireEvent.click(await screen.findByRole("button", { name: /suggest ideas/i }));
+  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", true, "", true);
+});
+
+test("a campaign switch drops the ideas the last one earned", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [{ title: "Campaign A's idea", premise: "", cast: [], location: null }],
+      greeting_picks: [], next_date: "2026-01-01" });
+  const { rerender } = render(
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByRole("button", { name: /suggest ideas/i }));
+  await screen.findByText("Campaign A's idea");
+
+  // Nothing re-fetches on its own any more, so a ranking that outlived its
+  // campaign would sit in the next one's picker until somebody pressed --
+  // ideas cast from a world the reader has left.
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  expect(await screen.findByRole("button", { name: /suggest ideas/i })).toBeInTheDocument();
+  expect(screen.queryByText("Campaign A's idea")).toBeNull();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
 test("the import mode opens the import pane and asks for no suggestions", async () => {
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Import a transcript"));
 
   await screen.findByLabelText(/transcript file/i);
@@ -76,7 +126,7 @@ test("the import mode opens the import pane and asks for no suggestions", async 
 
 test("importing reports the scene it created", async () => {
   const onCreated = vi.fn();
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
   fireEvent.click(screen.getByText("Import a transcript"));
 
   fireEvent.change(await screen.findByLabelText(/transcript file/i),
@@ -99,7 +149,7 @@ test("Escape and the backdrop are ignored while an import is in flight", async (
   let release: (v: any) => void = () => {};
   (api.sceneImport as any).mockReturnValue(new Promise((r) => { release = r; }));
   const onClose = vi.fn();
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Import a transcript"));
   fireEvent.change(await screen.findByLabelText(/transcript file/i),
                    { target: { files: [new File(["**You:** hi\n"], "scene.md")] } });
@@ -113,7 +163,7 @@ test("Escape and the backdrop are ignored while an import is in flight", async (
 });
 
 test("Back from the import pane returns to the mode cards", async () => {
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Import a transcript"));
   await screen.findByLabelText(/transcript file/i);
   fireEvent.click(screen.getByRole("button", { name: /back/i }));
@@ -121,13 +171,13 @@ test("Back from the import pane returns to the mode cards", async () => {
 });
 
 test("mode is chosen first and nothing is fetched before it", () => {
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   expect(screen.getByText("With your PC")).toBeInTheDocument();
   expect(api.availableGreetings).not.toHaveBeenCalled();
 });
 
 test("picking a card opens the confirm form and creates nothing yet", async () => {
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
   await screen.findByRole("button", { name: /create scene/i });
@@ -135,7 +185,7 @@ test("picking a card opens the confirm form and creates nothing yet", async () =
 });
 
 test("Back returns to the picker without writing", async () => {
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
   fireEvent.click(await screen.findByRole("button", { name: /back/i }));
@@ -151,7 +201,7 @@ test("Back returns to the picker without writing", async () => {
 // about this wire; this is the only test that follows the real value across
 // the seam.
 test("the confirm pane is told whether an LLM is connected", async () => {
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready={false} onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready={false} onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
   fireEvent.click(await screen.findByRole("radio", { name: /generate one/i }));
@@ -169,8 +219,9 @@ test("Back preserves the typed direction and the regenerated cards, and issues n
   (api.sceneSuggestions as any).mockResolvedValue(
     { suggestions: [{ title: "Undirected", premise: "", cast: [], location: null }],
       greeting_picks: [], next_date: "2026-01-01" });
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByRole("button", { name: /suggest ideas/i }));
   await screen.findByText("Undirected");
   expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
 
@@ -206,14 +257,14 @@ test("a cid change mid-create-sequence stops further writes and never reports th
   (api.createScene as any).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
   const onCreated = vi.fn();
   const { rerender } = render(
-    <NewSceneChooser suggest cid="a" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));   // a greeting draft: source "greeting", date set
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(api.createScene).toHaveBeenCalled());
 
   // the reader switches campaigns while createScene is still in flight
-  rerender(<NewSceneChooser suggest cid="b" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
 
   await act(async () => { releaseCreate({ id: "s9" }); });
   // none of the sequence's later steps fired against campaign "a"
@@ -237,14 +288,14 @@ test("a cid change mid-write does not leave the new campaign's chooser stuck und
   (api.createScene as any).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
   const onClose = vi.fn();
   const { rerender } = render(
-    <NewSceneChooser suggest cid="a" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(api.createScene).toHaveBeenCalled());
 
   // the reader switches campaigns while createScene is still in flight
-  rerender(<NewSceneChooser suggest cid="b" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
 
   // back at campaign b's mode-select step -- Escape must still dismiss it
   fireEvent.keyDown(window, { key: "Escape" });
@@ -267,7 +318,7 @@ test("StrictMode's mount cycle does not wedge the create sequence", async () => 
   const onCreated = vi.fn();
   render(
     <StrictMode>
-      <NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />
+      <NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />
     </StrictMode>,
   );
   fireEvent.click(screen.getByText("With your PC"));
@@ -283,16 +334,19 @@ test("StrictMode's mount cycle does not wedge the create sequence", async () => 
 test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
   (api.availableGreetings as any).mockResolvedValue(
     [{ id: "cabal", name: "Cabal", available: true, reasons: [], unlocked: false, pcless: true }]);
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
   fireEvent.click(await screen.findByText("Cabal"));
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "Cabal", expect.anything(), true));
+  // No date: the in-world date estimate rides on the suggestions call, and
+  // nobody pressed for one. The confirm form's "Last scene's date" button
+  // fills it from the campaign clock, which costs nothing (#428).
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "Cabal", undefined, true));
 });
 
 test("Cancel from the picker writes nothing", async () => {
   const onClose = vi.fn();
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
   expect(onClose).toHaveBeenCalled();
@@ -303,7 +357,7 @@ test("Escape and the backdrop are ignored while the create sequence is writing",
   let release: (v: any) => void = () => {};
   (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
   const onClose = vi.fn();
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
@@ -316,7 +370,7 @@ test("Escape and the backdrop are ignored while the create sequence is writing",
 test("creating reports the scene and Escape closes while idle", async () => {
   const onCreated = vi.fn();
   const onClose = vi.fn();
-  render(<NewSceneChooser suggest cid="c" afterSid="s1" ready onClose={onClose} onCreated={onCreated} />);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={onCreated} />);
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onClose).toHaveBeenCalled();
   fireEvent.click(screen.getByText("With your PC"));
@@ -335,12 +389,12 @@ test("changing cid discards the draft and returns to the mode step", async () =>
       ? [{ id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true }]
       : [{ id: "vow", name: "Vow of silence", available: true, reasons: [], unlocked: true }]));
   const { rerender } = render(
-    <NewSceneChooser suggest cid="a" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
   await screen.findByRole("button", { name: /create scene/i });   // confirm form open on campaign a's draft
 
-  rerender(<NewSceneChooser suggest cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   // back at the mode step -- campaign a's draft (and its "Create scene" form) is gone
   expect(screen.getByText("With your PC")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /create scene/i })).toBeNull();
@@ -349,7 +403,7 @@ test("changing cid discards the draft and returns to the mode step", async () =>
   fireEvent.click(await screen.findByText("Vow of silence"));
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   // the create call carries campaign b's own draft, not a's
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("b", "Vow of silence", expect.anything(), false));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("b", "Vow of silence", undefined, false));
   expect(api.createScene).not.toHaveBeenCalledWith("b", "Reckoning", expect.anything(), expect.anything());
 });
 

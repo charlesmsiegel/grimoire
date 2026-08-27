@@ -2031,6 +2031,12 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .chooser-row { display: flex; align-items: stretch; gap: 6px; }
 .chooser-row .chooser-card { flex: 1; min-width: 0; }
 .chooser-row .grow { flex: 1; align-self: center; }
+/* The direction row and its Suggest ideas / Regenerate button sit INSIDE the
+   Generated group now (#428), next to the one thing in the picker that spends
+   a generation. So they take the chooser's own 8px rhythm rather than the
+   standalone block's 12/20 -- a 20px gap under the control would read as a
+   break between it and the cards it produces. */
+.chooser .picker { margin: 0; }
 .chooser .picker input.grow { flex: 1; }
 .chooser textarea { width: 100%; background: transparent; border: 1px solid var(--muted); color: inherit; padding: 8px; font: inherit; }
 .chooser select { width: 100%; }
