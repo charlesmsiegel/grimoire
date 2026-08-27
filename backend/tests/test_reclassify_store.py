@@ -9,6 +9,7 @@ from grimoire.store import (
     campaigns,
     changes,
     entities,
+    entity_schema,
     journal,
     overlay,
     pins,
@@ -490,6 +491,33 @@ def test_a_refused_campaign_move_does_not_materialize_the_record(monkeypatch, tm
 # at the bottom that hold the decision.
 
 def test_world_move_rewrites_ref_fields_in_the_world(monkeypatch, tmp_path):
+    # `holder` accepts both locations and groups, so a location that becomes a
+    # group is still something an item can be held by, and the ref follows it.
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch")
+    entities.create_entity(wroot, "items", "Salt Knife",
+                           fields={"holder": "locations:tidewatch"})
+    reclassify.world_entity(wid, "locations", "tidewatch", "groups")
+    assert (entities.read_entity(wroot, "items", "salt-knife")["meta"]["holder"]
+            == "groups:tidewatch")
+
+
+def test_ref_rewrite_collapses_a_record_that_named_both_spellings(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch")
+    entities.create_entity(wroot, "items", "Salt Knife",
+                           fields={"holder": "locations:tidewatch, groups:tidewatch"})
+    reclassify.world_entity(wid, "locations", "tidewatch", "groups")
+    assert (entities.read_entity(wroot, "items", "salt-knife")["meta"]["holder"]
+            == "groups:tidewatch")
+
+
+def test_a_field_does_not_follow_a_record_into_a_kind_it_cannot_name(monkeypatch, tmp_path):
+    # `headquarters` accepts locations only. Repointing it at `lore:tidewatch`
+    # would store a value `invalid_values` rejects -- and the editor sends every
+    # declared field on every save, so the Watch could not be saved again at all
+    # until somebody cleared it. The ref is left to dangle instead, which is what
+    # it now is: the thing it named is no longer something it can name.
     wid, wroot = _world(monkeypatch, tmp_path)
     entities.create_entity(wroot, "locations", "Tidewatch")
     entities.create_entity(wroot, "groups", "Saltmarch Watch",
@@ -497,40 +525,46 @@ def test_world_move_rewrites_ref_fields_in_the_world(monkeypatch, tmp_path):
     entities.create_entity(wroot, "creatures", "Marsh Wyrm",
                            fields={"habitat": "locations:tidewatch, locations:elsewhere"})
     reclassify.world_entity(wid, "locations", "tidewatch", "lore")
-    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
-            == "lore:tidewatch")
-    # a multi field keeps its order and its untouched entries
-    assert (entities.read_entity(wroot, "creatures", "marsh-wyrm")["meta"]["habitat"]
-            == "lore:tidewatch, locations:elsewhere")
-
-
-def test_ref_rewrite_collapses_a_record_that_named_both_spellings(monkeypatch, tmp_path):
-    wid, wroot = _world(monkeypatch, tmp_path)
-    entities.create_entity(wroot, "locations", "Tidewatch")
-    entities.create_entity(wroot, "creatures", "Marsh Wyrm",
-                           fields={"habitat": "locations:tidewatch, lore:tidewatch"})
-    reclassify.world_entity(wid, "locations", "tidewatch", "lore")
-    assert (entities.read_entity(wroot, "creatures", "marsh-wyrm")["meta"]["habitat"]
-            == "lore:tidewatch")
+    hq = entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+    habitat = entities.read_entity(wroot, "creatures", "marsh-wyrm")["meta"]["habitat"]
+    assert hq == "locations:tidewatch"
+    assert habitat == "locations:tidewatch, locations:elsewhere"
+    # ...and the point of leaving them: both records still save.
+    assert entity_schema.invalid_values("groups", {"headquarters": hq}) == []
+    assert entity_schema.invalid_values("creatures", {"habitat": habitat}) == []
 
 
 def test_campaign_move_rewrites_ref_fields_it_only_inherits(monkeypatch, tmp_path):
     _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
-    entities.create_entity(wroot, "groups", "Saltmarch Watch",
-                           fields={"headquarters": "lore:tidewatch"})
+    entities.create_entity(wroot, "items", "Salt Knife",
+                           fields={"holder": "lore:tidewatch"})
     reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
-    assert (overlay.read_entity(cid, "groups", "saltmarch-watch")["meta"]["headquarters"]
+    assert (overlay.read_entity(cid, "items", "salt-knife")["meta"]["holder"]
             == "locations:tidewatch")
     # campaign-side only: the world's record still says what it always did
-    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+    assert (entities.read_entity(wroot, "items", "salt-knife")["meta"]["holder"]
             == "lore:tidewatch")
 
 
 def test_campaign_move_leaves_unrelated_ref_fields_unmaterialized(monkeypatch, tmp_path):
     _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
-    entities.create_entity(wroot, "groups", "Saltmarch Watch",
-                           fields={"headquarters": "locations:elsewhere"})
+    entities.create_entity(wroot, "items", "Salt Knife",
+                           fields={"holder": "locations:elsewhere"})
     reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert not (overlay.croot_of(cid) / "items" / "salt-knife.md").exists()
+
+
+def test_a_campaign_field_does_not_follow_into_a_kind_it_cannot_name(monkeypatch, tmp_path):
+    # The overlay half of the rule above, and the one that matters most: a
+    # campaign-side rewrite MATERIALIZES the referring record, so an illegal
+    # repoint would diverge a world record from the library *and* leave the
+    # copy unsaveable.
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+                           fields={"headquarters": "lore:tidewatch"})
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "creatures")
+    assert (overlay.read_entity(cid, "groups", "saltmarch-watch")["meta"]["headquarters"]
+            == "lore:tidewatch")
     assert not (overlay.croot_of(cid) / "groups" / "saltmarch-watch.md").exists()
 
 

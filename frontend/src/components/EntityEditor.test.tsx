@@ -1162,3 +1162,65 @@ test("an untouched dangling ref is saved back rather than scrubbed", async () =>
       expect.objectContaining({
         fields: expect.objectContaining({ leader: "characters:mara" }) })));
 });
+
+/** A promise plus the handle to settle it later, so a test can hold one
+ *  scope's listing open while another lands. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+test("a scope change clears the ref candidates before the new ones arrive", async () => {
+  // Navigating between worlds can keep this editor mounted. Until the new
+  // scope's listing lands the picker must offer NOTHING — offering the old
+  // scope's records saves a ref into a scope where it names nothing, and
+  // existence is deliberately not validated server-side.
+  const w2 = deferred<any[]>();
+  (api.listEntities as any).mockImplementation((s: any, kind: string) => {
+    if (kind !== "locations") return Promise.resolve([]);
+    return s.id === "w1" ? Promise.resolve([{ id: "saltmarch", name: "Saltmarch" }]) : w2.promise;
+  });
+  const { rerender } = render(
+    <EntityEditor wid="w1" scope={{ kind: "world", id: "w1" }} kind="creatures" />);
+  expect(within(await screen.findByRole("group", { name: "Habitat" }))
+    .getByLabelText("Saltmarch")).toBeInTheDocument();
+  // w2's listing is still in flight at this point, deliberately.
+  rerender(<EntityEditor wid="w2" scope={{ kind: "world", id: "w2" }} kind="creatures" />);
+  expect(within(screen.getByRole("group", { name: "Habitat" }))
+    .queryByLabelText("Saltmarch")).toBeNull();
+  w2.resolve([{ id: "realm", name: "Realm" }]);
+  expect(await within(screen.getByRole("group", { name: "Habitat" }))
+    .findByLabelText("Realm")).toBeInTheDocument();
+});
+
+test("a slow listing from the previous scope cannot land on top of the current one", async () => {
+  // The other half: w1's request resolves SECOND. Without a request token it
+  // overwrites w2's options and the stale candidates stick permanently.
+  const w1 = deferred<any[]>();
+  (api.listEntities as any).mockImplementation((s: any, kind: string) => {
+    if (kind !== "locations") return Promise.resolve([]);
+    return s.id === "w1" ? w1.promise : Promise.resolve([{ id: "realm", name: "Realm" }]);
+  });
+  const { rerender } = render(
+    <EntityEditor wid="w1" scope={{ kind: "world", id: "w1" }} kind="creatures" />);
+  rerender(<EntityEditor wid="w2" scope={{ kind: "world", id: "w2" }} kind="creatures" />);
+  const habitat = await screen.findByRole("group", { name: "Habitat" });
+  expect(await within(habitat).findByLabelText("Realm")).toBeInTheDocument();
+  w1.resolve([{ id: "saltmarch", name: "Saltmarch" }]);
+  await waitFor(() => expect(within(habitat).getByLabelText("Realm")).toBeInTheDocument());
+  expect(within(habitat).queryByLabelText("Saltmarch")).toBeNull();
+});
+
+test("a record whose id carries the list delimiter is not offered as a candidate", async () => {
+  // `<kind>:<id>` in a comma-separated list, so `locations:salt,march` parses
+  // as two refs and could never be saved. slugify cannot make one; an imported
+  // file can. Mirrors entity_schema.referenceable.
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations"
+      ? [{ id: "salt,march", name: "Salt March" }, { id: "realm", name: "Realm" }] : []));
+  render(<EntityEditor wid="w" kind="creatures" />);
+  const habitat = await screen.findByRole("group", { name: "Habitat" });
+  expect(within(habitat).getByLabelText("Realm")).toBeInTheDocument();
+  expect(within(habitat).queryByLabelText("Salt March")).toBeNull();
+});

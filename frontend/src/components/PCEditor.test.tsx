@@ -451,3 +451,28 @@ test("a PC's art carries its description, and saving one names that image", asyn
   await waitFor(() => expect(api.setPCImageDescription).toHaveBeenCalledWith(
     { kind: "world", id: "w" }, "elara", "default", "gallery_1", "On the road north."));
 });
+
+test("a focus prop opens that PC on arrival", async () => {
+  // A `pcs:` chip — a lore owner, or an item's holder / a group's leader
+  // (#222) — has to land on the record, not merely on the PC section.
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" focus="elara" focusNonce={1} />);
+  await screen.findByText("a wanderer");
+  expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara");
+});
+
+test("re-following the same chip re-opens it, via the nonce", async () => {
+  // The id alone does not change, so a reader who wandered off to another PC
+  // and came back would otherwise be sent nowhere.
+  const { rerender } = render(
+    <PCEditor scope={{ kind: "world", id: "w" }} wid="w" focus="elara" focusNonce={1} />);
+  await screen.findByText("a wanderer");
+  (api.readPC as any).mockClear();
+  rerender(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" focus="elara" focusNonce={2} />);
+  await waitFor(() => expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara"));
+});
+
+test("no focus prop selects nothing", async () => {
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Elara");            // the rail is populated
+  expect(api.readPC).not.toHaveBeenCalled();   // ...but nothing is open
+});

@@ -218,3 +218,19 @@ def test_ref_kinds_is_the_real_set_of_records(monkeypatch, tmp_path):
     # cycle. This is what keeps the copy honest when a new kind ships.
     from grimoire.store import appearances
     assert set(entity_schema.REF_KINDS) == set(entities.ENTITY_KINDS) | set(appearances.ACTOR_KINDS)
+
+
+def test_an_id_carrying_the_list_delimiter_cannot_be_referenced():
+    # The comma separates refs, so `locations:salt,march` parses as two. slugify
+    # cannot produce such an id; a hand-authored or imported file can, and the
+    # picker filters it out rather than offering a candidate nothing can save.
+    assert entity_schema.referenceable("saltmarch")
+    assert not entity_schema.referenceable("salt,march")
+    assert entity_schema.invalid_values(
+        "creatures", {"habitat": "locations:salt,march"}) == ["habitat"]
+
+
+def test_referenceable_still_carries_everything_safe_id_rejects():
+    # The comma rule is ON TOP of safe_id, not instead of it.
+    for bad in ("../escape", "a/b", "", ".", "..", "a:b", "trailing ", "trailing."):
+        assert not entity_schema.referenceable(bad), bad

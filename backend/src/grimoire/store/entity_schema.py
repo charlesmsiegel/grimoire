@@ -20,6 +20,14 @@ kinds' records, and this module refuses anything else at the save boundary. A
 group is led by a person and headquartered in a place, and a save that says
 otherwise is a bug in whatever produced it.
 
+The comma is the list separator, so **an id containing one cannot be named by a
+ref** -- `locations:salt,march` reads as two refs, and `REF_DELIMITER` is what
+both sides check against. `slugify` reduces everything outside `[a-z0-9]` to a
+dash, so nothing this app creates can hit it; a hand-authored or imported
+`salt,march.md` can, and `referenceable` is what keeps the picker from offering
+a candidate that could never be saved. Inherited from `owners:`, which has
+always had the same grammar and the same hole.
+
 ## Dangling refs: deleting a target does not rewrite the refs that name it
 
 Deliberate, and the alternative is worse in three separate ways:
@@ -111,6 +119,21 @@ def ref_fields(kind: str) -> tuple[dict[str, Any], ...]:
     return tuple(f for f in FIELDS.get(kind, ()) if f.get("widget") == REF)
 
 
+REF_DELIMITER = ","
+
+
+def referenceable(eid: str) -> bool:
+    """Can a ref name this id at all?
+
+    `safe_id` is about what a resolver may open and permits a comma; the ref
+    grammar is a comma-separated list and cannot carry one. Both have to hold,
+    and this is the pair said once so the picker and the save boundary cannot
+    drift -- the failure that drift produces is a candidate the UI offers and
+    the backend refuses, with nothing anywhere saying why.
+    """
+    return safe_id(eid) and REF_DELIMITER not in eid
+
+
 def parse_refs(value: object) -> list[str]:
     """A ref field's stored string as the refs it names.
 
@@ -123,7 +146,7 @@ def parse_refs(value: object) -> list[str]:
     """
     if not isinstance(value, str):
         return []
-    return [r.strip() for r in value.split(",") if r.strip()]
+    return [r.strip() for r in value.split(REF_DELIMITER) if r.strip()]
 
 
 def field_keys(kind: str) -> tuple[str, ...]:
@@ -203,11 +226,12 @@ def _valid_ref_value(spec: dict[str, Any], value: object) -> bool:
     single-valued field got exactly one, and each ref names an accepted kind
     with an id `paths.safe_id` would let a resolver open.
 
-    `safe_id` is the load-bearing half. It rejects the colon, so `<kind>:<id>`
-    splits unambiguously on the FIRST one and `characters:a:b` cannot be read
-    as an id containing a separator; and it rejects the traversal that would
-    otherwise let a stored ref name a path outside the store the day something
-    resolves one.
+    `referenceable` is the load-bearing half. `safe_id` under it rejects the
+    colon, so `<kind>:<id>` splits unambiguously on the FIRST one and
+    `characters:a:b` cannot be read as an id containing a separator, and it
+    rejects the traversal that would otherwise let a stored ref name a path
+    outside the store the day something resolves one; the comma rule on top is
+    what keeps the grammar and the id space agreeing.
     """
     if not isinstance(value, str):
         return False
@@ -218,6 +242,6 @@ def _valid_ref_value(spec: dict[str, Any], value: object) -> bool:
         return False
     for ref in refs:
         head, sep, eid = ref.partition(":")
-        if not sep or head not in spec["kinds"] or not safe_id(eid):
+        if not sep or head not in spec["kinds"] or not referenceable(eid):
             return False
     return True

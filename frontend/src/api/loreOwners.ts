@@ -10,6 +10,14 @@ export type RecordRef = { ref: string; label: string; kind: RefKind; avatar?: st
  *  these. Identical type. */
 export type LoreOwner = RecordRef;
 
+/** A ref is `<kind>:<id>` and a field holds a comma-separated list of them, so
+ *  an id containing a comma cannot be named by one — it would parse as two.
+ *  Mirrors `entity_schema.referenceable`; `slugify` cannot produce such an id,
+ *  but a hand-authored or imported file can, and offering it would put a
+ *  candidate in the picker that the backend refuses on save with nothing
+ *  anywhere saying why. */
+const referenceable = (id: string) => !id.includes(",");
+
 /** Every record of `kinds` in a container (world or campaign copy), as pickable
  *  refs.
  *
@@ -29,7 +37,7 @@ export async function refOptions(
 async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<RecordRef[]> {
   if (kind === "characters") {
     const chars = await api.listCharacters(scope);
-    return chars.map((c) => ({
+    return chars.filter((c) => referenceable(c.id)).map((c) => ({
       ref: `characters:${c.id}`, label: c.name, kind,
       ...(c.has_avatar
         ? { avatar: api.actorImageUrl(scope, "characters", c.id, c.default_version, "avatar") }
@@ -40,7 +48,7 @@ async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<Record
     const pcs = await api.listPCs(scope);
     // A PC gets its portrait the same way now that PCs have images (#219) —
     // the owner chips beside a lore entry showed initials for every one of them.
-    return pcs.map((p) => ({
+    return pcs.filter((p) => referenceable(p.id)).map((p) => ({
       ref: `pcs:${p.id}`, label: p.name, kind,
       ...(p.has_avatar
         ? { avatar: api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar") }
@@ -48,7 +56,8 @@ async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<Record
     }));
   }
   const entities = await api.listEntities(scope, kind);
-  return entities.map((e) => ({ ref: `${kind}:${e.id}`, label: e.name, kind }));
+  return entities.filter((e) => referenceable(e.id))
+    .map((e) => ({ ref: `${kind}:${e.id}`, label: e.name, kind }));
 }
 
 /** All records in a container that can own lore.
