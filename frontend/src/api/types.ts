@@ -1875,11 +1875,19 @@ export type LogLevelInfo = { level: LogLevel; levels: LogLevel[] };
 export type ShellCampaign = {
   id: string;
   name: string;
+  /** The world id, alongside `world_name` — the same pairing `CampaignMeta`
+   *  uses. Needed to address the world's own pages (its images section among
+   *  them); `world_name` alone is a label, not a link. Optional so a fixture
+   *  frozen before this field existed still type-checks; the live route
+   *  always sends it. */
+  world?: string;
   world_name: string;
   scenes: number;
-  /** Scenes whose frontmatter `done` is not set. `turns` is null in this
-   *  slice — scene frontmatter carries no turn count, and the only cheap
-   *  candidate would undercount exactly the oldest scenes. */
+  /** Scenes whose frontmatter `done` is not set. `turns` counts that scene's
+   *  own transcript blocks that are actual model replies (not player posts,
+   *  not a manual dice roll or scene-transition line) — `null` when the
+   *  transcript could not be read, never `0` for that case; a scene that
+   *  opens cleanly and truly has no replies yet reports the real `0`. */
   open: { sid: string; title: string; turns: number | null }[];
   ledger_open: number;
   /** Null when the campaign binds no mechanics module. "This module keeps no
@@ -1891,8 +1899,9 @@ export type ShellCampaign = {
    *  than making the reader hunt for which scene was absorbed. */
   pending: { sid: string; proposals: number }[];
   /** Images with no description text — deliberately not `untagged`, which is
-   *  greeting art with no subjects recorded and stays a separate word. Filled
-   *  by the images slice. */
+   *  greeting art with no subjects recorded and stays a separate word. `null`
+   *  when the world cannot be read; a world that reads cleanly with nothing
+   *  outstanding reports the real `0`. */
   images_undescribed: number | null;
 };
 

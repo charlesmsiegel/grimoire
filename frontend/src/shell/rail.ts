@@ -199,8 +199,21 @@ export const CAMPAIGN_ROWS: RailRow[] = [
   },
   {
     id: "images", label: "Images", icon: "▨",
-    to: () => null,   // ImagesView is a WorldView section, not a route
+    // `ImagesView` is a section of `WorldView` rather than a route of its own,
+    // but the section is addressable — `WorldView` opens whatever
+    // `?section=` names — so the row has somewhere real to go after all. It
+    // needs the world's id, not its name, which is why `world` travels beside
+    // `world_name` in the payload.
+    to: (_ctx, s) => (s?.campaign?.world ? `/worlds/${s.campaign.world}?section=images` : null),
+    // Never lit, deliberately. `match` is given the pathname alone, and the
+    // section this row points at lives in the query string — so the honest
+    // options are "never active" or "active on every screen of that world,
+    // including its Characters and its Lore". A row that lights while you are
+    // somewhere else is worse than one that never lights, and the day Images
+    // earns a real route this becomes a one-line `isUnder`.
     match: () => false,
+    tail: (s) => num(s?.campaign?.images_undescribed),
+    tailLabel: (s) => lbl(s?.campaign?.images_undescribed, "images undescribed"),
   },
 ];
 

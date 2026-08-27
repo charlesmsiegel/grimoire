@@ -286,6 +286,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     if (!section) return;
     if (section === "characters") { openCharacter(id, params.get("v") ?? ""); return; }
     if (section === "greetings") { openGreeting(id); return; }
+    // Images is a section like any other to the column, but it is not in
+    // `INDEX` -- that list is the world's record kinds, and images are a view
+    // across all of them rather than one more kind. Without this branch
+    // `?section=images` fell through and did nothing, which is what the rail's
+    // Images row addresses.
+    if (section === "images") { setSection("images"); return; }
     if (INDEX.some((g) => g.rows.some((r) => r.key === section && r.key !== "tags"))) {
       // `pcs` has no per-record focus of its own yet; the section is as close
       // as this can land, which is still nearer than the page it started on.

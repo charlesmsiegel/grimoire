@@ -4085,7 +4085,9 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
        control and should be the width of the thumb reaching for it. */
     align-self: stretch; width: auto; margin: 8px 12px 12px;
     border: 1px solid var(--line-strong);
-    border-radius: 999px; min-height: 40px; text-align: center;
+    /* 44px, not the pill's old 40 — the base rule above already clears the
+       floor and this more specific selector was quietly undercutting it. */
+    border-radius: 999px; min-height: 44px; text-align: center;
     background: var(--panel);
   }
   /* Above the sheet once it is up, because it is the sheet's Close — the same
@@ -4121,4 +4123,55 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      rule the design states for this breakpoint, and the reason `End scene` is
      still reachable when the row no longer fits on one line. */
   .shell.phone .scene-actions { flex-wrap: wrap; }
+}
+
+/* ---- more of PHONE_PX's 44px floor: the controls the first pass missed ---- */
+/* A 375px audit turned up standalone controls still under 40px on the scene
+   view, /climates, /worlds/:wid and /styles — every editor's picker list,
+   its Save button, its chips, its bare form fields. None of it is prose, so
+   none of it gets the pass a paragraph link or a `.field-hint` gets; it is
+   the thing a thumb is aiming at. Kept as a second block, appended, rather
+   than folded into the one above: this one is a sweep by control SHAPE
+   (every `.row`, every `.primary`) rather than by page, so it reads as its
+   own pass instead of scattering into the page-specific rules above it. */
+@media (max-width: 720px) {
+  /* Every editor's picker list — climates, style guides, tags, characters,
+     greetings, connections, modules, response presets — is the same shape: a
+     button per row that selects the thing to work on. That IS the page's
+     navigation, same as `.column-row` above, just one editor level down. */
+  .row { min-height: 44px; }
+  /* `EditableRow`'s own row is a container, not the tap target — `.row-label`
+     is the span carrying the onClick, and centering it on its own floor is
+     what actually grows the target rather than just the whitespace around
+     it. Its rename/delete pair rides along for the same reason `.chore-fix`
+     and `.chore-ignore` do: a row's attached actions are controls too. */
+  .row-label { display: flex; align-items: center; min-height: 44px; }
+  .row-actions button { min-height: 44px; }
+  /* `.primary` is the one class every editor's Save/Create/Add button
+     reaches for, in this file and in every editor that isn't in it. */
+  .primary { min-height: 44px; }
+  /* `.chip` doubles as a read-only badge (a tag, a count, a status pill) far
+     more often than as a control — those stay pill-sized on purpose. Only
+     the clickable half, an actual `<button class="chip">`, owes the floor. */
+  button.chip { min-height: 44px; }
+  /* Chrome-coloured buttons (the stream's Reroll) never got swept up with
+     `.btn-accent` / `.btn-outline` above because they are a third skin, not
+     a state of the same one. */
+  .btn-chrome { min-height: 44px; }
+  /* The world overview's checklist is links to unfinished setup; `.static`
+     is the one row with nowhere to click through to, so it stays out. */
+  .check-row:not(.static) { min-height: 44px; }
+  /* In-page tab strips (the character editor's Story/Sheet/Gallery tabs, the
+     changes panel, the image browser) are navigation exactly like `.tab`'s
+     cousin `.column-link` above, just drawn as a horizontal strip. */
+  .tab { min-height: 44px; }
+  /* Every text field and dropdown, `.field`-wrapped or bare — the climate
+     table's inline name/weight/requires cells never got a `.field` wrapper,
+     and the floor still applies. Checkboxes and radios are exempt: forcing
+     their native box only pads dead space around a mark that is already
+     easy to hit. */
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 44px; }
+  /* Collapsible section triggers — the character editor's own disclosures,
+     the cast panel, the context/cost breakdowns' `<details>`. */
+  summary { min-height: 44px; }
 }

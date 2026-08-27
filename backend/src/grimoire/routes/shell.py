@@ -13,11 +13,20 @@ counts, for the same reason: an answer nobody computed is worse than silence.
 Every optional field is nullable from the first commit, so a later slice
 filling one in is a value change rather than a schema change.
 
-*Nothing here reads a transcript body.* Open-scene detection comes off scene
-frontmatter (``done``), which is what ``scenes.read.list_scenes`` already
-does through ``parse_frontmatter_head``. A campaign can hold a great many
-scenes and this runs on every navigation, so the rail must never be the thing
-that reads them.
+*Nothing here reads a transcript body to find which scenes are open.*
+Open-scene detection comes off scene frontmatter (``done``), which is what
+``scenes.read.list_scenes`` already does through ``parse_frontmatter_head``.
+A campaign can hold a great many scenes and this runs on every navigation, so
+the rail must never be the thing that scans all of them.
+
+Once a scene is known to be open, ITS OWN transcript is fair game: ``turns``
+reads exactly that scene's body to count model replies, off the same walk
+``scenes._model_blocks`` counts turn boundaries in for reroll and drift
+measurement -- reusing that walk rather than a second opinion about what
+counts as a reply. What this route pays for is bounded by how many scenes are
+open at once, not by the campaign's whole history: the same number ``open``
+already carries, and the one ``_chore_open_scenes`` treats as worth a note
+only past two.
 
 *There is no money in this payload, deliberately.* The design puts a spend
 figure on the rail's Costs row. The rollup behind that figure is built on
@@ -74,6 +83,48 @@ def _pending(cid: str) -> tuple[int, list[dict]]:
     return total, scenes
 
 
+def _scene_turns(cid: str, sid: str) -> int | None:
+    """How many of `sid`'s transcript blocks are actual model replies.
+
+    `scenes._model_blocks`, not a raw count of assistant-role messages: a
+    manual dice roll and a scene transition are both stored as assistant-role
+    blocks (`serialize.ROLL_SPEAKER`, `TRANSITION_SPEAKER`) but neither is a
+    reply a model wrote, and `_model_blocks` is the one place that distinction
+    is already made -- the same walk `turn_sizes` is expressed in, so this
+    cannot answer a different question than reroll and drift measurement do.
+
+    `None`, not `0`, when the scene cannot be read or its transcript cannot be
+    decoded: a scene nobody could open is not a scene confirmed to hold no
+    replies, and the rail tells those two apart the way every other count
+    here does. A scene that opens cleanly and truly has none -- a fresh scene
+    still waiting on its opener -- reports the real `0`.
+    """
+    try:
+        messages = store.scenes.read.read_scene(cid, sid)["messages"]
+    except (OSError, UnicodeDecodeError, store.CampaignNotFound, store.SceneNotFound):
+        return None
+    return len(store.scenes._model_blocks(messages))
+
+
+def _images_undescribed(wid: str) -> int | None:
+    """How many stored images across `wid` carry no description, or `None`
+    when the world cannot be read.
+
+    Same bases and the same per-world error contract as
+    `todo._world_describe_counts` -- an unreadable world directory must not
+    500 `/api/shell`, which this feeds on every navigation just as `/api/todo`
+    does. `undescribed_count`, not `len(undescribed(...))`, for the reason
+    that function's own docstring gives: the list resolves an extension and a
+    cache-busting token per image that a count does not need.
+    """
+    try:
+        root = store.worlds.paths.world_root(wid)
+        return sum(store.image_descriptions.undescribed_count(root, base)
+                   for base in todo_routes._DESCRIBE_BASES)
+    except (OSError, store.worlds.paths.WorldNotFound):
+        return None
+
+
 def _campaign_block(cid: str) -> dict | None:
     """The open campaign's badges, or ``None`` if `cid` does not resolve.
 
@@ -96,11 +147,12 @@ def _campaign_block(cid: str) -> dict | None:
     # called a scene open while the absorb guard called it done would be worse
     # than either answer alone.
     #
-    # `turns` is None and stays None in this slice. Scene frontmatter carries
-    # no turn count, and the only cheap candidate would undercount a scene
-    # written before it existed -- so the rail renders no tail rather than a
-    # number that is wrong for exactly the oldest scenes.
-    open_scenes = [{"sid": s["id"], "title": s["title"], "turns": None}
+    # `turns` is read off the scene's OWN transcript, not derived from
+    # frontmatter -- there is no cheap field for it. `_scene_turns` bounds the
+    # cost to the scenes that are actually open, which is what makes reading a
+    # transcript body acceptable on a route that runs on every navigation; see
+    # the module docstring.
+    open_scenes = [{"sid": s["id"], "title": s["title"], "turns": _scene_turns(cid, s["id"])}
                    for s in scenes if not s["done"]]
 
     unreviewed, pending = _pending(cid)
@@ -119,6 +171,11 @@ def _campaign_block(cid: str) -> dict | None:
     return {
         "id": cid,
         "name": str(meta.get("name", cid)),
+        # The id alongside the name, matching `CampaignMeta`'s own
+        # `world`/`world_name` pairing -- the hub needs it to link at the
+        # world's own pages (`/worlds/{wid}?section=images` for the row
+        # below), and `world_name` alone cannot address one.
+        "world": wid,
         "world_name": store.worlds.read.world_name(wid) or wid,
         "scenes": len(scenes),
         "open": open_scenes,
@@ -128,10 +185,10 @@ def _campaign_block(cid: str) -> dict | None:
         # Which scenes are holding one, so the hub can name them and link
         # straight at the wrap-up rather than making the reader hunt.
         "pending": pending,
-        # Filled by the images slice. `undescribed` is images with no
-        # description text -- deliberately not `untagged`, which the design
-        # keeps as a separate word for greeting art with no subjects recorded.
-        "images_undescribed": None,
+        # `undescribed` is images with no description text -- deliberately
+        # not `untagged`, which the design keeps as a separate word for
+        # greeting art with no subjects recorded.
+        "images_undescribed": _images_undescribed(wid),
     }
 
 

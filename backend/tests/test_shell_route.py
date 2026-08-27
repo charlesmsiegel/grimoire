@@ -89,26 +89,95 @@ def test_an_absorbed_scene_is_not_open(client, campaign):
     assert block["scenes"] == 1
 
 
-def test_turns_is_null_rather_than_a_number_this_slice(client, campaign):
-    """Scene frontmatter carries no turn count.
+def test_turns_is_zero_for_a_scene_with_no_posts_yet(client, campaign):
+    """A brand-new scene has genuinely made no model replies yet.
 
-    The rail renders no tail for ``None``. Answering with a number derived from
-    something else would be wrong for exactly the oldest scenes -- the ones
-    written before whatever field it was derived from existed.
+    Distinct from the None cases below: nobody failed to answer this, the
+    honest answer is zero, and the rail draws a real zero differently from no
+    tail at all.
     """
     client.post(f"/api/campaigns/{campaign}/scenes", json={"title": "The Lower Step"})
+    assert _shell(client, campaign)["campaign"]["open"][0]["turns"] == 0
+
+
+def test_turns_counts_model_replies_not_player_posts(client, campaign):
+    """The count is of REPLIES, off `scenes._model_blocks` -- the same walk
+    `turn_sizes` is expressed in, so a player's own posts do not inflate it."""
+    sid = client.post(f"/api/campaigns/{campaign}/scenes",
+                      json={"title": "The Lower Step"}).json()["id"]
+    store.scenes.append_message(campaign, sid, "user", "I open the door.", speaker="You")
+    store.scenes.append_message(campaign, sid, "assistant", "The door creaks open.")
+    store.scenes.append_message(campaign, sid, "assistant", "A shadow moves inside.")
+    assert _shell(client, campaign)["campaign"]["open"][0]["turns"] == 2
+
+
+def test_turns_is_zero_for_an_all_player_transcript(client, campaign):
+    """A real zero, not the None a broken read would report -- a scene held
+    open while waiting on its first reply is not a scene nobody could open."""
+    sid = client.post(f"/api/campaigns/{campaign}/scenes",
+                      json={"title": "The Lower Step"}).json()["id"]
+    store.scenes.append_message(campaign, sid, "user", "I look around.", speaker="You")
+    assert _shell(client, campaign)["campaign"]["open"][0]["turns"] == 0
+
+
+def test_an_unreadable_transcript_reports_turns_as_none_not_zero(client, campaign,
+                                                                  monkeypatch):
+    """"Nobody could read this" and "this scene has no replies" are different
+    answers. Claiming 0 for the first would tell the reader a scene is caught
+    up when nobody actually checked."""
+    client.post(f"/api/campaigns/{campaign}/scenes", json={"title": "The Lower Step"})
+
+    def explode(cid, s):
+        raise OSError("boom")
+
+    monkeypatch.setattr(store.scenes.read, "read_scene", explode)
     assert _shell(client, campaign)["campaign"]["open"][0]["turns"] is None
 
 
-@pytest.mark.parametrize("field", ["images_undescribed"])
-def test_deferred_counts_are_null_not_zero(client, campaign, field):
-    """A count this slice does not compute says so.
+def test_images_undescribed_is_null_when_the_world_cannot_be_read(client, campaign,
+                                                                    monkeypatch):
+    """Same error contract as `todo._world_describe_counts`: an unreadable
+    world directory must not 500 `/api/shell`, and must not be misreported as
+    a caught-up backlog either."""
+    def explode(root, base="characters"):
+        raise OSError("boom")
 
-    Zero is an answer: it means "nothing is waiting". These fields mean "nobody
-    asked", and the rail draws them differently -- no tail at all, rather than
-    a tail reading 0.
+    monkeypatch.setattr(store.image_descriptions, "undescribed_count", explode)
+    assert _shell(client, campaign)["campaign"]["images_undescribed"] is None
+
+
+def _png() -> bytes:
+    """A real 2x2 PNG. `assets.put_image` sniffs the bytes for the extension."""
+    import base64
+
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGNgYGD4"
+        "z8DAwMDAAAANHQEDeuUOPQAAAABJRU5ErkJggg==")
+
+
+def test_images_undescribed_reflects_the_worlds_gallery(client, campaign):
+    """Not null once there is a real answer -- the count this slice was
+    waiting on `image_descriptions.undescribed_count` to compute.
+
+    Off the campaign's own bound world, which the block's new `world` field
+    (added alongside `world_name` so the hub can link to it) names directly.
     """
-    assert _shell(client, campaign)["campaign"][field] is None
+    wid = _shell(client, campaign)["campaign"]["world"]
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Winifred"}).json()["character"]
+    vid = client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["default_version"]
+    root = store.worlds.paths.world_root(wid)
+    store.assets.put_image(root, chid, vid, "gallery_1", _png(), "png")
+
+    assert _shell(client, campaign)["campaign"]["images_undescribed"] == 1
+
+
+def test_world_id_travels_alongside_its_name(client, campaign):
+    """`world_name` alone is a label; the hub needs the id to link at the
+    world's own pages, so it rides beside it the way `CampaignMeta` pairs
+    `world`/`world_name` already."""
+    wid = store.campaigns.read.read_campaign(campaign)["meta"]["world"]
+    assert _shell(client, campaign)["campaign"]["world"] == wid
 
 
 def test_unreviewed_counts_proposals_across_pending_reviews(client, campaign):

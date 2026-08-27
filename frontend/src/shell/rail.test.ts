@@ -71,9 +71,48 @@ test("a campaign child lights its own row and not Overview", () => {
 test("rows whose pages do not exist yet go nowhere", () => {
   // Not a wish-list: this is what keeps the rail from offering a destination
   // that is not there. Each id gets a route in its own slice.
+  //
+  // `images` is in this list for a different reason than `wrap`, and the two
+  // are worth telling apart. Wrap-up has no page at all. Images has one — a
+  // section of the world screen — and is only dark here because this fixture
+  // predates `world` on the payload, which is exactly the state an older
+  // server leaves the field in.
   const dead = [...APP_ROWS, ...CAMPAIGN_ROWS]
     .filter((r) => r.to(ctx, WITH_MODULE) === null).map((r) => r.id);
   expect(dead).toEqual(["wrap", "images"]);
+});
+
+describe("Images points at the world section that holds it", () => {
+  const WITH_WORLD = {
+    ...WITH_MODULE,
+    campaign: { ...WITH_MODULE.campaign, world: "saltmarch", images_undescribed: 3 },
+  };
+  const images = () => CAMPAIGN_ROWS.find((r) => r.id === "images")!;
+
+  test("the id, not the name: `world_name` cannot address anything", () => {
+    expect(images().to(ctx, WITH_WORLD)).toBe("/worlds/saltmarch?section=images");
+  });
+
+  test("the backlog rides along", () => {
+    expect(images().tail!(WITH_WORLD)).toBe("3");
+    expect(images().tailLabel!(WITH_WORLD)).toBe("3 images undescribed");
+  });
+
+  test("nothing computed is no tail, and zero is a tail", () => {
+    const none = { ...WITH_WORLD, campaign: { ...WITH_WORLD.campaign, images_undescribed: null } };
+    expect(images().tail!(none)).toBeUndefined();
+    const zero = { ...WITH_WORLD, campaign: { ...WITH_WORLD.campaign, images_undescribed: 0 } };
+    expect(images().tail!(zero)).toBe("0");
+  });
+
+  test("it never lights, because the section is in the query string", () => {
+    // `match` is handed the pathname alone. Lighting on `/worlds/saltmarch`
+    // would mean lighting while the reader is in that world's Characters or
+    // Lore, which is a worse lie than never lighting at all.
+    for (const p of ["/worlds/saltmarch", "/worlds/saltmarch?section=images", "/campaigns/c1"]) {
+      expect(images().match(p, ctx)).toBe(false);
+    }
+  });
 });
 
 test("Costs is absent with no campaign open, present with one", () => {
