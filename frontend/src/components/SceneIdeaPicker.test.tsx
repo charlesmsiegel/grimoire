@@ -440,6 +440,45 @@ test("Regenerate clears the Saved labels, which point at cards that are gone", a
   expect(screen.getByRole("button", { name: "Save The tide turns" })).toBeEnabled();
 });
 
+test("a save that lands after a regenerate does not label the card that replaced it", async () => {
+  // The save is in flight across the replacement: the reply lands first, and
+  // the callback then files its card. Keyed by index that marked whatever now
+  // sits at index 0 as "Saved" and refused to file it, over an idea nothing
+  // had persisted (Codex, review).
+  const OTHER: SceneSuggestion = { ...SUGGESTION, title: "The tide turns", premise: "Q" };
+  let releaseSave: (v: any) => void = () => {};
+  (api.saveSceneIdea as any).mockReturnValue(new Promise((r) => { releaseSave = r; }));
+  const { rerender } = render(
+    <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
+                     direction="" onDirectionChange={() => {}}
+                     asked suggestions={[SUGGESTION]} picks={[]} nextDate="" busy={false} error={null}
+                     suggest={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Save The creditor" }));
+
+  rerender(
+    <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
+                     direction="" onDirectionChange={() => {}}
+                     asked suggestions={[OTHER]} picks={[]} nextDate="" busy={false} error={null}
+                     suggest={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
+  await act(async () => { releaseSave({ id: "the-creditor" }); });
+
+  expect(await screen.findByRole("button", { name: "Save The tide turns" })).toBeEnabled();
+});
+
+test("the suggest control is disabled while an extraction is in flight", async () => {
+  // The extraction is a draft on its way to the confirm form, and this pane
+  // unmounts the moment it arrives -- a generation started here would be paid
+  // for and thrown away with the component.
+  let releaseIntent: (v: any) => void = () => {};
+  (api.sceneIntent as any).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
+  renderPicker();
+  await screen.findByText("Reckoning");
+  fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  expect(screen.getByRole("button", { name: /regenerate/i })).toBeDisabled();
+  await act(async () => { releaseIntent({ title: "x", date: "", location: null, cast: [] }); });
+});
+
 test("Save for later files the typed text without an extraction call", async () => {
   const { onPicked } = renderPicker();
   await screen.findByText("Reckoning");

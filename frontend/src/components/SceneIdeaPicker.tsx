@@ -54,10 +54,19 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   const [saved, setSaved] = useState<SceneIdea[]>([]);
   const [showDismissed, setShowDismissed] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  // Which generated cards this session has already saved, by index. The saved
-  // copy also appears under Saved on the next read, so without this the same
-  // idea can be filed twice with two ids and no way to tell them apart.
-  const [kept, setKept] = useState<Set<number>>(new Set());
+  // Which generated cards this session has already saved. The saved copy also
+  // appears under Saved on the next read, so without this the same idea can be
+  // filed twice with two ids and no way to tell them apart.
+  //
+  // Keyed by the suggestion OBJECT, not by its index. An index is a position
+  // in a list that a regenerate replaces wholesale, and a save is in flight
+  // across that replacement: the reply lands, and the save's callback then
+  // files index 0 against whatever idea now sits at index 0, labelling a
+  // brand-new card "Saved" and refusing to file it (Codex, review). Every
+  // reply is freshly parsed, so its objects are new ones and an entry made
+  // against a replaced card simply never matches again -- which is also why
+  // this needs no reset when `suggestions` changes.
+  const [kept, setKept] = useState<Set<SceneSuggestion>>(new Set());
   // A save in flight. Save is idempotent server-side (an identical standing
   // idea returns its existing id rather than a second one), so this is about
   // the reader seeing that their click landed rather than about correctness --
@@ -97,11 +106,6 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       .catch((err) => { setSaved([]); setError(err); });
   }, [cid, pcless]);
   useEffect(loadSaved, [loadSaved]);
-
-  // Regenerate replaces the cards those indices point at, so a set carried
-  // across would label a brand-new idea "Saved" and refuse to file it. The
-  // hook hands back a new array on every reply, so identity is the signal.
-  useEffect(() => { setKept(new Set()); }, [suggestions]);
 
   const active = saved.filter((i) => i.status === "active");
   const dismissed = saved.filter((i) => i.status === "dismissed");
@@ -267,7 +271,12 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
             cannot make (it knows a press happened, not that a reply came
             back). The label is stable while `busy` so it stays the same
             control to look at -- and disabled, so it cannot be pressed twice. */}
-        <button className="subtle" disabled={!ready || busy}
+        {/* `inferring` too, not just `busy`: an extraction in flight is a
+            draft on its way to the confirm form, and this pane unmounts the
+            moment it arrives. A generation started here would be paid for and
+            then thrown away with the component -- which is the whole thing
+            this button exists to stop. */}
+        <button className="subtle" disabled={!ready || busy || inferring}
                 onClick={() => { setError(null); suggest(direction); }}>
           {asked ? "↻ Regenerate" : "✨ Suggest ideas"}
         </button>
@@ -300,10 +309,10 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
               carries the title as well as the state — several of these sit on
               one screen, and an aria-label overrides the text, so a fixed one
               would leave them indistinguishable. */}
-          <button className="subtle" disabled={kept.has(i) || saving}
-                  aria-label={`${kept.has(i) ? "Saved" : "Save"} ${s.title}`}
-                  onClick={() => save(asDraft(s), () => setKept((k) => new Set(k).add(i)))}>
-            {kept.has(i) ? "Saved" : "Save"}
+          <button className="subtle" disabled={kept.has(s) || saving}
+                  aria-label={`${kept.has(s) ? "Saved" : "Save"} ${s.title}`}
+                  onClick={() => save(asDraft(s), () => setKept((k) => new Set(k).add(s)))}>
+            {kept.has(s) ? "Saved" : "Save"}
           </button>
         </div>
       ))}
