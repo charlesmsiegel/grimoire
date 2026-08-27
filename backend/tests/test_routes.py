@@ -14872,7 +14872,7 @@ def _seed_content_module_with_holder(client, tmp_path, holder, mid="refmod"):
     import json as _json
     d = tmp_path / "modules" / mid
     (d / "content" / "items").mkdir(parents=True)
-    (d / "module.md").write_text("---\nname: Ref Test\n---\n", encoding="utf-8")
+    (d / "module.md").write_text("---\nname: Content Test\n---\n", encoding="utf-8")
     (d / "sheets.json").write_text(_json.dumps({"groups": {}, "sheet_types": {}}),
                                    encoding="utf-8")
     (d / "content" / "items" / "lantern.md").write_text(

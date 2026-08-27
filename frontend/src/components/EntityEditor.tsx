@@ -193,7 +193,7 @@ const UNLOADED_HINT = "Could not load the list of records, so this reference cou
  *  is what makes each option's own label unambiguous — "Mara" under Leader and
  *  "Mara" under Held by are two different controls, and only the group says so.
  */
-function RefField({ spec, options, value, onChange, unresolvedHint }: {
+function RefField({ spec, options, value, onChange, unresolvedHint, optionsComplete }: {
   spec: EntityFieldSpec;
   options: RecordRef[];
   value: string;
@@ -202,6 +202,10 @@ function RefField({ spec, options, value, onChange, unresolvedHint }: {
    *  only when the candidate lists actually loaded. See `unresolvedHint` in the
    *  editor below. */
   unresolvedHint: string;
+  /** Whether `options` is the whole truth. False while the listings are in
+   *  flight or after one failed, and it is what stops an empty picker from
+   *  claiming the store is empty. */
+  optionsComplete: boolean;
 }) {
   const selected = parseRefs(value);
   const shown = displayLabels(options);
@@ -214,7 +218,14 @@ function RefField({ spec, options, value, onChange, unresolvedHint }: {
   const dangling = selected.filter((r) => !options.some((o) => o.ref === r));
   // Only what this field is allowed to name, in the words the field uses. A
   // picker that offered nothing and said nothing reads as a broken control.
-  const empty = `No ${spec.kinds?.map((k) => KIND_NOUNS[k].many).join(" or ")} yet.`;
+  //
+  // ...but "there are none" is a claim about the store, and only a listing
+  // that arrived can make it. A single-kind field whose one listing failed
+  // would otherwise sit there reading "No locations yet." — a request outage
+  // presented as an empty library, with no error and nothing to retry.
+  const empty = optionsComplete
+    ? `No ${spec.kinds?.map((k) => KIND_NOUNS[k].many).join(" or ")} yet.`
+    : "Could not load the list of records to choose from.";
   const danglingRow = (ref: string, type: "radio" | "checkbox", onClear: () => void) => (
     <label key={ref} className="owner-option dangling" title={unresolvedHint}>
       <input type={type} name={spec.key} aria-label={ref} checked onChange={onClear} />
@@ -1062,6 +1073,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             {fieldSpecs.map((f) => (f.widget === "ref" ? (
               <RefField key={f.key} spec={f} options={refOpts.filter((o) => f.kinds?.includes(o.kind))}
                         value={fields[f.key] ?? ""} unresolvedHint={unresolvedHint}
+                        optionsComplete={refOptsComplete}
                         onChange={(v) => setFields({ ...fields, [f.key]: v })} />
             ) : (
               <Field key={f.key} label={f.label}>

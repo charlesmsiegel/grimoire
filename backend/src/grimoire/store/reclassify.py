@@ -151,7 +151,7 @@ def _repoint_campaign_side(cid: str, kind: str, eid: str,
         overlay.rewrite_ref_fields(cid, _owner_ref(kind, eid),
                                    _owner_ref(new_kind, new_eid))
         record_refs.repoint(cid, {old_ref: new_ref})
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, entities.EntityNotFound) as exc:
         log.warning("reclassified %s to %s in campaign %s but could not finish "
                     "repointing it (%s) -- an `owners:` line, a ref field, a pin, a "
                     "citation or an undo entry may still name the old kind",
@@ -181,12 +181,19 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
             entities.rewrite_ref_fields(wroot, _owner_ref(kind, eid),
                                         _owner_ref(new_kind, new_eid))
             sheets.repoint_world_records(wid, {old_ref: new_ref})
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, entities.EntityNotFound) as exc:
             # Ahead of the sweep in the file, but never ahead of it in
             # importance: one unreadable world record must not cost every
             # dependent campaign the repoint that keeps it from ending with a
             # stale copy under the old kind AND a duplicate under the new one.
             # That is the failure this whole function exists to prevent.
+            #
+            # `EntityNotFound` is in the list for the reason the per-campaign
+            # loop below gives: both sweeps here read a listing and then write
+            # each record it named, and nothing holds a lock over the gap, so
+            # another process or a sync client deleting one in between is a
+            # miss rather than an error. Uncaught it is a 500 on a reclassify
+            # that already happened, with every dependent campaign skipped.
             log.warning("reclassified %s to %s but could not finish the world-side "
                         "sweep (%s) -- an `owners:` line, a ref field or a sheet may "
                         "still name the old kind", old_ref, new_ref, exc)

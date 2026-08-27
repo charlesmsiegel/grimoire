@@ -13,12 +13,19 @@ export type LoreOwner = RecordRef;
 /** Mirrors `entity_schema.referenceable` for the two rules a listing can still
  *  hand back: a field holds a comma-separated list, so an id containing a comma
  *  reads back as two refs; and a ref lives in a single-line frontmatter scalar,
- *  so one containing a line break is stored, reported saved, and read back
+ *  so one containing a line boundary is stored, reported saved, and read back
  *  truncated. `slugify` cannot produce either, but a hand-authored or imported
  *  file can — and offering such a candidate puts something in the picker that
- *  the backend refuses on save with nothing anywhere saying why. */
+ *  the backend refuses on save with nothing anywhere saying why.
+ *
+ *  The character class is every separator Python's `str.splitlines` recognises,
+ *  because that is what `parse_frontmatter` splits on — not just CR and LF,
+ *  which is the version of this rule that missed eight of them. */
+const LINE_BOUNDARIES = [
+  "\n", "\r", "\v", "\f", "\u001c", "\u001d", "\u001e", "\u0085", "\u2028", "\u2029",
+];
 const referenceable = (id: string) =>
-  !id.includes(",") && !id.includes("\n") && !id.includes("\r");
+  !id.includes(",") && !LINE_BOUNDARIES.some((c) => id.includes(c));
 
 /** What a candidate fetch came back with. `failed` names the kinds whose
  *  listing did not load, and it is not a detail: a caller that cannot tell a
