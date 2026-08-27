@@ -14897,9 +14897,12 @@ def test_instantiating_module_content_with_a_bad_ref_is_refused(client, tmp_path
     wid = _world(client)
     # `holder` accepts characters, PCs, groups and locations -- so `lore` is the
     # wrong-kind case, alongside a bare id and an unsafe one.
-    for bad in ("mara", "lore:the-pact", "characters:../escape"):
-        mid = _seed_content_module_with_holder(client, tmp_path, bad,
-                                               mid=f"refmod-{abs(hash(bad))}")
+    # `enumerate` rather than a hash of the value: `hash()` on a string is
+    # salted per process, so the fixture directory had a different name on every
+    # run -- which is exactly the property that makes a failure hard to
+    # reproduce, in a suite where reproducibility is the point.
+    for i, bad in enumerate(("mara", "lore:the-pact", "characters:../escape")):
+        mid = _seed_content_module_with_holder(client, tmp_path, bad, mid=f"refmod-{i}")
         r = client.post(f"/api/worlds/{wid}/items/instantiate/{mid}/lantern")
         assert r.status_code == 400, bad
         assert "holder" in r.json()["detail"], bad
