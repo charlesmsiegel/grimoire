@@ -3942,6 +3942,10 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      them so the head reads as chrome the content scrolls past rather than as
      the start of the content. */
   .page-wide { padding: 0 0 18px; max-width: none; }
+  /* Every screen title, not only the ones that lead with an eyebrow: half the
+     app's heads are `<eyebrow><title>` and half are a bare title, and at 26px
+     against 18px the two read as different screens of different apps. */
+  .screen-title { font-size: 18px; letter-spacing: 0.03em; line-height: 1.15; }
   .page-wide > .eyebrow:first-child {
     padding: 11px 14px 0; margin: 0; background: var(--panel);
   }
@@ -3950,6 +3954,18 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
     padding: 0 14px 11px; background: var(--panel);
     border-bottom: 1px solid var(--line);
   }
+  /* The older `.page` layout, which the library family still uses, gets the
+     same treatment from its own two classes. 44px of padding and a 64px
+     display face is a desktop measure; the 640px rule above already pulled
+     the face to 40, which is still most of a phone's first screenful before
+     any content. Same 18px, same gutter, so a reader moving between a
+     `.page` screen and a `.page-wide` one does not cross a seam. */
+  .page { padding: 0 14px 18px; max-width: none; }
+  .page-head { padding-top: 12px; }
+  .page-h1, .page-narrow .page-h1 {
+    font-size: 20px; line-height: 1.15; letter-spacing: 0.04em;
+  }
+
   /* Everything after the head keeps the body gutter the head already has. */
   .page-wide > *:not(.eyebrow):not(.screen-title) { padding-left: 14px; padding-right: 14px; }
   .page-wide > .chore-list,
@@ -4022,30 +4038,34 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   .detail-sidebar { width: auto; }
 
   /* ---- the context column becomes a sheet ---- */
+  /* ...except on the library, whose column is not an index at all: it is a
+     horizontal strip of section tabs that is always on screen, which is why
+     that page hides the toggle. Making it a sheet took the tabs off screen
+     and left nothing to open them with. */
   /* It was a full-screen overlay, which is the one shape that cannot be
      consulted: the whole reason to open Cast mid-scene is to look at it
      against the post you are reading, and a cover hides exactly that. The
      design's frame gives it 74% and leaves the transcript visible above.
      `visibility` still does the hiding — it keeps the closed sheet out of the
      tab order, which `transform` alone would not. */
-  .shell.phone .context-column {
+  .shell.phone:not(.library) .context-column {
     position: fixed; inset: auto 0 0 0; z-index: 30;
     max-height: 74%; height: auto; width: auto;
     border-top: 1px solid var(--line-strong); border-radius: 14px 14px 0 0;
     box-shadow: var(--pop); display: flex; flex-direction: column;
     transform: translateY(100%); transition: transform 0.18s ease;
   }
-  .shell.phone.show-column .context-column { transform: translateY(0); }
+  .shell.phone:not(.library).show-column .context-column { transform: translateY(0); }
   /* The grab handle. Decoration, and named as such — the sheet is dismissed by
      the control that opened it, not by dragging this. */
-  .shell.phone .context-column::before {
+  .shell.phone:not(.library) .context-column::before {
     content: ""; flex: none; width: 40px; height: 4px; border-radius: 2px;
     background: var(--line-strong); margin: 8px auto 4px;
   }
-  .shell.phone .column-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+  .shell.phone:not(.library) .column-scroll { flex: 1; min-height: 0; overflow-y: auto; }
   /* What the sheet is over stays legible, and a tap outside it is not a tap on
      the transcript underneath. */
-  .shell.phone.show-column .shell-main::after {
+  .shell.phone:not(.library).show-column .shell-main::after {
     content: ""; position: fixed; inset: 0; z-index: 29;
     background: rgba(0, 0, 0, 0.35);
   }
