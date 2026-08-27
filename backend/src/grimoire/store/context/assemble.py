@@ -517,7 +517,8 @@ class Section(NamedTuple):
     #: A heading this section SHARES with every other section naming the same
     #: template. `_render_sections` opens each contiguous RUN of them with it —
     #: one copy while they are adjacent, another for a half the layout moved
-    #: away, because what it frames is a block and a split layout has two. Not
+    #: away, because what it frames is a block and a split layout has two, and
+    #: `_dedupe_runs` takes the second back off when packing closes the gap. Not
     #: a section title: every other section opens with its own `# Heading`
     #: inside its own template, and only a block that was split into several
     #: sections for the token breakdown's sake needs this.
@@ -738,15 +739,59 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
         # actually appended. Prepended BEFORE macro expansion, because the
         # heading is a template on disk like any other and a reader may have
         # put a macro in it.
-        if body and section.heading and section.heading != last_heading:
-            body = prompts.render(section.heading, **data).strip() + "\n\n" + body
         text = macros.expand_macros(body, a["subs"], cid, sid).strip()
-        if text:
-            out.append({"id": section.id, "label": section.label,
-                        "text": text, "tier": section.tier,
-                        "pinned": section.id in pinned})
-            last_heading = section.heading
+        if not text:
+            continue
+        head = ""
+        if section.heading and section.heading != last_heading:
+            # Expanded on its own rather than prepended first, so the exact
+            # string that went on the front is the exact string `_dedupe_runs`
+            # can take back off. Each half is still expanded exactly once, and
+            # the heading is still expanded at all -- it is a template on disk
+            # like any other and a reader may have put a macro in it.
+            head = macros.expand_macros(prompts.render(section.heading, **data),
+                                        a["subs"], cid, sid).strip()
+            text = head + "\n\n" + text
+        out.append({"id": section.id, "label": section.label,
+                    "text": text, "tier": section.tier,
+                    "pinned": section.id in pinned,
+                    "heading": section.heading, "heading_text": head})
+        last_heading = section.heading
     return out
+
+
+def _dedupe_runs(sections: list[dict]) -> None:
+    """Strip a shared heading that PACKING made adjacent to its own copy.
+
+    Runs are decided while sections render, and the packer edits the list
+    afterwards -- so a layout that put a droppable section between two members
+    of a group renders two correctly-framed runs, and dropping that section
+    closes them up into one block carrying its heading twice.
+
+    In place, on the packed sections, so `_system_text` and `_breakdown` read
+    the same strings: an inspector row still showing a heading the prompt does
+    not have would be describing a different message from the one that went
+    out, which is the split `_render_sections` exists to prevent.
+
+    Safe in the direction packing cares about, which is why this can live after
+    `pack.pack` while the mirror-image problem (reassigning a heading to a
+    survivor when its carrier was dropped) cannot: `pack` measured the prompt
+    WITH both copies, so removing one only ever lowers the total. The cost is a
+    fit computed one heading pessimistically; adding tokens after the fit would
+    be a ceiling already spent.
+    """
+    last = ""
+    for s in sections:
+        if s.get("dropped"):
+            continue
+        head = s.get("heading") or ""
+        dupe = s.get("heading_text")
+        if head and head == last and dupe and s["text"].startswith(dupe):
+            s["text"] = s["text"][len(dupe):].lstrip("\n")
+            s["heading_text"] = ""
+        # Set even when stripped: the section is still in the group, so a THIRD
+        # member closing up behind it must dedupe against the same heading.
+        last = head
 
 
 def _packed(a: dict, cid: str, sid: str, opener: bool = False,
@@ -772,10 +817,13 @@ def _packed(a: dict, cid: str, sid: str, opener: bool = False,
     # config.md, so saving a new ceiling mid-compose made the breakdown report a
     # budget the packing pass never applied -- harmless drift in the live panel,
     # but a frozen snapshot would keep claiming it forever.
-    return {**pack.pack(_render_sections(a, cid, sid, opener=opener),
-                        [] if opener else a["history"], reserved, budget,
-                        compose=_compose_system),
-            "budget": budget}
+    packed = pack.pack(_render_sections(a, cid, sid, opener=opener),
+                       [] if opener else a["history"], reserved, budget,
+                       compose=_compose_system)
+    # After the fit, never before: what the packer DROPPED is what decides
+    # whether two runs of a shared heading became one.
+    _dedupe_runs(packed["sections"])
+    return {**packed, "budget": budget}
 
 
 def _compose_system(texts: list[str]) -> str:
