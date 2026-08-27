@@ -655,7 +655,19 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       const res = await api.saveChronicle(cid, sid, {
         one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
         timeline_events: absorb.timeline_events,
-        edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e),
+        // Everything the reviewer did not REJECT. Rejecting is now the only
+        // thing that excludes a proposal: a row left untouched is accepted,
+        // which is what the footer says in words and in its own count before
+        // the button is pressed.
+        //
+        // This reverses the older rule -- "nothing is applied that the reviewer
+        // did not tick" -- deliberately. Under that rule the proposals dropped
+        // by inaction were exactly the `low` band and the uncited ones, so
+        // closing a review without reading it silently threw away the model's
+        // least confident work and looked identical to approving it. Neither
+        // direction is safe by default; this one is at least legible, because
+        // the count of what will be accepted is on the button.
+        edits: editRows.filter((e) => !e.rejected).map(({ approved, ...e }) => e),
         // Same token on every attempt, so the retry below cannot commit twice
         // when the first PUT landed and only its response was lost (#235).
         commit_token: absorb.commit_token });

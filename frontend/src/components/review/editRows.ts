@@ -95,9 +95,18 @@ export function editBand(e: StagedEdit): NonNullable<StagedEdit["review"]>["band
   return e.review?.band ?? "medium";
 }
 
-// Only `low` starts unticked. Withholding a default approval is the safe
-// direction and the only relaxation of the review-everything invariant this
-// ships: nothing is applied that the reviewer did not tick and Save.
+// Only `low` starts unticked, and that is now a *display* verdict rather than
+// a gate: the save sends everything the reviewer did not reject, so an unticked
+// row still lands unless it is rejected. What the tick buys is visibility --
+// the rows the model was least sure about arrive looking unfinished and are
+// collected in the two NEEDS YOU drawers, so "what did nobody look at" is one
+// glance rather than a diff.
+//
+// The older rule was the reverse (nothing applied without a tick). It was
+// changed because its failure mode was silent in the worse direction: closing a
+// review without reading it discarded exactly the model's least confident work
+// while looking identical to accepting it. The footer now states which way it
+// goes and counts it on the button.
 export function approvedByDefault(e: StagedEdit): boolean {
   return editBand(e) !== "low";
 }

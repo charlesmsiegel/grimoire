@@ -3734,3 +3734,10 @@ a.column-back { text-decoration: none; }
   .scene-item-act { min-height: 44px; }
   .scene-item { min-height: 60px; }
 }
+
+/* The wrap-up footer: what the button is about to do, before it is pressed. */
+.review-explain {
+  flex-basis: 100%; order: 3; margin: 6px 0 0;
+  font-size: 13px; line-height: 1.5; color: var(--muted);
+}
+.review-footer { flex-wrap: wrap; }

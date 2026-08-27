@@ -89,8 +89,12 @@ export default function AbsorbEditRow({ e, i, review }: {
           <p className="field-hint">{conflict.reason} — it now reads:</p>
           <div className="absorb-stored">{conflict.stored}</div>
           <div className="form-actions">
+            {/* Keeping what is stored means this proposal must NOT be written,
+                and rejecting is the only thing that excludes one now. Merely
+                un-approving would leave it in the batch, which is the exact
+                opposite of what the button says. */}
             <button className="subtle" aria-label={`Keep stored ${e.label}`}
-                    onClick={() => editRow(i, { approved: false })}>
+                    onClick={() => decide(i, "rejected")}>
               Keep stored</button>
             <button className="subtle" aria-label={`Replace stored ${e.label}`}
                     onClick={() => resolveConflict(i, conflict, "replace")}>
