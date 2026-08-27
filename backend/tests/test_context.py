@@ -763,6 +763,61 @@ def test_dropping_the_heading_half_leaves_tier_three_unframed(monkeypatch, tmp_p
     assert "Introduce them only if the story calls for it" not in sys
 
 
+def test_packing_out_the_section_between_the_runs_leaves_one_heading(monkeypatch, tmp_path):
+    """Runs are decided when sections RENDER; the packer edits the list after.
+
+    A layout that puts a droppable section between the two tiers makes two runs
+    and two headings, correctly. Drop that section for budget and the survivors
+    close up — so the prompt would carry the directory's heading twice, in a row,
+    which is the mirror of the bug this branch is about: the reader is told once
+    too often instead of not at all.
+
+    Deduping is safe in the direction packing cares about. `pack` measured the
+    prompt WITH both copies, so removing one only ever lowers the total; the
+    cost is that the fit was computed a heading pessimistically, which is the
+    right way round."""
+    from grimoire.store import chronicle, config
+    cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
+    # A background section big enough to be the one the packer reaches for --
+    # largest within a tier goes first -- sitting between the two tiers.
+    for i in range(24):
+        chronicle.absorb(cid, {"id": f"2026-01-{i:02d}-past", "summary": "s", "keywords": [],
+                               "one_line": f"Episode {i}: a thing of some consequence happened here."})
+    entries = [e for e in _full_layout() if e["id"] != "story_so_far"]
+    at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_known")
+    entries.insert(at, {"id": "story_so_far", "label": "", "enabled": True})
+    context.layout.write_layout(entries)
+    config.write_config(prompt_layout_enabled="on")
+
+    # Split by a section of its own, the two runs are both framed (the fix above).
+    assert context.build_messages(cid, sid)[0]["content"].count(
+        "# Other characters in this world") == 2
+
+    rows = {r["id"]: r for r in context.context_breakdown(cid, sid)["sections"]}
+    assert rows["story_so_far"]["tokens"] > rows["off_scene_cast_active"]["tokens"], \
+        "fixture must make the separator the section the packer takes first"
+    total = context.context_breakdown(cid, sid)["total_tokens"]
+    config.write_config(context_budget=str(total - rows["story_so_far"]["tokens"] // 2))
+
+    after = {r["id"]: r for r in context.context_breakdown(cid, sid)["sections"]}
+    assert after["story_so_far"]["dropped"] is True
+    assert after["off_scene_cast_active"]["dropped"] is False
+    assert after["off_scene_cast_known"]["dropped"] is False
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert sys.count("# Other characters in this world") == 1
+    # ...and the survivors really did close up into one block.
+    assert ("# Other characters in this world\n"
+            "\n"
+            "# (Not present. Introduce them only if the story calls for it.)\n"
+            "\n"
+            "## Active in this campaign, elsewhere\n") in sys
+    # The inspector must agree with the prompt: the row whose heading was
+    # dropped may not still show one, or the panel is describing a different
+    # message from the one that went out.
+    assert "# Other characters in this world" not in after["off_scene_cast_known"]["text"]
+
+
 def test_a_reordered_layout_can_still_drop_the_half_holding_the_heading(monkeypatch, tmp_path):
     """The sibling of the test above, under a reordered layout -- and the one
     thing #423's fix does NOT solve.
