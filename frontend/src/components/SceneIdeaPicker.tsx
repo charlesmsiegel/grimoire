@@ -12,7 +12,7 @@ import type { SceneSuggestionsState } from "./useSceneSuggestions";
 const SAVED_SLOTS = 4;
 
 /** The generated half of the picker (suggestions/picks/nextDate/busy/error/
- *  refresh) and the typed `direction` both live in `NewSceneChooser` now, not
+ *  suggest) and the typed `direction` both live in `NewSceneChooser` now, not
  *  here — this component only renders them. That is what makes **Back**
  *  cheap: it unmounts this pane, and since the state it used to own now lives
  *  one level up, unmounting costs nothing (issue #319). Before this, Back
@@ -34,7 +34,7 @@ const SAVED_SLOTS = 4;
  *  no model configured all along. */
 export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
                                   asked, suggestions, picks, nextDate, busy, error: genError,
-                                  suggest, refresh, onPicked, onCancel }: {
+                                  suggest, onPicked, onCancel }: {
   cid: string;
   afterSid: string | null;
   ready: boolean;
@@ -262,16 +262,13 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
         <input type="text" aria-label="Direction" className="grow"
                placeholder="Steer the generated ideas — e.g. something at sea"
                value={direction} onChange={(e) => onDirectionChange(e.target.value)} />
-        {/* One control, two jobs: the first press ranks (which also orders the
-            greeting cards above), and every press after that regenerates the
-            ideas alone. The label is stable while `busy` so it stays the same
+        {/* One control and one call: `suggest` ranks until a ranking has
+            landed and regenerates after that, which is a distinction this pane
+            cannot make (it knows a press happened, not that a reply came
+            back). The label is stable while `busy` so it stays the same
             control to look at -- and disabled, so it cannot be pressed twice. */}
         <button className="subtle" disabled={!ready || busy}
-                onClick={() => {
-                  setError(null);
-                  if (asked) refresh(direction);
-                  else suggest(direction);
-                }}>
+                onClick={() => { setError(null); suggest(direction); }}>
           {asked ? "↻ Regenerate" : "✨ Suggest ideas"}
         </button>
       </div>
