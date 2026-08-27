@@ -1404,3 +1404,21 @@ test("a sidebar ref of a kind the field cannot name reads as unresolved", async 
   expect(within(leader).getByText("locations:realm")).toHaveClass("dangling");
   expect(within(hq).getByRole("button", { name: /Realm/ })).toBeInTheDocument();
 });
+
+test("a record read still in flight when the scope changes does not land under the new scope", async () => {
+  // The same exposure PCEditor.select had: this editor stays mounted across a
+  // world-to-world navigation, so without a token the previous scope's record
+  // lands under the new one — where Save and Delete act on the new scope.
+  let resolveRead!: (v: unknown) => void;
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  (api.readEntity as any).mockReturnValue(new Promise((r) => { resolveRead = r; }));
+  const { rerender } = render(
+    <EntityEditor wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  rerender(<EntityEditor wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+  await waitFor(() =>
+    expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w2" }, "lore"));
+  resolveRead({ meta: { id: "salt", name: "Salt" }, body: "old scope body", rev: "r1" });
+  await waitFor(() => expect(api.listEntities).toHaveBeenCalled());
+  expect(screen.queryByText("old scope body")).toBeNull();
+});

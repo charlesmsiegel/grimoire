@@ -323,6 +323,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   // land on top of a newer one — the same guard `PCEditor` uses for its lock
   // lookup, and for the same reason.
   const refReq = useRef(0);
+  // The same guard for the record READS. `select` and the image shelf both
+  // await and then write view state, and this editor stays mounted across a
+  // world-to-world navigation — so without a token the previous scope's record
+  // lands under the new one, where Save and Delete act on the new `scope`.
+  // Bumped by each read and by the scope change below.
+  const readReq = useRef(0);
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
@@ -351,6 +357,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [wid, kind, scope.kind, scope.id]);
   useEffect(() => {
+    readReq.current += 1;   // discard a record read still out for the old scope
     reload();
     resetForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -448,12 +455,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }, [nav]);
 
   const reloadImages = useCallback((id: string) => {
+    const req = readReq.current;   // whichever select or refresh asked for these
     api.listEntityImages(scope, kind, id)
-      .then((imgs) => setImages(imgs.map((i) => ({
+      .then((imgs) => { if (req === readReq.current) setImages(imgs.map((i) => ({
         name: i.name, v: i.v,
         description: i.described ? (i.description ?? "") : undefined,
-      }))))
-      .catch(() => setImages([]));
+      }))); })
+      .catch(() => { if (req === readReq.current) setImages([]); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, scope.kind, scope.id]);
 
@@ -481,7 +489,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setStale(null);
     setContentPreview(null);
     setWizardOpen(false);
+    const req = ++readReq.current;
     const e = await api.readEntity(scope, kind, id);
+    if (req !== readReq.current) return;   // the scope moved on, or a later select won
     setEditing(id);
     setRev(e.rev);
     setName(e.meta.name);
