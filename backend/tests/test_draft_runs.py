@@ -76,7 +76,14 @@ def test_a_draft_answers_202_with_a_run_and_delivers_its_result(client, world):
 
     assert started.status_code == 202
     run = started.json()["run"]
-    assert (run["cls"], run["kind"], run["state"]) == ("draft", "tagline", "running")
+    assert (run["cls"], run["kind"]) == ("draft", "tagline")
+    # NOT `state == "running"`. The 202 is built after the work is handed to
+    # the runner, so a faked provider can finish before the response is shaped
+    # -- rarely, and only when the machine is loaded enough to schedule the
+    # detached task in that gap. Asserting it passed here for a week and then
+    # failed once inside the full suite, which is the shape #351 documents.
+    # What the client actually needs is that the body names a run it can poll.
+    assert run["state"] in ("running", "landed")
     landed = _wait_state(client, f"/api/worlds/{world}/runs", run["id"])
     assert landed["result"] == {"tagline": "Keeps the tide-gate."}
 
@@ -408,6 +415,43 @@ def test_a_duplicate_opener_replays_rather_than_generating_again(client, campaig
 
     assert _first_run_id(first) == _first_run_id(again)
     assert fake.calls == 1
+
+
+def test_an_opener_that_failed_is_recorded_failed_not_landed(client, campaign):
+    """`ephemeral_frames` handles an upstream failure by emitting an error frame
+    and finishing normally, so "did not raise" covers both a delivered opener
+    and a failed one. Inferred, the run says `landed` with no error -- and a
+    client that came back and polled instead of reading the frames would be
+    told an opener arrived whose only terminal frame says it did not."""
+    _world, cid = campaign
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FailingOpenRouter([], "rate_limit", "slow down")
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener",
+                       json={"prompt": "begin"}).text
+    run = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/"
+                     f"{_first_run_id(body)}").json()["run"]
+
+    assert run["state"] == "failed"
+    assert run["error"]["kind"] == "rate_limit"
+
+
+def test_a_preflight_refusal_keeps_its_status_on_the_run(client, world):
+    """Both scenario parses reserve BEFORE their slow preflight, so a refusal
+    can land after the run is discoverable -- and a client whose response was
+    lost reads it off the record instead. Without the status the record says
+    409 where the request said 400, and a retry adopts that wrong shape."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+
+    refused = client.post(f"/api/worlds/{world}/scenario/parse-url",
+                          json={"url": "not a url"},
+                          headers={"X-Grimoire-Attempt": "a1"})
+
+    assert refused.status_code == 400
+    found = client.get(f"/api/worlds/{world}/runs?attempt=a1").json()["runs"]
+    assert [r["state"] for r in found] == ["failed"]
+    assert found[0]["error"]["status"] == 400
 
 
 def _first_run_id(body: str) -> str:

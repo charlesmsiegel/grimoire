@@ -1417,8 +1417,16 @@ def reservation(app, run: Run):
         # A refusal the route chose -- 400 for an empty retry, 404 for a scene
         # that vanished. The client is being told; the run has to agree, or the
         # composer stays locked against a turn that never began.
+        #
+        # WITH ITS STATUS AND ITS KIND, because the response carrying them can
+        # be lost. A draft route that reserves before its slow preflight (both
+        # scenario parses do) can refuse afterwards, and a client that adopts
+        # the run by attempt id reads the refusal off the record instead --
+        # so without these it is handed a bare 409 where the request said 400
+        # or 404, and a retry adopts that same wrong shape.
         _release_unstarted(app, run, "failed", {
-            "kind": "refused", "detail": _detail_text(exc)})
+            "kind": _detail_kind(exc), "detail": _detail_text(exc),
+            "status": exc.status_code})
         raise
     except BaseException as exc:
         _release_unstarted(app, run, "failed", {
@@ -1444,6 +1452,19 @@ def _release_unstarted(app, run: Run, state: RunState, error: dict | None = None
     if run.started or run.state != "running":
         return
     release_before_start(app, run, state, error)
+
+
+def _detail_kind(exc: HTTPException) -> str:
+    """An HTTPException's `kind`, or `refused` when it named none.
+
+    The structured refusals in this tree (`already_absorbed`,
+    `scene_id_too_long`, `missing_key`) carry one and the client acts on it;
+    the plain-string ones do not, and `refused` is what they have always been
+    recorded as."""
+    detail = exc.detail
+    if isinstance(detail, dict) and detail.get("kind"):
+        return str(detail["kind"])
+    return "refused"
 
 
 def _detail_text(exc: HTTPException) -> str:
