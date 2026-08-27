@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, type EntityScope, type ModuleDetail } from "../api/client";
+import { api, ENTITY_KINDS, type EntityKind, type EntityScope, type ModuleDetail } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
@@ -257,14 +257,19 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     setSection(kind);
   }
 
-  // an owner chip inside Lore jumps to that record's section
+  // A `<kind>:<id>` chip — a lore owner, or the target of a ref-valued entity
+  // field (#222) — jumps to the record it names. Split on the FIRST colon:
+  // `paths.safe_id` rejects a colon in an id, so the head is always the kind.
   function openOwner(ref: string) {
     const i = ref.indexOf(":");
     const kind = ref.slice(0, i);
     const id = ref.slice(i + 1);
     if (kind === "characters") openCharacter(id, ""); // "" -> CharacterEditor falls back to default version
     else if (kind === "pcs") setSection("pcs");
-    else if (kind === "locations") setSection("locations");
+    // The entity kinds land on the record itself, not merely its section: a
+    // ref names one record, and dropping the reader in a list to find it again
+    // would be answering the question with the index.
+    else if (ENTITY_KINDS.includes(kind as EntityKind)) openEntity(kind as IndexKey, id);
   }
 
   /** Open what the URL names: `?section=lore&id=the-salt-pact`, plus `&v=` for
@@ -486,11 +491,14 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           </>
         )}
         {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items" nav={navFor("items")}
-                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
+                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity}
+                                          onOpenOwner={openOwner} module={moduleCtx} />}
         {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" nav={navFor("groups")}
-                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
+                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity}
+                                          onOpenOwner={openOwner} module={moduleCtx} />}
         {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" nav={navFor("creatures")}
-                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
+                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity}
+                                          onOpenOwner={openOwner} module={moduleCtx} />}
         {section === "greetings" && (
           <>
             <div className="chips section-views" role="group" aria-label="Greetings view">

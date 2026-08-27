@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
-import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
+import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type RefKind, type Secrecy } from "../api/client";
+import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
 import { Field } from "./Field";
@@ -16,6 +16,14 @@ import { StaleRecordBanner } from "./StaleRecordBanner";
 
 export const KIND_LABELS: Record<EntityKind, string> = {
   locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
+};
+
+// Plurals, for saying what a ref picker with no candidates is missing. Wider
+// than KIND_LABELS because a ref field can name an actor, which is not an
+// entity kind and so has no entry there.
+const KIND_NOUNS: Record<RefKind, string> = {
+  characters: "characters", pcs: "PCs", locations: "locations", lore: "lore entries",
+  items: "items", groups: "groups", creatures: "creatures",
 };
 
 // What a record's body costs when it reaches a prompt (#51). Counted on the
@@ -85,6 +93,122 @@ const asSecrecy = (v: unknown): Secrecy => {
   return (SECRECY_LEVELS as readonly string[]).includes(level) ? (level as Secrecy) : "public";
 };
 
+/** The union of the record kinds this kind's `ref` fields can name, in first
+ *  appearance order and without repeats — what to fetch once for the whole
+ *  form. Empty for a kind that declares no ref field, which is what the effect
+ *  below checks before making any request at all. */
+function refKindsFor(specs: EntityFieldSpec[]): RefKind[] {
+  const out: RefKind[] = [];
+  for (const spec of specs) {
+    for (const k of spec.kinds ?? []) if (!out.includes(k)) out.push(k);
+  }
+  return out;
+}
+
+/** Refs stored in one field, in the `owners:` spelling: comma-separated
+ *  `<kind>:<id>`. Same parse as `entity_schema.parse_refs` on the other side.
+ *
+ *  Takes the undefined a `fields[key]` lookup can hand back rather than
+ *  `unknown`: everything that reaches this has already been read out of the
+ *  editor's own string map, and widening it would only invite a caller to
+ *  stringify something that has no spelling. */
+const parseRefs = (v: string | undefined): string[] =>
+  (v ?? "").split(",").map((r) => r.trim()).filter(Boolean);
+
+// What a ref that resolves to nothing says when hovered. Not an error and not
+// hidden: a delete deliberately leaves refs dangling (#222), so the chip's job
+// is to say the record is gone rather than to look like a field nobody filled in.
+const DANGLING_HINT = "This record no longer exists here — it may have been deleted, "
+  + "or it may live outside this campaign";
+
+/** The picker for one `ref` field (#222).
+ *
+ *  Real radios and real checkboxes, for the reason the secrecy picker gives:
+ *  a native group gets arrow-key navigation and roving focus for free, which a
+ *  row of buttons wearing `role="radio"` does not. Which of the two a field
+ *  gets is `multi` — a group has one leader and a creature ranges over several
+ *  places, and a control that let you tick two leaders would be offering a save
+ *  the backend refuses.
+ *
+ *  Not wrapped in `Field`: `Field` labels ONE control by id, and this is a set
+ *  of them. The heading is carried by the group's `aria-label` instead, which
+ *  is what makes each option's own label unambiguous — "Mara" under Leader and
+ *  "Mara" under Held by are two different controls, and only the group says so.
+ */
+function RefField({ spec, options, value, onChange }: {
+  spec: EntityFieldSpec;
+  options: RecordRef[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const selected = parseRefs(value);
+  // A stored ref that no candidate answers to — the record was deleted, or it
+  // lives outside this scope. It gets a row of its own, checked, so the value
+  // is VISIBLE and clearable. Leaving it out was the tempting shortcut and the
+  // wrong one: the field would look unset while still saving the old ref, and
+  // the one thing the user cannot then do is remove it.
+  const dangling = selected.filter((r) => !options.some((o) => o.ref === r));
+  // Only what this field is allowed to name, in the words the field uses. A
+  // picker that offered nothing and said nothing reads as a broken control.
+  const empty = `No ${spec.kinds?.map((k) => KIND_NOUNS[k]).join(" or ")} yet.`;
+  const danglingRow = (ref: string, type: "radio" | "checkbox", onClear: () => void) => (
+    <label key={ref} className="owner-option dangling" title={DANGLING_HINT}>
+      <input type={type} name={spec.key} aria-label={ref} checked onChange={onClear} />
+      {ref}
+    </label>
+  );
+  if (spec.multi) {
+    return (
+      <div className="field">
+        <label>{spec.label}</label>
+        <div className="chips owner-picker" role="group" aria-label={spec.label}>
+          {options.map((o) => (
+            <label key={o.ref} className="owner-option">
+              <input type="checkbox" aria-label={o.label} checked={selected.includes(o.ref)}
+                     onChange={(e) => onChange(
+                       (e.target.checked
+                         ? [...selected, o.ref]
+                         : selected.filter((r) => r !== o.ref)).join(", "))} />
+              {o.label}
+            </label>
+          ))}
+          {dangling.map((ref) => danglingRow(ref, "checkbox",
+            () => onChange(selected.filter((r) => r !== ref).join(", "))))}
+          {options.length === 0 && dangling.length === 0
+            && <span className="field-hint">{empty}</span>}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="field">
+      <label>{spec.label}</label>
+      <div className="chips owner-picker" role="radiogroup" aria-label={spec.label}>
+        {/* An explicit None, because a radio group has no way back to unset:
+            without it, picking a leader by accident could never be undone. */}
+        <label className="owner-option">
+          <input type="radio" name={spec.key} aria-label="None" checked={selected.length === 0}
+                 onChange={() => onChange("")} />
+          None
+        </label>
+        {options.map((o) => (
+          <label key={o.ref} className="owner-option">
+            <input type="radio" name={spec.key} aria-label={o.label}
+                   checked={selected[0] === o.ref} onChange={() => onChange(o.ref)} />
+            {o.label}
+          </label>
+        ))}
+        {/* Clearing it means picking None or another candidate; the row itself
+            is checked and stays checked until one of those happens, which is
+            how a radio group says "this is the current value". */}
+        {dangling.map((ref) => danglingRow(ref, "radio", () => undefined))}
+        {options.length === 0 && dangling.length === 0
+          && <span className="field-hint">{empty}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, onReclassified, module = null }: {
   wid: string;
   kind: EntityKind;
@@ -108,10 +232,15 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [keys, setKeys] = useState("");
   const fieldSpecs = ENTITY_FIELDS[kind];
   const [fields, setFields] = useState<Record<string, string>>({});
+  // The candidates every `ref` field on this kind can offer, fetched once for
+  // the union of their kinds and filtered per field below — `holder` and
+  // `headquarters` both want locations, and asking twice would be two requests
+  // for one answer.
+  const [refOpts, setRefOpts] = useState<RecordRef[]>([]);
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
-  const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
+  const [ownerOpts, setOwnerOpts] = useState<RecordRef[]>([]); // candidates for the picker
   const [tokenCost, setTokenCost] = useState<number | null>(null); // selected record's prompt cost
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +273,26 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   useEffect(() => {
     if (kind === "lore") loreOwnerOptions(scope).then(setOwnerOpts);
   }, [wid, kind]);
+
+  useEffect(() => {
+    const kinds = refKindsFor(fieldSpecs);
+    // Guarded rather than unconditional: a kind with no ref fields (lore, and
+    // locations, which has three text fields and none of these) would
+    // otherwise pay a listing request per record kind on every mount for a
+    // picker it never renders.
+    if (!kinds.length) { setRefOpts([]); return; }
+    refOptions(scope, kinds).then(setRefOpts).catch(() => setRefOpts([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wid, kind, scope.kind, scope.id]);
+
+  /** The label to show for a stored ref, or null when nothing here answers to
+   *  it — a record that has been deleted, or one this scope cannot see. Null is
+   *  the interesting answer: it is what the sidebar renders as a dangling chip
+   *  rather than dropping (#222). */
+  const refLabel = useCallback(
+    (ref: string) => refOpts.find((o) => o.ref === ref)?.label ?? null,
+    [refOpts],
+  );
 
   const ownerLabel = useCallback(
     (ref: string) => ownerOpts.find((o) => o.ref === ref)?.label ?? ref,
@@ -666,16 +815,44 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   <div className="field-hint">{costHint}</div>
                 </div>
               )}
-              {fieldSpecs.some((f) => fields[f.key]) && (
+              {fieldSpecs.some((f) => f.widget !== "ref" && fields[f.key]) && (
                 <div className="side-section">
                   <h4>Details</h4>
                   <div className="chips">
-                    {fieldSpecs.filter((f) => fields[f.key]).map((f) => (
+                    {fieldSpecs.filter((f) => f.widget !== "ref" && fields[f.key]).map((f) => (
                       <span key={f.key} className="chip on">{f.label}: {fields[f.key]}</span>
                     ))}
                   </div>
                 </div>
               )}
+              {/* One section per ref field rather than a row inside Details:
+                  these are records, and the list/detail contract says metadata
+                  referencing another record renders as a clickable chip under
+                  its own heading — the same shape lore's Owners has. */}
+              {fieldSpecs.filter((f) => f.widget === "ref" && fields[f.key]).map((f) => (
+                <div className="side-section" key={f.key}>
+                  <h4>{f.label}</h4>
+                  <div className="chips">
+                    {parseRefs(fields[f.key]).map((ref) => {
+                      const label = refLabel(ref);
+                      return label === null ? (
+                        // Not a button: there is nothing to navigate to. It is
+                        // shown at all because a delete does not scrub the refs
+                        // that name the record (#222), and a field that quietly
+                        // rendered nothing would read as one nobody filled in.
+                        <span key={ref} className="chip dangling" title={DANGLING_HINT}>{ref}</span>
+                      ) : (
+                        <button key={ref} className="chip owner-chip"
+                                onClick={() => onOpenOwner?.(ref)}>
+                          <Portrait src={refOpts.find((o) => o.ref === ref)?.avatar ?? null}
+                                    name={label} />
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
               {sdPrompt && (
                 <div className="side-section">
                   <h4>Image prompt</h4>
@@ -764,12 +941,16 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                 ))}
               </div>
             </Field>
-            {fieldSpecs.map((f) => (
+            {fieldSpecs.map((f) => (f.widget === "ref" ? (
+              <RefField key={f.key} spec={f} options={refOpts.filter((o) => f.kinds?.includes(o.kind))}
+                        value={fields[f.key] ?? ""}
+                        onChange={(v) => setFields({ ...fields, [f.key]: v })} />
+            ) : (
               <Field key={f.key} label={f.label}>
                 <input type="text" value={fields[f.key] ?? ""}
                        onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} />
               </Field>
-            ))}
+            )))}
             {kind === "lore" && (
               <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
                 <div className="chips owner-picker">

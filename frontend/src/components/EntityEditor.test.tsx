@@ -17,9 +17,17 @@ vi.mock("../api/client", () => ({
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_FIELDS: {
     locations: [], lore: [],
-    items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
-    groups: [{ key: "group_type", label: "Type" }],
-    creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
+    items: [{ key: "item_type", label: "Type", widget: "text" },
+            { key: "rarity", label: "Rarity", widget: "text" },
+            { key: "holder", label: "Held by", widget: "ref",
+              kinds: ["characters", "pcs", "groups", "locations"] }],
+    groups: [{ key: "group_type", label: "Type", widget: "text" },
+             { key: "leader", label: "Leader", widget: "ref", kinds: ["characters", "pcs"] },
+             { key: "headquarters", label: "Headquarters", widget: "ref", kinds: ["locations"] }],
+    creatures: [{ key: "creature_type", label: "Type", widget: "text" },
+                { key: "threat", label: "Threat", widget: "text" },
+                { key: "habitat", label: "Habitat", widget: "ref",
+                  kinds: ["locations"], multi: true }],
   },
   api: {
     listEntities: vi.fn(),
@@ -336,7 +344,11 @@ test("image urls carry per-record version tokens for immutable caching", async (
 });
 
 test("new kinds render the list/detail pattern with their own label", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt-circle", name: "Salt Circle" }]);
+  // Kind-aware: groups now has a `headquarters` ref field, so the editor also
+  // lists locations for its picker — a blanket mock would put a second "Salt
+  // Circle" on the page.
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "groups" ? [{ id: "salt-circle", name: "Salt Circle" }] : []));
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt-circle", name: "Salt Circle" }, body: "A quiet **cabal**" });
   const { container } = render(<EntityEditor wid="w" kind="groups" />);
@@ -1006,4 +1018,147 @@ test("a filter matching nothing is not an empty world", async () => {
   fireEvent.change(screen.getByLabelText(/search lore/i), { target: { value: "zzz" } });
   expect(screen.getByText(/nothing matches/i)).toBeInTheDocument();
   expect(screen.queryByText(/no lore yet/i)).not.toBeInTheDocument();
+});
+
+// ---- ref-valued fields (#222) ----------------------------------------------
+
+test("a single-valued ref field offers only its own kinds, and sends the pick", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
+  render(<EntityEditor wid="w" kind="groups" />);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "The Watch" } });
+  const leader = await screen.findByRole("radiogroup", { name: "Leader" });
+  const hq = screen.getByRole("radiogroup", { name: "Headquarters" });
+  // Leader takes people; headquarters takes places. Neither offers the other's.
+  expect(within(leader).getByLabelText("Mara")).toBeInTheDocument();
+  expect(within(leader).getByLabelText("Winifred")).toBeInTheDocument();
+  expect(within(leader).queryByLabelText("Saltmarch")).toBeNull();
+  expect(within(hq).getByLabelText("Saltmarch")).toBeInTheDocument();
+  expect(within(hq).queryByLabelText("Mara")).toBeNull();
+  fireEvent.click(within(leader).getByLabelText("Mara"));
+  fireEvent.click(screen.getByRole("button", { name: /create group/i }));
+  await waitFor(() =>
+    expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups",
+      expect.objectContaining({ fields: { leader: "characters:mara" } })));
+});
+
+test("a single-valued ref field can be cleared back to none", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
+  render(<EntityEditor wid="w" kind="groups" />);
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  const leader = await screen.findByRole("radiogroup", { name: "Leader" });
+  expect(within(leader).getByLabelText("Mara")).toBeChecked();
+  fireEvent.click(within(leader).getByLabelText("None"));
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.updateEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups", "watch",
+      expect.objectContaining({ fields: expect.objectContaining({ leader: "" }) })));
+});
+
+test("a multi-valued ref field is a checkbox picker and sends a comma-joined list", async () => {
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations"
+      ? [{ id: "saltmarch", name: "Saltmarch" }, { id: "realm", name: "Realm" }] : []));
+  render(<EntityEditor wid="w" kind="creatures" />);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Marsh Wyrm" } });
+  const habitat = await screen.findByRole("group", { name: "Habitat" });
+  fireEvent.click(within(habitat).getByLabelText("Saltmarch"));
+  fireEvent.click(within(habitat).getByLabelText("Realm"));
+  fireEvent.click(screen.getByRole("button", { name: /create creature/i }));
+  await waitFor(() =>
+    expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "creatures",
+      expect.objectContaining({
+        fields: expect.objectContaining({ habitat: "locations:saltmarch, locations:realm" }),
+      })));
+});
+
+test("a ref shows in the sidebar as a chip that navigates to the record", async () => {
+  const onOpenOwner = vi.fn();
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
+  const { container } = render(<EntityEditor wid="w" kind="groups" onOpenOwner={onOpenOwner} />);
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Leader")).toBeInTheDocument();
+  fireEvent.click(within(side).getByRole("button", { name: /Mara/ }));
+  expect(onOpenOwner).toHaveBeenCalledWith("characters:mara");
+});
+
+test("a ref whose record is gone renders as a dangling chip rather than disappearing", async () => {
+  // The decided behaviour (#222): a delete does not scrub the refs that name
+  // the record, so the reader has to say the holder is missing.
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
+  const { container } = render(<EntityEditor wid="w" kind="groups" />);
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  const chip = within(side).getByText("characters:mara");
+  expect(chip).toHaveClass("dangling");
+  expect(chip.getAttribute("title")).toMatch(/no longer/i);
+});
+
+test("a ref field with no candidates says so instead of rendering an empty picker", async () => {
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockResolvedValue([]);
+  render(<EntityEditor wid="w" kind="groups" />);
+  expect(await screen.findByText(/No characters or PCs yet/i)).toBeInTheDocument();
+});
+
+test("kinds with no ref fields fetch no candidate lists", async () => {
+  render(<EntityEditor wid="w" kind="locations" />);
+  await waitFor(() => expect(api.listEntities).toHaveBeenCalled());
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  expect(api.listPCs).not.toHaveBeenCalled();
+});
+
+test("a dangling ref is visible in the form and can be cleared", async () => {
+  // Without a row of its own the field would look unset while still saving the
+  // old ref — and the one thing you could not do is remove it.
+  (api.listCharacters as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
+  render(<EntityEditor wid="w" kind="groups" />);
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  const leader = await screen.findByRole("radiogroup", { name: "Leader" });
+  expect(within(leader).getByLabelText("characters:mara")).toBeChecked();
+  expect(within(leader).getByLabelText("None")).not.toBeChecked();
+  fireEvent.click(within(leader).getByLabelText("Winifred"));
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.updateEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups", "watch",
+      expect.objectContaining({
+        fields: expect.objectContaining({ leader: "characters:winifred" }) })));
+});
+
+test("an untouched dangling ref is saved back rather than scrubbed", async () => {
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
+  render(<EntityEditor wid="w" kind="groups" />);
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.updateEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups", "watch",
+      expect.objectContaining({
+        fields: expect.objectContaining({ leader: "characters:mara" }) })));
 });

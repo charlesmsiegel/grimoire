@@ -11,7 +11,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from . import atomic, statcache, tokens
+from . import atomic, entity_schema, statcache, tokens
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
@@ -346,16 +346,66 @@ def rewrite_owner_refs(root: Path, old: str, new: str) -> list[tuple[str, str]]:
     touched: list[tuple[str, str]] = []
     for kind in ENTITY_KINDS:
         for meta in list_entities(root, kind):
-            refs = owner_refs(meta.get("owners", ""))
-            if old not in refs:
+            rewritten = repointed(owner_refs(meta.get("owners", "")), old, new)
+            if rewritten is None:
                 continue
-            rewritten: list[str] = []
-            for ref in refs:
-                candidate = new if ref == old else ref
-                if candidate not in rewritten:
-                    rewritten.append(candidate)
             update_entity(root, kind, meta["id"], owners=", ".join(rewritten))
             touched.append((kind, meta["id"]))
+    return touched
+
+
+def repointed(refs: list[str], old: str, new: str) -> list[str] | None:
+    """`refs` with every `old` repointed at `new`, or None if it named none.
+
+    Order-preserving and duplicate-collapsing: a record that already named both
+    spellings ends with one, in the position the old one held. Shared by the
+    `owners:` sweep and the ref-field sweep because it is the same rewrite --
+    the two differ only in which line they read it out of.
+    """
+    if old not in refs:
+        return None
+    out: list[str] = []
+    for ref in refs:
+        candidate = new if ref == old else ref
+        if candidate not in out:
+            out.append(candidate)
+    return out
+
+
+def rewrite_ref_fields(root: Path, old: str, new: str) -> list[tuple[str, str]]:
+    """Repoint every declared `ref` FIELD naming `old` at `new`, across every
+    kind in this root. Returns the `(kind, id)` of each record it rewrote.
+
+    The twin of `rewrite_owner_refs`, and needed for the same reason: a ref is
+    `<kind>:<id>`, so a reclassify changes what every stored one spells. A
+    separate sweep rather than a wider `rewrite_owner_refs` because the two
+    read different frontmatter lines and a caller reading the log wants to know
+    which -- and a reclassify is a rare, deliberate correction, so the second
+    pass over a listing that is normally already warm costs nothing worth
+    saving.
+
+    Only a reclassify calls this. A DELETE leaves refs dangling on purpose;
+    `entity_schema`'s module docstring carries the three reasons.
+    """
+    touched: list[tuple[str, str]] = []
+    for kind in ENTITY_KINDS:
+        specs = entity_schema.ref_fields(kind)
+        if not specs:
+            continue
+        # Off the LISTING, exactly as `rewrite_owner_refs` reads `owners`:
+        # `list_entities` has already parsed each record's frontmatter, so
+        # re-reading every record to find a line it is holding would double the
+        # cost of a sweep that normally rewrites nothing.
+        for meta in list_entities(root, kind):
+            fields = {}
+            for spec in specs:
+                rewritten = repointed(
+                    entity_schema.parse_refs(meta.get(spec["key"], "")), old, new)
+                if rewritten is not None:
+                    fields[spec["key"]] = ", ".join(rewritten)
+            if fields:
+                update_entity(root, kind, meta["id"], fields=fields)
+                touched.append((kind, meta["id"]))
     return touched
 
 

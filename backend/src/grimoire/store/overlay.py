@@ -55,6 +55,7 @@ from . import (
     cards,
     characters,
     entities,
+    entity_schema,
     failsoft,
     greetings,
     image_descriptions,
@@ -720,16 +721,42 @@ def rewrite_owner_refs(cid: str, old: str, new: str) -> list[tuple[str, str]]:
         # is holding would double the cost of a sweep that normally rewrites
         # nothing.
         for meta in list_entities(cid, kind):
-            refs = entities.owner_refs(meta.get("owners", ""))
-            if old not in refs:
+            rewritten = entities.repointed(
+                entities.owner_refs(meta.get("owners", "")), old, new)
+            if rewritten is None:
                 continue
-            rewritten: list[str] = []
-            for ref in refs:
-                candidate = new if ref == old else ref
-                if candidate not in rewritten:
-                    rewritten.append(candidate)
             update_entity(cid, kind, meta["id"], owners=", ".join(rewritten))
             touched.append((kind, meta["id"]))
+    return touched
+
+
+def rewrite_ref_fields(cid: str, old: str, new: str) -> list[tuple[str, str]]:
+    """`entities.rewrite_ref_fields` through the overlay, for the reason above:
+    the records whose `holder` / `leader` / `headquarters` / `habitat` name a
+    reclassified record are usually still the world's, so a croot-only sweep
+    would rewrite none of them.
+
+    Only a reclassify calls this. A delete leaves refs dangling on purpose --
+    and the tombstone case is exactly why: `add_deleted` hides the world's
+    record from this campaign without touching it, so there is no edit here
+    that would not be one campaign rewriting a record every other campaign
+    shares. `entity_schema`'s module docstring carries the rest.
+    """
+    touched: list[tuple[str, str]] = []
+    for kind in entities.ENTITY_KINDS:
+        specs = entity_schema.ref_fields(kind)
+        if not specs:
+            continue
+        for meta in list_entities(cid, kind):
+            fields = {}
+            for spec in specs:
+                rewritten = entities.repointed(
+                    entity_schema.parse_refs(meta.get(spec["key"], "")), old, new)
+                if rewritten is not None:
+                    fields[spec["key"]] = ", ".join(rewritten)
+            if fields:
+                update_entity(cid, kind, meta["id"], fields=fields)
+                touched.append((kind, meta["id"]))
     return touched
 
 

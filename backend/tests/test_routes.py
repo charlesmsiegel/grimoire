@@ -14822,3 +14822,46 @@ def test_config_exposes_the_voice_anchor_cap(client):
     TypeScript literal would drift from the backend's truncation in silence."""
     assert client.get("/api/config").json()["voice_anchor_cap"] == \
         store.voice_anchors.VOICE_ANCHOR_CAP
+
+
+# ---- ref-valued entity fields (#222) ----------------------------------------
+
+def test_a_ref_field_round_trips_through_the_entity_routes(client):
+    wid = _world(client)
+    loc = client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"}).json()["id"]
+    gid = client.post(f"/api/worlds/{wid}/groups",
+                      json={"name": "The Watch",
+                            "fields": {"headquarters": f"locations:{loc}"}}).json()["id"]
+    got = client.get(f"/api/worlds/{wid}/groups/{gid}").json()
+    assert got["meta"]["headquarters"] == "locations:saltmarch"
+    r = client.put(f"/api/worlds/{wid}/groups/{gid}",
+                   json={"name": "The Watch", "body": "", "fields": {"headquarters": ""},
+                         "rev": got["rev"]})
+    assert r.status_code == 200
+    assert "headquarters" not in client.get(f"/api/worlds/{wid}/groups/{gid}").json()["meta"]
+
+
+def test_a_ref_naming_a_kind_the_field_rejects_is_a_400(client):
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/groups",
+                    json={"name": "The Watch", "fields": {"leader": "locations:saltmarch"}})
+    assert r.status_code == 400
+    assert "leader" in r.json()["detail"]
+
+
+def test_a_malformed_ref_is_a_400_on_both_scopes(client):
+    wid, cid = _campaign(client)
+    for path in (f"/api/worlds/{wid}/items", f"/api/campaigns/{cid}/items"):
+        r = client.post(path, json={"name": "Salt Knife",
+                                    "fields": {"holder": "characters:../../etc/passwd"}})
+        assert r.status_code == 400, path
+        assert "holder" in r.json()["detail"]
+
+
+def test_a_ref_to_a_record_that_does_not_exist_is_accepted(client):
+    # Deliberate (#222): existence is not a save-boundary question — a ref may
+    # name a record this scope cannot see, or one not written yet.
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/items",
+                    json={"name": "Salt Knife", "fields": {"holder": "characters:nobody"}})
+    assert r.status_code == 200

@@ -384,17 +384,51 @@ export type DivergedRecord = { ref: { kind: EntityKind | "greetings"; id: string
  *  copy-down is for. */
 export type LibraryDependent = { id: string; name: string; has_copy: boolean };
 
+// ---- typed entity fields (#37, #222) ----
+//
 // Mirrors backend/src/grimoire/store/entity_schema.py — keep in sync.
-export const ENTITY_FIELDS: Record<EntityKind, { key: string; label: string }[]> = {
+
+/** Every kind of record a `ref` field may name: the five entity kinds plus the
+ *  two actor kinds. Mirrors `entity_schema.REF_KINDS`. */
+export type RefKind = EntityKind | "characters" | "pcs";
+
+/** One typed field on an entity kind.
+ *
+ *  A `ref` field names other records in the `<kind>:<id>` spelling `owners:`
+ *  uses — one, or a comma-separated list when `multi`. `kinds` is what makes
+ *  it a picker rather than a text box: the editor offers exactly those kinds'
+ *  records, and the backend refuses anything else at the save boundary. */
+export type EntityFieldSpec = {
+  key: string;
+  label: string;
+  widget: "text" | "ref";
+  kinds?: readonly RefKind[];
+  multi?: boolean;
+};
+
+export const ENTITY_FIELDS: Record<EntityKind, EntityFieldSpec[]> = {
   locations: [
-    { key: "climate", label: "Climate" },
-    { key: "persistence", label: "Weather persistence" },
-    { key: "weather_zone", label: "Weather zone" },
+    { key: "climate", label: "Climate", widget: "text" },
+    { key: "persistence", label: "Weather persistence", widget: "text" },
+    { key: "weather_zone", label: "Weather zone", widget: "text" },
   ],
   lore: [],
-  items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
-  groups: [{ key: "group_type", label: "Type" }],
-  creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
+  items: [
+    { key: "item_type", label: "Type", widget: "text" },
+    { key: "rarity", label: "Rarity", widget: "text" },
+    { key: "holder", label: "Held by", widget: "ref",
+      kinds: ["characters", "pcs", "groups", "locations"] },
+  ],
+  groups: [
+    { key: "group_type", label: "Type", widget: "text" },
+    { key: "leader", label: "Leader", widget: "ref", kinds: ["characters", "pcs"] },
+    { key: "headquarters", label: "Headquarters", widget: "ref", kinds: ["locations"] },
+  ],
+  creatures: [
+    { key: "creature_type", label: "Type", widget: "text" },
+    { key: "threat", label: "Threat", widget: "text" },
+    { key: "habitat", label: "Habitat", widget: "ref", kinds: ["locations"], multi: true },
+  ],
 };
 
 // Mirrors store.entities.SECRECY_LEVELS. `owners` says what puts an entry in
