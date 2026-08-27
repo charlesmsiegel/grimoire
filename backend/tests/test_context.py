@@ -780,11 +780,13 @@ def test_packing_out_the_section_between_the_runs_leaves_one_heading(monkeypatch
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
     # A background section between the two tiers, and DECISIVELY the largest of
     # the three -- largest within a tier goes first. Decisively because the two
-    # tokenisers disagree: sized to beat the cast tier by a couple of tokens
-    # this passed under tiktoken and inverted (75 vs 76) under the
-    # characters/4 heuristic the Android dependency set falls back to, which
-    # only CI's pydantic-1.10 job runs. An order-of-magnitude margin is a
-    # fixture neither counter can flip.
+    # tokenisers disagree: sized to beat the cast tier by a couple of tokens,
+    # this passed locally and inverted (75 vs 76) on CI. tiktoken is in the
+    # `desktop` extra and every CI job installs `./backend[dev]`, so CI counts
+    # with `tokens.py`'s characters/4 fallback and a developer venv with the
+    # desktop extra is the one that does not -- a margin tuned against tiktoken
+    # is tuned against the counter CI never uses. An order-of-magnitude margin
+    # is a fixture neither can flip.
     for i in range(24):
         chronicle.absorb(cid, {"id": f"2026-01-{i:02d}-past", "summary": "s", "keywords": [],
                                "one_line": f"Episode {i}: a thing of some consequence happened "
