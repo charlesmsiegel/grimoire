@@ -143,13 +143,37 @@ REF_DELIMITER = ","
 def referenceable(eid: str) -> bool:
     """Can a ref name this id at all?
 
-    `safe_id` is about what a resolver may open and permits a comma; the ref
-    grammar is a comma-separated list and cannot carry one. Both have to hold,
-    and this is the pair said once so the picker and the save boundary cannot
-    drift -- the failure that drift produces is a candidate the UI offers and
-    the backend refuses, with nothing anywhere saying why.
+    Three rules, and `safe_id` is only the first. It is about what a *resolver*
+    may open, so it permits characters a stored ref cannot survive:
+
+    - `safe_id`: no separator, no colon, no traversal, no trailing dot or space.
+    - No `REF_DELIMITER`: the field is a comma-separated list, so an id with a
+      comma in it reads back as two refs.
+    - **No line break.** A ref is written into a single-line frontmatter
+      scalar, and a newline does not survive the round trip: `dump_frontmatter`
+      puts it straight into the value and `parse_frontmatter` reads the rest of
+      the line as the whole of it, so `characters:a\nb` is stored, reported
+      saved, and reads back as the truncated `'characters:a` -- stray quote
+      included, and with the record's own body boundary one line further down
+      than it was. A save that reports success and corrupts the file is the
+      worst failure on this surface, and it is why this is not simply `safe_id`
+      plus a comma check.
+
+      Line breaks ONLY, and the last test below is why: a tab round-trips
+      intact, so rejecting one would be a rule with no failure behind it. The
+      rule is exactly "what the frontmatter writer cannot carry", held against
+      the real writer rather than asserted.
+
+    Said once, here, so the picker and the save boundary cannot drift: a rule
+    living in only one of them means a candidate the UI offers and the backend
+    refuses, with nothing anywhere saying why.
+
+    (`safe_id` itself still accepts a newline. That is a wider question than
+    refs -- it is the id of a real directory somebody could create -- and it is
+    left where it is rather than tightened from here.)
     """
-    return safe_id(eid) and REF_DELIMITER not in eid
+    return (safe_id(eid) and REF_DELIMITER not in eid
+            and "\n" not in eid and "\r" not in eid)
 
 
 def parse_refs(value: object) -> list[str]:

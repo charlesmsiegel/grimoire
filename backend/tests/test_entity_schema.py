@@ -234,3 +234,29 @@ def test_referenceable_still_carries_everything_safe_id_rejects():
     # The comma rule is ON TOP of safe_id, not instead of it.
     for bad in ("../escape", "a/b", "", ".", "..", "a:b", "trailing ", "trailing."):
         assert not entity_schema.referenceable(bad), bad
+
+
+def test_a_line_break_in_a_ref_id_is_rejected():
+    # A ref lives in a single-line frontmatter scalar. A newline does not
+    # survive the round trip: it is written into the value, the parser reads
+    # only the first line, and the record comes back truncated -- a save that
+    # reports success and corrupts the file.
+    assert not entity_schema.referenceable("a\nb")
+    assert not entity_schema.referenceable("a\rb")
+    assert entity_schema.invalid_values("items", {"holder": "characters:a\nb"}) == ["holder"]
+
+
+def test_a_character_that_survives_the_round_trip_is_not_rejected():
+    # Line breaks only. A tab round-trips intact, so rejecting one would be a
+    # rule with no failure behind it.
+    assert entity_schema.referenceable("a\tb")
+
+
+def test_referenceable_agrees_with_what_frontmatter_can_carry():
+    # The rule stated as the property it exists for, against the real writer,
+    # so a change to either side has to keep them in step.
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+    for eid in ("saltmarch", "salt-march", "a\nb", "a\rb", "a\tb", "a b"):
+        value = f"locations:{eid}"
+        back = parse_frontmatter(dump_frontmatter({"name": "X", "habitat": value}, "b"))[0]
+        assert entity_schema.referenceable(eid) == (back.get("habitat") == value), eid
