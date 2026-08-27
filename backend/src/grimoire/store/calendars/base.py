@@ -280,6 +280,45 @@ def _configured(cfg: dict) -> list[CalendarProvider]:
     return out
 
 
+def _upcoming(providers: list[CalendarProvider], fixed: int, window: int) -> list[dict]:
+    """Observances in `(fixed, fixed + window]` across `providers`, soonest first.
+
+    Each `{name, fixed, in_days}`. Deduplicated on (day, name), because a
+    secondary calendar that observes the same thing the primary does would
+    otherwise offer it twice, and the reader is being warned about one day.
+
+    Sorted only on `in_days`, and Python's sort is stable, so two DIFFERENT
+    observances landing on one day keep the order the providers emitted them
+    in -- the primary's first. That is what `today_facts` already picked when
+    it scanned for the strictly-soonest, and this must not quietly rename the
+    "Upcoming:" line every prompt has been carrying.
+    """
+    seen: set[tuple[int, str]] = set()
+    out: list[dict] = []
+    for p in providers:
+        for h in p.holidays(fixed + 1, fixed + max(int(window), 0)):
+            key = (h["fixed"], h["name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"name": h["name"], "fixed": h["fixed"],
+                        "in_days": h["fixed"] - fixed})
+    out.sort(key=lambda h: h["in_days"])
+    return out
+
+
+def upcoming_holidays(cfg: dict, native: str, window: int = UPCOMING_WINDOW_DAYS) -> list[dict]:
+    """Every observance within `window` days after `native`, soonest first.
+
+    `today_facts` answers with the soonest one alone, which is all a prompt
+    line can say; a warn window (#106) wants everything inside it, and widening
+    `today_facts` would change a shape three consumers already read. So the
+    scan is shared and only the projection differs.
+    """
+    providers = _configured(cfg)
+    return _upcoming(providers, fixed_of(providers[0], native), window)
+
+
 def today_facts(cfg: dict, native: str) -> dict:
     """Computed date facts for a scene's current moment, merged across all
     configured calendars. `cfg` is {primary, secondary|None}."""
@@ -298,14 +337,8 @@ def today_facts(cfg: dict, native: str) -> dict:
             if h["name"] not in holidays_today:
                 holidays_today.append(h["name"])
 
-    upcoming = None
-    soonest: dict | None = None
-    for p in providers:
-        for h in p.holidays(fixed + 1, fixed + UPCOMING_WINDOW_DAYS):
-            if soonest is None or h["fixed"] < soonest["fixed"]:
-                soonest = h
-    if soonest is not None:
-        upcoming = {"name": soonest["name"], "in_days": soonest["fixed"] - fixed}
+    ahead = _upcoming(providers, fixed, UPCOMING_WINDOW_DAYS)
+    upcoming = {"name": ahead[0]["name"], "in_days": ahead[0]["in_days"]} if ahead else None
 
     return {
         "friendly": primary_desc["friendly"],

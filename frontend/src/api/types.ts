@@ -728,6 +728,19 @@ export type SceneDatetimeCast = { kind: string; id: string; name: string; age: n
 export type SceneDatetimeFacts = {
   native: string; friendly: string; weekday: string; secondary_friendly: string | null;
   holidays_today: string[]; upcoming: { name: string; in_days: number } | null; cast: SceneDatetimeCast[];
+  /** Warn-once pre-notices for this scene's own moment (#106) — imminent and
+   *  not yet acknowledged. Judged from the scene's date, not the campaign
+   *  clock, so a flashback is not warned about next week. */
+  notices: Notice[];
+};
+
+/** One thing about to happen that the reader has not been told about yet
+ *  (#106). `key` names the OCCURRENCE — the day plus the thing — which is what
+ *  makes next year's Midwinter warn again after this year's was dismissed, and
+ *  is the only field the dismiss route reads. */
+export type Notice = {
+  key: string; kind: "holiday" | "event"; name: string;
+  in_days: number; friendly: string;
 };
 export type SceneDatetime = { current: SceneDatetimeFacts | null; history: string[]; suggested: string | null };
 export type CalendarBlock = {
@@ -753,6 +766,13 @@ export type CalendarConfig = {
    *  it stale (#103). Sent back on save: a client that drops it is a campaign
    *  reset to a threshold nobody chose. */
   stale_after_days: number;
+  /** How far ahead an imminent event is warned about (#106). Sent back on save
+   *  like `stale_after_days`, but its unset value is `null` rather than 0: 0 is
+   *  a real setting here — a campaign that has switched the warnings off — so
+   *  it cannot double as "no opinion" the way a staleness threshold's 0 does.
+   *  The server always sends a number; `null` is only ever the client's own
+   *  cleared-field state on the way back. */
+  warn_days: number | null;
 };
 
 // ---- the campaign clock (#100) ----

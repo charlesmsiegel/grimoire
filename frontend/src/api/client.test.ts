@@ -1017,7 +1017,7 @@ test("getCalendarConfig GETs the world's calendar", async () => {
 
 test("setCalendarConfig PUTs to the scope it was given", async () => {
   const cfg = { primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
-                secondary: null, confirmed: true, stale_after_days: 30 };
+                secondary: null, confirmed: true, stale_after_days: 30, warn_days: 7 };
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   await api.setCalendarConfig({ kind: "world", id: "realm" }, cfg);

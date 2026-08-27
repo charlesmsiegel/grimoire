@@ -88,6 +88,7 @@ from . import (
     migrations,
     module_edit,
     modules,
+    notices,
     overlay,
     pcs,
     pending_reviews,
@@ -230,6 +231,10 @@ __all__ = [
     # still owes (#103) -- both read by routes, both part of the same
     # question the clock answers, so both on the facade beside it.
     "events",
+    # The warn-once pre-notice ledger over the two of them (#106) -- same
+    # question one step earlier ("what is about to happen?"), so it sits with
+    # the clock and the events it warns about.
+    "notices",
     "aging",
     "birthdays",
     "commitments",

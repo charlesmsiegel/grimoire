@@ -36,6 +36,7 @@ import {
   type ModelsRefreshResult,
   type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
+  type Notice,
   type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
   type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
@@ -1821,6 +1822,28 @@ export const api = {
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/events/${eid}/unfire`),
   deleteCampaignEvent: (cid: string, eid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/events/${eid}`),
+
+  // ---- warn-once pre-notices (#106) ----
+  /** What is imminent and unacknowledged, judged from the campaign clock. The
+   *  scene-scoped answer rides on `getSceneDatetime` instead, which is sharper
+   *  where there is a scene; this one serves the surfaces that plan a scene
+   *  before there is one.
+   *
+   *  `fresh`: dismissing a notice is meant to take effect immediately, and a
+   *  cached list would hand the reader back the banner they just closed. */
+  campaignNotices: (cid: string) =>
+    request<{ notices: Notice[]; now: string; warn_days: number }>(
+      "GET", `/api/campaigns/${cid}/notices`, undefined, { fresh: true }),
+  /** Acknowledge notices, by key. Campaign-wide and permanent for that
+   *  occurrence — the next occurrence has a different key and warns again. */
+  dismissNotices: (cid: string, keys: string[], scene = "") =>
+    request<{ ok: boolean; marked: string[] }>(
+      "POST", `/api/campaigns/${cid}/notices`, { keys, scene }),
+  /** The undo for a banner closed by mistake: dismissing will not overwrite an
+   *  existing acknowledgement, so this is the only way back. */
+  restoreNotices: (cid: string, keys: string[]) =>
+    request<{ ok: boolean; forgotten: string[] }>(
+      "POST", `/api/campaigns/${cid}/notices/forget`, { keys }),
 
   // ---- weather (#45, #195) and climates (#40) ----
   getSceneWeather: (cid: string, sid: string, opts?: { location?: string; native?: string }) => {

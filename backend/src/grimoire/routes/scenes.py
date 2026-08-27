@@ -4268,11 +4268,18 @@ def get_scene_datetime(cid: str, sid: str):
     current = None
     suggested = None
     if history:
-        cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
+        croot = store.campaigns.campaign_root(cid)
+        cfg = store.calendars.read_calendar(croot)
         native = history[-1]
         try:
             current = {"native": native, **store.calendars.today_facts(cfg, native),
-                       "cast": store.context.cast_datetime_facts(cid, sid, native)}
+                       "cast": store.context.cast_datetime_facts(cid, sid, native),
+                       # What is imminent and not yet acknowledged (#106), judged
+                       # from THIS scene's moment rather than the campaign clock:
+                       # a scene set in the past must not be warned about next
+                       # week. `pending` is tolerant end to end, so a calendar
+                       # that half-works costs the banner, not the panel.
+                       "notices": store.notices.pending(cid, croot, native)}
         except store.calendars.CalendarError:
             current = None  # misconfigured calendar — surface "no date" rather than 500
     else:

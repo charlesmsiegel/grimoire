@@ -16,14 +16,18 @@ from .base import (  # noqa: F401
     resolve,
     split_native,
     today_facts,
+    upcoming_holidays,
 )
 from .config import (  # noqa: F401
+    MAX_WARN_DAYS,
     STALE_AFTER_DAYS,
+    WARN_DAYS,
     copy_calendar,
     default_calendar,
     primary_provider,
     read_calendar,
     stale_after_days,
     validate_calendar,
+    warn_days,
     write_calendar,
 )

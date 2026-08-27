@@ -12,6 +12,9 @@ vi.mock("../api/client", () => ({
     listSceneIdeas: vi.fn(), saveSceneIdea: vi.fn(), setSceneIdeaStatus: vi.fn(),
     getCampaignClock: vi.fn(),   // SceneConfirmForm's date-fill button
     sceneImportParse: vi.fn(), sceneImport: vi.fn(),   // the import pane (#92)
+    // The pre-notice banner above the mode cards (#106): what is imminent in
+    // the campaign, read from the clock since there is no scene yet.
+    campaignNotices: vi.fn(), dismissNotices: vi.fn(),
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
@@ -43,6 +46,8 @@ beforeEach(() => {
       messages: [{ role: "user", content: "hi" }], turn_sizes: null,
       cast: [], unmatched: [], warnings: [] });
   (api.sceneImport as any).mockResolvedValue({ id: "s9", messages: 1, cast: 0 });
+  (api.campaignNotices as any).mockResolvedValue({ notices: [], now: "", warn_days: 7 });
+  (api.dismissNotices as any).mockResolvedValue({ ok: true, marked: [] });
 });
 
 test("picking a mode spends no generation on ideas", async () => {
@@ -170,10 +175,41 @@ test("Back from the import pane returns to the mode cards", async () => {
   expect(screen.getByText("With your PC")).toBeInTheDocument();
 });
 
-test("mode is chosen first and nothing is fetched before it", () => {
+test("mode is chosen first and nothing a scene needs is fetched before it", async () => {
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
-  expect(screen.getByText("With your PC")).toBeInTheDocument();
+  expect(await screen.findByText("With your PC")).toBeInTheDocument();
   expect(api.availableGreetings).not.toHaveBeenCalled();
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+  // The one read that DOES happen before a mode: the pre-notice banner (#106).
+  // Deliberate, and not the thing this test guards -- what must not happen
+  // before the reader has asked for anything is a *generation*, and this is a
+  // plain read of the campaign's own clock and events.
+  expect(api.campaignNotices).toHaveBeenCalledWith("c");
+});
+
+test("what is imminent is shown while the scene is being planned", async () => {
+  // The second surface of #106, and the one the feature is for: "the coronation
+  // is in three days" is a thing to know BEFORE deciding what the scene is
+  // about, not after.
+  (api.campaignNotices as any).mockResolvedValue({
+    notices: [{ key: "event:739437:the-coronation", kind: "event",
+                name: "The coronation", in_days: 3, friendly: "6 July 2026" }],
+    now: "2026-07-03", warn_days: 7 });
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  await screen.findByText("The coronation");
+  fireEvent.click(screen.getByLabelText("Dismiss The coronation"));
+  await waitFor(() => expect(api.dismissNotices).toHaveBeenCalledWith(
+    "c", ["event:739437:the-coronation"], ""));
+  await waitFor(() => expect(screen.queryByText("The coronation")).toBeNull());
+});
+
+test("a failed notice read leaves the chooser usable", async () => {
+  // A banner is the least important thing in this modal; it must never be what
+  // stops a scene being made.
+  (api.campaignNotices as any).mockRejectedValue(new Error("offline"));
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(await screen.findByText("With your PC"));
+  await screen.findByText("Reckoning");
 });
 
 test("picking a card opens the confirm form and creates nothing yet", async () => {

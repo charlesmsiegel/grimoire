@@ -60,6 +60,7 @@ from .models import (
     ImageDescription,
     NameBody,
     NewCampaign,
+    NoticeMark,
     PCCreate,
     PCUpdate,
     PersonaVersionCreate,
@@ -191,13 +192,14 @@ def get_calendar_config(cid: str):
 def put_calendar_config(cid: str, body: CalendarConfig):
     if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
-    # `stale_after_days` rides with the rest of the campaign's time config (#103).
+    # `stale_after_days` and `warn_days` ride with the rest of the campaign's
+    # time config (#103, #106).
     # A client sending 0 -- or an older one not sending it at all -- means "no
     # opinion", and the store answers that with its own default rather than
     # storing a threshold that would call every record stale on the day it was
     # written. That coercion lives in `calendars._stale_days`, once.
     cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed,
-           "stale_after_days": body.stale_after_days}
+           "stale_after_days": body.stale_after_days, "warn_days": body.warn_days}
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:
@@ -377,6 +379,57 @@ def delete_campaign_event(cid: str, eid: str):
     if not found:
         raise HTTPException(status_code=404, detail="event not found")
     return {"ok": True}
+
+
+# ---- warn-once pre-notices (#106) ----
+#
+# Declared here for the reason the clock and events routes above are --
+# ``/campaigns/{cid}/{kind}`` would otherwise capture ``notices`` -- and
+# ``test_route_order.py`` is what actually holds that.
+
+
+@router.get("/campaigns/{cid}/notices")
+def get_campaign_notices(cid: str):
+    """What is imminent and unacknowledged, judged from the campaign clock.
+
+    The campaign-wide surface: scene planning happens before there is a scene to
+    ask from, so this asks from the clock's present (#100) rather than from a
+    moment. ``GET .../scenes/{sid}/datetime`` answers the same question from the
+    scene's own date, which is the sharper one when there is a scene — a
+    flashback should not be warned about next week.
+
+    `warn_days` rides along so the surface can say what window it is reporting,
+    and 0 is a campaign that has switched the warnings off, not an empty one.
+    """
+    root = _campaign_root_or_404(cid)
+    now = store.clock.now(cid)
+    return {"notices": store.notices.pending(cid, root, now) if now else [],
+            "now": now, "warn_days": store.calendars.warn_days(root)}
+
+
+@router.post("/campaigns/{cid}/notices")
+def post_campaign_notices(cid: str, body: NoticeMark):
+    """Acknowledge these notices. Idempotent, and campaign-wide.
+
+    Never called on the reader's behalf by anything that merely *renders* a
+    notice — the model being told what is upcoming every turn is a different
+    channel from the reader being warned once, and the ledger only records the
+    second (`store/notices.py`).
+    """
+    _campaign_root_or_404(cid)
+    return {"ok": True, "marked": store.notices.mark(cid, body.keys, body.scene)}
+
+
+@router.post("/campaigns/{cid}/notices/forget")
+def post_campaign_notices_forget(cid: str, body: NoticeMark):
+    """Take back an acknowledgement, so the notice shows again.
+
+    The undo for a banner dismissed by mistake, and the only way back: `mark`
+    will not overwrite an existing stamp, so without this one misclick silences
+    an event until its day has gone by.
+    """
+    _campaign_root_or_404(cid)
+    return {"ok": True, "forgotten": store.notices.forget(cid, body.keys)}
 
 
 @router.get("/campaigns/{cid}/calendar/months")
