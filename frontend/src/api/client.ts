@@ -1,5 +1,6 @@
-import { isAbortError, parseSSEChunk, type ChatEvent, type LocalizeEvent,
-  type ChubGalleryEvent, type RunHandle, type TaglineBatchEvent } from "./stream";
+import { isAbortError, newAttemptId, parseSSEChunk, type ChatEvent,
+  type LocalizeEvent, type ChubGalleryEvent, type RunHandle,
+  type TaglineBatchEvent } from "./stream";
 import { campaignsChanged, configChanged, shellChanged } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
@@ -106,11 +107,20 @@ export class ApiError extends Error {
   }
 }
 
+// `attempt` is this client's own name for one piece of work, sent as
+// `X-Grimoire-Attempt`. It is the same contract `streamPost` already carries and
+// it is here for the same two reasons: it makes a duplicate delivery adopt the
+// original run instead of paying for the work twice, and it is the only handle
+// left when the response never arrives -- which for a detached `draft` is the
+// difference between finding the run and starting a second one.
 async function requestRaw<T>(method: string, path: string, body?: unknown,
-                             signal?: AbortSignal): Promise<T> {
+                             signal?: AbortSignal, attempt?: string): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(attempt ? { "X-Grimoire-Attempt": attempt } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
     signal,
   });
@@ -169,10 +179,11 @@ function retireAllInflight(): void {
 // so: an aborted GET would settle the shared promise below for every caller
 // waiting on it, not just the one that asked to stop.
 function request<T>(method: string, path: string, body?: unknown,
-                    opts?: { fresh?: boolean; signal?: AbortSignal }): Promise<T> {
+                    opts?: { fresh?: boolean; signal?: AbortSignal;
+                             attempt?: string }): Promise<T> {
   if (method !== "GET" || opts?.fresh) {
     if (opts?.fresh) retireInflight(path);
-    return requestRaw<T>(method, path, body, opts?.signal);
+    return requestRaw<T>(method, path, body, opts?.signal, opts?.attempt);
   }
   const pending = inflightGets.get(path);
   if (pending) return pending as Promise<T>;
@@ -231,6 +242,28 @@ export const READ_RETRIES = 3;
  */
 async function awaitRun(cid: string, sid: string, started: RunHandle,
                         signal?: AbortSignal): Promise<RunHandle> {
+  return awaitRunAt(`/api/campaigns/${cid}/scenes/${sid}/runs`, started,
+                    () => api.findRun(cid, sid).then((r) => r.run, () => null),
+                    signal);
+}
+
+/** The same wait, over any subject's run routes.
+ *
+ *  `base` is where this subject's runs live -- `.../scenes/{sid}/runs` for a
+ *  review, `/api/campaigns/{cid}/runs`, `/api/worlds/{wid}/runs` or `/api/runs`
+ *  for a draft. `restill` is how to ask, by a different path, whether the run
+ *  is still going; it is the last word before a run of failed polls is reported
+ *  as a failure, and it answers `null` for "not running any more or not
+ *  findable".
+ *
+ *  Split out rather than duplicated because the poll's whole value is in its
+ *  three refusals to give up -- a failed poll is not a failed run, a 404 is,
+ *  and running out of patience is neither -- and a second copy of that
+ *  reasoning is a second place for it to be got wrong.
+ */
+async function awaitRunAt(base: string, started: RunHandle,
+                          restill: () => Promise<RunHandle | null>,
+                          signal?: AbortSignal): Promise<RunHandle> {
   let run = started;
   let missed = 0;
   for (let asked = 0; run.state === "running"; asked++) {
@@ -238,8 +271,7 @@ async function awaitRun(cid: string, sid: string, started: RunHandle,
       asked < RUN_POLL_QUICK ? RUN_POLL_MS : RUN_POLL_SLOW_MS, signal);
     try {
       run = (await request<{ run: RunHandle }>(
-        "GET", `/api/campaigns/${cid}/scenes/${sid}/runs/${run.id}`,
-        undefined, { fresh: true })).run;
+        "GET", `${base}/${run.id}`, undefined, { fresh: true })).run;
       missed = 0;
     } catch (err) {
       // A FAILED POLL IS NOT A FAILED RUN. The conditions this feature exists
@@ -268,7 +300,7 @@ async function awaitRun(cid: string, sid: string, started: RunHandle,
       // patience and the wait goes on; anything else -- including this ask
       // failing too, which is the network really being gone -- lets the
       // original failure stand.
-      const still = await api.findRun(cid, sid).then((r) => r.run, () => null);
+      const still = await restill();
       if (still?.id !== run.id || still.state !== "running") throw err;
       missed = 0;
     }
@@ -278,6 +310,199 @@ async function awaitRun(cid: string, sid: string, started: RunHandle,
   throw new ApiError(error?.status ?? 409,
                      error?.detail ?? `the run ended ${run.state}`,
                      error?.kind ?? run.state, error);
+}
+
+/** Where a subject's detached runs are addressed.
+ *
+ *  Three, matching the three non-scene subjects the backend mounts run routes
+ *  for. A scene's runs are NOT reachable through this: a scene subject carries
+ *  an identity as well as an id, and the one draft that has one -- the opener
+ *  -- is a stream, so it uses `streamPost` and the scene run routes rather than
+ *  this poll.
+ */
+export type DraftScope =
+  | { at: "campaign"; id: string }
+  | { at: "world"; id: string }
+  | { at: "global" };
+
+function draftBase(scope: DraftScope): string {
+  if (scope.at === "campaign") return `/api/campaigns/${encodeSegment(scope.id)}/runs`;
+  if (scope.at === "world") return `/api/worlds/${encodeSegment(scope.id)}/runs`;
+  return "/api/runs";
+}
+
+/** This attempt's run on that subject, or `null` if the subject has none.
+ *
+ *  Matched on the ATTEMPT, never on the kind. The design deliberately lets
+ *  `draft` runs overlap on one coarse subject, so "the world's in-flight
+ *  image-description run" is ambiguous the moment two images are being
+ *  described at once -- and a caller that adopted the other image's run would
+ *  offer its text for the wrong picture.
+ *
+ *  **A failed lookup is not an answer of "no run".** It throws, and the caller
+ *  decides; three separate defects in the first phase of this work were a
+ *  `.catch(() => null)` on exactly this question, each of which turned "I could
+ *  not ask" into "there is nothing there". The retries are here for the same
+ *  reason the poll has them: the conditions this whole feature exists for --
+ *  a resuming tab, a dropped localhost fetch -- show up as a failed GET.
+ */
+async function findDraftRun(scope: DraftScope, attempt: string,
+                            signal?: AbortSignal): Promise<RunHandle | null> {
+  const path = `${draftBase(scope)}?attempt=${encodeURIComponent(attempt)}`;
+  for (let asked = 0; ; asked++) {
+    try {
+      const found = await request<{ runs: RunHandle[] }>(
+        "GET", path, undefined, { fresh: true });
+      // The newest, because an attempt id names one piece of work and the
+      // server keys its index on it -- so this list is at most one long. Read
+      // from the end rather than at 0 so a server that ever answered with more
+      // hands back the live one rather than a retained corpse.
+      return found.runs.length ? found.runs[found.runs.length - 1] : null;
+    } catch (err) {
+      if (isAbortError(err) || asked >= READ_RETRIES) throw err;
+      await sleepUnlessAborted(RUN_POLL_MS, signal);
+    }
+  }
+}
+
+/** Start a computing draft, wait for it, and hand back what it produced.
+ *
+ *  THE shared helper. Twelve routes are `start -> poll -> unwrap` and nothing
+ *  else, and writing that out twelve times is twelve subtly different readings
+ *  of one contract -- which of them retries a dropped poll, which of them tells
+ *  a 404 from a timeout, which of them re-finds a run whose 202 was lost. Each
+ *  call site keeps the exact shape it returned when these routes blocked, so
+ *  nothing above this line can tell that the work moved off the request.
+ *
+ *  `start` is given the attempt id to send, because how the POST is made
+ *  differs -- a JSON body, a query string, a multipart upload -- and only that
+ *  differs.
+ *
+ *  A START WITH NO RESPONSE IS AMBIGUOUS, and that is the case this exists for:
+ *  the server can have accepted the POST, reserved the run and begun a
+ *  provider call, and the 202 be lost on the way back. Reported as a failure,
+ *  the caller shows an error over work that is running and the user starts it
+ *  again -- paying twice. Only for a failure that carried NO reply: an
+ *  `ApiError` means the server answered, and a 404 or a `missing_key` is the
+ *  caller's to handle.
+ */
+async function draftRun<T>(scope: DraftScope,
+                           start: (attempt: string) => Promise<{ run: RunHandle }>,
+                           opts?: { signal?: AbortSignal; attempt?: string }): Promise<T> {
+  const attempt = opts?.attempt ?? newAttemptId();
+  let started: RunHandle;
+  try {
+    started = (await start(attempt)).run;
+  } catch (err) {
+    if (err instanceof ApiError || isAbortError(err)) throw err;
+    // Two different outcomes, and they are deliberately not collapsed. A
+    // lookup that ANSWERED "no run" settles it: nothing was started, so the
+    // start's own failure is the true one. A lookup that could not be made
+    // settles nothing -- `findDraftRun` has already retried it -- and reports
+    // the same start failure, because that is the one the caller actually
+    // suffered and a "could not check" tells them nothing they can act on.
+    const live = await findDraftRun(scope, attempt, opts?.signal).catch(() => null);
+    if (!live) throw err;
+    started = live;
+  }
+  const run = await awaitRunAt(draftBase(scope), started,
+                               () => findDraftRun(scope, attempt, opts?.signal)
+                                 .catch(() => null),
+                               opts?.signal);
+  // `landed` is the only way out of `awaitRunAt`, so a result is what this run
+  // is. An empty object rather than a throw for a route that legitimately
+  // produced nothing -- the caller's own type says which fields it expects.
+  return (run.result ?? {}) as T;
+}
+
+/** How many times a lost streaming draft is picked back up before its failure
+ *  is reported. Small, because each attempt makes two requests and a run that
+ *  is really gone answers the same way every time; more than one because the
+ *  case this exists for -- a WebView resuming into a dead socket -- can drop
+ *  the re-attach as easily as it dropped the stream. */
+export const STREAM_REATTACH_TRIES = 3;
+
+/** Read a streaming draft, and keep reading it across a lost connection.
+ *
+ *  The opener is the only member, and it is the one draft whose value is the
+ *  text arriving word by word rather than a payload at the end -- so it gets
+ *  `streamPost` and the run's frame buffer instead of `draftRun`'s poll. What
+ *  it shares with the twelve is the whole point: it is detached, so the socket
+ *  dying is no longer the generation dying, and this is what turns that into
+ *  something the reader sees.
+ *
+ *  `consumed` is the last frame index actually DELIVERED, tracked from the
+ *  server's `id:` lines rather than counted here. A per-event count would lag,
+ *  because a heartbeat frame carries no event at all -- and resuming at a lagged
+ *  cursor replays text already on the screen, mid-sentence.
+ *
+ *  An `ApiError` or an abort is the caller's and is re-raised untouched: the
+ *  server answered (a missing key, a scene that vanished), or the caller said
+ *  stop. Only a connection that died with no reply is picked back up.
+ */
+async function streamDraft(cid: string, sid: string, path: string, body: unknown,
+                           onEvent: (e: ChatEvent) => void,
+                           signal?: AbortSignal): Promise<void> {
+  const attempt = newAttemptId();
+  let consumed = -1;
+  const onIndex = (i: number) => { consumed = i; };
+  let lost: unknown;
+  try {
+    return await streamPost(path, body, onEvent, signal, attempt, onIndex);
+  } catch (err) {
+    if (err instanceof ApiError || isAbortError(err)) throw err;
+    lost = err;
+  }
+  for (let tries = 0; tries < STREAM_REATTACH_TRIES; tries++) {
+    let run: RunHandle | null;
+    try {
+      run = (await api.findRun(cid, sid, attempt)).run;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      // NOT `.catch(() => null)`. A lookup that FAILED has not answered "no
+      // run", so it settles nothing and must not end the recovery -- treating
+      // it as an answer abandons a generation that is still going, and that
+      // confusion is the single defect this feature's first phase shipped
+      // three times. Asked again; if the tries run out, the failure reported
+      // is the one that actually interrupted the reader.
+      continue;
+    }
+    // The server has never heard of this attempt, so nothing was started and
+    // the original failure is the true one.
+    if (!run) throw lost;
+    // Terminal with nothing left in the buffer: the run finished while we were
+    // away and every frame of it has already been delivered.
+    if (run.state !== "running" && consumed + 1 >= run.next_index) return;
+    try {
+      return await api.attachRun(cid, sid, run.id, consumed + 1, onEvent, signal, onIndex);
+    } catch (err) {
+      if (err instanceof ApiError || isAbortError(err)) throw err;
+      lost = err;
+    }
+  }
+  throw lost;
+}
+
+/** The four image-description surfaces, which differ only in their path.
+ *
+ *  A world's three describe art hanging off one of its records and a campaign's
+ *  describes its own library, so the subject differs too -- but that is the
+ *  whole of it, and four copies of the same `draftRun` call is four places for
+ *  the shape to drift.
+ */
+function describeImage(scope: DraftScope, path: string,
+                       signal?: AbortSignal): Promise<{ description: string }> {
+  return draftRun<{ description: string }>(scope, (attempt) =>
+    request<{ run: RunHandle }>("POST", path, undefined, { attempt }), { signal });
+}
+
+/** An `EntityScope` as the subject its detached runs belong to. The two are
+ *  the same distinction wearing different names -- a world or a campaign --
+ *  and the anchor route is the one draft that is reachable in both scopes. */
+function draftScopeOf(scope: EntityScope): DraftScope {
+  return scope.kind === "world"
+    ? { at: "world", id: scope.id }
+    : { at: "campaign", id: scope.id };
 }
 
 /** The stored review a scoped retry folded itself into, when its run is gone.
@@ -389,8 +614,12 @@ async function streamGet<T = ChatEvent>(
   }
 }
 
-async function requestForm<T>(path: string, form: FormData, method = "POST"): Promise<T> {
-  const res = await fetch(path, { method, body: form });
+async function requestForm<T>(path: string, form: FormData, method = "POST",
+                              attempt?: string): Promise<T> {
+  const res = await fetch(path, {
+    method, body: form,
+    headers: attempt ? { "X-Grimoire-Attempt": attempt } : undefined,
+  });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
@@ -1063,8 +1292,14 @@ export const api = {
     request<{ tagline: string }>("GET", `/api/worlds/${wid}/characters/${cid}/tagline`),
   setCharacterTagline: (wid: string, cid: string, tagline: string) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/tagline`, { tagline }),
-  generateCharacterTagline: (wid: string, cid: string) =>
-    request<{ tagline: string }>("POST", `/api/worlds/${wid}/characters/${cid}/tagline/generate`),
+  /** Detached, like every computing draft: the POST answers 202 with a run and
+   *  this waits for it. The returned shape is unchanged, so callers cannot
+   *  tell -- except that backgrounding the tab no longer loses the sentence. */
+  generateCharacterTagline: (wid: string, cid: string, signal?: AbortSignal) =>
+    draftRun<{ tagline: string }>({ at: "world", id: wid }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/worlds/${wid}/characters/${cid}/tagline/generate`,
+        undefined, { attempt }), { signal }),
   /** Derive a tagline for every character in the world that has none (#57).
    *
    *  A stream rather than a call per character: the roster can be hundreds
@@ -1085,8 +1320,11 @@ export const api = {
   /** A blank anchor REMOVES it, opting the character back out of drift detection. */
   setCharacterVoiceAnchor: (scope: EntityScope, cid: string, voice_anchor: string) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}/voice-anchor`, { voice_anchor }),
-  generateCharacterVoiceAnchor: (scope: EntityScope, cid: string) =>
-    request<{ voice_anchor: string }>("POST", `${entityBase(scope)}/characters/${cid}/voice-anchor/generate`),
+  generateCharacterVoiceAnchor: (scope: EntityScope, cid: string, signal?: AbortSignal) =>
+    draftRun<{ voice_anchor: string }>(draftScopeOf(scope), (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `${entityBase(scope)}/characters/${cid}/voice-anchor/generate`,
+        undefined, { attempt }), { signal }),
   createVersion: (scope: EntityScope, cid: string, body: { name: string; card: Card }) =>
     request<{ version: string }>("POST", `${entityBase(scope)}/characters/${cid}/versions`, body),
   updateVersion: (scope: EntityScope, cid: string, vid: string, card: Card) =>
@@ -1297,18 +1535,24 @@ export const api = {
    *  to keep it and persists through `setCharacterImageDescription`. World-side
    *  only — a description drafted from the bytes is a claim about the bytes,
    *  and a campaign reaches most of its art through its world. */
-  draftCharacterImageDescription: (wid: string, cid: string, vid: string, name: string) =>
-    request<{ description: string }>("POST",
-      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${encodeSegment(name)}/description/draft`),
-  draftPCImageDescription: (wid: string, pid: string, vid: string, name: string) =>
-    request<{ description: string }>("POST",
-      `/api/worlds/${wid}/pcs/${pid}/versions/${vid}/images/${encodeSegment(name)}/description/draft`),
-  draftEntityImageDescription: (wid: string, kind: EntityKind, eid: string, name: string) =>
-    request<{ description: string }>("POST",
-      `/api/worlds/${wid}/${kind}/${eid}/images/${encodeSegment(name)}/description/draft`),
-  draftCampaignImageDescription: (cid: string, name: string) =>
-    request<{ description: string }>("POST",
-      `/api/campaigns/${cid}/images/${encodeSegment(name)}/description/draft`),
+  draftCharacterImageDescription: (wid: string, cid: string, vid: string, name: string,
+                                   signal?: AbortSignal) =>
+    describeImage({ at: "world", id: wid },
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${encodeSegment(name)}/description/draft`,
+      signal),
+  draftPCImageDescription: (wid: string, pid: string, vid: string, name: string,
+                            signal?: AbortSignal) =>
+    describeImage({ at: "world", id: wid },
+      `/api/worlds/${wid}/pcs/${pid}/versions/${vid}/images/${encodeSegment(name)}/description/draft`,
+      signal),
+  draftEntityImageDescription: (wid: string, kind: EntityKind, eid: string, name: string,
+                                signal?: AbortSignal) =>
+    describeImage({ at: "world", id: wid },
+      `/api/worlds/${wid}/${kind}/${eid}/images/${encodeSegment(name)}/description/draft`,
+      signal),
+  draftCampaignImageDescription: (cid: string, name: string, signal?: AbortSignal) =>
+    describeImage({ at: "campaign", id: cid },
+      `/api/campaigns/${cid}/images/${encodeSegment(name)}/description/draft`, signal),
   setPCImageDescription: (scope: EntityScope, pid: string, vid: string,
                           name: string, description: string) =>
     request<{ ok: boolean }>("PUT",
@@ -1509,8 +1753,11 @@ export const api = {
    *  refresh on the Connections page updates the store and the editor while
    *  every scene inspector goes on sizing prompts against the list this
    *  request replaced. */
-  refreshConnectionModels: (id: string) =>
-    request<ModelsRefreshResult>("POST", `/api/llm-connections/${id}/models/refresh`)
+  refreshConnectionModels: (id: string, signal?: AbortSignal) =>
+    draftRun<ModelsRefreshResult>({ at: "global" }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/llm-connections/${encodeSegment(id)}/models/refresh`,
+        undefined, { attempt }), { signal })
       .then(notifyConfig),
   /** The catalog for a connection that has been described but not saved (#149)
    *  — the New-connection form and the setup wizard, where there is no id to
@@ -1697,19 +1944,25 @@ export const api = {
   dismissSceneBreak: (cid: string, sid: string) =>
     request<SceneBreak>("POST", `/api/campaigns/${cid}/scenes/${sid}/scene-break/dismiss`),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean,
-                     direction?: string, rank = true) => {
+                     direction?: string, rank = true, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (after) params.set("after", after);
     if (offscreen) params.set("offscreen", "true");
     if (direction) params.set("direction", direction);
     if (!rank) params.set("rank", "false");
     const qs = params.toString();
-    return request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[]; next_date?: string }>(
-      "POST", `/api/campaigns/${cid}/scene-suggestions${qs ? `?${qs}` : ""}`);
+    return draftRun<{ suggestions: SceneSuggestion[]; greeting_picks?: string[];
+                      next_date?: string }>(
+      { at: "campaign", id: cid }, (attempt) =>
+        request<{ run: RunHandle }>(
+          "POST", `/api/campaigns/${cid}/scene-suggestions${qs ? `?${qs}` : ""}`,
+          undefined, { attempt }), { signal });
   },
-  sceneIntent: (cid: string, text: string, offscreen: boolean) =>
-    request<SceneIntentResult>("POST", `/api/campaigns/${cid}/scene-intent`,
-      { text, offscreen }),
+  sceneIntent: (cid: string, text: string, offscreen: boolean, signal?: AbortSignal) =>
+    draftRun<SceneIntentResult>({ at: "campaign", id: cid }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/campaigns/${cid}/scene-intent`, { text, offscreen },
+        { attempt }), { signal }),
   // The scene ledger (#88). `fresh`, like the continuity ledger: the picker
   // re-reads this precisely when it has just written to it (a save, a dismiss,
   // a restore), and a shared or cached response would answer that with the
@@ -2006,8 +2259,14 @@ export const api = {
                  (e) => e.kind === "dossier" && proposed.has(e.target?.id)) };
     }
   },
-  opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
+  /** Generate a scene's first post. Detached server-side, so a backgrounded
+   *  tab no longer loses it: `streamDraft` re-finds the run by its attempt id
+   *  and reads the frames it missed. Nothing is written by this call — the
+   *  text reaches the transcript through `firstPost`. */
+  opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void,
+           signal?: AbortSignal) =>
+    streamDraft(cid, sid, `/api/campaigns/${cid}/scenes/${sid}/opener`,
+                { prompt }, onEvent, signal),
   firstPost: (cid: string, sid: string, text: string) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/first-post`, { text }),
 
@@ -2039,14 +2298,19 @@ export const api = {
 
   // scenario-card import (#217). The two parse calls write nothing — they hand
   // back a proposal to review; only scenarioImport touches the world.
-  scenarioParse: (wid: string, file: File, format: string) => {
+  scenarioParse: (wid: string, file: File, format: string, signal?: AbortSignal) => {
     const form = new FormData();
     form.append("file", file);
     form.append("format", format);
-    return requestForm<ScenarioProposal>(`/api/worlds/${wid}/scenario/parse`, form);
+    return draftRun<ScenarioProposal>({ at: "world", id: wid }, (attempt) =>
+      requestForm<{ run: RunHandle }>(`/api/worlds/${wid}/scenario/parse`, form,
+                                      "POST", attempt), { signal });
   },
-  scenarioParseUrl: (wid: string, url: string) =>
-    request<ScenarioProposal>("POST", `/api/worlds/${wid}/scenario/parse-url`, { url }),
+  scenarioParseUrl: (wid: string, url: string, signal?: AbortSignal) =>
+    draftRun<ScenarioProposal>({ at: "world", id: wid }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/worlds/${wid}/scenario/parse-url`, { url }, { attempt }),
+      { signal }),
   scenarioImport: (wid: string, proposal: ScenarioProposal, art: boolean) =>
     request<ScenarioImportResult>("POST", `/api/worlds/${wid}/scenario/import`, { ...proposal, art }),
 

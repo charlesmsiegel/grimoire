@@ -631,8 +631,14 @@ test("refreshing a catalog announces, so a cached model list is dropped", async 
   // sizing prompts against the list this request replaced (#149).
   const seen: string[] = [];
   const off = onConfigChanged(() => seen.push("config"));
+  // The refresh is detached (#398), so the POST answers with a run and the
+  // catalog is its result. Landed on arrival is the duplicate-delivery shape --
+  // a re-POST of an attempt that already finished adopts its outcome -- which
+  // is the one that needs no timers to express.
   globalThis.fetch = vi.fn().mockResolvedValue(
-    jsonOk({ models: [], fetched_at: "2026-08-21", rev: "r1" })) as any;
+    jsonOk({ run: { id: "r1", attempt_id: "a1", state: "landed", next_index: 0,
+                    cls: "draft", kind: "models-refresh",
+                    result: { models: [], fetched_at: "2026-08-21", rev: "r1" } } })) as any;
 
   await api.refreshConnectionModels("openrouter");
   expect(seen).toEqual(["config"]);
@@ -1740,4 +1746,226 @@ test("a transient failure discovering a live review is retried, not answered", a
   } finally {
     vi.useRealTimers();
   }
+});
+
+// ---- the draft family, detached (#398) -------------------------------------
+//
+// The twelve computing draft routes are `start -> poll -> unwrap` and nothing
+// else, which is why they share one helper. These pin what that helper owes
+// each of them: it polls the SUBJECT's run routes, it hands back the result
+// unchanged, it raises a failure as the HTTP failure the synchronous route
+// raised, and it does not read a lookup it could not make as "there is no run".
+
+/** An SSE response whose socket dies part-way — the case detachment exists for.
+ *
+ *  `sseResponse` reaches a clean EOF, which is a stream that ENDED rather than
+ *  one that was cut, and a client has no reason to pick that back up. */
+function sseCutOff(chunks: string[]) {
+  let i = 0;
+  return {
+    ok: true,
+    body: {
+      getReader() {
+        return {
+          read: async () => {
+            if (i < chunks.length) {
+              return { value: new TextEncoder().encode(chunks[i++]), done: false };
+            }
+            throw new TypeError("Failed to fetch");
+          },
+        };
+      },
+    },
+  };
+}
+
+function draftRunResponse(state: string, extra: Record<string, unknown> = {}) {
+  return jsonOk({ run: { id: "r1", attempt_id: "a1", state, next_index: 0,
+                         cls: "draft", kind: "tagline", ...extra } });
+}
+
+test("a draft polls its own subject's runs and unwraps the result", async () => {
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(draftRunResponse("running"))
+      .mockResolvedValueOnce(draftRunResponse("running"))
+      .mockResolvedValueOnce(draftRunResponse("landed",
+        { result: { tagline: "Keeps the tide-gate." } }));
+    globalThis.fetch = fetchMock;
+
+    const pending = api.generateCharacterTagline("realm", "mara");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(await pending).toEqual({ tagline: "Keeps the tide-gate." });
+    expect(fetchMock.mock.calls[0][0])
+      .toBe("/api/worlds/realm/characters/mara/tagline/generate");
+    // The WORLD's run routes, not a scene's: a tagline belongs to no scene, and
+    // before #398 there was nowhere to ask about it at all.
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/worlds/realm/runs/r1");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the start carries an attempt id, so a duplicate delivery is not paid for twice",
+     async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    draftRunResponse("landed", { result: { tagline: "x" } }));
+  globalThis.fetch = fetchMock;
+
+  await api.generateCharacterTagline("realm", "mara");
+
+  const init = fetchMock.mock.calls[0][1] as { headers: Record<string, string> };
+  expect(init.headers["X-Grimoire-Attempt"]).toBeTruthy();
+});
+
+test("a failed draft raises the failure the synchronous route used to raise", async () => {
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(draftRunResponse("running"))
+      .mockResolvedValueOnce(draftRunResponse("failed", {
+        error: { kind: "rate_limit", detail: "slow down", status: 429 } }));
+    globalThis.fetch = fetchMock;
+
+    const failed = api.generateCharacterTagline("realm", "mara")
+      .then(() => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const err = await failed;
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(429);
+    expect((err as ApiError).kind).toBe("rate_limit");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a start whose reply never arrived adopts the run it may have made", async () => {
+  // A POST WITH NO RESPONSE IS AMBIGUOUS: the server can have accepted it,
+  // reserved the run and begun a provider call, and the 202 be lost on the way
+  // back. Reported as a failure, the user starts it again and pays twice.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(jsonOk({ runs: [
+        { id: "r1", attempt_id: "a1", state: "running", next_index: 0, cls: "draft" }] }))
+      .mockResolvedValueOnce(draftRunResponse("landed", { result: { tagline: "x" } }));
+    globalThis.fetch = fetchMock;
+
+    const pending = api.generateCharacterTagline("realm", "mara");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(await pending).toEqual({ tagline: "x" });
+    // Found by the ATTEMPT, never by the kind: drafts overlap on one coarse
+    // subject by design, so "the world's in-flight tagline run" is ambiguous.
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/api/worlds/realm/runs?attempt=");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a lookup that could not be made is not read as 'there is no run'", async () => {
+  // The defect the first phase of this work shipped three times: a
+  // `.catch(() => null)` on a discovery turns "I could not ask" into "there is
+  // nothing there". The lookup is retried, and only a real empty answer settles
+  // it -- so the run started before the network went is still adopted.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(jsonOk({ runs: [
+        { id: "r1", attempt_id: "a1", state: "running", next_index: 0, cls: "draft" }] }))
+      .mockResolvedValueOnce(draftRunResponse("landed", { result: { tagline: "x" } }));
+    globalThis.fetch = fetchMock;
+
+    const pending = api.generateCharacterTagline("realm", "mara");
+    await vi.advanceTimersByTimeAsync(10000);
+
+    expect(await pending).toEqual({ tagline: "x" });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a server that answered is the caller's to handle, never a run to adopt", async () => {
+  // An `ApiError` means the request was received and refused -- a 404 for a
+  // character that is gone, a 409 for a missing key. Adopting a run for one of
+  // those would hide a setup mistake behind a wait that never ends.
+  const fetchMock = vi.fn().mockResolvedValue(
+    { ok: false, status: 404, json: async () => ({ detail: "character not found" }) });
+  globalThis.fetch = fetchMock;
+
+  await expect(api.generateCharacterTagline("realm", "nobody")).rejects.toThrow();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+// ---- the opener, the one streaming draft ------------------------------------
+
+test("an opener whose connection dies is picked back up where it stopped", async () => {
+  // The acceptance criterion in one test: backgrounding the app during an
+  // opener used to lose it outright, because the only copy of each frame was
+  // the one already on the wire.
+  const seen: string[] = [];
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(sseCutOff([
+      'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
+      'id: 0\ndata: {"delta":"The "}\n\n',
+    ]))
+    // `next_index` is 2: the run kept generating while the client was away, so
+    // the live tail is AHEAD of what was delivered. That gap is the whole
+    // reason a client resumes from what it read rather than from the tail.
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1", state: "running",
+                                           next_index: 2, cls: "draft" } }))
+    .mockResolvedValueOnce(sseResponse([
+      'id: 1\ndata: {"delta":"quay."}\n\n', 'id: 2\ndata: {"done":true}\n\n',
+    ]));
+  globalThis.fetch = fetchMock;
+
+  await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
+
+  expect(seen.join("")).toBe("The quay.");
+  // Found by the attempt, so a second opener on the same scene cannot be
+  // mistaken for this one.
+  expect(String(fetchMock.mock.calls[1][0])).toContain("attempt=");
+  // From ONE PAST the last frame actually delivered, never from the run's
+  // `next_index`: that is the live tail, and resuming there drops the reply.
+  expect(String(fetchMock.mock.calls[2][0]))
+    .toBe("/api/campaigns/run/scenes/s1/runs/r1/stream?from=1");
+});
+
+test("an opener the server never heard of reports the failure it really had",
+     async () => {
+  const fetchMock = vi.fn()
+    .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+    .mockResolvedValueOnce(jsonOk({ run: null }));
+  globalThis.fetch = fetchMock;
+
+  await expect(api.opener("run", "s1", "begin", () => {})).rejects.toThrow("Failed to fetch");
+});
+
+test("an opener lookup that could not be made does not end the recovery", async () => {
+  // A failed discovery has not answered "there is no run". Ending here would
+  // abandon a generation that is still going -- and the reader would see a
+  // half-written opener with no way back to the rest of it.
+  const seen: string[] = [];
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(sseCutOff([
+      'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
+      'id: 0\ndata: {"delta":"The "}\n\n',
+    ]))
+    .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1", state: "running",
+                                           next_index: 2, cls: "draft" } }))
+    .mockResolvedValueOnce(sseResponse([
+      'id: 1\ndata: {"delta":"quay."}\n\n', 'id: 2\ndata: {"done":true}\n\n',
+    ]));
+  globalThis.fetch = fetchMock;
+
+  await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
+
+  expect(seen.join("")).toBe("The quay.");
 });

@@ -18,6 +18,7 @@ from grimoire import health, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
+from tests import draft_runs as drafts
 from tests.llm_fakes import (
     FakeCatalog,
     FlakyProvider,
@@ -296,7 +297,7 @@ def test_a_generation_cut_off_by_its_ceiling_is_recorded_against_its_connection(
     client.post(f"/api/worlds/{wid}/characters",
                 json={"name": "Mara", "version_name": "main"})
 
-    r = client.post(f"/api/worlds/{wid}/characters/mara/tagline/generate")
+    r = drafts.post(client, f"/api/worlds/{wid}/characters/mara/tagline/generate")
 
     assert r.status_code == 504
     assert [(c["id"], e.kind) for c, e in stalled.noted] == [("openrouter", "timeout")]
@@ -326,7 +327,7 @@ def test_a_claude_connection_is_checkable_though_it_has_no_catalog(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     assert client.post("/api/llm-connections/claude/health").json()["ok"] is True
-    assert client.post("/api/llm-connections/claude/models/refresh").status_code == 400
+    assert drafts.post(client, "/api/llm-connections/claude/models/refresh").status_code == 400
 
 
 # ---- what the rest of the app sees ----

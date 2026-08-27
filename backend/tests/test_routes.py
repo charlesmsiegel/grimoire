@@ -20,6 +20,7 @@ from grimoire import llm, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.store import atomic
+from tests import draft_runs as drafts
 from tests import review_runs
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter,
@@ -193,12 +194,12 @@ def test_models_refresh_400_only_for_the_kind_with_no_catalog(client):
     is refused."""
     fake = FakeCatalog(models=[])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    assert client.post("/api/llm-connections/openrouter/models/refresh").status_code == 200
-    assert client.post("/api/llm-connections/claude/models/refresh").status_code == 400
+    assert drafts.post(client, "/api/llm-connections/openrouter/models/refresh").status_code == 200
+    assert drafts.post(client, "/api/llm-connections/claude/models/refresh").status_code == 400
 
 
 def test_models_refresh_404_for_missing_connection(client):
-    assert client.post("/api/llm-connections/nope/models/refresh").status_code == 404
+    assert drafts.post(client, "/api/llm-connections/nope/models/refresh").status_code == 404
 
 
 def test_models_refresh_asks_the_connections_own_provider(client):
@@ -211,7 +212,7 @@ def test_models_refresh_asks_the_connections_own_provider(client):
         {"id": "glm-4.6", "name": "GLM-4.6", "context": 128000, "prompt": None, "completion": None}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
-    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    r = drafts.post(client, f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 200
     assert r.json()["models"] == fake.models
     assert [(c["kind"], c["base_url"], c["api_key"]) for c in fake.listed] == [
@@ -232,7 +233,7 @@ def test_models_refresh_for_openrouter_presents_the_stored_key(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-live"})
 
-    assert client.post("/api/llm-connections/openrouter/models/refresh").status_code == 200
+    assert drafts.post(client, "/api/llm-connections/openrouter/models/refresh").status_code == 200
     assert [(c["kind"], c["api_key"]) for c in fake.listed] == [("openrouter", "sk-or-live")]
 
 
@@ -244,7 +245,7 @@ def test_models_refresh_upstream_error_normalized(client):
     fake = FakeCatalog(error=LLMError("auth", "bad key"))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
-    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    r = drafts.post(client, f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 502
     assert r.json()["kind"] == "auth"
 
@@ -269,7 +270,7 @@ def test_models_refresh_route_write_hidden_if_connection_changes_during_the_fetc
             return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
 
     client.app.dependency_overrides[routes.get_llm] = lambda: MutatingFakeClient()
-    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    r = drafts.post(client, f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 200
     assert r.json()["models"] == [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
 
@@ -292,7 +293,7 @@ def test_models_refresh_route_write_hidden_after_delete_and_recreate_during_fetc
             return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
 
     client.app.dependency_overrides[routes.get_llm] = lambda: DeleteRecreateFakeClient()
-    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    r = drafts.post(client, f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 200
 
     detail = client.get(f"/api/llm-connections/{cid}").json()
@@ -3621,7 +3622,7 @@ def test_a_blocking_generation_retries_too(client):
     provider = TransientProvider(failures=1, reply="- A storm breaks over Saltmarch")
     _real_facade(client, provider)
 
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     assert r.status_code == 200
     assert len(provider.models) == 2
@@ -5931,7 +5932,7 @@ def test_post_tagline_generate_from_model(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("A silent snowleopardgirl.\nignored second line")
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
+    r = drafts.post(client, f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
     assert r.status_code == 200
     assert r.json() == {"tagline": "A silent snowleopardgirl."}
     # preview only: generate does not persist until the caller saves via PUT
@@ -5948,14 +5949,14 @@ def test_post_tagline_generate_survives_a_card_with_no_data(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("A silent snowleopardgirl.")
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
+    r = drafts.post(client, f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
     assert r.status_code == 200
     assert r.json() == {"tagline": "A silent snowleopardgirl."}
 
 
 def test_post_tagline_generate_requires_key(client):
     wid, cid = _world_char(client)
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
+    r = drafts.post(client, f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
     assert r.status_code == 409
 
 
@@ -5998,7 +5999,7 @@ def test_post_voice_anchor_generate_is_preview_only(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("  Clipped.\nNever uses contractions.  ")
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/voice-anchor/generate")
+    r = drafts.post(client, f"/api/worlds/{wid}/characters/{cid}/voice-anchor/generate")
     assert r.status_code == 200
     assert r.json() == {"voice_anchor": "Clipped.\nNever uses contractions."}
     # nothing written until the caller saves via PUT (#59: never write without review)
@@ -6018,7 +6019,7 @@ def test_voice_anchor_generate_survives_a_card_with_no_data(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Clipped.")
-    r = client.post(f"/api/worlds/{wid}/characters/{char}/voice-anchor/generate")
+    r = drafts.post(client, f"/api/worlds/{wid}/characters/{char}/voice-anchor/generate")
     assert r.status_code == 200 and r.json() == {"voice_anchor": "Clipped."}
 
 
@@ -6031,15 +6032,14 @@ def test_campaign_voice_anchor_generate_survives_a_card_with_no_data(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Clipped.")
-    r = client.post(f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate")
+    r = drafts.post(client, f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate")
     assert r.status_code == 200 and r.json() == {"voice_anchor": "Clipped."}
 
 
 
 def test_post_voice_anchor_generate_requires_key(client):
     wid, cid = _world_char(client)
-    assert client.post(
-        f"/api/worlds/{wid}/characters/{cid}/voice-anchor/generate").status_code == 409
+    assert drafts.post(client, f"/api/worlds/{wid}/characters/{cid}/voice-anchor/generate").status_code == 409
 
 
 # ---- scene calendar ----
@@ -8058,7 +8058,7 @@ def test_a_dribbling_one_shot_generation_is_cut_off(client):
     provider = DribblingProvider()
     _dribbling(client, provider)
 
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     assert r.status_code == 504 and r.json()["kind"] == "timeout"
     # and the provider's stream is closed rather than left holding a connection
@@ -8099,7 +8099,7 @@ def test_every_one_shot_generation_route_carries_the_ceiling(client):
                  f"/api/worlds/{wid}/characters/mara/voice-anchor/generate",
                  f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate"):
         _dribbling(client, DribblingProvider())
-        r = client.post(path)
+        r = drafts.post(client, path)
         assert r.status_code == 504 and r.json()["kind"] == "timeout", path
 
 
@@ -8138,7 +8138,7 @@ def test_the_ceiling_does_not_wait_for_the_cancellation_it_requests(client):
     _dribbling(client, provider)
 
     started = time.monotonic()
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
     elapsed = time.monotonic() - started
 
     assert r.status_code == 504 and r.json()["kind"] == "timeout"
@@ -8199,7 +8199,7 @@ def test_a_zero_call_budget_disables_the_ceiling(client):
             return "no suggestions"
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Slow()
-    assert client.post(f"/api/campaigns/{cid}/scene-suggestions").status_code == 200
+    assert drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions").status_code == 200
 
 
 def test_a_timeout_from_inside_the_call_is_not_blamed_on_the_ceiling(client):
@@ -8220,7 +8220,7 @@ def test_a_timeout_from_inside_the_call_is_not_blamed_on_the_ceiling(client):
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Upstream()
 
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     assert r.status_code == 504 and r.json()["kind"] == "timeout"
     assert r.json()["detail"] == "the upstream gave up"
@@ -9216,7 +9216,7 @@ def test_scene_suggestions_returns_resolved(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [{"title": "T", "premise": "P",'
         f' "cast": ["characters:{ann}"], "location": ""}}]}}')
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 200
     s = r.json()["suggestions"][0]
     assert s["title"] == "T" and s["premise"] == "P"
@@ -9226,14 +9226,14 @@ def test_scene_suggestions_returns_resolved(client):
 
 def test_scene_suggestions_missing_key_returns_409(client):
     _, cid = _campaign(client)
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 409 and r.json()["kind"] == "missing_key"
 
 
 # ---- scene intent (#317) ----
 def test_scene_intent_rejects_empty_text(client):
     _wid, cid = _campaign(client)
-    assert client.post(f"/api/campaigns/{cid}/scene-intent",
+    assert drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
                        json={"text": "   ", "offscreen": False}).status_code == 400
 
 
@@ -9247,7 +9247,7 @@ def test_scene_intent_resolves_names(client):
     reply = ('{"title": "The morning after", "date": "2026-03-04", '
              '"location": "saltmarch", "cast": ["characters:mara"]}')
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(reply)
-    r = client.post(f"/api/campaigns/{cid}/scene-intent",
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
                     json={"text": "the morning after, back at the marsh house",
                           "offscreen": False})
     assert r.status_code == 200
@@ -9261,7 +9261,7 @@ def test_scene_intent_reports_an_llm_failure_as_a_bad_gateway(client):
     _wid, cid = _campaign(client)
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter()
-    assert client.post(f"/api/campaigns/{cid}/scene-intent",
+    assert drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
                        json={"text": "a storm", "offscreen": False}).status_code == 502
 
 
@@ -9276,7 +9276,7 @@ def test_scene_intent_forwards_offscreen_to_the_parser(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     reply = '{"title": "T", "date": "", "location": "", "cast": ["characters:mara"]}'
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(reply)
-    r = client.post(f"/api/campaigns/{cid}/scene-intent",
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-intent",
                     json={"text": "while she sleeps", "offscreen": True})
     assert r.json()["cast"] == []
 
@@ -10603,7 +10603,7 @@ def test_scene_suggestions_rank_greetings_when_more_than_two(client):
     cid, gids = _campaign_with_greetings(client, 3)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [], "greeting_picks": ["' + gids[2] + '", "ghost", "' + gids[0] + '"]}')
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 200
     assert r.json()["greeting_picks"] == [gids[2], gids[0]]
 
@@ -10613,7 +10613,7 @@ def test_scene_suggestions_skip_ranking_at_two_or_fewer(client):
     cid, gids = _campaign_with_greetings(client, 2)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [], "greeting_picks": ["' + gids[0] + '"]}')
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 200
     assert r.json()["greeting_picks"] == []  # nothing was ranked, nothing honored
 
@@ -10632,7 +10632,7 @@ def test_scene_suggestions_rank_false_skips_greeting_picks(client, monkeypatch):
     monkeypatch.setattr(suggest_mod, "greeting_candidates", _spy)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": []}')
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions?rank=false")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions?rank=false")
     assert r.status_code == 200
     assert r.json()["greeting_picks"] == []
     assert "called" not in seen
@@ -10643,7 +10643,7 @@ def test_scene_suggestions_truncates_an_over_long_direction(client):
     _wid, cid = _campaign(client)
     fake = FakeOpenRouterComplete('{"suggestions": []}')
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions",
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions",
                     params={"direction": "x" * 900})
     assert r.status_code == 200
     content = fake.messages[1]["content"]
@@ -10686,7 +10686,7 @@ def test_scene_suggestions_include_dates_and_next_date(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [{"title": "T", "premise": "P", "cast": [], "location": "",'
         ' "date": "2026-07-10"}], "next_date": "2026-07-08"}')
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 200
     assert r.json()["suggestions"][0]["date"] == "2026-07-10"
     assert r.json()["next_date"] == "2026-07-08"
@@ -10971,7 +10971,7 @@ def test_offscreen_suggestions_filter_player_cast(client):
         "title": "Plot", "premise": "The cult schemes.",
         "cast": ["characters:vex", f"pcs:{pid}"], "location": ""}]}))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
+    out = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
     assert out["suggestions"][0]["cast"] == [{"kind": "characters", "id": "vex", "name": "Vex"}]
     assert "offscreen" in fake.messages[0]["content"].lower()
     assert f"pcs:{pid}" not in fake.messages[1]["content"]  # players withheld from the cast list
@@ -10989,7 +10989,7 @@ def test_offscreen_suggestions_rank_only_offscreen_greetings(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     fake = FakeOpenRouterComplete(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
+    out = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
     assert "Available greetings" in fake.messages[1]["content"]
     assert "Normal" not in fake.messages[1]["content"]
     assert out["greeting_picks"] == ["alpha", "beta"]

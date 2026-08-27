@@ -30,6 +30,7 @@ import pytest
 from grimoire import llm, llm_errors, routes
 from grimoire.llm_errors import KINDS, LLMError
 from grimoire.routes import common
+from tests import draft_runs as drafts
 from tests.llm_fakes import FailingOpenRouter, FakeCatalog
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire" / "routes"
@@ -202,7 +203,8 @@ def test_every_one_shot_generation_route_reports_the_kind_it_got(client, kind, s
     for path, body in _paths(wid, cid):
         client.app.dependency_overrides[routes.get_llm] = \
             lambda: FailingOpenRouter([], kind, "upstream said no")
-        r = client.post(path, json=body) if body else client.post(path)
+        r = (drafts.post(client, path, json=body) if body
+             else drafts.post(client, path))
         assert (r.status_code, r.json()["kind"]) == (status, kind), path
         assert r.json()["detail"] == "upstream said no", path
 
@@ -215,13 +217,13 @@ def test_a_provider_missing_key_matches_the_pre_flight_refusal(client):
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
 
-    early = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    early = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
     assert (early.status_code, early.json()["kind"]) == (409, "missing_key")
 
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FailingOpenRouter([], "missing_key", "OpenRouter API key is not set")
-    late = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    late = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     assert (late.status_code, late.json()["kind"]) == (409, "missing_key")
 
@@ -237,10 +239,13 @@ def test_the_model_listing_route_reports_the_kind_it_got(client):
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeCatalog(error=LLMError("rate_limit", "slow down", 30.0))
 
-    r = client.post(f"/api/llm-connections/{conn}/models/refresh")
+    r = drafts.post(client, f"/api/llm-connections/{conn}/models/refresh")
 
     assert (r.status_code, r.json()["kind"]) == (429, "rate_limit")
-    assert r.headers["retry-after"] == "30"
+    # In the BODY, not a header: the refresh is detached (#398) and its 202 went
+    # out before the provider was called, so there is no response left to hang a
+    # `Retry-After` on. See `common.run_error`.
+    assert r.json()["retry_after"] == "30"
 
 
 def test_a_rate_limited_route_passes_the_providers_window_on(client):
@@ -248,25 +253,31 @@ def test_a_rate_limited_route_passes_the_providers_window_on(client):
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FailingOpenRouter([], "rate_limit", "slow down", retry_after=12.4)
 
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     assert r.status_code == 429
-    assert r.headers["retry-after"] == "13"
+    assert r.json()["retry_after"] == "13"
 
 
 def test_a_cross_origin_caller_can_read_the_retry_after(client):
     """CORS hides every response header but a safelisted handful, and
     `Retry-After` is not one of them. The app's own frontend is same-origin via
-    vite's proxy, so nothing here would have noticed."""
+    vite's proxy, so nothing here would have noticed.
+
+    The one-shot routes carry their window in the body now that they are
+    detached, so this pins the exposure for the routes that still answer with a
+    header -- the pre-flight refusals every one of them can still raise while
+    the request is there."""
     _wid, cid = _fixtures(client)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FailingOpenRouter([], "rate_limit", "slow down", retry_after=12.4)
 
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions",
-                    headers={"Origin": "http://localhost:5173"})
+    started = client.post(f"/api/campaigns/{cid}/scene-suggestions",
+                          headers={"Origin": "http://localhost:5173"})
 
-    assert r.status_code == 429 and r.headers["retry-after"] == "13"
-    assert "Retry-After" in r.headers["access-control-expose-headers"]
+    assert started.status_code == 202
+    assert "Retry-After" in started.headers["access-control-expose-headers"]
+    assert drafts.settle(client, started).json()["retry_after"] == "13"
 
 
 def test_a_rate_limit_with_no_window_sends_no_retry_after(client):
@@ -274,9 +285,9 @@ def test_a_rate_limit_with_no_window_sends_no_retry_after(client):
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FailingOpenRouter([], "rate_limit", "slow down")
 
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
-    assert r.status_code == 429 and "retry-after" not in r.headers
+    assert r.status_code == 429 and "retry_after" not in r.json()
 
 
 def test_a_streamed_failure_still_answers_200_with_an_in_band_error(client):

@@ -27,6 +27,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 
+from . import draft_runs as drafts
 from . import review_runs
 from .llm_fakes import FakeLLM
 
@@ -128,27 +129,27 @@ def _drive_summary(client, wid, cid, sid):
 
 
 def _drive_suggestions(client, wid, cid, sid):
-    client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
 
 def _drive_voice(client, wid, cid, sid):
-    client.post(f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate")
+    drafts.post(client, f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate")
 
 
 def _drive_image(client, wid, cid, sid):
     client.put(f"/api/campaigns/{cid}/images/coastline",
                files={"file": ("art.png", _png(), "image/png")})
-    client.post(f"/api/campaigns/{cid}/images/coastline/description/draft")
+    drafts.post(client, f"/api/campaigns/{cid}/images/coastline/description/draft")
 
 
 def _drive_tagline(client, wid, cid, sid):
-    client.post(f"/api/worlds/{wid}/characters/mara/tagline/generate")
+    drafts.post(client, f"/api/worlds/{wid}/characters/mara/tagline/generate")
 
 
 def _drive_scenario(client, wid, cid, sid):
     card = ('{"spec": "chara_card_v3", "spec_version": "3.0", "data": '
             '{"name": "Winifred", "description": "a lamplighter", "extensions": {}}}')
-    client.post(f"/api/worlds/{wid}/scenario/parse",
+    drafts.post(client, f"/api/worlds/{wid}/scenario/parse",
                 data={"format": "json"},
                 files={"file": ("card.json", card.encode(), "application/json")})
 
@@ -320,7 +321,7 @@ def test_a_route_naming_a_deleted_connection_falls_back_rather_than_failing(clie
     assert client.delete(f"/api/llm-connections/{doomed}").status_code == 200
     fake = _fake(client)
 
-    client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     assert {r["conn"]["id"] for r in fake.requests} == {"openrouter"}
 
@@ -344,7 +345,7 @@ def test_a_routed_connection_that_cannot_send_is_reported_not_silently_replaced(
     client.put("/api/routing", json={"routes": {"suggestions": keyless}})
     _fake(client)
 
-    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     assert r.status_code == 409
     # The app's LLM-error handler flattens a dict detail onto the body, which is
@@ -397,7 +398,7 @@ def test_the_ledger_records_the_connection_a_routed_call_actually_used(client):
     client.put("/api/routing", json={"routes": {"suggestions": routed}})
     _fake(client)
 
-    client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
 
     # The campaign rollup groups by model, and the model it names is the routed
     # connection's -- not the active connection's `vendor/x`.

@@ -9,19 +9,29 @@ registered before these. That is the one ordering rule the package has, and
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 
 from .. import store
 from ..llm import LLMClient
+from . import runs
 from .common import (
     _campaign_root_or_404,
-    _draft_description,
     _fresh_or_409,
     _serve_image,
     _upload_image_ext,
     _with_descriptions,
     _world_root_or_404,
+    draft_completion,
     get_llm,
+    image_draft_prompt,
 )
 from .models import (
     DemoteBody,
@@ -450,17 +460,27 @@ def delete_campaign_entity(cid: str, kind: str, eid: str):
     return _campaign_entity_delete(cid, kind, eid)
 
 
-@router.post("/worlds/{wid}/{kind}/{eid}/images/{name}/description/draft")
-async def post_world_entity_image_description_draft(wid: str, kind: str, eid: str, name: str,
-                                                    client: LLMClient = Depends(get_llm)):
-    """A model-drafted first pass at what this entity's picture shows."""
+@router.post("/worlds/{wid}/{kind}/{eid}/images/{name}/description/draft", status_code=202)
+def post_world_entity_image_description_draft(
+        wid: str, kind: str, eid: str, name: str, request: Request,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a model-drafted first pass at what this entity's picture shows."""
     root = _world_entity_or_404(wid, kind, eid)
     try:
         subject = store.entities.read_entity(root, kind, eid)["meta"]["name"]
     except store.entities.EntityNotFound:
         subject = ""
-    return await _draft_description(
-        client, store.assets.image_path(root, eid, "default", name, base=kind), subject)
+    conn, messages = image_draft_prompt(
+        store.assets.image_path(root, eid, "default", name, base=kind), subject)
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "image-description",
+            lambda text: {"description": store.image_drafts.parse_output(text)})
+
+    return runs.run_draft(request.app, runs.world_subject(wid),
+                          "image-description", x_grimoire_attempt, work)
 
 
 @router.put("/worlds/{wid}/{kind}/{eid}/images/{name}/description")

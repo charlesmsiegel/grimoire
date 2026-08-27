@@ -224,26 +224,48 @@ that is always right.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Eight handlers** start detached runs, in two classes:
+subscriber. **Twenty-one handlers** start detached runs, in three classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn` and
-  `post_roll_proposal`. (Five, not six: `post_opener` is the sixth synchronous
-  streaming handler, but it is a `draft` and the draft routes are still
-  attached.)
+  `post_roll_proposal`. All six synchronous streaming handlers are detached
+  now; the sixth, `post_opener`, is a `draft` rather than a turn (below).
 - `review` — `post_absorb`, `post_audit` and `post_dossiers`. These are not
   streams: each answers **202** with a run to poll and persists its result to
   `store/pending_reviews.py`, because a review's value is a payload nobody has
   written down and losing it costs the longest generation in the app.
+- `draft` — `post_opener`, plus the twelve computing previews: scene
+  suggestions and intent, the four image-description drafts, both voice
+  anchors, taglines, both scenario parses, and the model-catalog refresh. The
+  twelve answer **202** and hand back a result held on the run and reaped;
+  `post_opener` streams and buffers its frames like a turn. **A draft declares
+  no exclusion key** — it neither holds a scene nor is refused by one, which is
+  what stops a tagline preview from being able to refuse a chat, and its result
+  is deliberately *not* durable: a sentence nobody has agreed to yet is
+  regenerable, and storing it would be a second store to keep consistent.
+
+  All twelve go through **one contract** rather than twelve variants —
+  `runs.run_draft` on the route side, `common.draft_completion` for the call,
+  and `api.draftRun` in the client. `post_opener` is the exception on the
+  client side only, where `api.streamDraft` re-attaches by attempt id instead
+  of polling.
 
 - The run registry lives on **`app.state.runs`**, not at module scope: a
   `TestClient` builds an app per test, and module state would leak runs between
   them. `runner.install` adds the parts that need a running loop.
 - Those handlers are `def`, so FastAPI runs them in a threadpool worker. Work is
   handed to the lifespan loop through an `anyio` **`BlockingPortal`** —
-  `tg.start_soon` is not thread-safe from a worker.
+  `tg.start_soon` is not thread-safe from a worker. Reserving a run builds its
+  handshake events through that portal, so **a route that reserves may not be
+  `async def`**: called from the loop thread the portal raises. The two scenario
+  parses have to be `async` (an upload, a download), so they reach their
+  reservation through `run_in_threadpool`.
 - A scene run's subject is **`("scene", cid, identity)`**. The `sid` moves on
   rename and is reissued after a delete, so it cannot name a run that outlives
-  its request.
+  its request. The other three subjects — `("campaign", cid)`, `("world", wid)`
+  and `("global",)` — need no identity, because nothing renames a campaign or a
+  world in place. Each has the same four run routes mounted under it (list,
+  poll, stream, cancel); without them a scenario parse or a model refresh would
+  be detached and unreachable.
 - Every terminal write is **fenced** on that identity under the campaign lock,
   and every route that changes a scene's *shape* is refused with `scene_busy`
   while a turn **or a review** holds it (both classes share one exclusion key

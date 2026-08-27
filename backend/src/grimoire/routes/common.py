@@ -176,6 +176,110 @@ def _llm_http_error(exc: LLMError) -> HTTPException:
         headers={"Retry-After": retry_after} if retry_after else None)
 
 
+def run_error(exc: HTTPException) -> dict:
+    """One refusal as the error a POLLING client reads off a detached run.
+
+    Carries the HTTP status the same failure would have had when these routes
+    answered synchronously, so a client's existing handling of `409
+    missing_key` or `504 timeout` needs no second shape to understand -- the
+    only thing that moved is where it reads it from. That equivalence is the
+    whole migration contract for a computing route: what the client sees must
+    not depend on whether the work was detached.
+
+    Here rather than in `runs`, which the `draft` routes' modules already reach
+    through this one, and which may not import anything that would let it build
+    an `HTTPException` from an `LLMError` (`_llm_http_error` lives here).
+
+    **`retry_after` moves into the BODY, because a header cannot survive
+    detachment.** A rate limit's window is advice about when this work can be
+    tried again, and the response that would have carried it as `Retry-After`
+    went out as a 202 before the provider was even called -- the same thing
+    that has always been true of a streamed failure, whose errors are SSE
+    events for exactly this reason. Dropping it instead would silently lose the
+    one number a client needs to schedule its retry.
+    """
+    detail = exc.detail
+    if isinstance(detail, dict):
+        out = {"kind": detail.get("kind", "refused"),
+               "detail": str(detail.get("detail", "")),
+               "status": exc.status_code}
+    else:
+        out = {"kind": "refused", "detail": str(detail), "status": exc.status_code}
+    window = (exc.headers or {}).get("Retry-After")
+    return {**out, "retry_after": window} if window else out
+
+
+async def draft_completion(client: LLMClient, conn: dict, messages: list[dict],
+                           task: str, shape, cid: str = "", sid: str = "") -> dict:
+    """One metered non-stream generation, as the outcome a detached run reports.
+
+    THE helper the twelve computing `draft` routes share, and the reason they
+    are allowed to be three lines each. Every one of them was the same four
+    steps written out again -- open a meter, call under the duration ceiling,
+    turn an `LLMError` into an HTTP failure, parse the text into the caller's
+    own shape -- and detaching them would have made it the same *seven*, with a
+    reservation and a terminal outcome dict on either end. Thirteen slightly
+    different implementations of that contract is the risk the issue named.
+
+    Returns what `runner._guarded` understands: `{"state": ..., "result"?:,
+    "error"?:}`. A failure is REPORTED rather than raised, because a raise here
+    is recorded as an opaque `run_failed` and the client would lose the
+    `missing_key` / `timeout` / `rate_limit` kind it acts on today.
+
+    `shape` runs OUTSIDE the meter's block: it is parsing, not generation, and
+    a parse that raises inside would file the model's successful call as a
+    provider error in the usage ledger -- which is the one place that has to be
+    able to say what the provider actually did.
+    """
+    try:
+        with store.usage.meter(task, campaign=cid, scene=sid) as m:
+            text = await _bounded_call(client.complete(messages, conn, m.usage),
+                                       on_timeout=_noting(client, conn, m.usage))
+    except LLMError as exc:
+        return {"state": "failed", "error": run_error(_llm_http_error(exc))}
+    try:
+        return {"state": "landed", "result": shape(text)}
+    except HTTPException as exc:
+        # A refusal the SHAPE chose -- an image whose bytes the model described
+        # for a record that has since gone. Reported with its own status rather
+        # than as the generic `run_failed` an escaping exception becomes.
+        return {"state": "failed", "error": run_error(exc)}
+
+
+def image_draft_prompt(path, subject: str, cid: str = "") -> tuple[dict, list[dict]]:
+    """The connection and the messages for one image-description draft.
+
+    Everything `_draft_description` used to do BEFORE the provider call, split
+    out so the route can do it synchronously -- while the request is still
+    there to be told `no such image`, `that connection cannot read pictures`,
+    `that file is too large` -- and detach only the part that is slow. A
+    refusal the caller can act on must not arrive as a run state minutes later.
+
+    `cid` is the CAMPAIGN whose routing applies (#142), and only the campaign
+    library surface has one -- the other three describe a picture belonging to
+    a world record, where the path's `cid` is a character id and naming a
+    campaign would be a coincidence of spelling.
+    """
+    conn = _require_connection("image-description", cid)
+    if conn.get("kind") not in store.image_drafts.SUPPORTED_KINDS:
+        # A refusal the user can act on, rather than a 500 out of the SDK path:
+        # `claude_agent` joins message content as a string, so a multimodal
+        # message raises deep inside it. See `store/image_drafts.py`.
+        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
+    if path is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    try:
+        return conn, store.image_drafts.build_prompt(path, subject)
+    except store.image_drafts.ImageTooLargeError as exc:
+        # Refused before the bytes are read, so this is an error rather than the
+        # killed process an Android install would otherwise get. See MAX_BYTES.
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except ValueError as exc:
+        # An externally-placed file with an extension we never accepted, so we
+        # cannot label its bytes for the provider.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _connection_problem(conn: dict) -> str | None:
     """Why this connection cannot send, or None if it can.
 
@@ -598,50 +702,6 @@ def _write_response(setter, fields: dict, style_key: str = "style_id") -> None:
 # ---- image serving ----
 _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
-
-
-async def _draft_description(client, path, subject: str, cid: str = "") -> dict:
-    """One model-drafted first pass at what the picture at `path` shows.
-
-    Shared by the four surfaces rather than copied into each, because the only
-    thing that differs between them is how the image and the subject's NAME are
-    found -- and a copy per surface is four places for the connection-kind
-    refusal to drift.
-
-    Preview only, like `tagline/generate` and `voice-anchor/generate`: the caller
-    persists through the PUT on Save, so a draft nobody read is never written
-    (#59).
-
-    `cid` is the CAMPAIGN whose routing applies (#142), and only the campaign
-    library surface has one -- the other three describe a picture belonging to a
-    world record, where the path's `cid` is a character id and naming a campaign
-    would be a coincidence of spelling.
-    """
-    conn = _require_connection("image-description", cid)
-    if conn.get("kind") not in store.image_drafts.SUPPORTED_KINDS:
-        # A refusal the user can act on, rather than a 500 out of the SDK path:
-        # `claude_agent` joins message content as a string, so a multimodal
-        # message raises deep inside it. See `store/image_drafts.py`.
-        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
-    if path is None:
-        raise HTTPException(status_code=404, detail="image not found")
-    try:
-        messages = store.image_drafts.build_prompt(path, subject)
-    except store.image_drafts.ImageTooLargeError as exc:
-        # Refused before the bytes are read, so this is an error rather than the
-        # killed process an Android install would otherwise get. See MAX_BYTES.
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
-    except ValueError as exc:
-        # An externally-placed file with an extension we never accepted, so we
-        # cannot label its bytes for the provider.
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        with store.usage.meter("image-description") as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn, m.usage))
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
-    return {"description": store.image_drafts.parse_output(text)}
 
 
 def _with_descriptions(images: list[dict], descriptions: dict[str, str]) -> list[dict]:

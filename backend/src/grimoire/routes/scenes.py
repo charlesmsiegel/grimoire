@@ -29,7 +29,6 @@ from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from . import runs, streaming
 from .common import (
-    _bounded_call,
     _campaign_root_or_404,
     _dump,
     _llm_http_error,
@@ -44,7 +43,9 @@ from .common import (
     _turn_override,
     _write_response,
     computes_only,
+    draft_completion,
     get_llm,
+    run_error,
 )
 from .models import (
     Appear,
@@ -285,11 +286,18 @@ def _resolve_cast(cid: str, tokens: list[str], memo: dict[str, str] | None = Non
     return out
 
 
-@router.post("/campaigns/{cid}/scene-suggestions")
+@router.post("/campaigns/{cid}/scene-suggestions", status_code=202)
 @computes_only
-async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: bool = False,
-                                 direction: str = "", rank: bool = True,
-                                 client: LLMClient = Depends(get_llm)):
+def post_scene_suggestions(cid: str, request: Request, after: str | None = None,
+                           offscreen: bool = False, direction: str = "", rank: bool = True,
+                           client: LLMClient = Depends(get_llm),
+                           x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a set of drafted scene ideas. 202 and a run to poll.
+
+    The ranking half of the prompt is built HERE, while the request is still
+    there: it is the expensive read, but it is a read, and a campaign that
+    cannot be read has to be refused as a 404 rather than as a run state.
+    """
     try:
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
@@ -300,12 +308,25 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
     candidates = store.suggest.greeting_candidates(cid, after, pcless=offscreen) if rank else []
     messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
                                           candidates, offscreen=offscreen, direction=direction)
-    try:
-        with store.usage.meter("suggestions", campaign=cid) as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn, m.usage))
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "suggestions",
+            lambda text: _suggestions_payload(cid, text, candidates, offscreen),
+            cid=cid)
+
+    return runs.run_draft(request.app, runs.campaign_subject(cid), "suggestions",
+                          x_grimoire_attempt, work)
+
+
+def _suggestions_payload(cid: str, text: str, candidates: list[dict],
+                         offscreen: bool) -> dict:
+    """The model's suggestions as the body this route has always returned.
+
+    Split from the route so the shape survives detachment unchanged: what a
+    client receives is the same dict it received when this blocked, and only
+    where it reads it from moved.
+    """
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
     out = []
     for s in store.suggest.parse_output(text, cid, offscreen=offscreen):
@@ -318,10 +339,11 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
             "next_date": store.suggest.parse_next_date(text, cid)}
 
 
-@router.post("/campaigns/{cid}/scene-intent")
+@router.post("/campaigns/{cid}/scene-intent", status_code=202)
 @computes_only
-async def post_scene_intent(cid: str, body: SceneIntent,
-                            client: LLMClient = Depends(get_llm)):
+def post_scene_intent(cid: str, body: SceneIntent, request: Request,
+                      client: LLMClient = Depends(get_llm),
+                      x_grimoire_attempt: str | None = Header(default=None)):
     """Metadata implied by the user's own scene-start description. Computes and
     returns; the confirm form is what decides whether any of it is written."""
     try:
@@ -332,13 +354,20 @@ async def post_scene_intent(cid: str, body: SceneIntent,
         raise HTTPException(status_code=400, detail="empty scene description")
     conn = _require_connection("intent", cid)
     messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
-    try:
-        with store.usage.meter("intent", campaign=cid) as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn, m.usage))
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
-    got = store.suggest.parse_intent(text, cid, offscreen=body.offscreen)
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "intent",
+            lambda text: _intent_payload(cid, text, body.offscreen), cid=cid)
+
+    return runs.run_draft(request.app, runs.campaign_subject(cid), "intent",
+                          x_grimoire_attempt, work)
+
+
+def _intent_payload(cid: str, text: str, offscreen: bool) -> dict:
+    """The parsed intent as the body this route has always returned -- see
+    `_suggestions_payload` for why it is a function rather than inline."""
+    got = store.suggest.parse_intent(text, cid, offscreen=offscreen)
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
     loc = ({"id": got["location"], "name": loc_names.get(got["location"], got["location"])}
            if got["location"] else None)
@@ -2210,20 +2239,10 @@ def _review_abandoned(run):
     return gone
 
 
-def _run_error(exc: HTTPException) -> dict:
-    """One refusal as the error a polling client reads off the run.
-
-    Carries the HTTP status the same failure would have had when these routes
-    answered synchronously, so a client's existing handling of `409
-    missing_key` or `504 timeout` needs no second shape to understand -- the
-    only thing that moved is where it reads it from.
-    """
-    detail = exc.detail
-    if isinstance(detail, dict):
-        return {"kind": detail.get("kind", "refused"),
-                "detail": str(detail.get("detail", "")),
-                "status": exc.status_code}
-    return {"kind": "refused", "detail": str(detail), "status": exc.status_code}
+# `run_error` under its old local name: the `draft` routes need exactly the
+# same translation, so it moved to `common` and this alias keeps the dozen call
+# sites below reading as they did.
+_run_error = run_error
 
 
 def _cancelled_error() -> dict:

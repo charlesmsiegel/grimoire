@@ -6,27 +6,36 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from . import runs
 from .common import (
     THUMB_W,
     _bounded_call,
     _card_data,
     _display_name_or_400,
-    _draft_description,
-    _llm_http_error,
-    _noting,
     _require_connection,
     _serve_image,
     _upload_image_ext,
     _world_char_version_or_404,
     _world_root_or_404,
+    draft_completion,
     get_llm,
+    image_draft_prompt,
 )
 from .models import (
     AvatarFocus,
@@ -236,9 +245,18 @@ def put_character_tagline(wid: str, cid: str, body: TaglineSave):
     return {"ok": True}
 
 
-@router.post("/worlds/{wid}/characters/{cid}/tagline/generate")
-async def post_character_tagline_generate(wid: str, cid: str,
-                                          client: LLMClient = Depends(get_llm)):
+@router.post("/worlds/{wid}/characters/{cid}/tagline/generate", status_code=202)
+def post_character_tagline_generate(
+        wid: str, cid: str, request: Request,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a drafted tagline for this character. 202 and a run to poll.
+
+    Preview only — the caller persists via PUT on Save, so Generate-then-cancel
+    (e.g. the import popup's Skip) leaves nothing written, and the run's result
+    is reaped rather than stored. That is the right durability for a sentence
+    nobody has agreed to yet.
+    """
     root = _world_root_or_404(wid)
     conn = _require_connection("tagline")
     try:
@@ -247,15 +265,14 @@ async def post_character_tagline_generate(wid: str, cid: str,
         raise HTTPException(status_code=404, detail="character not found")
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.taglines.build_prompt(_card_data(card))
-    try:
-        with store.usage.meter("tagline") as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn, m.usage))
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
-    # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
-    # (e.g. the import popup's Skip) leaves nothing written.
-    return {"tagline": store.taglines.parse_output(text)}
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "tagline",
+            lambda text: {"tagline": store.taglines.parse_output(text)})
+
+    return runs.run_draft(request.app, runs.world_subject(wid), "tagline",
+                          x_grimoire_attempt, work)
 
 
 def _tagline_target(root, cid: str) -> tuple[dict | None, str, str]:
@@ -483,9 +500,16 @@ def put_character_voice_anchor(wid: str, cid: str, body: VoiceAnchorSave):
     return {"ok": True}
 
 
-@router.post("/worlds/{wid}/characters/{cid}/voice-anchor/generate")
-async def post_character_voice_anchor_generate(wid: str, cid: str,
-                                               client: LLMClient = Depends(get_llm)):
+@router.post("/worlds/{wid}/characters/{cid}/voice-anchor/generate", status_code=202)
+def post_character_voice_anchor_generate(
+        wid: str, cid: str, request: Request,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a drafted voice anchor for this character. 202 and a run to poll.
+
+    Preview only, like tagline/generate — the caller persists via PUT on Save,
+    so an anchor is never written without review (#59).
+    """
     root = _world_root_or_404(wid)
     conn = _require_connection("voice-anchor")
     try:
@@ -494,15 +518,14 @@ async def post_character_voice_anchor_generate(wid: str, cid: str,
         raise HTTPException(status_code=404, detail="character not found")
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.voice_anchors.build_prompt(_card_data(card))
-    try:
-        with store.usage.meter("voice-anchor") as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn, m.usage))
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
-    # Preview only, like tagline/generate — the caller persists via PUT on Save,
-    # so an anchor is never written without review (#59).
-    return {"voice_anchor": store.voice_anchors.parse_output(text)}
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "voice-anchor",
+            lambda text: {"voice_anchor": store.voice_anchors.parse_output(text)})
+
+    return runs.run_draft(request.app, runs.world_subject(wid), "voice-anchor",
+                          x_grimoire_attempt, work)
 
 
 _EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "application/zip"}
@@ -866,10 +889,13 @@ def put_world_avatar_focus(wid: str, cid: str, vid: str, body: AvatarFocus):
     return {"ok": True}
 
 
-@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description/draft")
-async def post_world_image_description_draft(wid: str, cid: str, vid: str, name: str,
-                                             client: LLMClient = Depends(get_llm)):
-    """A model-drafted first pass at what this character's picture shows.
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description/draft",
+             status_code=202)
+def post_world_image_description_draft(
+        wid: str, cid: str, vid: str, name: str, request: Request,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a model-drafted first pass at what this character's picture shows.
 
     World-side only, and that is not an oversight -- it is true of all four
     surfaces. A description drafted from the bytes is a claim about the bytes,
@@ -883,8 +909,16 @@ async def post_world_image_description_draft(wid: str, cid: str, vid: str, name:
         subject = store.characters.read_character(root, cid)["meta"]["name"]
     except store.characters.CharacterNotFound:
         subject = ""
-    return await _draft_description(
-        client, store.assets.image_path(root, cid, vid, name), subject)
+    conn, messages = image_draft_prompt(
+        store.assets.image_path(root, cid, vid, name), subject)
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "image-description",
+            lambda text: {"description": store.image_drafts.parse_output(text)})
+
+    return runs.run_draft(request.app, runs.world_subject(wid),
+                          "image-description", x_grimoire_attempt, work)
 
 
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description")

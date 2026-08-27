@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from tests import draft_runs as drafts
 from tests import review_runs
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
@@ -130,7 +131,7 @@ def test_a_world_level_call_records_no_campaign_at_all(client, home):
     client.post(f"/api/worlds/{wid}/characters",
                 json={"name": "Mara", "version": "default"})
 
-    client.post(f"/api/worlds/{wid}/characters/mara/tagline/generate")
+    drafts.post(client, f"/api/worlds/{wid}/characters/mara/tagline/generate")
 
     row, = _rows(home)
     assert row["task"] == "tagline"
@@ -327,7 +328,7 @@ def test_the_scenario_extraction_files_a_world_level_row(client, home):
     _use(client.app, FakeOpenRouterComplete("{}", usage=USAGE))
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
 
-    r = client.post(f"/api/worlds/{wid}/scenario/parse",
+    r = drafts.post(client, f"/api/worlds/{wid}/scenario/parse",
                     files={"file": ("card.json", io.BytesIO(b'{"name": "Saltmarch"}'),
                                     "application/json")},
                     data={"format": "json"})
