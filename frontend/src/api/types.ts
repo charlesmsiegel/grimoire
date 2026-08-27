@@ -296,6 +296,12 @@ export type ForkReport = {
    *  verbatim, which is how it learns it did not make a second campaign. */
   replayed: boolean;
 };
+/** A fork request's optional guards (#409). `idempotencyKey` makes a repeat
+ *  safe; `expectRevision` is the source's write token as the caller priced the
+ *  copy against it, checked under the source's own lock so a campaign written
+ *  in between costs a refusal rather than a `copytree` of a state nobody asked
+ *  for. */
+export type ForkGuards = { idempotencyKey?: string; expectRevision?: string };
 /** `done` is the scene's absorb mark: End Scene run to completion and its
  *  changes accepted, written into the scene's own frontmatter by
  *  `scenes.mark_absorbed`. It is what the rail marks and what the composer

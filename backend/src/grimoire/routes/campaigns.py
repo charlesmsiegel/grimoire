@@ -905,14 +905,29 @@ def post_campaign_fork(cid: str, body: ForkCampaign):
     # field should not get a 404 for a scene called "".
     from_scene = (body.from_scene or "").strip() or None
     try:
+        # The key is passed through VERBATIM, where `name` above is stripped:
+        # a name is text a reader will see, and a key is an opaque value whose
+        # only property is equality. Stripping it would make `"job"` and
+        # `" job "` collide, so a client that sent the second would be answered
+        # with the fork the first made (Codex review). The empty string is still
+        # "no key" -- that is the store's own rule, not a normalization.
         return store.fork.fork_campaign(cid, name, from_scene,
-                                        key=body.idempotency_key.strip())
+                                        key=body.idempotency_key,
+                                        expect_revision=body.expect_revision)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     except store.SceneNotFound:
         raise HTTPException(status_code=404, detail="scene not found")
     except ValueError as e:                     # a key past `fork.KEY_LIMIT`
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except store.RevisionMismatchError as e:
+        # The same refusal `/advance` gives, in the same shape: this is one
+        # operation across two endpoints, and a client that has to branch on two
+        # spellings of "the campaign moved" will get one of them wrong.
+        raise HTTPException(status_code=409, detail={
+            "kind": "campaign_moved", "revision": e.current,
+            "detail": "this campaign changed while the checkpoint was being "
+                      "decided; preview it again"}) from e
 
 
 @router.delete("/campaigns/{cid}")

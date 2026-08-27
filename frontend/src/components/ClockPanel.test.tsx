@@ -289,7 +289,8 @@ test("the checkpoint is taken before the skip, never after it", async () => {
   // The copy carries the idempotency key its operation derives (#409), and
   // the skip carries the token it was priced against.
   expect(api.forkCampaign).toHaveBeenCalledWith(
-    "c", "Before 24 March 2027", undefined, `checkpoint:${BIG.to}:${REV}`);
+    "c", "Before 24 March 2027", undefined,
+    { idempotencyKey: `checkpoint:${BIG.to}:${REV}`, expectRevision: REV });
   expect(api.advanceTime).toHaveBeenCalledWith(
     "c", { days: 90, reason: "a season passes", expect_revision: REV });
 });
@@ -837,10 +838,14 @@ test("a checkpoint retried after a lost response asks for the same copy", async 
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
   await screen.findByText(/^Advanced/);
 
-  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
   expect(keys).toHaveLength(2);
   expect(keys[0]).toBe(`checkpoint:${BIG.to}:${REV}`);
   expect(keys[1]).toBe(keys[0]);
+  // ...and both name the state they were priced against, so the server refuses
+  // the copy rather than taking one of a campaign that moved.
+  expect(vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.expectRevision))
+    .toEqual([REV, REV]);
 });
 
 
@@ -878,7 +883,7 @@ test("a disowned copy costs one more copy, not two", async () => {
   // Exactly two copies for one landed checkpoint: the disowned one, and the one
   // the reader kept. The second names the state it was actually priced against,
   // and so does the skip.
-  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
   expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
   expect(vi.mocked(api.advanceTime).mock.calls[0][1].expect_revision).toBe("rev-2");
 });
@@ -926,7 +931,7 @@ test("a checkpoint the campaign outlived is not replayed for the retry", async (
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
   await screen.findByText(/^Advanced/);
 
-  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
   expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
   expect(vi.mocked(api.advanceTime).mock.calls[1][1].expect_revision).toBe("rev-2");
 });
@@ -950,4 +955,19 @@ test("a span whose contents changed under an open question is not skipped", asyn
   await screen.findByText(/preview it again/);
   expect(api.forkCampaign).not.toHaveBeenCalled();
   expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("the copy carries the token it was priced against, not only its key", async () => {
+  // This panel's own check is not binding: a whole request separates it from
+  // the copy, and only the server holds the source's lock across one. Without
+  // the token travelling with the fork, a campaign written in that gap gets
+  // checkpointed anyway and the skip then refuses it — a `copytree` spent on a
+  // state nobody asked for.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+  expect(vi.mocked(api.forkCampaign).mock.calls[0][3]).toEqual({
+    idempotencyKey: `checkpoint:${BIG.to}:${REV}`, expectRevision: REV });
 });

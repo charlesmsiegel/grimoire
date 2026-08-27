@@ -64,20 +64,53 @@ def test_no_token_can_ever_equal_the_initial_reading(cid):
     assert all(revision.bump(cid) != revision.INITIAL for _ in range(20))
 
 
-def test_a_damaged_file_reads_as_initial_rather_than_as_itself(cid):
+def test_a_damaged_file_refuses_the_token_somebody_is_holding(cid):
     stamped = revision.bump(cid)
-    path = store.campaigns.campaign_root(cid) / "revision.txt"
-    path.write_bytes(b"\xff\xfe not text")
-    assert revision.current(cid) == revision.INITIAL
-    # ...and the point of that: the token somebody is still holding no longer
-    # passes, so a stale operation is refused rather than waved through.
+    (store.campaigns.campaign_root(cid) / revision.FILENAME).write_bytes(b"\xff\xfe not text")
+    # Checked before anything reads it for a price, since reading repairs.
     with pytest.raises(revision.RevisionMismatchError):
         revision.require(cid, stamped)
 
 
-def test_a_token_longer_than_this_module_writes_is_not_believed(cid):
-    (store.campaigns.campaign_root(cid) / "revision.txt").write_text("x" * 500)
+def test_a_value_this_module_did_not_write_is_not_a_token(cid):
+    root = store.campaigns.campaign_root(cid)
+    for damage in ("0", "a3f9", "not a token", "A" * 32, "0" * 33, "", "x" * 500):
+        (root / revision.FILENAME).write_text(damage)
+        with pytest.raises(revision.RevisionMismatchError):
+            revision.require(cid, revision.INITIAL)
+        with pytest.raises(revision.RevisionMismatchError):
+            revision.require(cid, "f" * 32)
+
+
+def test_reading_a_damaged_file_repairs_it_rather_than_leaving_a_treadmill(cid):
+    """Fail-closed must not mean stuck.
+
+    `require` refuses against damage whatever the caller holds, which is right —
+    but if `current` also reported a value that check rejects, the client's
+    recovery loop never terminates: price, `campaign_moved`, price again, same
+    value, forever. One mint ends it, and every earlier holder is still refused.
+    """
+    stamped = revision.bump(cid)
+    (store.campaigns.campaign_root(cid) / revision.FILENAME).write_text("garbled")
+
+    priced = revision.current(cid)
+    assert priced not in (revision.INITIAL, stamped, "garbled")
+    revision.require(cid, priced)            # the next confirm goes through...
+    with pytest.raises(revision.RevisionMismatchError):
+        revision.require(cid, stamped)       # ...and the older holder does not
+
+
+def test_a_repair_that_cannot_be_written_still_refuses(cid, monkeypatch):
+    # A store that will not take the replacement leaves the damage in place, and
+    # `INITIAL` reports what `require` will go on refusing — the same fail-closed
+    # answer, for a disk with bigger problems than a token.
+    revision.bump(cid)
+    (store.campaigns.campaign_root(cid) / revision.FILENAME).write_text("garbled")
+    monkeypatch.setattr(atomic, "write_text",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("full disk")))
     assert revision.current(cid) == revision.INITIAL
+    with pytest.raises(revision.RevisionMismatchError):
+        revision.require(cid, revision.INITIAL)
 
 
 def test_an_empty_expectation_is_no_expectation(cid):
@@ -93,31 +126,6 @@ def test_a_matching_expectation_passes_and_a_stale_one_names_both_values(cid):
         revision.require(cid, first)
     assert exc.value.expected == first
     assert exc.value.current == second
-
-
-def test_a_damaged_file_refuses_even_the_initial_expectation(cid):
-    """The reporting path and the checking path part company on a damaged file.
-
-    `current` degrades it to `INITIAL` so a caller is handed something usable.
-    `require` refuses against it whatever the caller holds — including `INITIAL`,
-    which is the one value a caller can be holding without anything having been
-    stamped, and which a file damaged down to the literal `0` would otherwise
-    match after the campaign had been written and its token destroyed.
-    """
-    revision.bump(cid)
-    (store.campaigns.campaign_root(cid) / revision.FILENAME).write_text("0\n")
-    assert revision.current(cid) == revision.INITIAL
-    with pytest.raises(revision.RevisionMismatchError):
-        revision.require(cid, revision.INITIAL)
-
-
-def test_only_a_value_this_module_minted_is_a_token(cid):
-    root = store.campaigns.campaign_root(cid)
-    for damage in ("0", "a3f9", "not a token", "A" * 32, "0" * 33, ""):
-        (root / revision.FILENAME).write_text(damage)
-        assert revision.current(cid) == revision.INITIAL, damage
-        with pytest.raises(revision.RevisionMismatchError):
-            revision.require(cid, revision.INITIAL)
 
 
 def test_a_campaign_that_has_never_been_stamped_can_still_be_priced(cid):
@@ -695,6 +703,42 @@ def test_a_retrospective_forks_report_is_replayed_whole(client):
     two = _fork(client, cid, "Branch", from_scene=first_sid, idempotency_key="k-1")
     assert one["removed_scenes"] and two["removed_scenes"] == one["removed_scenes"]
     assert two["records"] == one["records"] and two["from_scene"] == one["from_scene"]
+
+
+def test_a_fork_priced_against_a_state_the_campaign_has_left_is_refused(client):
+    # The client's own check cannot bind: a whole request separates it from the
+    # copy, and only the server holds the source's lock across one.
+    cid = _campaign(client)
+    token = _token(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Meanwhile"})
+    r = client.post(f"/api/campaigns/{cid}/fork",
+                    json={"name": "Checkpoint", "expect_revision": token})
+    assert r.status_code == 409 and r.json()["kind"] == "campaign_moved"
+    # Refused ahead of the claim, so a stale request leaves nothing behind.
+    assert [c["id"] for c in client.get("/api/campaigns").json()] == [cid]
+
+
+def test_a_repeat_is_answered_whatever_the_campaign_has_done_since(client):
+    # The expectation describes the copy this call would take, and a repeat is
+    # not taking one — the copy it names was made long ago.
+    cid = _campaign(client)
+    token = _token(client, cid)
+    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1", expect_revision=token)
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Meanwhile"})
+    again = client.post(f"/api/campaigns/{cid}/fork",
+                        json={"name": "Checkpoint", "idempotency_key": "k-1",
+                              "expect_revision": token}).json()
+    assert again["replayed"] is True and again["id"] == first["id"]
+
+
+def test_an_idempotency_key_is_used_exactly_as_it_was_sent(client):
+    # An opaque value whose only property is equality. Stripping it would make
+    # two distinct keys collide, and answer one client's fork with another's.
+    cid = _campaign(client)
+    first = _fork(client, cid, "Checkpoint", idempotency_key="job")
+    spaced = _fork(client, cid, "Checkpoint", idempotency_key=" job ")
+    assert spaced["replayed"] is False and spaced["id"] != first["id"]
+    assert _fork(client, cid, "Checkpoint", idempotency_key=" job ")["id"] == spaced["id"]
 
 
 def test_a_key_past_the_cap_is_refused_rather_than_truncated(client):

@@ -133,7 +133,7 @@ def _nothing_cut() -> dict:
 
 
 def fork_campaign(cid: str, name: str, from_scene: str | None = None,
-                  key: str = "") -> dict:
+                  key: str = "", expect_revision: str = "") -> dict:
     """Copy campaign `cid` into a new campaign called `name`, and return a
     report of what that took.
 
@@ -172,7 +172,16 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
     that one case, and visible on the shelf rather than silent, since
     `uniquify(slugify(name))` lands the second copy under its own suffixed id.
 
-    Raises `ValueError` for a key past `KEY_LIMIT`.
+    `expect_revision` is the source's write token as the caller priced this fork
+    against (#409); empty is no expectation. Checked under the source's lock and
+    ahead of the claim, so a campaign written between the caller's reading and
+    this call costs a refusal rather than a `copytree` of a state nobody asked
+    for. A replay is answered BEFORE it, for the reason `from_scene` is: the
+    expectation describes the copy this call would take, and a repeat is not
+    taking one.
+
+    Raises `ValueError` for a key past `KEY_LIMIT` and
+    `revision.RevisionMismatchError` for a source that has moved.
 
     The report is `{"id", "from_scene", "removed_scenes", "records", "refused",
     "failed", "replayed"}`. All but `id` and `replayed` are always present and
@@ -205,6 +214,11 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
             done = _replay(cid, key)
             if done is not None:
                 return {**done, "replayed": True}
+        # After the replay and before everything else: a repeat is answered
+        # whatever the campaign has done since (the copy it names was taken long
+        # ago), and a real copy is refused before the id is claimed so a stale
+        # request leaves nothing behind.
+        revision.require(cid, expect_revision)
         if from_scene is not None:
             # Against the campaign's own enumeration rather than a bare
             # `exists()`: `list_scenes` drops ids the resolvers would refuse, and
