@@ -4,15 +4,18 @@ from grimoire.store import entities, entity_schema
 
 
 def test_descriptor_shape():
-    assert [f["key"] for f in entity_schema.FIELDS["items"]] == ["item_type", "rarity"]
-    assert [f["key"] for f in entity_schema.FIELDS["groups"]] == ["group_type"]
-    assert [f["key"] for f in entity_schema.FIELDS["creatures"]] == ["creature_type", "threat"]
-    assert all(f["widget"] == "text" for fs in entity_schema.FIELDS.values() for f in fs)
+    assert [f["key"] for f in entity_schema.FIELDS["items"]] == ["item_type", "rarity", "holder"]
+    assert [f["key"] for f in entity_schema.FIELDS["groups"]] == [
+        "group_type", "leader", "headquarters"]
+    assert [f["key"] for f in entity_schema.FIELDS["creatures"]] == [
+        "creature_type", "threat", "habitat"]
+    assert all(f["widget"] in ("text", "ref")
+               for fs in entity_schema.FIELDS.values() for f in fs)
 
 
 def test_invalid_keys():
     assert entity_schema.invalid_keys("items", {"rarity": "rare"}) == []
-    assert entity_schema.invalid_keys("items", {"holder": "mara", "rarity": "x"}) == ["holder"]
+    assert entity_schema.invalid_keys("items", {"colour": "red", "rarity": "x"}) == ["colour"]
     assert entity_schema.invalid_keys("lore", {"rarity": "x"}) == ["rarity"]  # lore declares no fields
 
 
@@ -109,3 +112,109 @@ def test_a_non_string_climate_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     from grimoire.store import entity_schema
     assert entity_schema.invalid_values("locations", {"climate": ["temperate-interior"]}) == ["climate"]
+
+
+# ---- ref-valued fields (#222) ----------------------------------------------
+
+def test_ref_specs_declare_their_candidate_kinds():
+    specs = {f["key"]: f for f in entity_schema.FIELDS["groups"]}
+    assert specs["leader"]["widget"] == "ref"
+    assert specs["leader"]["kinds"] == ("characters", "pcs")
+    assert specs["headquarters"]["kinds"] == ("locations",)
+    # Single by default; only a field that means a list says so.
+    assert not specs["leader"].get("multi")
+    habitat = {f["key"]: f for f in entity_schema.FIELDS["creatures"]}["habitat"]
+    assert habitat["multi"] is True
+
+
+def test_every_ref_spec_names_at_least_one_real_kind():
+    for kind, specs in entity_schema.FIELDS.items():
+        for spec in specs:
+            if spec["widget"] != "ref":
+                assert "kinds" not in spec, (kind, spec["key"])
+                continue
+            assert spec["kinds"], (kind, spec["key"])
+            for k in spec["kinds"]:
+                assert k in entity_schema.REF_KINDS, (kind, spec["key"], k)
+
+
+def test_ref_fields_are_declared_keys():
+    assert entity_schema.invalid_keys("items", {"holder": "characters:mara"}) == []
+    assert entity_schema.invalid_keys("groups", {"leader": "pcs:seraphine"}) == []
+    assert entity_schema.invalid_keys("creatures", {"habitat": "locations:saltmarch"}) == []
+
+
+def test_a_well_formed_ref_passes():
+    assert entity_schema.invalid_values("items", {"holder": "characters:mara"}) == []
+    assert entity_schema.invalid_values("groups", {"headquarters": "locations:saltmarch"}) == []
+
+
+def test_a_ref_naming_a_kind_the_field_does_not_accept_is_rejected():
+    # A group is led by a person, not by a place.
+    assert entity_schema.invalid_values("groups", {"leader": "locations:saltmarch"}) == ["leader"]
+    # ...and headquartered in a place, not in a person.
+    assert entity_schema.invalid_values("groups", {"headquarters": "characters:mara"}) == ["headquarters"]
+
+
+def test_a_bare_id_with_no_kind_is_rejected():
+    # `mara` could name a character, a location or nothing; the store cannot
+    # resolve it and the picker never produces it.
+    assert entity_schema.invalid_values("items", {"holder": "mara"}) == ["holder"]
+
+
+def test_a_ref_whose_id_is_not_a_safe_id_is_rejected():
+    for bad in ("characters:../../etc/passwd", "characters:", "characters:.",
+                "characters:a:b", ":mara"):
+        assert entity_schema.invalid_values("items", {"holder": bad}) == ["holder"], bad
+
+
+def test_a_single_ref_field_rejects_a_list_of_refs():
+    assert entity_schema.invalid_values(
+        "groups", {"leader": "characters:mara, characters:winifred"}) == ["leader"]
+
+
+def test_a_multi_ref_field_accepts_several_and_rejects_one_bad_one():
+    assert entity_schema.invalid_values(
+        "creatures", {"habitat": "locations:saltmarch, locations:realm"}) == []
+    assert entity_schema.invalid_values(
+        "creatures", {"habitat": "locations:saltmarch, characters:mara"}) == ["habitat"]
+
+
+def test_a_non_string_ref_is_rejected():
+    assert entity_schema.invalid_values("items", {"holder": ["characters:mara"]}) == ["holder"]
+    assert entity_schema.invalid_values("items", {"holder": True}) == ["holder"]
+
+
+def test_an_empty_ref_field_is_a_clear_not_a_rejection():
+    # The editor sends "" for a ref the user never picked or has just cleared.
+    assert entity_schema.invalid_values("groups", {"leader": ""}) == []
+
+
+def test_ref_fields_are_not_checked_for_existence(tmp_path: Path):
+    # Deliberate: see the module docstring. A ref may name a record this scope
+    # cannot see (a campaign tombstone) or one that does not exist yet, and a
+    # save must not depend on the order the two records were written in.
+    assert entity_schema.invalid_values("items", {"holder": "characters:nobody-at-all"}) == []
+
+
+def test_parse_refs_matches_the_owners_spelling():
+    assert entity_schema.parse_refs(" locations:a ,, locations:b ") == ["locations:a", "locations:b"]
+    assert entity_schema.parse_refs("") == []
+    assert entity_schema.parse_refs(None) == []
+
+
+def test_ref_fields_round_trip_as_frontmatter_scalars(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "creatures", "Marsh Wyrm", "big",
+                                 fields={"habitat": "locations:saltmarch, locations:realm"})
+    got = entities.read_entity(tmp_path, "creatures", eid)
+    assert got["meta"]["habitat"] == "locations:saltmarch, locations:realm"
+    entities.update_entity(tmp_path, "creatures", eid, fields={"habitat": ""})
+    assert "habitat" not in entities.read_entity(tmp_path, "creatures", eid)["meta"]
+
+
+def test_ref_kinds_is_the_real_set_of_records(monkeypatch, tmp_path):
+    # REF_KINDS is spelled out in entity_schema rather than imported, so that
+    # `entities` can import this module for the reclassify rewriter without a
+    # cycle. This is what keeps the copy honest when a new kind ships.
+    from grimoire.store import appearances
+    assert set(entity_schema.REF_KINDS) == set(entities.ENTITY_KINDS) | set(appearances.ACTOR_KINDS)

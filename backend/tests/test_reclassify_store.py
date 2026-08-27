@@ -480,3 +480,98 @@ def test_a_refused_campaign_move_does_not_materialize_the_record(monkeypatch, tm
             reclassify.campaign_entity(cid, "lore", "tidewatch", bad_kind)
         assert not (croot / "lore" / "tidewatch.md").exists()
     assert campaigns.read_manifest(cid) == {}
+
+
+# ---- ref-valued fields (#222) ----
+#
+# The same two spellings `owners:` has, for the same reason: a reclassify moves
+# a record that still exists, so every field naming it has to follow. A DELETE
+# deliberately does not -- see `entity_schema`'s docstring, and the two tests
+# at the bottom that hold the decision.
+
+def test_world_move_rewrites_ref_fields_in_the_world(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch")
+    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+                           fields={"headquarters": "locations:tidewatch"})
+    entities.create_entity(wroot, "creatures", "Marsh Wyrm",
+                           fields={"habitat": "locations:tidewatch, locations:elsewhere"})
+    reclassify.world_entity(wid, "locations", "tidewatch", "lore")
+    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+            == "lore:tidewatch")
+    # a multi field keeps its order and its untouched entries
+    assert (entities.read_entity(wroot, "creatures", "marsh-wyrm")["meta"]["habitat"]
+            == "lore:tidewatch, locations:elsewhere")
+
+
+def test_ref_rewrite_collapses_a_record_that_named_both_spellings(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch")
+    entities.create_entity(wroot, "creatures", "Marsh Wyrm",
+                           fields={"habitat": "locations:tidewatch, lore:tidewatch"})
+    reclassify.world_entity(wid, "locations", "tidewatch", "lore")
+    assert (entities.read_entity(wroot, "creatures", "marsh-wyrm")["meta"]["habitat"]
+            == "lore:tidewatch")
+
+
+def test_campaign_move_rewrites_ref_fields_it_only_inherits(monkeypatch, tmp_path):
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+                           fields={"headquarters": "lore:tidewatch"})
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert (overlay.read_entity(cid, "groups", "saltmarch-watch")["meta"]["headquarters"]
+            == "locations:tidewatch")
+    # campaign-side only: the world's record still says what it always did
+    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+            == "lore:tidewatch")
+
+
+def test_campaign_move_leaves_unrelated_ref_fields_unmaterialized(monkeypatch, tmp_path):
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+                           fields={"headquarters": "locations:elsewhere"})
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert not (overlay.croot_of(cid) / "groups" / "saltmarch-watch.md").exists()
+
+
+def test_a_ref_sweep_that_fails_still_leaves_the_record_moved(monkeypatch, tmp_path):
+    # Same trade the `owners:` sweep makes: the record has already moved by the
+    # time this runs, so one unreadable file must not 500 a move that happened.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "lore", "tidewatch")
+
+    def boom(*_a, **_k):
+        raise OSError("the disk said no")
+
+    monkeypatch.setattr(reclassify.entities, "rewrite_ref_fields", boom)
+    out = reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert out == {"id": "tidewatch", "campaigns": [cid]}
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+
+
+def test_deleting_a_target_leaves_the_ref_dangling_rather_than_scrubbing_it(
+        monkeypatch, tmp_path):
+    # The decided behaviour (#222), not an oversight: see `entity_schema`'s
+    # docstring. A dangling ref says the holder is gone, and comes back by
+    # itself if the record is re-created under its old name.
+    _wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch")
+    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+                           fields={"headquarters": "locations:tidewatch"})
+    entities.delete_entity(wroot, "locations", "tidewatch")
+    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+            == "locations:tidewatch")
+    # ...and re-creating it under the same name reclaims the id, so the ref resolves again
+    assert entities.create_entity(wroot, "locations", "Tidewatch") == "tidewatch"
+
+
+def test_a_campaign_tombstone_does_not_edit_the_worlds_ref(monkeypatch, tmp_path):
+    # The scope argument: the delete is one campaign's, the referring record is
+    # the world's, and every other campaign shares it.
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "groups", "Saltmarch Watch",
+                           fields={"headquarters": "lore:tidewatch"})
+    overlay.delete_entity(cid, "lore", "tidewatch")
+    assert (entities.read_entity(wroot, "groups", "saltmarch-watch")["meta"]["headquarters"]
+            == "lore:tidewatch")
+    assert not (overlay.croot_of(cid) / "groups" / "saltmarch-watch.md").exists()

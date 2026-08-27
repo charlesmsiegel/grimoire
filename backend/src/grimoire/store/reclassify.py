@@ -53,7 +53,9 @@ Two scopes, and the difference is not cosmetic:
   serialized to protect it; sweeping every post of every scene to repair a
   cosmetic link is not a trade this makes. The alt text -- which is the part
   the model ever sees (`context.story`) -- is unaffected either way.
-- **`owners:` in a campaign's copy, on a WORLD-scope move.** World scope
+- **`owners:` and the ref-valued FIELDS in a campaign's copy, on a WORLD-scope
+  move.** Both spell a ref the same way (`<kind>:<id>`) and both are swept in
+  the same breath, world-side and campaign-side. World scope
   rewrites the world's own records; a campaign that materialized its own copy of
   one keeps its own text, and the world's rewritten version reaches it as an
   ordinary sync update. Rewriting a campaign's copy under it would manufacture a
@@ -146,11 +148,14 @@ def _repoint_campaign_side(cid: str, kind: str, eid: str,
     try:
         overlay.rewrite_owner_refs(cid, _owner_ref(kind, eid),
                                    _owner_ref(new_kind, new_eid))
+        overlay.rewrite_ref_fields(cid, _owner_ref(kind, eid),
+                                   _owner_ref(new_kind, new_eid))
         record_refs.repoint(cid, {old_ref: new_ref})
     except (OSError, ValueError) as exc:
         log.warning("reclassified %s to %s in campaign %s but could not finish "
-                    "repointing it (%s) -- an `owners:` line, a pin, a citation or an "
-                    "undo entry may still name the old kind", old_ref, new_ref, cid, exc)
+                    "repointing it (%s) -- an `owners:` line, a ref field, a pin, a "
+                    "citation or an undo entry may still name the old kind",
+                    old_ref, new_ref, cid, exc)
 
 
 def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
@@ -173,6 +178,8 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
         try:
             entities.rewrite_owner_refs(wroot, _owner_ref(kind, eid),
                                         _owner_ref(new_kind, new_eid))
+            entities.rewrite_ref_fields(wroot, _owner_ref(kind, eid),
+                                        _owner_ref(new_kind, new_eid))
             sheets.repoint_world_records(wid, {old_ref: new_ref})
         except (OSError, ValueError) as exc:
             # Ahead of the sweep in the file, but never ahead of it in
@@ -181,8 +188,8 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
             # stale copy under the old kind AND a duplicate under the new one.
             # That is the failure this whole function exists to prevent.
             log.warning("reclassified %s to %s but could not finish the world-side "
-                        "sweep (%s) -- an `owners:` line or a sheet may still name "
-                        "the old kind", old_ref, new_ref, exc)
+                        "sweep (%s) -- an `owners:` line, a ref field or a sheet may "
+                        "still name the old kind", old_ref, new_ref, exc)
         swept = []
         for cid in cids:
             try:

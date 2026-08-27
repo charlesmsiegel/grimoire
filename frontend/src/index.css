@@ -1491,6 +1491,22 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .chip.owner-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; }
 .owner-chip .portrait, .owner-chip .portrait-initials { width: 22px; height: 22px; font-size: 10px; }
 
+/* A ref field naming a record that is no longer here (#222). Deleting a record
+   does not scrub the refs that point at it, so this has to read as "the thing
+   is missing" rather than as an ordinary value: dashed, muted, and not a
+   button, because there is nowhere to go. */
+/* Its picker row, same story: the value is real and has to be visible, but it
+   must not read like an ordinary candidate. */
+.owner-option.dangling { color: var(--muted); font-family: var(--fm); font-size: 11px; }
+
+.chip.dangling {
+  border-style: dashed;
+  color: var(--muted);
+  cursor: help;
+  font-family: var(--fm);
+  font-size: 11px;
+}
+
 /* Per-record prompt cost (#51). Deliberately quiet — it is a measurement
    sitting beside the record's name, not a label the eye should land on first. */
 .row-tokens {
