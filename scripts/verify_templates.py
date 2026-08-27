@@ -866,8 +866,8 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
 #: contiguous run of them with it (context.assemble is the other copy).
 #: Template path -> the heading template it shares.
 _SHARED_HEADINGS = {
-    "scene/sections/off_scene_cast_active.j2": "scene/_off_scene_cast.j2",
-    "scene/sections/off_scene_cast_known.j2": "scene/_off_scene_cast.j2",
+    "scene/sections/off_scene_cast_active.j2": "scene/off_scene_cast_heading.j2",
+    "scene/sections/off_scene_cast_known.j2": "scene/off_scene_cast_heading.j2",
 }
 
 

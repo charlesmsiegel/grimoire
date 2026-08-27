@@ -489,8 +489,16 @@ def _pinned_sections(pinned_refs: frozenset, cast: list[dict], activated_wi: lis
 
 
 #: The off-scene cast directory's shared heading: the line that says these
-#: characters are NOT present. Both tiers name it, exactly one of them emits it.
-_OFF_SCENE_CAST_HEADING = "scene/_off_scene_cast.j2"
+#: characters are NOT present. Both tiers name it and `_render_sections` emits
+#: it once per contiguous run of them — one copy in the catalog's order, where
+#: they are adjacent, and one per half a layout has separated. NOT "exactly one
+#: of them emits it": collapsing it back to one per message is how the later
+#: half ends up under an unrelated section's `# Heading` (#423).
+#:
+#: No leading underscore, and that is the convention rather than an oversight:
+#: `templates/README.md` reserves `_` for macro libraries, and this file is
+#: rendered as prompt text like `history_line.j2` or `post_history.j2`.
+_OFF_SCENE_CAST_HEADING = "scene/off_scene_cast_heading.j2"
 
 
 class Section(NamedTuple):
