@@ -387,8 +387,16 @@ def sending_scene(client, campaign_scene):
 
 
 def _latest(client, cid, sid):
-    """The newest run on this scene, reservation order."""
-    found = client.app.state.runs.for_subject(_subject(cid, sid))
+    """The newest run on this scene that a client could be waiting for.
+
+    `background` runs are skipped, the way `GET .../run` skips them
+    (`runs.ATTACHABLE`): a landed turn schedules its own rolling-summary and
+    scene-break work (#397), so the literal newest run on a scene is routinely
+    one of those -- and every caller here means "the run the route I just
+    called made".
+    """
+    found = [r for r in client.app.state.runs.for_subject(_subject(cid, sid))
+             if r.cls in runs_mod.ATTACHABLE]
     return found[-1] if found else None
 
 

@@ -27,6 +27,7 @@ from .models import (
     SheetBulkBody,
     SheetCreationBody,
 )
+from .scenes import _follow_up_hook
 from .streaming import StreamOutcome, _continuation_stream, _sse
 
 router = APIRouter()
@@ -247,8 +248,15 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
     # did the chat path and stopped would pass every other detach test while
     # locking the phone during an accepted roll still cancelled it and dropped
     # the narration -- and a roll is exactly when a player looks away.
+    # The follow-ups ride it too (#397): an adjudicated roll's continuation
+    # appends narration like any other turn, so the summary and the break
+    # question want asking exactly as they do after a send. The hook comes from
+    # `scenes` rather than being written again here, so the two callers cannot
+    # disagree about what a turn asks for next.
     stream = _continuation_stream(cid, sid, pid, messages, conn, client,
-                                  identity=run.scene_identity, outcome=outcome)
+                                  identity=run.scene_identity, outcome=outcome,
+                                  after_turn=_follow_up_hook(request.app, cid, sid,
+                                                             client))
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))

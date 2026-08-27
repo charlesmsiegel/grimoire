@@ -280,6 +280,20 @@ subscriber. **Eight handlers** start detached runs, in two classes:
   player dismissed comes back minutes later. It is addressed by **generation**
   (minted per absorb, carried by its retries), because the stored payload names
   no producer and "the scene's newest run" is as likely to be a chat turn.
+- **A landed turn schedules its own follow-ups.** The rolling summary and the
+  scene-break check are the `background` class — no exclusion key, no
+  notification, their own stores — and they were fired by
+  `CampaignView.askAfterPost` once the streaming promise settled, which is
+  exactly what a locked phone prevents: the turn lands server-side and nobody
+  is left to ask, so the summary falls behind by every backgrounded turn and
+  the break prompt never appears. `streaming._fire_follow_up` asks for both
+  once the turn's terminal write is done, with a boundary read under the lock
+  that write held. Holding no key, neither can refuse a turn with
+  `run_in_flight` or freeze a scene; sitting after the outcome and swallowing
+  its own failures, a summary that fails is not a failed turn. Every *other*
+  transcript write — an edit, a cut, a retcon, a roll, a check, a replay —
+  still asks from the client, and that is right: each is a request the player
+  is waiting on, so there is a client there by construction.
 
 ## Observability: one writer, three views
 
