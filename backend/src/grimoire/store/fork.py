@@ -63,10 +63,11 @@ than claiming the branch is the past exactly.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 
-from . import atomic, cascade, locks
+from . import atomic, cascade, locks, revision
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -95,6 +96,30 @@ log = logging.getLogger(__name__)
 PARENT_KEY = campaigns_read.PARENT_KEY
 FORKED_AT_KEY = campaigns_read.FORKED_AT_KEY
 
+#: Where a fork records the idempotency key it was made for, and the report that
+#: was returned for it: `<fork>/fork.json`, holding
+#: `{"key", "parent", "at", "report"}`.
+#:
+#: Beside the fork's own metadata rather than in a global sidecar, and that is
+#: the whole of the storage design. A shelf-wide `key -> cid` index is a second
+#: file to keep in step with a directory that the user can delete, rename or
+#: sync out from under it -- and its failure mode is the expensive one: an index
+#: naming a fork that is no longer there replays a report for a campaign that
+#: does not exist. Here the record cannot outlive the thing it describes,
+#: because it is INSIDE it.
+#:
+#: The cost is that finding one is a scan. Paid only when a key is sent, and
+#: only against the campaigns that name this one as `parent` -- `list_campaigns`
+#: already reads every campaign's frontmatter for the shelf, so this is one
+#: existing read plus a small JSON file per child.
+MARKER = "fork.json"
+
+#: The longest key this will record. Refused rather than truncated, deliberately:
+#: two keys that differ only past the cap would truncate onto each other and one
+#: caller's retry would be answered with the other's fork. Far past a UUID or any
+#: composite a caller has reason to build.
+KEY_LIMIT = 200
+
 
 def _nothing_cut() -> dict:
     """The cut half of the report when there was no cut.
@@ -107,7 +132,8 @@ def _nothing_cut() -> dict:
     return {"removed_scenes": [], "records": 0, "refused": [], "failed": []}
 
 
-def fork_campaign(cid: str, name: str, from_scene: str | None = None) -> dict:
+def fork_campaign(cid: str, name: str, from_scene: str | None = None,
+                  key: str = "") -> dict:
     """Copy campaign `cid` into a new campaign called `name`, and return a
     report of what that took.
 
@@ -127,11 +153,33 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None) -> dict:
     `scenes.SceneNotFound` for a `from_scene` that is not one of its scenes.
     Both are checked before anything is created.
 
+    `key` is an optional idempotency key (#409). A repeat with the same key, from
+    the same source, is answered with the fork the first call made and its report
+    verbatim rather than copying again — because "the write committed and the
+    response was lost" and "the write never happened" are the same thing to a
+    caller, and a `copytree` is not a retry to guess wrong about. The key wins
+    over everything else in the request: a repeat under a different `name` or a
+    different `from_scene` still replays the first fork, because a key names an
+    *operation* and the second call is the same operation asked again. Keys are
+    scoped to the source, so two campaigns cannot collide on one.
+
+    The record lands last, inside the same lock hold as the copy, so anybody who
+    can see the fork can see what key made it. What it cannot cover is the gap
+    the same way round: a crash between the copy and the record leaves a fork
+    with no key, and the retry copies again — which is the pre-#409 behaviour for
+    that one case, and visible on the shelf rather than silent, since
+    `uniquify(slugify(name))` lands the second copy under its own suffixed id.
+
+    Raises `ValueError` for a key past `KEY_LIMIT`.
+
     The report is `{"id", "from_scene", "removed_scenes", "records", "refused",
-    "failed"}`. The last four are always present and carry nothing at all for a
-    fork from now — see `_nothing_cut`.
+    "failed", "replayed"}`. All but `id` and `replayed` are always present and
+    carry nothing at all for a fork from now — see `_nothing_cut`. `replayed`
+    says which of the two things happened: a copy, or a key being answered.
     """
     ensure_home()
+    if len(key) > KEY_LIMIT:
+        raise ValueError(f"an idempotency key may be at most {KEY_LIMIT} characters")
     if not campaigns_paths.campaign_meta_path(cid).exists():
         raise campaigns_paths.CampaignNotFound(cid)
     if from_scene is not None:
@@ -151,6 +199,16 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None) -> dict:
     # future still in it. Everything inside is file work this package owns; no
     # calendar provider or other plugin code runs under it.
     with locks.hold_all([cid, new_cid]):
+        # The key is looked up INSIDE the hold, and that is what makes it a
+        # check rather than a hint: the source's lock is held from here through
+        # the copy and the record, so a second call with the same key either
+        # finds the first one's record or waits for it and then does. Ahead of
+        # the claim below because a replay creates nothing and should leave
+        # nothing to clean up.
+        if key:
+            done = _replay(cid, key)
+            if done is not None:
+                return {**done, "replayed": True}
         # Claim the id with an empty directory FIRST, and outside the block that
         # cleans up -- this is the one step whose failure must not delete
         # anything. `uniquify` ran before the lock, so the id can have been taken
@@ -179,7 +237,10 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None) -> dict:
             _discard(new_cid)
             raise
         report = _cut_after(new_cid, from_scene) if from_scene else _nothing_cut()
-    return {"id": new_cid, "from_scene": from_scene or "", **report}
+        out = {"id": new_cid, "from_scene": from_scene or "", **report}
+        if key:
+            _record(cid, new_cid, key, out)
+    return {**out, "replayed": False}
 
 
 def _discard(new_cid: str) -> None:
@@ -205,6 +266,63 @@ def _discard(new_cid: str) -> None:
         log.warning("fork: could not discard the partial copy at %s", new_cid, exc_info=True)
 
 
+def _marker_path(new_cid: str):
+    return campaigns_paths.campaign_root(new_cid) / MARKER
+
+
+def _replay(cid: str, key: str) -> dict | None:
+    """The report of an existing fork of `cid` made under `key`, or None.
+
+    Reads the children rather than an index — see `MARKER`. `list_campaigns`
+    is the same enumeration the shelf uses, so a directory it would not show is
+    not a fork this will replay either; the `parent` filter it applies first is
+    what keeps this to the campaigns actually descended from this one.
+
+    Answers None for anything it cannot read cleanly: a truncated or hand-edited
+    marker, a key that does not match, a `report` that is not an object. A
+    marker this cannot read means a second copy, which is exactly what a caller
+    with no key gets and is recoverable by deleting the extra campaign. Believing
+    a damaged one would hand back a report describing a fork whose actual
+    contents nobody has checked.
+    """
+    for row in campaigns_read.list_campaigns():
+        if row.get("parent") != cid:
+            continue
+        try:
+            raw = json.loads(_marker_path(row["id"]).read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 -- unreadable means "no record at all"
+            continue
+        if not isinstance(raw, dict) or raw.get("key") != key:
+            continue
+        report = raw.get("report")
+        if isinstance(report, dict) and report.get("id") == row["id"]:
+            return report
+        # The id disagreeing with the directory the marker is IN is the one
+        # damaged shape worth a line in the log: it is what a hand-copied
+        # campaign directory looks like, and it would otherwise replay a report
+        # naming somebody else's fork.
+        log.warning("fork: the marker in %s does not describe it", row["id"])
+    return None
+
+
+def _record(cid: str, new_cid: str, key: str, report: dict) -> None:
+    """Record which key made this fork, and what was reported for it. Never raises.
+
+    The fork exists by the time this runs, and this module's whole posture is
+    that a fork already on disk is not turned into a 500 by a step that comes
+    after it — the same call `_cut_after` makes for a scene that will not come
+    off. What a lost record costs is one duplicate copy on a retry, which is the
+    behaviour every caller had before the key existed.
+    """
+    try:
+        atomic.write_text(_marker_path(new_cid), json.dumps(
+            {"key": key, "parent": cid, "at": now_iso(), "report": report},
+            indent=2) + "\n")
+    except Exception:   # see docstring: the fork is already made
+        log.warning("fork %s: could not record the idempotency key", new_cid,
+                    exc_info=True)
+
+
 def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
     """Duplicate the campaign directory and re-stamp the copy's `campaign.md`.
 
@@ -215,9 +333,15 @@ def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
     is "everything, then fix up what is identity" — so a part added tomorrow
     travels without anybody remembering this file exists.
 
-    Identity is three things: the name, the timestamps and the lineage. One
-    thing is *removed* rather than rewritten — `activity.txt`, the campaign's
-    "something happened here" high-water mark. Copied, it would rank a fork
+    Identity is three things: the name, the timestamps and the lineage. Two more
+    are re-stamped rather than carried, both of them statements about a write
+    history the copy does not have: `revision.txt`, the write token a caller
+    compares a priced operation against (#409), which is minted afresh so the
+    fork cannot answer "unchanged" to a reading taken from its parent; and the
+    source's own `fork.json`, dropped, so a copy of a copy does not claim to
+    have been made for a key that named an earlier operation on another
+    campaign. One thing is *removed* rather than rewritten — `activity.txt`,
+    the campaign's "something happened here" high-water mark. Copied, it would rank a fork
     made a second ago by when its parent was last played, which for an old
     campaign is the bottom of Recent. Absent, `read_activity` answers "" and
     `best_stamp` falls back to the `updated` stamped here: now, which is when
@@ -265,6 +389,8 @@ def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
         meta.pop(FORKED_AT_KEY, None)
     atomic.write_text(mp, dump_frontmatter(meta, body))
     campaigns_paths.campaign_activity_path(new_cid).unlink(missing_ok=True)
+    _marker_path(new_cid).unlink(missing_ok=True)
+    revision.bump(new_cid)
 
 
 def _cut_after(cid: str, from_scene: str) -> dict:

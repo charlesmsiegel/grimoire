@@ -195,8 +195,20 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
             # transcript, never a reason to lose or misreport one. The cost is
             # the round-eleven durability window staying open for this turn.
             pass
-    # Counted the way `append_reply` filters, because that is what it wrote.
-    return sum(1 for s in segments if s["content"].strip())
+        # Counted the way `append_reply` filters, because that is what it wrote.
+        kept = sum(1 for s in segments if s["content"].strip())
+        if kept:
+            # Inside the hold, so the token has moved before any other writer
+            # can take the lock and read it. The activity middleware stamps
+            # every other campaign write, but it deliberately skips streams --
+            # a stream's status line is sent before its outcome is known -- so
+            # a detached turn is the one mutation that would otherwise land
+            # with the campaign's revision reading exactly as it did before
+            # (#409). A clock advance priced in another tab while this turn was
+            # generating would then confirm against a transcript that has grown
+            # under it. Never raises, like everything else after the append.
+            store.revision.bump(cid)
+    return kept
 
 
 def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],

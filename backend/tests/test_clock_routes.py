@@ -16,7 +16,12 @@ def _campaign(client, calendar=None):
 
 def test_clock_of_a_fresh_campaign_is_empty(client):
     _wid, cid = _campaign(client)
-    assert client.get(f"/api/campaigns/{cid}/clock").json() == {"now": "", "friendly": "", "log": []}
+    assert client.get(f"/api/campaigns/{cid}/clock").json() == {
+        # `revision` is `revision.INITIAL`: creating a campaign is not a
+        # campaign-SCOPED write (no `cid` in the path), so nothing has stamped
+        # this one yet. A caller may still price against it — see
+        # `test_revision_routes.py`.
+        "now": "", "friendly": "", "log": [], "revision": store.revision.INITIAL}
 
 
 def test_clock_of_an_unknown_campaign_is_404(client):

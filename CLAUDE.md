@@ -478,6 +478,19 @@ would answer neither question.
   disable, an edit between playing and absorbing, a local template edit). A
   `drift` verdict means "worth looking at". `store/voice_anchors.py`'s
   docstring carries the reasoning, including what was given up to get here.
+- **A campaign carries a write token, and one route opts out of it.**
+  `store/revision.py` gives each campaign an opaque value that changes whenever
+  the app records a write to it — the primitive `POST /advance` compares an
+  expected state against and `POST /fork` keys a repeat on (#409). It is
+  stamped in one place, the activity middleware in `main.py`, so a route added
+  tomorrow is covered without anyone remembering; the exception is
+  `routes/streaming.py`'s `_persist_reply`, which stamps for itself because the
+  middleware deliberately skips streams. A route that mutates a *different*
+  campaign than the one in its path says so with `@leaves_campaign_unchanged`
+  (`POST /fork`, whose source is never written to) — otherwise a fork would
+  invalidate the very expectation the caller took it to protect. What the token
+  cannot see, and why a mismatch is a re-price rather than an error, is in that
+  module's docstring and in `docs/store-guarantees.md`.
 - **Adding an LLM call site?** Resolve its connection with
   `_require_connection(<task>, cid)` and name the task the call meters under.
   `store/routing.py` maps that task to a route the user can point at a

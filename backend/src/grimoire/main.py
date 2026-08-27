@@ -19,7 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import runner
 from .health import ProviderHealth
 from .routes import build_llm, build_openai_compatible_client, router, runs
-from .store import backups, campaigns, locks, logs, migrations, module_edit
+from .store import backups, campaigns, locks, logs, migrations, module_edit, revision
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
 
@@ -193,8 +193,31 @@ async def _lifespan(app: FastAPI):
                 log.warning("closing %s failed -- %s", type(client).__name__, exc)
 
 
+def _record_campaign_write(cid: str, changed: bool) -> None:
+    """Both records a campaign write leaves behind, in one thread hop.
+
+    The activity stamp orders the recents rail; the revision token (#409) is
+    what a caller compares to ask "is this campaign still in the state I priced
+    against?". They are recorded together because they are recorded for the
+    same reason and by the same rule, and separately because they answer
+    different questions -- and because one route needs exactly one of them:
+    `POST /campaigns/{cid}/fork` is activity in the campaign it names and writes
+    nothing to it (`store/fork.py`: "The source is never written to"), so a fork
+    that moved the source's revision would invalidate the very expectation the
+    caller took the fork to protect. `@leaves_campaign_unchanged` is how a route
+    says so.
+
+    Neither call raises, which is what makes it safe to run after the mutation
+    has already committed -- see `campaigns.touch_quietly` and `revision.bump`.
+    """
+    campaigns.touch_quietly(cid)
+    if changed:
+        revision.bump(cid)
+
+
 class _CampaignActivityStamp:
-    """Record campaign activity for any successful campaign-scoped write.
+    """Record campaign activity for any successful campaign-scoped write — and,
+    since #409, the campaign's write token beside it (`_record_campaign_write`).
 
     Enumerating the mutators does not converge. Six review rounds each found
     another one -- scenes, overlay entities, greetings, plot edges, actors,
@@ -250,8 +273,12 @@ class _CampaignActivityStamp:
                 # suggestions, a replayed roll -- declare themselves with
                 # @computes_only, so merely *looking* at a campaign does not
                 # move it up the recents rail.
-                preview = getattr(getattr(scope.get("route"), "endpoint", None),
-                                  "grimoire_computes_only", False)
+                endpoint = getattr(scope.get("route"), "endpoint", None)
+                preview = getattr(endpoint, "grimoire_computes_only", False)
+                # A route that mutates a DIFFERENT campaign than the one it
+                # names still counts as activity here and must not move this
+                # campaign's revision -- see `_record_campaign_write`.
+                changed = not getattr(endpoint, "grimoire_leaves_campaign", False)
                 if message["status"] < 300 and not streaming and cid and not preview:
                     # BEFORE forwarding the status, so the stamp has landed by
                     # the time the client can observe success. Otherwise a
@@ -264,9 +291,9 @@ class _CampaignActivityStamp:
                     # retries, so on a synced or removable store it can block long
                     # enough to stall every other request and live stream on this
                     # worker. Sync route bodies get a thread from Starlette;
-                    # middleware does not. `touch_quietly` never raises, so this
+                    # middleware does not. Neither record raises, so this
                     # cannot turn a completed write into a failure.
-                    await anyio.to_thread.run_sync(campaigns.touch_quietly, cid)
+                    await anyio.to_thread.run_sync(_record_campaign_write, cid, changed)
             await send(message)
 
         await self.app(scope, receive, _send)

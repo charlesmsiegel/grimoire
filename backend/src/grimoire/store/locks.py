@@ -352,6 +352,19 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "makes the overlap reachable. Same known gap as "
         "`store.campaigns.lifecycle`, whose mutators it races."
     ),
+    "store.revision": (
+        "A considered exclusion, not a gap. `bump` publishes a freshly minted "
+        "token and reads nothing first, so there is no update for a second "
+        "writer to lose: two concurrent bumps leave one of two tokens on disk "
+        "and either is a correct answer, since the only property the value "
+        "carries is `different from what an earlier reader holds`. Taking the "
+        "campaign lock would buy nothing and cost the thing that matters -- "
+        "this fires from the activity middleware after every campaign-scoped "
+        "mutating request, so it would queue behind whatever holds that "
+        "campaign (a minutes-long absorb, a turn) to write a value that was "
+        "already correct before the wait. A counter would need the lock; that "
+        "is one of the reasons the token is not a counter (`store/revision.py`)."
+    ),
     "store.usage": (
         "A considered exclusion, not a gap. `repoint_scenes` is the only public "
         "cid-taking mutator here, and it does not read-modify-write anything: "

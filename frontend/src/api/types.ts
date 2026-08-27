@@ -290,6 +290,11 @@ export type CampaignMeta = {
 export type ForkReport = {
   id: string; from_scene: string; removed_scenes: string[];
   records: number; refused: { label: string; reason: string }[]; failed: string[];
+  /** Whether this answer is a REPLAY of an earlier fork made under the same
+   *  idempotency key rather than a copy this call took (#409). A caller that
+   *  retried after a lost response gets `true` and the first fork's report
+   *  verbatim, which is how it learns it did not make a second campaign. */
+  replayed: boolean;
 };
 /** `done` is the scene's absorb mark: End Scene run to completion and its
  *  changes accepted, written into the scene's own frontmatter by
@@ -778,7 +783,14 @@ export type CalendarConfig = {
 // ---- the campaign clock (#100) ----
 /** One row of the clock's log: where time went, why, and when that was recorded. */
 export type ClockLogEntry = { from: string; to: string; reason: string; at: string };
-export type CampaignClock = { now: string; friendly: string; log: ClockLogEntry[] };
+export type CampaignClock = {
+  now: string; friendly: string; log: ClockLogEntry[];
+  /** The campaign's write token (#409): an opaque value that changes whenever
+   *  the campaign is written. Only ever compared for equality — it is not a
+   *  version, a count or an ordering — and handed back to `/advance` as
+   *  `expect_revision` to say which state a move was priced against. */
+  revision: string;
+};
 
 /** One image in a campaign's own library (#376). `v` is the cache token an
  *  `?v=` URL is answered `immutable` for. */
@@ -863,8 +875,17 @@ export type AdvanceDigest = {
    *  "large" means in this install without a second request for it. */
   fork_threshold: number;
 };
-/** `to` skips to a date, `days` advances by a duration; `to` wins if both are sent. */
-export type AdvanceRequest = { to?: string; days?: number; reason?: string };
+/** `to` skips to a date, `days` advances by a duration; `to` wins if both are sent.
+ *
+ *  `expect_revision` is the campaign's write token as this move was priced
+ *  against it (#409). Omitted, the advance runs against whatever the campaign
+ *  is when it arrives, which is what every caller had before it existed; sent
+ *  and stale, the server answers 409 `campaign_moved` and the caller re-prices.
+ *  `/advance/preview` ignores it — the preview is where a token is picked up,
+ *  not where one is spent. */
+export type AdvanceRequest = {
+  to?: string; days?: number; reason?: string; expect_revision?: string;
+};
 
 // ---- weather (#45, #195) and climates (#40) ----
 export const WEATHER_AXES = ["condition", "temperature", "wind"] as const;

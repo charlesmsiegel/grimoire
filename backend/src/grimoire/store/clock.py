@@ -60,6 +60,7 @@ from . import (
     events,
     locks,
     plot,
+    revision,
 )
 from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
@@ -522,7 +523,7 @@ def preview(cid: str, to: str | None = None, days: int | None = None) -> dict:
 
 
 def advance(cid: str, to: str | None = None, days: int | None = None,
-            reason: str = "") -> dict:
+            reason: str = "", expect_revision: str = "") -> dict:
     """Move the campaign clock, recording why. Returns {moved, now, digest}.
 
     Exactly one of `to` (skip to a date, in the primary calendar's notation)
@@ -531,13 +532,38 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
     returns the digest, mirroring `scenes.set_datetime`'s `{"advanced": False}`
     for a repeated date — a second identical click should not add a second row
     to the log.
+
+    `expect_revision` is the campaign's write token as the caller priced this
+    move against it (`store/revision.py`); an empty one is no expectation, which
+    is what every caller had before #409. It is checked TWICE and the two are
+    not redundant. The first is a refusal before `_provider` and `digest` run,
+    which import and execute the campaign's (possibly user-authored) calendar
+    plugin and walk up to `SCAN_LIMIT_DAYS` of it — work a doomed request should
+    not pay for. The second is the binding one: it happens inside the same lock
+    hold as the write it guards, because checking first and locking after leaves
+    room for exactly the mutation being guarded against to land in between. Same
+    rule the scene-shape routes follow for `scene_busy`.
+
+    What the guard is honest about: the token moves when this app records a
+    campaign write, so a mutation that has committed but whose bump has not
+    landed yet is not seen. That narrows a window rather than closing one, which
+    is why a mismatch is a re-price rather than an error — see
+    `store/revision.py` for what moves the token and what does not.
+
+    Raises `revision.RevisionMismatchError` when the campaign has moved on.
     """
+    revision.require(cid, expect_revision)
     provider = _provider(cid)
     start, target = _resolve(provider, cid, to, days)
     computed = digest(cid, provider, start, target)
     if target == start:
+        # Checked once, above: a no-op writes nothing, so there is no window
+        # between the check and a write to close. The caller is still told its
+        # price is stale rather than handed a digest measured from a moment it
+        # never asked about.
         return {"moved": False, "now": start, "digest": computed, "fired": []}
     with locks.campaign_lock(cid):
+        revision.require(cid, expect_revision)
         _commit(cid, target, {"from": start, "to": target,
                               "reason": _reason(reason), "at": now_iso()})
     # After the clock has landed, never before: an event stamped by a move that

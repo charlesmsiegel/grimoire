@@ -280,6 +280,13 @@ class ForkCampaign(BaseModel):
     """
     name: str
     from_scene: str | None = None
+    #: An optional idempotency key (#409). A repeat with the same key is answered
+    #: with the fork the first call made instead of copying the campaign again —
+    #: because a lost response and a failed write are the same thing to a client,
+    #: and a `copytree` is an expensive thing to guess wrong about. Defaulted to
+    #: "" rather than required, so a client that predates it keeps working and
+    #: simply gets what it has today: no idempotency.
+    idempotency_key: str = ""
 
 
 class WeatherOverride(BaseModel):
@@ -622,6 +629,16 @@ class AdvanceTime(BaseModel):
     to: str | None = None
     days: int | None = None
     reason: str = ""
+    #: The campaign's write token as the caller priced this move against it
+    #: (#409, `store/revision.py`). Empty is "no expectation", which is what
+    #: every caller had before it existed; a token that no longer matches earns a
+    #: 409 the client re-prices and re-asks against, because an advance resolves
+    #: its starting moment from the live clock and a move priced against one
+    #: state is not the move it shows when confirmed against another.
+    #:
+    #: Ignored by `/advance/preview`, which writes nothing — the preview is where
+    #: a caller GETS a token, not where it spends one.
+    expect_revision: str = ""
 
 
 class CalendarConfig(BaseModel):
