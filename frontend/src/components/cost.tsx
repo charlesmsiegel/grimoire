@@ -244,3 +244,66 @@ export function PostCost({ bucket }: { bucket: UsagePostBucket }) {
     </span>
   );
 }
+
+
+/** The three money columns, side by side and never added together.
+ *
+ *  `bucketPrice` answers "one figure for this bucket", which is the right
+ *  shape for a row in a table and the wrong one for a page whose whole subject
+ *  is the money. Here each column is drawn in its own right, labelled with what
+ *  it actually is, so the reader can see that a campaign whose spend is $0 has
+ *  nonetheless used $4 of subscription and $1 of arithmetic.
+ *
+ *  There is deliberately no total. Adding any two of these produces a number
+ *  that is wrong in a direction nobody can recover, and a UI that offers the
+ *  sum is a UI that will be quoted.
+ */
+export function MoneyColumns({ bucket }: { bucket: UsageBucket }) {
+  const billed = n(bucket.cost_usd);
+  const estimated = n(bucket.estimated_usd);
+  const modelled = n(bucket.modelled_usd);
+  const unpriced = n(bucket.unpriced_calls);
+  return (
+    <div className="money-columns">
+      <div className="money-col spend">
+        <div className="money-label">Spend</div>
+        {/* `money(0)` is "$0.00", and a bucket nobody priced is exactly where
+            that would be a lie -- the one claim this module exists to prevent.
+            The same test `bucketPrice` uses: a figure only when something was
+            actually charged, or when there are billed calls behind a zero. */}
+        <div className="money-figure">
+          {billed > 0 || n(bucket.priced_calls) > n(bucket.subscription_calls)
+            ? money(billed)
+            : UNPRICED}
+        </div>
+        <div className="money-hint">What a provider said it charged.</div>
+      </div>
+      <div className="money-col">
+        <div className="money-label">Estimated</div>
+        <div className="money-figure">{estimated > 0 ? about(estimated) : "—"}</div>
+        <div className="money-hint">
+          Billed to a subscription. Real usage; not money anybody paid.
+        </div>
+      </div>
+      <div className="money-col">
+        <div className="money-label">Modelled</div>
+        <div className="money-figure">{modelled > 0 ? about(modelled) : "—"}</div>
+        <div className="money-hint">
+          Priced against your own table. Arithmetic, not a receipt.
+        </div>
+      </div>
+      <p className="money-note">
+        Never summed — three different claims about money.
+        {unpriced > 0 && (
+          <>
+            {" "}
+            <span className="money-unpriced">
+              ⚠ {unpriced} call{unpriced === 1 ? "" : "s"} reported no price
+              {" "}— not counted as zero.
+            </span>
+          </>
+        )}
+      </p>
+    </div>
+  );
+}

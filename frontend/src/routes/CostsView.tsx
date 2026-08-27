@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type CampaignSceneCosts, type SceneCostRow } from "../api/client";
 import {
-  Footnotes, about, bound, bucketPrice, headlineIsEstimate, money,
+  Footnotes, MoneyColumns, about, bound, bucketPrice, headlineIsEstimate, money,
 } from "../components/cost";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
@@ -124,7 +124,10 @@ export function CostsView() {
           && <p className="column-empty">Reading the ledger…</p>}
         {!failed && totals !== undefined && (
           <>
-            <div className="cost-headline">{bucketPrice(totals)}</div>
+            {/* The three columns ARE the headline now. One combined figure
+                beside them would be a fourth number for the reader to
+                reconcile against three that are already exact. */}
+            <MoneyColumns bucket={totals} />
             <div className="ctx-tokens">
               {totals.calls.toLocaleString()}{" "}
               {totals.calls === 1 ? "generation" : "generations"}

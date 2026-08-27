@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { Footnotes, PostCost, about, bound, bucketPrice, money, turnPrice } from "./cost";
+import { Footnotes, PostCost, about, bound, bucketPrice, money, turnPrice, MoneyColumns } from "./cost";
 
 /** The rule these three surfaces share: a price nobody reported is never
  *  rendered as zero, and a figure grimoire computed is never rendered as one it
@@ -172,4 +172,34 @@ test("a post nothing could price shows no chip rather than an empty one", () => 
                         unpriced_calls: 2 }} />);
 
   expect(container.textContent).toBe("");
+});
+
+test("the three columns are separate, and none of them sums the others", () => {
+  // Adding any two produces a number that is wrong in a direction nobody can
+  // recover. There is no total on screen because a UI that offers one gets
+  // quoted.
+  const { container } = render(
+    <MoneyColumns bucket={{
+      calls: 4, priced_calls: 2, subscription_calls: 1, unpriced_calls: 1,
+      cost_usd: 4.82, estimated_usd: 1.1, modelled_usd: 0.36,
+      total_tokens: 0, prompt_tokens: 0, completion_tokens: 0,
+    } as any} />);
+  const figures = [...container.querySelectorAll(".money-figure")]
+    .map((n) => n.textContent);
+  expect(figures).toEqual(["$4.82", "≈ $1.10", "≈ $0.36"]);
+  // ...and the incomplete total says so rather than reading as complete.
+  expect(container.textContent).toMatch(/1 call reported no price/);
+});
+
+test("a bucket nobody priced does not render spend as $0.00", () => {
+  // The one claim this module exists to prevent, in the column most likely to
+  // make it: `money(0)` is a perfectly good "$0.00" and a lie here.
+  const { container } = render(
+    <MoneyColumns bucket={{
+      calls: 2, priced_calls: 0, subscription_calls: 0, unpriced_calls: 2,
+      cost_usd: 0, estimated_usd: 0, modelled_usd: 0,
+      total_tokens: 0, prompt_tokens: 0, completion_tokens: 0,
+    } as any} />);
+  expect(container.querySelector(".money-figure")?.textContent).toBe("unpriced");
+  expect(container.textContent).not.toMatch(/\$0\.00/);
 });
