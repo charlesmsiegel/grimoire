@@ -778,24 +778,35 @@ def test_packing_out_the_section_between_the_runs_leaves_one_heading(monkeypatch
     right way round."""
     from grimoire.store import chronicle, config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
-    # A background section big enough to be the one the packer reaches for --
-    # largest within a tier goes first -- sitting between the two tiers.
+    # A background section between the two tiers, and DECISIVELY the largest of
+    # the three -- largest within a tier goes first. Decisively because the two
+    # tokenisers disagree: sized to beat the cast tier by a couple of tokens
+    # this passed under tiktoken and inverted (75 vs 76) under the
+    # characters/4 heuristic the Android dependency set falls back to, which
+    # only CI's pydantic-1.10 job runs. An order-of-magnitude margin is a
+    # fixture neither counter can flip.
     for i in range(24):
         chronicle.absorb(cid, {"id": f"2026-01-{i:02d}-past", "summary": "s", "keywords": [],
-                               "one_line": f"Episode {i}: a thing of some consequence happened here."})
+                               "one_line": f"Episode {i}: a thing of some consequence happened "
+                                           f"here, and then a great deal more besides, at "
+                                           f"considerable length and in circumstances the "
+                                           f"chronicle saw fit to record in full."})
     entries = [e for e in _full_layout() if e["id"] != "story_so_far"]
     at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_known")
     entries.insert(at, {"id": "story_so_far", "label": "", "enabled": True})
     context.layout.write_layout(entries)
-    config.write_config(prompt_layout_enabled="on")
+    # `recap_depth` caps how many chronicle lines the recap renders, so absorbing
+    # more entries alone cannot make it the largest section -- the cap has to
+    # come up with them.
+    config.write_config(prompt_layout_enabled="on", recap_depth="24")
 
     # Split by a section of its own, the two runs are both framed (the fix above).
     assert context.build_messages(cid, sid)[0]["content"].count(
         "# Other characters in this world") == 2
 
     rows = {r["id"]: r for r in context.context_breakdown(cid, sid)["sections"]}
-    assert rows["story_so_far"]["tokens"] > rows["off_scene_cast_active"]["tokens"], \
-        "fixture must make the separator the section the packer takes first"
+    assert rows["story_so_far"]["tokens"] > 5 * rows["off_scene_cast_active"]["tokens"], \
+        "the separator must be the section the packer takes first, under EITHER tokeniser"
     total = context.context_breakdown(cid, sid)["total_tokens"]
     config.write_config(context_budget=str(total - rows["story_so_far"]["tokens"] // 2))
 
