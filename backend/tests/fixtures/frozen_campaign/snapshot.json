@@ -981,6 +981,7 @@
       "id": "002--2026-01-02--the-long-quay",
       "model": "openai/gpt-4o-mini",
       "pcless": false,
+      "place": "",
       "title": "The Long Quay",
       "updated": "2026-01-01T09:11:00Z"
     },
@@ -991,6 +992,7 @@
       "id": "001--the-tide-comes-in",
       "model": "anthropic/claude-opus-4.1",
       "pcless": false,
+      "place": "tidewatch-keep",
       "title": "The Tide Comes In",
       "updated": "2026-01-01T09:07:00Z"
     }
