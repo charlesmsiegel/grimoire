@@ -3603,69 +3603,7 @@ a.column-back { text-decoration: none; }
   .app-header .header-model, .app-header .conn-dot { display: none; }
 }
 
-/* ---- below PHONE_PX: the bar replaces the drawer as the way to move ---- */
-/* 720 is `shell/tabs.ts`'s PHONE_PX and `PageShell`'s, and the three are one
-   decision: below it a 274px column cannot share a row with content, and
-   navigation cannot afford to be modal. */
-.phone-tabs { display: none; }
-@media (max-width: 720px) {
-  /* The 46px header. What is left is what the design's phone frame keeps: the
-     wordmark, the scene's cost and context, and the health dot. The ⌘K pill
-     goes because Search is a rail row and the rail is one tap away as `More`;
-     the theme and focus controls go because neither is something a phone
-     reaches for mid-scene, and both are in Configuration. Dropped rather than
-     clipped -- the design's own rule for this breakpoint. */
-  .app-header {
-    height: 46px; gap: 8px; padding: 0 12px;
-  }
-  .app-header .kbar,
-  .app-header .header-rail,
-  .app-header .header-theme,
-  .app-header .header-focus { display: none; }
-  .app-header .brand { font-size: 14px; letter-spacing: 0.1em; gap: 0; }
-  /* The mark and the wordmark both say the same thing and both go home; at
-     46px only one of them fits, and the design's phone frame keeps the word.
-     That reverses the older rule 3000 lines up, which kept the mark and hid
-     the span — so the span has to be turned back ON here rather than merely
-     leaving it alone, or the two rules between them hide the whole brand and
-     the header opens with an empty 46px band. */
-  .app-header .brand img { display: none; }
-  .app-header .brand span { display: inline; }
-  /* Back from the 1180px rule above: the dot is 9px and says whether the
-     provider is reachable, which is worth more on a phone than off it. */
-  .app-header .conn-dot { display: inline; }
 
-  /* A row of the shell, not a layer over it. `#root` is a column, so the bar
-     taking its own height is what stops a scrolling page ending underneath
-     it — which `position: fixed` would need padding elsewhere to fake, kept
-     in step with a height this rule owns. */
-  .phone-tabs {
-    flex: none; display: flex; background: var(--panel);
-    border-top: 1px solid var(--line);
-    /* Above the home indicator on a notched phone, and 0 everywhere else. */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-  .phone-tab {
-    flex: 1; min-width: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 2px;
-    min-height: 54px; padding: 4px 2px; text-decoration: none;
-    background: transparent; border: 0; border-top: 2px solid transparent;
-    color: var(--muted); cursor: pointer;
-  }
-  .phone-tab.on { color: var(--accent); border-top-color: var(--accent); }
-  .phone-tab-icon { font-size: 14px; line-height: 1; }
-  .phone-tab-label {
-    font-family: var(--fm, monospace); font-size: 8.5px; letter-spacing: 0.1em;
-    text-transform: uppercase; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; max-width: 100%;
-  }
-  .phone-tab-badge {
-    font-family: var(--fm, monospace); font-size: 7.5px; letter-spacing: 0.06em;
-    color: var(--muted);
-  }
-  /* The one badge that is a backlog rather than a size. */
-  .phone-tab[href="/todo"] .phone-tab-badge { color: var(--alert); }
-}
 
 /* ---- the campaign hub ---- */
 /* The campaign's front door. Leads with what to do next and only then with
@@ -3933,3 +3871,153 @@ button.chore-what:hover { color: var(--accent); }
 a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
 .chore-item-detail { font-size: 12.5px; color: var(--muted); min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- below PHONE_PX: the bar replaces the drawer as the way to move ---- */
+/* 720 is `shell/tabs.ts`'s PHONE_PX and `PageShell`'s, and the three are one
+   decision: below it a 274px column cannot share a row with content, and
+   navigation cannot afford to be modal. */
+.phone-tabs { display: none; }
+@media (max-width: 720px) {
+  /* The 46px header. What is left is what the design's phone frame keeps: the
+     wordmark, the scene's cost and context, and the health dot. The ⌘K pill
+     goes because Search is a rail row and the rail is one tap away as `More`;
+     the theme and focus controls go because neither is something a phone
+     reaches for mid-scene, and both are in Configuration. Dropped rather than
+     clipped -- the design's own rule for this breakpoint. */
+  .app-header {
+    height: 46px; gap: 8px; padding: 0 12px;
+  }
+  .app-header .kbar,
+  .app-header .header-rail,
+  .app-header .header-theme,
+  .app-header .header-focus { display: none; }
+  .app-header .brand { font-size: 14px; letter-spacing: 0.1em; gap: 0; }
+  /* The mark and the wordmark both say the same thing and both go home; at
+     46px only one of them fits, and the design's phone frame keeps the word.
+     That reverses the older rule 3000 lines up, which kept the mark and hid
+     the span — so the span has to be turned back ON here rather than merely
+     leaving it alone, or the two rules between them hide the whole brand and
+     the header opens with an empty 46px band. */
+  .app-header .brand img { display: none; }
+  .app-header .brand span { display: inline; }
+  /* Back from the 1180px rule above: the dot is 9px and says whether the
+     provider is reachable, which is worth more on a phone than off it. */
+  .app-header .conn-dot { display: inline; }
+
+  /* A row of the shell, not a layer over it. `#root` is a column, so the bar
+     taking its own height is what stops a scrolling page ending underneath
+     it — which `position: fixed` would need padding elsewhere to fake, kept
+     in step with a height this rule owns. */
+  .phone-tabs {
+    flex: none; display: flex; background: var(--panel);
+    border-top: 1px solid var(--line);
+    /* Above the home indicator on a notched phone, and 0 everywhere else. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .phone-tab {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2px;
+    min-height: 54px; padding: 4px 2px; text-decoration: none;
+    background: transparent; border: 0; border-top: 2px solid transparent;
+    color: var(--muted); cursor: pointer;
+  }
+  .phone-tab.on { color: var(--accent); border-top-color: var(--accent); }
+  .phone-tab-icon { font-size: 14px; line-height: 1; }
+  .phone-tab-label {
+    font-family: var(--fm, monospace); font-size: 8.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 100%;
+  }
+  .phone-tab-badge {
+    font-family: var(--fm, monospace); font-size: 7.5px; letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  /* The one badge that is a backlog rather than a size. */
+  .phone-tab[href="/todo"] .phone-tab-badge { color: var(--alert); }
+
+  /* ---- the page head, compacted ---- */
+  /* 26px of Cinzel over a 10px eyebrow costs about 70px before a phone has
+     shown anything. The design's frames give the same two lines 11px of
+     padding and an 18px title, and put them on `--panel` with a rule under
+     them so the head reads as chrome the content scrolls past rather than as
+     the start of the content. */
+  .page-wide { padding: 0 0 18px; max-width: none; }
+  .page-wide > .eyebrow:first-child {
+    padding: 11px 14px 0; margin: 0; background: var(--panel);
+  }
+  .page-wide > .eyebrow:first-child + .screen-title {
+    font-size: 18px; letter-spacing: 0.03em; margin: 3px 0 0;
+    padding: 0 14px 11px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  /* Everything after the head keeps the body gutter the head already has. */
+  .page-wide > *:not(.eyebrow):not(.screen-title) { padding-left: 14px; padding-right: 14px; }
+  .page-wide > .chore-list,
+  .page-wide > section > .chore-list { padding-left: 0; padding-right: 0; }
+  .page-wide > section { padding-left: 0; padding-right: 0; }
+  .page-wide > section > * { padding-left: 14px; padding-right: 14px; }
+
+  /* ---- To do: a row becomes a card, and its actions stop competing ---- */
+  /* Side by side, the fix and the ignore squeeze the sentence they are about
+     into two words a line. Stacked under it they are two 44px targets and the
+     chore keeps its measure. */
+  .chore-list { margin: 12px 0 0; }
+  .chore {
+    border: 1px solid var(--line); border-left: 3px solid var(--line-strong);
+    border-radius: 4px; background: var(--panel);
+    padding: 11px 13px; margin-bottom: 9px;
+  }
+  .chore-warn { border-left-color: var(--accent); }
+  .chore-alert { border-left-color: var(--alert); }
+  /* The dot said what the left rule now says, in less room. */
+  .chore-dot { display: none; }
+  .chore-line { flex-direction: column; align-items: stretch; gap: 9px; }
+  .chore-what { font-size: 14.5px; line-height: 1.35; }
+  .chore-why { font-size: 12.5px; }
+  .chore-actions { gap: 7px; }
+  /* The fix takes the room; ignoring is deliberate and stays the smaller of
+     the two, as it is on the desktop row. */
+  .chore-fix { flex: 1; justify-content: center; }
+  .chore-ignore { flex: none; padding: 0 14px; }
+  .chore-group { margin-top: 16px; }
+
+  /* ---- the campaign hub ---- */
+  .hub { max-width: none; }
+  .hub-grid { gap: 11px; margin-top: 14px; }
+  /* One column is what the grid already collapses to; what it does not do is
+     stop the cards being 18px from an edge they no longer have. */
+  .hub-next, .hub-waiting, .hub-quiet, .hub-panel { padding: 13px 14px; }
+  .hub-next-title { font-size: 18px; }
+  .hub-lead { font-size: 14px; }
+  /* Full width, because a phone's primary action has no reason to be a
+     word-shaped island in the middle of a row. */
+  .hub-primary { display: flex; justify-content: center; width: 100%; }
+
+  /* ---- scene lists ---- */
+  .scenes-head { flex-wrap: wrap; gap: 10px; }
+  .scenes-tools { width: 100%; }
+  .scene-item-sub { font-size: 8.5px; letter-spacing: 0.1em; }
+  /* The row carries a title, a status and an action, and at 375px the two
+     controls between them left the title about ten characters — "A ledger in
+     the d…", which is the one thing on the row nobody can do without. So the
+     title takes the width and WRAPS, and the status and the action drop to a
+     line under it. Neither is dropped: the design's rule for this breakpoint
+     is that secondary chrome gives way rather than being clipped, and here it
+     is the title that was being clipped by chrome that had not given way. */
+  .scene-item { flex-wrap: wrap; gap: 0; padding-bottom: 8px; }
+  .scene-item-main { flex: 1 1 100%; }
+  .scene-item-title {
+    white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.3;
+  }
+  .scene-item .chip,
+  .scene-item-act { margin-left: 10px; }
+  /* Aligned under the title rather than under the number. */
+  .scene-item .chip { margin-left: 56px; }
+  /* Compact: on the desktop row this sits at the end of a line it shares, so
+     it can afford a label. Here it is a second line of its own. */
+  .scenes-head .hub-primary { width: auto; min-height: 38px; padding: 0 13px; }
+
+  /* ---- anything laid out in columns lays out in one ---- */
+  .detail-view { flex-direction: column; }
+  .detail-sidebar { width: auto; }
+}
