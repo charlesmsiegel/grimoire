@@ -166,7 +166,24 @@ export const CAMPAIGN_ROWS: RailRow[] = [
   },
   {
     id: "wrap", label: "Wrap-up", icon: "✦",
-    to: () => null,   // review lives inside CampaignView; the wrap-up slice moves it
+    // Review still lives inside `CampaignView` — the wrap-up slice is what
+    // gives it a page. Until then the row goes where the hub's own "Open
+    // wrap-up" button goes, which is the scene holding the proposals. That is
+    // a real destination, and pointing at it is what makes the tail below
+    // reach a reader: it was computed on every shell read and then discarded,
+    // because `Row` returns null on a null `to` before any tail is drawn.
+    //
+    // Null when nothing is pending, so the row is absent rather than offering
+    // a wrap-up with nothing to wrap up. `unreviewed` and `pending` come from
+    // one `_pending` call, so they cannot disagree about whether to render.
+    to: (ctx, s) => {
+      const first = s?.campaign?.pending?.[0];
+      return ctx.cid && first ? `/campaigns/${ctx.cid}/scenes/${first.sid}` : null;
+    },
+    // Never lit, and for the same reason as Images: the destination is a
+    // scene, and `scenes` already owns every path under `/scenes`. Lighting
+    // here too would put two rows of one tier active at once, which the rail's
+    // own test forbids.
     match: () => false,
     // The one badge that is an alert rather than a count: proposals nobody has
     // decided are holding the world back, and the hub says so in words.

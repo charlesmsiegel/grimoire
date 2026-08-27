@@ -82,6 +82,36 @@ test("rows whose pages do not exist yet go nowhere", () => {
   expect(dead).toEqual(["wrap", "images"]);
 });
 
+describe("Wrap-up goes where the proposals are", () => {
+  const PENDING = {
+    ...WITH_MODULE,
+    campaign: {
+      ...WITH_MODULE.campaign, unreviewed: 8,
+      pending: [{ sid: "s13", proposals: 8 }, { sid: "s11", proposals: 2 }],
+    },
+  };
+  const wrap = () => CAMPAIGN_ROWS.find((r) => r.id === "wrap")!;
+
+  test("the first scene holding proposals, which is where the hub sends you too", () => {
+    expect(wrap().to(ctx, PENDING)).toBe("/campaigns/c1/scenes/s13");
+  });
+
+  test("the tail reaches a reader now, instead of being computed and dropped", () => {
+    // It was always computed. `Row` returns null on a null `to` before it
+    // draws any tail, so the count never left the table.
+    expect(wrap().tail!(PENDING)).toBe("8");
+    expect(wrap().tailLabel!(PENDING)).toBe("8 proposals undecided");
+  });
+
+  test("nothing pending, no row — not a wrap-up with nothing to wrap up", () => {
+    expect(wrap().to(ctx, WITH_MODULE)).toBeNull();
+  });
+
+  test("it never lights, because `scenes` owns every path under /scenes", () => {
+    expect(wrap().match("/campaigns/c1/scenes/s13", ctx)).toBe(false);
+  });
+});
+
 describe("Images points at the world section that holds it", () => {
   const WITH_WORLD = {
     ...WITH_MODULE,

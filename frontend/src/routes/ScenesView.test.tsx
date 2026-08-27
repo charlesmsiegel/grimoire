@@ -69,6 +69,26 @@ test("every scene is listed with its number from its own id", async () => {
   expect(within(rows[2]).getByText("1")).toBeInTheDocument();
 });
 
+test("the eyebrow names the campaign, what this list is, and how much is open", async () => {
+  // The design's eyebrow is richer than the bare campaign name: it also says
+  // what kind of list this is and how much of it still needs playing.
+  renderScenes();
+  await screen.findByText("The third");
+  expect(screen.getByText("Run One · every scene, newest first · 1 open"))
+    .toBeInTheDocument();
+});
+
+test("the eyebrow drops the open count rather than claiming zero", async () => {
+  // Joining with a filter means a part with nothing to say disappears
+  // instead of printing "0 open" -- matching how the hub's eyebrow behaves.
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--first", title: "The first", done: true }),
+  ]);
+  renderScenes();
+  await screen.findByText("The first");
+  expect(screen.getByText("Run One · every scene, newest first")).toBeInTheDocument();
+});
+
 test("the action names what to do, and it is not the same verb for every state", async () => {
   (api.getShell as any).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
   renderScenes();
@@ -87,7 +107,18 @@ test("an absorbed scene holding a review is not filed away as finished", async (
   renderScenes();
   await screen.findByText("The second");
   const row = screen.getAllByRole("listitem")[1];
-  expect(within(row).getByText("unreviewed")).toBeInTheDocument();
+  expect(within(row).getByText("4 unreviewed")).toBeInTheDocument();
+});
+
+test("the chip carries the proposal count, not just that some are waiting", async () => {
+  // The shell payload already has the count per pending scene; a bare
+  // "unreviewed" would make the reader open the scene to learn whether it's
+  // one proposal or thirty.
+  (api.getShell as any).mockResolvedValue(shell([{ sid: "002--second", proposals: 12 }]));
+  renderScenes();
+  await screen.findByText("The second");
+  const row = screen.getAllByRole("listitem")[1];
+  expect(within(row).getByText("12 unreviewed")).toBeInTheDocument();
 });
 
 test("when and where come off the row without a second read", async () => {

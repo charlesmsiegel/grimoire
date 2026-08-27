@@ -28,11 +28,11 @@ type Filter = "all" | "open" | "absorbed";
 
 /** What to do with this scene, and what to call it.
  *
- *  Four states, four verbs. `unreviewed` is the one worth keeping separate:
+ *  Three states, three verbs. `unreviewed` is the one worth keeping separate:
  *  an absorbed scene whose proposals nobody decided is not finished, and
  *  calling it "Read" would file it away with the ones that are.
  */
-function actionFor(s: SceneMeta, waiting: Set<string>) {
+function actionFor(s: SceneMeta, waiting: Map<string, number>) {
   if (waiting.has(s.id)) return { label: "Wrap up →", tone: "alert" };
   if (s.done) return { label: "Read →", tone: "quiet" };
   return { label: "Open →", tone: "accent" };
@@ -66,11 +66,12 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
     return () => { live = false; };
   }, [cid]);
 
-  // Which scenes are holding a review. A set rather than a lookup per row, and
-  // it comes from the same payload the rail and the hub read — so all three
-  // agree about what is waiting.
+  // Which scenes are holding a review, and how many proposals each is
+  // holding — a map rather than a set, so the chip can say "how many" instead
+  // of just "some". It comes from the same payload the rail and the hub read
+  // — so all three agree about what is waiting.
   const waiting = useMemo(
-    () => new Set((shell?.campaign?.pending ?? []).map((p) => p.sid)),
+    () => new Map((shell?.campaign?.pending ?? []).map((p) => [p.sid, p.proposals])),
     [shell]);
 
   const shown = useMemo(() => {
@@ -113,7 +114,10 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   return (
     <PageShell column={column} columnLabel="Scenes">
       <div className="page-wide view-anim">
-        <div className="eyebrow">{meta?.name ?? ""}</div>
+        <div className="eyebrow">
+          {[meta?.name, "every scene, newest first", counts.open ? `${counts.open} open` : null]
+            .filter(Boolean).join(" · ")}
+        </div>
         <div className="scenes-head">
           <h1 className="screen-title">Scenes</h1>
           {/* Creation lives here, not on the transcript. The play view is
@@ -191,7 +195,9 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
                   </span>
                 </Link>
                 <span className={"chip" + (s.done ? "" : " on")}>
-                  {waiting.has(s.id) ? "unreviewed" : s.done ? "absorbed" : "open"}
+                  {waiting.has(s.id)
+                    ? `${waiting.get(s.id)} unreviewed`
+                    : s.done ? "absorbed" : "open"}
                 </span>
                 <Link className={"scene-item-act " + act.tone}
                       to={`/campaigns/${cid}/scenes/${s.id}`}>{act.label}</Link>
