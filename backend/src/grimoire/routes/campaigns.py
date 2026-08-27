@@ -397,19 +397,29 @@ def delete_campaign_event(cid: str, eid: str):
     day, and clearing only the latest would leave the earlier key to suppress a
     recreation dated back to it. `notices.forget_event` keys on the id alone,
     which needs no calendar and so cannot half-succeed.
+
+    Both under ONE hold, because keying on the id alone is only safe while no
+    other id of that name can exist. `events.delete` frees the id the moment it
+    releases the lock, so between the two an unlucky concurrent `create` can
+    take it back, and a dismissal of the NEW event's notice would then be
+    matched and removed by this cleanup — a banner returning after a dismissal
+    that succeeded. The lock is an `RLock` and both mutators take it themselves,
+    so this costs two reentrant acquires and closes the window; neither of them
+    runs calendar code, which is the thing that must never happen under it.
     """
     _campaign_root_or_404(cid)
-    try:
-        found = store.events.delete(cid, eid)
-    except store.events.EventError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not found:
-        raise HTTPException(status_code=404, detail="event not found")
-    # A corrupt ledger is the writer's refusal, not this completed delete's
-    # failure: the event is gone by here, and raising would report a write that
-    # actually landed as an error.
-    with contextlib.suppress(store.notices.NoticeError):
-        store.notices.forget_event(cid, eid)
+    with store.locks.campaign_lock(cid):
+        try:
+            found = store.events.delete(cid, eid)
+        except store.events.EventError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not found:
+            raise HTTPException(status_code=404, detail="event not found")
+        # A corrupt ledger is the writer's refusal, not this completed delete's
+        # failure: the event is gone by here, and raising would report a write
+        # that actually landed as an error.
+        with contextlib.suppress(store.notices.NoticeError):
+            store.notices.forget_event(cid, eid)
     return {"ok": True}
 
 

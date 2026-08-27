@@ -393,17 +393,25 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     }
   }
 
+  // Which datetime read is the newest one asked for. `fresh` and this are two
+  // different guarantees and BOTH are needed: `fresh` stops a new read joining
+  // an in-flight GET of the same path, but it does not cancel the older
+  // promise, whose `.then` is already attached and will still call `setWhen`
+  // when it lands. Arriving late, that older payload replaces the fresh one --
+  // and since the banner's optimistic dismissal is component state, collapsing
+  // and reopening the When section remounts it and shows the acknowledged
+  // warning again (#106). Only the newest read is allowed to apply.
+  const whenGen = useRef(0);
   const reloadWhen = useCallback(
-    // `fresh` opts out of the in-flight GET sharing. Most callers here are
-    // reading because the scene changed under them, and one of them (a notice
-    // dismissal, #106) reads immediately after a write to this same scene --
-    // where joining a GET issued before that write hands back the state before
-    // it, and the notice just acknowledged reappears.
-    (opts?: { fresh?: boolean }) => api.getSceneDatetime(cid, sid, opts).then((w) => {
-      setWhen(w);
-      // dateless scene with a suggestion: pre-fill the input, but never clobber typing
-      if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
-    }).catch(() => setWhen(null)),
+    (opts?: { fresh?: boolean }) => {
+      const mine = ++whenGen.current;
+      return api.getSceneDatetime(cid, sid, opts).then((w) => {
+        if (mine !== whenGen.current) return;
+        setWhen(w);
+        // dateless scene with a suggestion: pre-fill the input, but never clobber typing
+        if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
+      }).catch(() => { if (mine === whenGen.current) setWhen(null); });
+    },
     [cid, sid]);
 
   // Any surface acknowledging a notice makes this panel's copy of the datetime

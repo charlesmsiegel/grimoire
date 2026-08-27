@@ -501,6 +501,38 @@ test("a notice dismissed elsewhere refreshes this panel's copy of the payload", 
   expect(last[2]).toEqual({ fresh: true });
 });
 
+test("an older datetime read cannot replace a newer one", async () => {
+  // `fresh` stops a new read JOINING an in-flight GET; it does not cancel the
+  // older promise, whose `.then` is already attached. Landing late, that stale
+  // payload would put the acknowledged notice back (#106).
+  const withNotice = {
+    current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
+               secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
+               notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
+                           name: "The envoy arrives", in_days: 2,
+                           friendly: "6 July 2026" }] },
+    history: ["2026-07-04"] };
+  const withoutNotice = {
+    ...withNotice,
+    current: { ...withNotice.current, notices: [] } };
+
+  // The first (stale) read is held open; the second resolves immediately.
+  let landStale: (v: any) => void = () => {};
+  (api.getSceneDatetime as any)
+    .mockReturnValueOnce(new Promise((r: any) => { landStale = r; }))
+    .mockResolvedValue(withoutNotice);
+  renderInspector();
+  await waitFor(() => expect(api.getSceneDatetime).toHaveBeenCalled());
+
+  // A dismissal elsewhere triggers the fresh read, which settles first.
+  act(() => { noticesChanged(); });
+  await waitFor(() => expect(screen.getByText(/4 July 2026/)).toBeTruthy());
+
+  // Now the stale one lands, still carrying the notice. It must be ignored.
+  await act(async () => { landStale(withNotice); });
+  expect(screen.queryByText("The envoy arrives")).toBeNull();
+});
+
 test("a scene with nothing imminent shows no warning at all", async () => {
   (api.getSceneDatetime as any).mockResolvedValue({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
