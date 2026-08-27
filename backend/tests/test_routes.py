@@ -7682,13 +7682,18 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     the review PROPOSES has landed -- and the sidecar is what a Cancel deletes
     and a save clears.
 
-    The other two are not campaign content at all but records THAT the campaign
-    was written, and writing that sidecar and deleting it again is two writes.
-    `revision.txt` (#409) must move across them: a token that read the same
-    afterwards would be the bug, since a reader holding the earlier one would be
-    told nothing had happened while a review was generated and dismissed under
-    them. `activity.txt` is the same kind of value and is excluded only at the
-    discard, where the comment below says why.
+    The other two are not campaign content at all but records that the campaign
+    was WRITTEN, and generating a review and dismissing it is two writes.
+    `revision.txt` (#409) has to move across them: a token that read the same
+    afterwards would tell a reader holding the earlier one that nothing had
+    happened while a review was generated and dismissed under them, which is the
+    one thing that value promises not to do. `activity.txt` is the same kind of
+    value with a coarser clock, and it is excluded because it made this test
+    flaky rather than because it is allowed to move -- `touch_quietly` skips a
+    stamp inside the same second, so the file changed or not depending on
+    whether the absorb happened to cross a second boundary, and on a loaded CI
+    runner it did. A wall-clock timestamp cannot be part of a byte-identical
+    assertion.
 
     Excluding the whole directory, or comparing only the files that existed
     before, would let a real regression hide behind the exclusion; this names
@@ -7699,10 +7704,13 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     sid = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime",
                      json={"datetime": "2026-01-01"}).json()["id"]  # first date renames the scene
     croot = store.campaigns.campaign_root(cid)
-    token = croot / "revision.txt"
+    # The two write-records, by path rather than by name-matching, so a campaign
+    # file that happened to be called one of these somewhere deeper would still
+    # be compared.
+    written = {croot / "revision.txt", croot / "activity.txt"}
     def content(skip=()):
         return {p: p.read_bytes() for p in croot.rglob("*")
-                if p.is_file() and p != token and p not in skip}
+                if p.is_file() and p not in written and p not in skip}
     snapshot = content()
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],'
@@ -7732,14 +7740,7 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     generation = client.get(
         f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()["generation"]
     review_runs.cancel(client, cid, sid, generation)
-    # Both write-records, for two different reasons: `activity.txt` per the
-    # paragraph above, and `revision.txt` -- excluded by `content` throughout --
-    # because the token has to move across a review landing and being dismissed.
-    # That is two campaign writes, and a value that did not move for them would
-    # be the bug #409 exists to prevent rather than the absorb leaving something
-    # behind.
-    stamp = store.campaigns.campaign_activity_path(cid)
-    assert content(skip=(stamp,)) == {p: b for p, b in snapshot.items() if p != stamp}
+    assert content() == snapshot
 
 
 # ---- absorb: re-absorb guard (#235) ----
