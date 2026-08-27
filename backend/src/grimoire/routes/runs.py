@@ -744,6 +744,26 @@ class RunRegistry:
         requirement -- these are all `draft` runs, whose result is held on the
         record and written nowhere, so a run nobody can find is a run that
         changes nothing.
+
+        **PARTIAL, and deliberately said out loud.** This covers the ordinary
+        case -- the record is deleted, then somebody discovers or retries --
+        and not two races either side of it:
+
+        * a draft that read the record BEFORE the delete but reserves after
+          this sweep is stamped with the live subject and nothing has it;
+        * a replacement that reserves between the store delete and this call
+          is hidden by it.
+
+        Both need a fence shared between deletion and reservation, and the only
+        one that actually works is the per-record identity a scene already has
+        (`scene_identity`), which would make a recycled slug a different
+        subject outright. An epoch stamped at reservation does not: the late
+        reservation captures the post-sweep value and matches it. A tombstone
+        set poisons the slug for a legitimately recreated record. The campaign
+        lock serializes nothing here, because `reserve_draft` does not take it
+        and world and global subjects have none. Minting identities for
+        campaigns and worlds is a store change with a migration; until then
+        this is what is covered.
         """
         with self._lock:
             ids = self._by_subject.pop(subject, [])
