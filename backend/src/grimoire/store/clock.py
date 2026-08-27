@@ -583,6 +583,15 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
     # correction, and un-firing on the way back would erase the only record that
     # the story already played the event.
     fired = _fire(cid, computed["events"], target) if computed["elapsed_days"] > 0 else []
+    if fired:
+        # `_fire` writes events.json, and it writes it OUTSIDE the hold above --
+        # so the token published in there is already current-looking while this
+        # advance is still only half-made. A reader that picks it up in between
+        # would hold a value certifying a state that is about to change again,
+        # and the middleware's stamp is a whole response away (Codex review).
+        # Only when something was actually stamped: a move that crossed no
+        # scheduled event wrote nothing here.
+        revision.bump(cid)
     return {"moved": True, "now": target, "digest": computed, "fired": fired}
 
 

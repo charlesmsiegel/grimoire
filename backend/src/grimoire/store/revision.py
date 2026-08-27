@@ -22,10 +22,19 @@ passes the very check it was written for. A fresh unique value is a blind
 write with nothing to lose: two concurrent bumps leave one of two tokens on
 disk and *either* is a correct answer, because the only property required is
 "different from what any earlier reader is holding". That is also why this
-module takes no lock (`store/locks.py` classifies it), and why the file is
-disposable -- an unreadable or absent one reads as `INITIAL`, which no minted
-token can equal, so a damaged file refuses stale expectations rather than
-waving them through.
+module takes no lock (`store/locks.py` classifies it).
+
+**A damaged file refuses everything; an absent one only means "never stamped".**
+The two are told apart because they mean different things. A file holding
+something `bump` would not have written says nothing about what has happened to
+the campaign, so `require` refuses against it whatever the caller holds --
+`INITIAL` included, which is the one value a caller can hold without anything
+having been stamped. A file that is simply not there is indistinguishable from a
+campaign nothing has ever written, and reads as `INITIAL` so that such a
+campaign can be priced at all. The residual is exactly that: a token file
+DELETED after writes lets a caller still holding `INITIAL` through, and a caller
+can only be holding it from having read the campaign before anything stamped
+it.
 
 **What moves it, and what does not.** The default is the activity middleware in
 `main.py`, which fires for every campaign-scoped mutating request that answered
@@ -62,6 +71,7 @@ turns `RevisionMismatchError` into a 409 the client re-prices and re-asks agains
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 
 from . import atomic
@@ -76,11 +86,13 @@ log = logging.getLogger(__name__)
 #: to be wrong in.
 INITIAL = "0"
 
-#: A token is written by this module and only ever compared for equality, so it
-#: needs no structure. The length check on the way back in is a shape check on a
-#: hand-editable file, not a validation of anything: past this, the file is not
-#: something we wrote and `INITIAL` is the honest reading of it.
-_MAX_LEN = 64
+#: What `bump` writes: `uuid4().hex`, and nothing else ever. Checked on the way
+#: back in, so a file holding anything this module would not have written is
+#: known to be damaged rather than merely unfamiliar -- which is what lets
+#: `require` refuse against it. A length bound alone was not enough: it accepted
+#: a truncated or hand-edited value verbatim, including the literal `0`, which
+#: is the one string a caller can legitimately still be holding (Codex review).
+_MINTED = re.compile(r"\A[0-9a-f]{32}\Z")
 
 
 class RevisionMismatchError(Exception):
@@ -106,21 +118,37 @@ def _path(cid: str):
     return campaigns_paths.campaign_root(cid) / FILENAME
 
 
-def current(cid: str) -> str:
-    """This campaign's token, or `INITIAL`.
+def _stored(cid: str) -> str | None:
+    """The file's contents when it holds a token this module minted, `""` when it
+    holds something else, and None when there is nothing there.
+
+    Three answers rather than two, because `current` and `require` want different
+    things from the middle one -- see both.
 
     Never raises over the file. An id that cannot name a campaign at all still
     raises `CampaignNotFound` out of `campaign_root`, which is where that check
-    belongs; everything else -- absent, unreadable, non-UTF-8 from a half-landed
-    sync, or holding something this module would not have written -- reads as
-    `INITIAL`. That is deliberately the *strictest* degradation available: every
-    stale-check against a damaged file refuses, and a refusal costs a re-price.
+    belongs; unreadable, non-UTF-8 from a half-landed sync, and holding something
+    this module would not have written are all "damaged".
     """
     try:
-        token = _path(cid).read_text(encoding="utf-8").strip()
+        raw = _path(cid).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
     except Exception:  # noqa: BLE001 -- see docstring: a damaged file is not a crash
-        return INITIAL
-    return token if token and len(token) <= _MAX_LEN else INITIAL
+        return ""
+    return raw if _MINTED.match(raw) else ""
+
+
+def current(cid: str) -> str:
+    """This campaign's token, or `INITIAL`.
+
+    The REPORTING path: what a caller is handed to price against. A damaged file
+    degrades to `INITIAL` here rather than to something unusable, because the
+    alternative is handing a caller a value it can do nothing with. `require` is
+    where damage is acted on, and the asymmetry between the two is the point --
+    see this module's own docstring.
+    """
+    return _stored(cid) or INITIAL
 
 
 def bump(cid: str) -> str:
@@ -139,6 +167,14 @@ def bump(cid: str) -> str:
     token = uuid.uuid4().hex
     try:
         atomic.write_text(_path(cid), token + "\n")
+    except FileNotFoundError:
+        # The campaign directory is not there. `DELETE /campaigns/{cid}` reaches
+        # here through the activity middleware, having just removed the whole
+        # tree, and that is the ordinary path rather than a fault -- a traceback
+        # for it would put a storage-failure warning in the log after every
+        # deletion, in a file a user may hand to somebody else (Codex review).
+        # There is nothing to stamp and nothing to say.
+        return INITIAL
     except Exception:   # see docstring: nothing here may propagate
         log.warning("revision: could not stamp %s", cid, exc_info=True)
         return current(cid)
@@ -156,6 +192,17 @@ def require(cid: str, expected: str) -> None:
     """
     if not expected:
         return
-    now = current(cid)
+    stored = _stored(cid)
+    if stored == "":
+        # Present, and not a value this module wrote. The CHECKING path parts
+        # company with the reporting one here: `current` degrades this to
+        # `INITIAL` so a caller is handed something usable, and doing the same
+        # here would let a caller still holding `INITIAL` -- the one token it can
+        # hold without anything having been stamped -- match a campaign that has
+        # been written and then had its token damaged away. A file we did not
+        # write says nothing about what happened to the campaign, so nothing may
+        # be certified against it.
+        raise RevisionMismatchError(cid, expected, INITIAL)
+    now = stored or INITIAL
     if expected != now:
         raise RevisionMismatchError(cid, expected, now)
