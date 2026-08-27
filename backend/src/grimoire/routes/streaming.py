@@ -322,7 +322,7 @@ class StreamOutcome:
         #: or None when it wrote nothing. See `persisted`.
         self.at: int | None = None
 
-    def persisted(self, at: int) -> None:
+    def persisted(self, at: int | None) -> None:
         """The transcript length a terminal write of this turn left behind.
 
         This is the follow-up boundary (#397): the length `askAfterPost` used
@@ -337,8 +337,13 @@ class StreamOutcome:
         wrote nothing leaves this None, which is what tells the runner there is
         no follow-up worth scheduling -- neither the summary's coverage nor the
         scene-break count has moved.
+
+        `None` is accepted and ignored, so a boundary that could not be read
+        (`_tail_length`) is a skipped follow-up rather than an exception out of
+        a `finalize` that has already written the reply.
         """
-        self.at = at
+        if at is not None:
+            self.at = at
 
     def land(self) -> None:
         """The turn finished and its writes were attempted -- the ordinary end."""
@@ -362,15 +367,30 @@ class StreamOutcome:
         return {"state": self.state, "error": self.error}
 
 
-def _tail_length(cid: str, sid: str) -> int:
-    """How many posts the transcript holds right now.
+def _tail_length(cid: str, sid: str) -> int | None:
+    """How many posts the transcript holds right now, or None if it cannot be read.
 
     Called under the campaign-lock hold a terminal write took, immediately
     after it, so what comes back is the boundary that write produced rather
-    than a length something else has since moved on. Its one caller is
-    `StreamOutcome.persisted`, whose docstring carries the reasoning.
+    than a length something else has since moved on. What it is FOR is
+    `StreamOutcome.persisted`, whose docstring carries that reasoning.
+
+    **It may not raise**, and that is why it is a function rather than a
+    `len(read_scene(...))` at each call site. It runs inside `finalize`, after
+    the reply is already on disk, and `_fence_stream` converts only `StoreBusy`
+    there -- so a scene momentarily unreadable (a sync client mid-replace, a
+    Windows sharing violation) would escape to the runner and mark a landed
+    turn `failed`, over a reply that is perfectly persisted, with a retry then
+    free to append a second one. Losing the follow-up is the right cost of
+    that: the next turn asks again with a boundary of its own, where a false
+    failure is a duplicated reply nobody asked for.
     """
-    return len(store.scenes.read_scene(cid, sid)["messages"])
+    try:
+        return len(store.scenes.read_scene(cid, sid)["messages"])
+    except Exception:                                        # noqa: BLE001
+        _log.warning("could not read the follow-up boundary for %s/%s",
+                     cid, sid, exc_info=True)
+        return None
 
 
 async def _fire_follow_up(after_turn, box: StreamOutcome) -> None:
@@ -695,6 +715,19 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # metered connection it was billed.
             meter.done("aborted")
             await _flush_on_abort(on_abort, watcher)
+            # A Stop can flush a partial, and a flushed partial is a post: the
+            # transcript grew, so both gates moved (#397). Nothing else will ask
+            # -- the client's own `askAfterPost` went with this change, and this
+            # path never reaches either of the calls below.
+            #
+            # SHIELDED, for `_flush_on_abort`'s reason: we are unwinding a
+            # cancellation, so an unshielded await would be cancelled at its
+            # first one and reserve nothing. Fail-soft is `_fire_follow_up`'s
+            # own doing, which is what makes it safe to run here at all -- on
+            # shutdown the portal is closing, and `_start_background` releases
+            # a run it could not hand over.
+            with anyio.CancelScope(shield=True):
+                await _fire_follow_up(after_turn, box)
             raise
         try:
             # In a worker thread, not inline (#234). `finalize` is synchronous
