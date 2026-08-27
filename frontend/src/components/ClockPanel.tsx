@@ -395,8 +395,17 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
                    + " was copied and the skip was not taken — preview it again.");
           return;
         }
-        const key = `checkpoint:${gate?.to ?? ""}:${pricedRevision}`;
-        const report = await api.forkCampaign(cid, name, undefined, key);
+        // The token goes WITH the copy, not just into its key. The check above
+        // is this panel's, and a client's check cannot bind: a whole request
+        // separates it from the copy, and only the server holds the source's
+        // lock across one. Sent, a campaign written in that gap costs a refusal
+        // instead of a checkpoint of a state nobody asked for — which the skip
+        // would then reject anyway, leaving the copy on the shelf for nothing
+        // (Codex review).
+        const report = await api.forkCampaign(cid, name, undefined, {
+          idempotencyKey: `checkpoint:${gate?.to ?? ""}:${pricedRevision}`,
+          expectRevision: pricedRevision,
+        });
         // The sharpest case for the rule above. A copy of A recorded as B's
         // means a large skip in B offers "Retry the skip", takes no copy at
         // all, and advances anyway — the feature failing silently in exactly

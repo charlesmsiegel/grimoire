@@ -24,13 +24,16 @@ disk and *either* is a correct answer, because the only property required is
 "different from what any earlier reader is holding". That is also why this
 module takes no lock (`store/locks.py` classifies it).
 
-**A damaged file refuses everything; an absent one only means "never stamped".**
-The two are told apart because they mean different things. A file holding
-something `bump` would not have written says nothing about what has happened to
-the campaign, so `require` refuses against it whatever the caller holds --
-`INITIAL` included, which is the one value a caller can hold without anything
-having been stamped. A file that is simply not there is indistinguishable from a
-campaign nothing has ever written, and reads as `INITIAL` so that such a
+**A damaged file refuses everything, and is repaired by the next read; an absent
+one only means "never stamped".** The two are told apart because they mean
+different things. A file holding something `bump` would not have written says
+nothing about what has happened to the campaign, so `require` refuses against it
+whatever the caller holds -- `INITIAL` included, which is the one value a caller
+can hold without anything having been stamped. Refusing forever is not the same
+promise, though, and would be a worse one: `current` therefore mints a
+replacement, so damage costs every earlier holder its next operation and then
+the campaign works again. A file that is simply not there is indistinguishable
+from a campaign nothing has ever written, and reads as `INITIAL` so that such a
 campaign can be priced at all. The residual is exactly that: a token file
 DELETED after writes lets a caller still holding `INITIAL` through, and a caller
 can only be holding it from having read the campaign before anything stamped
@@ -142,13 +145,44 @@ def _stored(cid: str) -> str | None:
 def current(cid: str) -> str:
     """This campaign's token, or `INITIAL`.
 
-    The REPORTING path: what a caller is handed to price against. A damaged file
-    degrades to `INITIAL` here rather than to something unusable, because the
-    alternative is handing a caller a value it can do nothing with. `require` is
-    where damage is acted on, and the asymmetry between the two is the point --
-    see this module's own docstring.
+    The REPORTING path: what a caller is handed to price against.
+
+    **A damaged file is REPAIRED here, and that is what keeps fail-closed from
+    meaning stuck.** `require` refuses against damage whatever the caller holds,
+    which is right -- but with `current` reporting a value that check would
+    always reject, the client's whole recovery loop is a treadmill: price, get
+    `campaign_moved`, price again, get the same value, forever, until some
+    unrelated write happens to replace the file (Codex review). Minting one here
+    ends it in one round: every earlier holder is refused, which is the honest
+    answer for a token nobody can vouch for, and the caller in front of us gets
+    a value that will work.
+
+    An ABSENT file is not damage and is not repaired: it cannot be told from a
+    campaign nothing has ever written, and `INITIAL` is what makes such a
+    campaign priceable at all.
     """
-    return _stored(cid) or INITIAL
+    stored = _stored(cid)
+    if stored == "":
+        return _repair(cid)
+    return stored or INITIAL
+
+
+def _repair(cid: str) -> str:
+    """Replace a file this module did not write, and return what replaced it.
+
+    Best-effort: a store that will not take this write leaves the damage in
+    place, and `INITIAL` then reports what `require` will go on refusing. That is
+    the same fail-closed answer as before, for a disk that has bigger problems
+    than a token.
+    """
+    token = uuid.uuid4().hex
+    try:
+        atomic.write_text(_path(cid), token + "\n")
+    except Exception:   # see docstring: nothing here may propagate
+        log.warning("revision: could not replace the damaged token in %s", cid,
+                    exc_info=True)
+        return INITIAL
+    return token
 
 
 def bump(cid: str) -> str:
@@ -177,7 +211,9 @@ def bump(cid: str) -> str:
         return INITIAL
     except Exception:   # see docstring: nothing here may propagate
         log.warning("revision: could not stamp %s", cid, exc_info=True)
-        return current(cid)
+        # `_stored`, not `current`: a store that just refused this write is not
+        # one to attempt a repair against on the way out of the failure.
+        return _stored(cid) or INITIAL
     return token
 
 

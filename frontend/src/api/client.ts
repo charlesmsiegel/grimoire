@@ -21,7 +21,7 @@ import {
   type CampaignBudget,
   type CampaignSceneCosts,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
-  type ForkReport,
+  type ForkGuards, type ForkReport,
   type CatalogDraft, type CharacterDetail,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
@@ -1009,15 +1009,22 @@ export const api = {
    *  the fork and nothing at all happens to `cid`. Omitted, the fork is of the
    *  campaign as it stands. `notifyCampaigns` for the same reason
    *  `createCampaign` sends it: the shelf and the sidebar gain a row. */
-  /** `idempotencyKey` makes a repeat safe (#409): the same key, against the same
-   *  source, is answered with the fork the first call made (`replayed: true`)
-   *  instead of copying the campaign again. Mint one BEFORE the request, and
-   *  derive it from the operation rather than at random where you can — a key
-   *  held only in component state is lost by the reload it exists to survive. */
-  forkCampaign: (cid: string, name: string, fromScene?: string, idempotencyKey?: string) =>
+  /** `guards.idempotencyKey` makes a repeat safe (#409): the same key, against
+   *  the same source, is answered with the fork the first call made
+   *  (`replayed: true`) instead of copying the campaign again. Mint one BEFORE
+   *  the request, and derive it from the operation rather than at random where
+   *  you can — a key held only in component state is lost by the reload it
+   *  exists to survive.
+   *
+   *  `guards.expectRevision` refuses the copy if the source has been written
+   *  since it was priced. A client can check that itself and cannot BIND it:
+   *  between its own check and this call is a whole request, and only the
+   *  server holds the source's lock across the copy. */
+  forkCampaign: (cid: string, name: string, fromScene?: string, guards: ForkGuards = {}) =>
     request<ForkReport>("POST", `/api/campaigns/${cid}/fork`,
       { name, ...(fromScene ? { from_scene: fromScene } : {}),
-        ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}) },
+        ...(guards.idempotencyKey ? { idempotency_key: guards.idempotencyKey } : {}),
+        ...(guards.expectRevision ? { expect_revision: guards.expectRevision } : {}) },
     ).then(notifyCampaigns),
   // `fresh` for the caller re-reading *because* an undo just repointed one of
   // these deltas: handed a promise started before that write, it would conclude

@@ -287,6 +287,13 @@ class ForkCampaign(BaseModel):
     #: "" rather than required, so a client that predates it keeps working and
     #: simply gets what it has today: no idempotency.
     idempotency_key: str = ""
+    #: The source campaign's write token as the caller priced this fork against
+    #: (#409). Empty is "no expectation", as everywhere else. Checked under the
+    #: source's own lock, immediately before the copy, which is the only place a
+    #: check can bind: a client that read the token and then asked for a fork has
+    #: a whole request's worth of window in between, and a copy taken across a
+    #: write is a checkpoint of a state nobody asked for.
+    expect_revision: str = ""
 
 
 class WeatherOverride(BaseModel):
