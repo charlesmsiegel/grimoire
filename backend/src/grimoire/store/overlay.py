@@ -741,10 +741,16 @@ def rewrite_ref_fields(cid: str, old: str, new: str) -> list[tuple[str, str]]:
     record from this campaign without touching it, so there is no edit here
     that would not be one campaign rewriting a record every other campaign
     shares. `entity_schema`'s module docstring carries the rest.
+
+    Fields whose declared `kinds` do not include the destination are skipped,
+    for the reason `entities.rewrite_ref_fields` gives at length: repointing
+    one stores a value the save boundary then rejects, which would leave the
+    referring record unsaveable.
     """
     touched: list[tuple[str, str]] = []
+    new_kind = new.split(":", 1)[0]
     for kind in entities.ENTITY_KINDS:
-        specs = entity_schema.ref_fields(kind)
+        specs = [s for s in entity_schema.ref_fields(kind) if new_kind in s["kinds"]]
         if not specs:
             continue
         for meta in list_entities(cid, kind):

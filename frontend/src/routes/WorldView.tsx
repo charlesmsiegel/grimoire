@@ -93,6 +93,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   /** The greeting a cross-navigation asked for, with a nonce: opening the same
    *  node twice has to reach the editor twice. */
   const [focusGreeting, setFocusGreeting] = useState<{ gid: string; n: number } | null>(null);
+  /** A PC to open once the PC section is showing — see `openOwner`. Nonce'd
+   *  for GreetingEditor's reason: following the same chip twice is two events. */
+  const [focusPC, setFocusPC] = useState<{ pid: string; n: number } | null>(null);
   /** Which way the Greetings section is showing its records: the chip-list
    *  editor, or the same edges as a graph (#9). A view of one set of records
    *  rather than a second place to keep them -- both write through
@@ -265,7 +268,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     const kind = ref.slice(0, i);
     const id = ref.slice(i + 1);
     if (kind === "characters") openCharacter(id, ""); // "" -> CharacterEditor falls back to default version
-    else if (kind === "pcs") setSection("pcs");
+    else if (kind === "pcs") { setFocusPC((p) => ({ pid: id, n: (p?.n ?? 0) + 1 })); setSection("pcs"); }
     // The entity kinds land on the record itself, not merely its section: a
     // ref names one record, and dropping the reader in a list to find it again
     // would be answering the question with the index.
@@ -472,7 +475,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             indefinitely if one stalls. */}
         {!campaign && section === "images" && <ImagesView key={wid} wid={wid} />}
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
-        {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
+        {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
+                                       focus={focusPC?.pid ?? null} focusNonce={focusPC?.n ?? 0}
+                                       module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" nav={navFor("locations")}
                                           onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} onOpenLore={openLore} module={moduleCtx} />}

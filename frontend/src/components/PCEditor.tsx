@@ -15,9 +15,17 @@ import SheetPanel from "./SheetPanel";
 import { errorText } from "../api/errors";
 const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
 
-export function PCEditor({ scope, wid, onOpenLore, module = null }:
+export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module = null }:
   { scope: EntityScope; wid: string;
     onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
+    /** A PC to open on arrival — a `pcs:` chip beside a lore entry, or the
+     *  holder or leader named by a ref field (#222). Without it those chips
+     *  landed on the PC section and left the reader to find the record again,
+     *  which is answering the question with the index. */
+    focus?: string | null;
+    /** Bumped per navigation, so following the same chip twice is two events
+     *  rather than one no-op — same reason `GreetingEditor` carries one. */
+    focusNonce?: number;
     module?: ModuleDetail | null }) {
   const worldScope = scope.kind === "world";
   const [pcs, setPCs] = useState<PCSummary[]>([]);
@@ -55,6 +63,12 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     if (worldScope) api.listTags(wid).then(setTags);
     setWizardOpen(false); // a scope change can reuse this instance; never carry a wizard across it
   }, [wid, worldScope, reload]);
+
+  // arrived via an owner chip or a ref field: open that PC
+  useEffect(() => {
+    if (focus) void select(focus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, focusNonce, scope.kind, scope.id]);
 
   async function select(pid: string, version?: string) {
     setError(null);

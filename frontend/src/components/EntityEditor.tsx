@@ -237,6 +237,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   // `headquarters` both want locations, and asking twice would be two requests
   // for one answer.
   const [refOpts, setRefOpts] = useState<RecordRef[]>([]);
+  // Token for the in-flight candidate fetch, so a slow earlier response cannot
+  // land on top of a newer one — the same guard `PCEditor` uses for its lock
+  // lookup, and for the same reason.
+  const refReq = useRef(0);
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
@@ -275,13 +279,24 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }, [wid, kind]);
 
   useEffect(() => {
+    // Cleared FIRST, and every response checked against the request that is
+    // current when it lands. Navigating between two worlds can keep this
+    // editor mounted, and without both halves the picker offers the previous
+    // scope's records until the new listing settles — or permanently, if the
+    // older request resolves second. Picking one of those saves a ref into a
+    // scope where it names nothing, and since existence is deliberately not
+    // validated the backend takes it.
+    setRefOpts([]);
     const kinds = refKindsFor(fieldSpecs);
     // Guarded rather than unconditional: a kind with no ref fields (lore, and
     // locations, which has three text fields and none of these) would
     // otherwise pay a listing request per record kind on every mount for a
     // picker it never renders.
-    if (!kinds.length) { setRefOpts([]); return; }
-    refOptions(scope, kinds).then(setRefOpts).catch(() => setRefOpts([]));
+    if (!kinds.length) return;
+    const req = ++refReq.current;
+    refOptions(scope, kinds)
+      .then((opts) => { if (req === refReq.current) setRefOpts(opts); })
+      .catch(() => { if (req === refReq.current) setRefOpts([]); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wid, kind, scope.kind, scope.id]);
 

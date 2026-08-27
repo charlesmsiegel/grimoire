@@ -386,10 +386,29 @@ def rewrite_ref_fields(root: Path, old: str, new: str) -> list[tuple[str, str]]:
 
     Only a reclassify calls this. A DELETE leaves refs dangling on purpose;
     `entity_schema`'s module docstring carries the three reasons.
+
+    **A field only follows a record into a kind it is allowed to name**, and
+    this is where it parts company with `rewrite_owner_refs`. That one repoints
+    regardless, on the reasoning that leaving a live ref on a slug the
+    reclassify just freed is #225 through the one door that is plain text. The
+    same rewrite here would be worse than the residue it avoids: a
+    `headquarters` accepts locations only, so writing `lore:tidewatch` into one
+    stores a value `entity_schema.invalid_values` then rejects -- and since the
+    editor sends every declared field on every save, the referring record could
+    not be saved again at all until somebody cleared that field. A record made
+    unsaveable by a move somewhere else is a worse failure than a stale chip.
+
+    So the ref is left as it stands, where it dangles exactly as a delete makes
+    one dangle -- which is the truth from the field's side: the thing it named
+    is no longer something it can name. The residue `rewrite_owner_refs` is
+    afraid of is real but cheap here: these fields never reach a prompt (the
+    entity-kinds design settled that), so the worst a reused slug costs is a
+    wrong name on a chip, not a leaked gate.
     """
     touched: list[tuple[str, str]] = []
+    new_kind = new.split(":", 1)[0]
     for kind in ENTITY_KINDS:
-        specs = entity_schema.ref_fields(kind)
+        specs = [s for s in entity_schema.ref_fields(kind) if new_kind in s["kinds"]]
         if not specs:
             continue
         # Off the LISTING, exactly as `rewrite_owner_refs` reads `owners`:
