@@ -484,6 +484,27 @@ def test_an_advance_that_fired_nothing_does_not_stamp_twice(cid, monkeypatch):
     assert len(minted) == 1
 
 
+def test_a_no_op_is_refused_when_the_campaign_moved_during_the_calendar_work(cid, monkeypatch):
+    """The no-op branch writes nothing, so it has no lock hold to check under --
+    but the window it has to answer for is the calendar plugin's, not a write's.
+
+    `digest` stands in for a write landing during it: the caller asked to be
+    told its price was stale, and would otherwise be told its move was a no-op,
+    with a digest measured from a moment it never asked about.
+    """
+    token = revision.bump(cid)
+    monkeypatch.setattr(clock, "_provider", lambda *a, **k: object())
+    monkeypatch.setattr(clock, "_resolve", lambda *a, **k: ("2026-05-01", "2026-05-01"))
+
+    def _racing_digest(*a, **k):
+        revision.bump(cid)
+        return {"events": [], "elapsed_days": 0, "to_friendly": "", "truncated": False}
+
+    monkeypatch.setattr(clock, "digest", _racing_digest)
+    with pytest.raises(revision.RevisionMismatchError):
+        clock.advance(cid, to="2026-05-01", reason="no move", expect_revision=token)
+
+
 def test_the_check_is_taken_again_under_the_lock_that_covers_the_write(cid, monkeypatch):
     """Checking first and locking after leaves room for exactly the mutation
     being guarded against to land in between.
