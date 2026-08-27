@@ -4,12 +4,11 @@
 
     Tier 3 is the sibling section off_scene_cast_known.j2, and the two are
     joined by system.j2's blank line into the single block they were split out
-    of. This one carries the shared heading because it renders first; when it
-    is empty the heading travels with tier 3 instead, so the directory always
-    opens with exactly one copy. -#}
+    of. The block's shared heading is in neither file: it is declared as this
+    section's `Section.heading` and emitted by the render path — see
+    scene/_off_scene_cast.j2. -#}
 {%- set lines = [] -%}
 {%- for a in offscene_active -%}{%- set _ = lines.append(a.name ~ ": " ~ a.dossier) -%}{%- endfor -%}
 {%- if lines -%}
-{%- from "scene/_off_scene_cast.j2" import heading -%}
-{{ [heading(), "## Active in this campaign, elsewhere\n" ~ (lines | join("\n"))] | join("\n\n") }}
+{{ "## Active in this campaign, elsewhere\n" ~ (lines | join("\n")) }}
 {%- endif -%}

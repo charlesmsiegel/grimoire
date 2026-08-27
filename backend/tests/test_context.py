@@ -763,6 +763,72 @@ def test_dropping_the_heading_half_leaves_tier_three_unframed(monkeypatch, tmp_p
     assert "Introduce them only if the story calls for it" not in sys
 
 
+def test_layout_disabling_tier_two_moves_the_heading_to_tier_three(monkeypatch, tmp_path):
+    """The heading follows what RENDERS, not what has data (#423).
+
+    Tier 3 used to decide whether to emit the shared heading by looking at tier
+    2's data, so switching tier 2 off in the prompt layout left tier 3's data
+    non-empty, tier 3 silent about the heading, and the prompt carrying a bare
+    list of names with nothing saying those characters are absent."""
+    from grimoire.store import config
+    cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
+    context.layout.write_layout(
+        _full_layout(off_scene_cast_active={"enabled": False}))
+    config.write_config(prompt_layout_enabled="on")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "## Active in this campaign, elsewhere" not in sys      # really disabled
+    assert ("# Other characters in this world\n"
+            "\n"
+            "# (Not present. Introduce them only if the story calls for it.)\n"
+            "\n"
+            "## Known to exist\n"
+            "Char00: A distant person of no immediate consequence.") in sys
+    assert sys.count("# Other characters in this world") == 1
+
+
+def test_layout_reordering_the_tiers_keeps_the_heading_on_top(monkeypatch, tmp_path):
+    """The other half of #423: put tier 3 first and the heading has to move with
+    it, or it renders in the MIDDLE of the block — tier 3 suppressing it and
+    tier 2 emitting it second."""
+    from grimoire.store import config
+    cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
+    entries = [e for e in _full_layout() if e["id"] != "off_scene_cast_known"]
+    at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_active")
+    entries.insert(at, {"id": "off_scene_cast_known", "label": "", "enabled": True})
+    context.layout.write_layout(entries)
+    config.write_config(prompt_layout_enabled="on")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert ("# Other characters in this world\n"
+            "\n"
+            "# (Not present. Introduce them only if the story calls for it.)\n"
+            "\n"
+            "## Known to exist\n"
+            "Char00: A distant person of no immediate consequence.") in sys
+    assert sys.count("# Other characters in this world") == 1
+    assert (sys.index("## Known to exist")
+            < sys.index("## Active in this campaign, elsewhere")), "tiers really swapped"
+
+
+def test_the_heading_is_priced_with_the_tier_that_carries_it(monkeypatch, tmp_path):
+    """The heading is part of a section's rendered text, so it is part of that
+    section's token count — and it moves between the two rows with the layout
+    rather than being billed to a row that did not send it."""
+    from grimoire.store import config
+    cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
+    active, known = _tier_rows(cid, sid)
+    assert "# Other characters in this world" in active["text"]
+    assert "# Other characters in this world" not in known["text"]
+
+    context.layout.write_layout(
+        _full_layout(off_scene_cast_active={"enabled": False}))
+    config.write_config(prompt_layout_enabled="on")
+    rows = {s["label"]: s for s in context.context_sections(cid, sid)}
+    assert "Off-scene cast · active elsewhere" not in rows
+    assert "# Other characters in this world" in rows["Off-scene cast · known to exist"]["text"]
+
+
 def _known_world(monkeypatch, tmp_path, n):
     """A world whose tier 3 is `n` briefed characters (`char00`…), plus `Aese`
     in the scene whose card names the LAST of them."""

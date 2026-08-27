@@ -1,13 +1,17 @@
 {#- The heading the off-scene cast directory opens with, shared by its two tier
     sections (off_scene_cast_active.j2, off_scene_cast_known.j2).
 
-    A macro rather than a copy in each file: the directory used to be one
-    template and one section, and splitting it so the two tiers could be
+    A file of its own rather than a copy in each of them: the directory used to
+    be one template and one section, and splitting it so the two tiers could be
     measured separately (#2) must not turn a single line of instruction into
-    two that can drift apart. Exactly one section emits it — whichever renders
-    first, which is tier 2 when it has content and tier 3 otherwise. -#}
-{%- macro heading() -%}
+    two that can drift apart.
+
+    NEITHER section renders it. `Section.heading` names this template and
+    `context.assemble._render_sections` prepends it to whichever member of the
+    group actually produced text first, so the directory opens with exactly one
+    copy however the reader's prompt layout orders or disables its halves.
+    Deciding that in a template is what #423 was: "am I first?" is a question
+    about the merged, enabled layout, and a template can only see the data. -#}
 # Other characters in this world
 
 # (Not present. Introduce them only if the story calls for it.)
-{%- endmacro -%}

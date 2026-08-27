@@ -860,6 +860,17 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "mechanics_checks": mechanics_checks}
 
 
+#: `Section.heading`, spelled out independently for the same reason the order
+#: below is: a block that was split into several sections for the token
+#: breakdown's sake shares one heading, and the render path puts it on
+#: whichever of them came back non-empty first (context.assemble is the other
+#: copy). Template path -> the heading template it shares.
+_SHARED_HEADINGS = {
+    "scene/sections/off_scene_cast_active.j2": "scene/_off_scene_cast.j2",
+    "scene/sections/off_scene_cast_known.j2": "scene/_off_scene_cast.j2",
+}
+
+
 def rendered_system(data: dict, opener: bool = False) -> str:
     """Mirror of context.assemble._render_sections + scene/system.j2: render
     each section, drop the empty ones, join with blank lines.
@@ -867,7 +878,8 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     The order is spelled out here rather than read off `context.SECTIONS`,
     which is the point — the prompt's section order is now a single list in
     code, and this is the independent copy that makes reordering it a
-    deliberate two-sided change instead of a silent one.
+    deliberate two-sided change instead of a silent one. `_SHARED_HEADINGS` is
+    the same deal for `Section.heading`.
     """
     names = []
     if opener:
@@ -913,7 +925,17 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     if not opener:
         names.append("scene/sections/transient_tracker.j2")
     names.append("scene/sections/response_budget.j2")
-    sections = [s for s in (render(n, **data).strip() for n in names) if s]
+    sections: list[str] = []
+    headed: set[str] = set()
+    for n in names:
+        body = render(n, **data).strip()
+        if not body:
+            continue
+        head = _SHARED_HEADINGS.get(n)
+        if head and head not in headed:
+            headed.add(head)
+            body = render(head, **data).strip() + "\n\n" + body
+        sections.append(body)
     return render("scene/system.j2", sections=sections).strip()
 
 
