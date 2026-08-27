@@ -107,6 +107,34 @@ def _owner_ref(kind: str, eid: str) -> str:
     return f"{kind}:{eid}"
 
 
+def _sweep(fn, lost: str, old_ref: str, new_ref: str, cid: str = "") -> None:
+    """Run one leg of a post-move sweep; log what stayed stale rather than raise.
+
+    **A leg each**, and that is the point of the helper. The `owners:` rewrite,
+    the ref-field rewrite and the ledger repoint are independent -- different
+    files, and none needs the others to have succeeded -- but they used to
+    share one `try`, so the first failure silently skipped the rest. That was
+    invisible until `EntityNotFound` became a caught miss rather than a 500: a
+    referring record vanishing mid-sweep then also cost the world sheet its
+    repoint, leaving it keyed to a kind the record no longer has, reachable
+    from nothing.
+
+    Never raises, for the reason every call site shares: the record has already
+    moved by the time any of this runs. A 500 here reports a reclassify that
+    DID happen as having failed, and the retry it invites then 404s. Stale
+    display refs are the smaller harm, and the warning names what to look at.
+
+    `EntityNotFound` is a miss and not an error because each sweep reads a
+    listing and then writes every record it named, with no lock over the gap --
+    another process or a sync client deleting one in between is ordinary.
+    """
+    try:
+        fn()
+    except (OSError, ValueError, entities.EntityNotFound) as exc:
+        log.warning("reclassified %s to %s%s but %s (%s)", old_ref, new_ref,
+                    f" in campaign {cid}" if cid else "", lost, exc)
+
+
 def campaign_entity(cid: str, kind: str, eid: str, new_kind: str) -> str:
     """Reclassify this campaign's copy of `kind`/`eid`. Returns its new id.
 
@@ -145,17 +173,14 @@ def _repoint_campaign_side(cid: str, kind: str, eid: str,
     warning names what to go and look at.
     """
     old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
-    try:
-        overlay.rewrite_owner_refs(cid, _owner_ref(kind, eid),
-                                   _owner_ref(new_kind, new_eid))
-        overlay.rewrite_ref_fields(cid, _owner_ref(kind, eid),
-                                   _owner_ref(new_kind, new_eid))
-        record_refs.repoint(cid, {old_ref: new_ref})
-    except (OSError, ValueError, entities.EntityNotFound) as exc:
-        log.warning("reclassified %s to %s in campaign %s but could not finish "
-                    "repointing it (%s) -- an `owners:` line, a ref field, a pin, a "
-                    "citation or an undo entry may still name the old kind",
-                    old_ref, new_ref, cid, exc)
+    old_owner, new_owner = _owner_ref(kind, eid), _owner_ref(new_kind, new_eid)
+    _sweep(lambda: overlay.rewrite_owner_refs(cid, old_owner, new_owner),
+           "an `owners:` line may still name the old kind", old_ref, new_ref, cid)
+    _sweep(lambda: overlay.rewrite_ref_fields(cid, old_owner, new_owner),
+           "a ref field may still name the old kind", old_ref, new_ref, cid)
+    _sweep(lambda: record_refs.repoint(cid, {old_ref: new_ref}),
+           "a pin, a citation or an undo entry may still name the old kind",
+           old_ref, new_ref, cid)
 
 
 def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
@@ -175,28 +200,18 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
     with locks.hold_all(cids):
         new_eid = entities.reclassify(wroot, kind, eid, new_kind)
         old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
-        try:
-            entities.rewrite_owner_refs(wroot, _owner_ref(kind, eid),
-                                        _owner_ref(new_kind, new_eid))
-            entities.rewrite_ref_fields(wroot, _owner_ref(kind, eid),
-                                        _owner_ref(new_kind, new_eid))
-            sheets.repoint_world_records(wid, {old_ref: new_ref})
-        except (OSError, ValueError, entities.EntityNotFound) as exc:
-            # Ahead of the sweep in the file, but never ahead of it in
-            # importance: one unreadable world record must not cost every
-            # dependent campaign the repoint that keeps it from ending with a
-            # stale copy under the old kind AND a duplicate under the new one.
-            # That is the failure this whole function exists to prevent.
-            #
-            # `EntityNotFound` is in the list for the reason the per-campaign
-            # loop below gives: both sweeps here read a listing and then write
-            # each record it named, and nothing holds a lock over the gap, so
-            # another process or a sync client deleting one in between is a
-            # miss rather than an error. Uncaught it is a 500 on a reclassify
-            # that already happened, with every dependent campaign skipped.
-            log.warning("reclassified %s to %s but could not finish the world-side "
-                        "sweep (%s) -- an `owners:` line, a ref field or a sheet may "
-                        "still name the old kind", old_ref, new_ref, exc)
+        old_owner, new_owner = _owner_ref(kind, eid), _owner_ref(new_kind, new_eid)
+        # Three legs, none of which may cost the other two -- see `_sweep`. And
+        # none of which, together, may cost the campaign loop below: one
+        # unreadable world record must not leave every dependent campaign with
+        # a stale copy under the old kind AND a duplicate under the new one,
+        # which is the failure this whole function exists to prevent.
+        _sweep(lambda: entities.rewrite_owner_refs(wroot, old_owner, new_owner),
+               "an `owners:` line may still name the old kind", old_ref, new_ref)
+        _sweep(lambda: entities.rewrite_ref_fields(wroot, old_owner, new_owner),
+               "a ref field may still name the old kind", old_ref, new_ref)
+        _sweep(lambda: sheets.repoint_world_records(wid, {old_ref: new_ref}),
+               "a sheet may still be keyed to the old kind", old_ref, new_ref)
         swept = []
         for cid in cids:
             try:

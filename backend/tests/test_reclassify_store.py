@@ -639,3 +639,53 @@ def test_a_campaign_side_sweep_survives_a_vanished_referring_record(monkeypatch,
     monkeypatch.setattr(reclassify.overlay, "rewrite_ref_fields", vanished)
     assert reclassify.campaign_entity(cid, "lore", "tidewatch", "locations") == "tidewatch"
     assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+
+
+def test_one_failed_sweep_leg_does_not_cost_the_others(monkeypatch, tmp_path):
+    # The legs are independent -- different files, none needing the others --
+    # but they used to share one `try`, so the first failure silently skipped
+    # the rest. Invisible until EntityNotFound became a caught miss rather than
+    # a 500: a referring record vanishing mid-sweep then also cost the world
+    # sheet its repoint, leaving it keyed to a kind the record no longer has.
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "lore", "Tidewatch")
+    sheet_dir = wroot / "sheets" / "mod1"
+    sheet_dir.mkdir(parents=True)
+    (sheet_dir / "lore--tidewatch.json").write_text('{"sheet_type": "place"}', encoding="utf-8")
+
+    def vanished(*_a, **_k):
+        raise entities.EntityNotFound("groups/gone")
+
+    monkeypatch.setattr(reclassify.entities, "rewrite_owner_refs", vanished)
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    # the FIRST leg failed; the third still ran
+    assert not (sheet_dir / "lore--tidewatch.json").exists()
+    assert (sheet_dir / "locations--tidewatch.json").exists()
+
+
+def test_a_failed_owner_sweep_does_not_cost_the_ref_sweep(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch")
+    entities.create_entity(wroot, "items", "Salt Knife",
+                           fields={"holder": "locations:tidewatch"})
+
+    def vanished(*_a, **_k):
+        raise entities.EntityNotFound("lore/gone")
+
+    monkeypatch.setattr(reclassify.entities, "rewrite_owner_refs", vanished)
+    reclassify.world_entity(wid, "locations", "tidewatch", "groups")
+    assert (entities.read_entity(wroot, "items", "salt-knife")["meta"]["holder"]
+            == "groups:tidewatch")
+
+
+def test_a_failed_campaign_leg_does_not_cost_the_ledger_repoint(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    pins.set_rule(cid, "lore:tidewatch", pins.PIN, scope=pins.CAMPAIGN)
+
+    def vanished(*_a, **_k):
+        raise entities.EntityNotFound("groups/gone")
+
+    monkeypatch.setattr(reclassify.overlay, "rewrite_owner_refs", vanished)
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    # the first leg failed; `record_refs.repoint` (the third) still ran
+    assert [r["ref"] for r in pins.read(cid).values()] == ["locations:tidewatch"]
