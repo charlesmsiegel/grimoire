@@ -460,11 +460,12 @@ def _other_config_value(current: str) -> str:
     """A value that differs from `current` and stays in its shape -- a flipped
     toggle, the next number up, a suffixed string.
 
-    Shape rather than a single sentinel for every key, because a setting the
-    page renders as a number should be round-tripped as one: the store keeps
+    Shape rather than one sentinel for every key, because a setting the page
+    renders as a number should be round-tripped as one: the store keeps
     strings, but the reader that parses this key back out does not, and a
     guard that wrote "sentinel" into all of them would be exercising a value
-    no install can hold."""
+    no install can hold.
+    """
     if current in ("on", "off"):
         return "off" if current == "on" else "on"
     if current.isdigit():
@@ -480,16 +481,25 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     somewhere other than what the PUT wrote -- a hardcoded default, a constant,
     the wrong `cfg.get` key. The page looks identical in both cases (a setting
     that saves, takes effect, and redisplays its default), so a guard that only
-    checks for the presence of the key would go green on it.
+    checks that the key is present goes green on it.
+
+    One key per round, and the round also asserts that no OTHER writable key
+    moved. That is what makes the wrong-key lookup detectable: half these
+    settings share a default (two thresholds at "10", every toggle at "off"),
+    so a pass that wrote a probe into all of them at once would give the two
+    sides of a `cfg.get("rolling_summary_every")` under `replay_fork_threshold`
+    the same value and read back exactly what it wanted. Isolating the write
+    removes the need for the probes to be distinct at all: whatever else the
+    response is reading, it is not reading this round's write.
 
     Every value is derived from what the current response says, so a key added
     to `ConfigUpdate` tomorrow is covered without touching this test -- which is
     the whole point, since the failure being guarded is one nobody notices
-    while writing the key that has it. The derived values need not be
-    *meaningful* (`"systemx"` is not a theme): `write_config` stores strings and
+    while writing the key that has it. The values need not be *meaningful*
+    (`"systemx"` is not a theme): `write_config` stores strings and
     `_public_config` reports them, so what is under test is the plumbing
-    between the two, and every route that validates a setting does it where the
-    setting is read.
+    between the two, and every setting that has a vocabulary is narrowed where
+    it is read, not here.
     """
     from grimoire.routes.models import ConfigUpdate
 
@@ -499,16 +509,17 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     # which makes this a real round trip rather than an exemption.
     live = {"active_connection_id": "claude"}
     writable = sorted(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
-    before = client.get("/api/config").json()
-    wanted = {key: live.get(key) or _other_config_value(str(before.get(key, "")))
-              for key in writable}
 
-    assert client.put("/api/config", json=wanted).status_code == 200
-
-    after = client.get("/api/config").json()
-    forgot = {key: (wanted[key], after.get(key))
-              for key in writable if after.get(key) != wanted[key]}
-    assert not forgot, f"stored, then not reported back by GET /config: {forgot}"
+    for key in writable:
+        before = client.get("/api/config").json()
+        wanted = live.get(key) or _other_config_value(str(before.get(key, "")))
+        assert client.put("/api/config", json={key: wanted}).status_code == 200
+        after = client.get("/api/config").json()
+        assert after.get(key) == wanted, \
+            f"{key}: stored {wanted!r}, GET /config answered {after.get(key)!r}"
+        moved = {k: (before.get(k), after.get(k))
+                 for k in writable if k != key and after.get(k) != before.get(k)}
+        assert not moved, f"writing {key} changed what GET /config says about {moved}"
 
 
 def test_config_fork_thresholds_default_and_roundtrip(client):
