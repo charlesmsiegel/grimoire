@@ -21,6 +21,7 @@ vi.mock("../api/client", async () => {
 const CLOCK = {
   now: "2026-12-24", friendly: "24 December 2026",
   log: [{ from: "", to: "2026-12-24", reason: "the caravan sets out", at: "2026-12-01T10:00:00Z" }],
+  revision: "rev-1",
 };
 
 const DIGEST: AdvanceDigest = {
@@ -52,12 +53,20 @@ const BIG: AdvanceDigest = { ...DIGEST, elapsed_days: 90, to: "2027-03-24",
               to_friendly: "24 March 2027", fork: true };
 
 const FORK_REPORT: ForkReport = { id: "before-24-march-2027", from_scene: "",
-                      removed_scenes: [], records: 0, refused: [], failed: [] };
+                      removed_scenes: [], records: 0, refused: [], failed: [],
+                      replayed: false };
+
+/** The campaign's write token (#409), as every pricing below hands one back.
+ *
+ *  One value for the whole suite because almost every test is about something
+ *  else and only needs the panel to have a token to carry; the tests that are
+ *  about the token say so by using a second one. */
+const REV = "rev-1";
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getCampaignClock).mockResolvedValue(CLOCK);
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: DIGEST });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: DIGEST });
   vi.mocked(api.advanceTime).mockResolvedValue(
     { ok: true, moved: true, now: "2026-12-27", friendly: "27 December 2026",
       digest: DIGEST, fired: DIGEST.events });
@@ -74,7 +83,7 @@ test("shows where the campaign's present is", async () => {
 });
 
 test("says so when no campaign date exists yet", async () => {
-  vi.mocked(api.getCampaignClock).mockResolvedValue({ now: "", friendly: "", log: [] });
+  vi.mocked(api.getCampaignClock).mockResolvedValue({ now: "", friendly: "", log: [], revision: REV });
   render(<ClockPanel cid="c" />);
   expect(await screen.findByText(/No campaign date yet/)).toBeInTheDocument();
 });
@@ -120,7 +129,8 @@ test("advances by days with the reason, then reports what it crossed", async () 
   fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "three days of rain" } });
   fireEvent.click(screen.getByText("Advance time"));
   expect(await screen.findByText(/^Advanced/)).toBeInTheDocument();
-  expect(api.advanceTime).toHaveBeenCalledWith("c", { days: 3, reason: "three days of rain" });
+  expect(api.advanceTime).toHaveBeenCalledWith(
+    "c", { days: 3, reason: "three days of rain", expect_revision: REV });
   // The clock is re-read, so the header line follows the move.
   await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledTimes(2));
 });
@@ -175,7 +185,7 @@ test("drops a previewed digest when the target changes", async () => {
 });
 
 test("an overlong span reports the span and says why it is not itemized", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: {
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: {
     ...DIGEST, elapsed_days: 4000, truncated: true, holidays: [], birthdays: [],
   } });
   render(<ClockPanel cid="c" />);
@@ -186,7 +196,7 @@ test("an overlong span reports the span and says why it is not itemized", async 
 });
 
 test("a backward move is labelled as one", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: {
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: {
     ...DIGEST, elapsed_days: -4, backward: true,
   } });
   render(<ClockPanel cid="c" />);
@@ -224,7 +234,7 @@ async function askToAdvance(days?: string) {
 }
 
 test("a large skip asks about a checkpoint before it moves anything", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   expect(await screen.findByText(/large time skip/)).toBeInTheDocument();
   // The whole point: nothing has been written when the question is asked.
@@ -236,7 +246,7 @@ test("a large skip asks about a checkpoint before it moves anything", async () =
 });
 
 test("a threshold that asks about everything still says \"1 day\"", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: {
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: {
     ...DIGEST, elapsed_days: 1, fork: true, fork_threshold: 0 } });
   await askToAdvance("1");
   expect(await screen.findByText(/1 day, more than 0 days/)).toBeInTheDocument();
@@ -244,7 +254,7 @@ test("a threshold that asks about everything still says \"1 day\"", async () => 
 
 test("the prompt says what this install counts as large", async () => {
   vi.mocked(api.previewAdvance).mockResolvedValue({
-    digest: { ...BIG, fork_threshold: 7 } });
+    revision: REV, digest: { ...BIG, fork_threshold: 7 } });
   await askToAdvance("90");
   // Read off the digest rather than restated in the panel, so the sentence
   // cannot disagree with the comparison that produced it.
@@ -254,7 +264,7 @@ test("the prompt says what this install counts as large", async () => {
 test("a large backward correction is asked about, and says which way it goes", async () => {
   // Un-living two months loses as much of the recorded present as living them.
   // "90 days" with no direction would read as the wrong one.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: {
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: {
     ...BIG, elapsed_days: -90, backward: true } });
   await askToAdvance("-90");
   expect(await screen.findByText(/90 days backward/)).toBeInTheDocument();
@@ -262,7 +272,7 @@ test("a large backward correction is asked about, and says which way it goes", a
 });
 
 test("the checkpoint is taken before the skip, never after it", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   const order: string[] = [];
   vi.mocked(api.forkCampaign).mockImplementation(
     () => { order.push("fork"); return Promise.resolve(FORK_REPORT as never); });
@@ -276,12 +286,16 @@ test("the checkpoint is taken before the skip, never after it", async () => {
   await screen.findByText(/^Advanced/);
   // A copy taken after the clock moved would be a copy of the wrong campaign.
   expect(order).toEqual(["fork", "advance"]);
-  expect(api.forkCampaign).toHaveBeenCalledWith("c", "Before 24 March 2027");
-  expect(api.advanceTime).toHaveBeenCalledWith("c", { days: 90, reason: "a season passes" });
+  // The copy carries the idempotency key its operation derives (#409), and
+  // the skip carries the token it was priced against.
+  expect(api.forkCampaign).toHaveBeenCalledWith(
+    "c", "Before 24 March 2027", undefined, `checkpoint:${BIG.to}:${REV}:0`);
+  expect(api.advanceTime).toHaveBeenCalledWith(
+    "c", { days: 90, reason: "a season passes", expect_revision: REV });
 });
 
 test("the checkpoint is a copy left behind, so the skip happens in the campaign you are in", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
@@ -294,17 +308,17 @@ test("the checkpoint is a copy left behind, so the skip happens in the campaign 
 });
 
 test("the checkpoint can be named", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   fireEvent.change(screen.getByLabelText("Checkpoint name"),
                    { target: { value: "Saltmarch" } });
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
-  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalledWith("c", "Saltmarch"));
+  await waitFor(() => expect(vi.mocked(api.forkCampaign).mock.calls[0]?.[1]).toBe("Saltmarch"));
 });
 
 test("a checkpoint with no name cannot be taken", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   fireEvent.change(screen.getByLabelText("Checkpoint name"), { target: { value: "  " } });
@@ -314,7 +328,7 @@ test("a checkpoint with no name cannot be taken", async () => {
 });
 
 test("a failed checkpoint leaves the clock where it was", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.forkCampaign).mockRejectedValue({ detail: "no space left on device" });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
@@ -331,7 +345,7 @@ test("a retry after a checkpoint that landed does not take a second copy", async
   // The expensive half succeeded and the cheap half did not. Forking again
   // would silently `copytree` the whole campaign a second time, and leave two
   // identically-named checkpoints on the shelf.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.advanceTime).mockRejectedValueOnce({ detail: "campaign is busy" });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
@@ -345,7 +359,7 @@ test("a retry after a checkpoint that landed does not take a second copy", async
 });
 
 test("the skip cannot be edited out from under a checkpoint in flight", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   let release: (r: ForkReport) => void = () => { /* replaced below */ };
   vi.mocked(api.forkCampaign).mockReturnValue(new Promise((res) => { release = res; }));
   await askToAdvance("90");
@@ -357,7 +371,8 @@ test("the skip cannot be edited out from under a checkpoint in flight", async ()
   await waitFor(() => expect(screen.getByLabelText("Days")).toBeDisabled());
   release(FORK_REPORT);
   await screen.findByText(/^Advanced/);
-  expect(api.advanceTime).toHaveBeenCalledWith("c", { days: 90, reason: "a season passes" });
+  expect(api.advanceTime).toHaveBeenCalledWith(
+    "c", { days: 90, reason: "a season passes", expect_revision: REV });
 });
 
 test("a pricing reply for the campaign you left cannot open a question here", async () => {
@@ -365,7 +380,7 @@ test("a pricing reply for the campaign you left cannot open a question here", as
   // campaign A, and the buttons the question renders belong to whatever is on
   // screen. Installed anyway, answering it forks and skips B on the strength of
   // a span measured in A.
-  let release: (r: { digest: AdvanceDigest }) => void = () => { /* replaced */ };
+  let release: (r: { digest: AdvanceDigest; revision: string }) => void = () => { /* replaced */ };
   vi.mocked(api.previewAdvance).mockReturnValue(new Promise((res) => { release = res; }));
   const { rerender } = render(<ClockPanel cid="a" />);
   await screen.findByText(/Now: 24 December 2026/);
@@ -375,7 +390,7 @@ test("a pricing reply for the campaign you left cannot open a question here", as
   await waitFor(() => expect(api.previewAdvance).toHaveBeenCalledWith("a", { days: 90 }));
 
   rerender(<ClockPanel cid="b" />);           // the reader moves on, mid-flight
-  release({ digest: BIG });
+  release({ digest: BIG, revision: REV });
   await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledWith("b"));
 
   expect(screen.queryByText(/large time skip/)).not.toBeInTheDocument();
@@ -389,7 +404,7 @@ test("a clock read for the campaign you left cannot become the new one's present
   let release: (c: CampaignClock) => void = () => { /* replaced */ };
   vi.mocked(api.getCampaignClock).mockReturnValueOnce(new Promise((res) => { release = res; }));
   vi.mocked(api.getCampaignClock).mockResolvedValue(
-    { now: "2030-01-01", friendly: "1 January 2030", log: [] });
+    { now: "2030-01-01", friendly: "1 January 2030", log: [], revision: REV });
   const { rerender } = render(<ClockPanel cid="a" />);
   rerender(<ClockPanel cid="b" />);
   await screen.findByText(/Now: 1 January 2030/);
@@ -400,13 +415,13 @@ test("a clock read for the campaign you left cannot become the new one's present
 });
 
 test("...and cannot leave a stale preview on the new campaign either", async () => {
-  let release: (r: { digest: AdvanceDigest }) => void = () => { /* replaced */ };
+  let release: (r: { digest: AdvanceDigest; revision: string }) => void = () => { /* replaced */ };
   vi.mocked(api.previewAdvance).mockReturnValue(new Promise((res) => { release = res; }));
   const { rerender } = render(<ClockPanel cid="a" />);
   await screen.findByText(/Now: 24 December 2026/);
   fireEvent.click(screen.getByText("Preview"));
   rerender(<ClockPanel cid="b" />);
-  release({ digest: BIG });
+  release({ digest: BIG, revision: REV });
   await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledWith("b"));
   expect(screen.queryByText(/Would advance/)).not.toBeInTheDocument();
 });
@@ -415,7 +430,7 @@ test("a reason cannot be emptied out from under an open question", async () => {
   // The endpoint requires one and the gate's actions do not re-check it, so a
   // cleared reason would fork the campaign and then earn a 400 for the skip --
   // a full copy on the shelf for a move that never happened.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   expect(screen.getByLabelText("Reason")).toBeDisabled();
@@ -425,7 +440,7 @@ test("a checkpoint stops counting once the campaign has moved on", async () => {
   // The marker means "a copy of this campaign AS IT STANDS exists". A turn
   // landing between the copy and the retry makes that false, and reusing it
   // would hand back a restore point missing everything since.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.advanceTime).mockRejectedValueOnce({ detail: "campaign is busy" });
   const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
   await screen.findByText(/Now: 24 December 2026/);
@@ -452,7 +467,7 @@ test("an advance that landed in the campaign you left is not reported here", asy
   // campaign's digest, and B's half-typed reason cleared by A's success.
   type AdvanceResult = Awaited<ReturnType<typeof api.advanceTime>>;
   let release: (r: AdvanceResult) => void = () => { /* replaced */ };
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: { ...DIGEST, fork: false } });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: { ...DIGEST, fork: false } });
   const landed = { ok: true, moved: true, now: "2026-12-27",
                    friendly: "27 December 2026", digest: DIGEST } as AdvanceResult;
   vi.mocked(api.advanceTime).mockReturnValue(new Promise((res) => { release = res; }));
@@ -462,7 +477,8 @@ test("an advance that landed in the campaign you left is not reported here", asy
   fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a day" } });
   fireEvent.click(screen.getByText("Advance time"));
   await waitFor(() =>
-    expect(api.advanceTime).toHaveBeenCalledWith("a", { days: 1, reason: "a day" }));
+    expect(api.advanceTime).toHaveBeenCalledWith(
+      "a", { days: 1, reason: "a day", expect_revision: REV }));
 
   rerender(<ClockPanel cid="b" />);           // the reader moves on, mid-advance
   release(landed);
@@ -478,7 +494,7 @@ test("an invalidated copy leaves a way forward, not a dead end", async () => {
   // landing could invalidate copy after copy. Asking again always reaches a
   // completed skip once nothing lands during the copy, and skipping without
   // one is on screen the whole time.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   let release: (r: ForkReport) => void = () => { /* replaced */ };
   vi.mocked(api.forkCampaign).mockReturnValueOnce(new Promise((res) => { release = res; }));
   vi.mocked(api.forkCampaign).mockResolvedValue(FORK_REPORT);
@@ -511,7 +527,7 @@ test("a copy taken across a change does not carry the skip with it", async () =>
   // restore point quietly missing a turn, so the marker stays clear and the
   // reader is told what the copy might not hold.
   let release: (r: ForkReport) => void = () => { /* replaced */ };
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.forkCampaign).mockReturnValue(new Promise((res) => { release = res; }));
 
   const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
@@ -542,7 +558,7 @@ test("a checkpoint of the campaign you left is never recorded against the new on
   // anyway — the feature failing silently in the one direction it exists to
   // prevent, with the reader believing a restore point exists.
   let release: (r: ForkReport) => void = () => { /* replaced */ };
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.forkCampaign).mockReturnValue(new Promise((res) => { release = res; }));
   vi.mocked(api.advanceTime).mockRejectedValue({ detail: "campaign is busy" });
 
@@ -576,7 +592,7 @@ test("dismissing after a checkpoint landed does not take a second one", async ()
   // `checkpointed` has to outlive the question being closed. Without that, a
   // reader who cancels after the copy landed and then asks again gets a second
   // full copy of the same campaign, under the same name, silently.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.advanceTime).mockRejectedValueOnce({ detail: "campaign is busy" });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
@@ -593,17 +609,18 @@ test("dismissing after a checkpoint landed does not take a second one", async ()
 });
 
 test("the skip can be taken without a checkpoint", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   fireEvent.click(screen.getByText("Skip without one"));
   await screen.findByText(/^Advanced/);
   expect(api.forkCampaign).not.toHaveBeenCalled();
-  expect(api.advanceTime).toHaveBeenCalledWith("c", { days: 90, reason: "a season passes" });
+  expect(api.advanceTime).toHaveBeenCalledWith(
+    "c", { days: 90, reason: "a season passes", expect_revision: REV });
 });
 
 test("the question can be dismissed without skipping or checkpointing", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   fireEvent.click(screen.getByText("Cancel"));
@@ -615,7 +632,7 @@ test("the question can be dismissed without skipping or checkpointing", async ()
 });
 
 test("changing the skip takes back the question it was asked about", async () => {
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   fireEvent.change(screen.getByLabelText("Days"), { target: { value: "2" } });
@@ -636,7 +653,7 @@ test("a skip to a date is priced before the question, so the prompt cannot be do
   // In "skip to a date" mode the client has no idea how far the skip goes --
   // that is calendar arithmetic, which is the server's. Confirming without
   // pressing Preview must therefore still ask, which means pricing it first.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.getCalendarMonths).mockResolvedValue(
     { months: [{ key: "March", name: "March", days: 31 }] });
   render(<ClockPanel cid="c" />);
@@ -660,7 +677,7 @@ test("a clock that moved under a preview is re-priced, not confirmed against", a
   // this one. Priced small from December and confirmed after the clock reached
   // June, the same "skip to a date" is a long correction BACKWARD -- over any
   // threshold, and the question would never have been asked.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: { ...DIGEST, fork: false } });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: { ...DIGEST, fork: false } });
   const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
   await screen.findByText(/Now: 24 December 2026/);
   fireEvent.click(screen.getByText("Preview"));
@@ -668,7 +685,7 @@ test("a clock that moved under a preview is re-priced, not confirmed against", a
 
   vi.mocked(api.getCampaignClock).mockResolvedValue(
     { ...CLOCK, now: "2027-06-01", friendly: "1 June 2027" });
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   rerender(<ClockPanel cid="c" refreshKey={1} />);
   await screen.findByText(/Now: 1 June 2027/);
   // The stale span is off the screen the moment the present it was measured
@@ -686,7 +703,7 @@ test("a clock that moved under a preview is re-priced, not confirmed against", a
 test("confirming prices the move even when Preview just ran on the same inputs", async () => {
   // The reuse this replaces was the bug above: a digest that looks current
   // because the inputs have not changed is not current if the clock has.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: { ...DIGEST, fork: false } });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: { ...DIGEST, fork: false } });
   render(<ClockPanel cid="c" />);
   await screen.findByText(/Now: 24 December 2026/);
   fireEvent.click(screen.getByText("Preview"));
@@ -702,7 +719,7 @@ test("a landed advance is priced again rather than reusing its own digest", asyn
   // The digest left on screen after a move describes the move that HAPPENED.
   // Reading a nudge off it would answer for the wrong span -- skipping to a
   // fixed date twice is ninety days and then none at all.
-  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: DIGEST });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: DIGEST });
   await askToAdvance("3");
   await screen.findByText(/^Advanced/);
   vi.mocked(api.previewAdvance).mockClear();
@@ -753,4 +770,98 @@ test("the digest badges what the skip leaves overdue and stale", async () => {
   fireEvent.click(await screen.findByText("Preview"));
   expect(await screen.findByText(/OVERDUE BY 7 DAYS/)).toBeInTheDocument();
   expect(screen.getByText(/STALE · 53 DAYS UNTOUCHED/)).toBeInTheDocument();
+});
+
+// --- the write token (#409) ------------------------------------------------
+
+test("a skip carries the token it was priced against", async () => {
+  // The whole point of re-pricing on confirm was that the campaign can move
+  // between a preview and the advance it describes. The re-price now says which
+  // state it measured from, and the advance says which one it expects — so a
+  // write landing in the gap is refused by the server rather than silently
+  // producing a different move than the one on screen.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: "rev-9", digest: DIGEST });
+  render(<ClockPanel cid="c" />);
+  fireEvent.change(await screen.findByLabelText("Reason"), { target: { value: "a week off" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/^Advanced/);
+  expect(vi.mocked(api.advanceTime).mock.calls[0][1].expect_revision).toBe("rev-9");
+});
+
+test("a refused skip takes the numbers it was refused for off the screen", async () => {
+  // `campaign_moved` does not merely explain why nothing happened: it says the
+  // digest, the question and the token behind them all describe a state the
+  // campaign has left. Leaving them up invites the reader to confirm again
+  // against a span nobody is being offered.
+  vi.mocked(api.advanceTime).mockRejectedValue({
+    kind: "campaign_moved", revision: "rev-2",
+    detail: "this campaign changed while the skip was being decided; preview it again" });
+  await askToAdvance("3");
+  expect(await screen.findByText(/preview it again/)).toBeInTheDocument();
+  expect(screen.queryByText(/Would advance/)).not.toBeInTheDocument();
+  // ...and the clock is re-read, because a write that moved the token may have
+  // moved the campaign's present with it.
+  await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledTimes(2));
+});
+
+test("an ordinary refusal leaves the preview standing", async () => {
+  // The counterpart, so the clearing above is a decision about one refusal
+  // rather than a new rule for all of them: "an advance needs a reason" says
+  // nothing about the numbers on screen having stopped being true.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: DIGEST });
+  vi.mocked(api.advanceTime).mockRejectedValue({ detail: "an advance needs a reason" });
+  await askToAdvance("3");
+  expect(await screen.findByText(/an advance needs a reason/)).toBeInTheDocument();
+  expect(screen.getByText(/Would advance/)).toBeInTheDocument();
+});
+
+test("a checkpoint retried after a lost response asks for the same copy", async () => {
+  // The case the key exists for. The copy may well have landed — a lost
+  // response and a failed write look identical from here — so the retry has to
+  // reach the server as the SAME request, or it takes a second `copytree` of
+  // the campaign and leaves a duplicate on the shelf. Derived from the
+  // operation rather than minted per attempt, so a reload between the two
+  // rebuilds it too.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
+  vi.mocked(api.forkCampaign).mockRejectedValueOnce({ detail: "connection lost" });
+  vi.mocked(api.forkCampaign).mockResolvedValue({ ...FORK_REPORT, replayed: true });
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/connection lost/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toBe(`checkpoint:${BIG.to}:${REV}:0`);
+  expect(keys[1]).toBe(keys[0]);
+});
+
+
+test("a disowned copy is not what the retry asks for", async () => {
+  // A copy taken across a change is not a checkpoint, and the panel says so and
+  // asks again. The retry must reach the server as a DIFFERENT operation, or
+  // the key would hand back the very copy that was just disowned.
+  let release: (r: ForkReport) => void = () => { /* replaced */ };
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
+  vi.mocked(api.forkCampaign).mockReturnValueOnce(new Promise((res) => { release = res; }));
+  vi.mocked(api.forkCampaign).mockResolvedValue(FORK_REPORT);
+
+  const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  rerender(<ClockPanel cid="c" refreshKey={1} />);      // a turn lands mid-copytree
+  release(FORK_REPORT);
+  await screen.findByText(/may not hold the latest turn/);
+
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
+  expect(keys[0]).not.toBe(keys[1]);
 });

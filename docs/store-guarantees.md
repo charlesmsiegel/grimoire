@@ -383,6 +383,16 @@ Collected, so that nothing here has to be inferred from an absence.
   `store/voice_anchors.py` and `store/dossiers.py` each record the reason
   beside the code — three absences with two different arguments behind them,
   and all three deliberate (#57).
+- **The campaign write token is evidence, not proof.** `store/revision.py`
+  gives each campaign one opaque value that changes whenever this app records a
+  write to it, so a caller can price an operation against a state and be refused
+  if the campaign has left it (`POST /advance` does; `POST /fork` keys a repeat
+  on it). What it cannot see is a write this app did not make — a hand edit, a
+  sync client landing a file, an older process — and a bump that lands after the
+  mutation it records leaves a window where a committed write has not moved the
+  token yet. So a token that has not changed is a strong hint that nothing has
+  happened, never a guarantee; the refusal it earns is a re-price, and no write
+  depends on it being complete.
 - **Nothing across devices**, and nothing across OS users.
 - **No background watcher.** The rebuilt app runs no resident machinery;
   conflict detection is on demand, and nothing notices an external write until
@@ -403,5 +413,6 @@ Collected, so that nothing here has to be inferred from an absence.
 | how the cross-process lock is taken | `backend/src/grimoire/store/proclock.py` |
 | what a sync client leaves behind | `backend/src/grimoire/store/external.py` |
 | the memo that makes external writes visible | `backend/src/grimoire/store/statcache.py` |
+| what the campaign write token is, and is not | `backend/src/grimoire/store/revision.py` |
 | the rules, as tests | `backend/tests/test_atomic_guard.py`, `test_lock_domain_guard.py`, `test_lock_order_guard.py` |
 | designs | `docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md`, `docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md` |

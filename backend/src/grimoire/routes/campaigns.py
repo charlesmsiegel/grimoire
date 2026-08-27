@@ -47,6 +47,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    leaves_campaign_unchanged,
 )
 from .models import (
     AdvanceTime,
@@ -244,19 +245,44 @@ def get_campaign_clock(cid: str):
     when there is not, so this answers for a campaign that has never advanced.
     """
     _campaign_root_or_404(cid)
+    # The write token beside the moment (#409): this is the panel's one read of
+    # the clock, so it is where a caller that has not previewed anything yet
+    # picks one up. Read BEFORE the state it travels with, the same order
+    # `/advance/preview` takes and for the same reason: a write landing between
+    # the two then makes the token stale for a reading that already reflects
+    # it, so anything priced against it is refused. Read after, the token would
+    # be current for a reading taken before that write -- the one pairing this
+    # guard exists to refuse, handed out certified as good.
+    token = store.revision.current(cid)
     clock = store.clock.state(cid)   # one read for the moment and the log both
     return {"now": clock["now"], "friendly": _clock_friendly(cid, clock["now"]),
-            "log": clock["log"]}
+            "log": clock["log"], "revision": token}
 
 
 @router.post("/campaigns/{cid}/advance/preview")
+@computes_only
 def post_advance_preview(cid: str, body: AdvanceTime):
     """The digest the same body would produce, writing nothing — so the reader
     sees what a skip crosses *before* confirming it. Deterministic, so the
-    preview and the advance that follows agree."""
+    preview and the advance that follows agree.
+
+    `@computes_only` because it persists nothing, which was always true and was
+    always the rule for a POST like this one — the marker was simply missed. It
+    is load-bearing now rather than tidy: this is where a caller picks up the
+    write token it confirms with (#409), and a preview that stamped the campaign
+    would hand back a token its own response had already invalidated.
+    """
     _campaign_root_or_404(cid)
+    # Read BEFORE the digest, and that order is the whole of the guarantee: a
+    # write landing between the two makes the token stale for a digest that
+    # already reflects it, so confirming with it is refused and the caller
+    # re-prices. Reading it after would hand back a token that is current for a
+    # digest measured before that write -- the exact pairing the guard exists to
+    # refuse, certified as good.
+    token = store.revision.current(cid)
     try:
-        return {"digest": store.clock.preview(cid, to=body.to, days=body.days)}
+        return {"digest": store.clock.preview(cid, to=body.to, days=body.days),
+                "revision": token}
     except (store.clock.ClockError, store.calendars.CalendarError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -274,9 +300,22 @@ def post_advance(cid: str, body: AdvanceTime):
     if not body.reason.strip():
         raise HTTPException(status_code=400, detail="an advance needs a reason")
     try:
-        result = store.clock.advance(cid, to=body.to, days=body.days, reason=body.reason)
+        result = store.clock.advance(cid, to=body.to, days=body.days, reason=body.reason,
+                                     expect_revision=body.expect_revision)
     except (store.clock.ClockError, store.calendars.CalendarError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except store.RevisionMismatchError as e:
+        # A refusal in the shape the client already handles for `scene_busy` and
+        # `runs_in_flight`: a `kind` it can branch on, a sentence it can show,
+        # and -- unlike those two -- what to price against next, so re-asking
+        # costs one call rather than two. 409 rather than 412: the request was
+        # not conditional on a representation the client fetched, it raced
+        # another writer, which is what this status is for everywhere else in
+        # this app.
+        raise HTTPException(status_code=409, detail={
+            "kind": "campaign_moved", "revision": e.current,
+            "detail": "this campaign changed while the skip was being decided; "
+                      "preview it again"}) from e
     # Taken off the digest rather than resolved again: the digest's target IS the
     # new `now` (both branches — a no-op advance returns the moment it was already
     # at), and resolving the provider a second time re-imports and re-runs a
@@ -841,6 +880,7 @@ def put_campaign(cid: str, body: NameBody):
 # `/campaigns/{cid}/{kind}` catch-alls -- `routes/__init__` includes that module
 # last precisely so a literal third segment like `fork` is still reachable.
 @router.post("/campaigns/{cid}/fork")
+@leaves_campaign_unchanged
 def post_campaign_fork(cid: str, body: ForkCampaign):
     """Fork `cid` into a new campaign, optionally cut back to an earlier scene.
 
@@ -855,11 +895,14 @@ def post_campaign_fork(cid: str, body: ForkCampaign):
     # field should not get a 404 for a scene called "".
     from_scene = (body.from_scene or "").strip() or None
     try:
-        return store.fork.fork_campaign(cid, name, from_scene)
+        return store.fork.fork_campaign(cid, name, from_scene,
+                                        key=body.idempotency_key.strip())
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     except store.SceneNotFound:
         raise HTTPException(status_code=404, detail="scene not found")
+    except ValueError as e:                     # a key past `fork.KEY_LIMIT`
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.delete("/campaigns/{cid}")

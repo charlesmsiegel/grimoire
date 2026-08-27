@@ -1280,3 +1280,26 @@ def computes_only(fn):
     """
     fn.grimoire_computes_only = True
     return fn
+
+
+def leaves_campaign_unchanged(fn):
+    """Mark a campaign-scoped write that does not write to the campaign it names.
+
+    There is exactly one, and its whole design rests on it:
+    `POST /campaigns/{cid}/fork` copies `cid` into a *second* campaign and
+    touches the source not at all (`store/fork.py`). It is still activity in the
+    source -- a fork is something that happened there, and the recents rail
+    should say so -- but it must not move the source's revision token (#409),
+    which answers "has this campaign changed since I priced against it?". A fork
+    that answered yes would break the one composition the token exists for:
+    checkpoint this campaign, then advance it against the state the checkpoint
+    was taken from.
+
+    A sibling of `computes_only` rather than a second meaning bolted onto it,
+    because the two say different things -- "nothing was written" and "something
+    was written, elsewhere" -- and the middleware acts on them differently.
+    Declared at the route for the same reason: a path list in the middleware
+    sits far from what it describes and goes stale in silence.
+    """
+    fn.grimoire_leaves_campaign = True
+    return fn

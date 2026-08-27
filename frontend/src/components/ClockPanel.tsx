@@ -32,6 +32,18 @@ function refusal(err: unknown): string {
   return typeof detail === "string" ? detail : String(err);
 }
 
+/** Whether a refusal is the server saying the campaign moved under a priced
+ *  move (#409).
+ *
+ *  Read off `kind` rather than the sentence, for the reason every other refusal
+ *  in this app carries one: the sentence is written for a reader and may be
+ *  reworded, and this decides whether the panel throws away numbers that have
+ *  stopped being true. */
+function campaignMoved(err: unknown): boolean {
+  return err !== null && typeof err === "object"
+    && (err as { kind?: unknown }).kind === "campaign_moved";
+}
+
 /** The campaign clock (#100): where the story's present is, and the one control
  *  that moves it deliberately — by a duration or to a date, always with a reason.
  *
@@ -87,6 +99,15 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // un-canonicalized seed off the chronicle, so the two spellings of one date
   // would read as a move and blank every preview the moment it arrived.
   const [pricedNow, setPricedNow] = useState<string | null>(null);
+  // The campaign's write token as the shown digest was priced against (#409),
+  // kept in step with `pricedNow` at every site because the two describe one
+  // pricing. `pricedNow` notices the campaign's PRESENT moving, which is what
+  // makes a shown span stop being true; this notices the campaign being written
+  // at all, which is what makes confirming it a different move than the one on
+  // screen. Neither can do the other's job: a scene edit leaves the clock
+  // reading exactly the same, and the token is not a moment anything can be
+  // measured from.
+  const [pricedRevision, setPricedRevision] = useState("");
   const [forkName, setForkName] = useState("");
   // A checkpoint already taken for the OPEN question. Kept apart from `saved`,
   // which is only the sentence: a fork that lands and a skip that then fails
@@ -145,7 +166,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // same reason: answering "checkpoint, then advance" against a span the prompt
   // was never about would fork for one skip and take another.
   useEffect(() => {
-    setDigest(null); setOutcome("preview"); setPricedNow(null);
+    setDigest(null); setOutcome("preview"); setPricedNow(null); setPricedRevision("");
     setGate(null); setCheckpointed(false); setSaved(""); setError(null);
   }, [cid, mode, days, target]);
 
@@ -163,7 +184,8 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   useEffect(() => {
     if (!clock || outcome !== "preview" || pricedNow === null) return;
     if (pricedNow === clock.now) return;
-    setDigest(null); setGate(null); setCheckpointed(false); setPricedNow(null);
+    setDigest(null); setGate(null); setCheckpointed(false);
+    setPricedNow(null); setPricedRevision("");
   }, [clock, outcome, pricedNow]);
 
   // A taken checkpoint stops being one the moment the campaign moves on. The
@@ -186,6 +208,33 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   const refreshGen = useRef(0);
   useEffect(() => { refreshGen.current += 1; setCheckpointed(false); }, [refreshKey]);
 
+  //: How many copies this panel has DISOWNED — taken, and then judged not to be
+  //: a checkpoint because the campaign moved while `copytree` ran. It is in the
+  //: fork's idempotency key (below) and exists only to be: the key is derived
+  //: from the operation so that a retry after a lost response is answered with
+  //: the copy that landed, and disowning one is exactly the case where the
+  //: retry must NOT be — the panel has just told the reader that copy may be
+  //: missing a turn. Without this the key would be identical and the server,
+  //: correctly, would hand the disowned copy straight back.
+  const disowned = useRef(0);
+
+  /** Show a refusal, and throw away a pricing the server has just said is stale.
+   *
+   *  `campaign_moved` (#409) is the one refusal that invalidates what is on
+   *  screen rather than merely explaining why nothing happened: the campaign was
+   *  written between the pricing and the confirm, so the digest, the gate's
+   *  question and the token behind them all describe a state the campaign has
+   *  left. Clearing them puts the reader back at Preview, which is where the
+   *  server's own sentence sends them. The clock is re-read for the same reason
+   *  — a write that moved the token may have moved the present too. */
+  function onRefusal(err: unknown) {
+    setError(refusal(err));
+    if (!campaignMoved(err)) return;
+    setDigest(null); setGate(null); setCheckpointed(false);
+    setPricedNow(null); setPricedRevision("");
+    void reload();
+  }
+
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
   const ready = mode === "days" ? !isNaN(parseInt(days, 10)) : !!target;
 
@@ -197,6 +246,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       if (!stillShowing(cid)) return;         // the reader moved on; this is A's answer
       setDigest(r.digest);
       setPricedNow(clock?.now ?? "");
+      setPricedRevision(r.revision);
       setOutcome("preview");
     } catch (err: unknown) {
       if (stillShowing(cid)) setError(refusal(err));
@@ -208,9 +258,19 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   }
 
   /** The write itself. Shared by the ungated path and both answers to the gate,
-   *  so there is exactly one place the clock moves. */
-  async function runAdvance() {
-    const r = await api.advanceTime(cid, { ...request(), reason });
+   *  so there is exactly one place the clock moves.
+   *
+   *  `expect` is the write token this move was priced against (#409), and it is
+   *  a PARAMETER rather than a read of `pricedRevision` because `confirm` prices
+   *  and advances inside one handler: a state write made two lines up is not
+   *  visible to the closure that made it, so reading it here would send the
+   *  PREVIOUS pricing's token — refusing every confirm that followed a change,
+   *  which is exactly the case the token exists to let through once re-priced.
+   *  The gate's two answers pass the state, which by the time they run is the
+   *  pricing the question was asked about.
+   */
+  async function runAdvance(expect: string) {
+    const r = await api.advanceTime(cid, { ...request(), reason, expect_revision: expect });
     // The clock moved in the campaign this call named, which is right. What
     // must not follow it is this panel adopting the result: it may be showing
     // somebody else by now, and "Advanced" over another campaign's digest is
@@ -222,6 +282,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     // `outcome` check in the effect below: two fields that must agree, kept in
     // agreement by a third, is the shape every bug in this panel has had.
     setPricedNow(null);
+    setPricedRevision("");
     setOutcome(r.moved ? "moved" : "unchanged");
     setGate(null);
     setCheckpointed(false);
@@ -265,21 +326,22 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     if (!checkpointed) setSaved("");
     setBusy(true);
     try {
-      const { digest: priced } = await api.previewAdvance(cid, request());
+      const { digest: priced, revision } = await api.previewAdvance(cid, request());
       // Never install a verdict for a campaign that is no longer on screen: the
       // question would be answered with the current campaign's id.
       if (!stillShowing(cid)) return;
       setDigest(priced);
       setPricedNow(clock?.now ?? "");
+      setPricedRevision(revision);
       setOutcome("preview");
       if (priced.fork) {
         setForkName(`Before ${priced.to_friendly || priced.to}`);
         setGate(priced);            // the question is asked; nothing is written
         return;
       }
-      await runAdvance();
+      await runAdvance(revision);
     } catch (err: unknown) {
-      if (stillShowing(cid)) setError(refusal(err));
+      if (stillShowing(cid)) onRefusal(err);
     } finally {
       // Never guarded: `busy` is the panel's, not the campaign's, and a guard
       // here would leave the controls disabled for whoever is on screen.
@@ -302,7 +364,17 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       if (!checkpointed) {
         const name = forkName.trim();
         const took = refreshGen.current;
-        const report = await api.forkCampaign(cid, name);
+        // The key is derived from the operation rather than minted at random,
+        // and that is what makes it survive the thing the marker below cannot:
+        // a reload between the copy and the skip. Both halves come back from the
+        // server, so the same reader asking the same question about the same
+        // campaign rebuilds the same key from a fresh page and is answered with
+        // the fork they already have. The token is in it for the other
+        // direction: a campaign that has been written since is a DIFFERENT
+        // operation, so it gets a different key and a fresh copy — which is the
+        // rule `checkpointed` is cleared by, spelled somewhere durable.
+        const key = `checkpoint:${gate?.to ?? ""}:${pricedRevision}:${disowned.current}`;
+        const report = await api.forkCampaign(cid, name, undefined, key);
         // The sharpest case for the rule above. A copy of A recorded as B's
         // means a large skip in B offers "Retry the skip", takes no copy at
         // all, and advances anyway — the feature failing silently in exactly
@@ -319,6 +391,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // quietly missing a turn.
         const current = refreshGen.current === took;
         if (current) setCheckpointed(true);
+        else disowned.current += 1;   // so the retry below cannot be answered with it
         // A fork from where the campaign stands cuts nothing, so `forkNotes` is
         // almost always "". Shown when it is not, on the same footing the shelf
         // and the campaign page show it — a checkpoint that quietly came up
@@ -340,10 +413,10 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // copy — one extra `copytree` against a restore point missing a turn.
         if (!current) return;
       }
-      await runAdvance();
+      await runAdvance(pricedRevision);
     } catch (err: unknown) {
       // The question stays open: the reader can retry, or skip without one.
-      if (stillShowing(cid)) setError(refusal(err));
+      if (stillShowing(cid)) onRefusal(err);
     } finally {
       setBusy(false);
     }
@@ -354,9 +427,9 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setError(null);
     setBusy(true);
     try {
-      await runAdvance();
+      await runAdvance(pricedRevision);
     } catch (err: unknown) {
-      if (stillShowing(cid)) setError(refusal(err));
+      if (stillShowing(cid)) onRefusal(err);
     } finally {
       // Never guarded: `busy` is the panel's, not the campaign's, and a guard
       // here would leave the controls disabled for whoever is on screen.

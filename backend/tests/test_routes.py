@@ -7676,20 +7676,34 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     of it does the same, e.g. the scene inspector) and carries no absorb state,
     so this fixture's weather store is clean and the assertion stays absolute.
 
-    ONE file is excluded, and naming it is the point rather than a loophole: the
-    scene's own `.review.json`, which is the absorb's result and the whole of
-    what #396 made durable. The invariant it guards is unchanged -- nothing the
-    review PROPOSES has landed -- and the sidecar is what a Cancel deletes and a
-    save clears. Excluding the whole directory, or comparing only the files that
-    existed before, would let a real regression hide behind the exclusion; this
-    names the single path and asserts that nothing else moved."""
+    THREE files are excluded, and naming each is the point rather than a
+    loophole. The scene's own `.review.json` is the absorb's result and the whole
+    of what #396 made durable: the invariant it guards is unchanged -- nothing
+    the review PROPOSES has landed -- and the sidecar is what a Cancel deletes
+    and a save clears.
+
+    The other two are not campaign content at all but records THAT the campaign
+    was written, and writing that sidecar and deleting it again is two writes.
+    `revision.txt` (#409) must move across them: a token that read the same
+    afterwards would be the bug, since a reader holding the earlier one would be
+    told nothing had happened while a review was generated and dismissed under
+    them. `activity.txt` is the same kind of value and is excluded only at the
+    discard, where the comment below says why.
+
+    Excluding the whole directory, or comparing only the files that existed
+    before, would let a real regression hide behind the exclusion; this names
+    each path and asserts that nothing else moved."""
     cid, sid = _dossier_scene(client)
     store.overlay.create_entity(cid, "locations", "The Tearoom", "A quiet room.")
     store.scenes.set_location(cid, sid, "the-tearoom")
     sid = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime",
                      json={"datetime": "2026-01-01"}).json()["id"]  # first date renames the scene
     croot = store.campaigns.campaign_root(cid)
-    snapshot = {p: p.read_bytes() for p in croot.rglob("*") if p.is_file()}
+    token = croot / "revision.txt"
+    def content(skip=()):
+        return {p: p.read_bytes() for p in croot.rglob("*")
+                if p.is_file() and p != token and p not in skip}
+    snapshot = content()
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],'
         ' "character_state_edits": [{"id": "aese", "current_state": "warmer"}],'
@@ -7703,9 +7717,7 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     assert {e["kind"] for e in body["edits"]} >= {"character_state", "plot", "new_lore", "weather"}
     review_file = croot / "scenes" / f"{sid}.review.json"
     assert review_file.is_file(), "the review is durable now; it has to be somewhere"
-    after = {p: p.read_bytes() for p in croot.rglob("*")
-             if p.is_file() and p != review_file}
-    assert after == snapshot
+    assert content(skip=(review_file,)) == snapshot
     # ...and discarding it puts the campaign back exactly as it was, which is
     # the half of #235 the exclusion above must not be allowed to weaken.
     #
@@ -7720,10 +7732,14 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     generation = client.get(
         f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()["generation"]
     review_runs.cancel(client, cid, sid, generation)
+    # Both write-records, for two different reasons: `activity.txt` per the
+    # paragraph above, and `revision.txt` -- excluded by `content` throughout --
+    # because the token has to move across a review landing and being dismissed.
+    # That is two campaign writes, and a value that did not move for them would
+    # be the bug #409 exists to prevent rather than the absorb leaving something
+    # behind.
     stamp = store.campaigns.campaign_activity_path(cid)
-    assert {p: p.read_bytes() for p in croot.rglob("*")
-            if p.is_file() and p != stamp} == {p: b for p, b in snapshot.items()
-                                               if p != stamp}
+    assert content(skip=(stamp,)) == {p: b for p, b in snapshot.items() if p != stamp}
 
 
 # ---- absorb: re-absorb guard (#235) ----

@@ -107,6 +107,7 @@ from . import (
     replay,
     response_presets,
     retcon,
+    revision,
     rolling_summary,
     rolls,
     routing,
@@ -167,6 +168,7 @@ from .paths import (
 )
 from .pcs import PCNotFound, PCVersionNotFound
 from .playing import PlayError
+from .revision import RevisionMismatchError
 from .rolls import RollNotFound
 from .scene_import import SceneImportError
 from .scenes import SceneNotFound
@@ -288,6 +290,13 @@ __all__ = [
     "record_refs",
     "replay",
     "retcon",
+    # The campaign write token (#409): what `/advance` compares an expected
+    # state against and what `/fork` records a repeat key beside. Read by
+    # `routes.campaigns` and stamped by the activity middleware in `main.py`,
+    # so it belongs on the facade rather than being reached through `store.`
+    # -- the same call `clock` and `events` made.
+    "revision",
+    "RevisionMismatchError",
     "journal",
     "undo",
     "relationships",

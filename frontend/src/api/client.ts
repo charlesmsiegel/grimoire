@@ -1009,9 +1009,16 @@ export const api = {
    *  the fork and nothing at all happens to `cid`. Omitted, the fork is of the
    *  campaign as it stands. `notifyCampaigns` for the same reason
    *  `createCampaign` sends it: the shelf and the sidebar gain a row. */
-  forkCampaign: (cid: string, name: string, fromScene?: string) =>
+  /** `idempotencyKey` makes a repeat safe (#409): the same key, against the same
+   *  source, is answered with the fork the first call made (`replayed: true`)
+   *  instead of copying the campaign again. Mint one BEFORE the request, and
+   *  derive it from the operation rather than at random where you can — a key
+   *  held only in component state is lost by the reload it exists to survive. */
+  forkCampaign: (cid: string, name: string, fromScene?: string, idempotencyKey?: string) =>
     request<ForkReport>("POST", `/api/campaigns/${cid}/fork`,
-      { name, ...(fromScene ? { from_scene: fromScene } : {}) }).then(notifyCampaigns),
+      { name, ...(fromScene ? { from_scene: fromScene } : {}),
+        ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}) },
+    ).then(notifyCampaigns),
   // `fresh` for the caller re-reading *because* an undo just repointed one of
   // these deltas: handed a promise started before that write, it would conclude
   // the reversal never happened.
@@ -1812,9 +1819,14 @@ export const api = {
   // ---- the campaign clock (#100) ----
   getCampaignClock: (cid: string) =>
     request<CampaignClock>("GET", `/api/campaigns/${cid}/clock`),
-  /** The digest an advance would produce, writing nothing. Needs no reason. */
+  /** The digest an advance would produce, writing nothing. Needs no reason.
+   *
+   *  `revision` is the campaign's write token as of this pricing (#409) — hand
+   *  it back as `expect_revision` when confirming, and the advance is refused
+   *  rather than measured from a state the reader never saw. */
   previewAdvance: (cid: string, body: AdvanceRequest) =>
-    request<{ digest: AdvanceDigest }>("POST", `/api/campaigns/${cid}/advance/preview`, body),
+    request<{ digest: AdvanceDigest; revision: string }>(
+      "POST", `/api/campaigns/${cid}/advance/preview`, body),
   /** `fired` is the subset of `digest.events` this move actually stamped —
    *  empty for a backward correction, which reports what it un-lived without
    *  un-firing it. */
