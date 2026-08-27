@@ -27,7 +27,9 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
-from grimoire.store import atomic, campaigns, clock, fork, revision, worlds
+from grimoire.routes import campaigns as campaign_routes
+from grimoire.routes import scenes as scene_routes
+from grimoire.store import atomic, campaigns, clock, fork, revision, scenes, worlds
 from tests.llm_fakes import FakeOpenRouter
 
 # --- the token itself ------------------------------------------------------
@@ -184,6 +186,80 @@ def test_a_detached_turns_posts_move_the_token(client):
     before = _token(client, cid)
     assert routes.streaming._persist_reply(cid, sid, "The gate stands open.")
     assert _token(client, cid) != before
+
+
+def test_a_send_moves_the_token_before_the_reply_lands(client, monkeypatch):
+    """The player's post is a campaign mutation of its own.
+
+    `_chat_run` appends it under the campaign lock and *then* returns a
+    streaming response, so the reply that bumps the token is minutes away. The
+    middleware therefore stamps the revision for a stream too (it stamps
+    activity for none), or an advance priced before the send would confirm
+    against a transcript that has already grown — and a large one would
+    checkpoint the campaign with an unanswered post in it.
+
+    `_persist_reply` is stubbed out precisely so it cannot be what moved the
+    token: with the terminal write gone, the middleware's stamp at the response
+    line is the only bump left, which is the one under test.
+    """
+    monkeypatch.setattr(routes.streaming, "_persist_reply", lambda *a, **k: 0)
+    cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    before = _token(client, cid)
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "I knock."}) as r:
+        assert r.status_code == 200
+        for _ in r.iter_lines():
+            pass
+    assert _token(client, cid) != before
+
+
+def test_a_stream_does_not_stamp_activity(client):
+    # The half of the rule that did NOT change: a stream's status is sent before
+    # its outcome is known, so a turn that fails and rolls back must not have
+    # ranked the campaign. The revision is the opposite trade -- see
+    # `main._record_campaign_write`.
+    cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    root = store.campaigns.campaign_root(cid)
+    (root / "activity.txt").unlink(missing_ok=True)
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "I knock."}) as r:
+        for _ in r.iter_lines():
+            pass
+    assert not (root / "activity.txt").exists()
+
+
+def test_a_preview_only_post_moves_nothing(client):
+    # Every campaign-scoped POST that persists nothing has to say so, or it
+    # refuses a clock confirmation over a campaign nothing wrote. Parsing an
+    # import for review is one: it answers with a draft and writes no file.
+    cid = _campaign(client)
+    before = _token(client, cid)
+    r = client.post(f"/api/campaigns/{cid}/scenes/import/parse",
+                    files={"file": ("log.md", b"## Scene\n\n**Mara:** Hello.\n", "text/markdown")})
+    assert r.status_code in (200, 400)     # the parse's own verdict is not the point
+    assert _token(client, cid) == before
+
+
+def test_every_preview_only_campaign_route_is_marked_as_one():
+    """The marker is what the middleware reads, so an unmarked preview route is
+    a false `campaign_moved` waiting to happen.
+
+    Asserted on the endpoint rather than through a request for the one route
+    that cannot be driven cheaply: drafting a description needs an image in the
+    library and a provider call, and what is actually in question is one
+    attribute. `_draft_description` documents itself as preview-only — the
+    caller persists through the PUT on Save — and this is its only
+    campaign-scoped surface; the other three describe world records.
+    """
+    # The endpoint function itself, which is exactly what the middleware reads
+    # off `scope["route"]` -- the router is wrapped, so walking `app.routes` for
+    # it would be testing the wrapper.
+    assert campaign_routes.post_campaign_library_description_draft.grimoire_computes_only
+    assert scene_routes.post_scene_import_parse.grimoire_computes_only
 
 
 def test_a_reply_that_lands_nothing_moves_nothing(client):
@@ -422,6 +498,79 @@ def test_a_marker_that_does_not_describe_the_campaign_it_is_in_is_not_believed(c
         encoding="utf-8")
     again = _fork(client, cid, "Checkpoint", idempotency_key="k-3")
     assert again["replayed"] is False and again["id"] not in (first["id"], planted["id"])
+
+
+def test_a_repeat_is_answered_after_the_scene_it_was_cut_at_is_deleted(client):
+    # A key names an operation that already happened, so nothing about the
+    # request repeating it needs to be true a second time. The scene belongs to
+    # the SOURCE, which keeps playing: validating it before the replay would
+    # answer a retry with a 404 while the fork it made is sitting on the shelf.
+    cid = _campaign(client)
+    first_sid = client.post(f"/api/campaigns/{cid}/scenes",
+                            json={"title": "Arrival"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Departure"})
+    made = _fork(client, cid, "Branch", from_scene=first_sid, idempotency_key="k-1")
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{first_sid}").status_code == 200
+    again = client.post(f"/api/campaigns/{cid}/fork",
+                        json={"name": "Branch", "from_scene": first_sid,
+                              "idempotency_key": "k-1"})
+    assert again.status_code == 200
+    assert again.json()["id"] == made["id"] and again.json()["replayed"] is True
+
+
+def test_an_unknown_scene_is_still_refused_without_a_key(client):
+    # The other half: the reordering must not have made the check optional for a
+    # request that is not a repeat of anything.
+    cid = _campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/fork",
+                    json={"name": "Branch", "from_scene": "404--nope"})
+    assert r.status_code == 404
+    assert [c["id"] for c in client.get("/api/campaigns").json()] == [cid]
+
+
+def test_a_half_written_marker_is_not_replayed_as_a_report(client):
+    # The marker's report is returned as the route's body and the client reads
+    # every field of it -- `forkNotes` walks `refused` and `failed` as arrays.
+    # A truncated one carrying only the right id would replay as a success and
+    # then fail in the reader's browser, where the documented recoverable path
+    # is a second copy on the shelf.
+    cid = _campaign(client)
+    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    (store.campaigns.campaign_root(first["id"]) / fork.MARKER).write_text(
+        json.dumps({"key": "k-1", "parent": cid, "at": "", "report": {"id": first["id"]}}),
+        encoding="utf-8")
+    again = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    assert again["replayed"] is False and again["id"] != first["id"]
+
+
+def test_a_replayed_report_carries_every_field_the_client_reads(client):
+    cid = _campaign(client)
+    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    again = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    assert again["replayed"] is True
+    assert set(again) == set(first)
+    assert isinstance(again["refused"], list) and isinstance(again["failed"], list)
+
+
+def test_a_forks_token_is_not_minted_until_the_cut_has_finished(cid, monkeypatch):
+    # `copytree` publishes `campaign.md` partway through, so from that line on
+    # the fork is a campaign to every read route -- and none of them takes this
+    # campaign's lock. A token minted before `_cut_after` would be handed to a
+    # reader mid-cut and still be current once the cut had finished: a stale
+    # reading certified as good.
+    sid = scenes.create_scene(cid, "Arrival")
+    scenes.append_message(cid, sid, "user", "I knock.")
+    later = scenes.create_scene(cid, "Departure")
+    scenes.append_message(cid, later, "user", "I leave.")
+    seen = []
+    real = fork._cut_after
+    monkeypatch.setattr(fork, "_cut_after",
+                        lambda c, s: (seen.append(revision.current(c)), real(c, s))[1])
+    made = fork.fork_campaign(cid, "Branch", from_scene=sid)
+    # Mid-cut it reads as INITIAL, which no expectation can match...
+    assert seen == [revision.INITIAL]
+    # ...and the finished fork carries a real one.
+    assert revision.current(made["id"]) not in (revision.INITIAL, revision.current(cid))
 
 
 def test_an_unreadable_marker_costs_a_second_copy_rather_than_a_wrong_answer(client):
