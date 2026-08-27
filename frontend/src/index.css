@@ -3603,6 +3603,70 @@ a.column-back { text-decoration: none; }
   .app-header .header-model, .app-header .conn-dot { display: none; }
 }
 
+/* ---- below PHONE_PX: the bar replaces the drawer as the way to move ---- */
+/* 720 is `shell/tabs.ts`'s PHONE_PX and `PageShell`'s, and the three are one
+   decision: below it a 274px column cannot share a row with content, and
+   navigation cannot afford to be modal. */
+.phone-tabs { display: none; }
+@media (max-width: 720px) {
+  /* The 46px header. What is left is what the design's phone frame keeps: the
+     wordmark, the scene's cost and context, and the health dot. The ⌘K pill
+     goes because Search is a rail row and the rail is one tap away as `More`;
+     the theme and focus controls go because neither is something a phone
+     reaches for mid-scene, and both are in Configuration. Dropped rather than
+     clipped -- the design's own rule for this breakpoint. */
+  .app-header {
+    height: 46px; gap: 8px; padding: 0 12px;
+  }
+  .app-header .kbar,
+  .app-header .header-rail,
+  .app-header .header-theme,
+  .app-header .header-focus { display: none; }
+  .app-header .brand { font-size: 14px; letter-spacing: 0.1em; gap: 0; }
+  /* The mark and the wordmark both say the same thing and both go home; at
+     46px only one of them fits, and the design's phone frame keeps the word.
+     That reverses the older rule 3000 lines up, which kept the mark and hid
+     the span — so the span has to be turned back ON here rather than merely
+     leaving it alone, or the two rules between them hide the whole brand and
+     the header opens with an empty 46px band. */
+  .app-header .brand img { display: none; }
+  .app-header .brand span { display: inline; }
+  /* Back from the 1180px rule above: the dot is 9px and says whether the
+     provider is reachable, which is worth more on a phone than off it. */
+  .app-header .conn-dot { display: inline; }
+
+  /* A row of the shell, not a layer over it. `#root` is a column, so the bar
+     taking its own height is what stops a scrolling page ending underneath
+     it — which `position: fixed` would need padding elsewhere to fake, kept
+     in step with a height this rule owns. */
+  .phone-tabs {
+    flex: none; display: flex; background: var(--panel);
+    border-top: 1px solid var(--line);
+    /* Above the home indicator on a notched phone, and 0 everywhere else. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .phone-tab {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2px;
+    min-height: 54px; padding: 4px 2px; text-decoration: none;
+    background: transparent; border: 0; border-top: 2px solid transparent;
+    color: var(--muted); cursor: pointer;
+  }
+  .phone-tab.on { color: var(--accent); border-top-color: var(--accent); }
+  .phone-tab-icon { font-size: 14px; line-height: 1; }
+  .phone-tab-label {
+    font-family: var(--fm, monospace); font-size: 8.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 100%;
+  }
+  .phone-tab-badge {
+    font-family: var(--fm, monospace); font-size: 7.5px; letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  /* The one badge that is a backlog rather than a size. */
+  .phone-tab[href="/todo"] .phone-tab-badge { color: var(--alert); }
+}
+
 /* ---- the campaign hub ---- */
 /* The campaign's front door. Leads with what to do next and only then with
    state — opening a campaign used to resume whichever scene was last, which is

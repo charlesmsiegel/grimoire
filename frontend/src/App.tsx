@@ -5,6 +5,7 @@ import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_MODE } from "./theme/themes";
 import AppHeader from "./components/AppHeader";
 import AppRail from "./components/AppRail";
+import PhoneTabs from "./components/PhoneTabs";
 import AppPaletteSource from "./components/AppPaletteSource";
 import CommandPalette, { usePaletteHotkey } from "./components/CommandPalette";
 import { FocusProvider, FocusRestore, useFocus } from "./components/focus";
@@ -211,6 +212,19 @@ function Shell(
         <Route path="/stats" element={<StatsView />} />
       </Routes>
       </div>
+      {/* The phone's half of the same decision, and a ROW of the shell rather
+          than something floating over it: `#root` is already a column, so the
+          bar taking its own height is what keeps a scrolling page from ending
+          underneath it — no fixed positioning, no padding to keep in step with
+          the bar's own size, and the safe-area inset is just its padding.
+          `noRail` covers it too: the wizards and focus mode answer "nothing,
+          finish this first" and "nothing, read this", and a permanent bar at
+          the foot is the one surface that would keep arguing. CSS draws it
+          only below `PHONE_PX`, where the rail has already become a drawer. */}
+      {!noRail && (
+        <PhoneTabs payload={shell.payload} cid={cid}
+                   onOpenRail={() => setRailOpen(true)} />
+      )}
     </>
   );
 }
