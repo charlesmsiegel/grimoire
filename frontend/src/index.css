@@ -3802,3 +3802,7 @@ a.column-back { text-decoration: none; }
 @media (max-width: 1180px) {
   .money-columns { grid-template-columns: minmax(0, 1fr); gap: 12px; }
 }
+.editor-list .rail-count {
+  font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted); padding: 4px 2px 8px;
+}

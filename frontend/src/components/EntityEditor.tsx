@@ -101,6 +101,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 }) {
   const scope: EntityScope = scopeProp ?? { kind: "world", id: wid };
   const [items, setItems] = useState<EntitySummary[]>([]);
+  const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<string | null>(null); // entity id, or null = new
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
@@ -432,16 +433,26 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
   // Group lore rows: "Unowned (world)" first, then one group per distinct owner ref.
   const ownersOf = (e: EntitySummary) => (e.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+
+  // What the rail is currently showing. Name and keys, because those are what
+  // a reader knows a record BY -- the id is a slug they never typed and the
+  // body is not in the summary.
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? items.filter((e) => (e.name ?? "").toLowerCase().includes(needle)
+                       || (e.keys ?? "").toLowerCase().includes(needle))
+    : items;
+
   const groups: { key: string; label: string; rows: EntitySummary[] }[] = [];
   if (kind === "lore") {
-    const unowned = items.filter((e) => ownersOf(e).length === 0);
+    const unowned = shown.filter((e) => ownersOf(e).length === 0);
     if (unowned.length) groups.push({ key: "", label: "Unowned (world)", rows: unowned });
     const seen = new Set<string>();
-    for (const e of items) {
+    for (const e of shown) {
       for (const ref of ownersOf(e)) {
         if (seen.has(ref)) continue;
         seen.add(ref);
-        groups.push({ key: ref, label: ownerLabel(ref), rows: items.filter((x) => ownersOf(x).includes(ref)) });
+        groups.push({ key: ref, label: ownerLabel(ref), rows: shown.filter((x) => ownersOf(x).includes(ref)) });
       }
     }
   }
@@ -490,6 +501,20 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     <div className="editor">
       <div className="editor-list">
         <button className="primary new" onClick={resetForm}>+ New {label}</button>
+        {/* Shown once there is enough to lose something in. Below that the
+            filter is a control that costs a row and saves nothing. */}
+        {items.length > 8 && (
+          <>
+            <input className="rail-search" type="search" value={query}
+                   aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`}
+                   onChange={(e) => setQuery(e.target.value)} />
+            <div className="rail-count">
+              {shown.length === items.length
+                ? `${items.length} ${label}${items.length === 1 ? "" : "s"}`
+                : `${shown.length} of ${items.length}`}
+            </div>
+          </>
+        )}
         {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === kind) && (
           <button className="subtle" onClick={() => { resetForm(); setWizardOpen(true); }}>
             + New {label} with sheet…
@@ -502,8 +527,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                 {g.rows.map(row)}
               </div>
             ))
-          : items.map(row)}
+          : shown.map(row)}
+        {/* Three different answers, and they must not share one line: nothing
+            here yet, nothing MATCHING here, and a filter narrowing a real set. */}
         {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
+        {items.length > 0 && shown.length === 0 && (
+          <div className="editor-empty">Nothing matches “{query}”.</div>
+        )}
         {module?.content.filter((c) => c.kind === kind).map((c) => (
           <button key={`content-${c.id}`} className="row content-row"
                   onClick={() => selectContent(c.id)}>

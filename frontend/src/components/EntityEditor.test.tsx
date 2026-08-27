@@ -971,3 +971,39 @@ test("moving into locations says nothing about settings", async () => {
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
   expect(confirm.mock.calls[0][0]).not.toMatch(/setting/);
 });
+
+test("a long roster can be filtered, and says how much of it is showing", async () => {
+  // A world can hold hundreds of records and the rail is a fixed 220px. Without
+  // a filter the only way to reach one is to scroll for it — which is the
+  // problem the redesign's full-width browse grid was answering.
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    id: `e${i}`, name: `Record ${i}`, keys: i === 3 ? "harbour" : "",
+    secrecy: "public", tokens: 10,
+  }));
+  (api.listEntities as any).mockResolvedValue(many);
+  render(<EntityEditor wid="w" kind="lore" />);
+  await screen.findByText("Record 0");
+  expect(screen.getByText(/12 lores?/)).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText(/search lore/i), { target: { value: "harbour" } });
+  // Matched on keys as well as name: keys are what a reader knows a lore record
+  // by, and the id is a slug they never typed.
+  expect(screen.getByText("1 of 12")).toBeInTheDocument();
+  // Scoped to the rail: the filter narrows what you can NAVIGATE to, and must
+  // not close whatever record is already open in the body beside it.
+  const rail = document.querySelector(".editor-list")!;
+  expect(within(rail as HTMLElement).queryByText("Record 0")).not.toBeInTheDocument();
+  expect(within(rail as HTMLElement).getByText("Record 3")).toBeInTheDocument();
+});
+
+test("a filter matching nothing is not an empty world", async () => {
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    id: `e${i}`, name: `Record ${i}`, secrecy: "public", tokens: 10,
+  }));
+  (api.listEntities as any).mockResolvedValue(many);
+  render(<EntityEditor wid="w" kind="lore" />);
+  await screen.findByText("Record 0");
+  fireEvent.change(screen.getByLabelText(/search lore/i), { target: { value: "zzz" } });
+  expect(screen.getByText(/nothing matches/i)).toBeInTheDocument();
+  expect(screen.queryByText(/no lore yet/i)).not.toBeInTheDocument();
+});
