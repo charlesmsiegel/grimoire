@@ -265,6 +265,14 @@ class Run:
         # run that happens to be newer, and "flag the run the record names"
         # finds nothing at all before the absorb has published one.
         self.review_generation = review_generation
+        # Set when the record this run belongs to is DELETED. Read by `_owns`,
+        # so every discovery path -- by id, by subject, by attempt -- answers
+        # as it would for a run that never existed, while the internal sweeps
+        # (`any_live`, `live_running_in`) still see it, because it really is
+        # still generating and the store must not move under it. Campaign and
+        # world ids are slugs and a slug is reusable, so without this a
+        # replacement of the same name inherits the dead record's runs.
+        self.forgotten = False
         # Set by the reviewer's Cancel, under the campaign lock, BEFORE the
         # record is deleted -- and read by this run's terminal persist under
         # that same lock, which is what stops the runner from publishing and
@@ -547,7 +555,7 @@ class RunRegistry:
         identity is exactly the thing that distinguishes them; callers that
         have it pass it.
         """
-        if run is None or run.subject != subject:
+        if run is None or run.forgotten or run.subject != subject:
             return False
         return identity is None or run.scene_identity == identity
 
@@ -710,6 +718,44 @@ class RunRegistry:
             holder_id = self._by_key.get(key)
             holder = self._runs.get(holder_id) if holder_id else None
             return holder if holder is not None and holder.state == "running" else None
+
+    def forget_subject(self, subject: Subject) -> int:
+        """Make every run on `subject` unreachable. Returns how many went.
+
+        For a record that has been DELETED. Campaign and world ids are slugs
+        and a slug is reusable: deleting "Saltmarch" and creating another
+        campaign of that name lands on the same id, and inside the retention
+        window the replacement's `/runs` would answer with the dead campaign's
+        runs -- so a retry with the same attempt id could adopt suggestions
+        computed from a campaign that no longer exists, and show them as this
+        one's. A scene solves this with an identity in its subject; campaigns
+        and worlds have no such token, and minting one is a store change, so
+        the deletion clears them instead.
+
+        A FLAG on each run plus the indexes, and the flag is the part that
+        matters: `get` resolves by id straight out of `_runs`, and the client
+        that started the run is holding that id -- so clearing the indexes
+        alone would still let it poll the dead record's result.
+
+        Never `_runs` itself: a live run may still be executing, its record has
+        to stay for `_guarded` to finish with and for the reaper to collect,
+        and the internal sweeps that refuse a store move while anything is
+        generating have to keep seeing it. Unreachable is the whole
+        requirement -- these are all `draft` runs, whose result is held on the
+        record and written nowhere, so a run nobody can find is a run that
+        changes nothing.
+        """
+        with self._lock:
+            ids = self._by_subject.pop(subject, [])
+            for run_id in ids:
+                run = self._runs.get(run_id)
+                if run is not None:
+                    run.forgotten = True
+            for key in [k for k in self._by_attempt if k[0] == subject]:
+                del self._by_attempt[key]
+            for key in [k for k in self._precancelled if k[0] == subject]:
+                del self._precancelled[key]
+            return len(ids)
 
     def reap(self, now: float | None = None) -> int:
         """Drop terminal runs older than the window. Returns how many went.
@@ -1814,6 +1860,12 @@ def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
     with reservation(app, run):
         start_computing(app, run, work)
         return {"run": run_payload(run)}
+
+
+def forget_subject(app, subject: Subject) -> int:
+    """Drop a deleted record's runs from discovery -- see
+    `RunRegistry.forget_subject` for why a delete has to do this at all."""
+    return app.state.runs.forget_subject(subject)
 
 
 def _subject_labels(subject: Subject) -> dict:

@@ -18,6 +18,7 @@ they had already read.
 from __future__ import annotations
 
 import time
+from unittest import mock
 
 import pytest
 
@@ -301,6 +302,62 @@ def test_a_draft_can_be_cancelled_through_its_subject(client, world):
 
     assert r.status_code == 200
     assert r.json()["run"]["state"] == "cancelled"
+
+
+# ---- what a deleted record leaves behind, and what a broken one reports -----
+
+def test_a_deleted_records_runs_stop_being_reachable(client, world):
+    """Campaign and world ids are SLUGS, and a slug is reusable. Deleting
+    "Realm" and creating another world of that name lands on the same id, so
+    inside the retention window the replacement would otherwise be handed this
+    one's runs -- and a retry with the same attempt id would adopt a proposal
+    computed from a world that no longer exists."""
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("Keeps the tide-gate.")
+    started = client.post(_tagline(world), headers={"X-Grimoire-Attempt": "a1"})
+    run_id = started.json()["run"]["id"]
+    _wait_state(client, f"/api/worlds/{world}/runs", run_id)
+
+    assert client.delete(f"/api/worlds/{world}").status_code == 200
+    remade = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+
+    assert remade == world, "the point of this test is a recycled id"
+    assert client.get(f"/api/worlds/{world}/runs").json()["runs"] == []
+    assert client.get(f"/api/worlds/{world}/runs?attempt=a1").json()["runs"] == []
+    assert client.get(f"/api/worlds/{world}/runs/{run_id}").status_code == 404
+
+
+def test_a_deleted_campaigns_runs_stop_being_reachable(client, campaign):
+    _world, cid = campaign
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: StallingOpenRouter(["half "])
+    run_id = client.post(f"/api/campaigns/{cid}/scene-suggestions",
+                         headers={"X-Grimoire-Attempt": "a1"}).json()["run"]["id"]
+
+    assert client.delete(f"/api/campaigns/{cid}").status_code == 200
+
+    # The run is still generating -- forgetting it does not stop it, and does
+    # not need to: a draft writes nowhere, so one nobody can find changes
+    # nothing.
+    assert client.get(f"/api/campaigns/{cid}/runs?attempt=a1").json()["runs"] == []
+    assert client.get(f"/api/campaigns/{cid}/runs/{run_id}").status_code == 404
+
+
+def test_an_unexpected_failure_reports_the_500_it_is(client, world):
+    """A parser bug is a 500, and has to say so. The status is what a client
+    builds its HTTP failure from, and an absent one falls back to 409 -- so an
+    internal error reached the reader as a conflict they could do nothing
+    about."""
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("Keeps the tide-gate.")
+    broken = lambda _text: (_ for _ in ()).throw(RuntimeError("the parser blew up"))
+    with mock.patch.object(store.taglines, "parse_output", broken):
+        started = client.post(_tagline(world))
+        failed = _wait_state(client, f"/api/worlds/{world}/runs",
+                             started.json()["run"]["id"], "failed")
+
+    assert failed["error"]["kind"] == "run_failed"
+    assert failed["error"]["status"] == 500
 
 
 # ---- the opener ------------------------------------------------------------

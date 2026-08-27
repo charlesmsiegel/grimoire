@@ -1969,3 +1969,119 @@ test("an opener lookup that could not be made does not end the recovery", async 
 
   expect(seen.join("")).toBe("The quay.");
 });
+
+test("an opener stream closed cleanly mid-generation is still picked back up", async () => {
+  // A proxy or a WebView can end the response body without an error: the
+  // reader reports `done` and `streamPost` resolves. A recovery hung off the
+  // exception alone returns happily and leaves a half-written opener on screen
+  // while the server finishes the rest into a buffer nobody reads.
+  const seen: string[] = [];
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(sseResponse([
+      'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
+      'id: 0\ndata: {"delta":"The "}\n\n',
+    ]))
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1", state: "running",
+                                           next_index: 2, cls: "draft" } }))
+    .mockResolvedValueOnce(sseResponse([
+      'id: 1\ndata: {"delta":"quay."}\n\n', 'id: 2\ndata: {"done":true}\n\n',
+    ]));
+  globalThis.fetch = fetchMock;
+
+  await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
+
+  expect(seen.join("")).toBe("The quay.");
+});
+
+test("an opener that really did finish is not re-attached to", async () => {
+  // The other half of the same rule: a `done` frame IS the end, and a client
+  // that went back for more would spend a request per opener forever.
+  const fetchMock = vi.fn().mockResolvedValueOnce(sseResponse([
+    'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
+    'id: 0\ndata: {"delta":"The quay."}\n\n', 'id: 1\ndata: {"done":true}\n\n',
+  ]));
+  globalThis.fetch = fetchMock;
+
+  await api.opener("run", "s1", "begin", () => {});
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test("a failed draft announces on the config channel — the status bar is stale",
+     async () => {
+  // A detached failure never goes through `requestRaw`'s non-2xx branch: the
+  // 202 was a success and the provider failed minutes later. Without the same
+  // announcement the status bar shows the verdict from before the failure
+  // until the next navigation (#146).
+  vi.useFakeTimers();
+  try {
+    const seen: string[] = [];
+    const off = onConfigChanged(() => seen.push("config"));
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(draftRunResponse("running"))
+      .mockResolvedValueOnce(draftRunResponse("failed", {
+        error: { kind: "auth", detail: "bad key", status: 502 } }));
+
+    const failed = api.generateCharacterTagline("realm", "mara").catch(() => null);
+    await vi.advanceTimersByTimeAsync(5000);
+    await failed;
+
+    expect(seen).toEqual(["config"]);
+    off();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a model refresh whose run was reaped reads its catalog back off the store",
+     async () => {
+  // The one draft with a DURABLE result: the sidecar is written before the run
+  // goes terminal, so a tab suspended past the retention window would be told a
+  // refresh failed that actually succeeded — and `notifyConfig` would never
+  // fire, leaving every scene inspector sizing prompts against the old list.
+  vi.useFakeTimers();
+  try {
+    const seen: string[] = [];
+    const off = onConfigChanged(() => seen.push("config"));
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(draftRunResponse("running"))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [{ id: "m-1" }],
+                                      fetched_at: "2026-08-27", rev: "r1" }));
+
+    const pending = api.refreshConnectionModels("openrouter");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await pending).rev).toBe("r1");
+    expect(seen).toEqual(["config"]);
+    off();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a refresh that was reaped without ever writing is still a failure", async () => {
+  // `run_gone` on its own does not mean the fetch landed. An empty
+  // `fetched_at` is a connection whose catalog was never written, and calling
+  // that a success would report a refresh nobody got.
+  vi.useFakeTimers();
+  try {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(draftRunResponse("running"))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [], fetched_at: "",
+                                      rev: "r1" }));
+
+    const failed = api.refreshConnectionModels("openrouter")
+      .then(() => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await failed as ApiError).kind).toBe("run_gone");
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -346,7 +346,15 @@ async def _guarded(app, run, factory: Callable[[], Any],
             raise
         except Exception as exc:                            # noqa: BLE001
             _log.exception("run %s failed", run.id)
-            error = {"kind": "run_failed", "detail": str(exc)}
+            # `status` 500, stated rather than left out. An exception nobody
+            # handled IS a 500, and this record is read by clients that build
+            # an HTTP failure out of it -- with the field absent the frontend
+            # falls back to 409, so a parser bug in a producer reached the
+            # reader as a conflict it could do nothing about, and the test
+            # helper (which falls back to 500) and the client disagreed about
+            # the same run. Every handled failure sets its own status; this is
+            # the one path that had none.
+            error = {"kind": "run_failed", "detail": str(exc), "status": 500}
             run.error = error
             # BUFFERED, not just recorded. `tail_response` sees the terminal
             # state, drains what is there and closes -- so a failure recorded
