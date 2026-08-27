@@ -154,6 +154,14 @@ body::before {
 .notice-row + .notice-row { margin-top: 4px; }
 .notice-text { flex: 1; }
 .notice-banner .chip-clear { color: var(--banner-ink); padding: 0; }
+/* The dismissed row, kept on screen only to carry its Undo -- muted, so it
+   reads as a receipt rather than as a second warning. */
+.notice-row.notice-done { opacity: 0.7; }
+.notice-undo {
+  flex: none; background: none; border: none; padding: 0; cursor: pointer;
+  font-family: var(--fm); font-size: 11px; color: var(--banner-ink);
+  text-decoration: underline;
+}
 
 /* ---- section label (character detail, config) ---- */
 .section-label {

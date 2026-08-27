@@ -198,13 +198,17 @@ def put_calendar_config(cid: str, body: CalendarConfig):
     # opinion", and the store answers that with its own default rather than
     # storing a threshold that would call every record stale on the day it was
     # written. That coercion lives in `calendars._stale_days`, once.
+    root = store.campaigns.campaign_root(cid)
     cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed,
-           "stale_after_days": body.stale_after_days, "warn_days": body.warn_days}
+           "stale_after_days": body.stale_after_days,
+           # `None` is "the request said nothing about it", which must keep what
+           # is stored rather than reset it -- see `calendars.warn_days_for_save`.
+           "warn_days": store.calendars.warn_days_for_save(root, body.warn_days)}
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    store.calendars.write_calendar(store.campaigns.campaign_root(cid), cfg)
+    store.calendars.write_calendar(root, cfg)
     return {"ok": True}
 
 

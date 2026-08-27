@@ -292,16 +292,27 @@ def _upcoming(providers: list[CalendarProvider], fixed: int, window: int) -> lis
     in -- the primary's first. That is what `today_facts` already picked when
     it scanned for the strictly-soonest, and this must not quietly rename the
     "Upcoming:" line every prompt has been carrying.
+
+    The name is coerced to `str` before it is used, and that is load-bearing
+    rather than defensive. `validate_rule` accepts any TRUTHY name, so a
+    hand-written `"name": ["Saltmarch", "Eve"]` in calendar.json is a config
+    this app already stores -- and the dedup below puts the name in a set, where
+    a list raises `TypeError`. `today_facts` reaches this helper now, so that
+    would leave an accepted calendar 500-ing the scene datetime route and
+    failing prompt assembly, past every caller's `except CalendarError`. The
+    old scan compared `h["fixed"]` alone and never touched the name, which is
+    why nothing noticed before.
     """
     seen: set[tuple[int, str]] = set()
     out: list[dict] = []
     for p in providers:
         for h in p.holidays(fixed + 1, fixed + max(int(window), 0)):
-            key = (h["fixed"], h["name"])
+            name = h["name"] if isinstance(h["name"], str) else str(h["name"])
+            key = (h["fixed"], name)
             if key in seen:
                 continue
             seen.add(key)
-            out.append({"name": h["name"], "fixed": h["fixed"],
+            out.append({"name": name, "fixed": h["fixed"],
                         "in_days": h["fixed"] - fixed})
     out.sort(key=lambda h: h["in_days"])
     return out

@@ -182,3 +182,50 @@ def test_a_world_calendar_carries_warn_days_into_its_campaigns(client):
                       json={**cfg, "warn_days": 2}).status_code == 200
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     assert client.get(f"/api/campaigns/{cid}/calendar").json()["warn_days"] == 2
+
+
+def test_an_older_client_does_not_reset_a_configured_window(client):
+    """`None` is "the request said nothing about it". Treating it as the default
+    means saving an unrelated calendar field silently discards a window the
+    reader chose — which is exactly what the `None`-not-0 sentinel exists to
+    prevent."""
+    cid = _campaign(client)
+    cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
+    client.put(f"/api/campaigns/{cid}/calendar", json={**cfg, "warn_days": 14})
+    older = client.get(f"/api/campaigns/{cid}/calendar").json()
+    older.pop("warn_days")          # a client that has never heard of the field
+    client.put(f"/api/campaigns/{cid}/calendar", json=older)
+    assert client.get(f"/api/campaigns/{cid}/calendar").json()["warn_days"] == 14
+
+
+def test_an_older_client_does_not_switch_the_warnings_back_on(client):
+    """The sharper half of the same bug: 0 is a deliberate "not this campaign",
+    and resetting it to the default would start warning a reader who said not
+    to."""
+    cid = _campaign(client)
+    cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
+    client.put(f"/api/campaigns/{cid}/calendar", json={**cfg, "warn_days": 0})
+    older = client.get(f"/api/campaigns/{cid}/calendar").json()
+    older.pop("warn_days")
+    client.put(f"/api/campaigns/{cid}/calendar", json=older)
+    assert client.get(f"/api/campaigns/{cid}/calendar").json()["warn_days"] == 0
+
+
+def test_a_world_calendar_keeps_its_window_through_an_older_save(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cfg = client.get(f"/api/worlds/{wid}/calendar").json()
+    client.put(f"/api/worlds/{wid}/calendar", json={**cfg, "warn_days": 2})
+    older = client.get(f"/api/worlds/{wid}/calendar").json()
+    older.pop("warn_days")
+    client.put(f"/api/worlds/{wid}/calendar", json=older)
+    assert client.get(f"/api/worlds/{wid}/calendar").json()["warn_days"] == 2
+
+
+def test_an_absurd_window_is_reported_as_the_value_actually_stored(client):
+    """The form clamps to the same ceiling, but the server is what decides —
+    a client that sends past it must be told what was kept."""
+    cid = _campaign(client)
+    cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
+    client.put(f"/api/campaigns/{cid}/calendar", json={**cfg, "warn_days": 100000})
+    assert client.get(f"/api/campaigns/{cid}/calendar").json()["warn_days"] == \
+        store.calendars.MAX_WARN_DAYS

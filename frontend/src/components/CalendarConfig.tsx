@@ -3,6 +3,12 @@ import { api, type CalendarConfig as Cfg, type CalendarScope } from "../api/clie
 
 const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
 
+/** The widest warn window the store will keep (`calendars.MAX_WARN_DAYS`, #106).
+ *  Mirrored rather than fetched: it is a constant, and a form that lets a reader
+ *  type past it shows a number the server did not store. Anything past it is
+ *  clamped here so the control cannot disagree with what was saved. */
+const MAX_WARN_DAYS = 365;
+
 /** The calendar editor for either scope (#223).
  *
  *  One store file under two roots: a campaign's own calendar.json, and the
@@ -159,16 +165,21 @@ export function CalendarConfig({ scope, onConfig }: {
           kind of fact: how far ahead this record reckons. Empty is "no opinion"
           and saves as null, which the store answers with its own default; a
           typed 0 is a real setting — no warnings in this campaign — which is why
-          the two cannot share `stale_after_days`' 0-means-unset convention. */}
+          the two cannot share `stale_after_days`' 0-means-unset convention.
+
+          Clamped to the same ceiling the store enforces (`MAX_WARN_DAYS`).
+          Without it, typing 1000 leaves the form showing 1000 and reporting it
+          onward while the server has stored 365 — a control that lies about
+          what was saved, which is worse than one that refuses the input. */}
       <label>
         Warn ahead
-        <input type="number" aria-label="Warn ahead days" min={0}
+        <input type="number" aria-label="Warn ahead days" min={0} max={MAX_WARN_DAYS}
                value={cfg.warn_days ?? ""}
                onChange={(e) => {
                  setSaved(false);
                  const raw = e.target.value.trim();
                  setCfg({ ...cfg, warn_days: raw === "" ? null
-                                                        : Math.max(0, parseInt(raw, 10) || 0) });
+                            : Math.min(MAX_WARN_DAYS, Math.max(0, parseInt(raw, 10) || 0)) });
                }} />
       </label>
       <div className="field-hint">

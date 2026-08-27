@@ -210,14 +210,6 @@ def test_marking_nothing_writes_nothing(monkeypatch, tmp_path):
     assert not notices._path(cid).exists()
 
 
-def test_a_key_is_bounded(monkeypatch, tmp_path):
-    """The key is stored verbatim — holiday names are not slugs — so the length
-    cap is what stops a crafted dismissal writing an unbounded file."""
-    cid = _campaign(monkeypatch, tmp_path)
-    (key,) = notices.mark(cid, ["holiday:1:" + "x" * 5000])
-    assert len(key) == notices.KEY_LIMIT
-
-
 # ---- the file, which a reader may have edited ------------------------------
 
 def test_a_garbled_ledger_reads_as_no_dismissals(monkeypatch, tmp_path):
@@ -316,3 +308,64 @@ def test_a_corrupt_calendar_answers_the_default_window(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     (_root(cid) / "calendar.json").write_text("{not json", encoding="utf-8")
     assert calendars.warn_days(_root(cid)) == calendars.WARN_DAYS
+
+
+# ---- keys stay bounded, and bounded means the SAME key on both sides -------
+
+def test_a_long_holiday_name_still_dismisses(monkeypatch, tmp_path):
+    """A holiday name has no length limit anywhere — `validate_rule` checks only
+    that one is present. The key generated from it must still be one `mark` will
+    store, or the dismissal reports success and the banner comes straight back.
+    """
+    cid = _campaign(monkeypatch, tmp_path,
+                    holidays=[_rule("Saltmarch " * 40, "05", 13)])
+    key = _pending(cid)[0]["key"]
+    assert len(key) <= notices.KEY_LIMIT
+    assert notices.mark(cid, [key]) == [key]
+    assert _pending(cid) == []
+
+
+def test_two_long_names_sharing_a_prefix_do_not_share_a_dismissal(monkeypatch, tmp_path):
+    """Bounding by truncation alone would give these one key, so dismissing the
+    first would silence the second without the reader ever seeing it."""
+    prefix = "The Feast of " + "x" * 200
+    cid = _campaign(monkeypatch, tmp_path,
+                    holidays=[_rule(prefix + " Saltmarch", "05", 13),
+                              _rule(prefix + " Winifred", "05", 13)])
+    keys = [r["key"] for r in _pending(cid)]
+    assert len(set(keys)) == 2
+    notices.mark(cid, [keys[0]])
+    assert [r["key"] for r in _pending(cid)] == [keys[1]]
+
+
+def test_an_overlong_key_is_refused_not_truncated(monkeypatch, tmp_path):
+    """Every key this app generates is bounded, so an overlong one is crafted —
+    and storing a shortened version of it would record an acknowledgement of
+    something no `pending` can ever match."""
+    cid = _campaign(monkeypatch, tmp_path)
+    assert notices.mark(cid, ["holiday:1:" + "x" * 5000]) == []
+    assert notices.read(cid) == {}
+
+
+def test_the_dismissing_scene_is_bounded(monkeypatch, tmp_path):
+    """It arrives in a public request body and is written into every new row:
+    capping the key and the row count bounds nothing if this one is free."""
+    cid = _campaign(monkeypatch, tmp_path)
+    notices.mark(cid, ["holiday:1:Saltmarch Eve"], scene="S" * 5000)
+    assert len(notices.read(cid)["holiday:1:Saltmarch Eve"]["scene"]) == notices.SCENE_LIMIT
+
+
+def test_a_non_string_holiday_name_does_not_break_the_scan(monkeypatch, tmp_path):
+    """`validate_rule` accepts any TRUTHY name, so a hand-written list reaches
+    the dedup below — where an unhashable name would raise `TypeError` past
+    every caller's `except CalendarError`, 500-ing the scene datetime route and
+    failing prompt assembly. `today_facts` goes through the same helper."""
+    cid = _campaign(monkeypatch, tmp_path)
+    root = _root(cid)
+    cfg = calendars.read_calendar(root)
+    cfg["primary"] = {**cfg["primary"], "region": "",
+                      "custom_holidays": [{"name": ["Saltmarch", "Eve"],
+                                           "month": "05", "day": 13}]}
+    calendars.write_calendar(root, cfg)
+    assert calendars.today_facts(calendars.read_calendar(root), NOW)["upcoming"] is not None
+    assert len(_pending(cid)) == 1

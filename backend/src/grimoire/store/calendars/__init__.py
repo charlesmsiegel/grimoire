@@ -29,5 +29,6 @@ from .config import (  # noqa: F401
     stale_after_days,
     validate_calendar,
     warn_days,
+    warn_days_for_save,
     write_calendar,
 )

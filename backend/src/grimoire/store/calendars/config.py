@@ -172,6 +172,23 @@ def warn_days(root: Path) -> int:
     return _warn_days(read_calendar(root).get("warn_days"))
 
 
+def warn_days_for_save(root: Path, sent) -> int:
+    """The window a save should persist, given what the request carried.
+
+    `None` means the request expressed no opinion — a client that predates the
+    field, or one editing only the calendars — and the answer is then what is
+    ALREADY stored, not the default. Those are different numbers whenever a
+    reader has set one, and treating them as the same is how saving an unrelated
+    calendar field silently resets a chosen window (or, worse, un-switches-off a
+    campaign that had deliberately set 0).
+
+    This is the whole reason `warn_days`' no-opinion value is `None` rather than
+    `stale_after_days`' `0`: 0 is a real setting here, so the sentinel had to be
+    something else, and something else needs a resolver like this one.
+    """
+    return _warn_days(sent) if sent is not None else warn_days(root)
+
+
 def copy_calendar(wroot: Path, croot: Path) -> None:
     write_calendar(croot, read_calendar(wroot))
 

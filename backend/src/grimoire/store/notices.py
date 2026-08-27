@@ -41,6 +41,7 @@ outside every lock in this module, the same cut `clock` and `events` make.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -60,7 +61,26 @@ LEDGER_LIMIT = 500
 
 #: A dismissed key is stored verbatim (it is opaque, and holiday names are not
 #: slugs), so this is what stops a crafted POST from writing an unbounded file.
+#: Keys over it are REFUSED rather than truncated: a truncated key is a
+#: different key, so storing one would report a dismissal that `pending` -- which
+#: compares against the full generated key -- then ignores, and the banner the
+#: reader just closed would come straight back. `_bounded` below is what keeps
+#: every generated key under this, so refusing can only ever reject a crafted
+#: one.
 KEY_LIMIT = 200
+
+#: How much of an observance's name a key spells out before `_bounded` hashes
+#: the rest. A holiday name has no length limit anywhere -- `validate_rule`
+#: checks only that one is present, and a custom rule is hand-written -- so
+#: without this a legitimate key could exceed `KEY_LIMIT` on its own.
+NAME_BUDGET = 120
+
+#: The dismissing scene, recorded for the reader alone. Bounded because it
+#: arrives in a public request body and is written into every new row: capping
+#: the KEY and the row COUNT bounds nothing if one field beside them is free to
+#: be a megabyte. Truncation is right here where it is wrong for a key --
+#: nothing compares this value, so a shortened one still says where it happened.
+SCENE_LIMIT = 200
 
 
 def _path(cid: str) -> Path:
@@ -117,11 +137,18 @@ def mark(cid: str, keys: list[str], scene: str = "") -> list[str]:
     — the ledger is a set of strings and has no idea what an event is, which is
     exactly what lets #103's commitments dismiss into it without changing
     anything here.
+
+    A key past `KEY_LIMIT` is dropped rather than shortened, and the return value
+    says so by not naming it: every key this app generates is bounded, so an
+    overlong one is crafted, and storing a truncated version of it would be
+    recording an acknowledgement of something nobody can be warned about.
     """
-    wanted = [k.strip()[:KEY_LIMIT] for k in keys if isinstance(k, str) and k.strip()]
+    wanted = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
+    wanted = [k for k in wanted if len(k) <= KEY_LIMIT]
     if not wanted:
         return []
     stamp = paths.now_iso()
+    scene = str(scene or "")[:SCENE_LIMIT]
     done: list[str] = []
     # The return is outside the hold, not inside it: `campaign_lock.__exit__` is
     # typed as able to swallow, so a `return` in the body leaves mypy unable to
@@ -158,12 +185,27 @@ def forget(cid: str, keys: list[str]) -> list[str]:
     return done
 
 
+def _bounded(text: str) -> str:
+    """`text` for a key: itself when short, else a prefix plus a digest of it.
+
+    Bounded AND collision-free, which a plain truncation is not: two observances
+    sharing a 120-character prefix would otherwise share one acknowledgement, so
+    dismissing the first would silence the second without the reader ever seeing
+    it. The prefix is kept so the key stays legible in a hand-read notices.json,
+    which is the whole reason the name is in the key rather than a hash of it.
+    """
+    if len(text) <= NAME_BUDGET:
+        return text
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return f"{text[:NAME_BUDGET]}~{digest}"
+
+
 def holiday_key(fixed: int, name: str) -> str:
-    return f"holiday:{fixed}:{name}"
+    return f"holiday:{fixed}:{_bounded(name)}"
 
 
 def event_key(fixed: int, eid: str) -> str:
-    return f"event:{fixed}:{eid}"
+    return f"event:{fixed}:{_bounded(eid)}"
 
 
 def pending(cid: str, croot: Path, native: str, window: int | None = None) -> list[dict]:
