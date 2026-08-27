@@ -2035,8 +2035,13 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
    Generated group now (#428), next to the one thing in the picker that spends
    a generation. So they take the chooser's own 8px rhythm rather than the
    standalone block's 12/20 -- a 20px gap under the control would read as a
-   break between it and the cards it produces. */
-.chooser .picker { margin: 0; }
+   break between it and the cards it produces.
+
+   Its own class, not `.chooser .picker`: the confirm form and the import pane
+   are also panes of this modal and carry `.picker` rows of their own (the date
+   and cast controls, the file control), which are standalone blocks and want
+   the standard spacing (Codex, review). */
+.chooser .idea-direction { margin: 0; }
 .chooser .picker input.grow { flex: 1; }
 .chooser textarea { width: 100%; background: transparent; border: 1px solid var(--muted); color: inherit; padding: 8px; font: inherit; }
 .chooser select { width: 100%; }
