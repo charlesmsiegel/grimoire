@@ -6,6 +6,10 @@
     measured separately (#2) must not turn a single line of instruction into
     two that can drift apart.
 
+    Named without the leading `_` on purpose: README.md reserves that for macro
+    libraries, and nothing imports this — it is rendered as prompt text, the
+    way history_line.j2 and post_history.j2 are.
+
     NEITHER section renders it. `Section.heading` names this template and
     `context.assemble._render_sections` opens each contiguous RUN of the two
     with it, so the directory is framed however the reader's prompt layout

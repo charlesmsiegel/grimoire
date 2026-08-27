@@ -6,7 +6,7 @@
     joined by system.j2's blank line into the single block they were split out
     of. The block's shared heading is in neither file: it is declared as this
     section's `Section.heading` and emitted by the render path — see
-    scene/_off_scene_cast.j2. -#}
+    scene/off_scene_cast_heading.j2. -#}
 {%- set lines = [] -%}
 {%- for a in offscene_active -%}{%- set _ = lines.append(a.name ~ ": " ~ a.dossier) -%}{%- endfor -%}
 {%- if lines -%}
