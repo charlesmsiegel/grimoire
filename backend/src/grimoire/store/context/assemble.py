@@ -515,10 +515,12 @@ class Section(NamedTuple):
     #: it from.
     except_opener: bool = False
     #: A heading this section SHARES with every other section naming the same
-    #: template, emitted by `_render_sections` on whichever of them renders
-    #: first. Not a section title: every other section opens with its own
-    #: `# Heading` inside its own template, and only a block that was split
-    #: into several sections for the token breakdown's sake needs this.
+    #: template. `_render_sections` opens each contiguous RUN of them with it —
+    #: one copy while they are adjacent, another for a half the layout moved
+    #: away, because what it frames is a block and a split layout has two. Not
+    #: a section title: every other section opens with its own `# Heading`
+    #: inside its own template, and only a block that was split into several
+    #: sections for the token breakdown's sake needs this.
     #:
     #: It is a property of the SECTION rather than something a template works
     #: out, because "am I first?" is a question about the merged, enabled
@@ -632,11 +634,22 @@ SECTIONS = [
     #   while tier 2 is unbounded dossier paragraphs, one per roster NPC, so a
     #   mature campaign's tier 2 is the larger half and largest goes first.
     #
+    # Which half is exposed follows the LAYOUT, because the heading rides on
+    # whichever renders first: reorder the two and it is tier 3 that can be
+    # dropped carrying the heading. Same defect, same cost, and pinned by
+    # `test_a_reordered_layout_can_still_drop_the_half_holding_the_heading`.
+    # #423 moved the heading's owner from data to the render path; it did not
+    # move it past the packer, which runs after.
+    #
     # Accepted rather than solved, and the options were weighed: dropping the
     # two together needs a section-grouping notion `pack` does not have, and
     # giving tier 3 its own lower tier means adding one to `DROP_ORDER` --
     # defensible (a directory of absent characters is worth less than the
     # recap) but a change to the packing model this issue did not ask for.
+    # Reassigning the heading to a survivor is the third option and has the
+    # same shape: done after `pack.pack` it adds tokens to a total already
+    # measured against the ceiling, so to be honest it has to happen inside the
+    # drop loop -- which is the grouping notion again.
     # Revisit if the unframed list turns out to cost anything in practice.
     Section("off_scene_cast_active", "Off-scene cast · active elsewhere",
             "scene/sections/off_scene_cast_active.j2", pack.BACKGROUND,
@@ -694,7 +707,9 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
     data = {**a["data"], "opener": opener}
     pinned = a.get("pinned_sections") or frozenset()
     out = []
-    headed: set[str] = set()
+    #: The heading of the last section actually EMITTED, which is what makes
+    #: the rule below about contiguous runs rather than the whole message.
+    last_heading = ""
     for section in layout.apply(SECTIONS):
         if section.pcless_only and not data["pcless"]:
             continue
@@ -703,23 +718,34 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
         if section.except_opener and opener:
             continue
         body = prompts.render(_section_template(section, data), **data).strip()
-        # A shared heading (`Section.heading`) rides on whichever member of its
-        # group RENDERED first, and this is the only place that can tell: it
-        # holds the reader's merged layout and the rendered text at once, so it
-        # is the one point where "which of these comes first" and "which of
-        # these has anything to say" are both answerable. `headed` is keyed on
-        # the heading template, so a second group would be independent of this
-        # one. Prepended BEFORE macro expansion, because the heading is a
-        # template on disk like any other and a reader may have put a macro in
-        # it.
-        if body and section.heading and section.heading not in headed:
-            headed.add(section.heading)
+        # A shared heading (`Section.heading`) opens each contiguous RUN of the
+        # sections that name it, and this is the only place that can tell: it
+        # holds the reader's merged layout and the rendered text at once, so
+        # "which of these comes first", "which of these has anything to say"
+        # and "are they still next to each other" are all answerable here and
+        # nowhere else.
+        #
+        # Per run, not once per message, because the heading frames a BLOCK. A
+        # layout that puts another section between the two halves has made two
+        # blocks, and that section's own `# Heading` closes the first -- so a
+        # suppressed second copy leaves the later half reading as part of
+        # whatever came between, which is the unframed list #423 is about.
+        # The catalog keeps them adjacent, so the default prompt has one run
+        # and is unchanged.
+        #
+        # A section that rendered EMPTY does not break a run: it puts nothing
+        # between the halves, so `last_heading` moves only when something is
+        # actually appended. Prepended BEFORE macro expansion, because the
+        # heading is a template on disk like any other and a reader may have
+        # put a macro in it.
+        if body and section.heading and section.heading != last_heading:
             body = prompts.render(section.heading, **data).strip() + "\n\n" + body
         text = macros.expand_macros(body, a["subs"], cid, sid).strip()
         if text:
             out.append({"id": section.id, "label": section.label,
                         "text": text, "tier": section.tier,
                         "pinned": section.id in pinned})
+            last_heading = section.heading
     return out
 
 

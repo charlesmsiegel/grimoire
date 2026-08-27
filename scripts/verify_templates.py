@@ -862,9 +862,9 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
 
 #: `Section.heading`, spelled out independently for the same reason the order
 #: below is: a block that was split into several sections for the token
-#: breakdown's sake shares one heading, and the render path puts it on
-#: whichever of them came back non-empty first (context.assemble is the other
-#: copy). Template path -> the heading template it shares.
+#: breakdown's sake shares one heading, and the render path opens each
+#: contiguous run of them with it (context.assemble is the other copy).
+#: Template path -> the heading template it shares.
 _SHARED_HEADINGS = {
     "scene/sections/off_scene_cast_active.j2": "scene/_off_scene_cast.j2",
     "scene/sections/off_scene_cast_known.j2": "scene/_off_scene_cast.j2",
@@ -926,16 +926,16 @@ def rendered_system(data: dict, opener: bool = False) -> str:
         names.append("scene/sections/transient_tracker.j2")
     names.append("scene/sections/response_budget.j2")
     sections: list[str] = []
-    headed: set[str] = set()
+    last_head = None
     for n in names:
         body = render(n, **data).strip()
-        if not body:
+        if not body:                      # an empty section does not split a run
             continue
         head = _SHARED_HEADINGS.get(n)
-        if head and head not in headed:
-            headed.add(head)
+        if head and head != last_head:    # one copy per CONTIGUOUS run
             body = render(head, **data).strip() + "\n\n" + body
         sections.append(body)
+        last_head = head
     return render("scene/system.j2", sections=sections).strip()
 
 

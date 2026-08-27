@@ -7,11 +7,12 @@
     two that can drift apart.
 
     NEITHER section renders it. `Section.heading` names this template and
-    `context.assemble._render_sections` prepends it to whichever member of the
-    group actually produced text first, so the directory opens with exactly one
-    copy however the reader's prompt layout orders or disables its halves.
-    Deciding that in a template is what #423 was: "am I first?" is a question
-    about the merged, enabled layout, and a template can only see the data. -#}
+    `context.assemble._render_sections` opens each contiguous RUN of the two
+    with it, so the directory is framed however the reader's prompt layout
+    orders, splits or disables its halves — one copy while they are adjacent,
+    which is the catalog's order and so the default prompt. Deciding that in a
+    template is what #423 was: "am I first?" is a question about the merged,
+    enabled layout, and a template can only see the data. -#}
 # Other characters in this world
 
 # (Not present. Introduce them only if the story calls for it.)
