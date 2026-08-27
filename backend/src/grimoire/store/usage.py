@@ -1351,3 +1351,53 @@ def budget(campaign: str, limit_usd: object, period: object = "") -> dict:
             # reason: 0.7999999999999999 renders as 79.99999999999999%.
             "fraction": round(fraction, 4), "level": level,
             "warn_fraction": WARN_FRACTION}
+
+
+def unpriced_models(months: int = 2) -> list[dict]:
+    """Models whose calls could be priced but are not, newest months first.
+
+    The gap this closes: a pricing table is opt-in and matched by model string,
+    so an entry whose key does not match what the ledger actually recorded
+    prices nothing, silently. Nothing anywhere said which strings the ledger
+    holds, so the only way to notice was to compare a rollup against a table by
+    eye and conclude that the feature was broken.
+
+    Only calls that a rate *could* have priced are counted -- no `cost_usd`, and
+    both token counts present. A call nobody metered cannot be rescued by a
+    rate (rates times nothing is zero), so listing its model here would send the
+    reader to write an entry that changes nothing.
+
+    Bounded to the newest `months` ledger files rather than the whole history:
+    this backs a chore and a hint, both opened casually, and `lifetime_since`
+    is the read reserved for the all-time view. Two months is enough to name
+    the models in current use, which is the question being asked.
+    """
+    root = ledger_dir()
+    try:
+        files = sorted((p for p in root.iterdir() if p.suffix == ".jsonl"),
+                       reverse=True)[:max(1, months)]
+    except OSError:
+        return []
+    table = pricing.read_pricing()
+    counts: dict[str, int] = {}
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict) or _float(row.get("cost_usd")) is not None:
+                continue
+            if _count(row.get("prompt_tokens")) is None \
+                    or _count(row.get("completion_tokens")) is None:
+                continue
+            model = str(row.get("model") or "")
+            if not model or pricing.rate_for(table, model) is not None:
+                continue
+            counts[model] = counts.get(model, 0) + 1
+    return [{"model": m, "calls": n}
+            for m, n in sorted(counts.items(), key=lambda kv: -kv[1])]

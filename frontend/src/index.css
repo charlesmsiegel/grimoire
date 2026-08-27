@@ -3657,12 +3657,10 @@ a.column-back { text-decoration: none; }
 .hub-quiet .hub-eyebrow { color: var(--muted); }
 .hub-quiet p { margin: 5px 0 0; color: var(--muted); font-size: 14px; }
 
-.hub-grid { display: grid; gap: 14px; margin-top: 20px; }
-.hub-cards .hub-grid { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
-.hub-two .hub-grid { grid-template-columns: 1.35fr 1fr; }
-.hub-one .hub-grid { grid-template-columns: minmax(0, 760px); }
-@media (max-width: 1180px) {
-  .hub-two .hub-grid, .hub-cards .hub-grid { grid-template-columns: minmax(0, 1fr); }
+/* One column, at a readable measure. */
+.hub-grid {
+  display: grid; gap: 14px; margin-top: 20px;
+  grid-template-columns: minmax(0, 760px);
 }
 
 .hub-card {
@@ -3805,4 +3803,15 @@ a.column-back { text-decoration: none; }
 .editor-list .rail-count {
   font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--muted); padding: 4px 2px 8px;
+}
+.unpriced-models { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.unpriced-models ul { list-style: none; margin: 6px 0; padding: 0; }
+.unpriced-models li { padding: 2px 0; }
+.unpriced-models code {
+  font-family: var(--fm, monospace); font-size: 12px;
+  background: var(--surface); padding: 1px 5px; border-radius: 2px;
+}
+.hub-panel {
+  margin-top: 16px; padding: 16px 18px; border: 1px solid var(--line);
+  border-radius: 4px; background: var(--panel);
 }

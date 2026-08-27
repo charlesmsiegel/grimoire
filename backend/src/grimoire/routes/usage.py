@@ -151,7 +151,12 @@ def get_campaign_scene_costs(cid: str, order: str = _ORDER):
                       # intent classification), which is a real category rather
                       # than a scene that has gone.
                       "missing": bool(bucket["scene"]) and meta is None})
-    return {**rollup, "scenes": named}
+    # Which model strings the ledger holds that no pricing entry matches. The
+    # page's "N calls reported no price" is a count; this is the reason, and
+    # without it the reader has no way to see that their table says
+    # `z.ai/...` where the ledger recorded `z-ai/...`.
+    return {**rollup, "scenes": named,
+            "unpriced_models": store.usage.unpriced_models()}
 
 
 @router.get("/pricing")

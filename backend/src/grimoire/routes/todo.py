@@ -167,17 +167,45 @@ def _chore_owed(cid: str, scenes: list[dict]) -> dict | None:
     }
 
 
+def _chore_unpriced(cid: str, scenes: list[dict]) -> dict | None:
+    """Models the ledger holds that no pricing entry matches.
+
+    The chore exists because the failure is silent: a table is matched by model
+    string, so an entry whose key does not match what was actually recorded
+    prices nothing and says nothing. Naming the strings is the whole fix -- the
+    reader can then see that their entry reads `z.ai/...` where the ledger says
+    `z-ai/...`, which no amount of staring at a rollup would reveal.
+    """
+    try:
+        models = store.usage.unpriced_models()
+    except (OSError, ValueError):
+        return None
+    if not models:
+        return None
+    calls = sum(m["calls"] for m in models)
+    names = ", ".join(m["model"] for m in models[:3])
+    more = "" if len(models) <= 3 else f", and {len(models) - 3} more"
+    return {
+        "id": "unpriced", "group": "Housekeeping", "severity": "warn", "n": calls,
+        "what": f"{calls} call{'s' if calls != 1 else ''} no pricing entry matches",
+        "why": f"Nobody reported a price for these and your table has no rate that "
+               f"matches them, so they are counted rather than costed: {names}{more}. "
+               f"The model string has to match exactly.",
+        "fix": "/config", "fix_label": "Pricing",
+    }
+
+
 #: One builder per chore, in the order they are worth doing. Proposals holding
 #: the world back lead regardless of count -- they are the only thing here that
 #: blocks play. Adding a chore is one entry and one function.
 BUILDERS = (_chore_unreviewed, _chore_open_scenes, _chore_sheets,
-            _chore_anchors, _chore_taglines, _chore_owed)
+            _chore_anchors, _chore_taglines, _chore_owed, _chore_unpriced)
 
 #: Every id `BUILDERS` can emit. The ignore route checks against this rather
 #: than accepting an id blind: a set that accumulates ids nothing emits grows
 #: forever and silences things nobody can name.
 KNOWN = frozenset({"unreviewed", "open-scenes", "sheets", "anchors",
-                   "taglines", "owed"})
+                   "taglines", "owed", "unpriced"})
 
 
 def _chores(cid: str) -> list[dict]:

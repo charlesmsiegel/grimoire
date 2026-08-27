@@ -46,12 +46,16 @@ export type RailRow = {
   /** Where the row goes, or `null` when it goes nowhere yet — the row is then
    *  not rendered at all, rather than rendered disabled.
    *
+   *  It takes the payload as well as the campaign, because whether a row has
+   *  anywhere to go can depend on what the campaign actually has -- Sheets is
+   *  meaningless without a mechanics module bound.
+   *
    *  This is what lets the rail ship complete in shape and sparse in fact.
    *  To be exact about what it buys, since it is easy to overclaim: a later
    *  slice still edits this table. It changes one `to` (and adds a `tail` if
    *  the row carries a count) rather than touching the rail's markup, its
    *  matching or its tests. */
-  to: (ctx: RailCtx) => string | null;
+  to: (ctx: RailCtx, payload: ShellPayload | null) => string | null;
   /** Whether this row is the one the current pathname belongs to.
    *
    *  Per row rather than one shared rule, because one shared rule is wrong in
@@ -175,8 +179,12 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     tailLabel: (s) => lbl(s?.campaign?.ledger_open, "open threads"),
   },
   {
+    // Only where the campaign binds a mechanics module. `sheets` is null when
+    // it does not, and a Sheets row on a campaign with no mechanics is an
+    // offer to look at a page that can only say "nothing here" -- the rail
+    // should not send anyone somewhere to be told that.
     id: "sheets", label: "Sheets", icon: "▣",
-    to: (ctx) => campaignPath(ctx, "/sheets"),
+    to: (ctx, s) => (s?.campaign?.sheets ? campaignPath(ctx, "/sheets") : null),
     match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/sheets`),
     tail: (s) => {
       const k = s?.campaign?.sheets;

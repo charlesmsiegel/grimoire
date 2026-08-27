@@ -1,5 +1,17 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+
+// The three settings panels are driven by their own suites; here they only
+// have to be REACHABLE, which is the bug this covers.
+vi.mock("../components/MechanicsConfig", () => ({
+  default: () => <div data-testid="mechanics-panel" />,
+}));
+vi.mock("../components/CalendarConfig", () => ({
+  CalendarConfig: () => <div data-testid="calendar-panel" />,
+}));
+vi.mock("../components/CampaignCover", () => ({
+  CampaignCover: () => <div data-testid="cover-panel" />,
+}));
 
 vi.mock("../api/client", () => ({
   api: {
@@ -44,6 +56,15 @@ beforeEach(() => {
   (api.getChronicle as any).mockResolvedValue([
     { sid: "s2", one_line: "It ended.", summary: "It ended, and the tide went out." },
   ]);
+});
+
+test("the layout picker is gone; the hub is one column", async () => {
+  // Three layouts of the same cards is a setting the reader has to have an
+  // opinion about before they can read the page.
+  renderHub();
+  await screen.findByText("Run One");
+  expect(screen.queryByText(/two column/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/^cards$/i)).not.toBeInTheDocument();
 });
 
 test("the hub leads with what to do next, not with state", async () => {
@@ -96,10 +117,24 @@ test("nothing waiting reads as an answer, not as an empty banner", async () => {
   expect(screen.queryByText("Waiting on you")).not.toBeInTheDocument();
 });
 
-test("no mechanics module is not 0 of 0 sheeted", async () => {
+test("with no mechanics module there is no sheets card and no sheets link", async () => {
+  // "No mechanics bound" is a legal state, not a coverage of 0 of 0 -- and a
+  // card whose whole content is "this does not apply here" is a card that
+  // should not be on the page.
   renderHub();
   await screen.findByText("Run One");
-  expect(screen.getByText(/binds no mechanics module/i)).toBeInTheDocument();
+  expect(screen.queryByText(/mechanics & sheets/i)).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /^sheets$/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/0 of 0/)).not.toBeInTheDocument();
+});
+
+test("with a module bound the sheets card carries its coverage", async () => {
+  (api.getShell as any).mockResolvedValue(shell({ sheets: { sheeted: 4, total: 7 } }));
+  renderHub();
+  await screen.findByText("Run One");
+  expect(screen.getByText("4 of 7")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /^sheets$/i }))
+    .toHaveAttribute("href", "/campaigns/run/sheets");
 });
 
 // Moved here with the controls themselves: these were on the scene toolbar,
@@ -132,4 +167,23 @@ test("a failed read is not an empty campaign", async () => {
   renderHub();
   expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText("Next up")).not.toBeInTheDocument();
+});
+
+
+test("the campaign's own settings are reachable from its front door", () => {
+  // Mechanics, Calendar and Cover belong to the CAMPAIGN, but they used to sit
+  // on the scene bar -- so opening a campaign gave you no way to bind a
+  // mechanics module at all. You had to already be inside a scene to configure
+  // the thing the scenes belong to.
+  renderHub();
+  return screen.findByText("Run One").then(() => {
+    fireEvent.click(screen.getByRole("button", { name: "Mechanics" }));
+    expect(screen.getByTestId("mechanics-panel")).toBeInTheDocument();
+    // One at a time, and clicking the open one closes it.
+    fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
+    expect(screen.queryByTestId("mechanics-panel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("calendar-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
+    expect(screen.queryByTestId("calendar-panel")).not.toBeInTheDocument();
+  });
 });

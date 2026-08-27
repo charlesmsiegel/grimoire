@@ -20,8 +20,21 @@ const PATHS = [
 
 const ctx = { cid: "c1" };
 
+/** A payload with a mechanics module bound, so rows gated on one are offered.
+ *  `to` takes the payload because whether a row has anywhere to go can depend
+ *  on what the campaign actually has. */
+const WITH_MODULE = {
+  campaigns: 1, todo: null,
+  campaign: {
+    id: "c1", name: "A Run", world_name: "Saltmarch", scenes: 1, open: [],
+    ledger_open: 0, sheets: { sheeted: 1, total: 2 }, unreviewed: 0,
+    pending: [], images_undescribed: null,
+  },
+} as any;
+
 function activeIn(rows: typeof APP_ROWS, path: string) {
-  return rows.filter((r) => r.to(ctx) !== null && r.match(path, ctx)).map((r) => r.id);
+  return rows.filter((r) => r.to(ctx, WITH_MODULE) !== null && r.match(path, ctx))
+             .map((r) => r.id);
 }
 
 describe("at most one row lights per tier", () => {
@@ -59,14 +72,15 @@ test("rows whose pages do not exist yet go nowhere", () => {
   // Not a wish-list: this is what keeps the rail from offering a destination
   // that is not there. Each id gets a route in its own slice.
   const dead = [...APP_ROWS, ...CAMPAIGN_ROWS]
-    .filter((r) => r.to(ctx) === null).map((r) => r.id);
+    .filter((r) => r.to(ctx, WITH_MODULE) === null).map((r) => r.id);
   expect(dead).toEqual(["wrap", "images"]);
 });
 
 test("Costs is absent with no campaign open, present with one", () => {
   const none = { cid: null };
-  expect(APP_ROWS.find((r) => r.id === "costs")!.to(none)).toBeNull();
-  expect(APP_ROWS.find((r) => r.id === "costs")!.to(ctx)).toBe("/campaigns/c1/costs");
+  expect(APP_ROWS.find((r) => r.id === "costs")!.to(none, WITH_MODULE)).toBeNull();
+  expect(APP_ROWS.find((r) => r.id === "costs")!.to(ctx, WITH_MODULE))
+    .toBe("/campaigns/c1/costs");
 });
 
 test("Search advertises no shortcut", () => {
@@ -141,4 +155,20 @@ test("RAIL_PX and the stylesheet agree", () => {
   // `process.cwd()` is `frontend/` -- vitest runs from there (see CLAUDE.md).
   const css = readFileSync(join(process.cwd(), "src", "index.css"), "utf-8");
   expect(css).toContain(`@media (max-width: ${RAIL_PX}px)`);
+});
+
+
+test("Sheets is offered only where a mechanics module is bound", () => {
+  // `sheets` is null when none is. A Sheets row on a campaign with no
+  // mechanics is an offer to visit a page that can only say "nothing here",
+  // and the rail should not send anyone somewhere to be told that.
+  const sheets = CAMPAIGN_ROWS.find((r) => r.id === "sheets")!;
+  expect(sheets.to(ctx, WITH_MODULE)).toBe("/campaigns/c1/sheets");
+  const noModule = {
+    ...WITH_MODULE,
+    campaign: { ...WITH_MODULE.campaign, sheets: null },
+  };
+  expect(sheets.to(ctx, noModule)).toBeNull();
+  // ...and with no payload at all it stays quiet rather than guessing.
+  expect(sheets.to(ctx, null)).toBeNull();
 });

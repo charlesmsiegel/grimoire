@@ -128,6 +128,30 @@ export function CostsView() {
                 beside them would be a fourth number for the reader to
                 reconcile against three that are already exact. */}
             <MoneyColumns bucket={totals} />
+            {/* The count says how many calls nobody priced; this says WHY, and
+                the why is almost always a model string that does not match.
+                Without it the only way to find a typo'd key is to compare a
+                rollup against a table by eye. */}
+            {!!report?.unpriced_models?.length && (
+              <div className="unpriced-models">
+                <div className="money-label">No rate matches these</div>
+                <ul>
+                  {report.unpriced_models.map((m) => (
+                    <li key={m.model}>
+                      <code>{m.model}</code>
+                      <span className="field-hint">
+                        {" "}— {m.calls} call{m.calls === 1 ? "" : "s"} that could be priced
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="field-hint">
+                  A pricing entry is matched on the model string exactly. Add one
+                  under <Link to="/config">Configuration → Pricing</Link>, or a
+                  wildcard like <code>vendor/*</code>.
+                </p>
+              </div>
+            )}
             <div className="ctx-tokens">
               {totals.calls.toLocaleString()}{" "}
               {totals.calls === 1 ? "generation" : "generations"}

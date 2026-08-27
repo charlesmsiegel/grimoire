@@ -4,6 +4,9 @@ import { api, type CampaignMeta, type ChronicleEntry, type SceneMeta } from "../
 import type { ShellPayload } from "../api/types";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { PageShell, ColumnSection } from "../components/PageShell";
+import MechanicsConfig from "../components/MechanicsConfig";
+import { CalendarConfig } from "../components/CalendarConfig";
+import { CampaignCover } from "../components/CampaignCover";
 
 /** The campaign's front door.
  *
@@ -18,8 +21,6 @@ import { PageShell, ColumnSection } from "../components/PageShell";
  *  this page replaced, and reproducing it inside a card would be the same
  *  mistake with a nicer border.
  */
-
-type Layout = "cards" | "two" | "one";
 
 function Card({ title, tail, children, foot }: {
   title: string; tail?: React.ReactNode;
@@ -43,8 +44,15 @@ export default function CampaignHub() {
   const [shell, setShell] = useState<ShellPayload | null>(null);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [chronicle, setChronicle] = useState<ChronicleEntry[]>([]);
-  const [layout, setLayout] = useState<Layout>("cards");
   const [failed, setFailed] = useState(false);
+  /** Which campaign setting is open, if any.
+   *
+   *  These used to live only on the scene bar, which meant they were reachable
+   *  only from inside a scene -- so opening a campaign gave you no way to bind
+   *  a mechanics module, set its calendar or give it a cover. They belong to
+   *  the campaign, not to whichever scene you happen to have open, so they are
+   *  here. */
+  const [panel, setPanel] = useState<"mechanics" | "calendar" | "cover" | null>(null);
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
@@ -76,19 +84,26 @@ export default function CampaignHub() {
 
   const column = (
     <>
-      <ColumnSection label="Layout">
-        {([["cards", "Cards"], ["two", "Two column"], ["one", "One column"]] as const)
-          .map(([id, label]) => (
-            <button key={id} type="button"
-                    className={"column-row" + (layout === id ? " active" : "")}
-                    onClick={() => setLayout(id)}>{label}</button>
-          ))}
-      </ColumnSection>
       <ColumnSection label="This campaign">
         <Link className="column-row" to={`/campaigns/${cid}/ledger`}>Ledger &amp; timeline</Link>
         <Link className="column-row" to={`/campaigns/${cid}/costs`}>Costs</Link>
-        <Link className="column-row" to={`/campaigns/${cid}/sheets`}>Sheets</Link>
+        {/* Only where a module is bound: `sheets` is null when it is not, and
+            offering a page that can only say "nothing here" is not an offer. */}
+        {camp?.sheets && (
+          <Link className="column-row" to={`/campaigns/${cid}/sheets`}>Sheets</Link>
+        )}
         <Link className="column-row" to={`/campaigns/${cid}/world`}>World</Link>
+      </ColumnSection>
+      <ColumnSection label="Settings">
+        {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
+           ["cover", "Cover"]] as const).map(([id, label]) => (
+          <button key={id} type="button"
+                  className={"column-row" + (panel === id ? " active" : "")}
+                  aria-pressed={panel === id}
+                  onClick={() => setPanel(panel === id ? null : id)}>
+            {label}
+          </button>
+        ))}
       </ColumnSection>
       <ColumnSection label="Export">
         <a className="column-row" href={`/api/campaigns/${cid}/export.epub`} download>EPUB</a>
@@ -117,12 +132,26 @@ export default function CampaignHub() {
 
   return (
     <PageShell column={column} columnLabel="This campaign">
-      <div className={"page-wide view-anim hub hub-" + layout}>
+      {/* One column. The design offered three layouts; a picker that
+          rearranges the same cards is a setting the reader has to have an
+          opinion about before they can read the page. */}
+      <div className="page-wide view-anim hub">
         <div className="eyebrow">
           {[camp?.world_name, camp ? `${camp.scenes} scenes` : null,
             open.length ? `${open.length} open` : null].filter(Boolean).join(" · ")}
         </div>
         <h1 className="screen-title">{meta?.name ?? "…"}</h1>
+
+        {panel && (
+          <section className="hub-panel">
+            {panel === "mechanics" && (
+              <MechanicsConfig cid={cid}
+                               onChanged={() => { void api.getShell(cid).then(setShell); }} />
+            )}
+            {panel === "calendar" && <CalendarConfig scope={{ kind: "campaign", id: cid }} />}
+            {panel === "cover" && <CampaignCover cid={cid} />}
+          </section>
+        )}
 
         {/* ---- what to do next, before any state ---- */}
         <section className="hub-next">
@@ -221,17 +250,18 @@ export default function CampaignHub() {
             </p>
           </Card>
 
-          <Card title="Mechanics &amp; sheets"
-                tail={camp?.sheets ? `${camp.sheets.sheeted} of ${camp.sheets.total}` : undefined}
-                foot={<Link to={`/campaigns/${cid}/sheets`}>Sheet coverage →</Link>}>
-            {/* "No mechanics bound" is legal and is not "0 of 0 sheeted" — the
-                two must never render the same way. */}
-            <p className="field-hint">
-              {camp?.sheets
-                ? `${camp.sheets.total - camp.sheets.sheeted} without a sheet.`
-                : "This campaign binds no mechanics module."}
-            </p>
-          </Card>
+          {/* Only where a module is bound. "No mechanics" is a legal state, not
+              a coverage of 0 of 0, and a card whose whole content is "this does
+              not apply here" is a card that should not be on the page. */}
+          {camp?.sheets && (
+            <Card title="Mechanics &amp; sheets"
+                  tail={`${camp.sheets.sheeted} of ${camp.sheets.total}`}
+                  foot={<Link to={`/campaigns/${cid}/sheets`}>Sheet coverage →</Link>}>
+              <p className="field-hint">
+                {camp.sheets.total - camp.sheets.sheeted} without a sheet.
+              </p>
+            </Card>
+          )}
         </div>
       </div>
     </PageShell>

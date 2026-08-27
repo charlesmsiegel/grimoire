@@ -42,7 +42,7 @@ function Row({ row, ctx, payload, onPick }: {
   row: RailRow; ctx: RailCtx; payload: ShellPayload | null; onPick: () => void;
 }) {
   const { pathname } = useLocation();
-  const to = row.to(ctx);
+  const to = row.to(ctx, payload);
   if (to === null) return null;
   const active = row.match(pathname, ctx);
   const { text, label } = tailOf(row, payload);

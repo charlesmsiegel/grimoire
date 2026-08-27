@@ -952,6 +952,10 @@ export type SceneCostRow = UsageBucket & {
  *  `since`/`until` is the window that could actually be scanned — a library
  *  whose oldest month file was deleted by hand cannot reach past what is left. */
 export type CampaignSceneCosts = {
+  /** Model strings the ledger holds that no pricing entry matches, and whose
+   *  calls DO carry token counts — so a rate would price them. Names the
+   *  reason behind `unpriced_calls`, which is otherwise just a number. */
+  unpriced_models?: { model: string; calls: number }[];
   campaign: string; since: string; until: string; generated_at: string;
   /** The order the server applied before capping the list — echoed back, so a
    *  view can tell an answer to the sort it asked for from a stale one. */

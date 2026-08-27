@@ -67,8 +67,9 @@ test("0 renders as 0; unmeasured renders nothing at all", () => {
   // "Nothing is waiting" is an answer and is shown.
   expect(within(camp).getByRole("link", { name: /ledger & timeline, 0 open threads/i }))
     .toBeInTheDocument();
-  // "Nobody computed it" is not, and is not drawn as a zero.
-  expect(within(camp).getByRole("link", { name: /^sheets$/i })).toBeInTheDocument();
+  // ...and a null `sheets` means no module is bound, so the row is not offered
+  // at all -- see the Sheets test below. What it must never be is "0 of 0".
+  expect(within(camp).queryByText(/0 of 0/)).not.toBeInTheDocument();
 });
 
 test("a count is in the row's accessible name, not only its position", () => {
