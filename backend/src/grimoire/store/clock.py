@@ -566,6 +566,17 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
         revision.require(cid, expect_revision)
         _commit(cid, target, {"from": start, "to": target,
                               "reason": _reason(reason), "at": now_iso()})
+        # In the SAME hold as the write, which is what makes the check above
+        # binding rather than merely narrow. The activity middleware stamps this
+        # campaign again once the response is on its way out, and that is far
+        # too late for a second advance: this one releases the lock, fires its
+        # events and returns, and any of that is long enough for a request
+        # carrying the SAME expected token to take the lock, read the value this
+        # one was supposed to have replaced, and commit a move priced against a
+        # clock that has already moved. Two callers with one token is exactly
+        # the case `expect_revision` exists for, so the token has to be gone
+        # before the lock is.
+        revision.bump(cid)
     # After the clock has landed, never before: an event stamped by a move that
     # then failed to commit would be a fired event in a campaign whose present
     # never reached it. Forward moves only (#101) -- a backward move is a
@@ -573,6 +584,7 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
     # the story already played the event.
     fired = _fire(cid, computed["events"], target) if computed["elapsed_days"] > 0 else []
     return {"moved": True, "now": target, "digest": computed, "fired": fired}
+
 
 
 def observe(cid: str, native: str, reason: str) -> dict:
