@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NoticeBanner } from "./NoticeBanner";
 import { api, type Notice } from "../api/client";
 
@@ -17,6 +17,10 @@ const EVENT: Notice = {
 };
 
 beforeEach(() => {
+  // Cleared before the defaults are re-set: without it a spy carries the calls
+  // every earlier test made, and a `not.toHaveBeenCalled()` assertion is
+  // reading the previous test rather than this one.
+  vi.clearAllMocks();
   vi.mocked(api.dismissNotices).mockResolvedValue({ ok: true, marked: [] });
   vi.mocked(api.restoreNotices).mockResolvedValue({ ok: true, forgotten: [] });
 });
@@ -40,27 +44,22 @@ test("a notice one day out says tomorrow, not '1 days'", () => {
 });
 
 test("dismissing marks the key and takes the warning away", async () => {
-  const onChanged = vi.fn();
-  render(<NoticeBanner cid="c" notices={[HOLIDAY, EVENT]} scene="001--a"
-                       onChanged={onChanged} />);
+  render(<NoticeBanner cid="c" notices={[HOLIDAY, EVENT]} scene="001--a" />);
   fireEvent.click(screen.getByLabelText("Dismiss Saltmarch Eve"));
   await waitFor(() => expect(api.dismissNotices).toHaveBeenCalledWith(
     "c", [HOLIDAY.key], "001--a"));
   expect(screen.queryByLabelText("Dismiss Saltmarch Eve")).toBeNull();
   // The other notice is untouched: a dismissal is about one occurrence.
   expect(screen.getByText("The envoy arrives")).toBeTruthy();
-  await waitFor(() => expect(onChanged).toHaveBeenCalled());
 });
 
 test("a failed dismissal puts the row back", async () => {
   // The one outcome a reader cannot tell from success is a banner that looks
   // dismissed and is not — so an optimistic hide has to be reversible.
   vi.mocked(api.dismissNotices).mockRejectedValue(new Error("offline"));
-  const onChanged = vi.fn();
-  render(<NoticeBanner cid="c" notices={[HOLIDAY]} onChanged={onChanged} />);
+  render(<NoticeBanner cid="c" notices={[HOLIDAY]} />);
   fireEvent.click(screen.getByLabelText("Dismiss Saltmarch Eve"));
   await waitFor(() => expect(screen.getByLabelText("Dismiss Saltmarch Eve")).toBeTruthy());
-  expect(onChanged).not.toHaveBeenCalled();
 });
 
 // ---- the undo, which a permanent dismissal has to have -------------------
@@ -75,17 +74,37 @@ test("a dismissed notice leaves an Undo behind", async () => {
   expect(screen.getByText(/Saltmarch Eve dismissed/)).toBeTruthy();
 });
 
-test("Undo restores the key and asks the owner to refetch", async () => {
-  const onChanged = vi.fn();
-  // The owner refetches on the callback, so by the time Undo is clicked the row
-  // is gone from `notices` — the banner has to be holding its own copy.
-  const { rerender } = render(<NoticeBanner cid="c" notices={[HOLIDAY]} onChanged={onChanged} />);
+test("Undo restores the key even after the owner has refetched the row away", async () => {
+  // The owning surface refetches as soon as the write lands, so by the time
+  // Undo is clicked the row is gone from `notices` — the banner has to be
+  // holding its own copy of it.
+  const { rerender } = render(<NoticeBanner cid="c" notices={[HOLIDAY]} />);
   fireEvent.click(screen.getByLabelText("Dismiss Saltmarch Eve"));
   await waitFor(() => expect(api.dismissNotices).toHaveBeenCalled());
-  rerender(<NoticeBanner cid="c" notices={[]} onChanged={onChanged} />);
+  rerender(<NoticeBanner cid="c" notices={[]} />);
   fireEvent.click(await screen.findByLabelText("Undo dismissing Saltmarch Eve"));
   await waitFor(() => expect(api.restoreNotices).toHaveBeenCalledWith("c", [HOLIDAY.key]));
-  await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+});
+
+test("Undo is disabled until the dismissal it would take back has landed", async () => {
+  // Both writes take the campaign lock, so in flight together they serialize in
+  // whichever order they arrive: a forget that wins finds nothing to forget,
+  // then the mark it beat lands, leaving the occurrence dismissed while the
+  // banner has already reported it restored.
+  let land: (v: any) => void = () => {};
+  vi.mocked(api.dismissNotices).mockReturnValue(new Promise((r) => { land = r; }));
+  render(<NoticeBanner cid="c" notices={[HOLIDAY]} />);
+  fireEvent.click(screen.getByLabelText("Dismiss Saltmarch Eve"));
+  const undo = await screen.findByLabelText("Undo dismissing Saltmarch Eve");
+  expect(undo).toBeDisabled();
+  // Clicked anyway: `fireEvent` dispatches straight at the handler, which is
+  // exactly the case the in-function guard exists for — the disabled attribute
+  // is the affordance, not the serialization.
+  fireEvent.click(undo);
+  expect(api.restoreNotices).not.toHaveBeenCalled();
+  await act(async () => { land({ ok: true, marked: [HOLIDAY.key] }); });
+  await waitFor(() => expect(
+    screen.getByLabelText("Undo dismissing Saltmarch Eve")).not.toBeDisabled());
 });
 
 test("a failed Undo leaves the row dismissed", async () => {

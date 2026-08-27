@@ -162,6 +162,9 @@ body::before {
   font-family: var(--fm); font-size: 11px; color: var(--banner-ink);
   text-decoration: underline;
 }
+/* Disabled while the dismissal it would take back is still in flight -- the two
+   writes must not race for the campaign lock. */
+.notice-undo:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
 
 /* ---- section label (character detail, config) ---- */
 .section-label {

@@ -29,25 +29,36 @@ function lead(n: number): string {
  *  misclick would otherwise silence a holiday until its day had gone by, with
  *  no way back short of editing notices.json. The dismissed row is therefore
  *  kept on screen as an Undo rather than vanishing. It holds its own copy of the
- *  `Notice`, because the owner refetches on the callback below and the row is
- *  gone from `notices` by the time the Undo is there to be clicked.
+ *  `Notice`, because the owning surface refetches as soon as the write lands and
+ *  the row is gone from `notices` by the time the Undo is there to be clicked.
  *
  *  Optimistic on both sides: the row changes state on click and the write
  *  follows. A failed write puts it back, because the alternative — a banner that
  *  looks dismissed and is not — is the one outcome a reader cannot tell from
- *  success.
+ *  success. Optimistic, but not concurrent: Undo is disabled until its own
+ *  dismissal has landed, or the two writes race for the campaign lock and the
+ *  loser decides.
+ *
+ *  Nothing is passed back to the owner. `dismissNotices` and `restoreNotices`
+ *  emit on the `notices` app-event channel, and every surface showing this
+ *  ledger listens — which is what a callback could not do, since two of those
+ *  surfaces are mounted as siblings and neither owns the other.
  */
-export function NoticeBanner({ cid, notices, scene = "", onChanged }: {
+export function NoticeBanner({ cid, notices, scene = "" }: {
   cid: string;
   notices: Notice[];
   /** Where the dismissal happened. Recorded in the ledger for the reader's
    *  benefit; once-ness is campaign-wide, so nothing reads it back. */
   scene?: string;
-  /** Called after a dismissal or an undo lands, so an owner holding its own
-   *  copy of the list can refetch. */
-  onChanged?: () => void;
 }) {
   const [dismissed, setDismissed] = useState<Notice[]>([]);
+  // Keys whose write is still in flight. Undo is disabled while its own
+  // dismissal is one: both requests take the campaign lock, so they serialize
+  // in whichever order they arrive, and a forget that wins finds nothing to
+  // forget -- then the mark it beat lands, leaving the occurrence dismissed
+  // while the banner has already reported it restored. Serializing at the
+  // control is what keeps the two from being in flight together at all.
+  const [writing, setWriting] = useState<string[]>([]);
 
   // Reset when the campaign changes. This component stays mounted across a
   // `cid` navigation (the inspector's rail and the new-scene chooser both do),
@@ -61,6 +72,7 @@ export function NoticeBanner({ cid, notices, scene = "", onChanged }: {
   if (cid !== seenCid) {
     setSeenCid(cid);
     setDismissed([]);
+    setWriting([]);
   }
 
   const shown = notices.filter((n) => !dismissed.some((d) => d.key === n.key));
@@ -68,21 +80,30 @@ export function NoticeBanner({ cid, notices, scene = "", onChanged }: {
 
   async function dismiss(notice: Notice) {
     setDismissed((rows) => [...rows, notice]);
+    setWriting((keys) => [...keys, notice.key]);
     try {
       await api.dismissNotices(cid, [notice.key], scene);
-      onChanged?.();
     } catch {
       setDismissed((rows) => rows.filter((r) => r.key !== notice.key));
+    } finally {
+      setWriting((keys) => keys.filter((k) => k !== notice.key));
     }
   }
 
   async function undo(notice: Notice) {
+    // Guarded here and not only by the button's `disabled`: the attribute is
+    // the affordance a reader sees, this is the serialization. They are not the
+    // same thing -- a programmatic click, or a second one racing the re-render
+    // that disables it, reaches the handler with the attribute set.
+    if (writing.includes(notice.key)) return;
     setDismissed((rows) => rows.filter((r) => r.key !== notice.key));
+    setWriting((keys) => [...keys, notice.key]);
     try {
       await api.restoreNotices(cid, [notice.key]);
-      onChanged?.();
     } catch {
       setDismissed((rows) => [...rows, notice]);
+    } finally {
+      setWriting((keys) => keys.filter((k) => k !== notice.key));
     }
   }
 
@@ -103,6 +124,7 @@ export function NoticeBanner({ cid, notices, scene = "", onChanged }: {
         <div className="notice-row notice-done" key={n.key}>
           <span className="notice-text">{n.name} dismissed.</span>
           <button className="notice-undo" aria-label={`Undo dismissing ${n.name}`}
+                  disabled={writing.includes(n.key)}
                   onClick={() => void undo(n)}>Undo</button>
         </div>
       ))}
