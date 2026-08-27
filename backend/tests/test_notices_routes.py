@@ -229,3 +229,44 @@ def test_an_absurd_window_is_reported_as_the_value_actually_stored(client):
     client.put(f"/api/campaigns/{cid}/calendar", json={**cfg, "warn_days": 100000})
     assert client.get(f"/api/campaigns/{cid}/calendar").json()["warn_days"] == \
         store.calendars.MAX_WARN_DAYS
+
+
+def test_a_recreated_event_warns_again(client):
+    """`events.create` uniquifies an id against the events that exist NOW, so
+    deleting one frees its id — and a notice key is `event:{fixed}:{id}`. Left
+    alone, a recreated event on the same day inherits the deleted one's
+    acknowledgement and is silently never warned about."""
+    cid = _campaign(client)
+    eid = client.post(f"/api/campaigns/{cid}/events",
+                      json={"name": "The envoy arrives", "date": "2026-05-12"}).json()["id"]
+    key = _notices(client, cid)["notices"][0]["key"]
+    client.post(f"/api/campaigns/{cid}/notices", json={"keys": [key]})
+    assert _notices(client, cid)["notices"] == []
+    assert client.delete(f"/api/campaigns/{cid}/events/{eid}").status_code == 200
+    again = client.post(f"/api/campaigns/{cid}/events",
+                        json={"name": "The envoy arrives", "date": "2026-05-12"}).json()["id"]
+    assert again == eid          # the id really is reused; that is the premise
+    assert [n["name"] for n in _notices(client, cid)["notices"]] == ["The envoy arrives"]
+
+
+def test_deleting_an_event_leaves_other_acknowledgements_alone(client):
+    cid = _campaign(client, holidays=[_rule("Saltmarch Eve", "05", 13)])
+    eid = client.post(f"/api/campaigns/{cid}/events",
+                      json={"name": "The envoy arrives", "date": "2026-05-12"}).json()["id"]
+    keys = [n["key"] for n in _notices(client, cid)["notices"]]
+    client.post(f"/api/campaigns/{cid}/notices", json={"keys": keys})
+    client.delete(f"/api/campaigns/{cid}/events/{eid}")
+    # The holiday's dismissal is untouched — only the deleted event's is retired.
+    assert _notices(client, cid)["notices"] == []
+
+
+def test_a_corrupt_ledger_is_reported_rather_than_replaced(client):
+    """A hand-edited or sync-damaged ledger can still be repaired; publishing
+    one acknowledgement over it cannot be undone."""
+    cid = _campaign(client)
+    store.notices._path(cid).write_text('{"holiday:1:Old": {} TRAILING', encoding="utf-8")
+    r = client.post(f"/api/campaigns/{cid}/notices", json={"keys": ["holiday:2:New"]})
+    assert r.status_code == 400
+    assert store.notices._path(cid).read_text(encoding="utf-8") == '{"holiday:1:Old": {} TRAILING'
+    assert client.post(f"/api/campaigns/{cid}/notices/forget",
+                       json={"keys": ["holiday:1:Old"]}).status_code == 400

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from grimoire.store import calendars, campaigns, events, notices, worlds
 
 # The campaign's present, and the days around it, in the primary calendar's own
@@ -384,3 +386,49 @@ def test_a_non_string_holiday_name_does_not_break_the_scan(monkeypatch, tmp_path
     calendars.write_calendar(root, cfg)
     assert calendars.today_facts(calendars.read_calendar(root), NOW)["upcoming"] is not None
     assert len(_pending(cid)) == 1
+
+
+# ---- the writer refuses what the reader tolerates --------------------------
+
+def test_a_writer_refuses_the_ledger_a_reader_tolerates(monkeypatch, tmp_path):
+    """The asymmetry is the point. A mutator inheriting `read`'s tolerance would
+    answer a corrupt file with `{}` and publish that over it — turning something
+    a reader could still repair by hand into one acknowledgement, permanently.
+    `events._mutable` draws the same line."""
+    cid = _campaign(monkeypatch, tmp_path)
+    notices._path(cid).write_text('{"holiday:1:Old": {} TRAILING', encoding="utf-8")
+    with pytest.raises(notices.NoticeError):
+        notices.mark(cid, ["holiday:2:New"])
+    with pytest.raises(notices.NoticeError):
+        notices.forget(cid, ["holiday:1:Old"])
+    assert notices._path(cid).read_text(encoding="utf-8") == '{"holiday:1:Old": {} TRAILING'
+    assert notices.read(cid) == {}          # the reader still degrades to silence
+
+
+def test_a_ledger_of_the_wrong_shape_is_refused_by_a_writer(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    notices._path(cid).write_text("[]", encoding="utf-8")
+    with pytest.raises(notices.NoticeError):
+        notices.mark(cid, ["holiday:1:x"])
+
+
+# ---- the dismissing scene follows its scene ------------------------------
+
+def test_a_renamed_scene_is_followed(monkeypatch, tmp_path):
+    """Nothing reads `scene` back to decide anything, but it is the only thing
+    saying WHERE a dismissal happened — and a scene id goes stale on a title
+    rename, the first date stamp, or a width re-pad."""
+    cid = _campaign(monkeypatch, tmp_path)
+    notices.mark(cid, ["holiday:1:Saltmarch Eve"], scene="001--s")
+    notices.repoint_scenes(cid, {"001--s": "001--2026-05-13--s"})
+    assert notices.read(cid)["holiday:1:Saltmarch Eve"]["scene"] == "001--2026-05-13--s"
+
+
+def test_repointing_steps_over_a_ledger_it_cannot_read(monkeypatch, tmp_path):
+    """This runs AFTER the scene file has been renamed, so raising would 500 the
+    rename and leave every store later in the sweep pointing at an id that is
+    already gone."""
+    cid = _campaign(monkeypatch, tmp_path)
+    notices._path(cid).write_text("{not json", encoding="utf-8")
+    notices.repoint_scenes(cid, {"001--s": "002--s"})   # must not raise
+    assert notices._path(cid).read_text(encoding="utf-8") == "{not json"
