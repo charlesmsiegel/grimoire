@@ -32,14 +32,21 @@ waving them through.
 2xx, streams included -- one place, so a route written tomorrow is covered
 without anybody remembering this file exists.
 
-Three writes stamp for themselves on top of that, and each has the same reason
-in a different shape: the response line is not the moment. `clock.advance` bumps
-inside the lock hold that covers its commit, because a check the token has not
-moved under does not exclude a second caller holding the same one.
-`routes.scenes._under_review_lock` bumps inside the fence that covers a detached
-review's terminal write, whose route answered 202 minutes earlier and correctly
-declares itself `@computes_only`. `routes.streaming._persist_reply` bumps for
-the posts a stream lands, long after its own status line went out.
+What stamps for itself on top of that has one reason in several shapes: the
+response line is not the moment.
+
+`clock.advance` bumps inside the lock hold that covers its commit, because a
+check the token has not moved under does not exclude a second caller holding the
+same one.
+
+Everything a DETACHED run writes bumps where it writes, because the run outlives
+the response: `routes.scenes._under_review_lock` for a review's terminal write
+(whose route answered 202 minutes earlier and correctly declares itself
+`@computes_only`), `routes.scenes._rolling_commit` and `_break_commit` for the
+follow-ups a landed turn schedules, and `routes.streaming._turn_settled` at each
+of a turn's terminal points. That last one is deliberately not "a post landed":
+a roll fence that closes with no narration writes a proposal record and nothing
+else, and a failed turn's rollback takes a post back OFF.
 
 What all of that leaves out is worth saying plainly:
 a store written by something other than this app (a hand edit, a sync client

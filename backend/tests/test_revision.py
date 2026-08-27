@@ -461,6 +461,46 @@ def test_two_advances_holding_one_token_cannot_both_commit(cid, monkeypatch):
     assert len(clock.read(cid)["log"]) == 1, "the second advance committed anyway"
 
 
+def test_a_follow_up_that_lands_moves_the_token(client):
+    """The rolling-summary fold and the scene-break question run as BACKGROUND
+    runs after every turn (#397), minutes after that turn's status line went
+    out — so neither has a response line for the middleware to stamp.
+
+    Driven at each commit, which is where the write is and where the stamp has
+    to share its hold: the follow-ups themselves need a provider, and what is in
+    question is the write, not the model call that decided it.
+    """
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    for _ in range(3):
+        store.scenes.append_message(cid, sid, "user", "The gate stands open.")
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    digest = store.rolling_summary.covered_digest(messages)
+    facts = store.chronicle.scene_facts(cid, sid)
+
+    before = _token(client, cid)
+    landed = scene_routes._rolling_commit(
+        cid, sid, "They reached the gate.", len(messages), digest,
+        store.rolling_summary.facts_digest(facts))
+    assert landed["landed"], "the fold did not write, so this proved nothing"
+    assert _token(client, cid) != before
+
+
+def test_a_follow_up_that_writes_nothing_moves_nothing(client):
+    # Both halves answer "nothing is due" without reaching a provider on most
+    # turns, which is what makes firing them after every turn cheap. A stamp
+    # there would put two fsyncs on the play path for a decision to do nothing.
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "The gate stands open.")
+    before = _token(client, cid)
+    # A digest of a prefix that is not the prefix on disk: the commit refuses.
+    refused = scene_routes._rolling_commit(cid, sid, "They reached the gate.", 1,
+                                           "not-the-digest", "not-the-facts")
+    assert not refused["landed"]
+    assert _token(client, cid) == before
+
+
 def test_a_review_that_lands_moves_the_token(client, monkeypatch):
     """A review is the one durable campaign write with no response line behind
     it: the route that starts it answers 202 and is `@computes_only` (correctly

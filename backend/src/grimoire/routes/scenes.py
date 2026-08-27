@@ -2996,6 +2996,14 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
         if landed:
             store.scenes.set_rolling_summary(cid, sid, summary, covered, digest,
                                              facts_key)
+            # In the hold that covers the write, and only when it landed (#409).
+            # This is reached two ways and one of them has no response line
+            # behind it: the panel's Refresh button is a request the activity
+            # middleware stamps, but `schedule_follow_ups` fires this as a
+            # BACKGROUND run after every turn (#397), minutes after that turn's
+            # own status line went out. A token read while the fold was running
+            # would otherwise still be current once it had written.
+            store.revision.bump(cid)
             scene = store.scenes.read_scene(cid, sid)
             facts = store.chronicle.scene_facts(cid, sid)
         return {"landed": landed, "view": _rolling_view(cid, sid, scene, facts)}
@@ -3494,6 +3502,10 @@ def _break_commit(cid: str, sid: str, watermark: dict, answer: dict,
                 cid, sid, watermark["at"], watermark["locs"], watermark["times"],
                 digest, "yes" if answer["break"] else "no", answer["reason"],
                 answer["title"] if answer["break"] else "")
+            # As in `_rolling_commit`, and for the same reason: the play loop
+            # fires this as a background run after every turn, with no response
+            # line for the middleware to stamp (#409).
+            store.revision.bump(cid)
             scene = store.scenes.read_scene(cid, sid)
         return {"landed": landed, "scene": scene}
 
