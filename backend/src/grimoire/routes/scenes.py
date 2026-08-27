@@ -2292,6 +2292,17 @@ def _under_review_lock(cid: str, sid: str, run, write) -> None:
                 if streaming._scene_moved(cid, sid, run.scene_identity):
                     raise _SceneMovedError
                 write()
+                # The campaign's write token (#409), in the same hold as the
+                # write it records. A review is the one durable campaign write
+                # with no request behind it at the moment it lands: the route
+                # that started it answered 202 and is marked `@computes_only`
+                # (correctly -- at 202 nothing had been written yet), and the
+                # run publishes minutes later with no response line for the
+                # middleware to stamp. Without this, a token read before an
+                # absorb landed stays current after it, and a clock advance or
+                # a checkpoint priced against it proceeds as though the scene
+                # had not gained a review at all.
+                store.revision.bump(cid)
                 return
         except store.locks.StoreBusy:
             if left <= 0:

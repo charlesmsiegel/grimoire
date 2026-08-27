@@ -208,15 +208,6 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   const refreshGen = useRef(0);
   useEffect(() => { refreshGen.current += 1; setCheckpointed(false); }, [refreshKey]);
 
-  //: How many copies this panel has DISOWNED — taken, and then judged not to be
-  //: a checkpoint because the campaign moved while `copytree` ran. It is in the
-  //: fork's idempotency key (below) and exists only to be: the key is derived
-  //: from the operation so that a retry after a lost response is answered with
-  //: the copy that landed, and disowning one is exactly the case where the
-  //: retry must NOT be — the panel has just told the reader that copy may be
-  //: missing a turn. Without this the key would be identical and the server,
-  //: correctly, would hand the disowned copy straight back.
-  const disowned = useRef(0);
 
   /** Show a refusal, and throw away a pricing the server has just said is stale.
    *
@@ -373,7 +364,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // direction: a campaign that has been written since is a DIFFERENT
         // operation, so it gets a different key and a fresh copy — which is the
         // rule `checkpointed` is cleared by, spelled somewhere durable.
-        const key = `checkpoint:${gate?.to ?? ""}:${pricedRevision}:${disowned.current}`;
+        const key = `checkpoint:${gate?.to ?? ""}:${pricedRevision}`;
         const report = await api.forkCampaign(cid, name, undefined, key);
         // The sharpest case for the rule above. A copy of A recorded as B's
         // means a large skip in B offers "Retry the skip", takes no copy at
@@ -391,7 +382,6 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // quietly missing a turn.
         const current = refreshGen.current === took;
         if (current) setCheckpointed(true);
-        else disowned.current += 1;   // so the retry below cannot be answered with it
         // A fork from where the campaign stands cuts nothing, so `forkNotes` is
         // almost always "". Shown when it is not, on the same footing the shelf
         // and the campaign page show it — a checkpoint that quietly came up
@@ -400,8 +390,8 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         setSaved(`Checkpoint saved: “${name}” is on the campaigns shelf.`
                  + (current ? "" : " The campaign changed while it was being copied,"
                                  + " so it may not hold the latest turn and the skip"
-                                 + " was not taken — ask again to checkpoint where"
-                                 + " the campaign stands now.")
+                                 + " was not taken — preview the skip again to"
+                                 + " checkpoint where the campaign stands now.")
                  + (notes ? ` ${notes}` : ""));
         // ...and the clock stays where it is. This panel's own rule, three
         // lines up in the docstring, is that a copy which fails abandons the
@@ -409,9 +399,24 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // and moving past it anyway hands them the one thing they said they did
         // not want. A copy that may not HOLD that moment is the same failure in
         // a weaker form, and letting it through was an inconsistency rather than
-        // a decision. The question stays open, so asking again takes a fresh
-        // copy — one extra `copytree` against a restore point missing a turn.
-        if (!current) return;
+        // a decision.
+        //
+        // The PRICING goes with it, and that is the part worth spelling out: the
+        // campaign moved, so the token this operation was priced against is one
+        // the server will now refuse. Leaving the question open would let the
+        // reader answer it again, spend a second whole `copytree` under a key
+        // that has not changed either, and only then learn from `/advance` that
+        // the skip was stale all along — two copies to land one checkpoint.
+        // Cleared, the next round re-prices, which is what mints both a current
+        // token for the skip and a different key for the copy. It also means
+        // the key needs no disown counter of its own: a campaign that really
+        // changed produces a new token, and one that did not produces the same
+        // key and is answered with the copy already taken, which is the right
+        // answer there too.
+        if (!current) {
+          setDigest(null); setGate(null); setPricedNow(null); setPricedRevision("");
+          return;
+        }
       }
       await runAdvance(pricedRevision);
     } catch (err: unknown) {

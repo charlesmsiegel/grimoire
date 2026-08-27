@@ -482,10 +482,15 @@ would answer neither question.
   `store/revision.py` gives each campaign an opaque value that changes whenever
   the app records a write to it — the primitive `POST /advance` compares an
   expected state against and `POST /fork` keys a repeat on (#409). It is
-  stamped in one place, the activity middleware in `main.py`, so a route added
-  tomorrow is covered without anyone remembering; the exception is
-  `routes/streaming.py`'s `_persist_reply`, which stamps for itself because the
-  middleware deliberately skips streams. A route that mutates a *different*
+  stamped by default in one place, the activity middleware in `main.py`, so a
+  route added tomorrow is covered without anyone remembering. Three writes stamp
+  for themselves on top of that, each because the response line is the wrong
+  moment for it: `clock.advance` bumps inside the lock hold that covers its
+  commit (a check the token has not moved under is not binding),
+  `routes/scenes._under_review_lock` bumps inside the fence that covers a
+  detached review's terminal write (its route answered 202 minutes earlier), and
+  `routes/streaming._persist_reply` bumps for the reply a stream lands. A route
+  that mutates a *different*
   campaign than the one in its path says so with `@leaves_campaign_unchanged`
   (`POST /fork`, whose source is never written to) — otherwise a fork would
   invalidate the very expectation the caller took it to protect. What the token

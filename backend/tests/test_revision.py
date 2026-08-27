@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -396,6 +397,63 @@ def test_a_key_that_cannot_be_recorded_does_not_undo_the_fork(cid, monkeypatch):
     monkeypatch.setattr(atomic, "write_text",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("full disk")))
     fork._record(cid, cid, "k-1", {"id": cid})
+
+
+def test_two_advances_holding_one_token_cannot_both_commit(cid, monkeypatch):
+    """The check under the lock is only binding if the token moves under it too.
+
+    The activity middleware stamps once a response is on its way out, which is
+    far too late to serialize two advances: the first releases the lock, fires
+    its events and returns, and any of that is long enough for a second request
+    carrying the SAME expected token to take the lock, read the value the first
+    was supposed to have replaced, and commit a move priced against a clock that
+    has already moved. Two callers with one token is the case `expect_revision`
+    exists for, so the store bumps inside the hold.
+
+    Both calls go straight to the store, which is what leaves the middleware out
+    of it — exactly the window between one request's commit and its response.
+    """
+    token = revision.bump(cid)
+    monkeypatch.setattr(clock, "_provider", lambda *a, **k: object())
+    monkeypatch.setattr(clock, "_resolve", lambda *a, **k: ("2026-05-01", "2026-05-04"))
+    monkeypatch.setattr(clock, "digest", lambda *a, **k: {
+        "events": [], "elapsed_days": 3, "to_friendly": "", "truncated": False})
+
+    assert clock.advance(cid, days=3, reason="travel", expect_revision=token)["moved"]
+    with pytest.raises(revision.RevisionMismatchError):
+        clock.advance(cid, days=3, reason="the same skip again", expect_revision=token)
+    assert len(clock.read(cid)["log"]) == 1, "the second advance committed anyway"
+
+
+def test_a_review_that_lands_moves_the_token(client, monkeypatch):
+    """A review is the one durable campaign write with no response line behind
+    it: the route that starts it answers 202 and is `@computes_only` (correctly
+    — nothing is written at 202), and the run publishes minutes later.
+
+    Driven through `_under_review_lock` directly, which is the choke point every
+    absorb, audit and dossier retry reaches its terminal write through — the
+    alternative is a whole detached review run to assert one stamp.
+    """
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    before = _token(client, cid)
+    run = SimpleNamespace(review_cancelled=False, cancel_requested=False,
+                          scene_identity=store.scenes.scene_identity_strict(cid, sid))
+    scene_routes._under_review_lock(cid, sid, run, lambda: None)
+    assert _token(client, cid) != before
+
+
+def test_a_review_that_is_cancelled_moves_nothing(client):
+    # The bump is inside the fence, not beside it: a run whose review the reader
+    # dismissed writes nothing, so there is nothing to record.
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    before = _token(client, cid)
+    run = SimpleNamespace(review_cancelled=True, cancel_requested=False,
+                          scene_identity=store.scenes.scene_identity_strict(cid, sid))
+    with pytest.raises(Exception):   # noqa: B017 -- the private _ReviewCancelledError
+        scene_routes._under_review_lock(cid, sid, run, lambda: None)
+    assert _token(client, cid) == before
 
 
 # --- POST /fork spends one -------------------------------------------------

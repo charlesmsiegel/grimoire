@@ -27,12 +27,21 @@ disposable -- an unreadable or absent one reads as `INITIAL`, which no minted
 token can equal, so a damaged file refuses stale expectations rather than
 waving them through.
 
-**What moves it, and what does not.** The bump is at the two places that know a
-campaign was written: the activity middleware in `main.py`, which fires for
-every campaign-scoped mutating request that answered 2xx, and
-`routes.streaming._persist_reply`, which is where a *detached* turn lands its
-posts -- the middleware deliberately skips streams, since a stream's status is
-sent before its outcome is known. What that leaves out is worth saying plainly:
+**What moves it, and what does not.** The default is the activity middleware in
+`main.py`, which fires for every campaign-scoped mutating request that answered
+2xx, streams included -- one place, so a route written tomorrow is covered
+without anybody remembering this file exists.
+
+Three writes stamp for themselves on top of that, and each has the same reason
+in a different shape: the response line is not the moment. `clock.advance` bumps
+inside the lock hold that covers its commit, because a check the token has not
+moved under does not exclude a second caller holding the same one.
+`routes.scenes._under_review_lock` bumps inside the fence that covers a detached
+review's terminal write, whose route answered 202 minutes earlier and correctly
+declares itself `@computes_only`. `routes.streaming._persist_reply` bumps for
+the posts a stream lands, long after its own status line went out.
+
+What all of that leaves out is worth saying plainly:
 a store written by something other than this app (a hand edit, a sync client
 landing a file, a second grimoire process older than this module) moves
 nothing here. So a token that has not changed is evidence and not proof, which
