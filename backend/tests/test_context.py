@@ -763,6 +763,44 @@ def test_dropping_the_heading_half_leaves_tier_three_unframed(monkeypatch, tmp_p
     assert "Introduce them only if the story calls for it" not in sys
 
 
+def test_a_reordered_layout_can_still_drop_the_half_holding_the_heading(monkeypatch, tmp_path):
+    """The sibling of the test above, under a reordered layout -- and the one
+    thing #423's fix does NOT solve.
+
+    The heading is attached while sections RENDER, and `pack` drops them after,
+    so whichever half carries it can still be the half the budget takes. In the
+    catalog's order that is tier 2 (above). Reorder the two and it becomes tier
+    3, which is what this pins: the exposure moves with the layout rather than
+    going away.
+
+    Solving it means reassigning the heading to a surviving group member, and
+    doing that honestly means doing it INSIDE the packer -- attaching after the
+    fit would add the heading's tokens to a total already measured against the
+    ceiling. That needs the section-grouping notion `pack` deliberately does
+    not have (see SECTIONS), so it is recorded here rather than half-done."""
+    from grimoire.store import config
+    cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=12)
+    entries = [e for e in _full_layout() if e["id"] != "off_scene_cast_known"]
+    at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_active")
+    entries.insert(at, {"id": "off_scene_cast_known", "label": "", "enabled": True})
+    context.layout.write_layout(entries)
+    config.write_config(prompt_layout_enabled="on")
+
+    active, known = _tier_rows(cid, sid)
+    assert "# Other characters in this world" in known["text"], "tier 3 leads, so it carries"
+    assert known["tokens"] > active["tokens"], "fixture must make the carrier the larger half"
+
+    after = _squeeze_out(cid, sid, known)
+    assert after["Off-scene cast · known to exist"]["dropped"] is True
+    assert after["Off-scene cast · active elsewhere"]["dropped"] is False
+    sys = context.build_messages(cid, sid)[0]["content"]
+    # The cost, stated exactly, as for the catalog-order case: the surviving
+    # list is still there and still labelled, and the sentence saying those
+    # characters are absent is not.
+    assert "## Active in this campaign, elsewhere" in sys
+    assert "# Other characters in this world" not in sys
+
+
 def test_layout_disabling_tier_two_moves_the_heading_to_tier_three(monkeypatch, tmp_path):
     """The heading follows what RENDERS, not what has data (#423).
 
@@ -809,6 +847,36 @@ def test_layout_reordering_the_tiers_keeps_the_heading_on_top(monkeypatch, tmp_p
     assert sys.count("# Other characters in this world") == 1
     assert (sys.index("## Known to exist")
             < sys.index("## Active in this campaign, elsewhere")), "tiers really swapped"
+
+
+def test_a_section_between_the_tiers_gets_each_run_its_own_heading(monkeypatch, tmp_path):
+    """The heading frames a BLOCK, so a layout that splits the directory in two
+    has two blocks to frame.
+
+    Suppressing the second copy because the first already went out assumes the
+    two tiers are still adjacent -- and once another section's own `# Heading`
+    has closed the directory, what follows reads as part of THAT section: a
+    list of absent characters under `# Response budget`, which is the unframed
+    list #423 is about, reached from a third direction."""
+    from grimoire.store import config
+    cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
+    entries = [e for e in _full_layout() if e["id"] != "response_budget"]
+    at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_known")
+    entries.insert(at, {"id": "response_budget", "label": "", "enabled": True})
+    context.layout.write_layout(entries)
+    config.write_config(prompt_layout_enabled="on")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    head = ("# Other characters in this world\n\n"
+            "# (Not present. Introduce them only if the story calls for it.)\n\n")
+    assert sys.count("# Other characters in this world") == 2
+    assert head + "## Active in this campaign, elsewhere" in sys
+    assert head + "## Known to exist" in sys
+    # ...and the run really was split by a section of its own, or this proves
+    # nothing: it is the intervening `# Heading` that ends the directory.
+    assert (sys.index("## Active in this campaign, elsewhere")
+            < sys.index("# Response budget")
+            < sys.index("## Known to exist"))
 
 
 def test_the_heading_is_priced_with_the_tier_that_carries_it(monkeypatch, tmp_path):

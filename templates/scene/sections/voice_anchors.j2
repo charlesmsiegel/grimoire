@@ -2,12 +2,14 @@
     anchor. A nameless entry contributes nothing -- an unattributed anchor is
     the very defect this section exists to fix.
 
-    Carries its OWN heading rather than sharing one with voice_examples.j2 via
-    a macro. The off-scene cast directory shares one that way and it is broken:
-    it decides ownership from DATA (`if not offscene_active`) while layout.py
-    lets a reader disable and reorder any section, so disabling one half loses
-    the heading entirely (#423). Any data-derived "am I first?" test has that
-    defect, because the question is about the merged, enabled layout.
+    Carries its OWN heading rather than sharing one with voice_examples.j2.
+    The off-scene cast directory does share one, and used to pick its owner
+    from DATA (`if not offscene_active`) while layout.py let a reader disable
+    and reorder any section — so disabling one half lost the heading entirely
+    (#423). Any data-derived "am I first?" test has that defect, because the
+    question is about the merged, enabled layout. That directory now declares
+    its heading as `Section.heading` and the render path places it; a section
+    with a heading of its own, like this one, needs none of that machinery.
 
     Vars: cast_blocks. -#}
 {%- set blocks = [] -%}
