@@ -2322,3 +2322,27 @@ test("aborting an opener stops its recovery lookups, not just its streams", asyn
   expect(signals.length).toBeGreaterThanOrEqual(3);
   expect(signals.every((s) => s === stop.signal)).toBe(true);
 });
+
+// ---- the notices channel covers derived inputs, not just dismissals (#106) --
+
+test("writes that change what is imminent announce it on the notices channel", async () => {
+  // A pre-notice is derived from events.json, the warn window and the clock —
+  // and the panels that write those sit in the same rail as the banner showing
+  // them, with no way to refresh it. So the mutators announce, per `appEvents`.
+  const { onNoticesChanged } = await import("../appEvents");
+  const heard = vi.fn();
+  const off = onNoticesChanged(heard);
+  globalThis.fetch = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+
+  await api.createCampaignEvent("c", { name: "The coronation", date: "2026-05-12" });
+  await api.updateCampaignEvent("c", "the-coronation", { date: "2026-05-14" });
+  await api.unfireCampaignEvent("c", "the-coronation");
+  await api.deleteCampaignEvent("c", "the-coronation");
+  await api.setCalendarConfig({ kind: "campaign", id: "c" }, {
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: true, stale_after_days: 30, warn_days: 0 });
+  await api.advanceTime("c", { days: 3, reason: "the caravan sets out" });
+
+  expect(heard).toHaveBeenCalledTimes(6);
+  off();
+});

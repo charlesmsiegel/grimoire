@@ -1802,13 +1802,16 @@ export const api = {
   /** The digest an advance would produce, writing nothing. Needs no reason. */
   previewAdvance: (cid: string, body: AdvanceRequest) =>
     request<{ digest: AdvanceDigest }>("POST", `/api/campaigns/${cid}/advance/preview`, body),
-  advanceTime: (cid: string, body: AdvanceRequest) =>
-    /** `fired` is the subset of `digest.events` this move actually stamped —
-     *  empty for a backward correction, which reports what it un-lived without
-     *  un-firing it. */
-    request<{ ok: boolean; moved: boolean; now: string; friendly: string;
-              digest: AdvanceDigest; fired: ScheduledEvent[] }>(
-      "POST", `/api/campaigns/${cid}/advance`, body),
+  /** `fired` is the subset of `digest.events` this move actually stamped —
+   *  empty for a backward correction, which reports what it un-lived without
+   *  un-firing it. */
+  advanceTime: async (cid: string, body: AdvanceRequest) => {
+    const r = await request<{ ok: boolean; moved: boolean; now: string; friendly: string;
+                              digest: AdvanceDigest; fired: ScheduledEvent[] }>(
+      "POST", `/api/campaigns/${cid}/advance`, body);
+    noticesChanged();   // the moment notices are judged from moved, and events fired
+    return r;
+  },
 
   // ---- scheduled events (#101) ----
   campaignEvents: (cid: string) =>
@@ -1817,17 +1820,34 @@ export const api = {
     // against, so the panel can say what "already gone by" means here.
     request<{ events: ScheduledEvent[]; now: string; friendly: string }>(
       "GET", `/api/campaigns/${cid}/events`, undefined, { fresh: true }),
-  createCampaignEvent: (cid: string, body: { name: string; date: string; note?: string }) =>
-    request<{ ok: boolean; id: string }>("POST", `/api/campaigns/${cid}/events`, body),
+  // Each of the four emits on the notices channel: a pre-notice is DERIVED from
+  // events.json, so filing, re-dating, deleting or un-firing an event changes
+  // what is imminent — and `EventsPanel` sits in the same rail as the When
+  // section that shows it, with no way to refresh it (#106).
+  createCampaignEvent: async (cid: string, body: { name: string; date: string; note?: string }) => {
+    const r = await request<{ ok: boolean; id: string }>(
+      "POST", `/api/campaigns/${cid}/events`, body);
+    noticesChanged();
+    return r;
+  },
   /** Every field is optional: what is not sent keeps the stored value. */
-  updateCampaignEvent: (cid: string, eid: string,
-                        body: { name?: string; date?: string; note?: string }) =>
-    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/events/${eid}`, body),
+  updateCampaignEvent: async (cid: string, eid: string,
+                              body: { name?: string; date?: string; note?: string }) => {
+    const r = await request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/events/${eid}`, body);
+    noticesChanged();
+    return r;
+  },
   /** Take back a fire stamp — the undo for an advance made by mistake. */
-  unfireCampaignEvent: (cid: string, eid: string) =>
-    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/events/${eid}/unfire`),
-  deleteCampaignEvent: (cid: string, eid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/events/${eid}`),
+  unfireCampaignEvent: async (cid: string, eid: string) => {
+    const r = await request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/events/${eid}/unfire`);
+    noticesChanged();
+    return r;
+  },
+  deleteCampaignEvent: async (cid: string, eid: string) => {
+    const r = await request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/events/${eid}`);
+    noticesChanged();
+    return r;
+  },
 
   // ---- warn-once pre-notices (#106) ----
   /** What is imminent and unacknowledged, judged from the campaign clock. The
@@ -1889,8 +1909,14 @@ export const api = {
     request<{ ok: boolean; reverted_to_preset: boolean }>("DELETE", `/api/climates/${id}`),
   getCalendarMonths: (scope: CalendarScope, year: number) =>
     request<{ months: CalendarMonth[] }>("GET", `${entityBase(scope)}/calendar/months?year=${year}`),
-  setCalendarConfig: (scope: CalendarScope, cfg: CalendarConfig) =>
-    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/calendar`, cfg),
+  /** Emits on the notices channel too: this write carries `warn_days` — the
+   *  width of the window a pre-notice is computed over, and `0` switches them
+   *  off entirely — as well as the calendars whose holidays they come from. */
+  setCalendarConfig: async (scope: CalendarScope, cfg: CalendarConfig) => {
+    const r = await request<{ ok: boolean }>("PUT", `${entityBase(scope)}/calendar`, cfg);
+    noticesChanged();
+    return r;
+  },
   listConnections: () => request<LLMConnection[]>("GET", "/api/llm-connections"),
   createConnection: (draft: LLMConnectionDraft) =>
     request<{ id: string }>("POST", "/api/llm-connections", draft).then((r) => {

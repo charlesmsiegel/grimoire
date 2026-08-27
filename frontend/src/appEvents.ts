@@ -52,7 +52,7 @@ export const onConfigChanged = config.subscribe;
 export const shellChanged = shell.emit;
 export const onShellChanged = shell.subscribe;
 
-/** A pre-notice was acknowledged, or an acknowledgement taken back (#106).
+/** What is imminent, or what the reader has been told about, changed (#106).
  *
  *  A fourth channel because two surfaces show the same ledger at once and
  *  neither owns it: `SceneInspector`'s When section reads notices off the scene
@@ -60,6 +60,13 @@ export const onShellChanged = shell.subscribe;
  *  CampaignView mounts them as independent siblings, so the chooser can be
  *  overlaid on a live inspector -- and a dismissal in one left the other holding
  *  a payload from before it, showing the reader the warning they just closed.
+ *
+ *  Fired by more than dismissal, because a pre-notice is DERIVED rather than
+ *  stored: filing or re-dating a scheduled event changes what is upcoming,
+ *  `warn_days` changes the width of the window, and advancing the clock moves
+ *  the moment the whole thing is judged from. Those writes come from panels
+ *  sitting in the same rail as the banner -- `EventsPanel`, the calendar
+ *  settings -- with no way to refresh it.
  *
  *  Emitted from the api client's mutators for the reason the three above are:
  *  the mutators are the one place every path goes through, so a surface cannot
