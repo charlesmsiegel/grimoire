@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useNavigate } from "react-router-dom";
 import WorldView from "./WorldView";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 import { PaletteProvider, usePalette, type PaletteItem } from "../components/palette";
@@ -152,6 +152,14 @@ function renderAt() {
       </Routes>
     </MemoryRouter>,
   );
+}
+
+/** Navigates the surrounding router without remounting the page under test —
+ *  `initialEntries` is read only on mount, so a scope change has to come from
+ *  inside. */
+function GoTo({ to }: { to: string }) {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(to)}>go</button>;
 }
 
 function renderAtUrl(url: string) {
@@ -690,6 +698,47 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
   fireEvent.click(indexRow("Groups"));
   (api.readPC as any).mockClear();
   fireEvent.click(indexRow("PCs"));
+  await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
+  expect(api.readPC).not.toHaveBeenCalled();
+});
+
+test("a focused PC is not carried into another scope's render", async () => {
+  // Child effects run before the parent's, so clearing the focus in an effect
+  // is a render too late: PCEditor would already have been handed the stale id
+  // and already have scheduled select() against the NEW scope — opening a
+  // stranger who happens to share the id. Deriving it during render is what
+  // makes the scope change atomic.
+  (api.listPCs as any).mockResolvedValue([
+    { id: "winifred", name: "Winifred", tags: [], default_version: "main", versions: [] }]);
+  (api.readPC as any).mockResolvedValue({
+    meta: { id: "winifred", name: "Winifred", tags: [], default_version: "main" },
+    versions: [{ id: "main", name: "main",
+                 persona: { name: "Winifred", pronouns: "", summary: "",
+                            birthdate: "", description: "a quiet sort" } }] });
+  (api.listPCImages as any).mockResolvedValue([]);
+  (api.listTags as any).mockResolvedValue({});
+  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
+  (api.getSheet as any).mockResolvedValue({ sheet: null });
+  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "pcs:winifred" }, body: "x", rev: "r1" });
+  render(
+    <MemoryRouter initialEntries={["/worlds/w"]}>
+      <Routes>
+        <Route path="/worlds/:wid" element={<><WorldView /><GoTo to="/worlds/w2" /></>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Groups"));
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
+  await waitFor(() => expect(api.readPC).toHaveBeenCalled());
+
+  (api.readPC as any).mockClear();
+  (api.listPCs as any).mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "go" }));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
   expect(api.readPC).not.toHaveBeenCalled();
 });

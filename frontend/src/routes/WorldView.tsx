@@ -96,11 +96,18 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   /** A PC to open once the PC section is showing — see `openOwner`. Nonce'd
    *  for GreetingEditor's reason: following the same chip twice is two events.
    *
-   *  Cleared by `select` (choosing PCs from the column means the list, not
-   *  whoever a chip pointed at earlier) and by a scope change (the id belongs
-   *  to the world or campaign it was read in, and retrying it in another one
-   *  opens a stranger or nothing). */
-  const [focusPC, setFocusPC] = useState<{ pid: string; n: number } | null>(null);
+   *  Carries the scope it was captured in, and the prop below is DERIVED from
+   *  that rather than cleared by an effect. An effect would be a render too
+   *  late: child effects run before the parent's, so `PCEditor` would already
+   *  have been handed the stale id and already have scheduled `select` against
+   *  the new scope — opening a stranger who happens to share the id, or
+   *  leaving the previous scope's PC on screen. Deciding it during render is
+   *  what makes the scope change atomic.
+   *
+   *  `select` still clears it outright: choosing PCs from the column means the
+   *  list, not whoever a chip pointed at earlier. */
+  const [focusPC, setFocusPC] =
+    useState<{ pid: string; n: number; scope: string } | null>(null);
   /** Which way the Greetings section is showing its records: the chip-list
    *  editor, or the same edges as a graph (#9). A view of one set of records
    *  rather than a second place to keep them -- both write through
@@ -173,9 +180,10 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   }, [campaign, worldMid]);
 
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
-  // A focused PC id belongs to the scope it was read in; retrying it in another
-  // one opens a stranger or nothing. See `focusPC`.
-  useEffect(() => { setFocusPC(null); }, [scope.kind, scope.id]);
+  const scopeKey = `${scope.kind}:${scope.id}`;
+  // A focused PC id belongs to the scope it was read in, so it is offered only
+  // back in that scope. See `focusPC` on why this is derived, not cleared.
+  const pcFocus = focusPC?.scope === scopeKey ? focusPC : null;
   // The tag vocabulary is a world concern (campaign PC tags are free strings)
   // and the overview is a world's setup checklist -- neither is something a
   // campaign's fork of the world has, so neither is offered on that shape.
@@ -277,7 +285,10 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     const kind = ref.slice(0, i);
     const id = ref.slice(i + 1);
     if (kind === "characters") openCharacter(id, ""); // "" -> CharacterEditor falls back to default version
-    else if (kind === "pcs") { setFocusPC((p) => ({ pid: id, n: (p?.n ?? 0) + 1 })); setSection("pcs"); }
+    else if (kind === "pcs") {
+      setFocusPC((p) => ({ pid: id, n: (p?.n ?? 0) + 1, scope: scopeKey }));
+      setSection("pcs");
+    }
     // The entity kinds land on the record itself, not merely its section: a
     // ref names one record, and dropping the reader in a list to find it again
     // would be answering the question with the index.
@@ -485,7 +496,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {!campaign && section === "images" && <ImagesView key={wid} wid={wid} />}
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
-                                       focus={focusPC?.pid ?? null} focusNonce={focusPC?.n ?? 0}
+                                       focus={pcFocus?.pid ?? null} focusNonce={pcFocus?.n ?? 0}
                                        module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" nav={navFor("locations")}
