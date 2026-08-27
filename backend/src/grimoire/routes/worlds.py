@@ -813,9 +813,10 @@ def put_world_calendar_config(wid: str, body: CalendarConfig):
     # route does it: the store re-normalizes and coerces every field anyway
     # (`stale_after_days` included -- 0 or a missing field means "no opinion",
     # not a threshold of zero), so this is the shape of the request, not its
-    # validation.
+    # validation. `warn_days` is the one field where 0 is a real answer ("no
+    # warnings"), which is why its no-opinion value is None instead.
     cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed,
-           "stale_after_days": body.stale_after_days}
+           "stale_after_days": body.stale_after_days, "warn_days": body.warn_days}
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:

@@ -236,6 +236,17 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # runs the campaign's (possibly user-authored) calendar provider, which must
     # not happen under this lock.
     "store.events",
+    # notices.json is rewritten whole by `mark` and `forget`, and a lost write
+    # here is a warning the reader dismissed coming back -- or, on the `forget`
+    # side, one they asked for staying gone. `mark` also evicts past
+    # `LEDGER_LIMIT` inside the same read-modify-write, so two unlocked callers
+    # can drop a row neither of them was writing. New module (#106), so it
+    # starts inside the exclusion rather than joining the frozen `UNREVIEWED`
+    # backlog. Only the read-modify-write is inside: `pending` resolves the
+    # campaign's (possibly user-authored) calendar provider and enumerates a
+    # window of its holidays, which must not run under this lock -- the same cut
+    # `clock` and `events` make.
+    "store.notices",
     # `facts.json` the same (#114), and with one reason of its own on top of
     # the whole-file rewrite: `record` retires the superseded fact and writes
     # its replacement in one read-modify-write, so an unlocked pair can also

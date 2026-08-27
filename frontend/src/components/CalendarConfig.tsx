@@ -155,6 +155,27 @@ export function CalendarConfig({ scope, onConfig }: {
         Days a thread or commitment may go untouched before the ledger calls it stale.
         {isWorld && " Campaigns started from this world begin with this threshold."}
       </div>
+      {/* The warn window (#106), beside the aging knob because it is the same
+          kind of fact: how far ahead this record reckons. Empty is "no opinion"
+          and saves as null, which the store answers with its own default; a
+          typed 0 is a real setting — no warnings in this campaign — which is why
+          the two cannot share `stale_after_days`' 0-means-unset convention. */}
+      <label>
+        Warn ahead
+        <input type="number" aria-label="Warn ahead days" min={0}
+               value={cfg.warn_days ?? ""}
+               onChange={(e) => {
+                 setSaved(false);
+                 const raw = e.target.value.trim();
+                 setCfg({ ...cfg, warn_days: raw === "" ? null
+                                                        : Math.max(0, parseInt(raw, 10) || 0) });
+               }} />
+      </label>
+      <div className="field-hint">
+        Days ahead of an upcoming holiday or scheduled event to warn you, once. 0 turns
+        the warnings off.
+        {isWorld && " Campaigns started from this world begin with this window."}
+      </div>
       {/* World-side this panel sits beside Mechanics, which has a Save of its
           own; "Save" twice in a row is ambiguous to anyone reading the page by
           its controls. The visible text stays "Save" and the name only extends

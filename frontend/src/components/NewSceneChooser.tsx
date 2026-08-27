@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api, type Notice } from "../api/client";
 import { useHotkeys } from "../shortcuts/useHotkeys";
+import { NoticeBanner } from "./NoticeBanner";
 import { SceneConfirmForm } from "./SceneConfirmForm";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
 import { SceneImport } from "./SceneImport";
@@ -61,6 +63,28 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // is shown. `direction` moves up for the same reason -- it has to survive
   // the picker unmounting on Back too.
   const [direction, setDirection] = useState("");
+  // What is about to happen in the campaign and has not been mentioned to the
+  // reader yet (#106). The second surface after the scene panel, and the one
+  // that matters more: this is where a scene gets planned, and "the coronation
+  // is in three days" is a thing to know BEFORE deciding what the next scene
+  // is about.
+  //
+  // Campaign-scoped rather than scene-scoped, because there is no scene yet --
+  // it reads from the campaign clock. A plain read with no model behind it, so
+  // unlike the idea ranking it neither waits on `ready` nor needs asking for:
+  // the "Suggest ideas" button exists because a ranking spends a generation,
+  // and this spends nothing. A failed read leaves the list empty -- a banner is
+  // the least important thing in this modal, and it must never be what stops a
+  // scene being made.
+  const [upcoming, setUpcoming] = useState<Notice[]>([]);
+  useEffect(() => {
+    let live = true;
+    api.campaignNotices(cid)
+      .then((r) => { if (live) setUpcoming(r.notices); })
+      .catch(() => { if (live) setUpcoming([]); });
+    return () => { live = false; };
+  }, [cid]);
+
   // Ideas cost a generation and are asked for by name now: the hook fires
   // nothing on its own, and the picker's "Suggest ideas" button is the only
   // thing that starts a ranking. `playable` still gates it, which is belt and
@@ -150,6 +174,13 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
          onClick={dismiss}>
       <div className="chooser" onClick={(e) => e.stopPropagation()}>
         <h3>New scene</h3>
+        {/* Above the mode cards and every pane after them: it is context for
+            the decision being made here, not a step in it. Dismissing writes to
+            the same campaign-wide ledger the scene panel's banner does, so a
+            warning closed in either place is closed in both. */}
+        <NoticeBanner cid={cid} notices={upcoming}
+                      onDismissed={(key) =>
+                        setUpcoming((rows) => rows.filter((n) => n.key !== key))} />
 
         {mode === null ? (
           <>

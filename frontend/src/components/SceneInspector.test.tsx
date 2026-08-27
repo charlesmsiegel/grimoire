@@ -16,6 +16,8 @@ vi.mock("../api/client", async () => {
       getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
+      // The pre-notice banner under the When section (#106).
+      dismissNotices: vi.fn(),
       getCampaignClock: vi.fn(), previewAdvance: vi.fn(), advanceTime: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(), sceneBriefing: vi.fn(),
@@ -105,6 +107,7 @@ beforeEach(() => {
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
   ] });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [], suggested: null });
+  (api.dismissNotices as any).mockResolvedValue({ ok: true, marked: [] });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
   (api.getCampaignClock as any).mockResolvedValue(
@@ -455,6 +458,35 @@ test("shows the current date when one is set", async () => {
     history: ["2026-07-04"] });
   renderInspector();
   await screen.findByText(/4 July 2026/);
+});
+
+test("an imminent event is warned about once, and dismissing it marks the key", async () => {
+  // The reader-facing half of #106. The model is told what is upcoming every
+  // turn; this is the channel that says it once and then stops.
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
+               secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
+               notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
+                           name: "The envoy arrives", in_days: 2,
+                           friendly: "6 July 2026" }] },
+    history: ["2026-07-04"] });
+  renderInspector();
+  await screen.findByText("The envoy arrives");
+  fireEvent.click(screen.getByLabelText("Dismiss The envoy arrives"));
+  await waitFor(() => expect(api.dismissNotices).toHaveBeenCalledWith(
+    "c", ["event:739437:the-envoy-arrives"], "s"));
+  await waitFor(() => expect(screen.queryByText("The envoy arrives")).toBeNull());
+});
+
+test("a scene with nothing imminent shows no warning at all", async () => {
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
+               secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
+               notices: [] },
+    history: ["2026-07-04"] });
+  renderInspector();
+  await screen.findByText(/4 July 2026/);
+  expect(screen.queryByLabelText("Coming up")).toBeNull();
 });
 
 test("Move to sets the scene location, reloads it, and refreshes the stream", async () => {

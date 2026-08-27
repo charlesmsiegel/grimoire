@@ -1,5 +1,5 @@
 """Calendar config IO: <root>/calendar.json = {primary, secondary|None,
-confirmed, stale_after_days}, each calendar block {provider, region,
+confirmed, stale_after_days, warn_days}, each calendar block {provider, region,
 custom_holidays, anchor}. World-scoped, copied into a campaign on create."""
 
 from __future__ import annotations
@@ -19,6 +19,25 @@ from .base import CalendarError, get_provider
 #: campaigns are created with, since the file is copied on create.
 STALE_AFTER_DAYS = 30
 
+#: How far ahead a scheduled event or an observance is warned about (#106).
+#: Deliberately NOT `UPCOMING_WINDOW_DAYS`: that is the *computation* window the
+#: prompt's "Upcoming:" line reads from, and it is wide on purpose — a month of
+#: lead time is useful to a model deciding what a scene mentions. A warning
+#: shown to the READER is a different thing, and one that fires a month out is
+#: noise by the time the day arrives. A week is the span a reader can still
+#: plan a scene inside.
+#:
+#: Beside `stale_after_days` for its reason exactly: it is a campaign-level knob
+#: about time, this is the campaign's time config, and a world can set the
+#: default its campaigns are created with because the file is copied on create.
+WARN_DAYS = 7
+
+#: The widest warn window that will be honoured. A hand-edited `"warn_days":
+#: 100000` is not a setting anybody means, and it is the bound on how many
+#: observances one notice read has to resolve — the provider is asked for every
+#: holiday in the window, and a user-authored plugin is doing that work.
+MAX_WARN_DAYS = 365
+
 
 def _blank(region: str = "US") -> dict:
     return {"provider": "gregorian", "region": region, "custom_holidays": [], "anchor": None}
@@ -26,7 +45,7 @@ def _blank(region: str = "US") -> dict:
 
 def default_calendar() -> dict:
     return {"primary": _blank(), "secondary": None, "confirmed": False,
-            "stale_after_days": STALE_AFTER_DAYS}
+            "stale_after_days": STALE_AFTER_DAYS, "warn_days": WARN_DAYS}
 
 
 def _stale_days(value) -> int:
@@ -49,6 +68,29 @@ def _stale_days(value) -> int:
     except (TypeError, ValueError):
         return STALE_AFTER_DAYS
     return days if days > 0 else STALE_AFTER_DAYS
+
+
+def _warn_days(value) -> int:
+    """A stored warn window as a whole number of days, or the default.
+
+    Coerced exactly like `_stale_days` and for the same reason — calendar.json
+    is hand-editable and this number reaches fixed-day arithmetic — with one
+    difference at each end. Zero is *kept* here rather than rejected: a
+    threshold of zero calls every record stale, which is meaningless, but a warn
+    window of zero warns about nothing, which is a reader saying "not this
+    campaign". And the value is capped at `MAX_WARN_DAYS`, because unlike a
+    staleness comparison a warn window is work: every day of it is a day the
+    calendar provider is asked to enumerate.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return WARN_DAYS
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return WARN_DAYS
+    if days < 0:
+        return WARN_DAYS
+    return min(days, MAX_WARN_DAYS)
 
 
 def _normalize_block(block: dict | None) -> dict | None:
@@ -75,14 +117,16 @@ def read_calendar(root: Path) -> dict:
     primary = _normalize_block(raw.get("primary")) or _blank()
     return {"primary": primary, "secondary": _normalize_block(raw.get("secondary")),
             "confirmed": bool(raw.get("confirmed", False)),
-            "stale_after_days": _stale_days(raw.get("stale_after_days"))}
+            "stale_after_days": _stale_days(raw.get("stale_after_days")),
+            "warn_days": _warn_days(raw.get("warn_days"))}
 
 
 def write_calendar(root: Path, cfg: dict) -> None:
     out = {"primary": _normalize_block(cfg.get("primary")) or _blank(),
            "secondary": _normalize_block(cfg.get("secondary")),
            "confirmed": bool(cfg.get("confirmed", False)),
-           "stale_after_days": _stale_days(cfg.get("stale_after_days"))}
+           "stale_after_days": _stale_days(cfg.get("stale_after_days")),
+           "warn_days": _warn_days(cfg.get("warn_days"))}
     atomic.write_text(_path(root), json.dumps(out, indent=2) + "\n")
 
 
@@ -115,6 +159,17 @@ def stale_after_days(root: Path) -> int:
     it once per ledger read.
     """
     return _stale_days(read_calendar(root).get("stale_after_days"))
+
+
+def warn_days(root: Path) -> int:
+    """How far ahead this root warns about an imminent event, in days (#106).
+
+    Through `read_calendar` rather than a second parse of the same file, so a
+    corrupt calendar.json answers the default here exactly as it answers the
+    default calendar everywhere else — the same shape as `stale_after_days`
+    above, which is the reader beside this one.
+    """
+    return _warn_days(read_calendar(root).get("warn_days"))
 
 
 def copy_calendar(wroot: Path, croot: Path) -> None:

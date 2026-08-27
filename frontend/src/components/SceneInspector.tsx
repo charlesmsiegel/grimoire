@@ -19,6 +19,7 @@ import { ErrorNote } from "./ErrorNote";
 import { EventsPanel } from "./EventsPanel";
 import { WeatherWidget } from "./WeatherWidget";
 import { ModelRoutingPicker } from "./ModelRoutingPicker";
+import { NoticeBanner } from "./NoticeBanner";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 import { taskLabel, whenLabel } from "./turnLabels";
@@ -1373,6 +1374,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             {when.current.holidays_today.length > 0 && (
               <div className="field-hint">Holidays: {when.current.holidays_today.join(", ")}</div>
             )}
+            {/* What is about to happen and has not been mentioned yet (#106),
+                judged from THIS scene's moment. Under the date rather than
+                above the picker: the reader reads where they are first, and the
+                warning is about somewhere they are not yet. `reloadWhen` on
+                dismiss keeps the panel's copy of the payload honest -- the
+                banner hides the row locally, but the next date change would
+                otherwise bring it back. */}
+            <NoticeBanner cid={cid} notices={when.current.notices ?? []} scene={sid}
+                          onDismissed={() => { void reloadWhen(); }} />
             <div className="picker">
               <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
                                   onChange={setDateInput} ariaLabel="Scene date" />

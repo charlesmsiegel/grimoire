@@ -634,6 +634,25 @@ class CalendarConfig(BaseModel):
     #: fields; the store coerces anything unusable back to its own default, so
     #: this is the shape of the request, not the validation of it.
     stale_after_days: int = 0
+    #: How far ahead an imminent event is warned about (#106). `None`, not 0,
+    #: is "no opinion": unlike a staleness threshold, zero is a setting somebody
+    #: can mean here -- it turns the warnings off -- so a client that predates
+    #: the field must be distinguishable from one that switched them off.
+    warn_days: int | None = None
+
+
+class NoticeMark(BaseModel):
+    """Acknowledge pre-notices, by key (#106).
+
+    A list rather than one key because a banner shows what a day carries and a
+    reader dismisses that, not each row of it -- and because two round trips
+    would let half an acknowledgement land.
+
+    `scene` is where it happened, recorded for the reader's benefit alone;
+    once-ness is campaign-wide, so nothing reads it back to decide anything.
+    """
+    keys: list[str] = []
+    scene: str = ""
 
 
 class ScheduledEventCreate(BaseModel):

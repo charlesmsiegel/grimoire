@@ -142,6 +142,19 @@ body::before {
   padding: 10px 14px; margin-bottom: 18px;
 }
 
+/* ---- imminent-event pre-notices (#106) ----
+   Sits inside a side section and inside the new-scene modal, so it carries no
+   margin of its own and no page-level padding -- the `.banner` rules above are
+   for a full-width strip across a route, which this is not. */
+.notice-banner {
+  border: 1px solid var(--accent); background: var(--banner-bg); color: var(--banner-ink);
+  font-family: var(--fm); font-size: 11px; padding: 6px 8px; margin-bottom: 8px;
+}
+.notice-row { display: flex; align-items: baseline; gap: 8px; }
+.notice-row + .notice-row { margin-top: 4px; }
+.notice-text { flex: 1; }
+.notice-banner .chip-clear { color: var(--banner-ink); padding: 0; }
+
 /* ---- section label (character detail, config) ---- */
 .section-label {
   font-family: var(--fm); font-size: 10px; color: var(--accent);
