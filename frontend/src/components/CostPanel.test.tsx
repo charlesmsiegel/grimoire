@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { CostPanel } from "./CostPanel";
+import { UNPRICED } from "./cost";
 import { api } from "../api/client";
 
 vi.mock("../api/client", async () => {
@@ -71,7 +72,7 @@ test("a turn the provider never priced says so rather than showing $0.00", async
   } as never);
   render(<CostPanel cid="c" sid="s" />);
 
-  expect(await screen.findByText("unpriced")).toBeInTheDocument();
+  expect(await screen.findByText(UNPRICED)).toBeInTheDocument();
   expect(await screen.findByText(/1 call came back with no price/)).toBeInTheDocument();
 });
 
@@ -104,7 +105,7 @@ test("a call nobody priced is estimated from the user's own rates, marked", asyn
     .toBeInTheDocument();
   // Headline and turn row both read as an estimate, never as a bill.
   expect(await screen.findByText(/^≈ \$0\.25 · 1 turn/)).toBeInTheDocument();
-  expect(screen.queryByText("unpriced")).not.toBeInTheDocument();
+  expect(screen.queryByText(UNPRICED)).not.toBeInTheDocument();
 });
 
 test("says when the turn list was cut and the totals were not", async () => {
@@ -194,8 +195,8 @@ test("a scene whose calls were all unpriced does not total to $0.00", async () =
   } as never);
   render(<CostPanel cid="c" sid="s" />);
 
-  expect(await screen.findByText(/^unpriced · 3 turns/)).toBeInTheDocument();
-  expect(screen.getByText(/chat 3 · unpriced/)).toBeInTheDocument();
+  expect(await screen.findByText(new RegExp(`^${UNPRICED} · 3 turns`))).toBeInTheDocument();
+  expect(screen.getByText(new RegExp(`chat 3 · ${UNPRICED}`))).toBeInTheDocument();
   expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
 });
 

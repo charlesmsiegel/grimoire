@@ -20,8 +20,8 @@ import { Footnotes, about, bound, bucketPrice, money, turnPrice } from "./cost";
  *
  *  **A price nobody reported is never rendered as zero.** Every OpenAI-compatible
  *  endpoint reports no cost at all today, and a `$0.00` on those turns would say
- *  the calls were free rather than uncounted — so an unpriced turn says
- *  "unpriced", and a total with unpriced calls under it says it is a floor.
+ *  the calls were free rather than uncounted — so a turn nobody priced says
+ *  "not reported", and a total with such calls under it says it is a floor.
  */
 export function CostPanel({ cid, sid, refreshKey }: {
   cid: string; sid: string;

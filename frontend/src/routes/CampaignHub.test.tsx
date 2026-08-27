@@ -101,6 +101,32 @@ test("with several scenes open it offers each rather than resuming one", async (
   expect(screen.queryByRole("link", { name: /continue scene/i })).not.toBeInTheDocument();
 });
 
+test("starting a scene is offered whether or not one is open", async () => {
+  // The regression this covers: the new-scene link used to render only in the
+  // empty branch, so a reader with a scene in flight could not start another
+  // from the front door -- which is the one thing a front door is for.
+  (api.getShell as any).mockResolvedValue(
+    shell({ open: [{ sid: "s3", title: "The third", turns: null }] }));
+  renderHub();
+  await screen.findByText("Run One");
+  const next = screen.getByText("Next up").closest("section")!;
+  expect(within(next).getByRole("link", { name: /new scene/i }))
+    .toHaveAttribute("href", "/campaigns/run/scenes");
+  // ...and it stays secondary: Continue is the offer, not an alternative to it.
+  expect(within(next).getByRole("link", { name: /new scene/i }))
+    .not.toHaveClass("hub-primary");
+});
+
+test("with nothing open the new-scene link is the primary offer", async () => {
+  // Same control, same destination, one name -- its weight follows what else
+  // the panel has to offer, and here there is nothing else.
+  renderHub();
+  await screen.findByText("Run One");
+  const next = screen.getByText("Next up").closest("section")!;
+  expect(within(next).getByRole("link", { name: /new scene/i }))
+    .toHaveClass("hub-primary");
+});
+
 test("unreviewed proposals are named as holding the world back", async () => {
   (api.getShell as any).mockResolvedValue(
     shell({ unreviewed: 8, pending: [{ sid: "s2", proposals: 8 }] }));
@@ -110,11 +136,94 @@ test("unreviewed proposals are named as holding the world back", async () => {
   expect(screen.getByText(/8 proposals/)).toBeInTheDocument();
 });
 
+test("each waiting scene is named on its own wrap-up link", async () => {
+  // Two pending reviews used to render two buttons reading the same four
+  // words: a choice with nothing to choose between, and no way to tell which
+  // scene was absorbed short of opening one. The sids travel in the payload
+  // for exactly this, and the scene list the page already fetches has the
+  // titles.
+  (api.getShell as any).mockResolvedValue(shell({
+    unreviewed: 5,
+    pending: [{ sid: "s2", proposals: 3 }, { sid: "s3", proposals: 2 }],
+  }));
+  renderHub();
+  await screen.findByText("Run One");
+  const waiting = screen.getByText("Waiting on you").closest("section")!;
+  expect(within(waiting).getByRole("link", { name: /wrap up the second/i }))
+    .toHaveAttribute("href", "/campaigns/run/scenes/s2");
+  expect(within(waiting).getByRole("link", { name: /wrap up the third/i }))
+    .toHaveAttribute("href", "/campaigns/run/scenes/s3");
+  // The prose counts the scenes too, rather than saying "a scene" over two.
+  expect(within(waiting).getByText(/2 scenes were absorbed/)).toBeInTheDocument();
+});
+
+test("a waiting scene the list cannot name still offers its wrap-up", async () => {
+  // A review sidecar can outlive the scene it belongs to. The route still
+  // answers, so the offer stands -- unnamed rather than invented.
+  (api.getShell as any).mockResolvedValue(
+    shell({ unreviewed: 2, pending: [{ sid: "gone", proposals: 2 }] }));
+  renderHub();
+  await screen.findByText("Run One");
+  expect(screen.getByRole("link", { name: /open wrap-up/i }))
+    .toHaveAttribute("href", "/campaigns/run/scenes/gone");
+});
+
+test("the to-do card renders a zero and links at the list", async () => {
+  // `0` is an answer -- nothing outstanding -- and the card says so with the
+  // count showing, which is the half of the rule that is easy to lose by
+  // writing a truthiness test.
+  (api.getShell as any).mockResolvedValue({ ...shell(), todo: 0 });
+  renderHub();
+  await screen.findByText("Run One");
+  const card = screen.getByText("To do").closest("section")!;
+  expect(within(card).getByText("0")).toBeInTheDocument();
+  expect(within(card).getByText(/nothing outstanding/i)).toBeInTheDocument();
+  expect(within(card).getByRole("link", { name: /everything noticed/i }))
+    .toHaveAttribute("href", "/todo");
+});
+
+test("a to-do count nobody computed draws no count at all", async () => {
+  // The other half: `null` means the field was never answered, and a zero
+  // there would read as a measurement nobody made. Same sentence as the cost
+  // rule one domain over.
+  (api.getShell as any).mockResolvedValue({ ...shell(), todo: null });
+  renderHub();
+  await screen.findByText("Run One");
+  const card = screen.getByText("To do").closest("section")!;
+  expect(within(card).queryByText("0")).not.toBeInTheDocument();
+  expect(within(card).getByText(/no count was reported/i)).toBeInTheDocument();
+});
+
+test("the to-do card carries what is still outstanding", async () => {
+  (api.getShell as any).mockResolvedValue({ ...shell(), todo: 4 });
+  renderHub();
+  await screen.findByText("Run One");
+  const card = screen.getByText("To do").closest("section")!;
+  expect(within(card).getByText("4")).toBeInTheDocument();
+  expect(within(card).getByText(/4 still to answer/i)).toBeInTheDocument();
+});
+
 test("nothing waiting reads as an answer, not as an empty banner", async () => {
   renderHub();
   await screen.findByText("Run One");
   expect(screen.getByText("Nothing waiting")).toBeInTheDocument();
   expect(screen.queryByText("Waiting on you")).not.toBeInTheDocument();
+});
+
+test("a review holding no proposals is still a scene waiting", async () => {
+  // `unreviewed` is the SUM of proposals across the sidecars, so an empty
+  // edits list counts zero while its scene is still holding a review. Branched
+  // on that sum, this panel answered "Nothing waiting -- every proposal has
+  // been decided" over a scene that was waiting, which is the one thing it
+  // must never say. `ScenesView` keys off `pending` and was always right.
+  (api.getShell as any).mockResolvedValue(
+    shell({ unreviewed: 0, pending: [{ sid: "s2", proposals: 0 }] }));
+  renderHub();
+  await screen.findByText("Run One");
+  expect(screen.getByText("Waiting on you")).toBeInTheDocument();
+  expect(screen.queryByText("Nothing waiting")).not.toBeInTheDocument();
+  // ...and it does not argue against itself with a count of nought.
+  expect(screen.queryByText(/0 proposals/i)).not.toBeInTheDocument();
 });
 
 test("with no mechanics module there is no sheets card and no sheets link", async () => {

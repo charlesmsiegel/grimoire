@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type CampaignSceneCosts, type SceneCostRow } from "../api/client";
 import {
-  Footnotes, MoneyColumns, about, bound, bucketPrice, headlineIsEstimate, money,
+  Footnotes, MoneyColumns, UNPRICED, about, bound, bucketPrice, headlineIsEstimate, money,
 } from "../components/cost";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
@@ -252,7 +252,9 @@ export function CostsView() {
                       </div>
                     </td>
                     <td className="cost-cell">
-                      <div>{bucketPrice(row)}</div>
+                      <div className={bucketPrice(row) === UNPRICED ? "money-unpriced" : undefined}>
+                        {bucketPrice(row)}
+                      </div>
                       {/* The parentheticals, per row: what was NOT billed per
                           token, priced at what it would have been — one line
                           each, never totalled. The two rest on different

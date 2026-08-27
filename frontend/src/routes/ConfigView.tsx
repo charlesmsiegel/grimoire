@@ -727,7 +727,7 @@ export default function ConfigView() {
             <p className="config-copy">
               Grimoire records what each provider says a call cost. OpenRouter
               says; an OpenAI-compatible endpoint you host yourself says nothing
-              at all, and those calls read as <em>unpriced</em> everywhere costs
+              at all, and those calls read as <em>not reported</em> everywhere costs
               are shown — which is honest, and no use for answering what a
               campaign has cost. Rates here fill that gap.
             </p>

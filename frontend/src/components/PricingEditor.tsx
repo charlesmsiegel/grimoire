@@ -5,7 +5,7 @@ import { ApiError, api, type PricingEntry } from "../api/client";
  *
  *  Grimoire records what a provider says a call cost. OpenRouter says; every
  *  OpenAI-compatible endpoint says nothing at all, and those calls sit in every
- *  rollup as "unpriced" — honest, and useless for answering what a campaign has
+ *  rollup as "not reported" — honest, and useless for answering what a campaign has
  *  cost. This table is how a reader closes that gap themselves.
  *
  *  **What comes out of it is an estimate and is labelled as one everywhere.**
@@ -236,7 +236,7 @@ export function PricingEditor() {
     <div className="pricing-editor">
       {rows.length === 0 && (
         <p className="field-hint">
-          No rates set. Calls whose provider reports no price stay "unpriced" in
+          No rates set. Calls whose provider reports no price stay "not reported" in
           every cost view — which is the honest answer, and not a useful one.
         </p>
       )}

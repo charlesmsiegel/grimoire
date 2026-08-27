@@ -36,7 +36,7 @@ function n(value: number | undefined | null): number {
 /** What a bucket or a turn reads as when nothing can price it. A constant
  *  because two callers branch on it, and a second spelling of the word would
  *  silently stop one of them from recognising the case. */
-export const UNPRICED = "unpriced";
+export const UNPRICED = "not reported";
 
 /** `cost_basis` for a call billed against a subscription rather than per token.
  *  Its `cost_usd` is the provider's own estimate of what it would have cost,
@@ -69,7 +69,7 @@ export function about(usd: number): string {
  *  one billed call keeps its figure; `Footnotes` below is what says the figure
  *  is a floor. A bucket with no billed calls but a modelled or subscription
  *  figure shows that instead, parenthesised — an estimate is better than
- *  "unpriced", and worse than a price, and reads as exactly that. */
+ *  "not reported", and worse than a price, and reads as exactly that. */
 export function bucketPrice(bucket: UsageBucket): string {
   const billed = n(bucket.cost_usd);
   if (billed > 0 || n(bucket.priced_calls) > n(bucket.subscription_calls)) {
@@ -81,7 +81,7 @@ export function bucketPrice(bucket: UsageBucket): string {
   // them; a bucket holding both (a connection changed between rerolls) would
   // then print a figure that reconciles to neither column, which is the
   // failure the three-column split exists to prevent. With both present the
-  // headline says `unpriced` and `Footnotes` prints each one separately,
+  // headline says `not reported` and `Footnotes` prints each one separately,
   // named, which is the only rendering that can be checked against the ledger.
   const estimates = [n(bucket.estimated_usd), n(bucket.modelled_usd)].filter((v) => v > 0);
   if (estimates.length === 1) return about(estimates[0]);
@@ -110,7 +110,7 @@ export function turnPrice(
   turn: Pick<UsageTurn, "cost_usd" | "modelled_usd" | "cost_basis">,
 ): string {
   // `== null` covers both null and the absent field an older response carries,
-  // which is the difference between "unpriced" and a `≈ <$0.0001` built out of
+  // which is the difference between "not reported" and a `≈ <$0.0001` built out of
   // `undefined`.
   if (turn.cost_usd != null) {
     // A subscription turn's `cost_usd` is what it WOULD have cost, not what
@@ -198,7 +198,7 @@ export function Footnotes({ bucket, showRatesHint = true }: {
  *
  *  A chip rather than a line, and only where there is something to say: an
  *  unmetered post (an endpoint that reports nothing, with no rate set) shows
- *  no chip at all rather than a `$0.00` or an "unpriced" badge on every post in
+ *  no chip at all rather than a `$0.00` or a "not reported" badge on every post in
  *  the scene. What is worth interrupting a transcript for is a cost; the
  *  absence of one is the inspector's business.
  */
@@ -274,7 +274,7 @@ export function MoneyColumns({ bucket }: { bucket: UsageBucket }) {
         <div className="money-figure">
           {billed > 0 || n(bucket.priced_calls) > n(bucket.subscription_calls)
             ? money(billed)
-            : UNPRICED}
+            : <span className="money-unpriced">{UNPRICED}</span>}
         </div>
         <div className="money-hint">What a provider said it charged.</div>
       </div>

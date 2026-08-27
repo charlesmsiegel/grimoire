@@ -26,7 +26,7 @@ test("an estimate is marked as one", () => {
 });
 
 test("a bucket of calls nobody priced says so rather than $0.00", () => {
-  expect(bucketPrice({ ...ZERO, calls: 3, unpriced_calls: 3 })).toBe("unpriced");
+  expect(bucketPrice({ ...ZERO, calls: 3, unpriced_calls: 3 })).toBe("not reported");
 });
 
 test("one billed call among unpriced ones keeps the figure", () => {
@@ -44,7 +44,7 @@ test("a bucket holding both kinds of estimate refuses to merge them", () => {
   // that reconciles to neither column. The footnotes name each separately.
   expect(bucketPrice({ ...ZERO, calls: 4, priced_calls: 2, subscription_calls: 2,
                        estimated_usd: 0.5, modelled_calls: 2,
-                       modelled_usd: 0.25 })).toBe("unpriced");
+                       modelled_usd: 0.25 })).toBe("not reported");
 });
 
 test("a bucket that was only ever subscription-billed reads as an estimate too", () => {
@@ -65,7 +65,7 @@ test("a response missing a money column renders nothing rather than NaN", () => 
 test("a turn's estimate is shown in place of an absent price, marked", () => {
   const turn = { cost_usd: null, modelled_usd: null, cost_basis: "" };
   expect(turnPrice({ ...turn, modelled_usd: 0.01 })).toBe("≈ $0.01");
-  expect(turnPrice(turn)).toBe("unpriced");
+  expect(turnPrice(turn)).toBe("not reported");
   expect(turnPrice({ ...turn, cost_usd: 0.02, cost_basis: "billed" })).toBe("$0.02");
 });
 
@@ -200,6 +200,6 @@ test("a bucket nobody priced does not render spend as $0.00", () => {
       cost_usd: 0, estimated_usd: 0, modelled_usd: 0,
       total_tokens: 0, prompt_tokens: 0, completion_tokens: 0,
     } as any} />);
-  expect(container.querySelector(".money-figure")?.textContent).toBe("unpriced");
+  expect(container.querySelector(".money-figure")?.textContent).toBe("not reported");
   expect(container.textContent).not.toMatch(/\$0\.00/);
 });

@@ -217,6 +217,17 @@ test("nothing missing leaves the bulk button disabled and offers no choice", asy
   await screen.findByText("Every cast member has a sheet.");
   expect(screen.getByRole("button", { name: /Create missing sheets/ })).toBeDisabled();
   expect(screen.queryByLabelText("Sheet type for Characters")).not.toBeInTheDocument();
+  expect(screen.queryByText(/^Missing ·/)).not.toBeInTheDocument();
+});
+
+test("the action row names who is missing, not just how many", async () => {
+  renderSheets();
+  await screen.findByText("Sheet coverage");
+
+  // The rail already marks Winifred's row "Missing" (see the first test
+  // above); the design also wants the name in the action row itself, so a
+  // reader does not have to scan the roster to see who the count refers to.
+  expect(screen.getByText("Missing · Winifred")).toBeInTheDocument();
 });
 
 test("a campaign with no module bound says so instead of an empty cast", async () => {

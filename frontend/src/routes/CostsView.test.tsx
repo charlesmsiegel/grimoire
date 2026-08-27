@@ -161,7 +161,7 @@ test("a scene nobody priced does not total to $0.00", async () => {
   renderCosts();
 
   const [only] = await screen.findAllByRole("row").then((r) => r.slice(1));
-  expect(within(only).getByText("unpriced")).toBeInTheDocument();
+  expect(within(only).getByText("not reported")).toBeInTheDocument();
   expect(screen.queryByText("$0.00")).toBeNull();
 });
 

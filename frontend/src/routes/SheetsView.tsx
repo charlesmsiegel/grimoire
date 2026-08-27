@@ -517,6 +517,15 @@ export default function SheetsView() {
               {missingTotal === 0 && (
                 <span className="field-hint">Every cast member has a sheet.</span>
               )}
+              {/* The names, not just the count: the rail already marks each row,
+                  but this is the one place the design puts them in the action
+                  row itself, so a reader does not have to scroll the roster to
+                  see who is still missing. */}
+              {missingTotal > 0 && (
+                <span className="field-hint">
+                  Missing · {plan.flatMap(({ rows }) => rows.filter(isMissing).map((r) => r.name)).join(", ")}
+                </span>
+              )}
             </div>
           </>
         )}

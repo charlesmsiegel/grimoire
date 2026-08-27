@@ -41,7 +41,7 @@ test("an empty table says what that costs rather than showing nothing", async ()
   vi.mocked(api.getPricing).mockResolvedValue({ ...TABLE, rates: {} });
   render(<PricingEditor />);
 
-  expect(await screen.findByText(/stay "unpriced" in every cost view/))
+  expect(await screen.findByText(/stay "not reported" in every cost view/))
     .toBeInTheDocument();
 });
 
@@ -111,7 +111,7 @@ test("removing a row and saving drops it", async () => {
   fireEvent.click(screen.getByText("Save rates"));
 
   await waitFor(() => expect(api.setPricing).toHaveBeenCalledWith({}));
-  expect(await screen.findByText(/stay "unpriced" in every cost view/))
+  expect(await screen.findByText(/stay "not reported" in every cost view/))
     .toBeInTheDocument();
 });
 
