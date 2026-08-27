@@ -38,6 +38,22 @@ Only ever a scheduling gap -- the task is already queued on the loop -- so this
 is generous, not a real wait.
 """
 
+NOTIFYING_CLASSES = frozenset({"turn", "review"})
+"""Run classes whose terminal state is worth telling the player about.
+
+The class table's `Notify` column, applied in the one place that announces a
+terminal run. A `turn` produces a reply and a `review` produces a form to read;
+both are things a player came back for. A `background` run -- the rolling
+summary, the scene-break check (#397) -- is work nobody asked for by name, and
+announced as anything at all the Android shell posts "New Post" for a scene
+whose transcript did not grow. A `draft` is held on the run and read by the
+request that asked for it.
+
+Only the SINK is gated. `retire` still runs for every class, because the live
+count it feeds is what keeps the foreground service promoted while any run is
+alive -- which is exactly what these background runs need.
+"""
+
 REAP_INTERVAL_SECONDS = 60.0
 """How often to sweep terminal runs. Well under ``REAP_SECONDS`` so a run is
 dropped promptly after its window, and rare enough that the sweep itself is
@@ -145,7 +161,8 @@ def _announce_terminal(app, run) -> None:
     notification may say. A `turn` produces a reply and a `review` produces a
     form to read; telling the player "New Post" when what arrived is an
     end-of-scene review is a small lie they act on -- they open the scene
-    looking for narration that is not there.
+    looking for narration that is not there. Whole classes say nothing at all,
+    and `NOTIFYING_CLASSES` is which.
 
     Both AFTER the bookkeeping and each in its own fail-soft boundary. Inside
     `_guarded`'s try, a notification the OS refused would flip a successfully
@@ -160,7 +177,7 @@ def _announce_terminal(app, run) -> None:
         except Exception:                                    # noqa: BLE001
             _log.exception("retiring run %s failed", run.id)
     sink = getattr(app.state, "on_run_terminal", None)
-    if sink is None:
+    if sink is None or run.cls not in NOTIFYING_CLASSES:
         return
     try:
         sink(run.id, run.state, run.cls, run.labels.get("campaign", ""),

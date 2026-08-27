@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import time
 
 import anyio
@@ -43,6 +44,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+
+_log = logging.getLogger(__name__)
 
 # An SSE comment: framing every proxy on the path understands as traffic, and
 # that `parseSSEChunk` already skips (it only reads `data:` lines), so the
@@ -310,11 +313,32 @@ class StreamOutcome:
     unmigrated caller working exactly as before.
     """
 
-    __slots__ = ("error", "state")
+    __slots__ = ("at", "error", "state")
 
     def __init__(self) -> None:
         self.state: str | None = None
         self.error: dict | None = None
+        #: How long the transcript was when this turn's terminal write finished,
+        #: or None when it wrote nothing. See `persisted`.
+        self.at: int | None = None
+
+    def persisted(self, at: int) -> None:
+        """The transcript length a terminal write of this turn left behind.
+
+        This is the follow-up boundary (#397): the length `askAfterPost` used
+        to read on the client and pass as `upto`, so a fold cannot swallow a
+        post whose reply has not been written yet. Recorded here rather than
+        read afterwards, because "afterwards" is a second read of a file
+        anything may have moved on -- and the server, unlike the client, can
+        take it under the very lock the write held.
+
+        The LAST write wins, and there is at most one that matters: a turn
+        either persists its reply or persists a partial and stops. A turn that
+        wrote nothing leaves this None, which is what tells the runner there is
+        no follow-up worth scheduling -- neither the summary's coverage nor the
+        scene-break count has moved.
+        """
+        self.at = at
 
     def land(self) -> None:
         """The turn finished and its writes were attempted -- the ordinary end."""
@@ -336,6 +360,65 @@ class StreamOutcome:
         if self.state is None:
             return None
         return {"state": self.state, "error": self.error}
+
+
+def _tail_length(cid: str, sid: str) -> int:
+    """How many posts the transcript holds right now.
+
+    Called under the campaign-lock hold a terminal write took, immediately
+    after it, so what comes back is the boundary that write produced rather
+    than a length something else has since moved on. Its one caller is
+    `StreamOutcome.persisted`, whose docstring carries the reasoning.
+    """
+    return len(store.scenes.read_scene(cid, sid)["messages"])
+
+
+async def _fire_follow_up(after_turn, box: StreamOutcome) -> None:
+    """Ask for this turn's background work, once the turn is over.
+
+    The rolling summary and the scene-break check are scheduled here rather
+    than by the client that sent the turn (#397). `CampaignView.askAfterPost`
+    fired them when the streaming promise settled, which is precisely what does
+    not happen in the case detached runs exist for: the phone locks, the
+    JavaScript is suspended, the turn lands server-side, and nobody is left to
+    ask. The summary then falls behind by however many turns were taken with
+    the app backgrounded and the scene-break prompt never appears.
+
+    Three things keep this from costing the turn anything, and all three are
+    deliberate:
+
+    * it runs AFTER the outcome is decided and outside every write path, so
+      nothing here can change what the turn reports;
+    * its failures are swallowed -- a summary that could not even be
+      *scheduled* is not a failed turn, and there is nobody to tell;
+    * it is gated on a boundary having been recorded, which is the same
+      question as "did this turn write anything". A turn that persisted
+      nothing has moved neither the summary's coverage nor the scene-break
+      count, so asking would spend two reservations to be told nothing is due.
+
+    What it schedules is `background` class work, which by `runs.exclusion_key`
+    holds no key on the scene -- so neither of these can ever refuse a later
+    turn with `run_in_flight` or hold the scene against an edit or an End Scene.
+
+    IN A WORKER THREAD, and both halves of that matter. Reserving a run takes
+    the campaign lock and reads the scene's identity off disk, and this is the
+    lifespan's event loop -- inline, a contended campaign would freeze every
+    unrelated request and open stream on the backend for as long as it took to
+    resolve. And the runner's own handoff is built for a thread that is not the
+    loop: `runner._PortalEvent` calls through the portal to build a run's
+    events, which raises outright when called from the loop thread.
+
+    Awaited AFTER the frames have gone out, never before. It is the last thing
+    a turn does, so nothing a subscriber is waiting for can queue behind it --
+    the only thing it delays is the run's own terminal state, by the few
+    milliseconds two reservations cost.
+    """
+    if after_turn is None or box.at is None:
+        return
+    try:
+        await run_in_threadpool(after_turn, box.at)
+    except Exception:                                        # noqa: BLE001
+        _log.exception("could not schedule the follow-ups for a finished turn")
 
 
 def _scene_moved(cid: str, sid: str, identity: str | None) -> bool:
@@ -462,7 +545,7 @@ def _answering_post(messages: list[dict]) -> int | None:
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                   client: LLMClient, finalize, on_error=None, on_abort=None,
                   task: str = "chat", outcome: StreamOutcome | None = None,
-                  post: int | None = None):
+                  post: int | None = None, after_turn=None):
     """Stream one persisted turn while watching for a ```roll fence.
 
     Deltas are routed through a FenceWatcher, so an opener (even split across
@@ -485,6 +568,13 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     the turn -- read from inside this generator it would be read after the claim
     and could see a transcript another writer had moved on. `None` for a turn
     that answers no post at all.
+
+    `after_turn(at)` is what this turn asks for once it is over -- the rolling
+    summary and the scene-break check, scheduled server-side rather than by a
+    client that may no longer exist (#397). Fired from here because this is the
+    one place that sees every way a stream can end, and only where the producer
+    recorded a boundary through `StreamOutcome.persisted`; see
+    `_fire_follow_up` for what it is and is not allowed to cost the turn.
 
     `on_abort(watcher)` is the same decision for a *disconnect* — the client
     cancelled, or the connection died — which arrives as cancellation rather
@@ -585,6 +675,11 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # provider failure indistinguishable from a delivered reply.
             box.fail(exc.kind, exc.detail, **note)
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind, **note}})
+            # A failed turn that kept a partial reply still grew the transcript,
+            # so it still wants asking about (#397). After the frame, like the
+            # success path below: the report of the failure is what the client
+            # is waiting for.
+            await _fire_follow_up(after_turn, box)
             return
         except BaseException:
             # Cancellation, `GeneratorExit`, or anything else that ends this
@@ -641,13 +736,19 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
         box.land()
         for frame in frames:
             yield frame
+        # LAST, after the outcome is decided and after every frame has gone out.
+        # A subscriber that has walked away does not lose this: the producer is
+        # always driven to exhaustion by `runs.start_detached`'s pump, which
+        # buffers frames on the run rather than on the socket (#397).
+        await _fire_follow_up(after_turn, box)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient,
                  undo_user_post=None, restore_removed=None, task: str = "chat",
-                 *, identity: str | None, outcome: StreamOutcome | None):
+                 *, identity: str | None, outcome: StreamOutcome | None,
+                 after_turn=None):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
     transcript that ends at a mechanical decision point always has a
@@ -747,9 +848,12 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 # continuation inherits that rather than inventing one.
                 rec = store.proposals.new(cid, sid, payload, post)  # heals before replacing
             _persist_reply(cid, sid, watcher.narration)
+            # Read under the hold this whole function runs in, so the follow-ups
+            # fold exactly the transcript this turn left (#397).
+            box.persisted(_tail_length(cid, sid))
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         elif _persist_reply(cid, sid, watcher.narration):
-            pass                     # it landed; nothing else to decide
+            box.persisted(_tail_length(cid, sid))   # it landed; see above (#397)
         elif restore_removed is not None:
             # A turn that *succeeded* and produced nothing — a clean EOF with no
             # text and no fence, which a provider does return (an empty safety
@@ -806,6 +910,8 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 # the provider failure that brought us here.
                 return {}
             if _persist_reply(cid, sid, watcher.narration):
+                # A partial is still a post, and still moves both gates (#397).
+                box.persisted(_tail_length(cid, sid))
                 return {}            # a normal turn keeps its partial reply
             if not _owns_turn(cid, sid, turn_token):
                 return {}
@@ -912,12 +1018,13 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             return finalize(watcher)
 
     return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort,
-                         task=task, outcome=box, post=post)
+                         task=task, outcome=box, post=post, after_turn=after_turn)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
                          conn: dict, client: LLMClient, *,
-                         identity: str | None, outcome: StreamOutcome | None):
+                         identity: str | None, outcome: StreamOutcome | None,
+                         after_turn=None):
     """Stream a proposal's continuation and commit it atomically. A supersede
     that lands mid-stream makes ``commit_narration`` return False and the
     streamed text is dropped. A follow-up fence in the continuation hands off
@@ -962,9 +1069,18 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
             frames.append(_sse({"done": True}))
             return frames
         persist = lambda: _persist_reply(cid, sid, watcher.narration)
+        # Whether this continuation put anything in the transcript, which is
+        # what decides if the follow-ups are worth scheduling (#397). Both
+        # halves: the guard above has already returned for narration that would
+        # not land, so non-empty narration plus a committed record is exactly
+        # "a post was written" -- and an empty one commits too, marking the
+        # record narrated without appending anything.
+        wrote = bool(watcher.narration.strip())
         if watcher.complete or watcher.truncated:
             with store.locks.campaign_lock(cid):
                 if store.proposals.commit_narration(cid, sid, pid, persist):
+                    if wrote:
+                        box.persisted(_tail_length(cid, sid))
                     payload = _make_proposal(cid, sid, watcher)
                     # new() heals the record it is about to erase; the lock is
                     # reentrant, so that projection is safe under ours.
@@ -974,8 +1090,8 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
                     # exists to prevent, one hop further along.
                     rec = store.proposals.new(cid, sid, payload, post)
                     frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
-        else:
-            store.proposals.commit_narration(cid, sid, pid, persist)
+        elif store.proposals.commit_narration(cid, sid, pid, persist) and wrote:
+            box.persisted(_tail_length(cid, sid))
         frames.append(_sse({"done": True}))
         return frames
 
@@ -986,7 +1102,8 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     # committed outside `commit_narration` is narration a supersede can no
     # longer displace.
     return _fence_stream(cid, sid, messages, conn, client, finalize,
-                         task="continuation", outcome=box, post=post)
+                         task="continuation", outcome=box, post=post,
+                         after_turn=after_turn)
 
 
 def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient,

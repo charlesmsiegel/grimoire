@@ -5997,40 +5997,38 @@ test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
 
 // ------------------------------------------ #110/#112: confidence routing
 
-// ---- the live rolling summary (#85) ----
-test("a finished turn asks the server to refold the scene summary", async () => {
+// ---- the live rolling summary (#85) and the scene-break detector (#84) ----
+//
+// Both used to be fired from here once a turn's streaming promise settled, and
+// #397 moved that trigger to the backend: a phone that locks mid-turn suspends
+// this JavaScript, the turn lands server-side anyway, and nothing here is left
+// to ask. Every other transcript write below still asks for itself, because
+// each is a request the player is waiting on -- it is only the turn whose end
+// this side can miss.
+test("a finished turn leaves both follow-ups to the server", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  // Without `force`: the server decides whether this turn is the Nth, so an
-  // ordinary turn spends nothing. The fourth argument is the turn's transcript
-  // boundary, so a fast next send cannot be swallowed by this fold.
-  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
-    "run", "s1", false, expect.anything()));
+  // Settled: the composer is out of its Stop state, so the whole of `runStream`
+  // -- including the point these two used to be fired from -- has run.
+  await waitFor(() => expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull());
+  expect(api.refreshRollingSummary).not.toHaveBeenCalled();
+  expect(api.askSceneBreak).not.toHaveBeenCalled();
 });
 
-// ---- the scene-break detector (#84) ----
-test("a finished turn also asks whether the scene has reached a break", async () => {
+test("a break question that fails never surfaces an error over the play view", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  renderCampaign();
-  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
-  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  // Without `force` and with the same boundary the fold gets: the heuristic is
-  // the server's, so an ordinary turn spends nothing, and a question that took
-  // an unanswered next post as the scene's END would be asking about a beat
-  // whose reply had not arrived.
-  await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalledWith(
-    "run", "s1", false, expect.anything()));
-});
-
-test("a break question that fails never surfaces an error over the turn", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.roll as any).mockResolvedValue({ ok: true, total: 7, message: "" });
   (api.askSceneBreak as any).mockRejectedValue(
     new ApiError(409, "OpenRouter key not set", "missing_key"));
   renderCampaign();
-  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
-  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
   await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalled());
   expect(screen.queryByText(/OpenRouter key not set/)).toBeNull();
 });
@@ -6039,11 +6037,16 @@ test("a failed summary refold does not take the break question down with it", as
   // Fired separately rather than chained, precisely so neither is a
   // precondition for the other.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.roll as any).mockResolvedValue({ ok: true, total: 7, message: "" });
   (api.refreshRollingSummary as any).mockRejectedValue(
     new ApiError(409, "OpenRouter key not set", "missing_key"));
   renderCampaign();
-  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
-  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
   await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalled());
 });
 
@@ -6063,35 +6066,47 @@ test("a manual dice roll also asks whether the scene has reached a break", async
     "run", "s1", false, expect.anything()));
 });
 
-test("a refresh that fails never surfaces an error over the turn", async () => {
+test("a refresh that fails never surfaces an error over the play view", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.roll as any).mockResolvedValue({ ok: true, total: 7, message: "" });
   (api.refreshRollingSummary as any).mockRejectedValue(
     new ApiError(409, "OpenRouter key not set", "missing_key"));
   renderCampaign();
-  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
-  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalled());
   // The summary is a background reading aid; a play session must not be
   // interrupted by one that could not be written.
   expect(screen.queryByText(/OpenRouter key not set/)).toBeNull();
 });
 
-test("the turn does not wait on the summary refresh", async () => {
+test("a roll does not wait on the summary refresh", async () => {
+  // "Non-blocking" is the property, and the roll is where it can still be
+  // observed from this side: the turn's own follow-ups are the server's now
+  // (#397), so there is nothing left in `runStream` for a hung fold to hold up.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.roll as any).mockResolvedValue({ ok: true, total: 7, message: "" });
   let release: (() => void) | undefined;
   (api.refreshRollingSummary as any).mockImplementation(
     () => new Promise((resolve) => { release = () => resolve({
       summary: "Late.", at: 1, total: 1, stale: false, every: 10, due: false,
       refreshed: true }); }));
   renderCampaign();
-  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
-  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  // The turn is over — the composer is out of its Stop state and takes input
-  // again — while the refresh is still unresolved. That is what "non-blocking"
-  // has to mean for the player. (The button reads "Continue ▶" here rather than
-  // "Send ▸": a landed send clears the composer.)
-  await waitFor(() => expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull());
-  expect(await screen.findByRole("button", { name: /Continue/ })).not.toBeDisabled();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  // The roll is over — its form is gone and the composer takes input again —
+  // while the refresh is still unresolved.
+  await waitFor(() => expect(api.roll).toHaveBeenCalled());
+  expect(await screen.findByRole("button", { name: /(send ▸|continue ▶)/i }))
+    .not.toBeDisabled();
   expect(release).toBeDefined();      // ...and the refresh really is still in flight
   await act(async () => { release!(); });
 });
@@ -6135,22 +6150,29 @@ test("a check also asks whether the summary is due", async () => {
     "run", "s1", false, expect.anything()));
 });
 
-test("a turn whose re-read never landed asks for no fold at all", async () => {
-  // The boundary passed to the fold comes from the post-turn re-read. When that
-  // read is retired — a newer turn superseded it, or it failed outright — there
-  // is no verified boundary, and the earlier code fell back to an UNBOUNDED
-  // request. That is backwards: the case with a newer turn in flight is exactly
-  // the case where an unbounded fold can cover a player post whose reply has
-  // not been written yet, keeping that reply out of the summary until another
-  // threshold. Nothing is the right thing to send (#85).
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+test("a write whose re-read never landed asks for no fold at all", async () => {
+  // The boundary passed to the fold comes from a re-read. When that read is
+  // retired — a newer write superseded it, or it failed outright — there is no
+  // verified boundary, and the earlier code fell back to an UNBOUNDED request.
+  // That is backwards: the case with a newer turn in flight is exactly the case
+  // where an unbounded fold can cover a player post whose reply has not been
+  // written yet, keeping that reply out of the summary until another threshold.
+  // Nothing is the right thing to send (#85).
+  //
+  // Driven through scene birth rather than through a turn: `refreshAndAsk` is
+  // the caller that swallows a failed read into a −1 boundary, and the turn's
+  // own follow-ups moved server-side (#397).
+  (api.listScenes as any)
+    .mockResolvedValueOnce(ONE_SCENE)                // initial load
+    .mockResolvedValue([{ id: "s9", title: "New", model: "", created: "", updated: "" }]);
   renderCampaign();
-  await screen.findByRole("textbox");
+  await screen.findByText(/Run One/);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
   (api.refreshRollingSummary as any).mockClear();
   (api.getScene as any).mockRejectedValue(new ApiError(503, "store busy", "busy"));
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
-  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull());
+  fireEvent.click(await screen.findByText("stub-pick"));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith(
+    "run", "s9", expect.anything()));
   expect(api.refreshRollingSummary).not.toHaveBeenCalled();
 });
 

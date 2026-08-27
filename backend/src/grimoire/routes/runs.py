@@ -108,6 +108,22 @@ absorbed; either running while the other mutates loses work that cannot be
 regenerated.
 """
 
+ATTACHABLE: frozenset[str] = frozenset({"turn", "review"})
+"""Classes an attemptless discovery may answer with.
+
+`GET .../run` without an attempt asks "what is the newest thing on this scene
+I might still be waiting for?", and only these two are ever that: a `turn` has
+a frame buffer to read and a `review` has a payload to poll. `background` and
+`draft` have neither, and a client handed one attaches to a buffer that never
+fills -- the composer stays locked over a scene where nothing is wrong. Once a
+landed turn schedules its own follow-ups (#397), a `background` run is
+routinely the newest run on a scene, so this stopped being hypothetical.
+
+The same members as `_EXCLUSIVE` today and deliberately not spelled as that
+name: they answer different questions, and a background run that one day
+needed a key must not thereby become attachable.
+"""
+
 
 class HandshakeEvent(Protocol):
     """What a run's `ready`/`terminal` events must do.
@@ -919,6 +935,11 @@ def get_scene_run(cid: str, sid: str, request: Request,
     found = request.app.state.runs.for_subject(subject, identity=identity)
     if attempt is not None:
         found = [r for r in found if r.attempt_id == attempt]
+    else:
+        # An id the caller named is answered whatever its class -- it asked
+        # about that run. Without one this is "the newest thing I could be
+        # waiting for", and only `ATTACHABLE` is ever that; see there.
+        found = [r for r in found if r.cls in ATTACHABLE]
     if not found:
         return {"run": None}
     # Reservation order, NOT `max(started_at)`. `for_subject` preserves the
@@ -1421,6 +1442,33 @@ def reserve_review(app, cid: str, sid: str, kind: str,
     """
     run, _ = _reserve(app, cid, sid, "review", kind, None,
                       review_generation=generation)
+    return run
+
+
+def reserve_background(app, cid: str, sid: str, kind: str) -> Run | None:
+    """Reserve a `background` run for this scene, or `None` if it cannot be.
+
+    The rolling summary and the scene-break check (#397). Fire-and-forget by
+    class: `exclusion_key` gives `background` no key, so one can neither refuse
+    a turn with `run_in_flight` nor hold the scene against an edit, a cut or an
+    End Scene -- structural, rather than an exemption to remember.
+
+    Every way a reservation can fail answers `None` rather than raising, and
+    that is the difference from `reserve_turn`: nobody is waiting for this, and
+    there is no request to answer. A scene deleted between the turn landing and
+    this call, a store root mid-move, a contended campaign -- each means "not
+    this one", and the next turn asks again.
+
+    It is still a run rather than a bare task, for the two things a run buys
+    that a task does not: it keeps the Android foreground service promoted
+    while the work is live, which is the whole reason the trigger moved
+    server-side, and `runner._guarded` gives it a failure boundary so one that
+    dies takes no sibling with it.
+    """
+    try:
+        run, _ = _reserve(app, cid, sid, "background", kind, None)
+    except (HTTPException, store.locks.StoreBusy):
+        return None
     return run
 
 

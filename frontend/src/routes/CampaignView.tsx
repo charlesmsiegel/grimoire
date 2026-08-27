@@ -2253,7 +2253,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // absorbed perfectly well. It is left alone rather than released:
         // `useSceneReview` adopts it, and releasing here would unlock a
         // composer the server is refusing anyway.
-        if (live.cls === "review") return;
+        //
+        // Every class the server names that is not a turn, rather than the one
+        // that existed when this was written. A landed turn now schedules its
+        // own rolling-summary and scene-break work (#397), and those are
+        // `background` runs on this same scene -- so "not a review" stopped
+        // being the same question as "has frames". A run with no class at all
+        // still attaches, because `cls` is optional on the wire and the only
+        // thing that ever omitted it was a turn.
+        //
+        // Belt and braces: the backend keeps both classes out of an attemptless
+        // discovery in the first place (`runs.ATTACHABLE`).
+        if (live.cls && live.cls !== "turn") return;
         await attachToRun(cid, sid, live.id);
         return;
       }
@@ -2815,30 +2826,26 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // clearing unconditionally would unlock the scene the *new* turn is
         // streaming into. Same token idiom as `windowTokenRef`.
         if (streamTokenRef.current === streamToken) setStreamingId(null);
-        // Ask the server whether this turn was the one that makes the scene's
-        // running summary due (#85). Deliberately NOT awaited: the player's next
-        // send must never queue behind a summarization, which is the whole
-        // meaning of "non-blocking" here. Sent without `force`, so the decision —
-        // and the cost — stay on the server; an ordinary turn answers
-        // `refreshed: false` having reached no provider.
+        // NO `askAfterPost` HERE, and its absence is the point (#397). The
+        // rolling-summary fold and the scene-break question used to be fired
+        // from exactly this line, once the streaming promise settled — which is
+        // precisely the thing that does not happen in the case detached turns
+        // exist for. The phone locks, this JavaScript is suspended or the page
+        // is gone, the turn lands server-side, and nothing here is left to ask:
+        // the summary falls behind by however many turns were taken with the
+        // app backgrounded, and the scene-break prompt never appears.
         //
-        // Every rejection is swallowed. A missing key, a dead provider, a busy
-        // store: none of them is a reason to put a banner over a turn that landed,
-        // and the panel's own Refresh button reports the failure when the player
-        // actually asks for one.
+        // So the backend schedules both itself, when the turn's terminal write
+        // finishes (`streaming._fire_follow_up` → `scenes.schedule_follow_ups`),
+        // with a boundary it reads under the lock that write held — strictly
+        // better than the `seen` this side could offer, which is a read taken
+        // after the scene was already released. Asking from here as well would
+        // simply run each of them twice.
         //
-        // The `ctxKey` bump is guarded on the reader still being here, like every
-        // other post-await write in this function: a summary written for the scene
-        // they just left must not re-read the panel for the scene they are on.
-        // `seen` is how long the transcript was when this turn finished, and it
-        // is passed as the fold's boundary: `setStreamingId(null)` above has
-        // already released the scene, so the player can send again before this
-        // request reaches the server, and a fold that swallowed that unanswered
-        // post would keep the reply out of the summary until another threshold.
-        // A `seen` of -1 is a read that was retired rather than one that saw an
-        // empty transcript, so it is no boundary at all; `askAfterPost`
-        // declines it rather than falling back to an unbounded fold.
-        askAfterPost(id, seen);
+        // Every other transcript write in this component still asks for itself,
+        // and correctly so: an edit, a cut, a retcon, a roll and a check are all
+        // requests the player is waiting on, so there is a client here by
+        // construction. It is only the turn whose end this side can miss.
       }
     }
     // Landed means the backend said so, not that the promise resolved -- and
