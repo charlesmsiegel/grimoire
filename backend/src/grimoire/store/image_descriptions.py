@@ -217,7 +217,7 @@ def _walk(root: Path, base: str) -> Iterator[tuple[Path, Path]]:
     cache-busting `v` per image, which are a stat apiece, and a count needs
     neither -- so what they read inside a folder is theirs. What they must NOT
     disagree on is which images count, and that is `assets.storable` plus key
-    presence in both, held to one answer by `test_image_descriptions.py`.
+    presence in both, held to one answer by `test_image_descriptions_store.py`.
     """
     bdir = root / base
     if not bdir.exists():
@@ -291,7 +291,7 @@ def undescribed_count(root: Path, base: str = "characters") -> int:
     list needs this number for every world on every read, and the list itself
     only for the one world a reader expanded.
 
-    `test_image_descriptions.py` holds the two to the same answer. A cheap count
+    `test_image_descriptions_store.py` holds the two to the same answer. A cheap count
     that can disagree with the list behind it is worse than no count -- it is
     the stale number the to-do list exists to not have.
     """
