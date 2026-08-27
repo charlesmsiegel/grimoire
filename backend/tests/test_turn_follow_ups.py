@@ -12,6 +12,8 @@ neither can cost the turn anything -- not its outcome, and not the scene.
 from __future__ import annotations
 
 import importlib
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +21,9 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from grimoire.routes import runs as runs_routes
 from grimoire.routes import scenes as scenes_routes
+from grimoire.routes import streaming as streaming_routes
 
 from .llm_fakes import FakeLLM, from_entries
 
@@ -266,3 +270,64 @@ def test_a_follow_up_is_never_notified(client):
     _send(client, cid, sid)
     _settled(client, cid, sid)
     assert [args[2] for args in seen] == ["turn"]
+
+
+# ---- and none of it may cost the turn its own outcome ----------------------
+def test_an_unreadable_boundary_is_a_skipped_follow_up_not_a_failed_turn(client):
+    """`_tail_length` runs inside `finalize`, AFTER the reply is on disk, and
+    `_fence_stream` converts only `StoreBusy` there. A scene momentarily
+    unreadable -- a sync client mid-replace, a Windows sharing violation --
+    would otherwise escape to the runner and mark a landed turn `failed`, over
+    a reply that is perfectly persisted, leaving a retry free to append a
+    second one."""
+    cid, sid = _scene(client, posts=2)
+    # The real function, against a scene that is not there: `read_scene` raises
+    # and this must answer None rather than propagate.
+    assert streaming_routes._tail_length(cid, "no-such-scene") is None
+    # ...and None recorded on the box is simply no boundary.
+    box = streaming_routes.StreamOutcome()
+    box.persisted(None)
+    assert box.at is None
+
+
+def test_a_turn_whose_boundary_cannot_be_read_still_lands(client, monkeypatch):
+    """The other half of the same rule, end to end: no boundary means no
+    follow-up, and a turn that reported one is untouched."""
+    monkeypatch.setattr(streaming_routes, "_tail_length", lambda *a: None)
+    _use(client, _provider())
+    cid, sid = _scene(client, posts=9)
+    body = _send(client, cid, sid)
+    assert body.status_code == 200 and "The lamps are already lit." in body.text
+    assert store.scenes.read_scene(cid, sid)["messages"][-1]["content"] \
+        == "The lamps are already lit."
+    assert _background(client, cid, sid) == []
+
+
+def test_reserving_a_follow_up_does_not_wait_on_the_campaign_lock(client):
+    """The reservation is awaited by the turn's own generator, so a blocking
+    one keeps the SSE body open and the composer locked long after the reply
+    landed. `background` holds no exclusion key and its store-move refusal is
+    taken under the REGISTRY lock, so it has no business waiting on this one.
+    """
+    cid, sid = _scene(client, posts=2)
+    holding, release = threading.Event(), threading.Event()
+
+    def hold():
+        with store.locks.campaign_lock(cid):
+            holding.set()
+            release.wait(10)
+
+    keeper = threading.Thread(target=hold, daemon=True)
+    keeper.start()
+    try:
+        assert holding.wait(5), "the lock was never taken"
+        started = time.monotonic()
+        run = runs_routes.reserve_background(client.app, cid, sid, "rolling-summary")
+        waited = time.monotonic() - started
+    finally:
+        release.set()
+        keeper.join(timeout=10)
+    assert run is not None, "the reservation was refused"
+    # Well under `LOCK_TIMEOUT`, which is what a lock-taking reservation would
+    # have spent; loose enough not to be a stopwatch on a shared runner.
+    assert waited < 5, f"the reservation waited {waited:.1f}s on the campaign lock"

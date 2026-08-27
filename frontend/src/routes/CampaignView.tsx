@@ -4463,7 +4463,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                          // standing — the scene did not change, so the dialog
                          // they were looking at is waiting for them in the copy.
                          onForked={(forked) => navigate(sceneUrl(forked, activeId))}
-                         onChanged={async () => {
+                         onChanged={async (asked) => {
                            void loadScenes();
                            const seen = await selectScene(activeId);
                            setCtxKey((k) => k + 1);
@@ -4473,7 +4473,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                            // describes the transcript — and a walk that has
                            // just rewritten several turns is exactly when the
                            // scene-break question wants re-asking too.
-                           askAfterPost(activeId, seen);
+                           //
+                           // Unless the write was a reroll, which goes through
+                           // `/regenerate` and so already scheduled both
+                           // server-side (#397). Asking again would put a
+                           // second scene-break question at the provider —
+                           // that route has no in-flight coalescing, so both
+                           // are billed and the later one is thrown away as
+                           // superseded.
+                           if (!asked) askAfterPost(activeId, seen);
                          }} />
           )}
           {activeDone ? (

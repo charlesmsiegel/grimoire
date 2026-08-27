@@ -27,7 +27,10 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
    *  gutter; the panel prices it and asks before anything is cut. */
   startAt: number | null;
   onStartHandled: () => void;
-  onChanged: () => void;
+  /** The transcript moved. `asked` means the backend already scheduled this
+   *  write's follow-ups, so the handler must refresh without asking again
+   *  (#397) — see `refresh`. */
+  onChanged: (asked?: boolean) => void;
   /** Where a fork lands. The replay is meant to run in the copy, so the caller
    *  navigates there rather than this panel starting a walk in a campaign the
    *  reader is not looking at. */
@@ -155,10 +158,20 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   /** Re-read the session, then tell the caller its transcript moved — but only
    *  while this panel is still on screen. A reader who switches scene mid-request
    *  unmounts it, and `onChanged` refreshes the scene this panel was for, which
-   *  by then is not the one they are looking at. */
-  async function refresh() {
+   *  by then is not the one they are looking at.
+   *
+   *  `asked` says the BACKEND already scheduled this write's rolling-summary
+   *  and scene-break work, so the caller must refresh without asking again
+   *  (#397). Exactly one action here sets it: `again`, which goes through
+   *  `/regenerate` — an ordinary turn producer, which schedules its own
+   *  follow-ups wherever it is called from. `/replay/turn` deliberately does
+   *  not, and a cut, an accept or a cancel is no turn at all, so every other
+   *  caller still asks. Without this the reroll fired both, and the scene-break
+   *  question has no in-flight coalescing to collapse them: two calls reach the
+   *  provider and one answer is thrown away as superseded, billed. */
+  async function refresh(asked = false) {
     await load();
-    if (alive.current) onChanged();
+    if (alive.current) onChanged(asked);
   }
 
   const start = () => guard(async () => {
@@ -245,7 +258,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   const again = () => guard(async () => {
     await streamed((on, attempt, onIndex) =>
       api.regenerate(cid, sid, on, undefined, undefined, attempt, onIndex));
-    await refresh();
+    await refresh(true);   // `/regenerate` asked for itself — see `refresh`
   });
 
   const accept = () => guard(async () => {

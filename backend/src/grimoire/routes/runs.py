@@ -1464,10 +1464,38 @@ def reserve_background(app, cid: str, sid: str, kind: str) -> Run | None:
     while the work is live, which is the whole reason the trigger moved
     server-side, and `runner._guarded` gives it a failure boundary so one that
     dies takes no sibling with it.
+
+    **It takes no campaign lock, which is what makes it safe on a turn's
+    completion path.** `_reserve` takes one -- `ensure_identity` may mint and
+    write an identity, and the hold is what lets `scene_held_free` exclude a
+    reservation. Neither applies here: a `background` run holds no exclusion
+    key, so nothing needs to exclude it, and the store-move refusal lives
+    inside `start_or_existing` under the REGISTRY lock rather than this one.
+    Left going through `_reserve`, an unrelated request holding the campaign
+    lock would block this for `LOCK_TIMEOUT`, twice -- and this is awaited by
+    the turn's own generator, so the SSE body would stay open and the composer
+    locked for up to a minute after the reply was already on disk.
+
+    So the identity is READ (`scene_identity`) rather than ensured, and a scene
+    that has none yet -- the startup backfill skipped a contended campaign --
+    simply gets no follow-up this turn. Nothing looks a background run up by
+    identity; it is the subject key and nothing more.
     """
     try:
-        run, _ = _reserve(app, cid, sid, "background", kind, None)
-    except (HTTPException, store.locks.StoreBusy):
+        identity = scenes.scene_identity(cid, sid)
+    except OSError:
+        return None
+    if not identity:
+        return None
+    labels = {"campaign": _campaign_label(cid), "scene": _scene_label(cid, sid)}
+    try:
+        run, _ = app.state.runs.start_or_existing(
+            ("scene", cid, identity), "background", kind, None, identity, labels)
+    except (RunInFlightError, StoreMovingError):
+        # Neither is reachable for a keyless class today, and both are caught
+        # rather than asserted away: this is fire-and-forget, so a reservation
+        # that cannot happen is a skipped follow-up, never an exception on a
+        # path where nobody is listening for one.
         return None
     return run
 
