@@ -375,14 +375,59 @@ def post_campaign_event_unfire(cid: str, eid: str):
 
 @router.delete("/campaigns/{cid}/events/{eid}")
 def delete_campaign_event(cid: str, eid: str):
-    _campaign_root_or_404(cid)
+    """Delete one event, and retire the pre-notice it was dismissed under (#106).
+
+    `events.create` allocates an id by uniquifying the slug against the events
+    that exist *now*, so deleting "the-envoy-arrives" frees that id for the next
+    event of the same name. A notice key is `event:{fixed}:{id}`, so a recreated
+    event on the same day would regenerate the exact key the deleted one was
+    dismissed under and inherit its acknowledgement -- a distinct occurrence,
+    silently never warned about.
+
+    Retiring the key here rather than giving events non-reusable ids: this is
+    the notices ledger's problem with a reusable identifier, not a defect in
+    #101's id scheme, and it is the only place that knows both. Done from the
+    route because `notices` imports `events` -- the reverse call would close a
+    cycle the import guard forbids -- and after the delete, so a refused delete
+    cannot clear an acknowledgement for an event that is still there.
+
+    Best effort by construction: the key is rebuilt from the event's CURRENT
+    date, so one dismissed and then re-dated leaves its old key behind. That
+    residue is harmless (a re-dated event already warns again under a new key)
+    and the ledger's cap is what bounds it.
+    """
+    root = _campaign_root_or_404(cid)
+    row = store.events.get(cid, eid)
     try:
         found = store.events.delete(cid, eid)
     except store.events.EventError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not found:
         raise HTTPException(status_code=404, detail="event not found")
+    _retire_event_notice(cid, root, eid, (row or {}).get("date", ""))
     return {"ok": True}
+
+
+def _retire_event_notice(cid: str, root, eid: str, date: str) -> None:
+    """Forget the acknowledgement keyed to this event on this day, if any.
+
+    Silent on every failure: the event is already deleted by the time this runs,
+    and a calendar that will not load must not turn a completed delete into a
+    500. The cost of failing is one stale row in a capped ledger.
+    """
+    if not date:
+        return
+    provider = store.calendars.primary_provider(root)
+    if provider is None:
+        return
+    try:
+        fixed = store.calendars.fixed_of(provider, date)
+    except store.calendars.CalendarError:
+        return
+    try:
+        store.notices.forget(cid, [store.notices.event_key(fixed, eid)])
+    except store.notices.NoticeError:
+        return   # a corrupt ledger is the writer's refusal, not this route's failure
 
 
 # ---- warn-once pre-notices (#106) ----
@@ -421,7 +466,13 @@ def post_campaign_notices(cid: str, body: NoticeMark):
     second (`store/notices.py`).
     """
     _campaign_root_or_404(cid)
-    return {"ok": True, "marked": store.notices.mark(cid, body.keys, body.scene)}
+    try:
+        return {"ok": True, "marked": store.notices.mark(cid, body.keys, body.scene)}
+    except store.notices.NoticeError as e:
+        # A hand-edited or sync-damaged ledger is refused rather than replaced:
+        # say so, so it can be repaired instead of silently losing every
+        # acknowledgement it still holds.
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/campaigns/{cid}/notices/forget")
@@ -433,7 +484,10 @@ def post_campaign_notices_forget(cid: str, body: NoticeMark):
     an event until its day has gone by.
     """
     _campaign_root_or_404(cid)
-    return {"ok": True, "forgotten": store.notices.forget(cid, body.keys)}
+    try:
+        return {"ok": True, "forgotten": store.notices.forget(cid, body.keys)}
+    except store.notices.NoticeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/campaigns/{cid}/calendar/months")

@@ -115,6 +115,32 @@ def read(cid: str) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+class NoticeError(Exception):
+    """A notices.json that cannot be read as one. Raised by the mutators only."""
+
+
+def _mutable(cid: str) -> dict:
+    """`read` for a WRITER: the same file, but refusing what it cannot read.
+
+    The tolerance above is a reader's, and a mutator inheriting it would answer
+    a corrupt or wrongly-shaped notices.json with `{}` and then publish that
+    empty document over it — turning a file somebody could still repair by hand
+    into one acknowledgement, permanently. `events._mutable` and
+    `facts._read_ledger` draw the same line for the same reason; the difference
+    here is only that `read` swallows the parse, so this has to redo it.
+    """
+    path = _path(cid)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        raise NoticeError("notices.json cannot be read") from e
+    if not isinstance(raw, dict):
+        raise NoticeError("notices.json does not hold a set of acknowledgements")
+    return raw
+
+
 def _write(cid: str, data: dict) -> None:
     atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
@@ -171,7 +197,7 @@ def mark(cid: str, keys: list[str], scene: str = "") -> list[str]:
     # carries in the mypy baseline are that exact shape, and a sixth here would
     # be a new one, not an inherited one.
     with locks.campaign_lock(cid):
-        data = read(cid)
+        data = _mutable(cid)
         for key in wanted:
             if key in data:
                 continue
@@ -193,7 +219,7 @@ def forget(cid: str, keys: list[str]) -> list[str]:
     if not wanted:
         return []
     with locks.campaign_lock(cid):
-        data = read(cid)
+        data = _mutable(cid)
         done = [k for k in wanted if data.pop(k, None) is not None]
         if done:
             _write(cid, data)
@@ -213,6 +239,39 @@ def _bounded(text: str) -> str:
         return text
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     return f"{text[:NAME_BUDGET]}~{digest}"
+
+
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids in each row's `scene`. Part of the
+    `scene_refs.repoint` fan-out.
+
+    Nothing reads this field back to decide anything — once-ness is
+    campaign-wide — but it is the only thing in the ledger that says WHERE a
+    dismissal happened, and a scene id goes stale on an ordinary title rename,
+    the first date stamp, or a width re-pad. A field that names a scene which no
+    longer exists is worse than no field.
+
+    An unreadable file and malformed rows are stepped over rather than trusted,
+    for the reason `scene_ideas.repoint_scenes` gives: this runs AFTER the scene
+    file has been renamed, so raising here 500s the rename and leaves every
+    store later in the sweep pointing at an id that is already gone.
+    """
+    with locks.campaign_lock(cid):
+        try:
+            data = _mutable(cid)
+        except NoticeError:
+            return
+        hit = False
+        for rec in data.values():
+            if not isinstance(rec, dict):
+                continue
+            sid = rec.get("scene")
+            new_sid = mapping.get(sid) if isinstance(sid, str) else None
+            if new_sid is not None:
+                rec["scene"] = new_sid
+                hit = True
+        if hit:
+            _write(cid, data)
 
 
 def holiday_key(fixed: int, name: str) -> str:
