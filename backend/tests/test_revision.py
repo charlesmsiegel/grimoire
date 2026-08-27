@@ -780,6 +780,24 @@ def test_a_half_written_marker_is_not_replayed_as_a_report(client):
     assert again["replayed"] is False and again["id"] != first["id"]
 
 
+def test_a_marker_whose_rows_are_damaged_is_not_replayed(client):
+    # One level below the shape check: the containers are lists, so the earlier
+    # check passed, and `forkNotes` reads `.label` off every `refused` element —
+    # so a null row replayed as a success and then threw in the reader's
+    # browser, instead of taking the recoverable path of a second copy.
+    cid = _campaign(client)
+    root = store.campaigns.campaign_root(cid)
+    for damage in ([None], ["a bare string"], [{"label": "x"}], [{"label": 1, "reason": "y"}]):
+        first = _fork(client, cid, "Checkpoint", idempotency_key=f"k-{id(damage)}")
+        marker = root.parent / first["id"] / fork.MARKER
+        marker.write_text(json.dumps({"key": f"k-{id(damage)}", "parent": cid, "at": "",
+                                      "report": {**first, "refused": damage}}),
+                          encoding="utf-8")
+        again = _fork(client, cid, "Checkpoint", idempotency_key=f"k-{id(damage)}")
+        assert again["replayed"] is False, damage
+        assert again["id"] != first["id"], damage
+
+
 def test_a_replayed_report_carries_every_field_the_client_reads(client):
     cid = _campaign(client)
     first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")

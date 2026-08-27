@@ -342,9 +342,23 @@ _REPORT_FIELDS: dict[str, type | tuple[type, ...]] = {
     "records": int, "refused": list, "failed": list,
 }
 
+#: What each list field carries, checked down to its leaves. A container check
+#: alone let `{"refused": [null]}` through, and `forkNotes` reads `.label` off
+#: every element -- so a marker that got past the shape check still broke in the
+#: reader's browser instead of taking the recoverable path (Codex review). Past
+#: this there is nothing deeper: every leaf is a string.
+_REPORT_ROWS: dict[str, tuple[str, ...]] = {
+    "removed_scenes": (), "failed": (), "refused": ("label", "reason"),
+}
+
 
 def _whole(report: dict) -> bool:
-    """Whether `report` carries every field of a fork report, each of its type.
+    """Whether `report` is a fork report all the way down.
+
+    Every field, its type, and for the three lists the shape of each element --
+    because this value is returned as the route's body and the client reads all
+    of it. Anything short of that is a file we did not write, and believing one
+    hands back a report describing a fork whose contents nobody has checked.
 
     `bool` is excluded from `records` deliberately: it is an `int` to
     `isinstance` and is not a count, and a marker holding `true` there is a file
@@ -352,7 +366,17 @@ def _whole(report: dict) -> bool:
     """
     if not all(isinstance(report.get(f), t) for f, t in _REPORT_FIELDS.items()):
         return False
-    return not isinstance(report["records"], bool)
+    if isinstance(report["records"], bool):
+        return False
+    return all(_row(row, keys) for f, keys in _REPORT_ROWS.items() for row in report[f])
+
+
+def _row(row: object, keys: tuple[str, ...]) -> bool:
+    """One element of a report's list: a bare string, or an object with the keys
+    the client reads off it -- each of them a string too."""
+    if not keys:
+        return isinstance(row, str)
+    return isinstance(row, dict) and all(isinstance(row.get(k), str) for k in keys)
 
 
 def _record(cid: str, new_cid: str, key: str, report: dict) -> None:
