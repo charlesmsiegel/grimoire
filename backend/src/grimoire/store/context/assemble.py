@@ -488,6 +488,11 @@ def _pinned_sections(pinned_refs: frozenset, cast: list[dict], activated_wi: lis
     return frozenset(out)
 
 
+#: The off-scene cast directory's shared heading: the line that says these
+#: characters are NOT present. Both tiers name it, exactly one of them emits it.
+_OFF_SCENE_CAST_HEADING = "scene/_off_scene_cast.j2"
+
+
 class Section(NamedTuple):
     """One system-message section: its stable id, its inspector label, its
     template, the tier the packer drops it at, and the three selectors that
@@ -509,6 +514,20 @@ class Section(NamedTuple):
     #: they have to delete themselves — and there is no reply after it to strip
     #: it from.
     except_opener: bool = False
+    #: A heading this section SHARES with every other section naming the same
+    #: template, emitted by `_render_sections` on whichever of them renders
+    #: first. Not a section title: every other section opens with its own
+    #: `# Heading` inside its own template, and only a block that was split
+    #: into several sections for the token breakdown's sake needs this.
+    #:
+    #: It is a property of the SECTION rather than something a template works
+    #: out, because "am I first?" is a question about the merged, enabled
+    #: layout and a template can only see the data (#423). The off-scene cast
+    #: directory's tier 3 used to answer it by testing whether tier 2 had
+    #: content, which stopped being the same question the moment `layout.py`
+    #: let a reader disable or reorder either half — and the heading it lost is
+    #: the line saying the cast is not present.
+    heading: str = ""
 
 
 #: The section CATALOG: every section this build knows, with the order and the
@@ -592,9 +611,12 @@ SECTIONS = [
     # The off-scene cast directory is TWO sections, not one, so the token
     # breakdown can price its tiers apart (#2): tier 3 is the unbounded one and
     # folding it in with tier 2 hid exactly the number that decides whether it
-    # needs bounding. Adjacent and in this order, because the shared heading
-    # rides on whichever renders first and system.j2 joins them back into the
-    # single block they were split out of — see off_scene_cast_active.j2.
+    # needs bounding. Adjacent and in this order by DEFAULT, so system.j2 joins
+    # them back into the single block they were split out of — but only by
+    # default: `layout.py` lets a reader reorder or disable either half, which
+    # is why the shared heading is `Section.heading` (emitted by
+    # `_render_sections` on whichever half actually rendered first) rather than
+    # something the templates work out between themselves (#423).
     #
     # Same tier, so under budget pressure the packer may drop one and keep the
     # other -- a directory that used to be taken or left whole is now divisible.
@@ -617,9 +639,11 @@ SECTIONS = [
     # recap) but a change to the packing model this issue did not ask for.
     # Revisit if the unframed list turns out to cost anything in practice.
     Section("off_scene_cast_active", "Off-scene cast · active elsewhere",
-            "scene/sections/off_scene_cast_active.j2", pack.BACKGROUND),
+            "scene/sections/off_scene_cast_active.j2", pack.BACKGROUND,
+            heading=_OFF_SCENE_CAST_HEADING),
     Section("off_scene_cast_known", "Off-scene cast · known to exist",
-            "scene/sections/off_scene_cast_known.j2", pack.BACKGROUND),
+            "scene/sections/off_scene_cast_known.j2", pack.BACKGROUND,
+            heading=_OFF_SCENE_CAST_HEADING),
     Section("mechanics_response_format", "Mechanics response format",
             "scene/sections/mechanics_response_format.j2", pack.LOCK_IN),
     Section("response_format", "Response format",
@@ -670,6 +694,7 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
     data = {**a["data"], "opener": opener}
     pinned = a.get("pinned_sections") or frozenset()
     out = []
+    headed: set[str] = set()
     for section in layout.apply(SECTIONS):
         if section.pcless_only and not data["pcless"]:
             continue
@@ -677,8 +702,20 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
             continue
         if section.except_opener and opener:
             continue
-        text = macros.expand_macros(prompts.render(_section_template(section, data), **data),
-                                    a["subs"], cid, sid).strip()
+        body = prompts.render(_section_template(section, data), **data).strip()
+        # A shared heading (`Section.heading`) rides on whichever member of its
+        # group RENDERED first, and this is the only place that can tell: it
+        # holds the reader's merged layout and the rendered text at once, so it
+        # is the one point where "which of these comes first" and "which of
+        # these has anything to say" are both answerable. `headed` is keyed on
+        # the heading template, so a second group would be independent of this
+        # one. Prepended BEFORE macro expansion, because the heading is a
+        # template on disk like any other and a reader may have put a macro in
+        # it.
+        if body and section.heading and section.heading not in headed:
+            headed.add(section.heading)
+            body = prompts.render(section.heading, **data).strip() + "\n\n" + body
+        text = macros.expand_macros(body, a["subs"], cid, sid).strip()
         if text:
             out.append({"id": section.id, "label": section.label,
                         "text": text, "tier": section.tier,

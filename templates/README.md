@@ -348,8 +348,11 @@ substituted by code:
   `[{name, dossier}]` for the campaign-active tier and
   `[{id, name, tagline, versions}]` for the known-to-exist one, the latter
   already cut to `offscene_known_limit` by `context.cast._scope_known`. The
-  directory's shared heading lives in `scene/_off_scene_cast.j2` and is emitted
-  by whichever of the two sections renders first
+  directory's shared heading lives in `scene/_off_scene_cast.j2` and is in
+  neither section: it is declared as their `Section.heading` and emitted by
+  `context.assemble._render_sections` on whichever of the two actually rendered
+  first, which is the only thing that knows how the reader's prompt layout
+  ordered them
 - `player_names` — seated player names (the response-format guard)
 - `mechanics_rules` — `list[str]`, activated rules-doc bodies (frontmatter
   `always` docs, then docs gated on a present cast member's sheet type, then
