@@ -486,10 +486,13 @@ would answer neither question.
   route added tomorrow is covered without anyone remembering. Three writes stamp
   for themselves on top of that, each because the response line is the wrong
   moment for it: `clock.advance` bumps inside the lock hold that covers its
-  commit (a check the token has not moved under is not binding),
-  `routes/scenes._under_review_lock` bumps inside the fence that covers a
-  detached review's terminal write (its route answered 202 minutes earlier), and
-  `routes/streaming._persist_reply` bumps for the reply a stream lands. A route
+  commit (a check the token has not moved under is not binding), and everything
+  a *detached* run writes bumps where it writes, since the run outlives the
+  response the middleware stamps — `routes/scenes._under_review_lock` for a
+  review's terminal write, `_rolling_commit` and `_break_commit` for the
+  follow-ups a landed turn schedules (#397), and `routes/streaming._turn_settled`
+  at each of a turn's terminal points, which is not the same thing as "a post
+  landed": a closed roll fence writes a proposal and no post at all. A route
   that mutates a *different*
   campaign than the one in its path says so with `@leaves_campaign_unchanged`
   (`POST /fork`, whose source is never written to) — otherwise a fork would
