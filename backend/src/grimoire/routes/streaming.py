@@ -114,6 +114,30 @@ async def _flush_on_abort(hook, watcher) -> None:
         pass
 
 
+def _turn_settled(cid: str) -> None:
+    """Record that a detached turn reached its terminal write (#409).
+
+    Every one of them needs this and the reason is always the same: the
+    middleware stamped this campaign's revision when the stream's status line
+    went out, which is BEFORE the model ran, and everything a turn persists
+    lands after that. A token read while the model was generating would
+    otherwise still be current once the turn had finished writing, and a clock
+    advance or a checkpoint priced against it would proceed as though nothing
+    had happened.
+
+    Placed at the terminal points rather than beside each write, because what a
+    turn persists is not only posts: a roll fence that closes with no narration
+    at all still writes a proposal record, a continuation commits its narration
+    onto that record, and a failed turn's rollback takes the player's post back
+    off. Conditioning the stamp on the transcript having grown would miss every
+    one of those (Codex review).
+
+    Never raises -- `revision.bump` swallows and logs -- which is what makes it
+    safe this late, after work the user already has.
+    """
+    store.revision.bump(cid)
+
+
 def _persist_reply(cid: str, sid: str, text: str) -> int:
     """Split one model reply into per-speaker posts and append them (#744),
     returning how many actually landed.
@@ -199,15 +223,12 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
         kept = sum(1 for s in segments if s["content"].strip())
         if kept:
             # Inside the hold, so the token has moved before any other writer
-            # can take the lock and read it. The activity middleware stamps
-            # every other campaign write, but it deliberately skips streams --
-            # a stream's status line is sent before its outcome is known -- so
-            # a detached turn is the one mutation that would otherwise land
-            # with the campaign's revision reading exactly as it did before
-            # (#409). A clock advance priced in another tab while this turn was
-            # generating would then confirm against a transcript that has grown
-            # under it. Never raises, like everything else after the append.
-            store.revision.bump(cid)
+            # can take the lock and read it. Only when something landed: the
+            # callers that persist nothing here have written something else and
+            # stamp for themselves at their own terminal point -- see
+            # `_turn_settled`. This is also reached from `greetings.py`, which
+            # is a plain request and has no finalizer behind it.
+            _turn_settled(cid)
     return kept
 
 
@@ -917,6 +938,13 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             with store.locks.campaign_lock(cid):
                 if _owns_turn(cid, sid, turn_token):
                     restore_removed()
+        # Once, at the one exit, rather than in each branch above: a proposal
+        # record with no narration behind it, a restored reply, and a post that
+        # landed are all writes this turn made after its status line went out.
+        # The branch that wrote nothing at all bumps too, which costs a caller
+        # holding an older token one re-price and is the direction to be wrong
+        # in (`_turn_settled`).
+        _turn_settled(cid)
         frames.append(_sse({"done": True}))
         return frames
 
@@ -963,7 +991,12 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             if restore_removed is not None:
                 restore_removed()
             if undo_user_post is not None and undo_user_post():
+                # Taking the post back off is a transcript write like appending
+                # it was, and the one that a caller holding a token from before
+                # the send would otherwise never see.
+                _turn_settled(cid)
                 return {"post_returned": True}
+            _turn_settled(cid)
         return {}
 
     def on_abort(watcher) -> list[str]:
@@ -1137,6 +1170,11 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
                     frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         elif store.proposals.commit_narration(cid, sid, pid, persist) and wrote:
             box.persisted(_tail_length(cid, sid))
+        # Both branches wrote, whatever `wrote` says about the transcript:
+        # `commit_narration` marks the record narrated even when the
+        # continuation persisted no post, and the first minted a replacement
+        # proposal on top of that (#409, `_turn_settled`).
+        _turn_settled(cid)
         frames.append(_sse({"done": True}))
         return frames
 

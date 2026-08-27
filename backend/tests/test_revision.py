@@ -263,6 +263,42 @@ def test_every_preview_only_campaign_route_is_marked_as_one():
     assert scene_routes.post_scene_import_parse.grimoire_computes_only
 
 
+def test_a_turn_that_persists_no_post_still_records_its_terminal_write(client, monkeypatch):
+    """A roll fence that closes with no narration is a supported outcome, and it
+    writes a proposal record and nothing else.
+
+    The middleware's stamp went out with the stream's status line, BEFORE the
+    model ran, so the question is not whether the token moved at all — it did,
+    at that line — but whether it moved again afterwards. A reader holding what
+    the campaign read while the model was generating must not still be holding a
+    current token once the turn has written. `_persist_reply` cannot be what
+    records it: it counts posts, and this turn produced none.
+
+    So the assertion is on the SEQUENCE of tokens rather than on a count: the
+    value a mid-generation reader would have picked up is the first bump's, and
+    it has to be stale by the end.
+    """
+    cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    # Nothing lands in the transcript, exactly as a fence-only reply does.
+    monkeypatch.setattr(routes.streaming, "_persist_reply", lambda *a, **k: 0)
+    minted: list[str] = []
+    real = revision.bump
+    monkeypatch.setattr(revision, "bump",
+                        lambda c: minted.append(real(c)) or minted[-1])
+
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "I knock."}) as r:
+        assert r.status_code == 200
+        for _ in r.iter_lines():
+            pass
+
+    assert minted, "the send did not stamp the campaign at all"
+    # What a reader mid-generation was holding, against what the turn left behind.
+    assert _token(client, cid) != minted[0]
+
+
 def test_a_reply_that_lands_nothing_moves_nothing(client):
     cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]

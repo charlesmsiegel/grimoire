@@ -851,6 +851,9 @@ test("a disowned copy costs one more copy, not two", async () => {
   // checkpoint would have taken three copies. Re-pricing first mints both the
   // token the skip needs and the key the copy needs, in one call.
   let release: (r: ForkReport) => void = () => { /* replaced */ };
+  // Two prices before the turn lands (the confirm, then the checkpoint's own
+  // re-price), and rev-2 for everything after it.
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
   vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
   vi.mocked(api.previewAdvance).mockResolvedValue({ revision: "rev-2", digest: BIG });
   vi.mocked(api.forkCampaign).mockReturnValueOnce(new Promise((res) => { release = res; }));
@@ -878,4 +881,41 @@ test("a disowned copy costs one more copy, not two", async () => {
   const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
   expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
   expect(vi.mocked(api.advanceTime).mock.calls[0][1].expect_revision).toBe("rev-2");
+});
+
+test("a checkpoint the campaign outlived is not replayed for the retry", async () => {
+  // The path a counted-calls assertion cannot see. The copy COMPLETED, its
+  // advance then failed, and a turn landed before the retry: `refreshKey`
+  // clears the marker so a fresh copy is wanted, but the token that names the
+  // old one is still in state — and the key is derived from it, so the server
+  // would correctly replay the pre-turn copy and then refuse the skip that
+  // followed it. Re-pricing immediately before the copy is what keeps the key
+  // and the campaign in step.
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: "rev-2", digest: BIG });
+  vi.mocked(api.advanceTime).mockRejectedValueOnce({ detail: "an advance needs a reason" });
+
+  const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+
+  // The copy lands; the skip that follows it does not.
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/an advance needs a reason/);
+
+  // The marker says a checkpoint exists, so the button offers a bare retry...
+  expect(screen.getByText("Retry the skip")).toBeInTheDocument();
+  rerender(<ClockPanel cid="c" refreshKey={1} />);   // ...and then a turn lands
+  // ...which takes the marker back, because that copy is missing the turn.
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
+  expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
+  // ...and the skip names the state the second copy was actually taken from.
+  expect(vi.mocked(api.advanceTime).mock.calls[1][1].expect_revision).toBe("rev-2");
 });
