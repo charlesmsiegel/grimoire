@@ -3741,3 +3741,40 @@ a.column-back { text-decoration: none; }
   font-size: 13px; line-height: 1.5; color: var(--muted);
 }
 .review-footer { flex-wrap: wrap; }
+
+/* ---- to do ---- */
+.chore-group {
+  font-family: var(--fm, monospace); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--muted); font-weight: 400;
+  margin: 22px 0 0; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+}
+.chore-list { list-style: none; margin: 0; padding: 0; }
+.chore {
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.chore-dot {
+  flex: none; width: 6px; height: 6px; border-radius: 50%; margin-top: 7px;
+  background: var(--muted);
+}
+.chore-warn .chore-dot { background: var(--accent); }
+.chore-alert .chore-dot { background: var(--alert); }
+.chore-body { flex: 1; min-width: 0; }
+.chore-what { font-size: 15.5px; }
+.chore-why { font-size: 13.5px; line-height: 1.55; color: var(--muted); margin-top: 3px; }
+.chore-actions { flex: none; display: flex; align-items: center; gap: 10px; }
+.chore-fix {
+  display: inline-flex; align-items: center; min-height: 34px; padding: 0 12px;
+  border: 1px solid var(--accent); border-radius: 3px; text-decoration: none;
+  color: var(--accent); font-family: var(--fm, monospace); font-size: 9.5px;
+  letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap;
+}
+.chore-ignore {
+  background: none; border: 0; cursor: pointer; padding: 0 4px; min-height: 34px;
+  font-family: var(--fm, monospace); font-size: 9.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted);
+}
+.chore-ignore:hover { color: var(--ink); }
+@media (max-width: 1180px) {
+  .chore-fix, .chore-ignore { min-height: 44px; }
+}

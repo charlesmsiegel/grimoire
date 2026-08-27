@@ -48,8 +48,9 @@ test("the campaign tier is absent when nothing is open", () => {
 
 test("a row with nowhere to go is absent from the DOM, not disabled", () => {
   // Disabled would still be a promise that the page exists. It does not.
+  // To do has a page now; Wrap-up and Images still do not.
   renderRail();
-  expect(within(main()).queryByText("To do")).not.toBeInTheDocument();
+  expect(within(main()).getByText("To do")).toBeInTheDocument();
   const camp = screen.getByRole("navigation", { name: /open campaign/i });
   for (const gone of ["Wrap-up", "Images"]) {
     expect(within(camp).queryByText(gone)).not.toBeInTheDocument();

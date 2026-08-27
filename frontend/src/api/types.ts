@@ -1895,6 +1895,32 @@ export type ShellCampaign = {
 export type ShellPayload = {
   campaigns: number;
   campaign: ShellCampaign | null;
-  /** Filled by the To do slice; until then that rail row does not render. */
-  todo: null;
+  /** How many chores the user has NOT waved off, or null with no campaign
+   *  open. An ignored chore is counted nowhere — that is the whole point of
+   *  ignoring one. */
+  todo: number | null;
+};
+
+/** One thing the app noticed. Derived on every read, never stored: a chore at
+ *  zero leaves the list, so a label's number is always this request's. */
+export type Chore = {
+  id: string;
+  group: string;
+  severity: "note" | "warn" | "alert";
+  n: number;
+  /** What it is. */
+  what: string;
+  /** Why it matters — the half a bare count cannot carry. */
+  why: string;
+  /** Where to go and fix it, or null when there is nowhere yet. */
+  fix: string | null;
+  fix_label: string;
+};
+
+export type TodoPayload = {
+  chores: Chore[];
+  /** Waved off, kept with a Restore so the decision is reversible rather than
+   *  forgotten. */
+  ignored: Chore[];
+  count: number;
 };

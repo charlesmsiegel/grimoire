@@ -148,8 +148,9 @@ test("a rail row whose page does not exist yet is absent, not disabled", async (
   // so the rail never offers a destination that is not there.
   render(<MemoryRouter><App /></MemoryRouter>);
   await screen.findByText(/GRIMOIRE/);
-  const rail = screen.getByRole("navigation", { name: /^main$/i });
-  expect(within(rail).queryByText(/^To do$/)).not.toBeInTheDocument();
+  // Wrap-up is the row still waiting on its page; To do has one now.
+  const camp = screen.queryByRole("navigation", { name: /open campaign/i });
+  expect(camp === null || within(camp).queryByText(/^Wrap-up$/) === null).toBe(true);
 });
 
 test("the rail is not rendered beside either wizard", async () => {

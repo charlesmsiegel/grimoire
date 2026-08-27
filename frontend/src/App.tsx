@@ -21,6 +21,7 @@ import OpenScene from "./routes/OpenScene";
 import CampaignView from "./routes/CampaignView";
 import CampaignHub from "./routes/CampaignHub";
 import ScenesView from "./routes/ScenesView";
+import TodoView from "./routes/TodoView";
 import CostsView from "./routes/CostsView";
 import LedgerView from "./routes/LedgerView";
 import SheetsView from "./routes/SheetsView";
@@ -188,6 +189,7 @@ function Shell(
             top to bottom, and a drawer over the transcript is not where a list
             like that goes. */}
         <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
+        <Route path="/todo" element={<TodoView cid={cid} />} />
         <Route path="/library" element={<LibraryView />} />
         {/* Search keeps its query in the URL, so a result page is a link and
             the back button returns to it after following a hit. */}

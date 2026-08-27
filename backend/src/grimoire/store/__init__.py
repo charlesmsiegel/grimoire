@@ -46,6 +46,7 @@ from . import (
     changes,
     characters,
     checks,
+    chores,
     chronicle,
     chub,
     climates,
@@ -213,6 +214,7 @@ __all__ = [
     "BundleError",
     "ziputil",
     "campaigns",
+    "chores",
     "campaign_climate",
     # The campaign's own image library (#376) -- a deliberate addition to the
     # facade, not a leak: `routes.campaigns` and `store.export` both reach it

@@ -99,11 +99,15 @@ export const APP_ROWS: RailRow[] = [
     tailLabel: () => `${LIBRARY_SECTION_COUNT} sections`,
   },
   {
-    // No page and no backend yet, so the row does not render. The To do slice
-    // gives it a route and a tail off `payload.todo`.
     id: "todo", label: "To do", icon: "✓",
-    to: () => null,
+    to: () => "/todo",
     match: (p) => isUnder(p, "/todo"),
+    // The count of what has NOT been waved off. `null` outside a campaign,
+    // because every chore the app can compute is about one -- and no tail is
+    // the right answer there rather than a zero that would read as "nothing
+    // to do".
+    tail: (s) => num(s?.todo),
+    tailLabel: (s) => lbl(s?.todo, "things noticed"),
   },
   {
     id: "search", label: "Search", icon: "⌕",

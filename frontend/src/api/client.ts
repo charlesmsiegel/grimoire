@@ -54,7 +54,7 @@ import {
   type Timeline, type TimelineEvent, type UndescribedImage,
   type WeatherOverrideBody, type WeatherRangeBody,
   type WeatherSpan,
-  type ShellPayload,
+  type ShellPayload, type TodoPayload,
   type WorldCampaignPending, type WorldMeta,
 } from "./types";
 
@@ -582,6 +582,18 @@ export const api = {
   getShell: (cid?: string | null) =>
     request<ShellPayload>("GET", `/api/shell${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`,
                           undefined, { fresh: true }),
+
+  /** Everything the app noticed, for the open campaign. */
+  getTodo: (cid?: string | null) =>
+    request<TodoPayload>("GET", `/api/todo${cid ? `?campaign=${encodeURIComponent(cid)}` : ""}`,
+                         undefined, { fresh: true }),
+  /** Wave a chore off, or take it back. `notifyShell` because the rail's badge
+   *  is the count of what is NOT ignored, and this moves it without a
+   *  navigation. */
+  setChoreIgnored: (choreId: string, ignoredOn: boolean) =>
+    request<{ ok: boolean; ignored: string[] }>(
+      "PUT", `/api/todo/${encodeURIComponent(choreId)}/ignored`,
+      { ignored: ignoredOn }).then(notifyShell),
 
   // campaigns
   // `fresh` for the caller refetching *because* a campaign just changed: the

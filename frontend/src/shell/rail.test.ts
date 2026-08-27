@@ -60,7 +60,7 @@ test("rows whose pages do not exist yet go nowhere", () => {
   // that is not there. Each id gets a route in its own slice.
   const dead = [...APP_ROWS, ...CAMPAIGN_ROWS]
     .filter((r) => r.to(ctx) === null).map((r) => r.id);
-  expect(dead).toEqual(["todo", "wrap", "images"]);
+  expect(dead).toEqual(["wrap", "images"]);
 });
 
 test("Costs is absent with no campaign open, present with one", () => {

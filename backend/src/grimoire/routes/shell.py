@@ -40,6 +40,7 @@ import json
 from fastapi import APIRouter
 
 from .. import store
+from . import todo as todo_routes
 
 router = APIRouter()
 
@@ -146,7 +147,8 @@ def get_shell(campaign: str = ""):
     return {
         "campaigns": len(store.campaigns.read.list_campaigns()),
         "campaign": _campaign_block(campaign) if campaign else None,
-        # The To do slice fills this. Until then the rail's To do row does not
-        # render at all, rather than rendering an empty one.
-        "todo": None,
+        # How many things the app noticed that the user has not waved off. The
+        # badge is the number they still care about, so an ignored chore is not
+        # in it -- see `store.chores`.
+        "todo": todo_routes.live(campaign)["count"] if campaign else None,
     }
