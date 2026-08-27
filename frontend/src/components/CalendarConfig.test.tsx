@@ -170,13 +170,22 @@ test("the warn window saves, and 0 saves as 0 rather than as no opinion", async 
     { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: 0 })));
 });
 
-test("clearing the warn window saves null, which the store answers with its default", async () => {
+test("clearing the warn window sends the stored one, not the no-opinion sentinel", async () => {
+  // `null` means "this request expressed no opinion", and the store answers it
+  // by KEEPING the stored window (#106) — right for a client that predates the
+  // field, wrong for this form, which would be left showing an empty box over a
+  // server that kept 14. The form resolves blank before the request goes out,
+  // and the control then shows what was actually saved.
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: false, stale_after_days: 30, warn_days: 14 });
   render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   const input = await screen.findByLabelText("Warn ahead days");
   fireEvent.change(input, { target: { value: "" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
   await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
-    { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: null })));
+    { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: 14 })));
+  await waitFor(() => expect((input as HTMLInputElement).value).toBe("14"));
 });
 
 test("a warn window past the server's ceiling is clamped, not shown back as typed", async () => {

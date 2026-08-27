@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type CalendarConfig as Cfg, type CalendarScope } from "../api/client";
 
 const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
@@ -8,6 +8,11 @@ const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
  *  type past it shows a number the server did not store. Anything past it is
  *  clamped here so the control cannot disagree with what was saved. */
 const MAX_WARN_DAYS = 365;
+
+/** `calendars.WARN_DAYS`, mirrored for the same reason as the cap above. Only a
+ *  fallback: a GET always answers this field with a resolved number, so this is
+ *  reached only if a response arrives without one. */
+const DEFAULT_WARN_DAYS = 7;
 
 /** The calendar editor for either scope (#223).
  *
@@ -33,6 +38,9 @@ export function CalendarConfig({ scope, onConfig }: {
   const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // The window the SERVER currently holds. `save` resolves a cleared input
+  // against it so the request always carries a number -- see `save`.
+  const storedWarn = useRef(DEFAULT_WARN_DAYS);
   // A load that failed is not a load still running. Without the distinction
   // "Loading calendar…" is what an unreachable store shows forever, and on the
   // world Overview that is the first thing a new library puts on screen.
@@ -49,7 +57,12 @@ export function CalendarConfig({ scope, onConfig }: {
     setError(null);
     setFailed(false);
     api.getCalendarConfig(scope)
-      .then((c) => { if (live) { setCfg(c); onConfig?.(c); } })
+      .then((c) => {
+        if (!live) return;
+        setCfg(c);
+        storedWarn.current = c.warn_days ?? DEFAULT_WARN_DAYS;
+        onConfig?.(c);
+      })
       .catch(() => { if (live) { setCfg(null); setFailed(true); } });
     return () => { live = false; };
     // `onConfig` is deliberately not a dependency: callers pass an inline
@@ -78,13 +91,24 @@ export function CalendarConfig({ scope, onConfig }: {
 
   async function save() {
     setError(null);
+    // Blank resolves to what is stored BEFORE the request goes out, so this
+    // form never sends the `null` sentinel. That sentinel means "this request
+    // expressed no opinion", and the store answers it by keeping the stored
+    // window (#106) -- correct for a client that predates the field, and wrong
+    // for this one, which shows the field and would be left displaying an empty
+    // box over a server that kept 14. Resolving here keeps the invariant the
+    // comment below rests on: the server normalizes what the form sends, it
+    // never decides a field the form is showing.
+    const outgoing = { ...cfg!, warn_days: cfg!.warn_days ?? storedWarn.current };
     try {
-      await api.setCalendarConfig(scope, cfg!);
+      await api.setCalendarConfig(scope, outgoing);
+      storedWarn.current = outgoing.warn_days;
+      setCfg(outgoing);   // the control shows the number that was actually saved
       setSaved(true);
       // The saved config, not a re-read: the server normalizes but does not
       // decide any field the form shows, and a second GET would race this
       // component's own scope effect if the reader had already moved on.
-      onConfig?.(cfg!);
+      onConfig?.(outgoing);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
