@@ -1147,7 +1147,11 @@ test("a dangling ref is visible in the form and can be cleared", async () => {
         fields: expect.objectContaining({ leader: "characters:winifred" }) })));
 });
 
-test("an untouched dangling ref is saved back rather than scrubbed", async () => {
+test("an untouched dangling ref is left alone rather than scrubbed", async () => {
+  // A save sends only what the user changed, so an untouched field is not in
+  // the patch at all and the stored value stays exactly as it was found. That
+  // is what keeps a value the save boundary would REFUSE — a legacy free-text
+  // `leader`, say — from making the record uneditable.
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
   (api.readEntity as any).mockResolvedValue({
@@ -1157,10 +1161,49 @@ test("an untouched dangling ref is saved back rather than scrubbed", async () =>
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.click(await screen.findByRole("button", { name: /^save$/i }));
-  await waitFor(() =>
-    expect(api.updateEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups", "watch",
-      expect.objectContaining({
-        fields: expect.objectContaining({ leader: "characters:mara" }) })));
+  await waitFor(() => expect(api.updateEntity).toHaveBeenCalled());
+  const sent = (api.updateEntity as any).mock.calls[0][3];
+  expect(sent.fields).toBeUndefined();
+});
+
+test("a legacy free-text value in a newly-claimed key does not block an unrelated edit", async () => {
+  // `holder` was unrecognised frontmatter before ref fields existed, so a
+  // hand-written `holder: Mara` is out there. Resending it on every save would
+  // have the backend refuse it and make the record uneditable.
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "knife", name: "Salt Knife", holder: "Mara" }, body: "sharp", rev: "r1" });
+  render(<EntityEditor wid="w" kind="items" />);
+  fireEvent.click(await screen.findByText("Salt Knife"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText("Body"), { target: { value: "very sharp" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.updateEntity).toHaveBeenCalled());
+  const sent = (api.updateEntity as any).mock.calls[0][3];
+  expect(sent.body).toBe("very sharp");
+  expect(sent.fields?.holder).toBeUndefined();   // never resent, so never refused
+});
+
+test("changing one field sends only that field", async () => {
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "knife", name: "Salt Knife", item_type: "weapon", rarity: "rare" },
+    body: "sharp", rev: "r1" });
+  render(<EntityEditor wid="w" kind="items" />);
+  fireEvent.click(await screen.findByText("Salt Knife"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText("Rarity"), { target: { value: "common" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.updateEntity).toHaveBeenCalled());
+  expect((api.updateEntity as any).mock.calls[0][3].fields).toEqual({ rarity: "common" });
 });
 
 /** A promise plus the handle to settle it later, so a test can hold one

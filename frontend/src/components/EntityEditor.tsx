@@ -141,6 +141,21 @@ function refKindsFor(specs: EntityFieldSpec[]): RefKind[] {
   return out;
 }
 
+/** The declared fields whose value differs from what was loaded.
+ *
+ *  A create passes `{}` as `loaded`, so everything the user typed is "changed"
+ *  and an untouched field is simply absent — which is what `create_entity`
+ *  wants anyway, since it drops empties. */
+function changedFields(
+  current: Record<string, string>, loaded: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(current)) {
+    if (value !== (loaded[key] ?? "")) out[key] = value;
+  }
+  return out;
+}
+
 /** Refs stored in one field, in the `owners:` spelling: comma-separated
  *  `<kind>:<id>`. Same parse as `entity_schema.parse_refs` on the other side.
  *
@@ -281,6 +296,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [keys, setKeys] = useState("");
   const fieldSpecs = ENTITY_FIELDS[kind];
   const [fields, setFields] = useState<Record<string, string>>({});
+  // The declared fields as LOADED. A save sends the difference against this,
+  // never the whole set — see `changedFields`.
+  const [loadedFields, setLoadedFields] = useState<Record<string, string>>({});
   // The candidates every `ref` field on this kind can offer, fetched once for
   // the union of their kinds and filtered per field below — `holder` and
   // `headquarters` both want locations, and asking twice would be two requests
@@ -395,6 +413,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
       setBody("");
       setKeys("");
       setFields({});
+      setLoadedFields({});
       setOwners(nav.newOwner ? [nav.newOwner] : []);
       setSecrecy("public");
       setMode("edit");
@@ -422,6 +441,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setBody("");
     setKeys("");
     setFields({});
+    setLoadedFields({});
     setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
     setSecrecy("public");
     setSdPrompt("");
@@ -443,7 +463,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setName(e.meta.name);
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
-    setFields(Object.fromEntries(fieldSpecs.map((f) => [f.key, String((e.meta as any)[f.key] ?? "")])));
+    const loaded = Object.fromEntries(
+      fieldSpecs.map((f) => [f.key, String((e.meta as any)[f.key] ?? "")]));
+    setFields(loaded);
+    setLoadedFields(loaded);
     setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
     setSecrecy(asSecrecy(e.meta.secrecy));
     setSdPrompt(e.meta.sd_prompt ?? "");
@@ -483,16 +506,27 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setError(null);
     setStale(null);
     const ownerStr = owners.join(", ");
+    // Only what the user actually touched. Sending the whole set re-submitted
+    // every stored value on every save, which turned any value the save
+    // boundary refuses into a record that could not be edited at all — and a
+    // key this table has newly CLAIMED can hold one: `holder` was unrecognised
+    // frontmatter before ref fields existed, so a world where somebody hand-
+    // wrote `holder: Mara` would have had an unrelated body edit rejected until
+    // they noticed and cleared it. A field nobody edited is left exactly as it
+    // was found, which is what it did before this table named the key.
+    const patch = changedFields(fields, loadedFields);
     try {
       if (editing) {
         await api.updateEntity(scope, kind, editing,
-          { name, body, keys, owners: ownerStr, secrecy, ...(fieldSpecs.length ? { fields } : {}),
+          { name, body, keys, owners: ownerStr,
+            secrecy, ...(Object.keys(patch).length ? { fields: patch } : {}),
             ...(base ? { rev: base } : {}) });
         await reload();
         await select(editing); // back to the read-only view
       } else {
         await api.createEntity(scope, kind,
-          { name, body, keys, owners: ownerStr, secrecy, ...(fieldSpecs.length ? { fields } : {}) });
+          { name, body, keys, owners: ownerStr,
+            secrecy, ...(Object.keys(patch).length ? { fields: patch } : {}) });
         await reload();
         resetForm();
       }

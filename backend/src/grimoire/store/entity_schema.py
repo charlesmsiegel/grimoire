@@ -54,6 +54,24 @@ exactly as `rewrite_owner_refs` repoints `owners:`.
 Existence is not checked at the save boundary either, for the first reason
 above plus one more: it would make a save depend on the order two records were
 written in. Format is checkable and stable; existence is neither.
+
+## A key this table claims may already hold something else
+
+`holder`, `leader`, `headquarters` and `habitat` are ordinary words, and until
+they were declared here they were unrecognised frontmatter -- preserved across
+every edit and shown to nobody. A store predating this table can therefore
+carry `holder: Mara`, which is not a ref and never will be.
+
+Such a value is **left exactly where it is**. It is refused only if something
+tries to *set* it: `EntityEditor` sends the fields it changed rather than the
+whole set, so an untouched legacy value is never resubmitted and never
+rejected, and an unrelated body edit saves as it always did. The reader shows
+it as an unresolved ref, which is what it is.
+
+Validating what a request changes rather than what a record holds is the rule
+this shares with the two paragraphs above, and the failure it avoids is the
+same one each time: a stored value the boundary refuses is a record nobody can
+edit any more, which is a far worse outcome than the bad value itself.
 """
 
 from __future__ import annotations
