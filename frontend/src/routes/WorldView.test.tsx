@@ -11,9 +11,12 @@ vi.mock("../api/client", () => ({
   ENTITY_KINDS: ["locations", "lore", "items", "groups", "creatures"],
   ENTITY_FIELDS: {
     locations: [], lore: [],
-    items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
-    groups: [{ key: "group_type", label: "Type" }],
-    creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
+    items: [{ key: "item_type", label: "Type", widget: "text" },
+            { key: "rarity", label: "Rarity", widget: "text" }],
+    groups: [{ key: "group_type", label: "Type", widget: "text" },
+             { key: "leader", label: "Leader", widget: "ref", kinds: ["characters", "pcs"] }],
+    creatures: [{ key: "creature_type", label: "Type", widget: "text" },
+                { key: "threat", label: "Threat", widget: "text" }],
   },
   api: {
     getWorld: vi.fn(),
@@ -31,7 +34,8 @@ vi.mock("../api/client", () => ({
     demoteFromLibrary: vi.fn(),
     pushToLibrary: vi.fn(),
     listUndescribedImages: vi.fn(),
-    listPCs: vi.fn(),
+    listPCs: vi.fn(), readPC: vi.fn(),
+    listPCImages: vi.fn(), getCalendarMonths: vi.fn(),
     listTags: vi.fn(),
     listEntities: vi.fn(),
     readEntity: vi.fn(),
@@ -651,4 +655,41 @@ test("a map remounted mid-write is held behind the write the last one left", asy
   gate.forEach((res) => res());
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeEnabled());
+});
+
+test("a ref chip naming a PC opens that PC, and picking PCs from the index clears it", async () => {
+  // Two rules in one test because they are the same rule from both sides: a
+  // chip carries a record to open, choosing the section from the column means
+  // the list. Without the second, the section reopens whoever a chip pointed
+  // at, possibly several navigations ago.
+  (api.listPCs as any).mockResolvedValue([
+    { id: "winifred", name: "Winifred", tags: [], default_version: "main", versions: [] }]);
+  (api.readPC as any).mockResolvedValue({
+    meta: { id: "winifred", name: "Winifred", tags: [], default_version: "main" },
+    versions: [{ id: "main", name: "main",
+                 persona: { name: "Winifred", pronouns: "", summary: "",
+                            birthdate: "", description: "a quiet sort" } }] });
+  (api.listPCImages as any).mockResolvedValue([]);
+  (api.listTags as any).mockResolvedValue({});
+  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
+  (api.getSheet as any).mockResolvedValue({ sheet: null });
+  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "pcs:winifred" }, body: "x", rev: "r1" });
+  renderAt();
+  await screen.findByText("Drowned Realm");
+
+  fireEvent.click(indexRow("Groups"));
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
+  await waitFor(() =>
+    expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "winifred"));
+
+  // ...and coming back to PCs from the column shows the list, not Winifred
+  fireEvent.click(indexRow("Groups"));
+  (api.readPC as any).mockClear();
+  fireEvent.click(indexRow("PCs"));
+  await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
+  expect(api.readPC).not.toHaveBeenCalled();
 });

@@ -18,13 +18,49 @@ export const KIND_LABELS: Record<EntityKind, string> = {
   locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
 };
 
-// Plurals, for saying what a ref picker with no candidates is missing. Wider
-// than KIND_LABELS because a ref field can name an actor, which is not an
+// What each referenceable kind is called, for saying what an empty picker is
+// missing (`many`) and for telling two same-named candidates apart (`one`).
+// Wider than KIND_LABELS because a ref field can name an actor, which is not an
 // entity kind and so has no entry there.
-const KIND_NOUNS: Record<RefKind, string> = {
-  characters: "characters", pcs: "PCs", locations: "locations", lore: "lore entries",
-  items: "items", groups: "groups", creatures: "creatures",
+const KIND_NOUNS: Record<RefKind, { one: string; many: string }> = {
+  characters: { one: "character", many: "characters" },
+  pcs: { one: "PC", many: "PCs" },
+  locations: { one: "location", many: "locations" },
+  lore: { one: "lore entry", many: "lore entries" },
+  items: { one: "item", many: "items" },
+  groups: { one: "group", many: "groups" },
+  creatures: { one: "creature", many: "creatures" },
 };
+
+/** Display text per ref, unique within `options`.
+ *
+ *  Names are not unique — only ids are — and a field like `holder` offers four
+ *  kinds at once, so a PC and a group can both be called Mara. Two radios
+ *  reading "Mara" is a control where the reader cannot tell which relationship
+ *  they are about to store, and the accessible name is just as ambiguous as
+ *  the visible one.
+ *
+ *  Qualified only where it is needed, and by the least that settles it: the
+ *  kind for a cross-kind collision, the ref itself when even that still
+ *  collides (two characters really can share a name). An unambiguous candidate
+ *  keeps its plain name, so the common picker is not decorated for a case it
+ *  does not have. */
+function displayLabels(options: RecordRef[]): Map<string, string> {
+  const byLabel = new Map<string, RecordRef[]>();
+  for (const o of options) byLabel.set(o.label, [...(byLabel.get(o.label) ?? []), o]);
+  const out = new Map<string, string>();
+  for (const [label, group] of byLabel) {
+    if (group.length === 1) { out.set(group[0].ref, label); continue; }
+    const kinds = new Map<string, number>();
+    for (const o of group) kinds.set(o.kind, (kinds.get(o.kind) ?? 0) + 1);
+    for (const o of group) {
+      out.set(o.ref, kinds.get(o.kind) === 1
+        ? `${label} (${KIND_NOUNS[o.kind].one})`
+        : `${label} (${o.ref})`);
+    }
+  }
+  return out;
+}
 
 // What a record's body costs when it reaches a prompt (#51). Counted on the
 // server with the same tokenizer the context inspector uses; the frontend only
@@ -121,6 +157,13 @@ const parseRefs = (v: string | undefined): string[] =>
 const DANGLING_HINT = "This record no longer exists here — it may have been deleted, "
   + "or it may live outside this campaign";
 
+// ...and what it says when we do not actually know. A candidate list that
+// failed to load leaves every ref unresolved, and reporting that as "deleted"
+// turns a dropped request into a claim about the store — one the reader may
+// act on by clearing a relationship that was perfectly fine.
+const UNLOADED_HINT = "Could not load the list of records, so this reference could not be "
+  + "resolved — it has not necessarily gone anywhere";
+
 /** The picker for one `ref` field (#222).
  *
  *  Real radios and real checkboxes, for the reason the secrecy picker gives:
@@ -135,13 +178,19 @@ const DANGLING_HINT = "This record no longer exists here — it may have been de
  *  is what makes each option's own label unambiguous — "Mara" under Leader and
  *  "Mara" under Held by are two different controls, and only the group says so.
  */
-function RefField({ spec, options, value, onChange }: {
+function RefField({ spec, options, value, onChange, unresolvedHint }: {
   spec: EntityFieldSpec;
   options: RecordRef[];
   value: string;
   onChange: (v: string) => void;
+  /** What a ref no candidate answers to means right now — "the record is gone"
+   *  only when the candidate lists actually loaded. See `unresolvedHint` in the
+   *  editor below. */
+  unresolvedHint: string;
 }) {
   const selected = parseRefs(value);
+  const shown = displayLabels(options);
+  const labelOf = (o: RecordRef) => shown.get(o.ref) ?? o.label;
   // A stored ref that no candidate answers to — the record was deleted, or it
   // lives outside this scope. It gets a row of its own, checked, so the value
   // is VISIBLE and clearable. Leaving it out was the tempting shortcut and the
@@ -150,9 +199,9 @@ function RefField({ spec, options, value, onChange }: {
   const dangling = selected.filter((r) => !options.some((o) => o.ref === r));
   // Only what this field is allowed to name, in the words the field uses. A
   // picker that offered nothing and said nothing reads as a broken control.
-  const empty = `No ${spec.kinds?.map((k) => KIND_NOUNS[k]).join(" or ")} yet.`;
+  const empty = `No ${spec.kinds?.map((k) => KIND_NOUNS[k].many).join(" or ")} yet.`;
   const danglingRow = (ref: string, type: "radio" | "checkbox", onClear: () => void) => (
-    <label key={ref} className="owner-option dangling" title={DANGLING_HINT}>
+    <label key={ref} className="owner-option dangling" title={unresolvedHint}>
       <input type={type} name={spec.key} aria-label={ref} checked onChange={onClear} />
       {ref}
     </label>
@@ -164,12 +213,12 @@ function RefField({ spec, options, value, onChange }: {
         <div className="chips owner-picker" role="group" aria-label={spec.label}>
           {options.map((o) => (
             <label key={o.ref} className="owner-option">
-              <input type="checkbox" aria-label={o.label} checked={selected.includes(o.ref)}
+              <input type="checkbox" aria-label={labelOf(o)} checked={selected.includes(o.ref)}
                      onChange={(e) => onChange(
                        (e.target.checked
                          ? [...selected, o.ref]
                          : selected.filter((r) => r !== o.ref)).join(", "))} />
-              {o.label}
+              {labelOf(o)}
             </label>
           ))}
           {dangling.map((ref) => danglingRow(ref, "checkbox",
@@ -193,9 +242,9 @@ function RefField({ spec, options, value, onChange }: {
         </label>
         {options.map((o) => (
           <label key={o.ref} className="owner-option">
-            <input type="radio" name={spec.key} aria-label={o.label}
+            <input type="radio" name={spec.key} aria-label={labelOf(o)}
                    checked={selected[0] === o.ref} onChange={() => onChange(o.ref)} />
-            {o.label}
+            {labelOf(o)}
           </label>
         ))}
         {/* Clearing it means picking None or another candidate; the row itself
@@ -237,6 +286,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   // `headquarters` both want locations, and asking twice would be two requests
   // for one answer.
   const [refOpts, setRefOpts] = useState<RecordRef[]>([]);
+  // Whether `refOpts` is the whole truth. False while the listings are in
+  // flight and after any of them failed, and that is the only thing that
+  // entitles the UI to call an unresolved ref *deleted*.
+  const [refOptsComplete, setRefOptsComplete] = useState(false);
   // Token for the in-flight candidate fetch, so a slow earlier response cannot
   // land on top of a newer one — the same guard `PCEditor` uses for its lock
   // lookup, and for the same reason.
@@ -287,27 +340,43 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     // scope where it names nothing, and since existence is deliberately not
     // validated the backend takes it.
     setRefOpts([]);
+    setRefOptsComplete(false);
     const kinds = refKindsFor(fieldSpecs);
     // Guarded rather than unconditional: a kind with no ref fields (lore, and
     // locations, which has three text fields and none of these) would
     // otherwise pay a listing request per record kind on every mount for a
     // picker it never renders.
-    if (!kinds.length) return;
+    if (!kinds.length) { setRefOptsComplete(true); return; }
     const req = ++refReq.current;
     refOptions(scope, kinds)
-      .then((opts) => { if (req === refReq.current) setRefOpts(opts); })
+      .then(({ options, failed }) => {
+        if (req !== refReq.current) return;
+        setRefOpts(options);
+        // A partial answer still populates the picker with the kinds that DID
+        // load — losing three of a `holder`'s four kinds to one bad request is
+        // a worse picker for no reason — but it is not complete, so nothing
+        // built on it may call a ref dead.
+        setRefOptsComplete(failed.length === 0);
+      })
       .catch(() => { if (req === refReq.current) setRefOpts([]); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wid, kind, scope.kind, scope.id]);
 
   /** The label to show for a stored ref, or null when nothing here answers to
-   *  it — a record that has been deleted, or one this scope cannot see. Null is
-   *  the interesting answer: it is what the sidebar renders as a dangling chip
-   *  rather than dropping (#222). */
+   *  it — a record that has been deleted, one this scope cannot see, or one
+   *  whose listing did not load. Null is the interesting answer: it is what the
+   *  sidebar renders as a dangling chip rather than dropping (#222). */
   const refLabel = useCallback(
-    (ref: string) => refOpts.find((o) => o.ref === ref)?.label ?? null,
+    (ref: string) => {
+      const hit = refOpts.find((o) => o.ref === ref);
+      return hit ? (displayLabels(refOpts).get(hit.ref) ?? hit.label) : null;
+    },
     [refOpts],
   );
+  // Which of the two stories an unresolved ref gets. Reading `refOptsComplete`
+  // rather than assuming the worst is the whole point: only a listing that
+  // actually arrived can say a record is gone.
+  const unresolvedHint = refOptsComplete ? DANGLING_HINT : UNLOADED_HINT;
 
   const ownerLabel = useCallback(
     (ref: string) => ownerOpts.find((o) => o.ref === ref)?.label ?? ref,
@@ -855,7 +924,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                         // shown at all because a delete does not scrub the refs
                         // that name the record (#222), and a field that quietly
                         // rendered nothing would read as one nobody filled in.
-                        <span key={ref} className="chip dangling" title={DANGLING_HINT}>{ref}</span>
+                        <span key={ref} className="chip dangling" title={unresolvedHint}>{ref}</span>
                       ) : (
                         <button key={ref} className="chip owner-chip"
                                 onClick={() => onOpenOwner?.(ref)}>
@@ -958,7 +1027,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             </Field>
             {fieldSpecs.map((f) => (f.widget === "ref" ? (
               <RefField key={f.key} spec={f} options={refOpts.filter((o) => f.kinds?.includes(o.kind))}
-                        value={fields[f.key] ?? ""}
+                        value={fields[f.key] ?? ""} unresolvedHint={unresolvedHint}
                         onChange={(v) => setFields({ ...fields, [f.key]: v })} />
             ) : (
               <Field key={f.key} label={f.label}>

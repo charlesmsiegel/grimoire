@@ -14865,3 +14865,51 @@ def test_a_ref_to_a_record_that_does_not_exist_is_accepted(client):
     r = client.post(f"/api/worlds/{wid}/items",
                     json={"name": "Salt Knife", "fields": {"holder": "characters:nobody"}})
     assert r.status_code == 200
+
+
+def _seed_content_module_with_holder(client, tmp_path, holder, mid="refmod"):
+    """A module item whose `holder` is whatever the caller wants to test."""
+    import json as _json
+    d = tmp_path / "modules" / mid
+    (d / "content" / "items").mkdir(parents=True)
+    (d / "module.md").write_text("---\nname: Ref Test\n---\n", encoding="utf-8")
+    (d / "sheets.json").write_text(_json.dumps({"groups": {}, "sheet_types": {}}),
+                                   encoding="utf-8")
+    (d / "content" / "items" / "lantern.md").write_text(
+        f"---\nname: Lantern\nholder: {holder}\n---\nA soft lantern.\n", encoding="utf-8")
+    return mid
+
+
+def test_instantiating_module_content_carries_a_valid_ref_field(client, tmp_path):
+    mid = _seed_content_module_with_holder(client, tmp_path, "characters:mara")
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/items/instantiate/{mid}/lantern")
+    assert r.status_code == 200
+    got = client.get(f"/api/worlds/{wid}/items/{r.json()['id']}").json()
+    assert got["meta"]["holder"] == "characters:mara"
+
+
+def test_instantiating_module_content_with_a_bad_ref_is_refused(client, tmp_path):
+    # Not merely tidiness: the record would instantiate fine and then be
+    # unsaveable forever, because EntityEditor resends every declared field on
+    # every save and the save boundary rejects this one. Refused where the
+    # value enters, with the field named so the pack author can fix it.
+    wid = _world(client)
+    # `holder` accepts characters, PCs, groups and locations -- so `lore` is the
+    # wrong-kind case, alongside a bare id and an unsafe one.
+    for bad in ("mara", "lore:the-pact", "characters:../escape"):
+        mid = _seed_content_module_with_holder(client, tmp_path, bad,
+                                               mid=f"refmod-{abs(hash(bad))}")
+        r = client.post(f"/api/worlds/{wid}/items/instantiate/{mid}/lantern")
+        assert r.status_code == 400, bad
+        assert "holder" in r.json()["detail"], bad
+
+
+def test_instantiating_bad_module_content_into_a_campaign_is_refused(client, tmp_path):
+    mid = _seed_content_module_with_holder(client, tmp_path, "lore:the-pact",
+                                           mid="refmod-campaign")
+    _wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": mid})
+    r = client.post(f"/api/campaigns/{cid}/items/instantiate/{mid}/lantern")
+    assert r.status_code == 400
+    assert "holder" in r.json()["detail"]

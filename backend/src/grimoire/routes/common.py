@@ -930,7 +930,30 @@ def _campaign_root_or_404(cid: str):
 
 
 def _content_fields(kind: str, content: dict) -> dict:
-    return {k: content[k] for k in store.entity_schema.field_keys(kind) if k in content}
+    """The declared fields a module content entry carries, checked.
+
+    The check is the point, and it was missing: both instantiate routes handed
+    these straight to `create_entity`, while the ordinary create/update routes
+    ran `invalid_values` on the identical dict. A pack naming a bare, malformed
+    or wrong-kind `holder` therefore instantiated a record that `EntityEditor`
+    could never save again -- every later save resends the field and the save
+    boundary rejects it. That is the same trap a reclassify used to set, one
+    door over.
+
+    A 400 rather than a silent drop: the value came from a file somebody wrote,
+    and naming the field is what lets them fix it. Module *pack* validation
+    (`store/modules/validate.py`) does not look at these fields at all, so this
+    is the only boundary that can say anything, and it checks everything
+    `invalid_values` covers -- the location weather fields had the identical
+    hole beside the new ref ones.
+    """
+    fields = {k: content[k] for k in store.entity_schema.field_keys(kind) if k in content}
+    bad = store.entity_schema.invalid_values(kind, fields)
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=f"module content has invalid values for {kind}: {', '.join(bad)}")
+    return fields
 
 
 def _campaign_routing_meta(cid: str) -> dict:

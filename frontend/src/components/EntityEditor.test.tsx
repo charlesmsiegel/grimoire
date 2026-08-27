@@ -1224,3 +1224,78 @@ test("a record whose id carries the list delimiter is not offered as a candidate
   expect(within(habitat).getByLabelText("Realm")).toBeInTheDocument();
   expect(within(habitat).queryByLabelText("Salt March")).toBeNull();
 });
+
+test("same-named candidates across kinds are told apart by kind", async () => {
+  // Names are not unique — only ids are — and `holder` offers four kinds at
+  // once, so two radios both reading "Mara" would be a control where you
+  // cannot tell which relationship you are storing.
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "groups" ? [{ id: "mara-company", name: "Mara" }]
+      : kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
+  render(<EntityEditor wid="w" kind="items" />);
+  const holder = await screen.findByRole("radiogroup", { name: "Held by" });
+  expect(within(holder).getByLabelText("Mara (character)")).toBeInTheDocument();
+  expect(within(holder).getByLabelText("Mara (group)")).toBeInTheDocument();
+  // ...and an unambiguous one keeps its plain name
+  expect(within(holder).getByLabelText("Saltmarch")).toBeInTheDocument();
+});
+
+test("same-named candidates of the SAME kind fall back to the ref", async () => {
+  // Two characters really can share a name, and then the kind settles nothing.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara" }, { id: "mara-2", name: "Mara" }]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockResolvedValue([]);
+  render(<EntityEditor wid="w" kind="items" />);
+  const holder = await screen.findByRole("radiogroup", { name: "Held by" });
+  expect(within(holder).getByLabelText("Mara (characters:mara)")).toBeInTheDocument();
+  expect(within(holder).getByLabelText("Mara (characters:mara-2)")).toBeInTheDocument();
+});
+
+test("one kind failing to load does not empty the whole picker", async () => {
+  (api.listCharacters as any).mockRejectedValue(new Error("network"));
+  (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
+  render(<EntityEditor wid="w" kind="items" />);
+  const holder = await screen.findByRole("radiogroup", { name: "Held by" });
+  expect(within(holder).getByLabelText("Winifred")).toBeInTheDocument();
+  expect(within(holder).getByLabelText("Saltmarch")).toBeInTheDocument();
+});
+
+test("a failed candidate load does not report existing refs as deleted", async () => {
+  // The harmful version: a dropped request becomes a claim about the store,
+  // and the reader may act on it by clearing a relationship that is fine.
+  (api.listCharacters as any).mockRejectedValue(new Error("network"));
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "knife", name: "Salt Knife", holder: "characters:mara" }, body: "x", rev: "r1" });
+  const { container } = render(<EntityEditor wid="w" kind="items" />);
+  fireEvent.click(await screen.findByText("Salt Knife"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  const chip = within(side).getByText("characters:mara");
+  expect(chip.getAttribute("title")).toMatch(/could not load/i);
+  expect(chip.getAttribute("title")).not.toMatch(/no longer exists/i);
+});
+
+test("a ref really is reported as deleted once the lists have loaded", async () => {
+  // The other side of the same coin — the load succeeded, so "gone" is a claim
+  // this editor is entitled to make.
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "knife", name: "Salt Knife", holder: "characters:mara" }, body: "x", rev: "r1" });
+  const { container } = render(<EntityEditor wid="w" kind="items" />);
+  fireEvent.click(await screen.findByText("Salt Knife"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("characters:mara").getAttribute("title"))
+    .toMatch(/no longer exists/i);
+});
