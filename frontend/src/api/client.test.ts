@@ -2346,3 +2346,25 @@ test("writes that change what is imminent announce it on the notices channel", a
   expect(heard).toHaveBeenCalledTimes(6);
   off();
 });
+
+test("a scene datetime write announces only when it moved the clock", async () => {
+  // `clock.observe` runs on this path, so a scene carrying the campaign present
+  // forward fires the events it crossed — but a flashback or a re-date changes
+  // nothing campaign-wide, and the inspector already reloads its own `when`.
+  const { onNoticesChanged } = await import("../appEvents");
+  const heard = vi.fn();
+  const off = onNoticesChanged(heard);
+
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    jsonOk({ ok: true, advanced: true, friendly: "4 July 2026", id: "s1",
+             clock: { moved: false, now: "2026-07-04" } }));
+  await api.setSceneDatetime("c", "s1", "2026-07-04");
+  expect(heard).not.toHaveBeenCalled();
+
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    jsonOk({ ok: true, advanced: true, friendly: "8 July 2026", id: "s1",
+             clock: { moved: true, now: "2026-07-08" } }));
+  await api.setSceneDatetime("c", "s1", "2026-07-08");
+  expect(heard).toHaveBeenCalledTimes(1);
+  off();
+});

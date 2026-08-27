@@ -274,6 +274,38 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
             _write(cid, data)
 
 
+def forget_event(cid: str, eid: str) -> list[str]:
+    """Drop every acknowledgement keyed to this event, on ANY day.
+
+    Deleting an event frees its id (`events.create` uniquifies against what
+    exists NOW), so a later event of the same name regenerates the same
+    `event:{fixed}:{id}` key and would inherit the dead one's dismissal. Keying
+    on the id alone rather than on one date is what makes that complete: an
+    event dismissed on one day and re-dated to another leaves an acknowledgement
+    under EACH day it was warned about, and retiring only the current one leaves
+    the earlier key to suppress a recreation dated back to it.
+
+    Returns the keys removed. `_bounded` is applied to the id for the reason
+    `event_key` applies it: the two have to agree about what the key looks like.
+    """
+    suffix = f":{_bounded(eid)}"
+    done: list[str] = []
+    # Returned outside the hold, like `mark` and `forget`: `campaign_lock` is
+    # typed as able to swallow, so a `return` in the body leaves mypy unable to
+    # see that the function always returns one.
+    with locks.campaign_lock(cid):
+        try:
+            data = _mutable(cid)
+        except NoticeError:
+            return []
+        done = [k for k in data if k.startswith("event:") and k.endswith(suffix)]
+        for key in done:
+            del data[key]
+        if done:
+            _write(cid, data)
+    return done
+
+
 def holiday_key(fixed: int, name: str) -> str:
     return f"holiday:{fixed}:{_bounded(name)}"
 
