@@ -23,7 +23,7 @@ test("nothing is fetched until the reader asks", () => {
   expect(result.current.busy).toBe(false);
 });
 
-test("suggest ranks; a refresh after it does not, and keeps the picks", async () => {
+test("the first press ranks; the next one does not, and keeps the picks", async () => {
   (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"], "2026-01-01"));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   act(() => result.current.suggest(""));
@@ -32,8 +32,10 @@ test("suggest ranks; a refresh after it does not, and keeps the picks", async ()
   expect(result.current.asked).toBe(true);
 
   (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "B" }], [], ""));
-  act(() => result.current.refresh("something at sea"));
+  act(() => result.current.suggest("something at sea"));
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "B" }]));
+  // rank=false: the greeting order is earned, and re-ranking would reshuffle
+  // the cards under the reader's cursor.
   expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", "s1", false, "something at sea", false);
   expect(result.current.picks).toEqual(["g1"]);      // not clobbered by the empty list
   expect(result.current.nextDate).toBe("2026-01-01"); // not cleared by an empty one
@@ -72,12 +74,14 @@ test("a stale response that resolves after a newer one is discarded", async () =
   act(() => result.current.suggest(""));
 
   (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "newest" }]));
-  act(() => result.current.refresh("x"));
+  act(() => result.current.suggest("x"));
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "newest" }]));
 
   await act(async () => { releaseFirst(R([{ title: "stale" }], ["g9"])); });
   expect(result.current.suggestions).toEqual([{ title: "newest" }]);
-  expect(result.current.picks).toBeNull();     // the stale ranked reply wrote nothing
+  // The newest reply's own (empty) ranking stands; the stale one's "g9" never
+  // reached it.
+  expect(result.current.picks).toEqual([]);
 });
 
 test("a stale response's finally does not clear busy while a newer request is still in flight", async () => {
@@ -89,7 +93,7 @@ test("a stale response's finally does not clear busy while a newer request is st
   expect(result.current.busy).toBe(true);
 
   (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseSecond = r; }));
-  act(() => result.current.refresh("x"));
+  act(() => result.current.suggest("x"));
   expect(result.current.busy).toBe(true);
 
   // The stale (first) request resolves while the newer (second) one is still
@@ -113,12 +117,6 @@ test("without a connection suggest is a no-op and leaves nothing pending", () =>
   expect(result.current.picks).toEqual([]);
 });
 
-test("refresh is a no-op while not ready", () => {
-  const { result } = renderHook(() => useSceneSuggestions("c", "s1", false, false));
-  act(() => result.current.refresh("x"));
-  expect(api.sceneSuggestions).not.toHaveBeenCalled();
-});
-
 test("ready flipping true on a mounted hook fetches nothing on its own", () => {
   (api.sceneSuggestions as any).mockReturnValue(new Promise(() => {}));
   const { result, rerender } = renderHook(
@@ -135,7 +133,7 @@ test("ready flipping true on a mounted hook fetches nothing on its own", () => {
   expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
 });
 
-test("a refresh does not reset existing suggestions to pending while it is in flight", async () => {
+test("a later press does not reset existing suggestions to pending while it is in flight", async () => {
   (api.sceneSuggestions as any).mockResolvedValueOnce(R([{ title: "A" }], ["g1"]));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   act(() => result.current.suggest(""));
@@ -143,7 +141,7 @@ test("a refresh does not reset existing suggestions to pending while it is in fl
 
   let releaseRefresh: (v: any) => void = () => {};
   (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseRefresh = r; }));
-  act(() => result.current.refresh("x"));
+  act(() => result.current.suggest("x"));
   // the existing cards stay on screen while the new ones load
   expect(result.current.suggestions).toEqual([{ title: "A" }]);
 
@@ -163,6 +161,40 @@ test("a failure empties the suggestions and reports the error", async () => {
   // Still asked: the button says Regenerate, because pressing again is the
   // recovery.
   expect(result.current.asked).toBe(true);
+});
+
+test("a first press that failed leaves the next one ranked", async () => {
+  // The greeting order is half of what a press buys, and only `rank=true`
+  // fetches it -- the route sends no greeting candidates otherwise. Promoting
+  // the button to an unranked regenerate after a failure would leave a picker
+  // with more than two greetings waiting on an ordering that can never come.
+  (api.sceneSuggestions as any).mockRejectedValueOnce({ detail: "no key" });
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
+  act(() => result.current.suggest(""));
+  await waitFor(() => expect(result.current.error).toEqual({ detail: "no key" }));
+
+  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"]));
+  act(() => result.current.suggest("try again"));
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", "s1", false, "try again", true);
+  await waitFor(() => expect(result.current.picks).toEqual(["g1"]));
+
+  // ...and once one HAS landed, the press stops paying for a re-rank.
+  act(() => result.current.suggest("more"));
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", "s1", false, "more", false);
+});
+
+test("a press after a failure is pending again rather than showing the failure's empty list", async () => {
+  (api.sceneSuggestions as any).mockRejectedValueOnce({ detail: "no key" });
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
+  act(() => result.current.suggest(""));
+  await waitFor(() => expect(result.current.suggestions).toEqual([]));
+
+  (api.sceneSuggestions as any).mockReturnValue(new Promise(() => {}));
+  act(() => result.current.suggest("try again"));
+  // `null`, not the `[]` the failure left: this press is a first ranking all
+  // over again, and the picker should say "Generating…" for it.
+  expect(result.current.suggestions).toBeNull();
+  expect(result.current.picks).toBeNull();
 });
 
 // ---- the ranking is remembered per question, and only per question ----

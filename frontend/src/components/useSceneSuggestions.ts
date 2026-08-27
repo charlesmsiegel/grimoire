@@ -33,6 +33,14 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
                                     ready: boolean, offscreen: boolean) {
   // `false`/`[]`/`[]`: idle, which is what every mount starts at now.
   const [asked, setAsked] = useState(false);
+  // Whether a RANKED reply has actually landed, which is not the same question
+  // as whether anyone has pressed. The greeting order is half of what the
+  // press buys and only a `rank=true` request fetches it (the route sends no
+  // greeting candidates otherwise), so a first press that fails must leave the
+  // next one ranked. Tracking `asked` alone would promote the button to an
+  // unranked regenerate after a failure, and a picker with more than two
+  // greetings would then never get the ordering it is waiting on.
+  const [ranked, setRanked] = useState(false);
   const [suggestions, setSuggestions] = useState<SceneSuggestion[] | null>([]);
   const [picks, setPicks] = useState<string[] | null>([]);
   const [nextDate, setNextDate] = useState("");
@@ -57,7 +65,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
         setSuggestions(r.suggestions);
         // A rank=false reply carries no picks; writing its empty list would
         // wipe the ranking the greeting cards are ordered by.
-        if (rank) setPicks(r.greeting_picks ?? []);
+        if (rank) { setPicks(r.greeting_picks ?? []); setRanked(true); }
         // Likewise: a refresh that estimates no date must not clear a good one.
         if (r.next_date) setNextDate(r.next_date);
       })
@@ -79,6 +87,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
   useEffect(() => {
     seq.current++;
     setAsked(false);
+    setRanked(false);
     setSuggestions([]);
     setPicks([]);
     setNextDate("");
@@ -86,24 +95,34 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     setBusy(false);
   }, [cid, afterSid, offscreen]);
 
-  /** The button. Ranked (`rank=true`), because this is the call that also
-   *  orders the greeting cards, and pending on both lists so the picker shows
-   *  "Generating…" rather than an empty group it is about to fill. */
+  /** The button — every press of it, the first and the fifth.
+   *
+   *  It ranks until a ranking lands, then regenerates. The first press is the
+   *  expensive half of the prompt (it orders the greeting cards as well as
+   *  writing the ideas) and reports pending on both lists, so the picker shows
+   *  "Generating…" and "Choosing…" rather than two empty groups it is about to
+   *  fill. Once a ranked reply HAS landed, later presses ask for ideas alone:
+   *  re-ranking would reshuffle the greeting cards under the reader's cursor,
+   *  and what is on screen stays there while the new ideas load.
+   *
+   *  One entry point rather than two, because "is this press a ranking?" is a
+   *  question only the hook can answer -- the picker knows that somebody
+   *  pressed, not that a reply ever came back. Splitting it left a first press
+   *  that failed promoting the button to an unranked regenerate, which the
+   *  route answers with no greeting candidates at all, so a picker with more
+   *  than two greetings could never earn the ordering it was waiting on.
+   */
   const suggest = useCallback((direction: string) => {
     // Guarded, not merely delegated: `run` no-ops without a connection, and
     // setting the pending state around a call that never happens would leave
     // "Generating…" on screen forever.
     if (!ready) return;
     setAsked(true);
-    setSuggestions(null);
-    setPicks(null);
-    run(direction, true);
-  }, [ready, run]);
+    if (!ranked) { setSuggestions(null); setPicks(null); }
+    run(direction, !ranked);
+  }, [ready, ranked, run]);
 
-  /** Regenerate. Unranked: the greeting order is already earned, and the cards
-   *  on screen stay there while the new ones load. */
-  const refresh = useCallback((direction: string) => run(direction, false), [run]);
-  return { asked, suggestions, picks, nextDate, busy, error, suggest, refresh };
+  return { asked, suggestions, picks, nextDate, busy, error, suggest };
 }
 
 /** The shape `SceneIdeaPicker` needs to render this data — shared so the
