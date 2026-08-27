@@ -4,7 +4,7 @@ routes that open a scene from a greeting."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import store
 from ..llm import LLMClient
@@ -32,7 +32,7 @@ from .models import (
     StartFromGreeting,
     SubjectsBody,
 )
-from .streaming import _ephemeral_stream, _persist_reply
+from .streaming import _persist_reply, ephemeral_frames
 
 router = APIRouter()
 
@@ -322,13 +322,50 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/opener")
-def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(get_llm)):
+def post_opener(cid: str, sid: str, body: Opener, request: Request,
+                client: LLMClient = Depends(get_llm),
+                x_grimoire_attempt: str | None = Header(default=None)):
+    """Generate a scene's first post, without writing it anywhere.
+
+    **A `draft`, not a `turn`, and the distinction is about persistence rather
+    than importance.** This route persists nothing: the text reaches the
+    transcript only when the player accepts it through `post_first_post`, which
+    takes `body.text` and makes no LLM call. Classing it as a `turn` would
+    claim its result is already in the transcript when nothing has been
+    written, so a locked phone would leave the run `landed` with its output
+    owned by no one.
+
+    It is still the longest generation on this side of the class boundary -- as
+    long as a chat turn, and the first thing a new scene does -- which is why
+    it is detached at all. As a `draft` it is re-attachable for the whole
+    retention window: backgrounding the app used to lose the opener outright.
+
+    **No exclusion key, deliberately.** An opener runs on a scene where no turn
+    can be in flight, re-generating one the player did not like is an ordinary
+    thing to do twice, and holding the scene would refuse the very
+    `post_first_post` the opener exists to feed.
+    """
+    # BEFORE the preflight, exactly as `post_chat` does it: this is a REPLAY of
+    # work that already ran, and a connection removed since would otherwise
+    # answer `missing_key` for an opener sitting complete in a buffer.
+    replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
+    if replay is not None:
+        return replay
     _require_scene(cid, sid)
     conn = _require_connection("opener", cid)
     messages, breakdown = store.context.compose_opener(
         cid, sid, body.prompt, describe=store.prompt_log.capturing())
     _record_prompt(cid, sid, "opener", breakdown)
-    return _ephemeral_stream(messages, conn, client, task="opener", cid=cid, sid=sid)
+    run, fresh = runs.reserve_scene_draft(request.app, cid, sid, "opener",
+                                          x_grimoire_attempt)
+    if not fresh:
+        # A duplicate delivery of this exact POST. Replay the original rather
+        # than spend a second opener-length call on the same prompt.
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    with runs.reservation(request.app, run):
+        runs.start_detached(request.app, run, ephemeral_frames(
+            messages, conn, client, task="opener", cid=cid, sid=sid))
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/first-post")

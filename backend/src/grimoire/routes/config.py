@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import health, llm, store
 from ..llm import LLMClient
@@ -24,6 +24,7 @@ from .common import (
     _write_response,
     get_health,
     get_llm,
+    run_error,
 )
 from .models import (
     CatalogProbe,
@@ -442,9 +443,10 @@ def delete_connection_route(id: str, registry: health.ProviderHealth = Depends(g
     return {"ok": True}
 
 
-@router.post("/llm-connections/{id}/models/refresh")
-async def post_connection_models_refresh(
-    id: str, client: LLMClient = Depends(get_llm),
+@router.post("/llm-connections/{id}/models/refresh", status_code=202)
+def post_connection_models_refresh(
+    id: str, request: Request, client: LLMClient = Depends(get_llm),
+    x_grimoire_attempt: str | None = Header(default=None),
 ):
     """Re-fetch a saved connection's catalog from its own provider (#149).
 
@@ -453,6 +455,16 @@ async def post_connection_models_refresh(
     connection was open, so an OpenRouter connection's models came from
     OpenRouter whether or not that was the provider configured, and the key was
     never presented. Both halves are fixed by the fetch happening here.
+
+    Detached like the other drafts, and the one whose subject is `global`: the
+    catalog is stored beside the connection, which no world or campaign owns.
+    Not itself a generation — it is a listing — but it is a provider round trip
+    against a host that may be slow or unreachable, which is the same reason
+    the others could not survive a locked phone.
+
+    The cache write happens in the RUN, after the fetch, which is what makes
+    backgrounding this survivable: the point of the refresh is the sidecar it
+    leaves behind, so a client that never comes back still gets it.
     """
     try:
         conn = store.llm_connections.read_connection_raw(id)
@@ -461,13 +473,19 @@ async def post_connection_models_refresh(
     if conn["kind"] not in llm.LISTABLE_KINDS:
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     rev = conn["rev"]
-    try:
-        models = await client.list_models(conn)
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
-    fetched_at = store.now_iso()
-    store.llm_connections.set_cached_models(id, models, rev)
-    return {"models": models, "fetched_at": fetched_at, "rev": rev}
+
+    async def work():
+        try:
+            models = await client.list_models(conn)
+        except LLMError as exc:
+            return {"state": "failed", "error": run_error(_llm_http_error(exc))}
+        fetched_at = store.now_iso()
+        store.llm_connections.set_cached_models(id, models, rev)
+        return {"state": "landed",
+                "result": {"models": models, "fetched_at": fetched_at, "rev": rev}}
+
+    return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "models-refresh",
+                          x_grimoire_attempt, work)
 
 
 @router.post("/model-catalog")

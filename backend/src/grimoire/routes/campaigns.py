@@ -12,21 +12,25 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import Response
 
 from .. import store
 from ..llm import LLMClient
-from ..llm_errors import LLMError
+from . import runs
 from .common import (
-    _bounded_call,
     _campaign_root_or_404,
     _content_fields,
     _display_name_or_400,
-    _draft_description,
     _dump,
-    _llm_http_error,
-    _noting,
     _page_of,
     _page_window,
     _require_connection,
@@ -39,7 +43,9 @@ from .common import (
     _with_descriptions,
     _write_response,
     computes_only,
+    draft_completion,
     get_llm,
+    image_draft_prompt,
 )
 from .models import (
     AdvanceTime,
@@ -533,18 +539,33 @@ def delete_campaign_cover(cid: str):
 # Declared here for the same reason the cover is: `routes/__init__` includes
 # `campaigns` before `entities`, whose `/campaigns/{cid}/{kind}` would otherwise
 # capture `images`.
-@router.post("/campaigns/{cid}/images/{name}/description/draft")
-async def post_campaign_library_description_draft(cid: str, name: str,
-                                                  client: LLMClient = Depends(get_llm)):
-    """A model-drafted first pass at what a library picture shows.
+@router.post("/campaigns/{cid}/images/{name}/description/draft", status_code=202)
+def post_campaign_library_description_draft(
+        cid: str, name: str, request: Request,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a model-drafted first pass at what a library picture shows.
 
     No subject name: this art belongs to the campaign and to no record, which is
     the whole reason the library exists. The template simply asks what is in the
     picture.
+
+    202 and a run to poll, like every other computing draft: the call is a
+    multimodal one over a whole image and is the slowest of the previews, so it
+    is also the one most likely to be running when the phone locks.
     """
     _campaign_root_or_404(cid)
-    return await _draft_description(client, store.campaign_images.image_path(cid, name), "",
-                                    cid=cid)
+    conn, messages = image_draft_prompt(
+        store.campaign_images.image_path(cid, name), "", cid=cid)
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "image-description",
+            lambda text: {"description": store.image_drafts.parse_output(text)},
+            cid=cid)
+
+    return runs.run_draft(request.app, runs.campaign_subject(cid),
+                          "image-description", x_grimoire_attempt, work)
 
 
 @router.put("/campaigns/{cid}/images/{name}/description")
@@ -1755,13 +1776,15 @@ def put_campaign_voice_anchor(cid: str, char: str, body: VoiceAnchorSave):
     return {"ok": True}
 
 
-@router.post("/campaigns/{cid}/characters/{char}/voice-anchor/generate")
+@router.post("/campaigns/{cid}/characters/{char}/voice-anchor/generate", status_code=202)
 @computes_only
-async def post_campaign_voice_anchor_generate(cid: str, char: str,
-                                              client: LLMClient = Depends(get_llm)):
-    """Draft an anchor from the character's card, resolved through the overlay so
-    a campaign-local character (which has no world copy) can use it too. Preview
-    only — the caller persists with PUT."""
+def post_campaign_voice_anchor_generate(
+        cid: str, char: str, request: Request,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a drafted anchor from the character's card, resolved through the
+    overlay so a campaign-local character (which has no world copy) can use it
+    too. Preview only — the caller persists with PUT."""
     _campaign_root_or_404(cid)
     conn = _require_connection("voice-anchor", cid)
     root = store.overlay.char_root(cid, char)
@@ -1770,17 +1793,19 @@ async def post_campaign_voice_anchor_generate(cid: str, char: str,
         card = store.characters.read_card(root, char, ch["meta"]["default_version"])
     except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
         raise HTTPException(status_code=404, detail="character not found")
-    try:
-        # See the world-side route: `{}` and `{"data": ["speech"]}` are both
-        # supported card state, and the template renders "(none)" per field.
-        data = card.get("data")
-        with store.usage.meter("voice-anchor", campaign=cid) as m:
-            text = await _bounded_call(client.complete(
-                store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}),
-                conn, m.usage), on_timeout=_noting(client, conn, m.usage))
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
-    return {"voice_anchor": store.voice_anchors.parse_output(text)}
+    # See the world-side route: `{}` and `{"data": ["speech"]}` are both
+    # supported card state, and the template renders "(none)" per field.
+    data = card.get("data")
+    messages = store.voice_anchors.build_prompt(data if isinstance(data, dict) else {})
+
+    async def work():
+        return await draft_completion(
+            client, conn, messages, "voice-anchor",
+            lambda text: {"voice_anchor": store.voice_anchors.parse_output(text)},
+            cid=cid)
+
+    return runs.run_draft(request.app, runs.campaign_subject(cid), "voice-anchor",
+                          x_grimoire_attempt, work)
 
 
 @router.put("/campaigns/{cid}/characters/{char}")

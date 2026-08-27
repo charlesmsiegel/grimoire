@@ -17,6 +17,7 @@ from PIL import Image
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from tests import draft_runs as drafts
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouterComplete
 
 CARD = {
@@ -62,7 +63,7 @@ def wid(client):
 
 def _upload(client, wid, card=None, fmt="json"):
     blob = json.dumps(card if card is not None else CARD).encode()
-    return client.post(f"/api/worlds/{wid}/scenario/parse",
+    return drafts.post(client, f"/api/worlds/{wid}/scenario/parse",
                        files={"file": ("card.json", blob, "application/json")},
                        data={"format": fmt})
 
@@ -98,13 +99,16 @@ def test_a_parse_reaches_the_client_the_app_itself_holds(monkeypatch, tmp_path):
     importlib.reload(store)
     app = create_app()
     app.state.llm = FakeOpenRouterComplete(REPLY)
-    client = TestClient(app)
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    # `with`, like the shared fixture: the parse is detached now, so its work is
+    # handed to a runner that lives on the lifespan and a client without one
+    # cannot drive it.
+    with TestClient(app) as client:
+        client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+        wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
 
-    body = _upload(client, wid).json()
+        body = _upload(client, wid).json()
 
-    assert [c["name"] for c in body["characters"]] == ["Mara"]
+        assert [c["name"] for c in body["characters"]] == ["Mara"]
 
 
 def test_a_parse_says_which_of_the_cast_the_world_already_has(client, wid):
@@ -114,7 +118,7 @@ def test_a_parse_says_which_of_the_cast_the_world_already_has(client, wid):
 
 
 def test_parsing_an_unreadable_card_is_a_400(client, wid):
-    r = client.post(f"/api/worlds/{wid}/scenario/parse",
+    r = drafts.post(client, f"/api/worlds/{wid}/scenario/parse",
                     files={"file": ("card.json", b"not a card", "application/json")},
                     data={"format": "json"})
     assert r.status_code == 400
@@ -127,10 +131,10 @@ def test_parsing_without_a_connection_is_a_409_and_beats_the_cards_own_errors(cl
     configured sends them to fix the wrong thing."""
     world = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     for r in (_upload(client, world),
-              client.post(f"/api/worlds/{world}/scenario/parse",
+              drafts.post(client, f"/api/worlds/{world}/scenario/parse",
                           files={"file": ("c.json", b"not a card", "application/json")},
                           data={"format": "json"}),
-              client.post(f"/api/worlds/{world}/scenario/parse-url", json={"url": "not a url"})):
+              drafts.post(client, f"/api/worlds/{world}/scenario/parse-url", json={"url": "not a url"})):
         assert r.status_code == 409
         assert r.json()["kind"] == "missing_key"
 
@@ -159,7 +163,7 @@ def test_parsing_a_card_from_a_url(client, wid, monkeypatch):
         "id": 1, "max_res_url": "https://avatars.charhub.io/avatars/creator/saltmarch/c.png"})
     monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (png, "image/png"))
 
-    r = client.post(f"/api/worlds/{wid}/scenario/parse-url",
+    r = drafts.post(client, f"/api/worlds/{wid}/scenario/parse-url",
                     json={"url": "https://chub.ai/characters/creator/saltmarch"})
     assert r.status_code == 200
     assert [c["name"] for c in r.json()["characters"]] == ["Mara"]
@@ -167,10 +171,10 @@ def test_parsing_a_card_from_a_url(client, wid, monkeypatch):
 
 
 def test_a_url_that_is_not_one_is_a_400_and_an_unreachable_one_a_404(client, wid, monkeypatch):
-    assert client.post(f"/api/worlds/{wid}/scenario/parse-url",
+    assert drafts.post(client, f"/api/worlds/{wid}/scenario/parse-url",
                        json={"url": "not a url"}).status_code == 400
     monkeypatch.setattr(store.chub, "fetch_character_node", lambda fp: None)
-    r = client.post(f"/api/worlds/{wid}/scenario/parse-url",
+    r = drafts.post(client, f"/api/worlds/{wid}/scenario/parse-url",
                     json={"url": "https://chub.ai/characters/creator/missing"})
     assert r.status_code == 404
 

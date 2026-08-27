@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import llm, routes
 from grimoire.main import create_app
+from tests import draft_runs as drafts
 from tests.llm_fakes import CapturingOpenRouter, FakeOpenRouterComplete
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -49,7 +50,7 @@ def test_a_draft_comes_back_as_a_preview_and_is_not_stored(client, art):
     wid, cid, vid = art
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         "A rain-slick stone quay at dusk.\nFishing boats ride at anchor.")
-    r = client.post(_url(wid, cid, vid))
+    r = drafts.post(client, _url(wid, cid, vid))
     assert r.status_code == 200
     # Lines are joined, not truncated to the first: a description may run to
     # two or three sentences (unlike a tagline).
@@ -65,7 +66,7 @@ def test_the_request_carries_the_image_bytes_and_the_subject_name(client, art):
     wid, cid, vid = art
     fake = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    assert client.post(_url(wid, cid, vid)).status_code == 200
+    assert drafts.post(client, _url(wid, cid, vid)).status_code == 200
 
     user = next(m for m in fake.messages if m["role"] == "user")
     parts = {p["type"]: p for p in user["content"]}
@@ -82,7 +83,7 @@ def test_a_claude_connection_is_refused_with_a_reason_rather_than_crashing(clien
     wid, cid, vid = art
     client.put("/api/config", json={"active_connection_id": "claude"})
     client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
-    r = client.post(_url(wid, cid, vid))
+    r = drafts.post(client, _url(wid, cid, vid))
     assert r.status_code == 409
     assert "cannot read images" in str(r.json()["detail"])
 
@@ -90,7 +91,7 @@ def test_a_claude_connection_is_refused_with_a_reason_rather_than_crashing(clien
 def test_drafting_an_image_that_is_not_there_is_a_404(client, art):
     wid, cid, vid = art
     client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
-    assert client.post(_url(wid, cid, vid, "nope")).status_code == 404
+    assert drafts.post(client, _url(wid, cid, vid, "nope")).status_code == 404
 
 
 def test_parse_output_joins_and_trims():
@@ -115,7 +116,7 @@ def test_a_pc_image_can_be_drafted(client, art):
                files={"file": ("a.png", PNG, "image/png")})
     fake = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    r = client.post(f"/api/worlds/{wid}/pcs/{pid}/versions/{pvid}"
+    r = drafts.post(client, f"/api/worlds/{wid}/pcs/{pid}/versions/{pvid}"
                     f"/images/avatar/description/draft")
     assert r.status_code == 200
     user = next(m for m in fake.messages if m["role"] == "user")
@@ -130,7 +131,7 @@ def test_an_entity_image_can_be_drafted(client, art):
                files={"file": ("a.png", PNG, "image/png")})
     fake = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    r = client.post(f"/api/worlds/{wid}/locations/{eid}/images/gallery_1/description/draft")
+    r = drafts.post(client, f"/api/worlds/{wid}/locations/{eid}/images/gallery_1/description/draft")
     assert r.status_code == 200
     user = next(m for m in fake.messages if m["role"] == "user")
     assert "Saltmarch Harbour" in {p["type"]: p for p in user["content"]}["text"]["text"]
@@ -146,7 +147,7 @@ def test_a_library_image_can_be_drafted_with_no_subject(client, art):
                files={"file": ("a.png", PNG, "image/png")})
     fake = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    r = client.post(f"/api/campaigns/{camp}/images/coastline/description/draft")
+    r = drafts.post(client, f"/api/campaigns/{camp}/images/coastline/description/draft")
     assert r.status_code == 200
     user = next(m for m in fake.messages if m["role"] == "user")
     assert "belongs to a record" not in {p["type"]: p for p in user["content"]}["text"]["text"]
@@ -162,7 +163,7 @@ def test_every_surface_refuses_a_claude_connection_the_same_way(client, art):
                files={"file": ("a.png", PNG, "image/png")})
     for url in (_url(wid, cid, vid),
                 f"/api/worlds/{wid}/locations/{eid}/images/gallery_1/description/draft"):
-        r = client.post(url)
+        r = drafts.post(client, url)
         assert (r.status_code, "cannot read images" in str(r.json()["detail"])) == (409, True), url
 
 
@@ -210,5 +211,5 @@ def test_an_oversized_image_is_refused_before_its_bytes_are_read(tmp_path, monke
 def test_the_route_reports_an_oversized_image_as_a_413(client, art, monkeypatch):
     wid, cid, vid = art
     monkeypatch.setattr(store.image_drafts, "MAX_BYTES", 1)
-    r = client.post(_url(wid, cid, vid))
+    r = drafts.post(client, _url(wid, cid, vid))
     assert (r.status_code, r.json()["detail"]) == (413, store.image_drafts.TOO_LARGE)

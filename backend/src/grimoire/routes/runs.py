@@ -1063,6 +1063,165 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
     return tail_response(run, from_)
 
 
+# --- runs that belong to something other than a scene -----------------------
+#
+# The four operations above, mounted once per subject. A `draft` on a campaign,
+# a world or the app itself is detached exactly as a turn is, and without these
+# it would be detached and unreachable: the scene routes resolve their subject
+# from `(cid, sid)`, so a scenario parse or a model refresh has no path to be
+# discovered, polled, streamed or cancelled once its response is lost -- which
+# is the whole failure this class of run is being migrated to fix.
+#
+# Deliberately NOT one set of routes over a `?subject=` parameter. The subject
+# is what scopes every lookup, and a client that can name it in a query string
+# can name somebody else's; keeping it in the path means each family can only
+# ever address its own, the same isolation `_scene_subject` gives a scene.
+
+
+def campaign_subject(cid: str) -> Subject:
+    """The subject a campaign-wide run belongs to.
+
+    No identity component, unlike a scene's: a campaign id is stable for the
+    life of the campaign (nothing renames one in place), so there is no second
+    name needed to tell a recycled id from the original.
+    """
+    return ("campaign", cid)
+
+
+def world_subject(wid: str) -> Subject:
+    """The subject a world-wide run belongs to. Stable for the same reason a
+    campaign's is."""
+    return ("world", wid)
+
+
+GLOBAL_SUBJECT: Subject = ("global",)
+"""The subject for work that belongs to the app rather than to any record.
+
+One member today -- refreshing a saved connection's model catalog -- and it is
+genuinely global: the catalog is stored beside the connection, which no world
+or campaign owns.
+"""
+
+
+def _subject_run(app, subject: Subject, run_id: str) -> Run:
+    """One run on this subject, or 404. The subject check IS the isolation: a
+    run id belonging to another world answers 'gone', never that world's
+    state."""
+    run = app.state.runs.get(run_id, subject)
+    if run is None:
+        raise _gone("run_gone", "no such run for this subject")
+    return run
+
+
+def _subject_runs(app, subject: Subject, attempt: str | None) -> dict:
+    """Every run on this subject inside the retention window, oldest first.
+
+    A LIST, not the newest one, and that is the difference from
+    `get_scene_run`. Every class mounted here declares no exclusion key, so
+    several legitimately overlap -- two image descriptions being drafted at
+    once in one world is the ordinary case -- and answering with one of them
+    would leave the others discoverable by nothing.
+
+    `attempt` narrows it to the caller's own run, which is how a client that
+    lost its 202 finds the work it started rather than somebody else's.
+    Filtering here rather than making the caller scan is not a convenience: the
+    run ids are the only other handle, and a client that lost the response does
+    not have one.
+    """
+    found = app.state.runs.for_subject(subject)
+    if attempt is not None:
+        found = [r for r in found if r.attempt_id == attempt]
+    return {"runs": [run_payload(r) for r in found]}
+
+
+def _subject_cancel(app, subject: Subject, run_id: str) -> dict:
+    """`post_run_cancel` for a non-scene subject; see there for why a terminal
+    run is not an error."""
+    run = _subject_run(app, subject, run_id)
+    if run.state == "running":
+        runner.cancel(app, run)
+        run.terminal.wait(timeout=CANCEL_TIMEOUT_SECONDS)
+    return {"run": run_payload(run)}
+
+
+def _subject_stream(app, subject: Subject, run_id: str, from_: int):
+    """`get_run_stream` for a non-scene subject.
+
+    The negative-cursor refusal is repeated rather than left to the shared
+    helper because it has to happen before the lookup: a malformed cursor is
+    the caller's mistake and answering it with a 404 about a run that exists
+    would send them looking in the wrong place.
+    """
+    if from_ < 0:
+        raise HTTPException(status_code=400, detail="from must not be negative")
+    return tail_response(_subject_run(app, subject, run_id), from_)
+
+
+@router.get("/campaigns/{cid}/runs")
+def get_campaign_runs(cid: str, request: Request,
+                      attempt: str | None = None) -> dict:
+    return _subject_runs(request.app, campaign_subject(cid), attempt)
+
+
+@router.get("/campaigns/{cid}/runs/{run_id}")
+def get_campaign_run(cid: str, run_id: str, request: Request) -> dict:
+    return {"run": run_payload(_subject_run(request.app, campaign_subject(cid), run_id))}
+
+
+@router.get("/campaigns/{cid}/runs/{run_id}/stream")
+def get_campaign_run_stream(cid: str, run_id: str, request: Request,
+                            from_: int = Query(0, alias="from")):
+    return _subject_stream(request.app, campaign_subject(cid), run_id, from_)
+
+
+@router.post("/campaigns/{cid}/runs/{run_id}/cancel")
+def post_campaign_run_cancel(cid: str, run_id: str, request: Request) -> dict:
+    return _subject_cancel(request.app, campaign_subject(cid), run_id)
+
+
+@router.get("/worlds/{wid}/runs")
+def get_world_runs(wid: str, request: Request,
+                   attempt: str | None = None) -> dict:
+    return _subject_runs(request.app, world_subject(wid), attempt)
+
+
+@router.get("/worlds/{wid}/runs/{run_id}")
+def get_world_run(wid: str, run_id: str, request: Request) -> dict:
+    return {"run": run_payload(_subject_run(request.app, world_subject(wid), run_id))}
+
+
+@router.get("/worlds/{wid}/runs/{run_id}/stream")
+def get_world_run_stream(wid: str, run_id: str, request: Request,
+                         from_: int = Query(0, alias="from")):
+    return _subject_stream(request.app, world_subject(wid), run_id, from_)
+
+
+@router.post("/worlds/{wid}/runs/{run_id}/cancel")
+def post_world_run_cancel(wid: str, run_id: str, request: Request) -> dict:
+    return _subject_cancel(request.app, world_subject(wid), run_id)
+
+
+@router.get("/runs")
+def get_global_runs(request: Request, attempt: str | None = None) -> dict:
+    return _subject_runs(request.app, GLOBAL_SUBJECT, attempt)
+
+
+@router.get("/runs/{run_id}")
+def get_global_run(run_id: str, request: Request) -> dict:
+    return {"run": run_payload(_subject_run(request.app, GLOBAL_SUBJECT, run_id))}
+
+
+@router.get("/runs/{run_id}/stream")
+def get_global_run_stream(run_id: str, request: Request,
+                          from_: int = Query(0, alias="from")):
+    return _subject_stream(request.app, GLOBAL_SUBJECT, run_id, from_)
+
+
+@router.post("/runs/{run_id}/cancel")
+def post_global_run_cancel(run_id: str, request: Request) -> dict:
+    return _subject_cancel(request.app, GLOBAL_SUBJECT, run_id)
+
+
 def tail_response(run: Run, from_: int = 0, lead: str | None = None):
     """A response that replays `run` from `from_` and then follows it.
 
@@ -1563,6 +1722,120 @@ def _reserve(app, cid: str, sid: str, cls: RunClass, kind: str,
     # publishes it. `runner` reads the flag when it installs the cancel scope,
     # so the turn ends without ever reaching a provider.
     return run, fresh
+
+
+def reserve_draft(app, subject: Subject, kind: str,
+                  attempt_id: str | None) -> tuple[Run, bool]:
+    """Reserve a `draft` run on a non-scene subject.
+
+    **No exclusion key, and that is the point rather than an omission.** A
+    tagline, a voice anchor, an image description and a scenario parse all run
+    alongside whatever else the user is doing, including a turn in a campaign
+    of the same world; giving one of them a key would let a preview nobody is
+    waiting on refuse a chat, which is a far worse failure than the one
+    detaching them fixes. `exclusion_key` returns `None` for `draft`, so this
+    can never raise `RunInFlightError` -- there is nothing here to catch it.
+
+    `attempt_id` is the client's own name for this piece of work, from
+    `X-Grimoire-Attempt`. Absent, one is minted: the caller simply gets no
+    idempotency and no way to re-find its run, which is exactly what it has
+    today. Present, it is used verbatim and a duplicate delivery adopts the
+    original run rather than spending a second call -- and it is what
+    `GET .../runs?attempt=` matches, because on a subject where drafts overlap
+    "the world's in-flight image-description run" names no one thing.
+
+    No campaign lock, unlike `_reserve`. That hold exists so `scene_held_free`
+    can exclude a reservation while it reshapes a scene; nothing reshapes a
+    campaign or a world out from under a draft, and taking it here would make
+    every one of these routes block behind a save.
+    """
+    try:
+        return app.state.runs.start_or_existing(
+            subject, "draft", kind, attempt_id or uuid.uuid4().hex, None,
+            _subject_labels(subject))
+    except StoreMovingError as exc:
+        # The same refusal `_reserve` gives, for the same reason: the draft's
+        # result is held on the run rather than written anywhere, but the work
+        # itself still resolves the store root -- a scenario parse reads the
+        # world's roster -- and a root that moves underneath it reads the wrong
+        # tree. Milliseconds, so the client is told to retry rather than wait.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": "the storage location is being changed; try again"}) from exc
+
+
+def reserve_scene_draft(app, cid: str, sid: str, kind: str,
+                        attempt_id: str | None) -> tuple[Run, bool]:
+    """Reserve a `draft` run on a SCENE, which today means the opener.
+
+    Goes through `_reserve` rather than `reserve_draft` because a scene subject
+    is the one that needs an identity: the `sid` moves on rename and is handed
+    to the next scene on delete, so a run indexed by it could be adopted by a
+    replacement. Everything else about it is a draft -- `exclusion_key` gives
+    `draft` no key, so an opener neither holds the scene nor is refused by a
+    turn, and re-generating an opener the player did not like is an ordinary
+    thing to do twice.
+
+    That non-exclusion is worth stating rather than inferring: an opener writes
+    NOTHING. `post_first_post` is what puts the text in the transcript, and it
+    takes `body.text` and makes no call -- so an opener running while the scene
+    is frozen changes nothing about the scene, and freezing the scene while an
+    opener runs would refuse a first-post the player is entitled to make.
+    """
+    return _reserve(app, cid, sid, "draft", kind, attempt_id or uuid.uuid4().hex)
+
+
+def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
+              work) -> dict:
+    """Reserve a computing `draft`, hand `work` to the runner, answer the 202.
+
+    THE route-side half of the shared contract, so that the twelve call sites
+    are the three lines that differ between them -- what to generate and how to
+    read it back -- and none of the five that do not: reserve, adopt a
+    duplicate, guarantee the reservation reaches a terminal state, detach,
+    shape the body. Written out per route, that is twelve chances to forget
+    `reservation` and leave a run `running` for the life of the process.
+
+    `work` is `start_computing`'s: a zero-arg callable returning a coroutine
+    that returns `{"state": ..., "result"?: ..., "error"?: ...}`. Build it
+    AFTER every synchronous refusal the route can make -- a missing record, an
+    unusable connection -- so those still reach the client as the status codes
+    they are rather than as a run state read minutes later.
+
+    A duplicate delivery (`fresh` false) is answered with the original run and
+    nothing is generated again. That is the same promise `post_chat` makes and
+    it costs more here than it looks: a draft is a whole provider call, so a
+    retried POST that started a second one would be paid for twice and the two
+    answers would disagree.
+    """
+    run, fresh = reserve_draft(app, subject, kind, attempt_id)
+    if not fresh:
+        return {"run": run_payload(run)}
+    with reservation(app, run):
+        start_computing(app, run, work)
+        return {"run": run_payload(run)}
+
+
+def _subject_labels(subject: Subject) -> dict:
+    """The display text a run carries, derived from its subject.
+
+    Derived rather than passed in, which is the one place this departs from
+    `start_or_existing`'s "labels are required, never defaultable" rule. That
+    rule exists because a notification with no campaign or scene text is a
+    feature silently absent behind a green suite -- and a `draft` is the one
+    class that never notifies at all. Thirteen call sites each remembering to
+    build the same dict is how twelve of them end up subtly different; a
+    subject already says everything there is to say.
+
+    The campaign's title is read HERE, at reservation, for `_campaign_label`'s
+    reason: it has to survive the campaign being deleted while the run is still
+    discoverable.
+    """
+    if subject[0] == "campaign":
+        return {"campaign": _campaign_label(str(subject[1])), "scene": ""}
+    if subject[0] == "world":
+        return {"campaign": "", "scene": "", "world": str(subject[1])}
+    return {"campaign": "", "scene": ""}
 
 
 def cancel_review(app, cid: str, sid: str, generation: str) -> list[Run]:

@@ -1139,13 +1139,27 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
                          after_turn=after_turn)
 
 
-def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient,
-                      task: str = "opener", cid: str = "", sid: str = ""):
-    """Stream a generation without persisting it to any scene (used by the opener).
+def ephemeral_frames(messages: list[dict], conn: dict, client: LLMClient,
+                     task: str = "opener", cid: str = "", sid: str = ""):
+    """The raw SSE frames of a generation that is persisted to no scene.
 
-    Nothing about the turn is stored, but the call still cost tokens and money,
-    so it is still metered (#152) -- `cid`/`sid` only label the row."""
-    async def event_stream():
+    The opener is the only member. Nothing about the turn is stored, but the
+    call still cost tokens and money, so it is still metered (#152) --
+    `cid`/`sid` only label the row.
+
+    A FRAME PRODUCER rather than a response, which is what `runs.start_detached`
+    takes: every frame is buffered on the run before it reaches anybody, so a
+    client that goes away mid-opener reads the rest of it on the way back
+    instead of losing the whole generation. Wrapped straight into a
+    `StreamingResponse` this was un-detachable by construction, because the
+    only copy of each frame was the one already on the wire.
+
+    The `BaseException` arm still files the row and re-raises. It is no longer
+    the disconnect path -- a subscriber leaving does not close this generator
+    now -- but it is still the CANCEL path, which is `runner.cancel` unwinding
+    the provider call, and an aborted row is the honest record of that.
+    """
+    async def frames():
         meter = store.usage.meter(task, campaign=cid, scene=sid)
         try:
             async for delta in client.stream(messages, conn, meter.usage):
@@ -1159,12 +1173,12 @@ def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient,
             meter.done("error", exc.kind, detail=exc.detail)
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
         except BaseException:
-            # The disconnect path. No frame can be emitted into a generator that
-            # is being closed, so filing the row is the only thing left to do.
+            # No frame can be emitted into a generator that is being closed, so
+            # filing the row is the only thing left to do.
             meter.done("aborted")
             raise
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return frames
 
 
 # ---- roll-proposal derivation and projection ----
