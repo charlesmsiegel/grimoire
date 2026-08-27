@@ -5,6 +5,7 @@ from."""
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -473,6 +474,11 @@ def post_connection_models_refresh(
     if conn["kind"] not in llm.LISTABLE_KINDS:
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     rev = conn["rev"]
+    # Minted HERE rather than left to `reserve_draft`, which would mint the same
+    # thing but keep it to itself: the work has to stamp the sidecar with the
+    # attempt that wrote it, so the id has to be known before the closure is
+    # built. `reserve_draft` uses a non-None id verbatim, so this is the run's.
+    attempt = x_grimoire_attempt or uuid.uuid4().hex
 
     async def work():
         try:
@@ -480,12 +486,16 @@ def post_connection_models_refresh(
         except LLMError as exc:
             return {"state": "failed", "error": run_error(_llm_http_error(exc))}
         fetched_at = store.now_iso()
-        store.llm_connections.set_cached_models(id, models, rev)
+        # The only durable trace a draft leaves anywhere, and it exists for one
+        # question: a client whose run was reaped asks the store whether ITS
+        # refresh landed. "Newer than it was" cannot answer that -- a second tab
+        # refreshing the same connection moves the timestamp too.
+        store.llm_connections.set_cached_models(id, models, rev, attempt=attempt)
         return {"state": "landed",
                 "result": {"models": models, "fetched_at": fetched_at, "rev": rev}}
 
     return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "models-refresh",
-                          x_grimoire_attempt, work)
+                          attempt, work)
 
 
 @router.post("/model-catalog")

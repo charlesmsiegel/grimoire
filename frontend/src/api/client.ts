@@ -464,7 +464,16 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
   // reader a half-written opener while the server finishes the rest into a
   // buffer nobody reads.
   let ended = false;
-  const watch = (e: ChatEvent) => { if (e.done ?? e.error) ended = true; onEvent(e); };
+  // Where this scene is addressed NOW, and the name that survives it moving.
+  // Both are learned from the leading `run` frame, which arrives before any
+  // delta and before anything can fail.
+  let at = sid;
+  let identity = "";
+  const watch = (e: ChatEvent) => {
+    if (e.done ?? e.error) ended = true;
+    if (e.run?.scene_identity) identity = e.run.scene_identity;
+    onEvent(e);
+  };
   let lost: unknown;
   try {
     await streamPost(path, body, watch, signal, attempt, onIndex);
@@ -477,7 +486,22 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
   for (let tries = 0; tries < STREAM_REATTACH_TRIES; tries++) {
     let run: RunHandle | null;
     try {
-      run = (await api.findRun(cid, sid, attempt)).run;
+      run = (await api.findRun(cid, at, attempt)).run;
+      if (!run && identity) {
+        // THE SCENE MAY HAVE BEEN RENAMED. An opener holds no exclusion key --
+        // deliberately, so it cannot refuse the `first-post` it exists to feed
+        // -- so another tab may rename the scene while it runs, and a rename
+        // mints a new `sid`. The run is indexed by the scene's IDENTITY, which
+        // survives that, so the old id resolves to no run at all and every
+        // re-attach would abandon a generation the server is still buffering.
+        // `scene-by-identity` is the lookup that exists for exactly this.
+        const now = await api.sceneByIdentity(cid, identity)
+          .then((r) => r.id, () => null);
+        if (now && now !== at) {
+          at = now;
+          run = (await api.findRun(cid, at, attempt)).run;
+        }
+      }
     } catch (err) {
       if (isAbortError(err)) throw err;
       // NOT `.catch(() => null)`. A lookup that FAILED has not answered "no
@@ -495,7 +519,7 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
     // away and every frame of it has already been delivered.
     if (run.state !== "running" && consumed + 1 >= run.next_index) return;
     try {
-      await api.attachRun(cid, sid, run.id, consumed + 1, watch, signal, onIndex);
+      await api.attachRun(cid, at, run.id, consumed + 1, watch, signal, onIndex);
       if (ended) return;
       // Cut again, the same way. Another pass, bounded by the loop.
       lost = new Error("the opener stream ended before the generation did");
@@ -517,28 +541,32 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
  *  fire, leaving every scene inspector sizing prompts against the list this
  *  request replaced.
  *
- *  **Recovery needs evidence that THIS attempt wrote, not that some catalog
- *  exists.** A connection that already had one has a `fetched_at` whatever
- *  happened, so a refresh that failed and was then reaped would otherwise hand
- *  the stale list back as a success. The stamp is read before the refresh
- *  starts and the recovered one has to differ from it; a baseline that could
- *  not be read recovers nothing, because then there is nothing to compare and
- *  a guess in this direction reports a refresh nobody got.
+ *  **Recovery asks whether THIS attempt wrote, and nothing weaker will do.**
+ *  Not "does a catalog exist" -- one does for any connection ever refreshed,
+ *  so a refresh that failed and was reaped would hand the stale list back as a
+ *  success. Not "is the catalog newer than it was" either: two tabs refreshing
+ *  the same connection overlap by design (global drafts declare no exclusion
+ *  key), so the other tab's success would be read as this one's. The attempt
+ *  id is stamped into the sidecar by the run that wrote it, and that is the
+ *  only thing that answers the question asked.
+ *
+ *  An id that does not match -- including the `""` of a sidecar written before
+ *  the field existed -- recovers nothing and the reap stands.
  */
 async function refreshModels(id: string,
                              signal?: AbortSignal): Promise<ModelsRefreshResult> {
-  const before = await api.readConnection(id).then((c) => c.fetched_at, () => null);
+  const attempt = newAttemptId();
   try {
-    return await draftRun<ModelsRefreshResult>({ at: "global" }, (attempt) =>
+    return await draftRun<ModelsRefreshResult>({ at: "global" }, (a) =>
       request<{ run: RunHandle }>(
         "POST", `/api/llm-connections/${encodeSegment(id)}/models/refresh`,
-        undefined, { attempt }), { signal });
+        undefined, { attempt: a }), { signal, attempt });
   } catch (err) {
     // Only `run_gone`. Any other failure is the run saying what went wrong,
     // and the store cannot overrule it.
-    if (!(err instanceof ApiError) || err.kind !== "run_gone" || before === null) throw err;
+    if (!(err instanceof ApiError) || err.kind !== "run_gone") throw err;
     const conn = await api.readConnection(id);
-    if (!conn.fetched_at || conn.fetched_at === before) throw err;
+    if (conn.fetched_by !== attempt) throw err;
     return { models: conn.models, fetched_at: conn.fetched_at, rev: conn.rev };
   }
 }

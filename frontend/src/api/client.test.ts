@@ -635,13 +635,10 @@ test("refreshing a catalog announces, so a cached model list is dropped", async 
   // catalog is its result. Landed on arrival is the duplicate-delivery shape --
   // a re-POST of an attempt that already finished adopts its outcome -- which
   // is the one that needs no timers to express.
-  globalThis.fetch = vi.fn()
-    .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [], fetched_at: "",
-                                    rev: "r1" }))
-    .mockResolvedValueOnce(
-      jsonOk({ run: { id: "r1", attempt_id: "a1", state: "landed", next_index: 0,
-                      cls: "draft", kind: "models-refresh",
-                      result: { models: [], fetched_at: "2026-08-21", rev: "r1" } } })) as any;
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    jsonOk({ run: { id: "r1", attempt_id: "a1", state: "landed", next_index: 0,
+                    cls: "draft", kind: "models-refresh",
+                    result: { models: [], fetched_at: "2026-08-21", rev: "r1" } } })) as any;
 
   await api.refreshConnectionModels("openrouter");
   expect(seen).toEqual(["config"]);
@@ -2046,17 +2043,22 @@ test("a model refresh whose run was reaped reads its catalog back off the store"
   try {
     const seen: string[] = [];
     const off = onConfigChanged(() => seen.push("config"));
-    globalThis.fetch = vi.fn()
-      // The baseline stamp, read before the refresh starts: recovery has to
-      // prove THIS attempt wrote, not that some catalog exists.
-      .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [{ id: "old" }],
-                                      fetched_at: "2026-08-01", rev: "r1" }))
-      .mockResolvedValueOnce(draftRunResponse("running"))
+    // The sidecar names the attempt that wrote it, so recovery can ask whether
+    // THIS refresh landed rather than whether some catalog exists.
+    let sent = "";
+    const fetchMock = vi.fn()
+      .mockImplementationOnce((_p: string, init: { headers: Record<string, string> }) => {
+        sent = init.headers["X-Grimoire-Attempt"];
+        return Promise.resolve(draftRunResponse("running"));
+      })
       .mockResolvedValueOnce({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
                                                     kind: "run_gone" }) })
-      .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [{ id: "m-1" }],
-                                      fetched_at: "2026-08-27", rev: "r1" }));
+      .mockImplementationOnce(() =>
+        Promise.resolve(jsonOk({ id: "openrouter", models: [{ id: "m-1" }],
+                                 fetched_at: "2026-08-27", fetched_by: sent,
+                                 rev: "r1" })));
+    globalThis.fetch = fetchMock;
 
     const pending = api.refreshConnectionModels("openrouter");
     await vi.advanceTimersByTimeAsync(5000);
@@ -2076,14 +2078,12 @@ test("a refresh that was reaped without ever writing is still a failure", async 
   vi.useFakeTimers();
   try {
     globalThis.fetch = vi.fn()
-      .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [], fetched_at: "",
-                                      rev: "r1" }))
       .mockResolvedValueOnce(draftRunResponse("running"))
       .mockResolvedValueOnce({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
                                                     kind: "run_gone" }) })
       .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [], fetched_at: "",
-                                      rev: "r1" }));
+                                      fetched_by: "", rev: "r1" }));
 
     const failed = api.refreshConnectionModels("openrouter")
       .then(() => { throw new Error("resolved"); }, (e: unknown) => e);
@@ -2095,22 +2095,25 @@ test("a refresh that was reaped without ever writing is still a failure", async 
   }
 });
 
-test("a refresh that failed and was reaped does not pass the old catalog off as new",
-     async () => {
-  // The trap in recovering a durable result: a connection that already had a
-  // catalog has a `fetched_at` whatever happened, so "some cache exists" is not
-  // evidence this attempt wrote one. The stamp has to have MOVED.
+test("a refresh recovers only what its OWN attempt wrote", async () => {
+  // Two traps in recovering a durable result, and the second is why a
+  // timestamp cannot do the job: a connection that already had a catalog has a
+  // `fetched_at` whatever happened, AND a second tab refreshing the same
+  // connection moves it. Global drafts overlap by design, so the only evidence
+  // is which attempt the sidecar names.
   vi.useFakeTimers();
   try {
-    const stale = { id: "openrouter", models: [{ id: "old" }],
-                    fetched_at: "2026-08-01", rev: "r1" };
+    // Somebody ELSE's refresh wrote this one -- the second tab this
+    // connection was open in. A fresh timestamp is not evidence for us.
+    const theirs = { id: "openrouter", models: [{ id: "theirs" }],
+                     fetched_at: "2026-08-27", fetched_by: "another-tab",
+                     rev: "r1" };
     globalThis.fetch = vi.fn()
-      .mockResolvedValueOnce(jsonOk(stale))
       .mockResolvedValueOnce(draftRunResponse("running"))
       .mockResolvedValueOnce({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
                                                     kind: "run_gone" }) })
-      .mockResolvedValueOnce(jsonOk(stale));
+      .mockResolvedValueOnce(jsonOk(theirs));
 
     const failed = api.refreshConnectionModels("openrouter")
       .then(() => { throw new Error("resolved"); }, (e: unknown) => e);
@@ -2120,4 +2123,38 @@ test("a refresh that failed and was reaped does not pass the old catalog off as 
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("an opener whose scene was renamed under it is still picked back up", async () => {
+  // An opener holds no exclusion key — deliberately, so it cannot refuse the
+  // `first-post` it exists to feed — so another tab may rename the scene while
+  // it runs. A rename mints a new `sid`, and the run is indexed by the scene's
+  // identity, so the old id resolves to no run and every re-attach would
+  // abandon a generation the server is still buffering.
+  const seen: string[] = [];
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(sseCutOff([
+      'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
+        + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
+      'id: 0\ndata: {"delta":"The "}\n\n',
+    ]))
+    // The old id knows nothing about it any more.
+    .mockResolvedValueOnce(jsonOk({ run: null }))
+    .mockResolvedValueOnce(jsonOk({ id: "s2-renamed" }))
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1",
+                                           state: "running", next_index: 2,
+                                           cls: "draft" } }))
+    .mockResolvedValueOnce(sseResponse([
+      'id: 1\ndata: {"delta":"quay."}\n\n', 'id: 2\ndata: {"done":true}\n\n',
+    ]));
+  globalThis.fetch = fetchMock;
+
+  await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
+
+  expect(seen.join("")).toBe("The quay.");
+  expect(String(fetchMock.mock.calls[2][0])).toContain("scene-by-identity?identity=ident-1");
+  // And the re-attach goes to the scene's CURRENT id, not the one the stream
+  // was opened on.
+  expect(String(fetchMock.mock.calls[4][0]))
+    .toBe("/api/campaigns/run/scenes/s2-renamed/runs/r1/stream?from=1");
 });

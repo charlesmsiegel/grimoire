@@ -40,6 +40,12 @@ export type LLMConnection = {
 };
 export type LLMConnectionDetail = LLMConnection & {
   models: Model[]; fetched_at: string;
+  /** Which refresh ATTEMPT wrote the cached catalog (#398), or `""` for one
+   *  written before the field existed or by a caller that named none. The only
+   *  durable trace a `draft` leaves, and it exists for one question: a client
+   *  whose run was reaped asks whether ITS refresh landed, which a timestamp
+   *  cannot answer once a second tab can move it. */
+  fetched_by?: string;
 };
 /** The active connection as `GET /config` reports it — id, kind, name, and the
  *  EFFECTIVE model (a `claude` connection with none configured still runs one).

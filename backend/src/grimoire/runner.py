@@ -47,7 +47,9 @@ both are things a player came back for. A `background` run -- the rolling
 summary, the scene-break check (#397) -- is work nobody asked for by name, and
 announced as anything at all the Android shell posts "New Post" for a scene
 whose transcript did not grow. A `draft` is held on the run and read by the
-request that asked for it.
+request that asked for it -- and for the world- and global-subject ones there
+is not even a scene to send a tap to: `openIntent` would get `""` for both the
+campaign and the identity.
 
 Only the SINK is gated. `retire` still runs for every class, because the live
 count it feeds is what keeps the foreground service promoted while any run is
@@ -163,6 +165,11 @@ def _announce_terminal(app, run) -> None:
     end-of-scene review is a small lie they act on -- they open the scene
     looking for narration that is not there. Whole classes say nothing at all,
     and `NOTIFYING_CLASSES` is which.
+
+    Retiring happens for EVERY class; only the notification is filtered. The
+    registry's live count is what promotes and demotes the foreground service,
+    and a draft that stopped being live has to demote it exactly as a turn
+    does or the phone keeps the process pinned.
 
     Both AFTER the bookkeeping and each in its own fail-soft boundary. Inside
     `_guarded`'s try, a notification the OS refused would flip a successfully

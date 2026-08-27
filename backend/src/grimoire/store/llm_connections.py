@@ -214,7 +214,7 @@ def cached_models(id: str) -> dict:
     """The sole read path for the model-list cache — gates on `rev` here,
     not at write time, so there's no check-then-act gap for a concurrent
     update/delete/recreate to land in (see the design spec's §5)."""
-    empty = {"models": [], "fetched_at": ""}
+    empty = {"models": [], "fetched_at": "", "fetched_by": ""}
     p = _sidecar_path(id)
     if not p.exists():
         return empty
@@ -225,14 +225,29 @@ def cached_models(id: str) -> dict:
     conn = _read(id)
     if conn is None or sidecar.get("rev") != conn["rev"]:
         return empty
-    return {"models": sidecar["models"], "fetched_at": sidecar["fetched_at"]}
+    return {"models": sidecar["models"], "fetched_at": sidecar["fetched_at"],
+            # `.get`, not `[...]`: a sidecar written before #398 has no
+            # `fetched_by`, and a refresh is not worth failing over a field
+            # that only decides whether a lost response can be recovered.
+            "fetched_by": sidecar.get("fetched_by", "")}
 
 
-def set_cached_models(id: str, models: list[dict], rev: str) -> None:
+def set_cached_models(id: str, models: list[dict], rev: str,
+                      attempt: str = "") -> None:
     """Writes unconditionally, tagged with the rev captured before the
     fetch that produced `models` — staleness is judged later, on read, by
-    cached_models(), not here."""
-    payload = {"models": models, "fetched_at": now_iso(), "rev": rev}
+    cached_models(), not here.
+
+    `attempt` is WHICH refresh wrote this, and it is the only durable trace a
+    `draft` leaves anywhere. The refresh is the one draft whose result outlives
+    its run, so a client whose run was reaped has to ask the store whether its
+    own attempt landed — and "the catalog is newer than it was" cannot answer
+    that, because a second tab refreshing the same connection advances the
+    timestamp too. Empty for a caller that names none, which then simply
+    cannot be recovered.
+    """
+    payload = {"models": models, "fetched_at": now_iso(), "rev": rev,
+               "fetched_by": attempt}
     atomic.write_text(_sidecar_path(id), json.dumps(payload, indent=2) + "\n")
 
 

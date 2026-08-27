@@ -56,6 +56,13 @@ export type RunHandle = {
    *  the review rather than to one of the runs building it, so this is what a
    *  client discovering an absorb after a reload needs in order to stop it. */
   review_generation?: string | null;
+  /** Which SCENE this run belongs to, independently of what that scene is
+   *  called now. A `sid` goes stale the moment the scene is renamed, and an
+   *  opener does not hold its scene against one -- so a client that lost its
+   *  connection resolves the current id from this through
+   *  `GET /scene-by-identity` before concluding there is no run. `null` for
+   *  the campaign, world and global subjects, which have no scene. */
+  scene_identity?: string | null;
   /** Present on a run the server recorded as failed. The discovery routes carry
    *  it so a client that was away while the turn died can say WHY, rather than
    *  silently unlocking a composer over a scene that never got its reply. */
