@@ -24,10 +24,17 @@ const SAVED_SLOTS = 4;
  *  local: a greeting another client played meanwhile disappearing on Back is
  *  wanted, and it is cheap enough not to matter. The ledger read beside it
  *  stays local for the same reason and one more: this pane is what writes to
- *  it, so it is also what has to re-read it. */
+ *  it, so it is also what has to re-read it.
+ *
+ *  Nothing in the generated group happens until it is asked for: `asked` is
+ *  false until the reader presses **Suggest ideas**, and that press is the
+ *  only thing in this pane that spends a generation. Everything else on the
+ *  screen -- greetings, the saved ledger, a blank scene, their own typed
+ *  premise -- works without one, which is what the picker showed anyone with
+ *  no model configured all along. */
 export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
-                                  suggestions, picks, nextDate, busy, error: genError, refresh,
-                                  onPicked, onCancel }: {
+                                  asked, suggestions, picks, nextDate, busy, error: genError,
+                                  suggest, refresh, onPicked, onCancel }: {
   cid: string;
   afterSid: string | null;
   ready: boolean;
@@ -123,8 +130,9 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       .catch((err) => setError(err));
   }
 
-  // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will generate
-  const wantGenerated = ready && (suggestions === null || suggestions.length > 0);
+  // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will
+  // generate -- which, until the reader presses for ideas, is every picker.
+  const wantGenerated = ready && asked && (suggestions === null || suggestions.length > 0);
   // with >2 available the LLM chooses; until it answers, show nothing rather than
   // cards that would shuffle. Empty/failed picks fall back to today's order.
   const rankPending = ready && greetings.length > 2 && picks === null;
@@ -192,14 +200,6 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
     <>
       {shown != null && <div className="banner"><ErrorNote err={shown} /></div>}
 
-      <div className="picker">
-        <input type="text" aria-label="Direction" className="grow"
-               placeholder="Steer the generated ideas — e.g. something at sea"
-               value={direction} onChange={(e) => onDirectionChange(e.target.value)} />
-        <button className="subtle" disabled={!ready || busy}
-                onClick={() => { setError(null); refresh(direction); }}>↻ Regenerate</button>
-      </div>
-
       <div className="role">Saved</div>
       {active.length === 0 && (
         <div className="field-hint">Nothing saved yet — Save keeps an idea for another day.</div>
@@ -253,8 +253,41 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       ))}
 
       <div className="role">Generated</div>
+      {/* The direction box and its button sit in this group rather than at the
+          top of the modal, where they read as steering the whole picker. They
+          steer one group, and that group is the one that costs money: the
+          button below is the only thing in the picker that spends a
+          generation, and it is next to what it pays for. */}
+      <div className="picker">
+        <input type="text" aria-label="Direction" className="grow"
+               placeholder="Steer the generated ideas — e.g. something at sea"
+               value={direction} onChange={(e) => onDirectionChange(e.target.value)} />
+        {/* One control, two jobs: the first press ranks (which also orders the
+            greeting cards above), and every press after that regenerates the
+            ideas alone. The label is stable while `busy` so it stays the same
+            control to look at -- and disabled, so it cannot be pressed twice. */}
+        <button className="subtle" disabled={!ready || busy}
+                onClick={() => {
+                  setError(null);
+                  if (asked) refresh(direction);
+                  else suggest(direction);
+                }}>
+          {asked ? "↻ Regenerate" : "✨ Suggest ideas"}
+        </button>
+      </div>
       {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
-      {ready && suggestions === null && <div className="field-hint">Generating…</div>}
+      {/* Said before the press, not after it: this is the one place in the
+          picker where a click costs a model call, and the reader deciding
+          whether to make it is the one who needs to know. */}
+      {ready && !asked && (
+        <div className="field-hint">
+          Ideas are generated on request — pressing Suggest ideas is one model call.
+        </div>
+      )}
+      {ready && asked && suggestions === null && <div className="field-hint">Generating…</div>}
+      {ready && asked && suggestions !== null && suggestions.length === 0 && !busy && genError == null && (
+        <div className="field-hint">No ideas came back — Regenerate, or steer it and try again.</div>
+      )}
       {generatedCards.map((s, i) => (
         <div className="chooser-row" key={i}>
           <button className="chooser-card" disabled={inferring}

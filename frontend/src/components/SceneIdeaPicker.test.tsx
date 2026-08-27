@@ -40,11 +40,13 @@ beforeEach(() => {
 type StateOverrides = Partial<{
   ready: boolean;
   direction: string;
+  asked: boolean;
   suggestions: SceneSuggestion[] | null;
   picks: string[] | null;
   nextDate: string;
   busy: boolean;
   error: unknown;
+  suggest: (direction: string) => void;
   refresh: (direction: string) => void;
   onPicked: (draft: any, warning?: string) => void;
   onCancel: () => void;
@@ -59,11 +61,15 @@ function Wrapper(props: StateOverrides) {
   return (
     <SceneIdeaPicker cid="c" afterSid="s1" ready={props.ready ?? true} pcless={false}
                      direction={direction} onDirectionChange={setDirection}
+                     /* Most of these tests are about a picker that already has
+                        its cards, which is a picker whose reader has pressed. */
+                     asked={props.asked ?? true}
                      suggestions={"suggestions" in props ? props.suggestions! : [SUGGESTION]}
                      picks={"picks" in props ? props.picks! : []}
                      nextDate={props.nextDate ?? "2026-01-01"}
                      busy={props.busy ?? false}
                      error={props.error ?? null}
+                     suggest={props.suggest ?? vi.fn()}
                      refresh={props.refresh ?? vi.fn()}
                      onPicked={props.onPicked ?? vi.fn()}
                      onCancel={props.onCancel ?? vi.fn()} />
@@ -73,10 +79,13 @@ function Wrapper(props: StateOverrides) {
 function renderPicker(overrides: StateOverrides = {}) {
   const onPicked = overrides.onPicked ?? vi.fn();
   const refresh = overrides.refresh ?? vi.fn();
+  const suggest = overrides.suggest ?? vi.fn();
   // Routed: an unreachable model puts a Connections link in the banner (#210).
   const utils = render(
-    <MemoryRouter><Wrapper {...overrides} onPicked={onPicked} refresh={refresh} /></MemoryRouter>);
-  return { onPicked, refresh, ...utils };
+    <MemoryRouter>
+      <Wrapper {...overrides} onPicked={onPicked} refresh={refresh} suggest={suggest} />
+    </MemoryRouter>);
+  return { onPicked, refresh, suggest, ...utils };
 }
 
 test("picking a greeting emits a greeting draft", async () => {
@@ -93,6 +102,79 @@ test("picking a generated card emits its resolved metadata", async () => {
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
     source: "generated", location: "saltmarch", date: "2026-03-04",
     premise: "A debt-collector arrives." }));
+});
+
+// ---- ideas are asked for, not spent on arrival (issue #428) ----
+
+test("an unasked picker offers a button and nothing generated", async () => {
+  renderPicker({ asked: false, suggestions: [] });
+  await screen.findByText("Reckoning");
+  // The one control, before it has been pressed. No cards, no "Generating…",
+  // and nothing that suggests a call already went out.
+  expect(screen.getByRole("button", { name: /suggest ideas/i })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: /regenerate/i })).toBeNull();
+  expect(screen.queryByText(/generating/i)).toBeNull();
+  // ...and it says what pressing costs, before the press rather than after it.
+  expect(screen.getByText(/one model call/i)).toBeInTheDocument();
+});
+
+test("Suggest ideas is what starts the ranking, carrying the typed direction", async () => {
+  const { suggest, refresh } = renderPicker({ asked: false, suggestions: [] });
+  await screen.findByText("Reckoning");
+  fireEvent.change(screen.getByLabelText("Direction"), { target: { value: "something at sea" } });
+  fireEvent.click(screen.getByRole("button", { name: /suggest ideas/i }));
+  // Ranked, not refreshed: the first press is also what orders the greeting
+  // cards above it.
+  expect(suggest).toHaveBeenCalledWith("something at sea");
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+test("the button becomes Regenerate once ideas have been asked for", async () => {
+  const { rerender } = renderPicker({ asked: false, suggestions: [] });
+  await screen.findByRole("button", { name: /suggest ideas/i });
+  rerender(
+    <MemoryRouter><Wrapper asked suggestions={[SUGGESTION]} /></MemoryRouter>);
+  expect(await screen.findByText("The creditor")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /regenerate/i })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /suggest ideas/i })).toBeNull();
+});
+
+test("the greeting group gets all four slots until ideas are asked for", async () => {
+  // The 4-slot budget is 2 greetings + 2 generated only when something will
+  // generate. Nothing will, until someone presses -- so the greetings should
+  // not be squeezed into half a modal to reserve room for cards that are not
+  // coming.
+  (api.availableGreetings as any).mockResolvedValue(
+    [1, 2, 3, 4, 5].map((n) => (
+      { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
+  renderPicker({ asked: false, suggestions: [] });
+  expect(await screen.findByText("Greeting 4")).toBeInTheDocument();
+  expect(screen.queryByText("Greeting 5")).toBeNull();
+});
+
+test("an unasked picker does not sit on Choosing… over the greeting cards", async () => {
+  // `picks` is `[]` (nobody asked), not `null` (a ranking is running), so the
+  // greetings render in the order they arrived rather than waiting on a call
+  // that nobody started.
+  (api.availableGreetings as any).mockResolvedValue(
+    [1, 2, 3].map((n) => (
+      { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
+  renderPicker({ asked: false, suggestions: [], picks: [] });
+  expect(await screen.findByText("Greeting 1")).toBeInTheDocument();
+  expect(screen.queryByText(/choosing/i)).toBeNull();
+});
+
+test("a ranking in flight shows Generating… and cannot be pressed again", async () => {
+  renderPicker({ asked: true, suggestions: null, picks: null, busy: true });
+  await screen.findByText("Reckoning");
+  expect(screen.getByText(/generating/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /regenerate/i })).toBeDisabled();
+});
+
+test("a ranking that came back with nothing says so rather than showing an empty group", async () => {
+  renderPicker({ asked: true, suggestions: [], picks: [] });
+  await screen.findByText("Reckoning");
+  expect(screen.getByText(/no ideas came back/i)).toBeInTheDocument();
 });
 
 test("Regenerate calls refresh with the typed direction and does not refetch greetings", async () => {
@@ -148,14 +230,14 @@ test("a delayed date estimate reaches an emitted greeting draft", async () => {
   const { rerender } = render(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
                      direction="" onDirectionChange={() => {}}
-                     suggestions={[]} picks={[]} nextDate="" busy={false} error={null}
-                     refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
+                     asked suggestions={[]} picks={[]} nextDate="" busy={false} error={null}
+                     suggest={() => {}} refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
   await screen.findByText("Reckoning");
   rerender(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
                      direction="" onDirectionChange={() => {}}
-                     suggestions={[]} picks={[]} nextDate="2026-02-02" busy={false} error={null}
-                     refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
+                     asked suggestions={[]} picks={[]} nextDate="2026-02-02" busy={false} error={null}
+                     suggest={() => {}} refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
   fireEvent.click(screen.getByText("Reckoning"));
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-02-02" }));
 });
@@ -167,8 +249,8 @@ test("a typed pick that outlasts a slow date estimate still carries the fresh da
   const { rerender } = render(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
                      direction="" onDirectionChange={() => {}}
-                     suggestions={[]} picks={[]} nextDate="" busy={false} error={null}
-                     refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
+                     asked suggestions={[]} picks={[]} nextDate="" busy={false} error={null}
+                     suggest={() => {}} refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
   await screen.findByText("Reckoning");
   fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
   fireEvent.click(screen.getByRole("button", { name: /use this/i }));
@@ -176,8 +258,8 @@ test("a typed pick that outlasts a slow date estimate still carries the fresh da
   rerender(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
                      direction="" onDirectionChange={() => {}}
-                     suggestions={[]} picks={[]} nextDate="2026-05-05" busy={false} error={null}
-                     refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
+                     asked suggestions={[]} picks={[]} nextDate="2026-05-05" busy={false} error={null}
+                     suggest={() => {}} refresh={() => {}} onPicked={onPicked} onCancel={() => {}} />);
   await act(async () => {
     releaseIntent({ title: "The morning after", date: "", location: null, cast: [] });
   });
@@ -235,9 +317,9 @@ test("a stale greetings-fetch error banner is cleared when Regenerate starts", a
 });
 
 test("without a connection the direction row is disabled but typing still works", async () => {
-  const { onPicked } = renderPicker({ ready: false });
+  const { onPicked } = renderPicker({ ready: false, asked: false });
   await screen.findByText("Reckoning");
-  expect(screen.getByRole("button", { name: /regenerate/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /suggest ideas/i })).toBeDisabled();
   fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
   fireEvent.click(screen.getByRole("button", { name: /use this/i }));
   await waitFor(() => expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
@@ -351,16 +433,16 @@ test("Regenerate clears the Saved labels, which point at cards that are gone", a
   const { rerender } = render(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
                      direction="" onDirectionChange={() => {}}
-                     suggestions={[SUGGESTION]} picks={[]} nextDate="" busy={false} error={null}
-                     refresh={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
+                     asked suggestions={[SUGGESTION]} picks={[]} nextDate="" busy={false} error={null}
+                     suggest={() => {}} refresh={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: "Save The creditor" }));
   await screen.findByRole("button", { name: "Saved The creditor" });
   // the regenerate lands: index 0 is a different idea now, and must be savable
   rerender(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
                      direction="" onDirectionChange={() => {}}
-                     suggestions={[OTHER]} picks={[]} nextDate="" busy={false} error={null}
-                     refresh={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
+                     asked suggestions={[OTHER]} picks={[]} nextDate="" busy={false} error={null}
+                     suggest={() => {}} refresh={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
   expect(screen.getByRole("button", { name: "Save The tide turns" })).toBeEnabled();
 });
 

@@ -6,39 +6,12 @@ import { SceneImport } from "./SceneImport";
 import type { SceneDraft } from "./sceneDraft";
 import { useSceneSuggestions } from "./useSceneSuggestions";
 
-/** Scene suggestions are off.
- *
- *  Picking a scene mode used to spend a generation before the reader had asked
- *  for anything: the ranking is an LLM call, and it fired on the way to the
- *  picker whether or not the ideas were wanted. That is a cost the reader
- *  neither chose nor saw coming, on the path they take to start every scene.
- *
- *  Off rather than deleted, because nothing here is wrong — the hook, the
- *  ranking and the cards all work, and the question is whether the call should
- *  be automatic. Re-enabling is this constant; making it a button the reader
- *  presses is the better answer and is filed as its own piece of work.
- *
- *  `useSceneSuggestions` already draws the distinction this leans on: `null`
- *  means "still generating" and `[]` means "nothing to offer", so a hook that
- *  is never ready reports `[]` and the picker drops its generated section
- *  entirely rather than waiting on a call that will not come. Greetings and a
- *  blank scene are still offered, which is what the picker showed anyone
- *  without a model configured all along. */
-const SUGGESTIONS_ENABLED = false;
-
 /** Mode → pick → confirm → create. Props are unchanged from the
  *  commit-on-click version, so CampaignView's usage is untouched. */
-export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated,
-                                  suggest = SUGGESTIONS_ENABLED }: {
+export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   cid: string;
   afterSid: string | null;          // ranking reference: the selected (or latest) scene
   ready: boolean;
-  /** Whether picking a mode may spend a generation on ideas. Defaults to the
-   *  constant above, which is what production gets; it is a prop at all so the
-   *  ranking path stays under test while it is switched off — the code is
-   *  dormant, not gone, and a dormant path with no coverage is one that has
-   *  quietly stopped working by the time anyone turns it back on. */
-  suggest?: boolean;
   /** `createdSid` is set only when a scene was actually created before this
    *  dismissal (a soft-failure "salvaged" scene abandoned via Escape/backdrop
    *  rather than "Continue to scene") -- see `salvagedSid` below. */
@@ -88,17 +61,16 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated,
   // is shown. `direction` moves up for the same reason -- it has to survive
   // the picker unmounting on Back too.
   const [direction, setDirection] = useState("");
-  // Nothing should fetch before a mode is chosen (unchanged behavior --
-  // SceneIdeaPicker only ever mounted post-mode before this move). Once a
-  // PLAYABLE mode is set it stays set until a `cid` change resets it below, so
-  // this only ever toggles the hook's `ready` from false to true, never back.
-  //
-  // "import" is deliberately not one of them: suggestions are an LLM ranking,
-  // and an imported scene has a title, a cast and a transcript of its own, so
-  // picking that card must not spend a call on ideas nothing will read (#92).
+  // Ideas cost a generation and are asked for by name now: the hook fires
+  // nothing on its own, and the picker's "Suggest ideas" button is the only
+  // thing that starts a ranking. `playable` still gates it, which is belt and
+  // braces rather than the load-bearing guard it was -- "import" never reaches
+  // the picker, so it never reaches the button either, and an imported scene
+  // brings its own title, cast and transcript so there would be nothing to
+  // rank anyway (#92).
   const playable = mode === "pc" || mode === "offscreen";
   const suggestionsState = useSceneSuggestions(
-    cid, afterSid, suggest && ready && playable, mode === "offscreen");
+    cid, afterSid, ready && playable, mode === "offscreen");
 
   // CampaignView reuses this component across a `cid` navigation -- it stays
   // mounted, `chooserOpen` is untouched by the switch, so without an explicit
@@ -119,10 +91,11 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated,
     // Direction now lives here rather than inside SceneIdeaPicker, so it no
     // longer resets for free when the picker unmounts on a `mode` reset --
     // a campaign switch must not leave campaign A's typed steer sitting in
-    // campaign B's box. (`suggestionsState` itself needs no explicit reset:
-    // `mode` going back to null drops the hook's `ready` argument to false,
-    // and `cid` changing gives `run` a new identity, so the mount effect
-    // re-fires and fetches fresh once a mode is chosen again.)
+    // campaign B's box. (`suggestionsState` resets itself: the hook drops
+    // back to idle whenever `cid`, `afterSid` or the mode changes the
+    // question, which it has to do for itself now that nothing re-fetches on
+    // its own -- campaign A's cards would otherwise sit in campaign B's
+    // picker until someone pressed for new ones.)
     setDirection("");
     // `writing` must reset here too. SceneConfirmForm's own create() sequence
     // stops issuing writes once its `live` ref notices this same switch (see
