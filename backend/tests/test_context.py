@@ -763,6 +763,37 @@ def test_dropping_the_heading_half_leaves_tier_three_unframed(monkeypatch, tmp_p
     assert "Introduce them only if the story calls for it" not in sys
 
 
+def test_the_heading_is_expanded_before_the_body_it_sits_above(monkeypatch, tmp_path):
+    """`{{random:...}}` and `{{roll:...}}` are draws off one shared RNG, so the
+    order the two halves are expanded in IS the order the draws land in.
+
+    The heading prints above the body, so it has to be drawn first, or a macro
+    in a locally edited heading takes the value the body's position should have
+    had. Templates are loaded from disk with auto-reload precisely so a reader
+    can edit them, which is what makes a macro in the heading a real thing
+    rather than a hypothetical -- and this is pinned by a test rather than a
+    comment because the comment saying it has been wrong once already."""
+    from grimoire.store.context import macros as context_macros
+    cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
+
+    seen: list[str] = []
+    real = context_macros.expand_macros
+
+    def spy(text, subs, cid_, sid_):
+        seen.append(text)
+        return real(text, subs, cid_, sid_)
+
+    monkeypatch.setattr(context_macros, "expand_macros", spy)
+    context.build_messages(cid, sid)
+
+    head_at = next(i for i, t in enumerate(seen) if "# Other characters in this world" in t)
+    body_at = next(i for i, t in enumerate(seen) if "## Active in this campaign, elsewhere" in t)
+    assert head_at < body_at, "the heading must take its draw before the body below it"
+    # ...and each half went through exactly once, which is the other half of the
+    # reason they are expanded apart rather than joined and expanded together.
+    assert sum("# Other characters in this world" in t for t in seen) == 1
+
+
 def test_packing_out_the_section_between_the_runs_leaves_one_heading(monkeypatch, tmp_path):
     """Runs are decided when sections RENDER; the packer edits the list after.
 

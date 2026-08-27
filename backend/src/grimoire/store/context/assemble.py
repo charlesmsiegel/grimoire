@@ -744,22 +744,27 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
         #
         # A section that rendered EMPTY does not break a run: it puts nothing
         # between the halves, so `last_heading` moves only when something is
-        # actually appended. Prepended BEFORE macro expansion, because the
-        # heading is a template on disk like any other and a reader may have
-        # put a macro in it.
-        text = macros.expand_macros(body, a["subs"], cid, sid).strip()
-        if not text:
-            continue
+        # actually appended.
+        #
+        # The heading is expanded FIRST and separately, and both halves of that
+        # matter. Separately, because the exact string that goes on the front
+        # has to be the exact string `_dedupe_runs` can take back off, and
+        # expanding the joined text leaves no handle on where the prefix ends.
+        # First, because `{{random:...}}` and `{{roll:...}}` are draws off a
+        # shared RNG, so expansion order is the order the draws land in: the
+        # heading is printed above the body, and expanding the body first would
+        # hand the body's position the heading's draw. Templates are editable
+        # on disk, so a heading with a macro in it is a thing a reader can
+        # have. Each half is still expanded exactly once, in the order it is
+        # read.
         head = ""
-        if section.heading and section.heading != last_heading:
-            # Expanded on its own rather than prepended first, so the exact
-            # string that went on the front is the exact string `_dedupe_runs`
-            # can take back off. Each half is still expanded exactly once, and
-            # the heading is still expanded at all -- it is a template on disk
-            # like any other and a reader may have put a macro in it.
+        if body and section.heading and section.heading != last_heading:
             head = macros.expand_macros(prompts.render(section.heading, **data),
                                         a["subs"], cid, sid).strip()
-            text = head + "\n\n" + text
+        body = macros.expand_macros(body, a["subs"], cid, sid).strip()
+        text = head + "\n\n" + body if (head and body) else body
+        if not text:
+            continue
         out.append({"id": section.id, "label": section.label,
                     "text": text, "tier": section.tier,
                     "pinned": section.id in pinned,
