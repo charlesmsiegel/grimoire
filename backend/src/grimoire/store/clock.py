@@ -557,10 +557,14 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
     start, target = _resolve(provider, cid, to, days)
     computed = digest(cid, provider, start, target)
     if target == start:
-        # Checked once, above: a no-op writes nothing, so there is no window
-        # between the check and a write to close. The caller is still told its
-        # price is stale rather than handed a digest measured from a moment it
-        # never asked about.
+        # Checked AGAIN even though nothing is about to be written, because the
+        # window this closes is not the write's. `_provider` and `digest` run
+        # the campaign's calendar plugin and can walk `SCAN_LIMIT_DAYS`, and a
+        # write landing during that leaves this branch answering 200 with a
+        # digest measured from a moment the caller never priced -- a caller that
+        # asked to be told its price was stale, told instead that its move was a
+        # no-op (Codex review).
+        revision.require(cid, expect_revision)
         return {"moved": False, "now": start, "digest": computed, "fired": []}
     with locks.campaign_lock(cid):
         revision.require(cid, expect_revision)
