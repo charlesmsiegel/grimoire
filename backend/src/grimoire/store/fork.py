@@ -151,7 +151,9 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
 
     Raises `campaigns.CampaignNotFound` for an unknown source and
     `scenes.SceneNotFound` for a `from_scene` that is not one of its scenes.
-    Both are checked before anything is created.
+    Both are checked before anything is created — and the second of them after a
+    `key` has been looked up, so a repeat is answered even when the scene the
+    first call was cut at has since been deleted from the source.
 
     `key` is an optional idempotency key (#409). A repeat with the same key, from
     the same source, is answered with the fork the first call made and its report
@@ -182,12 +184,6 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
         raise ValueError(f"an idempotency key may be at most {KEY_LIMIT} characters")
     if not campaigns_paths.campaign_meta_path(cid).exists():
         raise campaigns_paths.CampaignNotFound(cid)
-    if from_scene is not None:
-        # Against the campaign's own enumeration rather than a bare `exists()`:
-        # `list_scenes` drops ids the resolvers would refuse, and a cut has to
-        # mean a scene the campaign will actually show you.
-        if from_scene not in {s["id"] for s in scenes_read.list_scenes(cid)}:
-            raise scenes_paths.SceneNotFound(from_scene)
     new_cid = uniquify(slugify(name), lambda c: campaigns_paths.campaign_root(c).exists())
     # Both locks, through the one function allowed to hold two (#267): the
     # source's so the copy is not taken across a scene being written, and the
@@ -209,6 +205,21 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
             done = _replay(cid, key)
             if done is not None:
                 return {**done, "replayed": True}
+        if from_scene is not None:
+            # Against the campaign's own enumeration rather than a bare
+            # `exists()`: `list_scenes` drops ids the resolvers would refuse, and
+            # a cut has to mean a scene the campaign will actually show you.
+            #
+            # AFTER the replay, which is the ordering a repeat depends on. The
+            # scene named here belongs to the SOURCE and the source keeps
+            # playing, so a scene a keyed fork was cut at can be deleted from it
+            # afterwards -- and validating first would then answer a retry of
+            # that fork with a 404 while the fork it made, and its record, are
+            # both still sitting there. A key names an operation that already
+            # happened; nothing about the request that repeats it needs to be
+            # true a second time.
+            if from_scene not in {s["id"] for s in scenes_read.list_scenes(cid)}:
+                raise scenes_paths.SceneNotFound(from_scene)
         # Claim the id with an empty directory FIRST, and outside the block that
         # cleans up -- this is the one step whose failure must not delete
         # anything. `uniquify` ran before the lock, so the id can have been taken
@@ -240,6 +251,16 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
         out = {"id": new_cid, "from_scene": from_scene or "", **report}
         if key:
             _record(cid, new_cid, key, out)
+        # LAST, after the cut and the record: the fork's own write token (#409).
+        # `_copy` removed the one it inherited rather than minting a fresh one
+        # here, because from `copytree` onwards this directory is a campaign to
+        # every reader -- and none of them takes this lock, since a read route
+        # does not. A token minted before the cut would be handed to a reader
+        # mid-cut and still be current once the cut had finished, which is a
+        # stale reading certified as good. Minted here, everything a reader can
+        # see mid-cut reads as `INITIAL` and every expectation built on it is
+        # refused.
+        revision.bump(new_cid)
     return {**out, "replayed": False}
 
 
@@ -279,11 +300,18 @@ def _replay(cid: str, key: str) -> dict | None:
     what keeps this to the campaigns actually descended from this one.
 
     Answers None for anything it cannot read cleanly: a truncated or hand-edited
-    marker, a key that does not match, a `report` that is not an object. A
-    marker this cannot read means a second copy, which is exactly what a caller
-    with no key gets and is recoverable by deleting the extra campaign. Believing
-    a damaged one would hand back a report describing a fork whose actual
-    contents nobody has checked.
+    marker, a key that does not match, a report missing a field or holding the
+    wrong type in one. A marker this cannot read means a second copy, which is
+    exactly what a caller with no key gets and is recoverable by deleting the
+    extra campaign. Believing a damaged one would hand back a report describing a
+    fork whose actual contents nobody has checked.
+
+    The shape is checked WHOLE rather than by its `id` alone, and that is not
+    belt-and-braces: this value is returned as the route's body, and the client
+    reads every field of it -- `forkNotes` walks `refused` and `failed` as
+    arrays. A half-written marker carrying nothing but the right id would
+    therefore replay as a success and fail in the reader's browser, where the
+    documented recoverable path is a second copy on the shelf.
     """
     for row in campaigns_read.list_campaigns():
         if row.get("parent") != cid:
@@ -295,14 +323,36 @@ def _replay(cid: str, key: str) -> dict | None:
         if not isinstance(raw, dict) or raw.get("key") != key:
             continue
         report = raw.get("report")
-        if isinstance(report, dict) and report.get("id") == row["id"]:
+        if isinstance(report, dict) and _whole(report) and report["id"] == row["id"]:
             return report
-        # The id disagreeing with the directory the marker is IN is the one
-        # damaged shape worth a line in the log: it is what a hand-copied
-        # campaign directory looks like, and it would otherwise replay a report
-        # naming somebody else's fork.
+        # A marker that names a key but cannot answer for it is the one damaged
+        # shape worth a line in the log -- an id disagreeing with the directory
+        # the marker is IN is what a hand-copied campaign directory looks like,
+        # and a missing field is a write that did not finish.
         log.warning("fork: the marker in %s does not describe it", row["id"])
     return None
+
+
+#: Every field of a fork report, and the type the client reads it as. Kept
+#: beside `_whole` rather than derived from `_nothing_cut`, because the two
+#: answer different questions: that one builds a report, this one refuses to
+#: believe a file claiming to be one.
+_REPORT_FIELDS: dict[str, type | tuple[type, ...]] = {
+    "id": str, "from_scene": str, "removed_scenes": list,
+    "records": int, "refused": list, "failed": list,
+}
+
+
+def _whole(report: dict) -> bool:
+    """Whether `report` carries every field of a fork report, each of its type.
+
+    `bool` is excluded from `records` deliberately: it is an `int` to
+    `isinstance` and is not a count, and a marker holding `true` there is a file
+    nobody wrote from this code.
+    """
+    if not all(isinstance(report.get(f), t) for f, t in _REPORT_FIELDS.items()):
+        return False
+    return not isinstance(report["records"], bool)
 
 
 def _record(cid: str, new_cid: str, key: str, report: dict) -> None:
@@ -333,15 +383,25 @@ def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
     is "everything, then fix up what is identity" — so a part added tomorrow
     travels without anybody remembering this file exists.
 
-    Identity is three things: the name, the timestamps and the lineage. Two more
-    are re-stamped rather than carried, both of them statements about a write
-    history the copy does not have: `revision.txt`, the write token a caller
-    compares a priced operation against (#409), which is minted afresh so the
-    fork cannot answer "unchanged" to a reading taken from its parent; and the
-    source's own `fork.json`, dropped, so a copy of a copy does not claim to
-    have been made for a key that named an earlier operation on another
-    campaign. One thing is *removed* rather than rewritten — `activity.txt`,
-    the campaign's "something happened here" high-water mark. Copied, it would rank a fork
+    Identity is three things: the name, the timestamps and the lineage. Three
+    files are *removed* rather than rewritten, and they have three different
+    reasons.
+
+    `revision.txt` is the write token a caller compares a priced operation
+    against (#409), and it is a statement about a write history the copy does
+    not have — carried over, the fork would answer "unchanged" to a reading
+    taken from its parent. Removed here and minted at the END of the fork
+    (`fork_campaign`), never here: `copytree` has already published
+    `campaign.md`, so the fork is a campaign to `list_campaigns` and to every
+    read route from this line on, while a retrospective fork is still deleting
+    scenes for a while afterwards. A token minted now would be handed to a
+    reader mid-cut and then still be current when the cut finished.
+
+    `fork.json` is the source's own idempotency record, dropped so a copy of a
+    copy does not claim to have been made for a key that named an earlier
+    operation on another campaign.
+
+    `activity.txt` is the campaign's "something happened here" high-water mark. Copied, it would rank a fork
     made a second ago by when its parent was last played, which for an old
     campaign is the bottom of Recent. Absent, `read_activity` answers "" and
     `best_stamp` falls back to the `updated` stamped here: now, which is when
@@ -390,7 +450,7 @@ def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
     atomic.write_text(mp, dump_frontmatter(meta, body))
     campaigns_paths.campaign_activity_path(new_cid).unlink(missing_ok=True)
     _marker_path(new_cid).unlink(missing_ok=True)
-    revision.bump(new_cid)
+    campaigns_paths.campaign_root(new_cid).joinpath(revision.FILENAME).unlink(missing_ok=True)
 
 
 def _cut_after(cid: str, from_scene: str) -> dict:

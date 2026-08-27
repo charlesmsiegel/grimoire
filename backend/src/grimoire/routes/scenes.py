@@ -156,8 +156,16 @@ def post_scene(cid: str, body: NewScene, request: Request):
 # reviewer approved. Only the second creates anything, which is what makes the
 # review step a gate rather than a confirmation dialog over work already done.
 @router.post("/campaigns/{cid}/scenes/import/parse")
+@computes_only
 async def post_scene_import_parse(cid: str, file: UploadFile = File(...)):
-    """Read a grimoire transcript into a reviewable draft. Writes nothing."""
+    """Read a grimoire transcript into a reviewable draft. Writes nothing.
+
+    Which is what `@computes_only` says, and it is load-bearing since #409:
+    the marker keeps this off both the recents rail and the campaign's write
+    token, so reviewing an import in another tab cannot refuse a clock
+    confirmation over a campaign nothing has written. `POST .../scenes/import`,
+    one route down, is the one that commits.
+    """
     _campaign_root_or_404(cid)
     # Before the read, like every other upload route here: `read()` materializes
     # the whole body as one `bytes`, and that allocation is what the bound

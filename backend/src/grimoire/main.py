@@ -193,24 +193,38 @@ async def _lifespan(app: FastAPI):
                 log.warning("closing %s failed -- %s", type(client).__name__, exc)
 
 
-def _record_campaign_write(cid: str, changed: bool) -> None:
+def _record_campaign_write(cid: str, stamp: bool, changed: bool) -> None:
     """Both records a campaign write leaves behind, in one thread hop.
 
     The activity stamp orders the recents rail; the revision token (#409) is
     what a caller compares to ask "is this campaign still in the state I priced
-    against?". They are recorded together because they are recorded for the
-    same reason and by the same rule, and separately because they answer
-    different questions -- and because one route needs exactly one of them:
-    `POST /campaigns/{cid}/fork` is activity in the campaign it names and writes
-    nothing to it (`store/fork.py`: "The source is never written to"), so a fork
-    that moved the source's revision would invalidate the very expectation the
-    caller took the fork to protect. `@leaves_campaign_unchanged` is how a route
-    says so.
+    against?". Recorded together because they are recorded at the same moment
+    and by nearly the same rule, and taken as two flags because the two places
+    the rules differ are both deliberate:
+
+    - **A STREAM stamps no activity and does move the revision.** A stream's
+      status line is sent before its outcome is known, so activity would rank a
+      campaign for a turn that then failed and rolled back -- but by the time
+      that line is sent, every producing route has already committed its setup
+      under the campaign lock (the player's post, the speaker stamp, the
+      retired proposal), and a token that had not moved would let an advance
+      priced before the send confirm against a transcript that has already
+      grown. The two errors are not symmetric: a stamp for a turn that failed
+      misorders a list, a token that failed to move breaks the one promise this
+      value makes. `routes/streaming.py`'s `_persist_reply` bumps again for the
+      reply itself, minutes later.
+    - **A route that mutates a DIFFERENT campaign stamps activity and does not
+      move the revision.** `POST /campaigns/{cid}/fork` is something that
+      happened in the campaign it names and writes nothing to it
+      (`store/fork.py`: "The source is never written to"), so a fork that moved
+      the source's revision would invalidate the very expectation the caller
+      took the fork to protect. `@leaves_campaign_unchanged` is how it says so.
 
     Neither call raises, which is what makes it safe to run after the mutation
     has already committed -- see `campaigns.touch_quietly` and `revision.bump`.
     """
-    campaigns.touch_quietly(cid)
+    if stamp:
+        campaigns.touch_quietly(cid)
     if changed:
         revision.bump(cid)
 
@@ -261,9 +275,11 @@ class _CampaignActivityStamp:
                 headers = {k.lower(): v for k, v in message.get("headers") or []}
                 # A stream's HTTP status is sent before its outcome is known:
                 # the chat route answers 200 and can still fail mid-stream,
-                # rolling back the message it had posted. Skipping those costs
-                # nothing -- a turn that *does* land advances the scene's own
-                # `updated`, which the campaign's activity already folds in.
+                # rolling back the message it had posted. Skipping the STAMP for
+                # those costs nothing -- a turn that *does* land advances the
+                # scene's own `updated`, which the campaign's activity already
+                # folds in. The revision is not skipped, and
+                # `_record_campaign_write` says why the two part company here.
                 streaming = b"text/event-stream" in headers.get(b"content-type", b"")
                 # `path_params` is populated by the router during handling, so
                 # by now it holds what actually matched.
@@ -279,7 +295,7 @@ class _CampaignActivityStamp:
                 # names still counts as activity here and must not move this
                 # campaign's revision -- see `_record_campaign_write`.
                 changed = not getattr(endpoint, "grimoire_leaves_campaign", False)
-                if message["status"] < 300 and not streaming and cid and not preview:
+                if message["status"] < 300 and cid and not preview:
                     # BEFORE forwarding the status, so the stamp has landed by
                     # the time the client can observe success. Otherwise a
                     # caller can navigate on the response and have the sidebar's
@@ -293,7 +309,8 @@ class _CampaignActivityStamp:
                     # worker. Sync route bodies get a thread from Starlette;
                     # middleware does not. Neither record raises, so this
                     # cannot turn a completed write into a failure.
-                    await anyio.to_thread.run_sync(_record_campaign_write, cid, changed)
+                    await anyio.to_thread.run_sync(
+                        _record_campaign_write, cid, not streaming, changed)
             await send(message)
 
         await self.app(scope, receive, _send)

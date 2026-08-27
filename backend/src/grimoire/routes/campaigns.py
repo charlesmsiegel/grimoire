@@ -683,6 +683,7 @@ def delete_campaign_cover(cid: str):
 # `campaigns` before `entities`, whose `/campaigns/{cid}/{kind}` would otherwise
 # capture `images`.
 @router.post("/campaigns/{cid}/images/{name}/description/draft", status_code=202)
+@computes_only
 def post_campaign_library_description_draft(
         cid: str, name: str, request: Request,
         client: LLMClient = Depends(get_llm),
@@ -696,6 +697,15 @@ def post_campaign_library_description_draft(
     202 and a run to poll, like every other computing draft: the call is a
     multimodal one over a whole image and is the slowest of the previews, so it
     is also the one most likely to be running when the phone locks.
+
+    `@computes_only` for the reason `_draft_description` states about itself --
+    the draft is persisted by the PUT on Save, never here -- and its three
+    sibling surfaces are world-scoped, so this is the one place the missing
+    marker was reachable. Nothing is written at the 202 either, which is the
+    same reason `post_absorb` and the voice-anchor generate route carry it. It
+    was a mis-ordered recents rail before #409 and is a false `campaign_moved`
+    after it: drafting a description in another tab would otherwise refuse a
+    clock confirmation over a campaign nothing had written.
     """
     _campaign_root_or_404(cid)
     conn, messages = image_draft_prompt(

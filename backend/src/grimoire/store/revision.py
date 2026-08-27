@@ -80,8 +80,14 @@ class RevisionMismatchError(Exception):
         self.cid, self.expected, self.current = cid, expected, current
 
 
+#: The token's filename, named here so the one other module that has to reach
+#: it -- `store/fork.py`, which drops the copy a `copytree` carried over -- does
+#: not spell it a second time.
+FILENAME = "revision.txt"
+
+
 def _path(cid: str):
-    return campaigns_paths.campaign_root(cid) / "revision.txt"
+    return campaigns_paths.campaign_root(cid) / FILENAME
 
 
 def current(cid: str) -> str:
