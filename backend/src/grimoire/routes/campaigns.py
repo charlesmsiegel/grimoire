@@ -10,6 +10,7 @@ Scenes, weather, mechanics and greetings have their own modules; the generic
 
 from __future__ import annotations
 
+import contextlib
 from urllib.parse import quote
 
 from fastapi import (
@@ -201,9 +202,9 @@ def put_calendar_config(cid: str, body: CalendarConfig):
     root = store.campaigns.campaign_root(cid)
     cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed,
            "stale_after_days": body.stale_after_days,
-           # `None` is "the request said nothing about it", which must keep what
-           # is stored rather than reset it -- see `calendars.warn_days_for_save`.
-           "warn_days": store.calendars.warn_days_for_save(root, body.warn_days)}
+           # `None` is "the request said nothing about it"; `write_calendar`
+           # resolves it against the stored window rather than the default.
+           "warn_days": body.warn_days}
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:
@@ -391,43 +392,25 @@ def delete_campaign_event(cid: str, eid: str):
     cycle the import guard forbids -- and after the delete, so a refused delete
     cannot clear an acknowledgement for an event that is still there.
 
-    Best effort by construction: the key is rebuilt from the event's CURRENT
-    date, so one dismissed and then re-dated leaves its old key behind. That
-    residue is harmless (a re-dated event already warns again under a new key)
-    and the ledger's cap is what bounds it.
+    Every day it was ever warned about, not just its current one: an event
+    dismissed, re-dated and dismissed again holds an acknowledgement under each
+    day, and clearing only the latest would leave the earlier key to suppress a
+    recreation dated back to it. `notices.forget_event` keys on the id alone,
+    which needs no calendar and so cannot half-succeed.
     """
-    root = _campaign_root_or_404(cid)
-    row = store.events.get(cid, eid)
+    _campaign_root_or_404(cid)
     try:
         found = store.events.delete(cid, eid)
     except store.events.EventError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not found:
         raise HTTPException(status_code=404, detail="event not found")
-    _retire_event_notice(cid, root, eid, (row or {}).get("date", ""))
+    # A corrupt ledger is the writer's refusal, not this completed delete's
+    # failure: the event is gone by here, and raising would report a write that
+    # actually landed as an error.
+    with contextlib.suppress(store.notices.NoticeError):
+        store.notices.forget_event(cid, eid)
     return {"ok": True}
-
-
-def _retire_event_notice(cid: str, root, eid: str, date: str) -> None:
-    """Forget the acknowledgement keyed to this event on this day, if any.
-
-    Silent on every failure: the event is already deleted by the time this runs,
-    and a calendar that will not load must not turn a completed delete into a
-    500. The cost of failing is one stale row in a capped ledger.
-    """
-    if not date:
-        return
-    provider = store.calendars.primary_provider(root)
-    if provider is None:
-        return
-    try:
-        fixed = store.calendars.fixed_of(provider, date)
-    except store.calendars.CalendarError:
-        return
-    try:
-        store.notices.forget(cid, [store.notices.event_key(fixed, eid)])
-    except store.notices.NoticeError:
-        return   # a corrupt ledger is the writer's refusal, not this route's failure
 
 
 # ---- warn-once pre-notices (#106) ----

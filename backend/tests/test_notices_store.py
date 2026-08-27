@@ -432,3 +432,44 @@ def test_repointing_steps_over_a_ledger_it_cannot_read(monkeypatch, tmp_path):
     notices._path(cid).write_text("{not json", encoding="utf-8")
     notices.repoint_scenes(cid, {"001--s": "002--s"})   # must not raise
     assert notices._path(cid).read_text(encoding="utf-8") == "{not json"
+
+
+def test_an_absurd_warn_days_literal_does_not_break_the_read(monkeypatch, tmp_path):
+    """`1e999` is legal JSON that Python parses as `float("inf")`, which `int()`
+    refuses. Uncaught that raises out of every calendar read — the settings
+    route, the scene panel, the notice path — instead of falling back."""
+    cid = _campaign(monkeypatch, tmp_path)
+    (_root(cid) / "calendar.json").write_text(
+        '{"primary": {"provider": "gregorian"}, "warn_days": 1e999, '
+        '"stale_after_days": 1e999}', encoding="utf-8")
+    assert calendars.warn_days(_root(cid)) == calendars.WARN_DAYS
+    assert calendars.stale_after_days(_root(cid)) == calendars.STALE_AFTER_DAYS
+
+
+def test_forget_event_clears_every_day_it_was_warned_about(monkeypatch, tmp_path):
+    """An event dismissed, re-dated and dismissed again holds an
+    acknowledgement under EACH day. Clearing only the latest leaves the earlier
+    key to suppress a recreation dated back to it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "The envoy arrives", "2026-05-12")
+    notices.mark(cid, [_pending(cid)[0]["key"]])
+    events.update(cid, eid, date="2026-05-14")
+    notices.mark(cid, [_pending(cid)[0]["key"]])
+    assert len(notices.read(cid)) == 2
+    assert len(notices.forget_event(cid, eid)) == 2
+    assert notices.read(cid) == {}
+
+
+def test_forget_event_leaves_other_events_alone(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "The envoy arrives", "2026-05-12")
+    other = events.create(cid, "Winifred returns", "2026-05-13")
+    notices.mark(cid, [r["key"] for r in _pending(cid)])
+    assert len(notices.forget_event(cid, eid)) == 1
+    assert [k.rsplit(":", 1)[-1] for k in notices.read(cid)] == [other]
+
+
+def test_forget_event_steps_over_a_ledger_it_cannot_read(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    notices._path(cid).write_text("{not json", encoding="utf-8")
+    assert notices.forget_event(cid, "the-envoy-arrives") == []

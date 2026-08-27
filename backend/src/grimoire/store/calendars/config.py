@@ -65,7 +65,7 @@ def _stale_days(value) -> int:
         return STALE_AFTER_DAYS
     try:
         days = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return STALE_AFTER_DAYS
     return days if days > 0 else STALE_AFTER_DAYS
 
@@ -86,7 +86,12 @@ def _warn_days(value) -> int:
         return WARN_DAYS
     try:
         days = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # `OverflowError` is not paranoia: calendar.json is hand-editable and
+        # `1e999` is a legal JSON number that Python's parser hands back as
+        # `float("inf")`, which `int()` refuses. Uncaught it would raise out of
+        # every calendar read -- the settings route, the scene panel, the notice
+        # path -- rather than falling back to the default this promises.
         return WARN_DAYS
     if days < 0:
         return WARN_DAYS
@@ -122,11 +127,31 @@ def read_calendar(root: Path) -> dict:
 
 
 def write_calendar(root: Path, cfg: dict) -> None:
+    """Publish a calendar config. A `warn_days` of `None` keeps what is stored.
+
+    That resolution happens HERE rather than in the routes, immediately before
+    the write, so the read it depends on is against the newest file this process
+    has seen. `None` means the request expressed no opinion — a client that
+    predates the field, or one editing only the calendars — and the answer is
+    then the stored window, not the default: those differ whenever a reader has
+    set one, and conflating them is how saving an unrelated calendar field
+    silently resets a chosen window, or un-switches-off a campaign that had
+    deliberately set 0. It is also the whole reason this field's sentinel is
+    `None` and not `stale_after_days`' `0`, which is a real setting here.
+
+    This narrows the read-modify-write, it does not make it atomic — and nothing
+    here is: the endpoint publishes the whole file from one request body, so two
+    concurrent saves already resolve last-write-wins for `primary`, `secondary`
+    and the rest. `warn_days` is no more exposed than its neighbours, and making
+    only this field atomic would buy a guarantee the document around it does not
+    have.
+    """
     out = {"primary": _normalize_block(cfg.get("primary")) or _blank(),
            "secondary": _normalize_block(cfg.get("secondary")),
            "confirmed": bool(cfg.get("confirmed", False)),
            "stale_after_days": _stale_days(cfg.get("stale_after_days")),
-           "warn_days": _warn_days(cfg.get("warn_days"))}
+           "warn_days": (_warn_days(cfg.get("warn_days"))
+                         if cfg.get("warn_days") is not None else warn_days(root))}
     atomic.write_text(_path(root), json.dumps(out, indent=2) + "\n")
 
 
@@ -172,21 +197,7 @@ def warn_days(root: Path) -> int:
     return _warn_days(read_calendar(root).get("warn_days"))
 
 
-def warn_days_for_save(root: Path, sent) -> int:
-    """The window a save should persist, given what the request carried.
 
-    `None` means the request expressed no opinion — a client that predates the
-    field, or one editing only the calendars — and the answer is then what is
-    ALREADY stored, not the default. Those are different numbers whenever a
-    reader has set one, and treating them as the same is how saving an unrelated
-    calendar field silently resets a chosen window (or, worse, un-switches-off a
-    campaign that had deliberately set 0).
-
-    This is the whole reason `warn_days`' no-opinion value is `None` rather than
-    `stale_after_days`' `0`: 0 is a real setting here, so the sentinel had to be
-    something else, and something else needs a resolver like this one.
-    """
-    return _warn_days(sent) if sent is not None else warn_days(root)
 
 
 def copy_calendar(wroot: Path, croot: Path) -> None:

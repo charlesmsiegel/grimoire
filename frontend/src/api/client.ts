@@ -1782,12 +1782,25 @@ export const api = {
   getSceneDatetime: (cid: string, sid: string, opts?: { fresh?: boolean }) =>
     request<SceneDatetime>("GET", `/api/campaigns/${cid}/scenes/${sid}/datetime`,
                            undefined, opts),
-  setSceneDatetime: (cid: string, sid: string, datetime: string) =>
-    request<{ ok: boolean; advanced: boolean; friendly: string; id: string;
-              // Whether this scene's moment carried the campaign clock forward
-              // with it (#100). Forward only: a flashback reports moved: false.
-              clock?: { moved: boolean; now: string } }>(
-      "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
+  setSceneDatetime: async (cid: string, sid: string, datetime: string) => {
+    const r = await request<{ ok: boolean; advanced: boolean; friendly: string; id: string;
+                              // Whether this scene's moment carried the campaign clock
+                              // forward with it (#100). Forward only: a flashback
+                              // reports moved: false.
+                              clock?: { moved: boolean; now: string } }>(
+      "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime });
+    // Only when the clock actually moved (#106). The backend runs
+    // `clock.observe` on this path, so a scene that carries the campaign present
+    // forward also fires the events it crossed and shifts every lead time the
+    // campaign-scoped banner is showing -- and that banner can be on screen
+    // while this write happens, since `SceneConfirmForm` dates a new scene from
+    // inside the chooser. Gated on `moved` rather than emitted always: the
+    // inspector already reloads its own `when` after this write, so an
+    // unconditional emit would add a second read to the commonest write in the
+    // app for the flashbacks and re-dates that change nothing campaign-wide.
+    if (r.clock?.moved) noticesChanged();
+    return r;
+  },
   // Both scopes: a campaign's calendar, and the world default it was created
   // from (#223). One store file (calendar.json) under two roots, so the scope
   // is carried in the URL and nowhere else.

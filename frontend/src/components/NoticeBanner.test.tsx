@@ -132,3 +132,27 @@ test("a campaign change forgets what was dismissed in the last one", async () =>
   expect(await screen.findByLabelText("Dismiss Saltmarch Eve")).toBeTruthy();
   expect(screen.queryByLabelText("Undo dismissing Saltmarch Eve")).toBeNull();
 });
+
+test("a dismissal that settles after a campaign switch does not touch the new one", async () => {
+  // The render-time reset clears state on a `cid` change, but a request already
+  // in flight closes over the OLD campaign. Its rejection must not remove the
+  // row B optimistically hid, and its `finally` must not clear B's guard early
+  // and re-open the mark/forget race.
+  let failA: (e: unknown) => void = () => {};
+  vi.mocked(api.dismissNotices).mockReturnValueOnce(
+    new Promise((_res, rej) => { failA = rej; }));
+  const { rerender } = render(<NoticeBanner cid="a" notices={[HOLIDAY]} />);
+  fireEvent.click(screen.getByLabelText("Dismiss Saltmarch Eve"));
+
+  // Campaign B, same occurrence key, its own dismissal still in flight.
+  vi.mocked(api.dismissNotices).mockReturnValueOnce(new Promise(() => {}));
+  rerender(<NoticeBanner cid="b" notices={[HOLIDAY]} />);
+  fireEvent.click(await screen.findByLabelText("Dismiss Saltmarch Eve"));
+  const undo = await screen.findByLabelText("Undo dismissing Saltmarch Eve");
+  expect(undo).toBeDisabled();
+
+  await act(async () => { failA(new Error("offline")); });
+  // B's optimistic row is still hidden, and B's Undo is still guarded.
+  expect(screen.queryByLabelText("Dismiss Saltmarch Eve")).toBeNull();
+  expect(screen.getByLabelText("Undo dismissing Saltmarch Eve")).toBeDisabled();
+});

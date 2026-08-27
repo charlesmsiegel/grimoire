@@ -270,3 +270,33 @@ def test_a_corrupt_ledger_is_reported_rather_than_replaced(client):
     assert store.notices._path(cid).read_text(encoding="utf-8") == '{"holiday:1:Old": {} TRAILING'
     assert client.post(f"/api/campaigns/{cid}/notices/forget",
                        json={"keys": ["holiday:1:Old"]}).status_code == 400
+
+
+def test_a_recreated_event_warns_again_after_a_re_date(client):
+    """The sharper half of the id-reuse case: dismissed on one day, re-dated and
+    dismissed again, then deleted and recreated back on the FIRST day. Retiring
+    only the current day's key would leave the earlier one suppressing it."""
+    cid = _campaign(client)
+    eid = client.post(f"/api/campaigns/{cid}/events",
+                      json={"name": "The envoy arrives", "date": "2026-05-12"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/notices",
+                json={"keys": [_notices(client, cid)["notices"][0]["key"]]})
+    client.put(f"/api/campaigns/{cid}/events/{eid}", json={"date": "2026-05-14"})
+    client.post(f"/api/campaigns/{cid}/notices",
+                json={"keys": [_notices(client, cid)["notices"][0]["key"]]})
+    client.delete(f"/api/campaigns/{cid}/events/{eid}")
+    again = client.post(f"/api/campaigns/{cid}/events",
+                        json={"name": "The envoy arrives", "date": "2026-05-12"}).json()["id"]
+    assert again == eid
+    assert [n["name"] for n in _notices(client, cid)["notices"]] == ["The envoy arrives"]
+
+
+def test_a_calendar_save_that_omits_the_window_keeps_the_newest_stored_one(client):
+    """`write_calendar` resolves the sentinel immediately before the write, so
+    the value it keeps is the one in the file at that moment."""
+    cid = _campaign(client)
+    cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
+    client.put(f"/api/campaigns/{cid}/calendar", json={**cfg, "warn_days": 21})
+    older = {k: v for k, v in cfg.items() if k != "warn_days"}
+    client.put(f"/api/campaigns/{cid}/calendar", json=older)
+    assert client.get(f"/api/campaigns/{cid}/calendar").json()["warn_days"] == 21

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api, type Notice } from "../api/client";
 
 /** `in N days`, pluralized — a warn window of 1 must not say "1 days". */
@@ -75,18 +75,33 @@ export function NoticeBanner({ cid, notices, scene = "" }: {
     setWriting([]);
   }
 
+  // The campaign this render belongs to, readable from a settled promise. The
+  // reset above clears state when `cid` changes, but a request already in
+  // flight closes over the OLD campaign and its completion would still land on
+  // the new one's state -- an A rejection removing a row B optimistically
+  // hid, or an A `finally` clearing B's guard early and re-opening the
+  // mark/forget race the guard exists to close. Every completion below checks
+  // that it is still answering the campaign it was started for.
+  const current = useRef(cid);
+  current.current = cid;
+
   const shown = notices.filter((n) => !dismissed.some((d) => d.key === n.key));
   if (shown.length === 0 && dismissed.length === 0) return null;
 
   async function dismiss(notice: Notice) {
+    const startedIn = cid;
     setDismissed((rows) => [...rows, notice]);
     setWriting((keys) => [...keys, notice.key]);
     try {
-      await api.dismissNotices(cid, [notice.key], scene);
+      await api.dismissNotices(startedIn, [notice.key], scene);
     } catch {
-      setDismissed((rows) => rows.filter((r) => r.key !== notice.key));
+      if (current.current === startedIn) {
+        setDismissed((rows) => rows.filter((r) => r.key !== notice.key));
+      }
     } finally {
-      setWriting((keys) => keys.filter((k) => k !== notice.key));
+      if (current.current === startedIn) {
+        setWriting((keys) => keys.filter((k) => k !== notice.key));
+      }
     }
   }
 
@@ -96,14 +111,17 @@ export function NoticeBanner({ cid, notices, scene = "" }: {
     // same thing -- a programmatic click, or a second one racing the re-render
     // that disables it, reaches the handler with the attribute set.
     if (writing.includes(notice.key)) return;
+    const startedIn = cid;
     setDismissed((rows) => rows.filter((r) => r.key !== notice.key));
     setWriting((keys) => [...keys, notice.key]);
     try {
-      await api.restoreNotices(cid, [notice.key]);
+      await api.restoreNotices(startedIn, [notice.key]);
     } catch {
-      setDismissed((rows) => [...rows, notice]);
+      if (current.current === startedIn) setDismissed((rows) => [...rows, notice]);
     } finally {
-      setWriting((keys) => keys.filter((k) => k !== notice.key));
+      if (current.current === startedIn) {
+        setWriting((keys) => keys.filter((k) => k !== notice.key));
+      }
     }
   }
 
