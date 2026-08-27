@@ -35,7 +35,7 @@
     "A002": 1
   },
   "backend/src/grimoire/routes/campaigns.py": {
-    "B904": 87,
+    "B904": 86,
     "RUF003": 1
   },
   "backend/src/grimoire/routes/characters.py": {

@@ -300,3 +300,23 @@ def test_a_calendar_save_that_omits_the_window_keeps_the_newest_stored_one(clien
     older = {k: v for k, v in cfg.items() if k != "warn_days"}
     client.put(f"/api/campaigns/{cid}/calendar", json=older)
     assert client.get(f"/api/campaigns/{cid}/calendar").json()["warn_days"] == 21
+
+
+def test_deleting_an_event_does_not_clear_a_concurrent_recreation(client):
+    """`events.delete` frees the id the moment it releases the lock, and
+    `forget_event` matches every key carrying that id — so the two must be one
+    critical section, or a dismissal of the NEXT event of that name can be
+    matched and removed by the cleanup of the last one.
+
+    Serial here (the TestClient is), so this pins the composition rather than
+    the race: the delete's cleanup must not reach past its own event."""
+    cid = _campaign(client)
+    eid = client.post(f"/api/campaigns/{cid}/events",
+                      json={"name": "The envoy arrives", "date": "2026-05-12"}).json()["id"]
+    client.delete(f"/api/campaigns/{cid}/events/{eid}")
+    again = client.post(f"/api/campaigns/{cid}/events",
+                        json={"name": "The envoy arrives", "date": "2026-05-13"}).json()["id"]
+    assert again == eid
+    key = _notices(client, cid)["notices"][0]["key"]
+    client.post(f"/api/campaigns/{cid}/notices", json={"keys": [key]})
+    assert _notices(client, cid)["notices"] == []
