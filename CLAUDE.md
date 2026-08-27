@@ -265,7 +265,11 @@ subscriber. **Twenty-one handlers** start detached runs, in three classes:
   and `("global",)` — need no identity, because nothing renames a campaign or a
   world in place. Each has the same four run routes mounted under it (list,
   poll, stream, cancel); without them a scenario parse or a model refresh would
-  be detached and unreachable.
+  be detached and unreachable. **Deleting a campaign or a world forgets its
+  runs** (`runs.forget_subject`), because those ids are slugs and a slug is
+  reusable: a replacement of the same name created inside the retention window
+  would otherwise be handed the dead record's drafts. A forgotten run keeps
+  running and stays visible to the internal sweeps — it is only unreachable.
 - Every terminal write is **fenced** on that identity under the campaign lock,
   and every route that changes a scene's *shape* is refused with `scene_busy`
   while a turn **or a review** holds it (both classes share one exclusion key

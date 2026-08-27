@@ -307,9 +307,20 @@ async function awaitRunAt(base: string, started: RunHandle,
   }
   if (run.state === "landed") return run;
   const error = run.error ?? undefined;
-  throw new ApiError(error?.status ?? 409,
-                     error?.detail ?? `the run ended ${run.state}`,
-                     error?.kind ?? run.state, error);
+  const failure = new ApiError(error?.status ?? 409,
+                               error?.detail ?? `the run ended ${run.state}`,
+                               error?.kind ?? run.state, error);
+  // The same announcement `requestRaw` makes for a non-2xx, and it has to be
+  // repeated here because a detached failure never goes through that branch:
+  // the 202 was a success and the provider failed minutes later. Without it a
+  // real `auth` or `rate_limit` leaves the status bar showing the verdict from
+  // before the failure until the next navigation, which is the exact staleness
+  // #146 exists to remove.
+  if (isProviderFailure(failure)) {
+    invalidateConfigCache();
+    configChanged();
+  }
+  throw failure;
 }
 
 /** Where a subject's detached runs are addressed.
@@ -446,9 +457,19 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
   const attempt = newAttemptId();
   let consumed = -1;
   const onIndex = (i: number) => { consumed = i; };
+  // Whether a TERMINAL frame arrived, not whether the read loop ended. A proxy
+  // or a WebView can close the response cleanly part-way through -- the reader
+  // reports `done` and `streamPost` resolves, with no error to catch -- and a
+  // recovery hung off the exception alone would return happily, leaving the
+  // reader a half-written opener while the server finishes the rest into a
+  // buffer nobody reads.
+  let ended = false;
+  const watch = (e: ChatEvent) => { if (e.done ?? e.error) ended = true; onEvent(e); };
   let lost: unknown;
   try {
-    return await streamPost(path, body, onEvent, signal, attempt, onIndex);
+    await streamPost(path, body, watch, signal, attempt, onIndex);
+    if (ended) return;
+    lost = new Error("the opener stream ended before the generation did");
   } catch (err) {
     if (err instanceof ApiError || isAbortError(err)) throw err;
     lost = err;
@@ -474,7 +495,10 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
     // away and every frame of it has already been delivered.
     if (run.state !== "running" && consumed + 1 >= run.next_index) return;
     try {
-      return await api.attachRun(cid, sid, run.id, consumed + 1, onEvent, signal, onIndex);
+      await api.attachRun(cid, sid, run.id, consumed + 1, watch, signal, onIndex);
+      if (ended) return;
+      // Cut again, the same way. Another pass, bounded by the loop.
+      lost = new Error("the opener stream ended before the generation did");
     } catch (err) {
       if (err instanceof ApiError || isAbortError(err)) throw err;
       lost = err;
@@ -1758,6 +1782,20 @@ export const api = {
       request<{ run: RunHandle }>(
         "POST", `/api/llm-connections/${encodeSegment(id)}/models/refresh`,
         undefined, { attempt }), { signal })
+      // The one draft with a DURABLE result. Every other preview lives only on
+      // its run, so a reap is the honest end of it; this one writes the catalog
+      // beside the connection before the run ever goes terminal, so a tab
+      // suspended past the retention window would be told a refresh failed
+      // that actually succeeded -- and, worse, `notifyConfig` would never fire,
+      // leaving every scene inspector sizing prompts against the list this
+      // request replaced. Read it back instead. Only for `run_gone`: any other
+      // failure means the fetch really did not land.
+      .catch(async (err: unknown) => {
+        if (!(err instanceof ApiError) || err.kind !== "run_gone") throw err;
+        const conn = await api.readConnection(id);
+        if (!conn.fetched_at) throw err;
+        return { models: conn.models, fetched_at: conn.fetched_at, rev: conn.rev };
+      })
       .then(notifyConfig),
   /** The catalog for a connection that has been described but not saved (#149)
    *  — the New-connection form and the setup wizard, where there is no id to

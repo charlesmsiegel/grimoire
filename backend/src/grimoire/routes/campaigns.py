@@ -759,11 +759,16 @@ def post_campaign_fork(cid: str, body: ForkCampaign):
 
 
 @router.delete("/campaigns/{cid}")
-def delete_campaign(cid: str):
+def delete_campaign(cid: str, request: Request):
     try:
         store.campaigns.delete_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
+    # AFTER the delete, so a campaign that could not be removed keeps its runs.
+    # Campaign ids are slugs and a slug is reusable, so a replacement created
+    # inside the retention window would otherwise inherit this one's drafts --
+    # see `RunRegistry.forget_subject`.
+    runs.forget_subject(request.app, runs.campaign_subject(cid))
     return {"ok": True}
 
 

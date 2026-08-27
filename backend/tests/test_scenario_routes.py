@@ -170,6 +170,38 @@ def test_parsing_a_card_from_a_url(client, wid, monkeypatch):
     assert _counts(client, wid)["characters"] == 0
 
 
+def test_the_attempt_is_discoverable_before_the_download_starts(client, wid, monkeypatch):
+    """A POST WITH NO RESPONSE IS AMBIGUOUS, and the download is the longest
+    window in which one can be lost -- a whole HTTP fetch against somebody
+    else's host. Reserved after it, a client whose connection died mid-download
+    asks `?attempt=` and is told, truthfully, that there is no such run; the
+    handler then reserves one and spends a provider call anyway, so the user's
+    retry pays for a second one.
+
+    Asked at the seam rather than by racing the request: the download itself
+    looks the registry up, which is the only place that can observe the
+    ordering from inside.
+    """
+    png = store.cards.dumps(CARD, "png")
+    seen = []
+
+    def looking(url):
+        seen.append(client.get(f"/api/worlds/{wid}/runs?attempt=mine").json()["runs"])
+        return png, "png", url, None
+
+    monkeypatch.setattr(store.characters, "download_card", looking)
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete(REPLY)
+
+    r = drafts.post(client, f"/api/worlds/{wid}/scenario/parse-url",
+                    json={"url": "https://chub.ai/characters/creator/saltmarch"},
+                    headers={"X-Grimoire-Attempt": "mine"})
+
+    assert r.status_code == 200
+    assert [run["kind"] for run in seen[0]] == ["scenario"], \
+        "the attempt was not addressable while the download was running"
+
+
 def test_a_url_that_is_not_one_is_a_400_and_an_unreachable_one_a_404(client, wid, monkeypatch):
     assert drafts.post(client, f"/api/worlds/{wid}/scenario/parse-url",
                        json={"url": "not a url"}).status_code == 400
