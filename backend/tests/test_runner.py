@@ -480,6 +480,36 @@ def test_the_terminal_sink_is_told_what_kind_of_work_landed(app_with_lifespan):
     assert seen[0][3:] == ("Saltmarch", "Mara", "saltmarch", "identity-1")
 
 
+def test_a_draft_is_retired_without_being_announced(app_with_lifespan):
+    """`draft` is the one class the spec marks "no" for notifications, and the
+    shell cannot make that call: `RunNotifier` reads the class to choose the
+    WORDING, and treats every landed non-review as "New Post" -- so a finished
+    tagline announced itself as a new post in a scene, and a world- or
+    global-subject draft handed the notification tap an empty scene identity to
+    open.
+
+    Retiring is NOT filtered with it. The live count is what promotes and
+    demotes the Android foreground service, so a draft that stopped running has
+    to demote it exactly as a turn does, or the phone keeps the process pinned
+    over nothing.
+    """
+    app = app_with_lifespan
+    seen = []
+    app.state.on_run_terminal = lambda *args: seen.append(args)
+
+    async def done():
+        return None
+
+    run, _ = app.state.runs.start_or_existing(
+        ("world", "realm"), "draft", "tagline", "a1", None, LABELS)
+    runner.start(app, run, done)
+    _wait_terminal(app, run.id)
+
+    assert seen == []
+    # Retired all the same: nothing is live, which is what the service reads.
+    assert app.state.runs.any_live() is None
+
+
 def test_a_failing_terminal_sink_does_not_fail_the_run(app_with_lifespan):
     """A notification is the least important thing a terminal run does: an OS
     that refuses one must not flip a successfully persisted run to `failed`."""

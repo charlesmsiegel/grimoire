@@ -176,7 +176,7 @@ def test_delete_then_recreate_same_name_gets_a_different_rev(monkeypatch, tmp_pa
 def test_cached_models_empty_until_set(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
-    assert s.llm_connections.cached_models(cid) == {"models": [], "fetched_at": ""}
+    assert s.llm_connections.cached_models(cid) == {"models": [], "fetched_at": "", "fetched_by": ""}
 
 
 def test_set_cached_models_visible_when_rev_matches(monkeypatch, tmp_path):
@@ -184,10 +184,38 @@ def test_set_cached_models_visible_when_rev_matches(monkeypatch, tmp_path):
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
     rev = s.llm_connections.read_connection_raw(cid)["rev"]
     models = [{"id": "glm-4.6", "name": "GLM 4.6", "context": 128000, "prompt": None, "completion": None}]
-    s.llm_connections.set_cached_models(cid, models, rev)
+    s.llm_connections.set_cached_models(cid, models, rev, attempt="a1")
     result = s.llm_connections.cached_models(cid)
     assert result["models"] == models
     assert result["fetched_at"]
+    # Which refresh wrote it (#398): a client whose run was reaped asks the
+    # store whether ITS attempt landed, and a timestamp cannot answer that
+    # once a second tab refreshing the same connection can move it.
+    assert result["fetched_by"] == "a1"
+
+
+def test_a_sidecar_written_before_the_stamp_existed_still_reads(monkeypatch, tmp_path):
+    """`fetched_by` arrived with #398, so every catalog cached before it has
+    none. A refresh is not worth failing over a field that only decides whether
+    a lost response can be recovered."""
+    import json
+    s = reload_with_home(monkeypatch, tmp_path)
+    cid = s.llm_connections.create_connection("openai_compatible", "Endpoint",
+                                              base_url="https://x")
+    rev = s.llm_connections.read_connection_raw(cid)["rev"]
+    models = [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
+    s.llm_connections.set_cached_models(cid, models, rev)
+    path = s.llm_connections._sidecar_path(cid)
+    old_shape = json.loads(path.read_text(encoding="utf-8"))
+    del old_shape["fetched_by"]
+    path.write_text(json.dumps(old_shape), encoding="utf-8")
+
+    result = s.llm_connections.cached_models(cid)
+
+    assert result["models"] == models
+    # Unclaimed, so nothing can recover against it -- which is the safe
+    # direction: an unrecoverable refresh is reported as the reap it was.
+    assert result["fetched_by"] == ""
 
 
 def test_cached_models_hidden_when_rev_is_stale(monkeypatch, tmp_path):
@@ -195,7 +223,7 @@ def test_cached_models_hidden_when_rev_is_stale(monkeypatch, tmp_path):
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
     models = [{"id": "old-model", "name": "Old", "context": None, "prompt": None, "completion": None}]
     s.llm_connections.set_cached_models(cid, models, "a-stale-rev")  # connection's real rev differs
-    assert s.llm_connections.cached_models(cid) == {"models": [], "fetched_at": ""}
+    assert s.llm_connections.cached_models(cid) == {"models": [], "fetched_at": "", "fetched_by": ""}
 
 
 def test_sidecar_cleared_when_base_url_changes(monkeypatch, tmp_path):
@@ -204,7 +232,7 @@ def test_sidecar_cleared_when_base_url_changes(monkeypatch, tmp_path):
     rev = s.llm_connections.read_connection_raw(cid)["rev"]
     s.llm_connections.set_cached_models(cid, [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}], rev)
     s.llm_connections.update_connection(cid, base_url="https://new")
-    assert s.llm_connections.cached_models(cid) == {"models": [], "fetched_at": ""}
+    assert s.llm_connections.cached_models(cid) == {"models": [], "fetched_at": "", "fetched_by": ""}
 
 
 def test_delete_removes_the_sidecar_file(monkeypatch, tmp_path):
@@ -228,7 +256,7 @@ def test_recreated_connection_never_inherits_an_orphaned_sidecar(monkeypatch, tm
     assert sidecar_path.exists()
     new_id = s.llm_connections.create_connection("openai_compatible", "Orphan Source", base_url="https://y")
     assert new_id == cid  # slugify collides with the freed id
-    assert s.llm_connections.cached_models(new_id) == {"models": [], "fetched_at": ""}
+    assert s.llm_connections.cached_models(new_id) == {"models": [], "fetched_at": "", "fetched_by": ""}
 
 
 def test_deleting_the_active_connection_leaves_nothing_active(monkeypatch, tmp_path):

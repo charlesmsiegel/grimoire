@@ -24,6 +24,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.llm_errors import LLMError
 from grimoire.routes import runs as runs_mod
 from tests.llm_fakes import (
     FailingOpenRouter,
@@ -281,11 +282,32 @@ def test_the_refresh_caches_its_catalog_even_if_nobody_is_listening(client):
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeCatalog(models=[{"id": "m-1"}])
 
-    started = client.post(f"/api/llm-connections/{conn}/models/refresh")
+    started = client.post(f"/api/llm-connections/{conn}/models/refresh",
+                          headers={"X-Grimoire-Attempt": "mine"})
     _wait_state(client, "/api/runs", started.json()["run"]["id"])
 
     stored = client.get(f"/api/llm-connections/{conn}").json()
     assert [m["id"] for m in stored["models"]] == ["m-1"]
+    # WHICH refresh wrote it, which is the only durable trace a draft leaves.
+    # A client whose run was reaped asks the store whether ITS attempt landed,
+    # and a timestamp cannot answer that: a second tab refreshing the same
+    # connection moves it too, and global drafts overlap by design.
+    assert stored["fetched_by"] == "mine"
+
+
+def test_a_refresh_that_failed_leaves_the_stamp_alone(client):
+    """The other half: nothing is written, so nothing claims this attempt."""
+    conn = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Endpoint",
+        "base_url": "https://x", "api_key": "sk-x"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeCatalog(error=LLMError("rate_limit", "slow down"))
+
+    started = client.post(f"/api/llm-connections/{conn}/models/refresh",
+                          headers={"X-Grimoire-Attempt": "mine"})
+    _wait_state(client, "/api/runs", started.json()["run"]["id"], "failed")
+
+    assert client.get(f"/api/llm-connections/{conn}").json()["fetched_by"] == ""
 
 
 def test_a_negative_cursor_is_refused_before_the_run_is_looked_up(client, world):

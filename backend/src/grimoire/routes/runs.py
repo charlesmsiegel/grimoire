@@ -933,6 +933,10 @@ def run_payload(run: Run) -> dict:
         # it -- `DELETE .../pending-review` names the generation, not the run.
         # `None` for every other class.
         "review_generation": run.review_generation,
+        # Which scene this run belongs to, independently of what that scene is
+        # called now -- see `lead_frame` for the rename it survives. `None` for
+        # the campaign, world and global subjects, which have no scene.
+        "scene_identity": run.scene_identity,
         "labels": run.labels,
         "next_index": len(run.frames),
         "error": run.error,
@@ -1508,9 +1512,19 @@ def lead_frame(run: Run) -> str:
     dies immediately still has to be able to find its run, or the send is
     unaddressable and "did my turn land?" has no answer -- which is the whole
     ambiguity this feature exists to remove.
+
+    `scene_identity` rides along for the same reason the notification intent
+    carries one: the `sid` in the URL the client came in on goes stale the
+    moment the scene is RENAMED, and an opener explicitly does not hold its
+    scene against a rename (a `draft` takes no exclusion key). So a client
+    that loses its connection and comes back at the old id finds no run at all,
+    and abandons a generation the server is still buffering. With the identity
+    it resolves the scene's current id through `GET /scene-by-identity` first.
+    Absent for a run that has none, which is only the non-scene subjects.
     """
     return sse({"run": {"id": run.id, "attempt_id": run.attempt_id,
-                        "state": run.state, "next_index": len(run.frames)}})
+                        "state": run.state, "next_index": len(run.frames),
+                        "scene_identity": run.scene_identity}})
 
 
 def replay_attempt(app, cid: str, sid: str, attempt_id: str | None):
