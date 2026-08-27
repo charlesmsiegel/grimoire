@@ -32,7 +32,7 @@ from .models import (
     StartFromGreeting,
     SubjectsBody,
 )
-from .streaming import _persist_reply, ephemeral_frames
+from .streaming import StreamOutcome, _persist_reply, ephemeral_frames
 
 router = APIRouter()
 
@@ -363,8 +363,15 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
         # than spend a second opener-length call on the same prompt.
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
+        # The box, not just the frames. `ephemeral_frames` handles an upstream
+        # `LLMError` by emitting an error frame and finishing normally, so a
+        # runner inferring success from a clean exhaustion would mark the run
+        # `landed` with `error: null` -- and a client polling it would be told
+        # an opener arrived whose only terminal frame says it did not.
+        outcome = StreamOutcome()
         runs.start_detached(request.app, run, ephemeral_frames(
-            messages, conn, client, task="opener", cid=cid, sid=sid))
+            messages, conn, client, task="opener", cid=cid, sid=sid,
+            outcome=outcome), outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 

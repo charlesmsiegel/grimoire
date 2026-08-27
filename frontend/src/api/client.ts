@@ -507,6 +507,42 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
   throw lost;
 }
 
+/** Re-fetch a connection's catalog, and recover the one draft whose result
+ *  outlives its run.
+ *
+ *  Every other preview lives only on the run, so a reap is the honest end of
+ *  it. This one writes the catalog beside the connection BEFORE the run goes
+ *  terminal, so a tab suspended past the retention window would be told a
+ *  refresh failed that had in fact succeeded -- and `notifyConfig` would never
+ *  fire, leaving every scene inspector sizing prompts against the list this
+ *  request replaced.
+ *
+ *  **Recovery needs evidence that THIS attempt wrote, not that some catalog
+ *  exists.** A connection that already had one has a `fetched_at` whatever
+ *  happened, so a refresh that failed and was then reaped would otherwise hand
+ *  the stale list back as a success. The stamp is read before the refresh
+ *  starts and the recovered one has to differ from it; a baseline that could
+ *  not be read recovers nothing, because then there is nothing to compare and
+ *  a guess in this direction reports a refresh nobody got.
+ */
+async function refreshModels(id: string,
+                             signal?: AbortSignal): Promise<ModelsRefreshResult> {
+  const before = await api.readConnection(id).then((c) => c.fetched_at, () => null);
+  try {
+    return await draftRun<ModelsRefreshResult>({ at: "global" }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/llm-connections/${encodeSegment(id)}/models/refresh`,
+        undefined, { attempt }), { signal });
+  } catch (err) {
+    // Only `run_gone`. Any other failure is the run saying what went wrong,
+    // and the store cannot overrule it.
+    if (!(err instanceof ApiError) || err.kind !== "run_gone" || before === null) throw err;
+    const conn = await api.readConnection(id);
+    if (!conn.fetched_at || conn.fetched_at === before) throw err;
+    return { models: conn.models, fetched_at: conn.fetched_at, rev: conn.rev };
+  }
+}
+
 /** The four image-description surfaces, which differ only in their path.
  *
  *  A world's three describe art hanging off one of its records and a campaign's
@@ -1778,25 +1814,7 @@ export const api = {
    *  every scene inspector goes on sizing prompts against the list this
    *  request replaced. */
   refreshConnectionModels: (id: string, signal?: AbortSignal) =>
-    draftRun<ModelsRefreshResult>({ at: "global" }, (attempt) =>
-      request<{ run: RunHandle }>(
-        "POST", `/api/llm-connections/${encodeSegment(id)}/models/refresh`,
-        undefined, { attempt }), { signal })
-      // The one draft with a DURABLE result. Every other preview lives only on
-      // its run, so a reap is the honest end of it; this one writes the catalog
-      // beside the connection before the run ever goes terminal, so a tab
-      // suspended past the retention window would be told a refresh failed
-      // that actually succeeded -- and, worse, `notifyConfig` would never fire,
-      // leaving every scene inspector sizing prompts against the list this
-      // request replaced. Read it back instead. Only for `run_gone`: any other
-      // failure means the fetch really did not land.
-      .catch(async (err: unknown) => {
-        if (!(err instanceof ApiError) || err.kind !== "run_gone") throw err;
-        const conn = await api.readConnection(id);
-        if (!conn.fetched_at) throw err;
-        return { models: conn.models, fetched_at: conn.fetched_at, rev: conn.rev };
-      })
-      .then(notifyConfig),
+    refreshModels(id, signal).then(notifyConfig),
   /** The catalog for a connection that has been described but not saved (#149)
    *  — the New-connection form and the setup wizard, where there is no id to
    *  refresh yet. Nothing is cached server-side and nothing is stored. */

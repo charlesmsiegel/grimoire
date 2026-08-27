@@ -1140,7 +1140,8 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
 
 
 def ephemeral_frames(messages: list[dict], conn: dict, client: LLMClient,
-                     task: str = "opener", cid: str = "", sid: str = ""):
+                     task: str = "opener", cid: str = "", sid: str = "",
+                     outcome: StreamOutcome | None = None):
     """The raw SSE frames of a generation that is persisted to no scene.
 
     The opener is the only member. Nothing about the turn is stored, but the
@@ -1158,6 +1159,14 @@ def ephemeral_frames(messages: list[dict], conn: dict, client: LLMClient,
     the disconnect path -- a subscriber leaving does not close this generator
     now -- but it is still the CANCEL path, which is `runner.cancel` unwinding
     the provider call, and an aborted row is the honest record of that.
+
+    `outcome` is what the RUN records, and it is not optional in practice: this
+    generator handles an upstream `LLMError` by emitting an error frame and
+    then finishing normally, so "did not raise" covers both a delivered opener
+    and a failed one. Without the box the runner infers `landed` from a clean
+    exhaustion, and a client polling the run is told an opener arrived whose
+    only terminal frame is an error -- the same defect `StreamOutcome` was
+    built for on the persisted-turn side.
     """
     async def frames():
         meter = store.usage.meter(task, campaign=cid, scene=sid)
@@ -1168,9 +1177,17 @@ def ephemeral_frames(messages: list[dict], conn: dict, client: LLMClient,
                     continue
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
             meter.done()
+            if outcome is not None:
+                outcome.land()
             yield f"data: {json.dumps({'done': True})}\n\n"
         except LLMError as exc:
             meter.done("error", exc.kind, detail=exc.detail)
+            if outcome is not None:
+                # The provider's own kind and detail, exactly as the persisted
+                # turns record theirs -- so a client reading a failed opener
+                # off the run acts on the same `rate_limit` or `auth` it would
+                # have read off the frame.
+                outcome.fail(exc.kind, exc.detail)
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
         except BaseException:
             # No frame can be emitted into a generator that is being closed, so

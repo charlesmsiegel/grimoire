@@ -635,10 +635,13 @@ test("refreshing a catalog announces, so a cached model list is dropped", async 
   // catalog is its result. Landed on arrival is the duplicate-delivery shape --
   // a re-POST of an attempt that already finished adopts its outcome -- which
   // is the one that needs no timers to express.
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    jsonOk({ run: { id: "r1", attempt_id: "a1", state: "landed", next_index: 0,
-                    cls: "draft", kind: "models-refresh",
-                    result: { models: [], fetched_at: "2026-08-21", rev: "r1" } } })) as any;
+  globalThis.fetch = vi.fn()
+    .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [], fetched_at: "",
+                                    rev: "r1" }))
+    .mockResolvedValueOnce(
+      jsonOk({ run: { id: "r1", attempt_id: "a1", state: "landed", next_index: 0,
+                      cls: "draft", kind: "models-refresh",
+                      result: { models: [], fetched_at: "2026-08-21", rev: "r1" } } })) as any;
 
   await api.refreshConnectionModels("openrouter");
   expect(seen).toEqual(["config"]);
@@ -2044,6 +2047,10 @@ test("a model refresh whose run was reaped reads its catalog back off the store"
     const seen: string[] = [];
     const off = onConfigChanged(() => seen.push("config"));
     globalThis.fetch = vi.fn()
+      // The baseline stamp, read before the refresh starts: recovery has to
+      // prove THIS attempt wrote, not that some catalog exists.
+      .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [{ id: "old" }],
+                                      fetched_at: "2026-08-01", rev: "r1" }))
       .mockResolvedValueOnce(draftRunResponse("running"))
       .mockResolvedValueOnce({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
@@ -2069,12 +2076,41 @@ test("a refresh that was reaped without ever writing is still a failure", async 
   vi.useFakeTimers();
   try {
     globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [], fetched_at: "",
+                                      rev: "r1" }))
       .mockResolvedValueOnce(draftRunResponse("running"))
       .mockResolvedValueOnce({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
                                                     kind: "run_gone" }) })
       .mockResolvedValueOnce(jsonOk({ id: "openrouter", models: [], fetched_at: "",
                                       rev: "r1" }));
+
+    const failed = api.refreshConnectionModels("openrouter")
+      .then(() => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect((await failed as ApiError).kind).toBe("run_gone");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a refresh that failed and was reaped does not pass the old catalog off as new",
+     async () => {
+  // The trap in recovering a durable result: a connection that already had a
+  // catalog has a `fetched_at` whatever happened, so "some cache exists" is not
+  // evidence this attempt wrote one. The stamp has to have MOVED.
+  vi.useFakeTimers();
+  try {
+    const stale = { id: "openrouter", models: [{ id: "old" }],
+                    fetched_at: "2026-08-01", rev: "r1" };
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(jsonOk(stale))
+      .mockResolvedValueOnce(draftRunResponse("running"))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk(stale));
 
     const failed = api.refreshConnectionModels("openrouter")
       .then(() => { throw new Error("resolved"); }, (e: unknown) => e);
