@@ -94,7 +94,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  node twice has to reach the editor twice. */
   const [focusGreeting, setFocusGreeting] = useState<{ gid: string; n: number } | null>(null);
   /** A PC to open once the PC section is showing — see `openOwner`. Nonce'd
-   *  for GreetingEditor's reason: following the same chip twice is two events. */
+   *  for GreetingEditor's reason: following the same chip twice is two events.
+   *
+   *  Cleared by `select` (choosing PCs from the column means the list, not
+   *  whoever a chip pointed at earlier) and by a scope change (the id belongs
+   *  to the world or campaign it was read in, and retrying it in another one
+   *  opens a stranger or nothing). */
   const [focusPC, setFocusPC] = useState<{ pid: string; n: number } | null>(null);
   /** Which way the Greetings section is showing its records: the chip-list
    *  editor, or the same edges as a graph (#9). A view of one set of records
@@ -168,6 +173,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   }, [campaign, worldMid]);
 
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
+  // A focused PC id belongs to the scope it was read in; retrying it in another
+  // one opens a stranger or nothing. See `focusPC`.
+  useEffect(() => { setFocusPC(null); }, [scope.kind, scope.id]);
   // The tag vocabulary is a world concern (campaign PC tags are free strings)
   // and the overview is a world's setup checklist -- neither is something a
   // campaign's fork of the world has, so neither is offered on that shape.
@@ -225,6 +233,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     setSection(key);
     if (key === "characters") { setCharReset((n) => n + 1); setFocusChar(null); }
     if (key === "greetings") setFocusGreeting(null);
+    if (key === "pcs") setFocusPC(null);
     // ...and any entity nav, for the same reason the two above are cleared:
     // choosing a section from the column means the list, not whoever happened
     // to be open in it. No path reaching here today leaves one pending -- every

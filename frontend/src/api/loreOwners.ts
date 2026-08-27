@@ -27,11 +27,32 @@ const referenceable = (id: string) => !id.includes(",");
  *
  *  One request per kind, in parallel. Actors and entities come from different
  *  endpoints and that is the only reason this is a switch rather than a map. */
+/** What a candidate fetch came back with. `failed` names the kinds whose
+ *  listing did not load, and it is not a detail: a caller that cannot tell a
+ *  failed load from an empty one renders every stored ref as deleted and
+ *  invites the reader to clear relationships that are perfectly fine. */
+export type RefOptions = { options: RecordRef[]; failed: RefKind[] };
+
 export async function refOptions(
   scope: EntityScope, kinds: readonly RefKind[],
-): Promise<RecordRef[]> {
-  const lists = await Promise.all(kinds.map((kind) => optionsForKind(scope, kind)));
-  return lists.flat();
+): Promise<RefOptions> {
+  // `allSettled`, not `all`: one kind's listing failing must not throw away the
+  // kinds that answered. A `holder` offers four, and losing the other three to
+  // one bad request is both a worse picker and — through the dangling chip — a
+  // false claim about records that still exist.
+  const settled = await Promise.all(
+    kinds.map(async (kind) => {
+      try {
+        return { kind, options: await optionsForKind(scope, kind) };
+      } catch {
+        return { kind, options: null };
+      }
+    }),
+  );
+  return {
+    options: settled.flatMap((r) => r.options ?? []),
+    failed: settled.filter((r) => r.options === null).map((r) => r.kind),
+  };
 }
 
 async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<RecordRef[]> {
@@ -67,5 +88,5 @@ async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<Record
  *  (the entity-kinds design settled this). A ref field has no such constraint,
  *  which is why the two lists are not the same list. */
 export function loreOwnerOptions(scope: EntityScope): Promise<RecordRef[]> {
-  return refOptions(scope, ["characters", "pcs", "locations"]);
+  return refOptions(scope, ["characters", "pcs", "locations"]).then((r) => r.options);
 }
