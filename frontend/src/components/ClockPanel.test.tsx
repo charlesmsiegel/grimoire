@@ -888,9 +888,11 @@ test("a checkpoint the campaign outlived is not replayed for the retry", async (
   // advance then failed, and a turn landed before the retry: `refreshKey`
   // clears the marker so a fresh copy is wanted, but the token that names the
   // old one is still in state — and the key is derived from it, so the server
-  // would correctly replay the pre-turn copy and then refuse the skip that
-  // followed it. Re-pricing immediately before the copy is what keeps the key
-  // and the campaign in step.
+  // would replay the pre-turn copy and then refuse the skip that followed it.
+  //
+  // Nothing is written for a question the campaign has outlived. The reader is
+  // sent back to Preview, which is the only thing that produces a digest, a
+  // token and a key that agree with each other.
   vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
   vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
   vi.mocked(api.previewAdvance).mockResolvedValue({ revision: "rev-2", digest: BIG });
@@ -906,16 +908,46 @@ test("a checkpoint the campaign outlived is not replayed for the retry", async (
   // The copy lands; the skip that follows it does not.
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
   await screen.findByText(/an advance needs a reason/);
-
-  // The marker says a checkpoint exists, so the button offers a bare retry...
   expect(screen.getByText("Retry the skip")).toBeInTheDocument();
+
   rerender(<ClockPanel cid="c" refreshKey={1} />);   // ...and then a turn lands
-  // ...which takes the marker back, because that copy is missing the turn.
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/preview it again/);
+  // No second copy was taken for the question the turn invalidated, and no skip.
+  expect(api.forkCampaign).toHaveBeenCalledTimes(1);
+  expect(api.advanceTime).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Would advance/)).not.toBeInTheDocument();
+
+  // Previewing again produces a token, a key and a skip that all name the
+  // campaign as it now stands.
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
   await screen.findByText(/^Advanced/);
 
   const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]);
   expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
-  // ...and the skip names the state the second copy was actually taken from.
   expect(vi.mocked(api.advanceTime).mock.calls[1][1].expect_revision).toBe("rev-2");
+});
+
+test("a span whose contents changed under an open question is not skipped", async () => {
+  // The case `pricedNow` cannot see: another tab schedules an event INSIDE the
+  // proposed span. The clock has not moved, so nothing on screen looks stale —
+  // but confirming would now fire something the reader was never shown. The
+  // token is what notices, because it moves on any write at all.
+  const WITH_EVENT: AdvanceDigest = { ...BIG, events: [
+    { id: "the-coronation", name: "The coronation", date: "2027-02-01",
+      friendly: "1 February 2027", note: "", fired: null, passed: false,
+      in_days: 39 }] };
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: "rev-2", digest: WITH_EVENT });
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+
+  await screen.findByText(/preview it again/);
+  expect(api.forkCampaign).not.toHaveBeenCalled();
+  expect(api.advanceTime).not.toHaveBeenCalled();
 });

@@ -221,9 +221,20 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   function onRefusal(err: unknown) {
     setError(refusal(err));
     if (!campaignMoved(err)) return;
+    forgetPricing();
+    void reload();
+  }
+
+  /** Throw away the shown numbers, the open question and the token behind them.
+   *
+   *  Three callers, one rule: the campaign has been written since this pricing,
+   *  so everything derived from it describes a state the campaign has left — the
+   *  digest, the question asked about it, and the token that would have been
+   *  spent on the skip and on the copy's idempotency key. The reader goes back
+   *  to Preview, which is the only thing that can produce a set that agrees. */
+  function forgetPricing() {
     setDigest(null); setGate(null); setCheckpointed(false);
     setPricedNow(null); setPricedRevision("");
-    void reload();
   }
 
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
@@ -355,28 +366,36 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       if (!checkpointed) {
         const name = forkName.trim();
         const took = refreshGen.current;
-        // Priced AGAIN, immediately before the copy, and this is the load-
-        // bearing half of the deterministic key rather than a belt-and-braces
-        // read. The key is derived from the operation — target and token — so
-        // that a retry after a lost response, or after a reload that took this
-        // panel's own marker with it, reaches the server as the same request
-        // and is answered with the copy that already landed. The cost of
-        // deriving it is that a STALE token derives a stale key: a turn landing
-        // between the question being asked and answered clears `checkpointed`
-        // (so a fresh copy is wanted) while leaving the token that names the
-        // old one, and the server would correctly replay a copy taken before
-        // that turn — then refuse the skip that followed it. One read-only call
-        // is what keeps the two in step.
+        // Asked, immediately before the copy, whether the campaign is still the
+        // one this question was priced against — and nothing is written if it
+        // is not. Two things go wrong otherwise, and they are the same fact
+        // seen from either end:
         //
-        // The digest is deliberately not re-installed from it: a span that
-        // stopped being true is caught by the `pricedNow` effect above, which
-        // watches the campaign's present. What this catches is the other case —
-        // the campaign was written, the span is unchanged, and only the token
-        // moved.
+        //  - the KEY is derived from the operation (target and token) so that a
+        //    retry after a lost response, or after a reload that took this
+        //    panel's marker with it, reaches the server as the same request. A
+        //    stale token therefore derives a stale key, and the server would
+        //    correctly replay a copy taken before whatever landed since;
+        //  - the DIGEST can have changed without the clock moving at all. An
+        //    event scheduled inside the span from another tab is the case:
+        //    `pricedNow` watches the campaign's present and sees nothing, while
+        //    the skip would now fire something the reader was never shown
+        //    (Codex review).
+        //
+        // So a moved campaign takes the whole pricing with it and the reader
+        // previews again, which is the same answer `campaign_moved` gets from
+        // the server and the same one a disowned copy gets below. Adopting the
+        // fresh token instead would have kept the key honest and quietly
+        // changed what the skip does.
         const { revision } = await api.previewAdvance(cid, request());
         if (!stillShowing(cid)) return;
-        setPricedRevision(revision);
-        const key = `checkpoint:${gate?.to ?? ""}:${revision}`;
+        if (revision !== pricedRevision) {
+          forgetPricing();
+          setError("This campaign changed while the question was open, so nothing"
+                   + " was copied and the skip was not taken — preview it again.");
+          return;
+        }
+        const key = `checkpoint:${gate?.to ?? ""}:${pricedRevision}`;
         const report = await api.forkCampaign(cid, name, undefined, key);
         // The sharpest case for the rule above. A copy of A recorded as B's
         // means a large skip in B offers "Retry the skip", takes no copy at
@@ -426,14 +445,10 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // key and is answered with the copy already taken, which is the right
         // answer there too.
         if (!current) {
-          setDigest(null); setGate(null); setPricedNow(null); setPricedRevision("");
+          forgetPricing();
           return;
         }
-        await runAdvance(revision);
-        return;
       }
-      // The marker path: the copy was taken earlier in this same operation, so
-      // the token in state is the one it was keyed on.
       await runAdvance(pricedRevision);
     } catch (err: unknown) {
       // The question stays open: the reader can retry, or skip without one.

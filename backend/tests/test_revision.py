@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -92,6 +93,51 @@ def test_a_matching_expectation_passes_and_a_stale_one_names_both_values(cid):
         revision.require(cid, first)
     assert exc.value.expected == first
     assert exc.value.current == second
+
+
+def test_a_damaged_file_refuses_even_the_initial_expectation(cid):
+    """The reporting path and the checking path part company on a damaged file.
+
+    `current` degrades it to `INITIAL` so a caller is handed something usable.
+    `require` refuses against it whatever the caller holds — including `INITIAL`,
+    which is the one value a caller can be holding without anything having been
+    stamped, and which a file damaged down to the literal `0` would otherwise
+    match after the campaign had been written and its token destroyed.
+    """
+    revision.bump(cid)
+    (store.campaigns.campaign_root(cid) / revision.FILENAME).write_text("0\n")
+    assert revision.current(cid) == revision.INITIAL
+    with pytest.raises(revision.RevisionMismatchError):
+        revision.require(cid, revision.INITIAL)
+
+
+def test_only_a_value_this_module_minted_is_a_token(cid):
+    root = store.campaigns.campaign_root(cid)
+    for damage in ("0", "a3f9", "not a token", "A" * 32, "0" * 33, ""):
+        (root / revision.FILENAME).write_text(damage)
+        assert revision.current(cid) == revision.INITIAL, damage
+        with pytest.raises(revision.RevisionMismatchError):
+            revision.require(cid, revision.INITIAL)
+
+
+def test_a_campaign_that_has_never_been_stamped_can_still_be_priced(cid):
+    # The other half of the rule: an ABSENT file is indistinguishable from a
+    # campaign nothing has written, so it reads as `INITIAL` and `INITIAL`
+    # matches. Refusing here instead would leave a fresh campaign unpriceable —
+    # every re-price would hand back the value that had just been refused.
+    assert revision.current(cid) == revision.INITIAL
+    revision.require(cid, revision.INITIAL)
+
+
+def test_stamping_a_campaign_that_is_gone_says_nothing(cid, caplog):
+    """`DELETE /campaigns/{cid}` reaches `bump` through the activity middleware,
+    having just removed the whole tree. That is the ordinary path, and a
+    traceback for it would put a storage-failure warning in the log after every
+    deletion — in a file a user may hand to somebody else."""
+    store.campaigns.delete_campaign(cid)
+    with caplog.at_level(logging.WARNING, logger="grimoire.store.revision"):
+        assert revision.bump(cid) == revision.INITIAL
+    assert caplog.records == []
 
 
 def test_a_bump_that_cannot_be_written_does_not_raise(cid, monkeypatch):
@@ -400,6 +446,42 @@ def test_the_stale_check_runs_before_the_calendar_does(client, monkeypatch):
     assert client.post(f"/api/campaigns/{cid}/advance",
                        json={"days": 3, "reason": "travel",
                              "expect_revision": token}).status_code == 409
+
+
+def test_an_advance_that_fired_events_stamps_again_afterwards(cid, monkeypatch):
+    """`_fire` writes events.json OUTSIDE the commit's hold, so the token
+    published inside it is current-looking while the advance is still half-made.
+
+    Sampled from inside `_fire`, which is exactly where a reader would pick it
+    up: after the clock landed, before the events were stamped.
+    """
+    monkeypatch.setattr(clock, "_provider", lambda *a, **k: object())
+    monkeypatch.setattr(clock, "_resolve", lambda *a, **k: ("2026-05-01", "2026-05-04"))
+    monkeypatch.setattr(clock, "digest", lambda *a, **k: {
+        "events": [{"id": "the-coronation"}], "elapsed_days": 3,
+        "to_friendly": "", "truncated": False})
+    seen = []
+    monkeypatch.setattr(clock, "_fire",
+                        lambda c, *a, **k: (seen.append(revision.current(c)),
+                                            [{"id": "the-coronation"}])[1])
+    clock.advance(cid, days=3, reason="travel")
+    assert seen, "the fire never ran, so this proved nothing"
+    assert revision.current(cid) != seen[0]
+
+
+def test_an_advance_that_fired_nothing_does_not_stamp_twice(cid, monkeypatch):
+    # A move that crossed no scheduled event wrote nothing in `_fire`, so there
+    # is nothing for a second stamp to record.
+    monkeypatch.setattr(clock, "_provider", lambda *a, **k: object())
+    monkeypatch.setattr(clock, "_resolve", lambda *a, **k: ("2026-05-01", "2026-05-04"))
+    monkeypatch.setattr(clock, "digest", lambda *a, **k: {
+        "events": [], "elapsed_days": 3, "to_friendly": "", "truncated": False})
+    minted = []
+    real = revision.bump
+    monkeypatch.setattr(revision, "bump",
+                        lambda c: minted.append(real(c)) or minted[-1])
+    clock.advance(cid, days=3, reason="travel")
+    assert len(minted) == 1
 
 
 def test_the_check_is_taken_again_under_the_lock_that_covers_the_write(cid, monkeypatch):
