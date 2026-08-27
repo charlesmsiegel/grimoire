@@ -1,7 +1,8 @@
 import { isAbortError, newAttemptId, parseSSEChunk, type ChatEvent,
   type LocalizeEvent, type ChubGalleryEvent, type RunHandle,
   type TaglineBatchEvent } from "./stream";
-import { campaignsChanged, configChanged, shellChanged } from "../appEvents";
+import { campaignsChanged, configChanged, noticesChanged,
+  shellChanged } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
 // `errorText` and `isOffline` used to live here, next to `ApiError`. They are
@@ -1774,8 +1775,13 @@ export const api = {
   setSceneLocation: (cid: string, sid: string, location: string) =>
     request<{ ok: boolean; moved: boolean; name: string }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/location`, { location }),
-  getSceneDatetime: (cid: string, sid: string) =>
-    request<SceneDatetime>("GET", `/api/campaigns/${cid}/scenes/${sid}/datetime`),
+  /** `fresh` for a caller reading *because* something just changed — a notice
+   *  dismissed (#106). Without it the read joins whatever GET of this path is
+   *  already in flight, and one issued before the write answers with the state
+   *  before it: the acknowledged notice comes back and the banner returns. */
+  getSceneDatetime: (cid: string, sid: string, opts?: { fresh?: boolean }) =>
+    request<SceneDatetime>("GET", `/api/campaigns/${cid}/scenes/${sid}/datetime`,
+                           undefined, opts),
   setSceneDatetime: (cid: string, sid: string, datetime: string) =>
     request<{ ok: boolean; advanced: boolean; friendly: string; id: string;
               // Whether this scene's moment carried the campaign clock forward
@@ -1836,14 +1842,20 @@ export const api = {
       "GET", `/api/campaigns/${cid}/notices`, undefined, { fresh: true }),
   /** Acknowledge notices, by key. Campaign-wide and permanent for that
    *  occurrence — the next occurrence has a different key and warns again. */
-  dismissNotices: (cid: string, keys: string[], scene = "") =>
-    request<{ ok: boolean; marked: string[] }>(
-      "POST", `/api/campaigns/${cid}/notices`, { keys, scene }),
+  dismissNotices: async (cid: string, keys: string[], scene = "") => {
+    const r = await request<{ ok: boolean; marked: string[] }>(
+      "POST", `/api/campaigns/${cid}/notices`, { keys, scene });
+    noticesChanged();   // every surface showing this ledger is now a payload behind
+    return r;
+  },
   /** The undo for a banner closed by mistake: dismissing will not overwrite an
    *  existing acknowledgement, so this is the only way back. */
-  restoreNotices: (cid: string, keys: string[]) =>
-    request<{ ok: boolean; forgotten: string[] }>(
-      "POST", `/api/campaigns/${cid}/notices/forget`, { keys }),
+  restoreNotices: async (cid: string, keys: string[]) => {
+    const r = await request<{ ok: boolean; forgotten: string[] }>(
+      "POST", `/api/campaigns/${cid}/notices/forget`, { keys });
+    noticesChanged();
+    return r;
+  },
 
   // ---- weather (#45, #195) and climates (#40) ----
   getSceneWeather: (cid: string, sid: string, opts?: { location?: string; native?: string }) => {

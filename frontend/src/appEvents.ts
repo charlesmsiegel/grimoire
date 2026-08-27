@@ -26,6 +26,7 @@ function channel() {
 const campaigns = channel();
 const config = channel();
 const shell = channel();
+const notices = channel();
 
 /** The set of campaigns, or one of their names, changed. */
 export const campaignsChanged = campaigns.emit;
@@ -50,3 +51,18 @@ export const onConfigChanged = config.subscribe;
  *  forget. */
 export const shellChanged = shell.emit;
 export const onShellChanged = shell.subscribe;
+
+/** A pre-notice was acknowledged, or an acknowledgement taken back (#106).
+ *
+ *  A fourth channel because two surfaces show the same ledger at once and
+ *  neither owns it: `SceneInspector`'s When section reads notices off the scene
+ *  datetime payload, and `NewSceneChooser` reads them from the campaign clock.
+ *  CampaignView mounts them as independent siblings, so the chooser can be
+ *  overlaid on a live inspector -- and a dismissal in one left the other holding
+ *  a payload from before it, showing the reader the warning they just closed.
+ *
+ *  Emitted from the api client's mutators for the reason the three above are:
+ *  the mutators are the one place every path goes through, so a surface cannot
+ *  forget -- including the next one somebody adds. */
+export const noticesChanged = notices.emit;
+export const onNoticesChanged = notices.subscribe;

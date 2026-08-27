@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Notice } from "../api/client";
+import { onNoticesChanged } from "../appEvents";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { NoticeBanner } from "./NoticeBanner";
 import { SceneConfirmForm } from "./SceneConfirmForm";
@@ -86,6 +87,9 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
       .catch(() => { if (live) setUpcoming([]); });
     return () => { live = false; };
   }, [cid, noticeGen]);
+  // The inspector underneath this modal shows the same ledger, so an
+  // acknowledgement made there lands here too -- and vice versa (`appEvents`).
+  useEffect(() => onNoticesChanged(reloadNotices), [reloadNotices]);
 
   // Ideas cost a generation and are asked for by name now: the hook fires
   // nothing on its own, and the picker's "Suggest ideas" button is the only
@@ -187,7 +191,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
             the decision being made here, not a step in it. Dismissing writes to
             the same campaign-wide ledger the scene panel's banner does, so a
             warning closed in either place is closed in both. */}
-        <NoticeBanner cid={cid} notices={upcoming} onChanged={reloadNotices} />
+        <NoticeBanner cid={cid} notices={upcoming} />
 
         {mode === null ? (
           <>

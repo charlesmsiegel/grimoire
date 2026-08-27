@@ -49,15 +49,25 @@ from . import atomic, calendars, events, locks, paths
 from .campaigns import paths as campaigns_paths
 
 #: How many acknowledgements are kept. The ledger only ever grows — one row per
-#: occurrence a reader has dismissed — and a campaign played across decades of
-#: in-world time would otherwise carry every Midwinter it has ever seen.
+#: occurrence a reader has dismissed — and `POST .../notices` is a public
+#: endpoint, so something has to bound the file.
 #:
-#: Evicting the oldest is safe rather than merely tolerable: a row's key names
-#: the day it was about, `pending` only ever looks at days AHEAD of the
-#: campaign's present, and the rows evicted first are the ones acknowledged
-#: longest ago. An evicted occurrence cannot come back as a warning because its
-#: day is behind the moment being asked about.
-LEDGER_LIMIT = 500
+#: This is a BACKSTOP against a writer that will not stop, not a
+#: safe-by-construction property, and the difference matters. Evicting the
+#: oldest acknowledgement would be free if `pending` only ever looked forward
+#: from the campaign clock, which advances: every evicted day would then be
+#: behind every later question. It does not. The scene surface asks from the
+#: SCENE's own moment — a flashback is a supported, tested case, and
+#: `clock.advance` takes backward corrections too — so a historical scene dated
+#: just before an evicted occurrence warns about it again.
+#:
+#: The cap is therefore set where a real reader cannot reach it: one row per
+#: occurrence they personally dismissed, so five thousand is a lifetime of
+#: campaigns, while the file stays well under a megabyte for a store read only
+#: when a notice surface asks. Reaching it means something is manufacturing
+#: dismissals, and re-warning about the oldest of those is the right failure for
+#: that case — the alternative is a file with no ceiling at all.
+LEDGER_LIMIT = 5000
 
 #: A dismissed key is stored verbatim (it is opaque, and holiday names are not
 #: slugs), so this is what stops a crafted POST from writing an unbounded file.
@@ -116,6 +126,11 @@ def _stamp(value) -> str:
 
 def _trim(data: dict) -> dict:
     """The newest `LEDGER_LIMIT` acknowledgements. Oldest `noticed_at` goes first.
+
+    Oldest-first because it is the least-bad order, not a correct one: no
+    eviction rule can avoid re-warning, since any stored day is reachable by a
+    scene dated just before it and nothing here knows which days a campaign's
+    scenes actually use. `LEDGER_LIMIT` carries why that is acceptable.
 
     Ties (and rows with no readable stamp) break on the key, so eviction is
     deterministic: two runs against the same file must not disagree about which

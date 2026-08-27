@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+import { noticesChanged } from "../appEvents";
 import { MemoryRouter } from "react-router-dom";
 import { SceneInspector } from "./SceneInspector";
 
@@ -476,6 +477,28 @@ test("an imminent event is warned about once, and dismissing it marks the key", 
   await waitFor(() => expect(api.dismissNotices).toHaveBeenCalledWith(
     "c", ["event:739437:the-envoy-arrives"], "s"));
   await waitFor(() => expect(screen.queryByText("The envoy arrives")).toBeNull());
+});
+
+test("a notice dismissed elsewhere refreshes this panel's copy of the payload", async () => {
+  // CampaignView mounts the inspector and the new-scene chooser as independent
+  // siblings, so the chooser can be overlaid on a live inspector. A dismissal
+  // in either left the other holding a payload from before it, showing the
+  // reader the warning they just closed (#106). The api mutators emit on the
+  // `notices` channel and both surfaces listen.
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
+               secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
+               notices: [] },
+    history: ["2026-07-04"] });
+  renderInspector();
+  await screen.findByText(/4 July 2026/);
+  const before = (api.getSceneDatetime as any).mock.calls.length;
+  act(() => { noticesChanged(); });
+  await waitFor(() =>
+    expect((api.getSceneDatetime as any).mock.calls.length).toBeGreaterThan(before));
+  // `fresh`, so the read cannot join a GET issued before the write it follows.
+  const last = (api.getSceneDatetime as any).mock.calls.at(-1);
+  expect(last[2]).toEqual({ fresh: true });
 });
 
 test("a scene with nothing imminent shows no warning at all", async () => {

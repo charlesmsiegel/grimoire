@@ -238,9 +238,8 @@ def test_a_hand_written_row_still_silences(monkeypatch, tmp_path):
 
 
 def test_the_ledger_is_capped(monkeypatch, tmp_path):
-    """It only ever grows, one row per acknowledged occurrence. Eviction is
-    safe because a row's key names a day, and `pending` only looks ahead: the
-    days evicted first are the ones furthest behind."""
+    """`POST .../notices` is public and the ledger only ever grows, so the file
+    needs a ceiling. Oldest acknowledgement goes first."""
     cid = _campaign(monkeypatch, tmp_path)
     notices.mark(cid, [f"holiday:{n}:Old" for n in range(notices.LEDGER_LIMIT)])
     notices.mark(cid, ["holiday:999999:New"])
@@ -248,6 +247,22 @@ def test_the_ledger_is_capped(monkeypatch, tmp_path):
     assert len(data) == notices.LEDGER_LIMIT
     assert "holiday:999999:New" in data
     assert "holiday:0:Old" not in data
+
+
+def test_eviction_can_re_warn_a_historical_scene(monkeypatch, tmp_path):
+    """The cost the cap accepts, pinned so nobody re-derives the safety claim it
+    used to carry. Eviction would be free if `pending` only looked forward from
+    the campaign clock; it also answers from a SCENE's own moment, and a
+    flashback dated before an evicted occurrence warns about it again. The
+    defence is the size of the cap, not the order of eviction — see
+    `LEDGER_LIMIT`."""
+    cid = _campaign(monkeypatch, tmp_path, holidays=[_rule("Saltmarch Eve", "05", 13)])
+    key = _pending(cid)[0]["key"]
+    notices.mark(cid, [key])
+    assert _pending(cid) == []
+    notices.mark(cid, [f"holiday:{900000 + n}:Later" for n in range(notices.LEDGER_LIMIT)])
+    assert key not in notices.read(cid)
+    assert _names(_pending(cid)) == ["Saltmarch Eve"]
 
 
 def test_a_calendar_that_will_not_load_warns_about_nothing(monkeypatch, tmp_path):

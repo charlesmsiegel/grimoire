@@ -8,6 +8,7 @@ import {
   type RollingSummary, type SceneBreak,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
+import { onNoticesChanged } from "../appEvents";
 import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { ContextDiff } from "./ContextDiff";
 import { CostPanel } from "./CostPanel";
@@ -393,12 +394,22 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   }
 
   const reloadWhen = useCallback(
-    () => api.getSceneDatetime(cid, sid).then((w) => {
+    // `fresh` opts out of the in-flight GET sharing. Most callers here are
+    // reading because the scene changed under them, and one of them (a notice
+    // dismissal, #106) reads immediately after a write to this same scene --
+    // where joining a GET issued before that write hands back the state before
+    // it, and the notice just acknowledged reappears.
+    (opts?: { fresh?: boolean }) => api.getSceneDatetime(cid, sid, opts).then((w) => {
       setWhen(w);
       // dateless scene with a suggestion: pre-fill the input, but never clobber typing
       if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
     }).catch(() => setWhen(null)),
     [cid, sid]);
+
+  // Any surface acknowledging a notice makes this panel's copy of the datetime
+  // payload one write out of date -- including the new-scene chooser, which
+  // CampaignView can have overlaid on this very inspector (`appEvents`).
+  useEffect(() => onNoticesChanged(() => { void reloadWhen({ fresh: true }); }), [reloadWhen]);
   const reloadCfg = useCallback(
     () => api.getCalendarConfig({ kind: "campaign", id: cid }).then(setCfg).catch(() => setCfg(null)),
     [cid]);
@@ -1381,8 +1392,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                 dismiss keeps the panel's copy of the payload honest -- the
                 banner hides the row locally, but the next date change would
                 otherwise bring it back. */}
-            <NoticeBanner cid={cid} notices={when.current.notices ?? []} scene={sid}
-                          onChanged={() => { void reloadWhen(); }} />
+            <NoticeBanner cid={cid} notices={when.current.notices ?? []} scene={sid} />
             <div className="picker">
               <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
                                   onChange={setDateInput} ariaLabel="Scene date" />
