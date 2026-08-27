@@ -1382,7 +1382,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                 banner hides the row locally, but the next date change would
                 otherwise bring it back. */}
             <NoticeBanner cid={cid} notices={when.current.notices ?? []} scene={sid}
-                          onDismissed={() => { void reloadWhen(); }} />
+                          onChanged={() => { void reloadWhen(); }} />
             <div className="picker">
               <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
                                   onChange={setDateInput} ariaLabel="Scene date" />

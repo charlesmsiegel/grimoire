@@ -203,6 +203,25 @@ test("what is imminent is shown while the scene is being planned", async () => {
   await waitFor(() => expect(screen.queryByText("The coronation")).toBeNull());
 });
 
+test("a campaign change clears the last campaign's notices before the new read lands", async () => {
+  // The effect's request is still in flight when the new campaign first paints,
+  // and the banner already holds the new `cid` — so a notice carried over from
+  // campaign A would record A's occurrence key in B's ledger, silencing a
+  // warning B never showed.
+  (api.campaignNotices as any).mockResolvedValue({
+    notices: [{ key: "event:739437:the-coronation", kind: "event",
+                name: "The coronation", in_days: 3, friendly: "6 July 2026" }],
+    now: "2026-07-03", warn_days: 7 });
+  const { rerender } = render(
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  await screen.findByText("The coronation");
+  // Campaign b's read never settles, so only the synchronous clear can help.
+  (api.campaignNotices as any).mockReturnValue(new Promise(() => {}));
+  rerender(
+    <NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  expect(screen.queryByText("The coronation")).toBeNull();
+});
+
 test("a failed notice read leaves the chooser usable", async () => {
   // A banner is the least important thing in this modal; it must never be what
   // stops a scene being made.

@@ -10,7 +10,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: false, stale_after_days: 30 });
+    secondary: null, confirmed: false, stale_after_days: 30, warn_days: 7 });
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
   (api.getCalendarProviders as any).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
@@ -156,4 +156,37 @@ test("the provider list is read once per mount, not again per scope", async () =
   await screen.findByLabelText("Calendar");
   expect(api.getCalendarProviders).toHaveBeenCalledTimes(1);
   expect(api.getCalendarConfig).toHaveBeenCalledTimes(2);
+});
+
+
+test("the warn window saves, and 0 saves as 0 rather than as no opinion", async () => {
+  // 0 is a real setting here — no warnings in this campaign — which is why the
+  // field's no-opinion value is null and not 0 (#106).
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  const input = await screen.findByLabelText("Warn ahead days");
+  fireEvent.change(input, { target: { value: "0" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: 0 })));
+});
+
+test("clearing the warn window saves null, which the store answers with its default", async () => {
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  const input = await screen.findByLabelText("Warn ahead days");
+  fireEvent.change(input, { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: null })));
+});
+
+test("a warn window past the server's ceiling is clamped, not shown back as typed", async () => {
+  // Otherwise the form displays 1000 and reports it onward while the server has
+  // stored 365 — a control that lies about what was saved.
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  const input = await screen.findByLabelText("Warn ahead days");
+  fireEvent.change(input, { target: { value: "1000" } });
+  expect((input as HTMLInputElement).value).toBe("365");
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: 365 })));
 });

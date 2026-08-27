@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, type Notice } from "../api/client";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { NoticeBanner } from "./NoticeBanner";
@@ -77,13 +77,15 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // the least important thing in this modal, and it must never be what stops a
   // scene being made.
   const [upcoming, setUpcoming] = useState<Notice[]>([]);
+  const [noticeGen, setNoticeGen] = useState(0);
+  const reloadNotices = useCallback(() => setNoticeGen((n) => n + 1), []);
   useEffect(() => {
     let live = true;
     api.campaignNotices(cid)
       .then((r) => { if (live) setUpcoming(r.notices); })
       .catch(() => { if (live) setUpcoming([]); });
     return () => { live = false; };
-  }, [cid]);
+  }, [cid, noticeGen]);
 
   // Ideas cost a generation and are asked for by name now: the hook fires
   // nothing on its own, and the picker's "Suggest ideas" button is the only
@@ -112,6 +114,13 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
     setDraft(null);
     setNotice(null);
     setDraftGen((n) => n + 1);
+    // Synchronously, not from the effect above: that effect's request is still
+    // in flight when the new campaign first paints, and until it settles the
+    // banner would be showing campaign A's notices while already holding B's
+    // `cid` -- so a dismissal would write A's occurrence key into B's ledger,
+    // silencing a warning B never showed. Clearing here means the worst case is
+    // an empty banner for one round trip.
+    setUpcoming([]);
     // Direction now lives here rather than inside SceneIdeaPicker, so it no
     // longer resets for free when the picker unmounts on a `mode` reset --
     // a campaign switch must not leave campaign A's typed steer sitting in
@@ -178,9 +187,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
             the decision being made here, not a step in it. Dismissing writes to
             the same campaign-wide ledger the scene panel's banner does, so a
             warning closed in either place is closed in both. */}
-        <NoticeBanner cid={cid} notices={upcoming}
-                      onDismissed={(key) =>
-                        setUpcoming((rows) => rows.filter((n) => n.key !== key))} />
+        <NoticeBanner cid={cid} notices={upcoming} onChanged={reloadNotices} />
 
         {mode === null ? (
           <>
