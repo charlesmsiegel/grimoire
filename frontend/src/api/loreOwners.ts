@@ -18,6 +18,12 @@ export type LoreOwner = RecordRef;
  *  anywhere saying why. */
 const referenceable = (id: string) => !id.includes(",");
 
+/** What a candidate fetch came back with. `failed` names the kinds whose
+ *  listing did not load, and it is not a detail: a caller that cannot tell a
+ *  failed load from an empty one renders every stored ref as deleted and
+ *  invites the reader to clear relationships that are perfectly fine. */
+export type RefOptions = { options: RecordRef[]; failed: RefKind[] };
+
 /** Every record of `kinds` in a container (world or campaign copy), as pickable
  *  refs.
  *
@@ -27,12 +33,6 @@ const referenceable = (id: string) => !id.includes(",");
  *
  *  One request per kind, in parallel. Actors and entities come from different
  *  endpoints and that is the only reason this is a switch rather than a map. */
-/** What a candidate fetch came back with. `failed` names the kinds whose
- *  listing did not load, and it is not a detail: a caller that cannot tell a
- *  failed load from an empty one renders every stored ref as deleted and
- *  invites the reader to clear relationships that are perfectly fine. */
-export type RefOptions = { options: RecordRef[]; failed: RefKind[] };
-
 export async function refOptions(
   scope: EntityScope, kinds: readonly RefKind[],
 ): Promise<RefOptions> {
