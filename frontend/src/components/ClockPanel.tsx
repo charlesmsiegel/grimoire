@@ -355,16 +355,28 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       if (!checkpointed) {
         const name = forkName.trim();
         const took = refreshGen.current;
-        // The key is derived from the operation rather than minted at random,
-        // and that is what makes it survive the thing the marker below cannot:
-        // a reload between the copy and the skip. Both halves come back from the
-        // server, so the same reader asking the same question about the same
-        // campaign rebuilds the same key from a fresh page and is answered with
-        // the fork they already have. The token is in it for the other
-        // direction: a campaign that has been written since is a DIFFERENT
-        // operation, so it gets a different key and a fresh copy — which is the
-        // rule `checkpointed` is cleared by, spelled somewhere durable.
-        const key = `checkpoint:${gate?.to ?? ""}:${pricedRevision}`;
+        // Priced AGAIN, immediately before the copy, and this is the load-
+        // bearing half of the deterministic key rather than a belt-and-braces
+        // read. The key is derived from the operation — target and token — so
+        // that a retry after a lost response, or after a reload that took this
+        // panel's own marker with it, reaches the server as the same request
+        // and is answered with the copy that already landed. The cost of
+        // deriving it is that a STALE token derives a stale key: a turn landing
+        // between the question being asked and answered clears `checkpointed`
+        // (so a fresh copy is wanted) while leaving the token that names the
+        // old one, and the server would correctly replay a copy taken before
+        // that turn — then refuse the skip that followed it. One read-only call
+        // is what keeps the two in step.
+        //
+        // The digest is deliberately not re-installed from it: a span that
+        // stopped being true is caught by the `pricedNow` effect above, which
+        // watches the campaign's present. What this catches is the other case —
+        // the campaign was written, the span is unchanged, and only the token
+        // moved.
+        const { revision } = await api.previewAdvance(cid, request());
+        if (!stillShowing(cid)) return;
+        setPricedRevision(revision);
+        const key = `checkpoint:${gate?.to ?? ""}:${revision}`;
         const report = await api.forkCampaign(cid, name, undefined, key);
         // The sharpest case for the rule above. A copy of A recorded as B's
         // means a large skip in B offers "Retry the skip", takes no copy at
@@ -417,7 +429,11 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
           setDigest(null); setGate(null); setPricedNow(null); setPricedRevision("");
           return;
         }
+        await runAdvance(revision);
+        return;
       }
+      // The marker path: the copy was taken earlier in this same operation, so
+      // the token in state is the one it was keyed on.
       await runAdvance(pricedRevision);
     } catch (err: unknown) {
       // The question stays open: the reader can retry, or skip without one.
