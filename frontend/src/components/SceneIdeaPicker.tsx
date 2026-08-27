@@ -262,7 +262,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
           steer one group, and that group is the one that costs money: the
           button below is the only thing in the picker that spends a
           generation, and it is next to what it pays for. */}
-      <div className="picker">
+      <div className="picker idea-direction">
         <input type="text" aria-label="Direction" className="grow"
                placeholder="Steer the generated ideas — e.g. something at sea"
                value={direction} onChange={(e) => onDirectionChange(e.target.value)} />
