@@ -150,6 +150,9 @@ export const componentStubs = {
         <button onClick={() => onStartHandled()}>stub-replay-close</button>
         <button onClick={() => onForked("forked")}>stub-replay-forked</button>
         <button onClick={() => onChanged()}>stub-replay-changed</button>
+        {/* The reroll's report: `/regenerate` scheduled this write's follow-ups
+            server-side, so the handler must refresh without asking (#397). */}
+        <button onClick={() => onChanged(true)}>stub-replay-changed-asked</button>
         <button onClick={() => latch()}>stub-replay-latch</button>
       </div>
     ),

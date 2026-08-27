@@ -16,7 +16,7 @@ import time
 import httpx
 
 import grimoire.store as store
-from tests.llm_fakes import FakeOpenRouter
+from tests.llm_fakes import FakeOpenRouter, StallingOpenRouter
 
 
 def _subject(cid, sid):
@@ -266,3 +266,82 @@ def test_a_dropped_subscriber_does_not_cancel_a_roll_continuation(live_server):
     assert run.state == "landed", f"the continuation was {run.state}, not landed"
     reply = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
     assert "gutter" in reply.lower(), "the accepted roll's narration was dropped"
+
+
+def test_a_stopped_turn_that_flushed_a_partial_still_asks_for_its_follow_ups(
+        live_server):
+    """A Stop is not a reason to leave both gates behind (#397).
+
+    `on_abort` persists whatever narration arrived, so the transcript grew --
+    and the client's own `askAfterPost` went with the move to server-side
+    scheduling, so nothing else is left to ask. The cancellation is re-raised
+    straight past the success path's scheduling call, which is why the abort
+    path fires one of its own, shielded.
+
+    A STALLING provider rather than a held one, and the difference is the whole
+    setup: `HeldOpenRouter` parks in `anyio.to_thread.run_sync`, which is not
+    abandoned on cancellation, so a Stop against it is only delivered once the
+    test releases -- by which time the stream loop has ended normally and the
+    cancellation lands between the loop and `finalize`, on a turn that flushed
+    nothing. Stalling parks on a cancellable sleep with the deltas already fed
+    to the watcher, which is the shape a real Stop mid-generation has.
+    """
+    import threading
+
+    cid, sid = live_server.campaign_scene
+    live_server.set_provider(StallingOpenRouter(["Mist over the dock."]))
+
+    with httpx.stream("POST", f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/chat",
+                      json={"content": "Mara steps onto the dock."},
+                      timeout=20) as r:
+        run_id = _first_run_frame(r)["run"]["id"]
+        _await_delta(r)
+        stop = threading.Thread(target=lambda: httpx.post(
+            f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel",
+            timeout=40), daemon=True)
+        stop.start()
+        stop.join(timeout=40)
+        r.close()
+
+    run = _wait_terminal(live_server.app, run_id, _subject(cid, sid))
+    assert run.state == "cancelled", f"the run was {run.state}, not cancelled"
+    # The premise, checked rather than assumed: the player's own post is
+    # appended before the stream starts, so a length alone would pass over a
+    # flush that never happened. It is the trailing ASSISTANT post that says
+    # the abort wrote something -- and therefore that both gates moved.
+    tail = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert tail["role"] == "assistant" and "mist" in tail["content"].lower(), \
+        f"nothing was flushed ({tail!r}), so this would prove nothing"
+
+    found = _background_runs(live_server.app, cid, sid)
+    assert sorted(run.kind for run in found) == ["rolling-summary", "scene-break"], \
+        f"a stopped turn that grew the transcript scheduled {[r.kind for r in found]}"
+
+
+def _await_delta(r, timeout: float = 10.0) -> None:
+    """Read frames until one carries narration, so the watcher has text to flush."""
+    deadline = time.monotonic() + timeout
+    for line in _lines(r):
+        if line.startswith("data: ") and "delta" in json.loads(line[6:]):
+            return
+        if time.monotonic() > deadline:
+            break
+    raise AssertionError("no delta arrived")
+
+
+def _background_runs(app, cid, sid, timeout: float = 15.0) -> list:
+    """This scene's `background` runs, once both have been reserved.
+
+    Polled rather than read once: the abort path schedules them while the
+    cancellation is still unwinding, which is after the cancel route -- which
+    waits only on the run's terminal event -- has already answered.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found = [r for r in app.state.runs.for_subject(_subject(cid, sid))
+                 if r.cls == "background"]
+        if len(found) == 2:
+            return found
+        time.sleep(0.05)
+    return [r for r in app.state.runs.for_subject(_subject(cid, sid))
+            if r.cls == "background"]
