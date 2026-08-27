@@ -489,3 +489,19 @@ test("a scope change closes the open PC rather than leaving it under the new sco
   expect(screen.queryByText("a wanderer")).toBeNull();
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
 });
+
+test("a read still in flight when the scope changes does not land under the new scope", async () => {
+  // Clearing `detail` on the scope change is not enough on its own: the read
+  // that was already out returns afterwards and sets it straight back, putting
+  // the previous scope's PC under the new one — where Edit and Delete act on
+  // the NEW scope.
+  let resolveRead!: (v: unknown) => void;
+  (api.readPC as any).mockReturnValue(new Promise((r) => { resolveRead = r; }));
+  const { rerender } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  rerender(<PCEditor scope={{ kind: "world", id: "w2" }} wid="w2" />);
+  await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith({ kind: "world", id: "w2" }));
+  resolveRead(DETAIL);                       // the old scope's read finally lands
+  await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
+  expect(screen.queryByText("a wanderer")).toBeNull();
+});

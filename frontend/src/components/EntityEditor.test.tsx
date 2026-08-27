@@ -1376,3 +1376,31 @@ test("a record whose id carries a line separator is not offered as a candidate",
   seps.forEach((_c, i) =>
     expect(within(habitat).queryByLabelText(`Bad ${i}`)).toBeNull());
 });
+
+test("a sidebar ref of a kind the field cannot name reads as unresolved", async () => {
+  // `leader` takes people; `headquarters` takes places. Resolving against the
+  // whole union let a legacy `leader: locations:realm` resolve off the
+  // locations fetched for headquarters and render as an ordinary clickable
+  // chip — the read view calling a malformed relationship valid, while the
+  // form one click away correctly showed it unresolved.
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "groups" ? [{ id: "watch", name: "The Watch" }]
+      : kind === "locations" ? [{ id: "realm", name: "Realm" }] : []));
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "watch", name: "The Watch", leader: "locations:realm",
+            headquarters: "locations:realm" },
+    body: "x", rev: "r1" });
+  const { container } = render(<EntityEditor wid="w" kind="groups" />);
+  fireEvent.click(await screen.findByText("The Watch"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  // ...the same value, under two fields, told apart by what each may name
+  const leader = within(side).getByRole("heading", { name: "Leader" })
+    .parentElement as HTMLElement;
+  const hq = within(side).getByRole("heading", { name: "Headquarters" })
+    .parentElement as HTMLElement;
+  expect(within(leader).getByText("locations:realm")).toHaveClass("dangling");
+  expect(within(hq).getByRole("button", { name: /Realm/ })).toBeInTheDocument();
+});

@@ -391,16 +391,29 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wid, kind, scope.kind, scope.id]);
 
-  /** The label to show for a stored ref, or null when nothing here answers to
-   *  it — a record that has been deleted, one this scope cannot see, or one
-   *  whose listing did not load. Null is the interesting answer: it is what the
-   *  sidebar renders as a dangling chip rather than dropping (#222). */
-  const refLabel = useCallback(
-    (ref: string) => {
-      const hit = refOpts.find((o) => o.ref === ref);
-      return hit ? (displayLabels(refOpts).get(hit.ref) ?? hit.label) : null;
-    },
+  /** The candidates one field may name — the same filter the form's picker
+   *  applies. The sidebar has to use it too: resolving a value against the
+   *  WHOLE union let a `leader` holding `locations:realm` resolve off the
+   *  locations fetched for `headquarters` and render as an ordinary clickable
+   *  chip, so the read view called a malformed relationship valid while the
+   *  form, one click away, correctly showed it unresolved. */
+  const optionsFor = useCallback(
+    (spec: EntityFieldSpec) => refOpts.filter((o) => spec.kinds?.includes(o.kind)),
     [refOpts],
+  );
+
+  /** The record one of `spec`'s stored refs names, or null when nothing this
+   *  field may name answers to it — deleted, out of scope, its listing failed,
+   *  or (as above) a kind this field does not accept. Null is the interesting
+   *  answer: it is what the sidebar renders as a dangling chip rather than
+   *  dropping (#222). */
+  const resolveRef = useCallback(
+    (spec: EntityFieldSpec, ref: string) => {
+      const opts = optionsFor(spec);
+      const hit = opts.find((o) => o.ref === ref);
+      return hit ? { ...hit, label: displayLabels(opts).get(hit.ref) ?? hit.label } : null;
+    },
+    [optionsFor],
   );
   // Which of the two stories an unresolved ref gets. Reading `refOptsComplete`
   // rather than assuming the worst is the whole point: only a listing that
@@ -963,8 +976,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   <h4>{f.label}</h4>
                   <div className="chips">
                     {parseRefs(fields[f.key]).map((ref) => {
-                      const label = refLabel(ref);
-                      return label === null ? (
+                      const hit = resolveRef(f, ref);
+                      return hit === null ? (
                         // Not a button: there is nothing to navigate to. It is
                         // shown at all because a delete does not scrub the refs
                         // that name the record (#222), and a field that quietly
@@ -973,9 +986,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                       ) : (
                         <button key={ref} className="chip owner-chip"
                                 onClick={() => onOpenOwner?.(ref)}>
-                          <Portrait src={refOpts.find((o) => o.ref === ref)?.avatar ?? null}
-                                    name={label} />
-                          {label}
+                          <Portrait src={hit.avatar ?? null} name={hit.label} />
+                          {hit.label}
                         </button>
                       );
                     })}
@@ -1071,7 +1083,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
               </div>
             </Field>
             {fieldSpecs.map((f) => (f.widget === "ref" ? (
-              <RefField key={f.key} spec={f} options={refOpts.filter((o) => f.kinds?.includes(o.kind))}
+              <RefField key={f.key} spec={f} options={optionsFor(f)}
                         value={fields[f.key] ?? ""} unresolvedHint={unresolvedHint}
                         optionsComplete={refOptsComplete}
                         onChange={(v) => setFields({ ...fields, [f.key]: v })} />

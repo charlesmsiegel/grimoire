@@ -37,6 +37,12 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
   const [error, setError] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const lockReq = useRef(0);
+  // Token for the in-flight `select`. A read is not instant, so a scope change
+  // (or a second click) landing while one is out has to be able to discard its
+  // result — otherwise the previous scope's PC reappears under the new one,
+  // where Edit and Delete act on the NEW scope. Bumped by `select` and by the
+  // scope effect; every setState after an await is gated on it.
+  const selReq = useRef(0);
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
@@ -66,6 +72,7 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
     // rail left the previous scope's PC on screen under the new one, where its
     // Save and Delete act on `scope` — issuing writes against whatever
     // unrelated PC happens to share the id here, or against nothing.
+    selReq.current += 1;   // discard a read still in flight for the old scope
     setDetail(null);
     setVid("");
     setPersona(BLANK);
@@ -82,7 +89,9 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
 
   async function select(pid: string, version?: string) {
     setError(null);
+    const req = ++selReq.current;
     const d = await api.readPC(scope, pid);
+    if (req !== selReq.current) return;   // the scope moved on, or a later select won
     setDetail(d);
     const v = d.versions.find((x) => x.id === (version ?? d.meta.default_version)) ?? d.versions[0];
     setVid(v?.id ?? "");
