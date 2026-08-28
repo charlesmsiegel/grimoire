@@ -111,11 +111,21 @@ Rules carried from the existing cache, made explicit:
 - **Memoized values are frozen.** Callers already treat the parsed dicts as
   read-only (`meta.get(...)` everywhere); the plan must verify no caller
   mutates a returned dict, and any that does copies at the boundary.
-- **Sweep-sized memo families get their own pools.** The shared FIFO is
-  4096 entries; scene heads and turn counts across a large library could
-  evict every card summary and sync hash on one listing. Scene-head and
-  scene-turns memos use the `pool=` parameter with their own budgets, as
-  `store/search.py` does.
+- **Sweep-sized memo families get their own pools, and the pools get their
+  own budgets.** The shared FIFO is 4096 entries; scene heads and turn
+  counts across a large library could evict every card summary and sync
+  hash on one listing, so those memos use the `pool=` parameter as
+  `store/search.py` does. A separate pool is not enough on its own,
+  though: `memo` applies the one global `MAX_ENTRIES` to caller pools too,
+  and FIFO eviction under a repeated *sequential* sweep is the worst case
+  — a library whose sweep exceeds the budget evicts the entries it will
+  need next before reaching them, and a "cached" listing gets zero hits.
+  So `memo` grows a per-pool budget, and the sweep pools are sized so a
+  whole library's working set fits with headroom: a memoized head is a
+  small dict, so tens of thousands of entries is a few megabytes, which is
+  the right trade for a cache whose entire purpose is the large-library
+  case. The budget is a constant justified structurally, tuned later if
+  ever.
 - **The racy window stands:** a file written within the last second is
   computed and not cached, same as today.
 
@@ -216,11 +226,15 @@ their response" argument `store/revision.py` is built on:
   tagline batch writes as it yields, a gallery import downloads mid-stream
   — all after the 200 was sent, under an epoch already minted. The wrapper
   therefore bumps a mutating stream **twice**: at the response line (the
-  navigation-ordering bound) and again when the final body frame is
-  forwarded (covering everything the generator wrote). Campaign-scoped
-  streams already self-bump at their terminals via the funnel; the second
-  bump is what covers the world-scoped ones, which have no revision to
-  call.
+  navigation-ordering bound) and again when the application call
+  **returns or is cancelled** — a `finally`, not an observation of the
+  final body frame. The distinction is exactly the disconnect case: a
+  client that drops mid-stream never receives a final frame, and the
+  disconnect is precisely when these generators' cleanup persists what
+  landed (the localize save runs in its `finally`; a cancelled tagline
+  batch keeps its completed writes). Campaign-scoped streams already
+  self-bump at their terminals via the funnel; the terminal bump is what
+  covers the world-scoped ones, which have no revision to call.
 - `PUT /config/data-dir` is a mutating 2xx, so repointing the store
   invalidates everything — no special case needed, but the test suite
   proves it.
@@ -342,10 +356,20 @@ instantly and corrects at most the ones that could have moved.
 
 ## What correctness rests on
 
-- **A stat signature is a real boundary.** Every store write goes through
-  `store.atomic` (guard-enforced), which replaces via rename — mtime and
-  dir entries move on every write, including one from another process
-  syncing the folder. The racy window covers coarse filesystem clocks.
+- **A stat signature is a real boundary — widened by one field to keep it
+  one.** Every store write goes through `store.atomic` (guard-enforced),
+  which replaces via rename — mtime and dir entries move on every write,
+  and the racy window covers coarse filesystem clocks. The remaining hole
+  is a *metadata-preserving replacement*: a sync client or a restore that
+  lands a same-size file while carrying the origin's old mtime produces an
+  identical `(path, mtime_ns, size)` tuple, and — unlike the epoch, whose
+  TTL forces a recompute that would only re-fetch the same stale memo —
+  nothing ever invalidates. Replacement via rename cannot preserve the
+  *inode*, so `statcache.signature` gains `st_ino`: the shared primitive
+  is widened (every existing memo family inherits the fix, not just the
+  new ones), the cost is zero (the field is already in the `stat` result),
+  and the residual shrinks to an in-place same-size rewrite with a
+  restored mtime — the racy-clean residual git also accepts.
 - **The epoch is wrong in the safe direction for this process's writes,
   and boundedly wrong for everyone else's.** Missed-bump bugs are the
   dangerous class; for writes this process makes, the design makes the
@@ -369,8 +393,11 @@ instantly and corrects at most the ones that could have moved.
   nothing; a write through `store.atomic` invalidates; the turns memo
   invalidates on an actor rename (name-in-key); a scene in a campaign with
   **no appearances record** caches (the absent-sentinel), and the record's
-  creation invalidates; pool isolation proves a
-  library-wide sweep leaves the shared cache's entries alone. **Fixture
+  creation invalidates; a rename-replace that preserves mtime and size
+  still invalidates (the `st_ino` field); pool isolation proves a
+  library-wide sweep leaves the shared cache's entries alone, and a
+  repeated sweep *larger than the shared budget* still hits in its own
+  pool (the per-pool budget). **Fixture
   mtimes must be backdated with `os.utime`** past the racy window, or the
   cache refuses to engage — the suite's established pattern
   (`test_statcache.py`, `test_characters_store.py`, `test_search_store.py`);
@@ -383,7 +410,9 @@ instantly and corrects at most the ones that could have moved.
   clock stepped past `EPOCH_TTL` flips it with **no** write, which is the
   external-writer guarantee stated as a test; a mutating SSE route whose
   generator writes after the response line answers `200` with a new tag to
-  the next conditional read (the final-frame bump); `GET /campaigns/{cid}` still
+  the next conditional read — including when the client disconnected
+  mid-stream and the write landed in cleanup (the terminal bump is a
+  `finally`); `GET /campaigns/{cid}` still
   performs its slim migration when answering `304`-eligible requests (the
   ordering exception); a run-poll GET never carries an `ETag`;
   campaign-scoped `@computes_only` routes don't bump.
