@@ -4106,6 +4106,34 @@ def test_regenerate_with_guidance_appends_a_system_steer(client):
     assert all("make her angrier" not in m["content"] for m in msgs)
 
 
+def test_regenerate_guidance_lands_in_the_steering_log(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "old reply")
+    client.app.dependency_overrides[routes.get_llm] = lambda: CapturingOpenRouter()
+    for _ in range(2):    # the error banner's Retry re-sends the same guidance
+        with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                           json={"guidance": "Mara already knows about the ledger"}) as r:
+            for _ in r.iter_lines():
+                pass
+    assert store.steering.texts(cid, sid) == ["Mara already knows about the ledger"]
+
+
+def test_regenerate_without_guidance_logs_no_steering(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "old reply")
+    client.app.dependency_overrides[routes.get_llm] = lambda: CapturingOpenRouter()
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate") as r:
+        for _ in r.iter_lines():
+            pass
+    assert store.steering.texts(cid, sid) == []
+
+
 def test_regenerate_after_a_failed_turn_behaves_like_retry(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)

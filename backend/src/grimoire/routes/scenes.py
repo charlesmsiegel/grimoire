@@ -1047,6 +1047,13 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         # guidance. `archive` writes nothing at all for a scene that has no set,
         # so the refusals above still leave the scene untouched.
         store.alternates.archive(cid, sid, guidance, ran_on)
+        # The durable half of the hint (store/steering.py): the alternates
+        # copy above is a display label that dies with the set, this one is
+        # what the end-of-scene absorb reads. Unconditional — a stream that
+        # dies does not un-say the correction, and the error banner's Retry
+        # re-sends the same guidance, which consecutive-dedupe absorbs.
+        if guidance:
+            store.steering.record(cid, sid, guidance)
         if replacing:
             try:
                 removed = store.scenes.remove_trailing_assistant_run(cid, sid)
