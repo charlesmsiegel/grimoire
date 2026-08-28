@@ -579,7 +579,16 @@ async function refreshModels(id: string,
     // Only `run_gone`. Any other failure is the run saying what went wrong,
     // and the store cannot overrule it.
     if (!(err instanceof ApiError) || err.kind !== "run_gone") throw err;
-    const conn = await api.readConnection(id);
+    // `fresh`, and NOT `api.readConnection`. Shared in-flight GETs are normally
+    // free because the answer cannot be stale -- the map only holds promises
+    // that have not settled -- but that reasoning assumes the caller does not
+    // care WHEN the read happened. This one does: it is verifying a write, and
+    // a read issued before that write (across the same suspension that let the
+    // run be reaped) would answer with the pre-refresh sidecar and no
+    // `fetched_by`, reporting a reap for a refresh that landed.
+    const conn = await request<LLMConnectionDetail>(
+      "GET", `/api/llm-connections/${encodeSegment(id)}`, undefined,
+      { fresh: true, signal });
     if (conn.fetched_by !== attempt) throw err;
     return { models: conn.models, fetched_at: conn.fetched_at, rev: conn.rev };
   }
