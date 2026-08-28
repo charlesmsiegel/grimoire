@@ -697,6 +697,39 @@ def test_journaled_migration_replays(monkeypatch, tmp_path):
     assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"brawn": 3}
 
 
+def test_recovery_stamps_a_campaign_whose_sheet_the_dead_pass_already_migrated(
+        monkeypatch, tmp_path):
+    """#409. The migration is idempotent by design, so an already-renamed sheet
+    answers False on replay — which is what makes recovery safe to repeat and
+    also what makes "changed" useless as a stamp condition there. A pass
+    interrupted between rewriting a campaign's sheet and stamping it would
+    otherwise leave that campaign's token current forever, and a browser still
+    holding it across the restart could price a fork or an advance against
+    migrated state (Codex review).
+
+    The crash is simulated the way `test_journaled_migration_replays` does it,
+    plus the half the dead pass had already finished: the sheet on disk is
+    renamed by hand before recovery runs, so the replay sees exactly what it
+    would have seen."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    _wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    real = me_migrate._run_migration
+    monkeypatch.setattr(me_migrate, "_run_migration",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    monkeypatch.setattr(me_migrate, "_run_migration", real)
+
+    # ...and the dead pass had already got to this one.
+    cp.write_text(json.dumps({"sheet_type": "warden", "fields": {"brawn": 3},
+                              "gen": "g2"}), encoding="utf-8")
+    before = revision.current(cid)
+    module_edit.recover()
+    assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"brawn": 3}
+    assert revision.current(cid) != before
+
+
 def test_dry_run_impact_counts(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     wid, cid = _bound_campaign(mid)
