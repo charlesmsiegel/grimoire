@@ -135,10 +135,14 @@ never inside the transcript, and the system prompt instructs:
   conflict would make the extractor suppress or fabricate — Codex review
   finding): a steering note is never quoted and never a speaker, and an edit
   a note points at that the transcript cannot independently establish is
-  reported with **no citation fields at all** rather than invented or
-  dropped — which routes it to the review's uncited drawer, where the player
-  who typed the steering adjudicates it. The player's own words never come
-  back as a citation.
+  reported with **no quote or speaker and a certainty of 0.3 or lower**
+  rather than invented or dropped. Certainty grades transcript support and a
+  note-only edit has none, so the honest self-report also does the routing:
+  `0.3 × WEIGHTS[UNCITED]` sits below the low band edge, landing the row in
+  the review's **unchecked** collapsed section — a bare uncited row would
+  band medium and pre-check (Codex review finding), and the player's own
+  correction still needs the player's explicit tick. The player's own words
+  never come back as a citation.
 - The system paragraph renders **only when the scene has steering notes**
   (`build_prompt` passes `steering=bool(steering_snapshot)`), so a
   steering-less absorb's prompt — both messages — is byte-identical to the
