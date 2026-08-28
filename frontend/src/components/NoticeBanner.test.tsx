@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { NoticeBanner } from "./NoticeBanner";
 import { api, type Notice } from "../api/client";
 
@@ -186,4 +187,69 @@ test("a dismissal that settles after a campaign switch does not touch the new on
   // B's optimistic row is still hidden, and B's Undo is still guarded.
   expect(screen.queryByLabelText("Dismiss Saltmarch Eve")).toBeNull();
   expect(screen.getByLabelText("Undo dismissing Saltmarch Eve")).toBeDisabled();
+});
+
+
+// ---- two banners over one ledger ------------------------------------------
+
+/** The scene panel and the new-scene chooser both render a banner over the same
+ *  campaign-wide ledger, so the interesting cases need two of them, a ledger
+ *  they share, and control over the order the writes reach it in. `refetch` is
+ *  what `noticesChanged` does in the app: every write emits, and every surface
+ *  showing the ledger reloads.
+ */
+function twoBanners() {
+  const ledger = new Set<string>();
+  const queue: (() => void)[] = [];
+  const owners: (() => void)[] = [];
+  const rowsNow = (n: Notice) => (ledger.has(n.key) ? [] : [n]);
+
+  function Owner({ notice }: { notice: Notice }) {
+    const [rows, setRows] = useState<Notice[]>(() => rowsNow(notice));
+    useEffect(() => {
+      const reload = () => setRows(rowsNow(notice));
+      owners.push(reload);
+      return () => { owners.splice(owners.indexOf(reload), 1); };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return <NoticeBanner cid="c" notices={rows} />;
+  }
+
+  const enqueue = (run: () => void) => new Promise<any>((res) => {
+    queue.push(() => { const v = run(); owners.forEach((f) => f()); res(v); });
+  });
+  vi.mocked(api.dismissNotices).mockImplementation((_c, keys) =>
+    enqueue(() => { keys.forEach((k) => ledger.add(k)); return { ok: true, marked: keys }; }));
+  vi.mocked(api.restoreNotices).mockImplementation((_c, keys) =>
+    enqueue(() => { keys.forEach((k) => ledger.delete(k)); return { ok: true, forgotten: keys }; }));
+
+  /** Land the write queued at `at`, and let the refetch it triggers settle. */
+  const land = (at: number) => act(async () => { queue.splice(at, 1)[0](); });
+  return { ledger, queue, land, Owner };
+}
+
+test("a write still in flight is not read as the store retiring its key", async () => {
+  // Both banners dismiss the same occurrence, then the first is undone. The
+  // undo lands between the second banner's mark going out and coming back, so
+  // the key leaves `notices` and comes back for a reason that is not this
+  // banner's own dismissal -- which, read as a retirement, would drop the
+  // receipt of a dismissal that then lands anyway, leaving the occurrence
+  // acknowledged with the Undo it needs gone from the screen.
+  const { ledger, queue, land, Owner } = twoBanners();
+  render(<><Owner notice={EVENT} /><Owner notice={EVENT} /></>);
+  const rows = screen.getAllByLabelText("Dismiss The envoy arrives");
+  expect(rows).toHaveLength(2);
+  fireEvent.click(rows[0]);                 // mark A
+  fireEvent.click(rows[1]);                 // mark B
+  await land(0);                            // mark A lands; queue = [mark B]
+  fireEvent.click(screen.getAllByLabelText("Undo dismissing The envoy arrives")[0]);
+  await land(1);                            // forget A lands first
+  await land(0);                            // then mark B
+  await waitFor(() => expect(queue).toHaveLength(0));
+
+  // The ledger holds the acknowledgement, so neither banner offers the warning
+  // -- and the banner whose mark wrote it still offers the way back.
+  expect(ledger.has(EVENT.key)).toBe(true);
+  expect(screen.queryAllByLabelText("Dismiss The envoy arrives")).toHaveLength(0);
+  expect(screen.queryAllByLabelText("Undo dismissing The envoy arrives")).toHaveLength(1);
 });

@@ -109,8 +109,18 @@ export function NoticeBanner({ cid, notices, scene = "" }: {
   for (const row of dismissed) {
     if (!notices.some((n) => n.key === row.key)) retired.current.add(row.key);
   }
+  // Never while this instance's OWN write is still out. Two banners can be
+  // mounted over one ledger (the scene panel and the new-scene chooser), so a
+  // key can leave `notices` and come back for reasons that are not this
+  // banner's dismissal at all -- the other instance's undo, landing between
+  // this one's mark going out and coming back. Read as a retirement, that
+  // drops the receipt of a dismissal that then lands anyway, leaving the
+  // occurrence acknowledged with the Undo it needs gone from the screen. Same
+  // principle as the guard on Undo below: a key with a write in flight has no
+  // settled state to reason about yet.
   const back = dismissed.filter(
-    (d) => retired.current.has(d.key) && notices.some((n) => n.key === d.key));
+    (d) => retired.current.has(d.key) && !writing.includes(d.key)
+           && notices.some((n) => n.key === d.key));
   if (back.length > 0) {
     for (const row of back) retired.current.delete(row.key);
     setDismissed((rows) => rows.filter((r) => !back.some((b) => b.key === r.key)));
