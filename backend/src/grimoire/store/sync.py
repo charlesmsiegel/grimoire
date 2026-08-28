@@ -928,39 +928,52 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
     # only sanctioned way to hold more than one campaign lock, and it sorts, so
     # this cannot be the holder that wedges against another (#267, Codex review).
     with locks.hold_all([d["id"] for d in every]):
-        if copy_down:
-            for dep in deps:
-                # The art goes down for EVERY dependent in scope, including the
-                # ones that already hold their own text. Assets overlay per
-                # file, so a campaign that diverged on wording is still reading
-                # the world's pictures -- and the delete below takes the world's
-                # record directory with it (`overlay.forget_world_record`).
-                overlay.copy_record_dir_down(dep["id"], kind, eid)
-                if kind == "greetings":
-                    # The greeting's edges live in the plot map, not in the
-                    # greeting -- and `delete_greeting` strips them from the
-                    # world's. A campaign still inheriting that map would watch
-                    # the record it was just given lose its prerequisites and
-                    # unlock itself, which is the opposite of keeping it
-                    # (Codex review). Its own map, taken before the delete.
-                    overlay.materialize_plotmap(dep["id"])
-                if dep["has_copy"]:
-                    continue     # already its own; materializing is a no-op anyway
-                overlay.materialize_entity(dep["id"], kind, eid)
-                copied.append(dep["id"])
-        if kind == "greetings":
-            greetings.delete_greeting(wroot, eid)   # also unwires the world's plot map
-        else:
-            entities.delete_entity(wroot, kind, eid)
-        overlay.forget_world_record(wroot, kind, eid)
         # Every dependent's write token (#409), inside the hold that covers the
-        # writes. This is a WORLD route, so nothing in `/api/campaigns/...`
-        # stamps it -- and the sweep above rewrote sync.md and detached.json in
+        # writes and in a `finally` so the failure path reaches it too. This is
+        # a WORLD route, so nothing in `/api/campaigns/...` stamps these
+        # campaigns -- and the sweep below rewrites sync.md and detached.json in
         # all of them, whether or not they took a copy. A caller holding one of
         # their tokens would otherwise confirm an operation priced before a
-        # record it depends on was demoted into it (Codex review).
-        for dep in every:
-            revision.bump(dep["id"])
+        # record it depends on was demoted into it.
+        #
+        # The `finally` is what a success-only stamp got wrong: the copy-down
+        # writes one dependent at a time, so a raise part-way through leaves the
+        # earlier ones written, and a world route's 5xx reaches no middleware
+        # that could repair it (Codex review). Which ones were reached is not
+        # knowable here without threading a record through every helper, so all
+        # of them are stamped -- the ones that were not written pay a re-price,
+        # which is the direction this value is deliberately wrong in.
+        # `revision.bump` never raises, so this cannot displace the error that
+        # got here.
+        try:
+            if copy_down:
+                for dep in deps:
+                    # The art goes down for EVERY dependent in scope, including the
+                    # ones that already hold their own text. Assets overlay per
+                    # file, so a campaign that diverged on wording is still reading
+                    # the world's pictures -- and the delete below takes the world's
+                    # record directory with it (`overlay.forget_world_record`).
+                    overlay.copy_record_dir_down(dep["id"], kind, eid)
+                    if kind == "greetings":
+                        # The greeting's edges live in the plot map, not in the
+                        # greeting -- and `delete_greeting` strips them from the
+                        # world's. A campaign still inheriting that map would watch
+                        # the record it was just given lose its prerequisites and
+                        # unlock itself, which is the opposite of keeping it
+                        # (Codex review). Its own map, taken before the delete.
+                        overlay.materialize_plotmap(dep["id"])
+                    if dep["has_copy"]:
+                        continue     # already its own; materializing is a no-op anyway
+                    overlay.materialize_entity(dep["id"], kind, eid)
+                    copied.append(dep["id"])
+            if kind == "greetings":
+                greetings.delete_greeting(wroot, eid)   # also unwires the world's plot map
+            else:
+                entities.delete_entity(wroot, kind, eid)
+            overlay.forget_world_record(wroot, kind, eid)
+        finally:
+            for dep in every:
+                revision.bump(dep["id"])
     _touch_world(wroot)
     return {"copied_down": sorted(copied),
             "dependents": [d["id"] for d in deps]}

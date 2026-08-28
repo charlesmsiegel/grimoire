@@ -379,6 +379,40 @@ def test_a_world_route_that_writes_campaigns_stamps_every_one_of_them(client):
     assert _token(client, cid) != before
 
 
+def test_a_demotion_that_failed_part_way_stamps_what_it_already_wrote(client, monkeypatch):
+    """The failure path, which a stamp after the loop never reached. A demotion
+    copies into one dependent at a time, so a raise part-way leaves the earlier
+    ones written — and this is a world route, so the 5xx reaches no middleware
+    that could repair the omission (Codex review). All of them are stamped on
+    the way out: which ones were reached is not knowable here, and a re-price
+    for a campaign that was not written is the cheap direction."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cids = [client.post("/api/campaigns",
+                        json={"name": n, "world": wid}).json()["id"]
+            for n in ("Saltmarch", "Branch")]
+    client.post(f"/api/worlds/{wid}/lore", json={"name": "The Blend", "body": "A smoked oolong."})
+    before = {c: _token(client, c) for c in cids}
+
+    real = store.overlay.copy_record_dir_down
+    seen = []
+
+    def failing(cid, *a, **kw):
+        seen.append(cid)
+        if len(seen) > 1:
+            raise OSError(28, "No space left on device")
+        return real(cid, *a, **kw)
+
+    monkeypatch.setattr(store.overlay, "copy_record_dir_down", failing)
+    # The TestClient re-raises rather than dressing this as a 500, which is the
+    # same thing from the token's point of view: no 2xx, so no middleware stamp.
+    with pytest.raises(OSError):
+        client.post(f"/api/worlds/{wid}/lore/the-blend/demote", json={})
+    assert len(seen) > 1, "the copy never reached a second dependent"
+    # The one that was written before the raise is the case; the other is the
+    # deliberate over-bump beside it.
+    assert _token(client, seen[0]) != before[seen[0]]
+
+
 def test_rebinding_a_worlds_module_stamps_the_campaigns_it_clears(client):
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
@@ -386,6 +420,30 @@ def test_rebinding_a_worlds_module_stamps_the_campaigns_it_clears(client):
     r = client.put(f"/api/worlds/{wid}/module", json={"module": "d20-basic"})
     assert r.status_code == 200, r.text
     assert _token(client, cid) != before
+
+
+def test_a_sweep_that_failed_in_one_campaign_still_stamps_it(client, monkeypatch):
+    """The caught-exception path. `_follow_in_campaign` can materialize the
+    record and rewrite an inheritance ledger before a later repoint raises, and
+    the sweep deliberately carries on rather than 500-ing a move that already
+    happened — so the route answers 200 with that campaign written and its
+    token where it was (Codex review). A follow that cannot say it wrote
+    nothing is stamped."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns",
+                      json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.post(f"/api/worlds/{wid}/lore",
+                json={"name": "Tidewatch", "body": "A stretch of grey coast."})
+    before = _token(client, cid)
+
+    def half_written(*a, **kw):
+        raise OSError(5, "the ledger could not be rewritten")
+
+    monkeypatch.setattr(store.reclassify, "_follow_in_campaign", half_written)
+    r = client.post(f"/api/worlds/{wid}/lore/tidewatch/reclassify", json={"to": "locations"})
+    assert r.status_code == 200, r.text
+    assert r.json()["campaigns"] == []          # it did not finish the sweep...
+    assert _token(client, cid) != before        # ...and cannot claim it wrote nothing
 
 
 def _opener(client, cid, sid):
