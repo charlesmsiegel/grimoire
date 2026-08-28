@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from grimoire.store import campaigns, locks, module_edit, modules, worlds
+from grimoire.store import campaigns, locks, module_edit, modules, revision, worlds
 from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.module_edit import migrate as me_migrate
 
@@ -579,6 +579,40 @@ def test_field_rename_migrates_sheets(monkeypatch, tmp_path):
     assert cdata["fields"] == {"brawn": 3} and cdata["gen"] != "g1"
     wdata = json.loads(wp.read_text(encoding="utf-8"))
     assert wdata["fields"] == {"brawn": 2} and wdata["gen"] != "g0"
+
+
+def test_field_rename_stamps_every_campaign_whose_sheet_it_rewrote(monkeypatch, tmp_path):
+    """#409. A module edit is otherwise an edit to what a campaign INHERITS,
+    which deliberately moves no token — but the sheet migration is the one
+    exception: `<campaign>/sheets/*.json` is the campaign's own file, rewritten
+    in place. `/api/modules/...` never reaches the activity middleware and
+    journal replay has no request behind it at all, so nothing else could
+    stamp it (Codex review)."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    _wid, cid = _bound_campaign(mid)
+    _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    before = revision.current(cid)
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"], res["errors"]
+    assert res["migration"]["migrated"] == 1
+    assert revision.current(cid) != before
+
+
+def test_a_rename_that_rewrote_no_campaign_sheet_stamps_nothing(monkeypatch, tmp_path):
+    """The other half, so the stamp above is about a campaign's own file rather
+    than about module edits generally: a world's sheets carry no cid at all,
+    and a rewrite of one is not a write to any campaign."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    wp = worlds.world_root(wid) / "sheets" / mid / "characters--winifred.json"
+    wp.parent.mkdir(parents=True, exist_ok=True)
+    wp.write_text(json.dumps({"sheet_type": "warden", "fields": {"strength": 2},
+                              "gen": "g0"}), encoding="utf-8")
+    before = revision.current(cid)
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"], res["errors"]
+    assert res["migration"]["migrated"] == 1        # the world's sheet, nobody's campaign
+    assert revision.current(cid) == before
 
 
 def test_field_rename_skips_other_types_and_unbound(monkeypatch, tmp_path):

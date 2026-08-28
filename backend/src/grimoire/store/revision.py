@@ -68,10 +68,26 @@ before: a token minted ahead of the write is readable while the write is still
 landing, and the reader holding it would then pass a check against a campaign
 that had been written since (Codex review).
 
-A multi-campaign write reached from a WORLD route stamps every campaign it
-wrote, for the same reason and one step further out: nothing under
+A multi-campaign write reached from a WORLD or MODULE route stamps every
+campaign it wrote, for the same reason and one step further out: nothing under
 `/api/campaigns/...` runs at all. `sync.demote`, `store.reclassify` and the
-world-module rebind each do it inside the `hold_all` that covers their writes.
+world-module rebind each do it inside the `hold_all` that covers their writes,
+and `module_edit.migrate._run_migration` stamps each campaign whose sheet a
+field rename rewrote.
+
+That last one is worth naming, because it is the exception to the paragraph
+below and was first left out on the strength of the rule rather than the code:
+a module edit changes what campaigns INHERIT, but its sheet migration rewrites
+`<campaign>/sheets/*.json`, which is the campaign's own file (Codex review).
+Journal replay after a crash reaches the same function, which is why it stamps
+there rather than at the route.
+
+A campaign write can also be answered NON-2xx, and the middleware only stamps
+success. `store.proposals.project` is the case: the stale-retry heal in
+`POST .../roll-proposal` projects a same-id superseded record -- appending the
+roll and the transcript line -- and then deliberately answers 409, because no
+continuation is ever offered for a superseded record. It stamps where it
+writes, under the lock it already holds.
 
 What all of that leaves out is worth saying plainly. A store written by
 something other than this app (a hand edit, a sync client landing a file, a

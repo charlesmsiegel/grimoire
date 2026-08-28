@@ -12686,6 +12686,25 @@ def test_superseded_same_id_crash_before_line_heals_on_stale_post(client, monkey
                 if e.get("proposal") == pid]) == 1
 
 
+def test_a_recovery_answered_with_409_still_moves_the_write_token(client):
+    """#409: a non-2xx response can still commit campaign state. The stale-retry
+    heal above projects a same-id superseded record — appending the roll, its
+    metadata and the transcript's 🎲 line — and then deliberately answers 409,
+    because no continuation is ever offered for a superseded record. The
+    activity middleware stamps 2xx only, so the transcript moved and the token
+    did not: an under-bump, and the one direction this value must never be
+    wrong in (Codex review)."""
+    cid, sid, _ = _mech_scene(client)
+    rec, _pid = _resolve_then_supersede(client, cid, sid)
+    before = client.get(f"/api/campaigns/{cid}/clock").json()["revision"]
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json=_accept_body(rec))
+    assert resp.status_code == 409
+    # ...and it really did write, which is what makes the stamp owed.
+    assert len(_roll_lines(client, cid, sid)) == 1
+    assert client.get(f"/api/campaigns/{cid}/clock").json()["revision"] != before
+
+
 def test_superseded_while_pending_same_id_post_is_plain_409(client):
     # A record superseded while still pending has no resolution to project:
     # the POST must be a plain 409 — no roll, no line, no projection.
