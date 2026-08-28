@@ -253,3 +253,48 @@ test("a write still in flight is not read as the store retiring its key", async 
   expect(screen.queryAllByLabelText("Dismiss The envoy arrives")).toHaveLength(0);
   expect(screen.queryAllByLabelText("Undo dismissing The envoy arrives")).toHaveLength(1);
 });
+
+
+test("dismissing, undoing, and dismissing again still leaves an Undo", async () => {
+  // A retirement marker describes a key that is in `dismissed`. Undo takes the
+  // row out, so it has to drop the marker too -- otherwise the second
+  // dismissal is read as a second retirement the moment its write clears, and
+  // the reader is left acknowledged with no way back. Single banner: this one
+  // needs nothing but the ordinary gap between a write settling and the
+  // owner's reload arriving.
+  const ledger = new Set<string>();
+  const owners: (() => void)[] = [];
+  function Owner() {
+    const [rows, setRows] = useState<Notice[]>([EVENT]);
+    useEffect(() => {
+      const reload = () => setRows(ledger.has(EVENT.key) ? [] : [EVENT]);
+      owners.push(reload);
+      return () => { owners.splice(owners.indexOf(reload), 1); };
+    }, []);
+    return <NoticeBanner cid="c" notices={rows} />;
+  }
+  // The write settles; the reload it triggers is a separate request, fired by
+  // hand so the test controls the gap between the two.
+  const refetch = () => act(async () => { owners.forEach((f) => f()); });
+  vi.mocked(api.dismissNotices).mockImplementation(async (_c, keys) => {
+    keys.forEach((k) => ledger.add(k));
+    return { ok: true, marked: keys };
+  });
+  vi.mocked(api.restoreNotices).mockImplementation(async (_c, keys) => {
+    keys.forEach((k) => ledger.delete(k));
+    return { ok: true, forgotten: keys };
+  });
+
+  render(<Owner />);
+  fireEvent.click(screen.getByLabelText("Dismiss The envoy arrives"));
+  await waitFor(() => expect(
+    screen.getByLabelText("Undo dismissing The envoy arrives")).not.toBeDisabled());
+  await refetch();                     // the key leaves `notices`: retired
+  fireEvent.click(screen.getByLabelText("Undo dismissing The envoy arrives"));
+  await waitFor(() => expect(api.restoreNotices).toHaveBeenCalled());
+  await refetch();                     // and comes back
+  fireEvent.click(await screen.findByLabelText("Dismiss The envoy arrives"));
+  await waitFor(() => expect(ledger.has(EVENT.key)).toBe(true));
+  await refetch();
+  expect(screen.getByLabelText("Undo dismissing The envoy arrives")).toBeTruthy();
+});

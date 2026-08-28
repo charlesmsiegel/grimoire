@@ -153,6 +153,16 @@ export function NoticeBanner({ cid, notices, scene = "" }: {
     // that disables it, reaches the handler with the attribute set.
     if (writing.includes(notice.key)) return;
     const startedIn = cid;
+    // The two go together: a retirement marker describes a key that is in
+    // `dismissed`, and taking the row out without dropping the marker leaves
+    // one that outlives what it was about. Dismiss the same occurrence again
+    // and the handshake reads that stale marker, with the pre-refetch props
+    // still holding the key, as a second retirement the moment the new write
+    // clears -- taking away the receipt for a dismissal that has just landed.
+    // A failed restore does not have to put it back: the row returns to
+    // `dismissed` while the ledger still holds the acknowledgement, so the
+    // next render derives the marker again.
+    retired.current.delete(notice.key);
     setDismissed((rows) => rows.filter((r) => r.key !== notice.key));
     setWriting((keys) => [...keys, notice.key]);
     try {
