@@ -32,7 +32,7 @@ These change the list before any prioritization of it means anything.
 | #119 | **Close (or narrow to lore→character)** | `entities.reclassify` + `store/reclassify.py` implement the entity-kind case including the cross-campaign sync sweep the issue predicted; frontend picker exists. Only Option B (lore→*character* conversion, a different record shape) remains. |
 | #26 | Narrowed already | Avatar half shipped (#25); what's left is iterating `data.assets` past `AVATAR` in `import_card`, reusing the existing safe-zip machinery. Small. |
 | #40 | **Narrow to "world default climate"** | World calendar editor shipped (#223); mechanics default exists. Atmosphere exists but campaign-scoped (`store/campaign_climate.py`); the world-level default is the only open slice. Small. |
-| #71 | **Narrow to "per-ref sync freeze"** | The composition overview and sync UI it asked for exist (`CompositionPanel`, `IncomingReview`, `sync.promote`/`push`). Only the per-ref pin ("stop offering me updates for this ref") is missing. Small. |
+| #71 | **Narrow to freeze + the joining endpoint** | The composition overview and sync UI it asked for exist (`CompositionPanel`, `IncomingReview`, `sync.promote`/`push`). Two residues, and the panel's own comments name both: the per-ref pin, and the joined endpoint — without it a followed record with nothing pending is invisible (no read enumerates the manifest) and an edited character/PC is unreported (`/diverged` covers flat records only; actors carry their base in the appearance record). Small-medium. |
 | #22 | **Narrow to frontend** | The backend primitive shipped: `POST .../first-post` takes arbitrary text with the right guards. Missing is only a "paste your own opener" affordance in `SceneConfirmForm`/`OpenerComposer`. Small. |
 | #82 | **Decide, don't build** | The nominated-speaker layer exists and is gated off by default (`DEFAULT_SPEAKER_TURN_TAKING = "off"`). One playtest decides whether per-NPC calls are still wanted. Cheapest open item, and it gates how #58 should be sequenced. |
 | #437 | **Decide, don't build** | Both halves are recorded in code comments as deliberate decisions (`librarySections.ts:63`, `EntityEditor.tsx:803`). Deciding rail-vs-grid matters more than Images: it is live convention drift (`CharacterEditor` already ships a grid) that every future editor inherits. |
@@ -45,19 +45,26 @@ who they are."
 **Now**
 
 - **#61 + #62 — emergent-NPC anchor, capsule and tags, one pass.** Both
-  former blockers (#59, #60) shipped; each issue collapsed to the same small
-  task: a *transcript-sourced* draft (today `voice_anchors.build_prompt`
-  reads the card only, which starves exactly the emergent case) plus a
-  first-scene/absorb trigger. The failure prevented is an NPC who walked on
-  mid-scene drifting into generic narrator voice and staying an unlabelled
-  name in the cast. Small; build together.
+  former blockers (#59, #60) shipped — and so did more of #62 than its body
+  says: the absorb review's `new_character` contract already extracts a
+  description, personality and example dialogue from the transcript and
+  writes the card, seeds a dossier, and seats the character
+  (`store/absorb/apply.py:540`). What is genuinely missing: a tagline and
+  card tags for that path, a *transcript-sourced* voice-anchor draft (today
+  `voice_anchors.build_prompt` reads the card only, which starves exactly
+  the emergent case) with a first-scene/absorb trigger, and the same for
+  characters added through the manual campaign-local create. The failure
+  prevented is an NPC who walked on mid-scene drifting into generic
+  narrator voice. Small; extend the existing extraction rather than adding
+  a second pass.
 - **#86 — per-scene POV.** Still absent everywhere (`pov` greps clean).
   Small-medium, copies the per-scene datetime/location pattern, and it
   unblocks the auto-hide half of #122 and the POV consolidation half of
   #140. High leverage per line of code.
 - **#81 — multi-PC attribution.** A two-PC scene still writes an
   *unattributed* user post (`speaker = names[0] if len(names) == 1 else
-  None`), degrading who-said-what for the model, the recap, and the ledger.
+  None`), degrading who-said-what for the model and the recap. (Not the
+  ledger: `_answering_post` attributes by role, not speaker label.)
   Option A (client-side queue over the existing marker machinery) is medium.
 
 **Next**
@@ -189,7 +196,8 @@ multiplier on all the coherence aspects: you can't fix what you can't see.
   #79's retcon replay, a different feature.
 - **#30 — named prompt-template variants.** `store/styles.py` is a working
   precedent for exactly the bundled+user overlay this asks for. Medium.
-- **#71 (narrowed) — per-ref sync freeze.** Small.
+- **#71 (narrowed) — per-ref sync freeze + the joining composition
+  endpoint** (see §0). Small-medium.
 
 **Later**
 
@@ -222,15 +230,21 @@ Friction in the editors, wizards, and play surface.
 **Next**
 
 - **#18 — character-as-player should satisfy requires_tags.** The gate
-  silently never opens for a character cast as player (only PCs carry
-  tags). Needs a small design decision (where character tags live) more
-  than code; `overlay.pc_root` means the change lands in one place. Medium.
+  silently never opens for a character cast as player — but not because
+  characters are tagless: cards already carry `data.tags`
+  (`characters.blank_card`), and the appearance records which version is
+  cast. The actual gap is one filter: `playing.player_tags` unions tags
+  only for `kind == "pcs"`. The remaining decision is just that the
+  cast-locked version's card tags are the source. Small, not medium.
 - **#73 — campaign settings IA.** Substantially overtaken: routing,
   response, climate, calendar are all per-campaign already. What's left is
   a consolidated surface plus three still-global keys (`recap_depth`,
   `context_scan_depth`, `system_prompt`). Small-medium now.
-- **#66 — merged PC card.** `GET /diverged` now answers the divergence
-  third cheaply; capabilities third still waits on #161. Medium.
+- **#66 — merged PC card.** The divergence third has a cheap read now —
+  but it is `sync.library_status` (the actor-aware per-record
+  `/campaigns/{cid}/{kind}/{id}/library`), not `/diverged`, which skips
+  every kind outside `SYNCED_KINDS` and so never reports the PC being
+  displayed. Capabilities third still waits on #161. Medium.
 - **#67 — PC revision history.** Edits are still destructive overwrites;
   Option A is ~4 store functions. Small, and it's the undo story for the
   longest hand-written text in the app.
@@ -250,8 +264,10 @@ Friction in the editors, wizards, and play surface.
   epic, not casually.
 - **#196 — per-campaign HUD config.** The "green field" framing is wrong
   now: `SceneInspector` already persists per-section collapse in
-  localStorage with stable widget ids. Remaining: reorder, density,
-  grouping, per-campaign scope, reset. Medium; #195 still absent.
+  localStorage with stable widget ids, and #195 shipped — the scene HUD
+  widget the weather spec named is `WeatherWidget`, mounted in the
+  inspector. Remaining: reorder, density, grouping, per-campaign scope,
+  reset. Medium, with no open dependency.
 - **#43 — map view.** Blocked by #42; its Option C (connection chips in
   the detail sidebar) is small and shippable first. `PlotMapEditor` is a
   hand-rolled node/edge precedent the issue predates.
