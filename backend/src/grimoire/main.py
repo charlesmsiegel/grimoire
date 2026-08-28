@@ -313,7 +313,40 @@ class _CampaignActivityStamp:
                         _record_campaign_write, cid, not streaming, changed)
             await send(message)
 
-        await self.app(scope, receive, _send)
+        try:
+            await self.app(scope, receive, _send)
+        except BaseException:
+            # A route that RAISED wrote no response line through `_send`, so
+            # nothing above ran -- and it may well have written first. This is
+            # the whole class of "a campaign write answered non-2xx" that no
+            # per-route stamp converges on: `set_datetime` appending a
+            # transition before its metadata write fails, `set_location`
+            # persisting a transition before it rewrites the history,
+            # `set_campaign_module` rewriting `campaign.md` before the
+            # baselines are cleared. Each of those was reported separately
+            # (Codex review, four rounds running) and each was fixed where it
+            # happened; this is the same argument the ACTIVITY stamp is built
+            # on, applied to the failure path -- enumerating writers does not
+            # converge, so the one place that sees them all does the work.
+            #
+            # Only unhandled exceptions arrive here. `HTTPException` is turned
+            # into a response by Starlette's `ExceptionMiddleware`, which is
+            # installed INSIDE this one, so every deliberate 4xx refusal comes
+            # through `_send` above and is skipped there. What reaches this
+            # `except` is what becomes a 500 -- a write that failed part-way
+            # rather than a request that was turned away. A raise that wrote
+            # nothing costs an over-bump, which is a re-price for somebody and
+            # the direction this value is deliberately wrong in.
+            #
+            # `revision.bump` never raises, and the original exception is
+            # re-raised untouched, so this cannot displace a failure or become
+            # one.
+            cid = (scope.get("path_params") or {}).get("cid")
+            endpoint = getattr(scope.get("route"), "endpoint", None)
+            if (cid and not getattr(endpoint, "grimoire_computes_only", False)
+                    and not getattr(endpoint, "grimoire_leaves_campaign", False)):
+                await anyio.to_thread.run_sync(revision.bump, cid)
+            raise
 
 
 def create_app() -> FastAPI:
