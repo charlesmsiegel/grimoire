@@ -1453,8 +1453,15 @@ def reservation(app, run: Run):
             "status": exc.status_code})
         raise
     except BaseException as exc:
+        # `status` 500, for the reason the arm above carries its own: this
+        # record is read INSTEAD of the response when that response was lost,
+        # and an absent status falls back to 409 on the client -- so an upload
+        # that blew up while being read came back as a conflict the reader
+        # could do nothing about. An exception nobody handled is a 500, and
+        # this is the last of the three arms that was not saying so.
         _release_unstarted(app, run, "failed", {
-            "kind": "run_failed", "detail": str(exc) or type(exc).__name__})
+            "kind": "run_failed", "detail": str(exc) or type(exc).__name__,
+            "status": 500})
         raise
     # No exception, no producer: the route answered on its own. Nothing will
     # ever set this run's events, so anyone already polling or cancelling it

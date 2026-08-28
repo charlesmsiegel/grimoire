@@ -271,7 +271,7 @@ async function awaitRunAt(base: string, started: RunHandle,
       asked < RUN_POLL_QUICK ? RUN_POLL_MS : RUN_POLL_SLOW_MS, signal);
     try {
       run = (await request<{ run: RunHandle }>(
-        "GET", `${base}/${run.id}`, undefined, { fresh: true })).run;
+        "GET", `${base}/${run.id}`, undefined, { fresh: true, signal })).run;
       missed = 0;
     } catch (err) {
       // A FAILED POLL IS NOT A FAILED RUN. The conditions this feature exists
@@ -363,7 +363,7 @@ async function findDraftRun(scope: DraftScope, attempt: string,
   for (let asked = 0; ; asked++) {
     try {
       const found = await request<{ runs: RunHandle[] }>(
-        "GET", path, undefined, { fresh: true });
+        "GET", path, undefined, { fresh: true, signal });
       // The newest, because an attempt id names one piece of work and the
       // server keys its index on it -- so this list is at most one long. Read
       // from the end rather than at 0 so a server that ever answered with more
@@ -487,21 +487,13 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
     let run: RunHandle | null;
     try {
       run = (await api.findRun(cid, at, attempt)).run;
-      if (!run && identity) {
-        // THE SCENE MAY HAVE BEEN RENAMED. An opener holds no exclusion key --
-        // deliberately, so it cannot refuse the `first-post` it exists to feed
-        // -- so another tab may rename the scene while it runs, and a rename
-        // mints a new `sid`. The run is indexed by the scene's IDENTITY, which
-        // survives that, so the old id resolves to no run at all and every
-        // re-attach would abandon a generation the server is still buffering.
-        // `scene-by-identity` is the lookup that exists for exactly this.
-        const now = await api.sceneByIdentity(cid, identity)
-          .then((r) => r.id, () => null);
-        if (now && now !== at) {
-          at = now;
-          run = (await api.findRun(cid, at, attempt)).run;
-        }
-      }
+      // THE SCENE MAY HAVE BEEN RENAMED. An opener holds no exclusion key --
+      // deliberately, so it cannot refuse the `first-post` it exists to feed
+      // -- so another tab may rename the scene while it runs, and a rename
+      // mints a new `sid`. The run is indexed by the scene's IDENTITY, which
+      // survives that, so the old id resolves to no run at all and every
+      // re-attach would abandon a generation the server is still buffering.
+      if (!run && await moved()) run = (await api.findRun(cid, at, attempt)).run;
     } catch (err) {
       if (isAbortError(err)) throw err;
       // NOT `.catch(() => null)`. A lookup that FAILED has not answered "no
@@ -524,11 +516,33 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
       // Cut again, the same way. Another pass, bounded by the loop.
       lost = new Error("the opener stream ended before the generation did");
     } catch (err) {
+      // A rename can land in the gap between the lookup above and this attach,
+      // and then it is the ATTACH that 404s -- so re-resolving only when the
+      // lookup came back empty leaves that window open. Same recovery, one
+      // step later; the loop bounds how often it can happen.
+      if (err instanceof ApiError && err.kind === "run_gone" && await moved()) continue;
       if (err instanceof ApiError || isAbortError(err)) throw err;
       lost = err;
     }
   }
   throw lost;
+
+  /** Point `at` at whatever this scene is called now. True if it moved.
+   *
+   *  `scene-by-identity` is the lookup that exists for exactly this -- it is
+   *  what the Android notification tap already resolves through, for the same
+   *  reason. A lookup that fails answers false rather than throwing: it has
+   *  not established that the scene moved, and the caller has its own failure
+   *  to report.
+   */
+  async function moved(): Promise<boolean> {
+    if (!identity) return false;
+    const now = await api.sceneByIdentity(cid, identity).then((r) => r.id,
+                                                             () => null);
+    if (!now || now === at) return false;
+    at = now;
+    return true;
+  }
 }
 
 /** Re-fetch a connection's catalog, and recover the one draft whose result
@@ -560,7 +574,7 @@ async function refreshModels(id: string,
     return await draftRun<ModelsRefreshResult>({ at: "global" }, (a) =>
       request<{ run: RunHandle }>(
         "POST", `/api/llm-connections/${encodeSegment(id)}/models/refresh`,
-        undefined, { attempt: a }), { signal, attempt });
+        undefined, { attempt: a, signal }), { signal, attempt });
   } catch (err) {
     // Only `run_gone`. Any other failure is the run saying what went wrong,
     // and the store cannot overrule it.
@@ -581,7 +595,8 @@ async function refreshModels(id: string,
 function describeImage(scope: DraftScope, path: string,
                        signal?: AbortSignal): Promise<{ description: string }> {
   return draftRun<{ description: string }>(scope, (attempt) =>
-    request<{ run: RunHandle }>("POST", path, undefined, { attempt }), { signal });
+    request<{ run: RunHandle }>("POST", path, undefined, { attempt, signal }),
+    { signal });
 }
 
 /** An `EntityScope` as the subject its detached runs belong to. The two are
@@ -703,10 +718,11 @@ async function streamGet<T = ChatEvent>(
 }
 
 async function requestForm<T>(path: string, form: FormData, method = "POST",
-                              attempt?: string): Promise<T> {
+                              attempt?: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method, body: form,
     headers: attempt ? { "X-Grimoire-Attempt": attempt } : undefined,
+    signal,
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -1387,7 +1403,7 @@ export const api = {
     draftRun<{ tagline: string }>({ at: "world", id: wid }, (attempt) =>
       request<{ run: RunHandle }>(
         "POST", `/api/worlds/${wid}/characters/${cid}/tagline/generate`,
-        undefined, { attempt }), { signal }),
+        undefined, { attempt, signal }), { signal }),
   /** Derive a tagline for every character in the world that has none (#57).
    *
    *  A stream rather than a call per character: the roster can be hundreds
@@ -1412,7 +1428,7 @@ export const api = {
     draftRun<{ voice_anchor: string }>(draftScopeOf(scope), (attempt) =>
       request<{ run: RunHandle }>(
         "POST", `${entityBase(scope)}/characters/${cid}/voice-anchor/generate`,
-        undefined, { attempt }), { signal }),
+        undefined, { attempt, signal }), { signal }),
   createVersion: (scope: EntityScope, cid: string, body: { name: string; card: Card }) =>
     request<{ version: string }>("POST", `${entityBase(scope)}/characters/${cid}/versions`, body),
   updateVersion: (scope: EntityScope, cid: string, vid: string, card: Card) =>
@@ -2040,13 +2056,13 @@ export const api = {
       { at: "campaign", id: cid }, (attempt) =>
         request<{ run: RunHandle }>(
           "POST", `/api/campaigns/${cid}/scene-suggestions${qs ? `?${qs}` : ""}`,
-          undefined, { attempt }), { signal });
+          undefined, { attempt, signal }), { signal });
   },
   sceneIntent: (cid: string, text: string, offscreen: boolean, signal?: AbortSignal) =>
     draftRun<SceneIntentResult>({ at: "campaign", id: cid }, (attempt) =>
       request<{ run: RunHandle }>(
         "POST", `/api/campaigns/${cid}/scene-intent`, { text, offscreen },
-        { attempt }), { signal }),
+        { attempt, signal }), { signal }),
   // The scene ledger (#88). `fresh`, like the continuity ledger: the picker
   // re-reads this precisely when it has just written to it (a save, a dismiss,
   // a restore), and a shared or cached response would answer that with the
@@ -2388,13 +2404,13 @@ export const api = {
     form.append("format", format);
     return draftRun<ScenarioProposal>({ at: "world", id: wid }, (attempt) =>
       requestForm<{ run: RunHandle }>(`/api/worlds/${wid}/scenario/parse`, form,
-                                      "POST", attempt), { signal });
+                                      "POST", attempt, signal), { signal });
   },
   scenarioParseUrl: (wid: string, url: string, signal?: AbortSignal) =>
     draftRun<ScenarioProposal>({ at: "world", id: wid }, (attempt) =>
       request<{ run: RunHandle }>(
-        "POST", `/api/worlds/${wid}/scenario/parse-url`, { url }, { attempt }),
-      { signal }),
+        "POST", `/api/worlds/${wid}/scenario/parse-url`, { url },
+        { attempt, signal }), { signal }),
   scenarioImport: (wid: string, proposal: ScenarioProposal, art: boolean) =>
     request<ScenarioImportResult>("POST", `/api/worlds/${wid}/scenario/import`, { ...proposal, art }),
 
