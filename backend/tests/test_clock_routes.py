@@ -16,12 +16,14 @@ def _campaign(client, calendar=None):
 
 def test_clock_of_a_fresh_campaign_is_empty(client):
     _wid, cid = _campaign(client)
-    assert client.get(f"/api/campaigns/{cid}/clock").json() == {
-        # `revision` is `revision.INITIAL`: creating a campaign is not a
-        # campaign-SCOPED write (no `cid` in the path), so nothing has stamped
-        # this one yet. A caller may still price against it — see
-        # `test_revision_routes.py`.
-        "now": "", "friendly": "", "log": [], "revision": store.revision.INITIAL}
+    body = client.get(f"/api/campaigns/{cid}/clock").json()
+    # `revision` is a real token, not `INITIAL`: creating a campaign binds no
+    # `cid` in the path, so the activity middleware never stamps it — and
+    # creation publishes `campaign.md` before its remaining initialization
+    # writes, so it mints one itself as the last act under the creation lock
+    # (#409). Compared apart from the rest because its value is opaque.
+    assert body.pop("revision") != store.revision.INITIAL
+    assert body == {"now": "", "friendly": "", "log": []}
 
 
 def test_clock_of_an_unknown_campaign_is_404(client):

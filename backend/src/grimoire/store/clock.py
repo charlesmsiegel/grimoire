@@ -566,48 +566,50 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
         # no-op (Codex review).
         revision.require(cid, expect_revision)
         return {"moved": False, "now": start, "digest": computed, "fired": []}
+    fired: list = []
+    # ONE hold over both writes, and one token published after both. An advance
+    # that crosses a scheduled event is two writes -- the clock, then the stamps
+    # in `events.json` -- and they are one operation to every reader: a campaign
+    # whose present has moved past an event still marked unfired is a state that
+    # never legitimately exists.
+    #
+    # Firing outside the hold and stamping twice was not enough, and the reason
+    # is worth keeping. The first token was published while the fire was still
+    # to come, so a reader could pick it up, price a checkpoint against it, and
+    # have `/fork` accept it -- copying exactly that half-made state. The second
+    # bump then moved the token, but the copy on the shelf is already wrong and
+    # no later stamp can reach it (Codex review). Widening the hold costs
+    # nothing here: `events.fire` takes this same lock and it is reentrant, and
+    # no calendar provider or other plugin code runs under it -- `_provider` and
+    # `digest` ran far above.
     with locks.campaign_lock(cid):
         revision.require(cid, expect_revision)
         _commit(cid, target, {"from": start, "to": target,
                               "reason": _reason(reason), "at": now_iso()})
-        # In the SAME hold as the write, which is what makes the check above
-        # binding rather than merely narrow. The activity middleware stamps this
-        # campaign again once the response is on its way out, and that is far
-        # too late for a second advance: this one releases the lock, fires its
-        # events and returns, and any of that is long enough for a request
-        # carrying the SAME expected token to take the lock, read the value this
-        # one was supposed to have replaced, and commit a move priced against a
-        # clock that has already moved. Two callers with one token is exactly
-        # the case `expect_revision` exists for, so the token has to be gone
-        # before the lock is.
-        revision.bump(cid)
-    # After the clock has landed, never before: an event stamped by a move that
-    # then failed to commit would be a fired event in a campaign whose present
-    # never reached it. Forward moves only (#101) -- a backward move is a
-    # correction, and un-firing on the way back would erase the only record that
-    # the story already played the event.
-    fired: list = []
-    try:
-        if computed["elapsed_days"] > 0:
-            fired = _fire(cid, computed["events"], target)
-    except BaseException:
-        # `_fire` stamps events one at a time, so a raise part-way leaves some
-        # of them stamped in `events.json` while this call unwinds -- and the
-        # 5xx that follows reaches a middleware that only stamps success. Not
-        # reported by review; the same shape as the failure paths in
-        # `sync.demote` and `proposals.project`, found by auditing every stamp
-        # in the change for it.
-        revision.bump(cid)
-        raise
-    if fired:
-        # `_fire` writes events.json, and it writes it OUTSIDE the hold above --
-        # so the token published in there is already current-looking while this
-        # advance is still only half-made. A reader that picks it up in between
-        # would hold a value certifying a state that is about to change again,
-        # and the middleware's stamp is a whole response away (Codex review).
-        # Only when something was actually stamped: a move that crossed no
-        # scheduled event wrote nothing here.
-        revision.bump(cid)
+        try:
+            # After the clock has landed, never before: an event stamped by a
+            # move that then failed to commit would be a fired event in a
+            # campaign whose present never reached it. Forward moves only
+            # (#101) -- a backward move is a correction, and un-firing on the
+            # way back would erase the only record that the story already
+            # played the event.
+            if computed["elapsed_days"] > 0:
+                fired = _fire(cid, computed["events"], target)
+        finally:
+            # In the SAME hold as the writes, which is what makes the check
+            # above binding rather than merely narrow. The activity middleware
+            # stamps this campaign again once the response is on its way out,
+            # and that is far too late for a second advance: releasing the lock
+            # with the old token still on disk is long enough for a request
+            # carrying it to take the lock, read the value this one was supposed
+            # to have replaced, and commit a move priced against a clock that
+            # has already moved. Two callers with one token is exactly the case
+            # `expect_revision` exists for, so the token has to be gone before
+            # the lock is.
+            #
+            # In a `finally` because `_fire` stamps events one at a time and a
+            # raise part-way leaves some of them written.
+            revision.bump(cid)
     return {"moved": True, "now": target, "digest": computed, "fired": fired}
 
 

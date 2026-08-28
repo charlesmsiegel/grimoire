@@ -1048,6 +1048,34 @@ test("a changed digest re-prices even when the token has not moved", async () =>
   expect(api.advanceTime).not.toHaveBeenCalled();
 });
 
+test("a rejected gate re-reads the clock, not only the pricing", async () => {
+  // `Now:` is the one number this panel shows that a re-preview cannot replace:
+  // `/advance/preview` answers with a digest and a token and says nothing about
+  // where the campaign's present is. So a clock another tab moved would sit on
+  // screen through the whole recovery, and the next pricing would be seeded
+  // from it (Codex review).
+  const WITH_EVENT: AdvanceDigest = { ...BIG, events: [
+    { id: "the-coronation", name: "The coronation", date: "2027-02-01",
+      friendly: "1 February 2027", note: "", fired: null, passed: false,
+      in_days: 39 }] };
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: WITH_EVENT });
+  // The first read is the campaign as the reader opened it; every read after
+  // that is a campaign another tab has moved.
+  vi.mocked(api.getCampaignClock).mockResolvedValueOnce(CLOCK);
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    { ...CLOCK, now: "2026-12-31", friendly: "31 December 2026" });
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/preview it again/);
+
+  // The reader is told to preview again, and what they are looking at while
+  // they do is the campaign's actual present.
+  expect(await screen.findByText(/Now: 31 December 2026/)).toBeInTheDocument();
+});
+
 test("the checkpoint key names the move, not just the token", async () => {
   // The reload case, which no in-panel check can reach: the panel's state is
   // gone, so a fresh preview rebuilds the question from whatever the campaign

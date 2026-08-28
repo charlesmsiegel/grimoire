@@ -330,8 +330,21 @@ def get_campaign_module(cid: str):
 def put_campaign_module(cid: str, body: ModuleSetting):
     try:
         with store.locks.campaign_lock(cid):
-            store.modules.set_campaign_module(cid, body.module.strip())
-            store.audit.clear_baselines(cid)
+            try:
+                store.modules.set_campaign_module(cid, body.module.strip())
+                store.audit.clear_baselines(cid)
+            finally:
+                # Two writes, one hold, and the token published after both --
+                # in a `finally` because `set_campaign_module` rewrites
+                # `campaign.md` atomically and `clear_baselines` can then fail,
+                # which answers 500 over a campaign that has genuinely changed
+                # module (Codex review). The middleware stamps success only, so
+                # a token priced under the old module would otherwise stay
+                # valid. A raise before either wrote costs an over-bump, which
+                # is a re-price for somebody and the direction this value is
+                # deliberately wrong in; the 404s below are raised by the same
+                # writes and cost the same.
+                store.revision.bump(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     except store.modules.ModuleNotFound:
