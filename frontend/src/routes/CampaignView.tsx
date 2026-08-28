@@ -12,6 +12,7 @@ import {
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
   type CampaignBudget,
   type IncomingRef,
+  type UsageBucket,
   type UsagePostBucket,
 } from "../api/client";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
@@ -31,7 +32,7 @@ import { CompositionPanel } from "../components/CompositionPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CampaignCover";
 import { SceneInspector } from "../components/SceneInspector";
-import { PostCost, money } from "../components/cost";
+import { PostCost, UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import RerollRoutePicker, {
@@ -40,7 +41,8 @@ import RerollRoutePicker, {
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { onConfigChanged } from "../appEvents";
-import { usePublishSceneModel, usePublishShellContext } from "../components/ShellStatus";
+import { usePublishSceneModel, usePublishSceneSpend, usePublishShellContext }
+  from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
 import { PageShell } from "../components/PageShell";
 import { useFocus } from "../components/focus";
@@ -1534,7 +1536,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // transcript. The inspector's Cost section is where a reader who wants the
   // figure and an explanation goes.
   const [postCosts, setPostCosts] =
-    useState<{ cid: string; sid: string; byPost: Record<number, UsagePostBucket> } | null>(null);
+    useState<{ cid: string; sid: string; byPost: Record<number, UsagePostBucket>;
+               totals: UsageBucket } | null>(null);
   useEffect(() => {
     if (!activeId) { setPostCosts(null); return; }
     let live = true;
@@ -1549,7 +1552,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     api.getSceneUsage(forCid, forSid)
       .then((u) => {
         if (!live) return;
-        setPostCosts({ cid: forCid, sid: forSid,
+        // The scene's own totals ride the read the chips already pay for.
+        // They are summed over every ledger row in the scene's lifetime, so
+        // they stay correct where the per-post list is capped or the scan is
+        // clamped -- which is why the bar says the total and the gutter says
+        // the breakdown, rather than the bar adding the gutter up.
+        setPostCosts({ cid: forCid, sid: forSid, totals: u.totals,
                        byPost: Object.fromEntries(u.by_post.map((b) => [b.post, b])) });
       })
       .catch(() => { if (live) setPostCosts(null); });
@@ -1557,9 +1565,26 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   }, [cid, activeId, ctxKey]);
 
   /** The chips, but only where they describe the transcript on screen. */
-  const postChips =
+  const sceneCosts =
     postCosts && loaded && postCosts.cid === loaded.cid && postCosts.sid === loaded.sid
-      ? postCosts.byPost : null;
+      ? postCosts : null;
+  const postChips = sceneCosts?.byPost ?? null;
+  /** What this scene has cost, as the scene head prints it.
+   *
+   *  `bucketPrice` rather than a bare figure: a scene whose calls nobody
+   *  priced reads "not reported" instead of `$0.00`, and one the ledger has no
+   *  rows for at all prints nothing -- "never generated against" is not "cost
+   *  nothing". The design puts spend and modelled side by side here, and they
+   *  stay side by side: `Footnotes` in the inspector is where the three are
+   *  explained, and this is the one line of it the bar has room for. */
+  const sceneSpend = sceneCosts && sceneCosts.totals.calls > 0
+    // `calls > 0` is the "never generated against" test, and it has to be made
+    // here: `bucketPrice` answers `$0.00` for an all-zero bucket, which is
+    // correct for a bucket of calls that genuinely cost nothing and wrong for
+    // a scene that has no calls in it at all. The two are the same numbers and
+    // different claims, and only the caller knows which one it is holding.
+    ? bucketPrice(sceneCosts.totals)
+    : null;
 
   // A dismissal belongs to the campaign it was made in, to the level it was
   // made at, and to the budget it was made against. Without the campaign, "I
@@ -3791,6 +3816,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // a cid, not a name, and which scene is open is state that lives only here.
   // During a review it names the scene being absorbed, not the one selected —
   // the scene is off the screen, so the pill is the only thing still saying it.
+  // The other half of the header's scene pill. Published rather than read by
+  // the chrome for `usePublishShellContext`'s reason: the header has a
+  // pathname, and which scene is open is state that lives only here.
+  usePublishSceneSpend(absorb ? null : sceneSpend);
   usePublishShellContext(
     name ? { campaign: name,
              scene: absorb ? `Absorbing ${absorbTitle}`
@@ -4333,6 +4362,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               <div className="eyebrow">
                 SCENE {sceneNumber(activeId, scenes.length)} · {messages.length}{" "}
                 {messages.length === 1 ? "TURN" : "TURNS"}
+                {/* What the scene has cost, which used to be reachable only by
+                    opening the inspector. It is the ledger's own total for the
+                    scene, not a sum of the gutter chips: those are capped and
+                    can be clamped, and a headline built by adding a capped
+                    list would understate without saying so. */}
+                {sceneSpend && (
+                  <span className={sceneSpend === UNPRICED ? "money-unpriced" : undefined}>
+                    {" · "}{sceneSpend}{sceneSpend === UNPRICED ? "" : " SPEND"}
+                  </span>
+                )}
               </div>
               {renamingScene ? (
                 <input

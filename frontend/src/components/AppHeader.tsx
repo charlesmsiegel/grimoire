@@ -53,7 +53,7 @@ export default function AppHeader(
   const { setFocus } = useFocus();
   const theme = useThemeSetting();
   const { pathname } = useLocation();
-  const { context, usage, sceneModel, sceneReady } = useShellStatus();
+  const { context, usage, sceneSpend, sceneModel, sceneReady } = useShellStatus();
   // The open campaign's scene model wins over the global one: with per-task
   // routing (#142) the active connection is not necessarily what writes this
   // campaign's prose, and the header exists to name what the next turn costs.
@@ -106,13 +106,22 @@ export default function AppHeader(
 
       <span className="header-spacer" />
 
-      {/* The scene pill. The design pairs the context percentage with the
-          scene's spend; the money half is not built here — the rail and this
-          pill both stay out of the ledger until the costs slice gives them a
-          maintained aggregate to read. */}
-      {inScene && usage !== null && (
-        <span className="scene-pill" title="How full the last prompt left the context budget">
-          CTX {Math.round(usage)}%
+      {/* The scene pill: what this scene has cost, and how full the last
+          prompt left the context budget. Two facts about the scene in front of
+          you, which is the only screen either is true of.
+
+          Either half can be absent and the pill still draws: a scene nobody
+          has generated in has no spend, and one sent before a budget was set
+          has no percentage. Both absent and there is no pill -- rather than an
+          empty one, or a `$0.00` for a scene that was never generated in. */}
+      {inScene && (sceneSpend !== null || usage !== null) && (
+        <span className="scene-pill"
+              title={[sceneSpend && `This scene has cost ${sceneSpend}`,
+                      usage !== null && "How full the last prompt left the context budget"]
+                     .filter(Boolean).join(" · ")}>
+          {sceneSpend !== null && <span className="scene-pill-spend">{sceneSpend}</span>}
+          {sceneSpend !== null && usage !== null && " · "}
+          {usage !== null && `CTX ${Math.round(usage)}%`}
         </span>
       )}
 

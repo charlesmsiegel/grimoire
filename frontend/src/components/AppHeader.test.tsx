@@ -9,7 +9,8 @@ vi.mock("../api/client", () => ({
 import AppHeader from "./AppHeader";
 import type { ProviderHealth } from "../api/types";
 import { ThemeProvider } from "../theme/ThemeProvider";
-import { ShellStatusProvider, usePublishSceneModel } from "./ShellStatus";
+import { ShellStatusProvider, usePublishContextUsage, usePublishSceneModel,
+         usePublishSceneSpend, usePublishShellContext } from "./ShellStatus";
 
 /** What the provider last actually did (#146). `null` is "nothing has been
  *  recorded", which is the state the dot is green-but-unproven in — so a test
@@ -94,4 +95,76 @@ test("a page with no opinion about readiness leaves the global verdict alone", a
   // pass whether it did or not.
   renderHeader("vendor/cheap", null, WORKED);
   expect(await screen.findByTitle(/OpenRouter, connected/)).toBeInTheDocument();
+});
+
+
+// ---- the scene pill ----
+
+/** A page inside a scene, publishing the three things the pill is made of.
+ *
+ *  The scene NAME as well as the figures: the pill is gated on a page saying
+ *  it has a scene open, which is a stronger claim than the URL looking like
+ *  one — a review replaces the transcript at the same address. */
+function ScenePublisher({ spend, usage, scene = "The tide" }:
+  { spend: string | null; usage: number | null; scene?: string }) {
+  usePublishShellContext(scene ? { campaign: "Run", scene } : null);
+  usePublishSceneSpend(spend);
+  usePublishContextUsage(usage);
+  return null;
+}
+
+function renderPill(spend: string | null, usage: number | null,
+                    scene = "The tide") {
+  return render(
+    <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+      <ThemeProvider initial="light">
+      <ShellStatusProvider>
+        <ScenePublisher spend={spend} usage={usage} scene={scene} />
+        <AppHeader model="vendor/active" connection="OpenRouter" ready health={null}
+                   railDrawer={false} onOpenRail={() => {}} />
+      </ShellStatusProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+test("the pill pairs the scene's spend with the context percentage", async () => {
+  // The design's `SCENE $0.41 · CTX 61%`. Two facts about the scene in front
+  // of you, which is the only screen either is true of.
+  renderPill("$0.41", 61);
+
+  expect(await screen.findByText("$0.41")).toBeInTheDocument();
+  expect(screen.getByText(/CTX 61%/)).toBeInTheDocument();
+});
+
+test("either half can be missing and the pill still draws", async () => {
+  // A scene nobody has generated in has no spend; one sent before a budget was
+  // set has no percentage. Neither absence is a reason to drop the other.
+  const { unmount } = renderPill("$0.41", null);
+  expect(await screen.findByText("$0.41")).toBeInTheDocument();
+  expect(screen.queryByText(/CTX/)).not.toBeInTheDocument();
+  unmount();
+
+  renderPill(null, 61);
+  expect(await screen.findByText(/CTX 61%/)).toBeInTheDocument();
+});
+
+test("with neither there is no pill, rather than an empty one", async () => {
+  renderPill(null, null);
+  await screen.findByText("VENDOR/ACTIVE");
+
+  expect(screen.queryByText(/CTX/)).not.toBeInTheDocument();
+  // ...and no `$0.00` for a scene that was never generated in.
+  expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+});
+
+test("outside a scene the pill says nothing about one", async () => {
+  // The figure is about the scene on screen. A page with no scene open —
+  // Configuration, the campaign hub, a review — has none for it to be about,
+  // and says so by publishing an empty scene name.
+  renderPill("$0.41", 61, "");
+  await screen.findByText("VENDOR/ACTIVE");
+
+  expect(screen.queryByText("$0.41")).not.toBeInTheDocument();
+  expect(screen.queryByText(/CTX/)).not.toBeInTheDocument();
 });

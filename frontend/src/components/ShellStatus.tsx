@@ -14,6 +14,19 @@ type Ctx = {
    *  then says nothing rather than claiming 0%. */
   usage: number | null;
   setUsage: (next: number | null) => void;
+  /** What the scene on screen has cost, already formatted — the ledger's own
+   *  total for it, not a sum of the gutter chips.
+   *
+   *  Formatted rather than a number, because the honest answer is sometimes
+   *  not one: a scene whose calls nobody priced reads "not reported", and one
+   *  the ledger has no rows for at all publishes `null` and the pill says
+   *  nothing. Passing a figure and a flag would put the rule that decides
+   *  between them in two places; `components/cost.tsx` is where it lives.
+   *
+   *  Only a page that owns a scene can know this, so it is published upward
+   *  like `context` rather than read by the chrome. */
+  sceneSpend: string | null;
+  setSceneSpend: (next: string | null) => void;
   /** The model this campaign's scene turns will actually run on (#142), when
    *  that is not simply the active connection's. `null` outside a campaign, and
    *  the header falls back to the global one. */
@@ -30,6 +43,7 @@ type Ctx = {
 // shell to be mounted around it just to be tested.
 const ShellStatusCtx = createContext<Ctx>({
   context: null, setContext: () => {}, usage: null, setUsage: () => {},
+  sceneSpend: null, setSceneSpend: () => {},
   sceneModel: null, setSceneModel: () => {},
   sceneReady: null, setSceneReady: () => {},
 });
@@ -37,12 +51,13 @@ const ShellStatusCtx = createContext<Ctx>({
 export function ShellStatusProvider({ children }: { children: ReactNode }) {
   const [context, setContext] = useState<ShellContext>(null);
   const [usage, setUsage] = useState<number | null>(null);
+  const [sceneSpend, setSceneSpend] = useState<string | null>(null);
   const [sceneModel, setSceneModel] = useState<string | null>(null);
   const [sceneReady, setSceneReady] = useState<boolean | null>(null);
   const value = useMemo(
-    () => ({ context, setContext, usage, setUsage, sceneModel, setSceneModel,
-             sceneReady, setSceneReady }),
-    [context, usage, sceneModel, sceneReady]);
+    () => ({ context, setContext, usage, setUsage, sceneSpend, setSceneSpend,
+             sceneModel, setSceneModel, sceneReady, setSceneReady }),
+    [context, usage, sceneSpend, sceneModel, sceneReady]);
   return <ShellStatusCtx.Provider value={value}>{children}</ShellStatusCtx.Provider>;
 }
 
@@ -70,6 +85,19 @@ export function usePublishShellContext(context: ShellContext): void {
 /** Same contract for the context-budget percentage the header shows beside the
  *  model. Cleared on unmount for the same reason: a percentage that outlives
  *  the campaign it was measured in is a lie about the page you are on. */
+/** Publish the open scene's spend for as long as the caller is mounted.
+ *
+ *  Cleared on unmount for `usePublishShellContext`'s reason: the chrome
+ *  outlives the page, and a figure left behind would sit in the pill over a
+ *  screen it is not about. */
+export function usePublishSceneSpend(spend: string | null): void {
+  const { setSceneSpend } = useShellStatus();
+  useEffect(() => {
+    setSceneSpend(spend);
+    return () => setSceneSpend(null);
+  }, [spend, setSceneSpend]);
+}
+
 export function usePublishContextUsage(usage: number | null): void {
   const { setUsage } = useShellStatus();
   useEffect(() => {

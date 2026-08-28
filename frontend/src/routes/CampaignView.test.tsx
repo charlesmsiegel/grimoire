@@ -7702,3 +7702,59 @@ test("a shown note is not plated as the narrator", async () => {
   // three would not.
   expect(within(note as HTMLElement).queryByText("Grimoire")).not.toBeInTheDocument();
 });
+
+
+// ---- what the scene has cost, where the reader already is ----
+
+function sceneUsage(over: Record<string, unknown> = {}) {
+  const zero = {
+    calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
+    cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
+    modelled_usd: 0, priced_calls: 0, unpriced_calls: 0, subscription_calls: 0,
+    modelled_calls: 0, unmetered_calls: 0, duration_ms: 0,
+  };
+  return {
+    campaign: "run", scene: "s1", since: "", until: "", generated_at: "",
+    clamped: false, by_task: [], by_post: [], turns: [], listed: 0,
+    truncated: false,
+    totals: { ...zero, calls: 4, cost_usd: 0.41, priced_calls: 4, ...over },
+  };
+}
+
+test("the scene bar says what the scene has cost", async () => {
+  // It used to be reachable only by opening the inspector, which is a surface
+  // you have to leave the scene to open — so nobody opened it.
+  (api.getSceneUsage as any).mockResolvedValue(sceneUsage());
+  renderCampaign();
+
+  expect(await screen.findByText(/\$0\.41 SPEND/)).toBeInTheDocument();
+});
+
+test("a scene nobody has generated in shows no figure at all", async () => {
+  // "Never generated against" is not "cost nothing", and `$0.00` says the
+  // second — the one claim the cost surfaces exist not to make.
+  (api.getSceneUsage as any).mockResolvedValue(
+    sceneUsage({ calls: 0, cost_usd: 0, priced_calls: 0 }));
+  renderCampaign();
+
+  await screen.findByText("Scene ⋯");
+  expect(screen.queryByText(/SPEND/)).not.toBeInTheDocument();
+  expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+});
+
+test("a scene whose calls nobody priced says so rather than $0.00", async () => {
+  (api.getSceneUsage as any).mockResolvedValue(
+    sceneUsage({ cost_usd: 0, priced_calls: 0, unpriced_calls: 4 }));
+  renderCampaign();
+
+  expect(await screen.findByText(/not reported/)).toBeInTheDocument();
+});
+
+test("a ledger read that failed costs the figure and nothing else", async () => {
+  (api.getSceneUsage as any).mockRejectedValue(new Error("busy"));
+  renderCampaign();
+
+  // The transcript is the page; the money is a line on the bar above it.
+  expect(await screen.findByText("Scene ⋯")).toBeInTheDocument();
+  expect(screen.queryByText(/SPEND/)).not.toBeInTheDocument();
+});

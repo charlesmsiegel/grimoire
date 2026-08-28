@@ -3670,6 +3670,9 @@ a.column-back { text-decoration: none; }
   font-family: var(--fm, monospace); font-size: 9.5px; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--muted); white-space: nowrap;
 }
+/* The money half, in the ink the rest of the app gives a real figure. It is
+   the half a reader is scanning for; the context percentage is context. */
+.scene-pill-spend { color: var(--ink); }
 
 /* ---- below RAIL_PX: the rail is a drawer ---- */
 @media (max-width: 1180px) {
