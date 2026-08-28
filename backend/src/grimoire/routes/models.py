@@ -563,6 +563,14 @@ class RefList(BaseModel):
     refs: list[Ref]
 
 
+class SyncPin(BaseModel):
+    # One ref plus the direction, because pinning is a toggle with two spellings
+    # ("stop offering updates" / "resume") and a body that names the end state
+    # is idempotent where a bare toggle would flip on a retried request.
+    ref: Ref
+    pinned: bool
+
+
 class PushBody(BaseModel):
     # Set only after the user has been shown the library's competing version:
     # this is the mirror of accepting a pull conflict, and it overwrites.

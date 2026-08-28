@@ -74,6 +74,7 @@ from .models import (
     RoutingUpdate,
     ScheduledEventCreate,
     ScheduledEventEdit,
+    SyncPin,
     VersionCreate,
     VersionUpdate,
     VoiceAnchorSave,
@@ -1033,6 +1034,39 @@ def post_reject(cid: str, body: RefList):
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return {"ok": True}
+
+
+@router.get("/campaigns/{cid}/composition")
+def get_composition(cid: str):
+    """Every ref this campaign holds against the library, with its state and
+    pin -- the join `/incoming`, `/diverged` and `/appearances` are projections
+    of, which the composition panel used to assemble client-side (#71)."""
+    try:
+        store.campaigns.ensure_campaign_slim(cid)
+        return {"rows": store.sync.composition(cid)}
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+
+
+@router.put("/campaigns/{cid}/composition/pins")
+def put_composition_pin(cid: str, body: SyncPin):
+    """Pin one ref against the sync engine, or unpin it (#71). Pinned refs are
+    not offered by `/incoming` and are dropped from accept/reject bodies; the
+    base hash is never touched, so unpinning restores exactly what was
+    waiting."""
+    try:
+        store.campaigns.ensure_campaign_slim(cid)
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    # Refused for a ref the engine never consults -- not in the manifest and
+    # not a locked actor -- while somebody is there to read the refusal; a pin
+    # on nothing would sit in the file meaning nothing. Unpinning is exempt: it
+    # only ever removes, and the ref it names may have left the composition
+    # since it was pinned.
+    if body.pinned and not store.sync.is_composition_ref(cid, body.ref.kind, body.ref.id):
+        raise HTTPException(status_code=404,
+                            detail="ref is not part of this campaign's composition")
+    return {"pinned": sorted(store.sync.set_pin(cid, body.ref.kind, body.ref.id, body.pinned))}
 
 
 def _record_name(cid: str, kind: str, eid: str) -> str | None:
