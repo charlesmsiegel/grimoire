@@ -88,5 +88,6 @@ from .snapshots import (  # noqa: F401
                plot_snapshot,
                relationships_snapshot,
                state_snapshot,
+               steering_snapshot,
 )
 from .weather import _apply_weather, _weather_edits  # noqa: F401

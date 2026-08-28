@@ -13,6 +13,8 @@
                       snippets/fact_line.j2) | None
       group_snapshot — rendered "- groups/<gid> (<Name>): <state>" lines,
                         "\n"-joined (see absorb.group_snapshot) | None
+      steering_snapshot — rendered "- <text>" reroll-steering lines,
+                        "\n"-joined (see absorb.steering_snapshot) | None
       transcript — str (see snippets/transcript.j2) -#}
 {%- set head = [] -%}
 {%- if facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
@@ -28,6 +30,7 @@
 {%- if plot_snapshot -%}{%- set _ = head.append("Current plot threads:\n" ~ plot_snapshot) -%}{%- endif -%}
 {%- if commitment_snapshot -%}{%- set _ = head.append("Open commitments:\n" ~ commitment_snapshot) -%}{%- endif -%}
 {%- if fact_snapshot -%}{%- set _ = head.append("Standing facts:\n" ~ fact_snapshot) -%}{%- endif -%}
+{%- if steering_snapshot -%}{%- set _ = head.append("Player steering notes (what the player typed to regenerate replies in this scene, oldest first):\n" ~ steering_snapshot) -%}{%- endif -%}
 {%- if head -%}
 {{ head | join("\n") }}
 

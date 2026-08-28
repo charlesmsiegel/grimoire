@@ -2441,7 +2441,8 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
             store.absorb.state_snapshot(cid, sid),
             store.absorb.relationships_snapshot(cid, sid),
             store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
-            store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid)),
+            store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid),
+            store.absorb.steering_snapshot(cid, sid)),
         watermark=store.pending_reviews.watermark(scene["messages"]))
 
     async def work():
