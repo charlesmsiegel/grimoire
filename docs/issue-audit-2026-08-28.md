@@ -15,7 +15,8 @@ drift is older claims the last audit didn't touch: several issues name
 blockers that have since shipped (#36 entity kinds, #37/#222 typed entity
 fields, #59/#60 voice anchors + emergent characters, #100 advance, #110/#111
 banding + conflicts, #120 turnstate, #126 packer, #130 prompt diff, #139
-export formats, #150 prompt log, #160 mechanics, #376 post images,
+export formats, #157's past-turn prompt log (not #150, which is still
+unbuilt — see #151), #160 mechanics, #376 post images,
 `sync.promote`/`push`, `sync.diverged` + CompositionPanel). One structural
 note: `routes.py` and `store/context.py` are packages now, so file:line
 citations in older issue bodies are stale as *lines* even where the claims
@@ -106,9 +107,12 @@ activates.
 **Next**
 
 - **#102 — NPC/group ticks over a time skip.** #100's advance + digest
-  shipped, and the digest's overdue/stale annotations already are Option
-  C's deterministic report; group state exists now. The remaining build is
-  the reviewable interim pass. Medium. Do before #108.
+  shipped, and group state exists now — but the digest does *not* supply
+  this issue's report: its aging rows come from open plot threads and
+  commitments (#103), it reads the roster only for birthdays, and its own
+  docstring says #100's prose "meanwhile" is deliberately absent. Both
+  halves remain: the deterministic NPC/group staleness report and the
+  reviewable interim pass. Medium. Do before #108.
 - **#105 — time granularity.** Day-only precision is now the binding
   constraint on #108 (durations are `days` only) and stored time already
   partially reaches prompts (`{{time}}` macro, weather). Medium.
@@ -145,10 +149,15 @@ Game rules meaning what they say.
   *actively* skip mechanics sections, drift staging, turnstate writes and
   cost bucketing. Write the invariants + regression test **before** #187
   builds the framework — this is the integrity half of the aux epic.
-- **#221 — sheets on world records.** Re-scope and unblock: the v1 typed
-  fields it deferred are shipped, and `store/sheets/` *is* the mechanics
-  data contract it was waiting for. The open question is now concrete: can
-  a creature/item/group carry a module sheet. Medium.
+- **#221 — sheets on world records: verify and close.** The question "can
+  a creature/item/group carry a module sheet" is answered end-to-end:
+  `sheets.FILE_KINDS` covers every entity kind, world-scope sheet routes
+  exist (`routes/worlds.py:273`), `EntityEditor` offers "+ New … with
+  sheet" where the module declares a matching sheet type, and
+  `test_sheets_store.py` proves a world item carrying one. The
+  "deferred (#221)" note in `entity_schema.py`'s docstring is stale.
+  Residue, if any, is whatever stat-block shape a module cannot yet
+  express — a new, narrower issue, not this one.
 
 **Parked (keep parked, but the premises improved)**
 
@@ -331,8 +340,9 @@ Getting content in and out without loss.
 
 If the next stretch of work took only the top of each aspect, in order:
 
-1. **Hygiene**: close #57/#113/#119/#40; run the #82 playtest; write down
-   the #437 rail-vs-grid decision. (Hours, and the list shrinks by six.)
+1. **Hygiene**: close #57/#113/#119/#40/#221; run the #82 playtest; write
+   down the #437 rail-vs-grid decision. (Hours, and the list shrinks by
+   seven.)
 2. **#61+#62** — emergent-NPC voice/capsule pass (character coherence,
    small, fully unblocked).
 3. **#20** — stash ST lorebook fields (portability, small; *standalone
@@ -349,6 +359,6 @@ If the next stretch of work took only the top of each aspect, in order:
 
 Behind those: #102 → #105 → #108 as the time-skip arc, #27 + #136 as the
 import arc, #58 after the #82 decision, #151/#132/#30 as the transparency
-arc, #221 as the mechanics arc — and the two epics (inventory, auxiliary
+arc — and the two epics (inventory, auxiliary
 generation) stay parked/planned rather than started casually, each with a
 note above about how the ground under them has improved.
