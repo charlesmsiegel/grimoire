@@ -214,15 +214,20 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
                "a sheet may still be keyed to the old kind", old_ref, new_ref)
         swept = []
         for cid in cids:
+            # Whether this campaign may have been WRITTEN, which is not the same
+            # question as whether the follow succeeded (#409). A partial follow
+            # -- the record materialized, an inheritance ledger rewritten, and
+            # then a later repoint raising -- is caught just below and the sweep
+            # carries on, so the bump was never reached while the campaign had
+            # changed underneath it (Codex review). The route then answers 200,
+            # so nothing else was ever going to stamp it.
+            wrote = False
             try:
-                if _follow_in_campaign(cid, wroot, kind, eid, new_kind, new_eid):
+                wrote = _follow_in_campaign(cid, wroot, kind, eid, new_kind, new_eid)
+                if wrote:
                     swept.append(cid)
-                    # Inside the hold that covers the repoint (#409). A world
-                    # route reaches this, so nothing in `/api/campaigns/...`
-                    # stamps the campaigns it rewrites -- see `sync.demote`,
-                    # which makes the same call for the same reason.
-                    revision.bump(cid)
             except (OSError, ValueError, entities.EntityNotFound) as exc:
+                wrote = True    # it may have written before it raised
                 # Per campaign, not per sweep, and for `overlay.forget_world_record`'s
                 # reason: the world record has already moved by the time we get
                 # here, so one campaign with an unreadable ledger must not cost
@@ -232,6 +237,14 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
                 # nothing holds a world-record lock, and there is none to hold.
                 log.warning("could not follow %s -> %s into campaign %s (%s) -- its refs "
                             "still name the old kind", old_ref, new_ref, cid, exc)
+            # Inside the hold that covers the repoint. A world route reaches
+            # this, so nothing in `/api/campaigns/...` stamps the campaigns it
+            # rewrites -- see `sync.demote`, which makes the same call for the
+            # same reason. A follow that cleanly returned False wrote nothing
+            # and is deliberately not stamped; a failed one cannot say that
+            # about itself, so it is.
+            if wrote:
+                revision.bump(cid)
     return {"id": new_eid, "campaigns": swept}
 
 
