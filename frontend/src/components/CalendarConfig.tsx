@@ -41,6 +41,9 @@ export function CalendarConfig({ scope, onConfig }: {
   // The window the SERVER currently holds. `save` resolves a cleared input
   // against it so the request always carries a number -- see `save`.
   const storedWarn = useRef(DEFAULT_WARN_DAYS);
+  // The scope this render belongs to, readable from a settled promise -- see `save`.
+  const current = useRef(`${scope.kind}/${scope.id}`);
+  current.current = `${scope.kind}/${scope.id}`;
   // A load that failed is not a load still running. Without the distinction
   // "Loading calendar…" is what an unreachable store shows forever, and on the
   // world Overview that is the first thing a new library puts on screen.
@@ -100,8 +103,15 @@ export function CalendarConfig({ scope, onConfig }: {
     // comment below rests on: the server normalizes what the form sends, it
     // never decides a field the form is showing.
     const outgoing = { ...cfg!, warn_days: cfg!.warn_days ?? storedWarn.current };
+    // The scope this save belongs to. This component is reused across worlds and
+    // campaigns, so a save still in flight when the scope changes would
+    // otherwise install ITS config over the new scope's load -- leaving the
+    // previous record's calendar on screen under the new record's Save button,
+    // where the next edit writes it over the new one.
+    const startedIn = `${scope.kind}/${scope.id}`;
     try {
       await api.setCalendarConfig(scope, outgoing);
+      if (current.current !== startedIn) return;
       storedWarn.current = outgoing.warn_days;
       setCfg(outgoing);   // the control shows the number that was actually saved
       setSaved(true);

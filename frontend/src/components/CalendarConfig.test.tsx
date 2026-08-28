@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { CalendarConfig } from "./CalendarConfig";
 
 vi.mock("../api/client", () => ({
@@ -198,4 +198,30 @@ test("a warn window past the server's ceiling is clamped, not shown back as type
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
   await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: 365 })));
+});
+
+test("a save that settles after a scope change does not install itself", async () => {
+  // This component is reused across worlds and campaigns. A save still in
+  // flight when the scope changes would otherwise put ITS config on screen
+  // under the new record's Save button, where the next edit writes the old
+  // record's calendar over the new one.
+  let landOld: (v: any) => void = () => {};
+  (api.setCalendarConfig as any).mockReturnValueOnce(
+    new Promise((r: any) => { landOld = r; }));
+  const { rerender } = render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  const input = await screen.findByLabelText("Warn ahead days");
+  fireEvent.change(input, { target: { value: "21" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+  // The reader moves to a world, whose calendar loads with a different window.
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "GB", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: true, stale_after_days: 30, warn_days: 3 });
+  rerender(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  await waitFor(() => expect(
+    screen.getByLabelText<HTMLInputElement>("Warn ahead days").value).toBe("3"));
+
+  await act(async () => { landOld({ ok: true }); });
+  // The campaign's 21 must not land on the world's form.
+  expect(screen.getByLabelText<HTMLInputElement>("Warn ahead days").value).toBe("3");
 });
