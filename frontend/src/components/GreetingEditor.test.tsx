@@ -458,7 +458,9 @@ test("editing a greeting can re-point its character and version (#17)", async ()
   fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
   await waitFor(() =>
     expect(api.updateGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open",
-      expect.objectContaining({ character: "rowan", version: "main" })),
+      // the primary follows the re-point into the cast: the old character's
+      // own chip becomes the new one's, so the speaker is present at its own opener
+      expect.objectContaining({ character: "rowan", version: "main", present: ["rowan"] })),
   );
 });
 

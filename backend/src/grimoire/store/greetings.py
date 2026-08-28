@@ -174,13 +174,25 @@ def _repoint(meta: dict, character: str | None, version: str | None, vroot: Path
     validating the new pair against `vroot`'s characters before anything is
     written -- a bad pointer raises `characters.CharacterNotFound` /
     `VersionNotFound` and changes nothing. A `None` half keeps what is stored;
-    an empty character clears the version with it (narrator-only)."""
+    an empty character clears the version with it (narrator-only).
+
+    A pair that MATCHES what is stored is not validated: the editor echoes the
+    pointer back on every save, and a greeting whose character has since been
+    deleted (a dangling pointer is a tolerated state everywhere else -- see
+    `char_name`'s fallback) must not become unsaveable because of it. Only an
+    actual re-point has to name something real. A version with no character to
+    hold it is refused rather than silently dropped."""
     new_char = meta.get("character", "") if character is None else character
     new_ver = meta.get("version", "") if version is None else version
+    if (new_char, new_ver) == (meta.get("character", ""), meta.get("version", "")):
+        return
     if not new_char:
+        if version:
+            raise characters.CharacterNotFound(new_char)
         new_ver = ""
     else:
-        characters.read_card(vroot, new_char, new_ver)
+        # two stats, no card read -- existence is the whole question here
+        characters.require_version(vroot, new_char, new_ver)
     meta["character"] = new_char
     meta["version"] = new_ver
 

@@ -880,12 +880,18 @@ def update_greeting(cid: str, gid: str, **kwargs) -> None:
     repoint = character is not None or version is not None
     if repoint or kwargs.get("body") is not None:
         meta = read_greeting(cid, gid)["meta"]
-        effective = meta.get("character", "") if character is None else character
+        stored = (meta.get("character", ""), meta.get("version", ""))
+        effective = stored[0] if character is None else character
+        new_ver = stored[1] if version is None else version
         if effective:
             kwargs["char_root"] = char_root(cid, effective)
-            if repoint:
-                new_ver = meta.get("version", "") if version is None else version
-                characters.read_card(kwargs["char_root"], effective, new_ver)
+            # Only an ACTUAL re-point is validated -- the same skip `_repoint`
+            # makes, so a save echoing a dangling pointer still lands, but made
+            # here too because by `_repoint` the materialize below has happened.
+            if repoint and (effective, new_ver) != stored:
+                characters.require_version(kwargs["char_root"], effective, new_ver)
+        elif repoint and version and (effective, new_ver) != stored:
+            raise characters.CharacterNotFound(effective)
     if not _materialize_flat(cid, "greetings", gid):
         raise greetings.GreetingNotFound(gid)
     greetings.update_greeting(croot_of(cid), gid, **kwargs)
