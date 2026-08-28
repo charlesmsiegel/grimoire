@@ -68,6 +68,12 @@ before: a token minted ahead of the write is readable while the write is still
 landing, and the reader holding it would then pass a check against a campaign
 that had been written since (Codex review).
 
+A STEERING-LOG append (`store/steering.py`'s `record`) bumps after its write
+and inside the lock hold that covers it, for the prompt capture's reason in the
+refusal direction: it lands before the reroll's guards are done refusing, so
+the one response the middleware would stamp for it can come back a 400
+(`TurnSizesDesynced`) with the sidecar already changed (Codex review).
+
 A multi-campaign write reached from a WORLD or MODULE route stamps every
 campaign it wrote, for the same reason and one step further out: nothing under
 `/api/campaigns/...` runs at all. `sync.demote`, `store.reclassify` and the

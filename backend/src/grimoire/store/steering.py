@@ -46,7 +46,7 @@ from __future__ import annotations
 import contextlib
 import json
 
-from . import atomic, locks
+from . import atomic, locks, revision
 from .paths import now_iso
 from .scenes import paths as scenes_paths
 
@@ -99,6 +99,15 @@ def record(cid: str, sid: str, text: str) -> None:
                 scenes_paths._steering_path(cid, sid),
                 json.dumps({"v": SCHEMA, "entries": entries[-STEERING_LIMIT:]},
                            indent=2) + "\n")
+            # Stamps for itself (`store/revision.py`'s census): this write is
+            # reachable on a reroll the route then REFUSES — the
+            # TurnSizesDesynced 400 — and the activity middleware only sees
+            # success. After the write, not before: a token minted ahead of it
+            # is readable while the write is still landing. Inside the try on
+            # purpose — the failsoft above must cover the stamp too, and a
+            # bump lost to the same dead disk costs one stale token, which
+            # `revision.current`'s damage semantics already price.
+            revision.bump(cid)
     except OSError:
         pass
 
