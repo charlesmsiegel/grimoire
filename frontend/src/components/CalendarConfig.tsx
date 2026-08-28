@@ -120,7 +120,10 @@ export function CalendarConfig({ scope, onConfig }: {
       // component's own scope effect if the reader had already moved on.
       onConfig?.(outgoing);
     } catch (err: any) {
-      setError(err.detail ?? String(err));
+      // Guarded like the success path above, and for the same reason: a
+      // rejection from the scope the reader has already left would otherwise
+      // put its error banner over the record now on screen.
+      if (current.current === startedIn) setError(err.detail ?? String(err));
     }
   }
 

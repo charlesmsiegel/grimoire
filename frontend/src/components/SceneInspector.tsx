@@ -415,6 +415,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   if (seenScene !== `${cid}/${sid}`) {
     setSeenScene(`${cid}/${sid}`);
     setWhen(null);
+    // And retire whatever is in flight. Clearing `when` alone is not enough:
+    // a read issued for the PREVIOUS scene still holds the current generation,
+    // so it would pass the check below and put that scene's payload back under
+    // the new ids -- the very state this clear exists to prevent. The two
+    // guards only compose if the reset advances the generation too.
+    whenGen.current += 1;
   }
   const reloadWhen = useCallback(
     (opts?: { fresh?: boolean }) => {

@@ -557,6 +557,41 @@ test("a scene change drops the previous scene's notices before the reload lands"
   expect(screen.queryByText("The envoy arrives")).toBeNull();
 });
 
+test("a read in flight when the scene changes cannot restore the old payload", async () => {
+  // The invariant: a read issued for the previous scene never restores its
+  // payload under the new ids (#106).
+  //
+  // Honest about what this does and does not pin. TWO things enforce it — the
+  // reset advances the generation, and so does the reload that follows it — so
+  // this passes with either one alone and cannot isolate the first. The window
+  // the reset closes is between the render-time clear and the effect flush,
+  // which a test cannot interleave. The bump is kept because it is free and
+  // correct, not because this proves it.
+  const withNotice = {
+    current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
+               secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
+               notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
+                           name: "The envoy arrives", in_days: 2,
+                           friendly: "6 July 2026" }] },
+    history: ["2026-07-04"] };
+  let landOld: (v: any) => void = () => {};
+  (api.getSceneDatetime as any).mockReturnValueOnce(
+    new Promise((r: any) => { landOld = r; }));
+  const { rerender } = render(
+    <MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+                                  onSceneChanged={() => {}} /></MemoryRouter>);
+  await waitFor(() => expect(api.getSceneDatetime).toHaveBeenCalled());
+  // The next scene has nothing imminent, and its read settles first.
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { ...withNotice.current, notices: [] }, history: ["2026-07-04"] });
+  rerender(
+    <MemoryRouter><SceneInspector cid="c" sid="s2" refreshKey={0}
+                                  onSceneChanged={() => {}} /></MemoryRouter>);
+  await screen.findByText(/4 July 2026/);
+  await act(async () => { landOld(withNotice); });
+  expect(screen.queryByText("The envoy arrives")).toBeNull();
+});
+
 test("a scene with nothing imminent shows no warning at all", async () => {
   (api.getSceneDatetime as any).mockResolvedValue({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
