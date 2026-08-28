@@ -60,6 +60,15 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
     blurb: "Providers and models the narrator can be run on.",
     count: () => api.listConnections().then((r) => r.length),
   },
+  // There is no Images section, and the design has one (#437). `ImagesView` is
+  // mounted world-scoped and there is no `/images` route, so an entry here
+  // would point nowhere -- and the rail's Library badge is this list's length,
+  // so it would also ship a count one too high. The prototype's own crumb
+  // agrees it is *a world's* images; what a library-level one would be is the
+  // question that has to be answered before the row can exist.
+  //
+  // Reachable meanwhile from the campaign rail (`?section=images`) and from
+  // the world itself, which is where the records are.
 ];
 
 /** Segment-aware, so /modules-of-my-own is not mistaken for a child of
