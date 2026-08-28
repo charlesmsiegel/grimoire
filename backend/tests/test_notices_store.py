@@ -526,6 +526,25 @@ def test_two_names_differing_only_in_whitespace_get_one_row_each(monkeypatch, tm
     assert _pending(cid) == []
 
 
+def test_a_key_named_twice_in_one_request_is_one_key(monkeypatch, tmp_path):
+    """`forget` reads which keys are present and then deletes them, so a repeat
+    was deleted twice -- and the second `del` raised, 500ing the undo and
+    leaving the notice dismissed, which is the one state this feature has no
+    other way out of. `mark` happens to survive a repeat (it skips what is
+    already stamped) but should still not spend two of its hundred on it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    key = "holiday:1:Saltmarch Eve"
+    assert notices.mark(cid, [key, key]) == [key]
+    assert notices.forget(cid, [key, key]) == [key]
+    assert notices.read(cid) == {}
+
+
+def test_a_batch_of_repeats_does_not_eat_the_cap(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    keys = [f"holiday:{n % 3}:x" for n in range(notices.BATCH_LIMIT * 4)]
+    assert notices.mark(cid, keys) == ["holiday:0:x", "holiday:1:x", "holiday:2:x"]
+
+
 def test_one_request_cannot_restore_unboundedly_many(monkeypatch, tmp_path):
     """The undo route is public and takes a list too. Unbounded it costs a
     membership test per key while holding the lock every other mutator in the

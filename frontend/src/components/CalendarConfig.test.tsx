@@ -256,3 +256,15 @@ test("an edit made while the save is in flight survives it", async () => {
   expect(screen.getByLabelText<HTMLSelectElement>("Holidays region").value).toBe("GB");
   expect(screen.queryByText("Saved.")).toBeNull();
 });
+
+test("exponent notation in the warn window is read as the number it is", async () => {
+  // A number input accepts `1e2`, and `parseInt("1e2", 10)` stops at the `e`
+  // and answers 1 -- so typing a hundred days silently saved a one-day window,
+  // with the form showing 1 afterwards and no sign anything was refused.
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  fireEvent.change(await screen.findByLabelText("Warn ahead days"),
+                   { target: { value: "1e2" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: 100 })));
+});
