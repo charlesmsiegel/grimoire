@@ -252,9 +252,22 @@ work.
 
 **A read-through payload cache in the API layer** (`api/readCache.ts`):
 successful GET payloads for opted-in paths are kept in a module-level map
-keyed by request path. A small hook (`useCachedGet` beside the existing
-patterns) hands a view the cached payload synchronously — marked stale —
-and swaps in the fresh answer when the refetch lands. `useShellPayload`
+keyed by request path, **bounded by a small LRU budget** — the values
+include whole record lists fetched for counts, and a session that visits
+many scopes must not retain every one of them for the life of the tab
+(the browser's HTTP cache already holds the bodies; this map only needs
+the recently-rendered ones). A small hook (`useCachedGet` beside the
+existing patterns) hands a view the cached payload synchronously — marked
+stale — and swaps in the fresh answer when the refetch lands.
+
+**Invalidation must retire what is in flight, not just what has landed.**
+A GET that began before a mutation and settles after it would otherwise
+repopulate the map with the pre-mutation answer — a stale page with no
+revalidation scheduled behind it. `api/client.ts` already solves exactly
+this ordering for its in-flight dedupe (`retireInflight` / the `fresh`
+flag); the cache carries the same idea as a per-path generation: an
+invalidation bumps the generation, and a settling response stamped with an
+older generation is discarded instead of stored. `useShellPayload`
 already implements exactly this posture ("the rail's first job is
 navigation, and navigation must survive a server that stopped answering");
 this generalizes it to the pages.
@@ -288,9 +301,13 @@ not.
 **WorldView stops re-asking everything.** On a section switch, only the
 count of the section being *left* is refreshed (that is the one the user
 could have changed), keeping the full re-ask for `populated` (a scenario
-import creates records in half a dozen sections at once). Combined with the
-cache, switching sections renders the previous counts instantly and
-corrects at most one of them.
+import creates records in half a dozen sections at once). One switch is
+*not* an ordinary leave: a reclassify moves a record between entity kinds
+and then navigates to the destination (`onReclassified={openEntity}`), so
+refreshing only the source would undercount the very section the user
+just landed in — a cross-kind move refreshes **both** affected counts.
+Combined with the cache, switching sections renders the previous counts
+instantly and corrects at most the ones that could have moved.
 
 ## What correctness rests on
 
@@ -338,10 +355,12 @@ corrects at most one of them.
 - **Intra-request dedup**: read-counting tests per fixed handler (shell
   parses each `campaign.md` at most once per request, etc.).
 - **Frontend** (vitest): the hook renders a cached payload synchronously
-  and swaps on settle; `campaignsChanged` drops the entry; a `data_dir`
+  and swaps on settle; `campaignsChanged` drops the entry; a response that
+  settles after its path was invalidated is discarded, not stored (the
+  generation check); the LRU budget evicts; a `data_dir`
   change clears everything; WorldView's section switch issues exactly one
-  count request; existing suites keep passing unchanged, which is the
-  payload-shape guarantee.
+  count request, and a reclassify refreshes both affected kinds; existing
+  suites keep passing unchanged, which is the payload-shape guarantee.
 - **Frozen campaign**: the read-only sweep must not change — the memos are
   pure reuse, and `snapshot.json` not moving is the proof.
 
