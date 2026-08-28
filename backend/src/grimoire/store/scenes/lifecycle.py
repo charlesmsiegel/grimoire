@@ -24,6 +24,7 @@ from .. import (
     relationship_history,
     scene_ids,
     scene_refs,
+    steering,
     turnstate,
 )
 from ..audit import baselines
@@ -77,6 +78,9 @@ def repad(cid: str, width: int) -> None:
     # inherited review carries a commit token, so saving it would write a dead
     # scene's summary into the chronicle under this scene's id.
     pending_reviews.clear_destinations(cid, set(mapping.values()))
+    # ...and the steering log: inherited, it feeds another scene's corrections
+    # to this scene's absorb.
+    steering.clear_destinations(cid, set(mapping.values()))
     for old, new in mapping.items():
         paths._scene_path(cid, old).rename(paths._scene_path(cid, new))
     scene_refs.repoint(cid, mapping)
@@ -243,15 +247,17 @@ def delete_scene(cid: str, sid: str) -> None:
     # `forget_scene` keeps the id as a historical string and takes it out of
     # both joins. Before the unlink, like the three above.
     relationship_history.forget_scene(cid, sid)
-    # The two per-scene sidecars go FIRST. Deleting the transcript is what frees
+    # The three per-scene sidecars go FIRST. Deleting the transcript is what frees
     # the id for reuse, so a crash between the unlinks must not be able to leave
     # a sidecar without one: that orphan would be adopted by the next scene to
-    # take this id -- handing it someone else's parked transcripts, or someone
+    # take this id -- handing it someone else's parked transcripts, someone
+    # else's steering log, or someone
     # else's end-of-scene review, complete with a commit token that would save
     # the dead scene's summary onto the new one. The other order is recoverable
     # in the harmless direction: a scene that still exists merely loses them.
     _unlink_sidecar(paths._review_path(cid, sid))
     _unlink_sidecar(paths._alts_path(cid, sid))
+    _unlink_sidecar(paths._steering_path(cid, sid))
     p.unlink()
     # AFTER the unlink, so a delete that raised records nothing. Deleting the
     # newest scene would otherwise drag the campaign's derived activity

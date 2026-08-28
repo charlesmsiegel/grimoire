@@ -10,6 +10,7 @@ from grimoire.store import (
     plot,
     provenance,
     scene_refs,
+    steering,
     worlds,
 )
 
@@ -46,7 +47,12 @@ def test_repoint_updates_every_store_that_holds_scene_ids(monkeypatch, tmp_path)
                                  "speaker": "Winifred", "certainty": 1.0},
     })
 
+    steering.record(cid, old, "kept the correction")
+
     scene_refs.repoint(cid, {old: "001--2026-07-04--s"})
+
+    assert steering.texts(cid, "001--2026-07-04--s") == ["kept the correction"]
+    assert steering.texts(cid, old) == []
 
     assert appearances.record(cid)["characters/a"]["scenes"] == ["001--2026-07-04--s"]
     assert appearances.record(cid)["characters/b"]["scenes"] == ["other"]  # untouched
