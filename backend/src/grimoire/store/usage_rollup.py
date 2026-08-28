@@ -291,35 +291,43 @@ def _fold(path: Path, start: int, data: dict, rates: usage.Rates) -> int:
     forever, so the bookmark stops in front of it and the next read tries
     again once the rest of the line has landed.
 
-    Opened in binary and split on ``\\n`` for the same reason the offset is in
-    bytes: a text-mode file object's ``tell()`` is an opaque cookie, not a
-    count of anything, and the whole scheme rests on the number meaning what
-    ``st_size`` means.
+    Opened in binary for the same reason the offset is in bytes: a text-mode
+    file object's ``tell()`` is an opaque cookie, not a count of anything, and
+    the whole scheme rests on the number meaning what ``st_size`` means.
+
+    A line at a time, not ``read()`` then split -- ``usage._read_rows`` makes
+    the same choice against the same files and says why: slurping a month holds
+    the whole of it plus a list of every line in memory at once. In the steady
+    state that is a few hundred bytes either way, but a rebuild folds a whole
+    month, and this module exists to keep a rebuild affordable rather than to
+    move where it is unaffordable.
     """
+    consumed = start
     try:
         with open(path, "rb") as f:
             f.seek(start)
-            blob = f.read()
+            for raw in f:
+                # An unterminated final line is a torn write --
+                # `atomic.append_line` documents how one can be produced. It
+                # must not be counted now and skipped forever, so the bookmark
+                # stops in front of it and the next read tries again once the
+                # rest of the line has landed.
+                if not raw.endswith(b"\n"):
+                    break
+                consumed += len(raw)
+                row = _row(raw)
+                if row is None or not usage._is_call(row):
+                    continue
+                usage._add(data["all"], row, rates)
+                cid = row.get("campaign")
+                if isinstance(cid, str) and cid:
+                    bucket = data["campaigns"].setdefault(cid, dict(usage._ZERO))
+                    usage._add(bucket, row, rates)
     except OSError:
-        return start
-    if not blob:
-        return start
-    # `keepends` so the consumed byte count is exact, and the final element is
-    # identifiable as unterminated by what it does NOT end with.
-    lines = blob.splitlines(keepends=True)
-    if lines and not lines[-1].endswith(b"\n"):
-        lines.pop()
-    consumed = start
-    for raw in lines:
-        consumed += len(raw)
-        row = _row(raw)
-        if row is None or not usage._is_call(row):
-            continue
-        usage._add(data["all"], row, rates)
-        cid = row.get("campaign")
-        if isinstance(cid, str) and cid:
-            bucket = data["campaigns"].setdefault(cid, dict(usage._ZERO))
-            usage._add(bucket, row, rates)
+        # Mid-file as well as on open, exactly as `_read_rows` handles it. The
+        # bookmark keeps whatever was folded in before the failure, so the next
+        # read resumes there rather than starting the month again.
+        return consumed
     return consumed
 
 
