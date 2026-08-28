@@ -54,7 +54,9 @@ _ST_EXTENSION_FIELDS = (
     "position", "insertion_order", "order", "priority",
     "probability", "useProbability", "case_sensitive", "caseSensitive",
     "constant", "use_regex", "useRegex", "excludeRecursion",
-    "exclude_recursion", "scanDepth", "scan_depth", "depth", "role",
+    "exclude_recursion", "preventRecursion", "prevent_recursion",
+    "delayUntilRecursion", "delay_until_recursion",
+    "scanDepth", "scan_depth", "depth", "role",
     "matchWholeWords", "match_whole_words",
 )
 

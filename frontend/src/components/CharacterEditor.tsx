@@ -269,9 +269,13 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [bookReview, setBookReview] = useState<LoreEntryDraft[] | null>(null);
   const bookKinds = useEntityKinds((bookReview?.length ?? 0) > 0);
   // A review describes one version's stored book; rows left up across a
-  // version or character switch would commit the previous card's entries.
+  // version or character switch would commit the previous card's entries. The
+  // counter invalidates a PARSE still in flight across that switch too --
+  // clearing the rows alone would let its late response repopulate them with
+  // the old card's entries under the new version's button.
   const detailId = detail?.meta.id ?? null;
-  useEffect(() => { setBookReview(null); }, [vid, detailId]);
+  const bookReq = useRef(0);
+  useEffect(() => { bookReq.current++; setBookReview(null); }, [vid, detailId]);
   const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
   const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
   const [galleryProg, setGalleryProg] = useState<{ done: number; total: number } | null>(null);
@@ -1260,9 +1264,11 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   async function reviewBook() {
     if (!storedCard) return;
     setBookMsg(null);
+    const mine = ++bookReq.current;
     try {
       const file = new File([JSON.stringify(storedCard)], "card.json", { type: "application/json" });
       const { entries } = await api.lorebookParse(wid, file, "json");
+      if (mine !== bookReq.current) return;  // the reader moved on mid-parse
       setBookReview(entries);
     } catch (err: unknown) {
       setError(err);

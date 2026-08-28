@@ -604,13 +604,21 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
                     onChange={(e) => {
                       const next = e.target.value;
                       // A re-point follows the primary into the cast: the old
-                      // character's own chip becomes the new one's (deduped if
-                      // both were present), so the greeting's speaker is never
-                      // absent from its own opener. Chips the reader set stay.
-                      const present = form.character && next
-                        ? form.present.map((id) => (id === form.character ? next : id))
-                            .filter((id, i, arr) => arr.indexOf(id) === i)
-                        : form.present;
+                      // character's chip becomes the new one's (deduped if both
+                      // were present), and a non-empty cast that lacks the new
+                      // primary gains it -- the speaker must not be absent from
+                      // its own opener. An EMPTY cast stays empty (the store
+                      // falls back to the primary), and clearing to narrator
+                      // leaves the chips to the reader.
+                      let present = form.present;
+                      if (next) {
+                        present = present
+                          .map((id) => (form.character && id === form.character ? next : id))
+                          .filter((id, i, arr) => arr.indexOf(id) === i);
+                        if (present.length > 0 && !present.includes(next)) {
+                          present = [...present, next];
+                        }
+                      }
                       setForm({ ...form, character: next, version: "", present });
                     }}>
               <option value="">— no character (narrator-only) —</option>

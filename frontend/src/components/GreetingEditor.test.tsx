@@ -464,6 +464,36 @@ test("editing a greeting can re-point its character and version (#17)", async ()
   );
 });
 
+test("re-pointing adds the new primary to a cast that lacks the old one", async () => {
+  // Codex review: the old primary may be unchecked (or the greeting narrator-
+  // only) while co-present characters are listed -- the new speaker still has
+  // to end up in its own opener's cast.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
+    { id: "winifred", name: "Winifred", default_version: "default", versions: [{ id: "default", name: "default" }] },
+    { id: "rowan", name: "Rowan", default_version: "main", versions: [{ id: "main", name: "main" }] },
+  ]);
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default", present: ["winifred"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["winifred"], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, rev: "r1",
+  });
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText("Character"), { target: { value: "rowan" } });
+  fireEvent.change(screen.getByLabelText("Version"), { target: { value: "main" } });
+  fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
+  await waitFor(() =>
+    expect(api.updateGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open",
+      expect.objectContaining({ character: "rowan", present: ["winifred", "rowan"] })),
+  );
+});
+
 test("editing a greeting sets leads_to edges", async () => {
   (api.listGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
