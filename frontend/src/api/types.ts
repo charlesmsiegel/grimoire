@@ -575,6 +575,25 @@ export type IncomingItem = {
   /** Absent when the campaign has no copy of its own to weigh against. */
   mine?: IncomingBlob;
 };
+/** The composition overview (#71): one row per ref the campaign holds against
+ *  the library — every sync.md ref plus every version-locked actor — with the
+ *  state derived from the same world/base/mine hash comparison the sync engine
+ *  runs on. Unlike `IncomingStatus` there is no `new` (a ref is only listed
+ *  once the campaign holds it) and there IS `diverged`/`insync`, the two
+ *  states `/incoming` never reports. */
+export type CompositionState = "conflict" | "update" | "diverged" | "insync";
+/** The appearance record's version lock, when the actor has one — a different
+ *  system from the sync ref (its upgrade verb is `import_version`, not
+ *  accept), which is why it rides beside the state instead of inside it. */
+export type CompositionLock = { version: string; role: string; scenes: string[] };
+export type CompositionRow = {
+  ref: IncomingRef; name: string; state: CompositionState;
+  /** Pinned against the sync engine: `/incoming` stops offering this ref and
+   *  accept/reject ignore it, while `state` still says what the pin holds off. */
+  pinned: boolean;
+  lock: CompositionLock | null;
+};
+
 /** One campaign descended from a world, and how much of that world it has not
  *  taken yet — the world-side half of the same question (#8). */
 export type WorldCampaignPending = {

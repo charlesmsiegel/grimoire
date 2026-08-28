@@ -2,39 +2,40 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { CompositionPanel } from "./CompositionPanel";
 
 vi.mock("../api/client", () => ({
-  api: {
-    getIncoming: vi.fn(), listDiverged: vi.fn(), listAppearances: vi.fn(),
-    listCharacters: vi.fn(), listPCs: vi.fn(),
-  },
+  api: { getComposition: vi.fn(), setSyncPin: vi.fn() },
 }));
 import { api } from "../api/client";
 
 const CONFLICT = {
-  ref: { kind: "locations", id: "saltmarch-harbor" }, status: "conflict",
-  world: { name: "Saltmarch Harbour", body: "The harbour is blockaded." },
-  mine: { name: "Saltmarch Harbour", body: "A busy port town." },
+  ref: { kind: "locations", id: "saltmarch-harbor" }, name: "Saltmarch Harbour",
+  state: "conflict", pinned: false, lock: null,
 };
 const UPDATE = {
-  ref: { kind: "lore", id: "winifred" }, status: "update",
-  world: { name: "Winifred", body: "Kept the tide ledger." },
-  mine: { name: "Winifred", body: "Kept the tide ledger." },
+  ref: { kind: "lore", id: "winifred" }, name: "Winifred",
+  state: "update", pinned: false, lock: null,
 };
-const LOCKED = { kind: "characters", id: "seraphine", version: "main",
-                 role: "npc", scenes: ["s1", "s2"] };
+const DIVERGED = {
+  ref: { kind: "items", id: "sunblade" }, name: "Sunblade",
+  state: "diverged", pinned: false, lock: null,
+};
+const INSYNC = {
+  ref: { kind: "locations", id: "quay" }, name: "Quay",
+  state: "insync", pinned: false, lock: null,
+};
+const LOCK = { version: "main", role: "npc", scenes: ["s1", "s2"] };
 
 const onReview = vi.fn();
+const onPinned = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getIncoming as any).mockResolvedValue([]);
-  (api.listDiverged as any).mockResolvedValue([]);
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listPCs as any).mockResolvedValue([]);
+  (api.getComposition as any).mockResolvedValue({ rows: [] });
+  (api.setSyncPin as any).mockResolvedValue({ pinned: [] });
 });
 
 async function renderPanel() {
-  const { container } = render(<CompositionPanel cid="saltmarch-nights" onReview={onReview} />);
+  const { container } = render(
+    <CompositionPanel cid="saltmarch-nights" onReview={onReview} onPinned={onPinned} />);
   await act(async () => {});
   return container;
 }
@@ -45,12 +46,9 @@ async function renderPanel() {
 const sidebar = (container: HTMLElement) =>
   container.querySelector(".detail-sidebar") as HTMLElement;
 
-test("the three systems fold into one row per ref, not three lists", async () => {
-  (api.getIncoming as any).mockResolvedValue([CONFLICT, UPDATE]);
-  (api.listDiverged as any).mockResolvedValue([
-    { ref: { kind: "items", id: "sunblade" }, name: "Sunblade" }]);
-  (api.listAppearances as any).mockResolvedValue([LOCKED]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
+test("one endpoint serves one row per ref, quiescent refs included", async () => {
+  (api.getComposition as any).mockResolvedValue(
+    { rows: [CONFLICT, UPDATE, DIVERGED, INSYNC] });
   await renderPanel();
 
   expect(screen.getByRole("button", { name: /Saltmarch Harbour/ }).textContent)
@@ -59,36 +57,23 @@ test("the three systems fold into one row per ref, not three lists", async () =>
     .toContain("update pending");
   expect(screen.getByRole("button", { name: /Sunblade/ }).textContent)
     .toContain("campaign override");
-  // `/appearances` answers with ids and no names on purpose; the campaign's own
-  // character listing is where the name comes from.
-  expect(screen.getByRole("button", { name: /Seraphine/ })).toBeInTheDocument();
-});
-
-test("a ref the world moved AND this campaign changed is one conflict, not two rows", async () => {
-  (api.getIncoming as any).mockResolvedValue([CONFLICT]);
-  (api.listDiverged as any).mockResolvedValue([
-    { ref: { kind: "locations", id: "saltmarch-harbor" }, name: "Saltmarch Harbour" }]);
-  await renderPanel();
-  const rows = screen.getAllByRole("button").filter((b) => b.className.startsWith("row"));
-  expect(rows).toHaveLength(1);
-  expect(rows[0].textContent).toContain("conflict");
-  expect(rows[0].textContent).not.toContain("campaign override");
+  // The row the client-side join could never show: a materialized ref with
+  // nothing pending. The endpoint enumerates the manifest, so it is here.
+  expect(screen.getByRole("button", { name: /Quay/ }).textContent)
+    .toContain("following the world");
 });
 
 test("a version lock rides beside the state rather than replacing it", async () => {
-  (api.getIncoming as any).mockResolvedValue([
-    { ...UPDATE, ref: { kind: "characters", id: "seraphine" },
-      world: { name: "Seraphine", version: "main", body: "" },
-      mine: { name: "Seraphine", version: "main", body: "" } }]);
-  (api.listAppearances as any).mockResolvedValue([LOCKED]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
+  (api.getComposition as any).mockResolvedValue({ rows: [
+    { ref: { kind: "characters", id: "seraphine" }, name: "Seraphine",
+      state: "update", pinned: false, lock: LOCK }] });
   const container = await renderPanel();
 
   fireEvent.click(screen.getByRole("button", { name: /Seraphine/ }));
   await act(async () => {});
   // Both facts, side by side: the sync ref has an update, and the actor is
-  // pinned. Their upgrade verbs are different calls, so collapsing them into one
-  // status is how the wrong one gets fired.
+  // pinned to a version. Their upgrade verbs are different calls, so collapsing
+  // them into one status is how the wrong one gets fired.
   expect(sidebar(container).textContent).toContain("update pending");
   expect(sidebar(container).textContent).toContain("version-locked");
   expect(screen.getByText(/Pinned to world version “main” as npc, in 2 scenes/))
@@ -98,8 +83,9 @@ test("a version lock rides beside the state rather than replacing it", async () 
 });
 
 test("an actor with a lock and nothing pending is listed as following the world", async () => {
-  (api.listAppearances as any).mockResolvedValue([LOCKED]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
+  (api.getComposition as any).mockResolvedValue({ rows: [
+    { ref: { kind: "characters", id: "seraphine" }, name: "Seraphine",
+      state: "insync", pinned: false, lock: LOCK }] });
   const container = await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: /Seraphine/ }));
   await act(async () => {});
@@ -108,14 +94,14 @@ test("an actor with a lock and nothing pending is listed as following the world"
 });
 
 test("the banner counts what is pending and says how much of it is contested", async () => {
-  (api.getIncoming as any).mockResolvedValue([CONFLICT, UPDATE]);
+  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
   await renderPanel();
   const banner = screen.getByText(/2 updates pending/);
   expect(banner.textContent).toContain("1 of them in conflict");
 });
 
 test("the banner hands the review a ref rather than accepting anything itself", async () => {
-  (api.getIncoming as any).mockResolvedValue([CONFLICT, UPDATE]);
+  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
   await renderPanel();
   // No Accept anywhere: taking a world change is destructive and has no undo,
   // and the panel that owns that decision is the one that shows the diff.
@@ -125,7 +111,7 @@ test("the banner hands the review a ref rather than accepting anything itself", 
 });
 
 test("a row's detail sends the review to that ref", async () => {
-  (api.getIncoming as any).mockResolvedValue([CONFLICT, UPDATE]);
+  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
   await act(async () => {});
@@ -135,8 +121,7 @@ test("a row's detail sends the review to that ref", async () => {
 });
 
 test("a diverged record has nothing to review, and is told where its moves live", async () => {
-  (api.listDiverged as any).mockResolvedValue([
-    { ref: { kind: "items", id: "sunblade" }, name: "Sunblade" }]);
+  (api.getComposition as any).mockResolvedValue({ rows: [DIVERGED] });
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: /Sunblade/ }));
   await act(async () => {});
@@ -145,51 +130,69 @@ test("a diverged record has nothing to review, and is told where its moves live"
     .toBeInTheDocument();
 });
 
-test("a resolve landing elsewhere re-reads the three sources", async () => {
-  // Both panels can be open at once and read the same `/incoming`. Without this
-  // the rows and the pending count go on reporting a change already accepted,
-  // and one accept can resolve several rows.
-  (api.getIncoming as any).mockResolvedValue([CONFLICT, UPDATE]);
+test("pinning a ref writes the pin, re-reads, and tells the panel next door", async () => {
+  (api.getComposition as any).mockResolvedValue({ rows: [UPDATE] });
+  await renderPanel();
+  fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
+  await act(async () => {});
+
+  (api.getComposition as any).mockResolvedValue({ rows: [{ ...UPDATE, pinned: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Stop offering world updates" }));
+  await act(async () => {});
+
+  expect(api.setSyncPin).toHaveBeenCalledWith(
+    "saltmarch-nights", { kind: "lore", id: "winifred" }, true);
+  // `IncomingReview` reads the same `/incoming` the pin just changed.
+  expect(onPinned).toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Resume world updates" })).toBeInTheDocument();
+});
+
+test("a pinned ref keeps its state on show but leaves the pending count and review", async () => {
+  (api.getComposition as any).mockResolvedValue(
+    { rows: [{ ...UPDATE, pinned: true }, CONFLICT] });
+  const container = await renderPanel();
+  // The banner advertises what the review panel will show, and the pin holds
+  // the update out of it — one pending, not two.
+  expect(screen.getByText(/1 update pending/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
+  await act(async () => {});
+  expect(sidebar(container).textContent).toContain("update pending");
+  expect(sidebar(container).textContent).toContain("pinned");
+  expect(screen.getByRole("button", { name: "See the change" })).toBeDisabled();
+  expect(screen.getByText(/Nothing is rejected/)).toBeInTheDocument();
+});
+
+test("a resolve landing elsewhere re-reads the composition", async () => {
+  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
   const { rerender } = render(
     <CompositionPanel cid="saltmarch-nights" onReview={onReview} refreshKey={0} />);
   await act(async () => {});
-  expect(api.getIncoming).toHaveBeenCalledTimes(1);
+  expect(api.getComposition).toHaveBeenCalledTimes(1);
 
-  (api.getIncoming as any).mockResolvedValue([UPDATE]);
+  (api.getComposition as any).mockResolvedValue({ rows: [UPDATE] });
   rerender(<CompositionPanel cid="saltmarch-nights" onReview={onReview} refreshKey={1} />);
   await act(async () => {});
-  expect(api.getIncoming).toHaveBeenCalledTimes(2);
+  expect(api.getComposition).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole("button", { name: /Saltmarch Harbour/ })).not.toBeInTheDocument();
   expect(screen.getByText(/1 update pending/)).toBeInTheDocument();
 });
 
-test("a campaign with nothing outstanding says so in all three senses", async () => {
+test("a campaign holding nothing of its own says what would put a row here", async () => {
   await renderPanel();
-  expect(screen.getByText(/no world change waiting/)).toBeInTheDocument();
+  expect(screen.getByText(/A record joins the composition/)).toBeInTheDocument();
   expect(screen.queryByText(/updates pending/)).not.toBeInTheDocument();
-  // ...and does not claim the fourth sense it cannot see.
-  expect(screen.getByText(/without pinning is not among the three reads/))
-    .toBeInTheDocument();
 });
 
 test("a failed read is reported, because 'nothing outstanding' is the wrong answer", async () => {
-  (api.getIncoming as any).mockRejectedValue(new Error("campaign not found"));
+  (api.getComposition as any).mockRejectedValue(new Error("campaign not found"));
   await renderPanel();
   expect(screen.getByRole("alert").textContent).toContain("campaign not found");
-  expect(screen.queryByText(/no world change waiting/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/A record joins the composition/)).not.toBeInTheDocument();
 
-  (api.getIncoming as any).mockResolvedValue([UPDATE]);
+  (api.getComposition as any).mockResolvedValue({ rows: [UPDATE] });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await act(async () => {});
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Winifred/ })).toBeInTheDocument();
-});
-
-test("the empty body says what this view cannot enumerate yet", async () => {
-  (api.getIncoming as any).mockResolvedValue([UPDATE]);
-  await renderPanel();
-  // Honest about its own blind spot: no read here lists the manifest, so a
-  // record the campaign follows with nothing pending is simply absent.
-  expect(screen.getByText(/no read this panel makes reports\s+them/)).toBeInTheDocument();
-  expect(screen.getByText(/edited here but never pinned/)).toBeInTheDocument();
 });

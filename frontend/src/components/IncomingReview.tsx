@@ -231,7 +231,7 @@ function BulkActions({ items, busy, onResolve }: {
  *  Accept copies the world's content in; Reject keeps the campaign's and
  *  advances the base so the same change stops being offered. Both are the same
  *  route with a list, so "all of them" is one call rather than a loop. */
-export function IncomingReview({ cid, focus, onResolved }: {
+export function IncomingReview({ cid, focus, onResolved, refreshKey = 0 }: {
   cid: string; focus?: IncomingRef | null;
   /** Fired after an accept or reject has LANDED and this panel has re-read.
    *  The composition panel (#199) is mounted beside this one and reads the same
@@ -239,6 +239,10 @@ export function IncomingReview({ cid, focus, onResolved }: {
    *  pending count until the reader refreshes by hand -- and one accept can
    *  resolve several of its rows at once. */
   onResolved?: () => void;
+  /** Bumped when the composition panel pins or unpins a ref (#71) -- the
+   *  mirror of `onResolved`, for the mirror reason: a pin changes what
+   *  `/incoming` answers, and this panel is mounted over that read. */
+  refreshKey?: number;
 }) {
   const [items, setItems] = useState<IncomingItem[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
@@ -272,7 +276,10 @@ export function IncomingReview({ cid, focus, onResolved }: {
     }
   }, [cid]);
 
-  useEffect(() => { void load(); }, [load]);
+  // `refreshKey` on the effect, not on `load` -- `CompositionPanel` documents
+  // the split: the function does not read it, so bumping it re-runs the read
+  // without rebuilding the reader.
+  useEffect(() => { void load(); }, [load, refreshKey]);
 
   // Opened on one ref by the composition panel (#199), which is where a reader
   // reads "conflict" and asks what the conflict IS.

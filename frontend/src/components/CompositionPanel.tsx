@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type DivergedRecord, type EntityScope, type IncomingItem,
-  type IncomingRef, type RosterEntry } from "../api/client";
+import { api, type CompositionLock, type CompositionRow, type CompositionState,
+  type IncomingRef } from "../api/client";
 
 /** What a ref's kind is called in a sentence. The same nine the incoming review
  *  names, and the same reason: the ref carries the store's plural slug, which is
@@ -17,36 +17,13 @@ const KIND_LABELS: Record<string, string> = {
 const KIND_ORDER = ["characters", "pcs", "locations", "items", "groups",
                     "creatures", "lore", "greetings", "plotmap"];
 
-/** Which side of the world/campaign split currently holds a ref — the
- *  "priority" the pre-rebuild feature list asked this view for.
- *
- *  Deliberately ONE state per ref rather than a set, in this precedence:
- *  a conflict outranks a plain update (both sides moved, so the decision is
- *  bigger), and either outranks a divergence (the world has moved too, which is
- *  the more urgent half of the same sentence). `locked` is not in the ladder at
- *  all — see `Row.locked`. */
-type State = "conflict" | "update" | "new" | "diverged" | "insync";
-
-type Row = {
-  key: string;
-  ref: IncomingRef;
-  name: string;
-  state: State;
-  /** The world version this actor is pinned to, if any.
-   *
-   *  Carried BESIDE the state rather than as one of its values, because a
-   *  version lock and a sync ref are two different systems with two different
-   *  upgrade verbs (`import_version` against a lock, `sync.accept` against a
-   *  ref) — and an actor can be in both at once. Folding them into one status
-   *  is how a single Accept button ends up firing the wrong call. */
-  locked?: RosterEntry;
-};
+type Row = CompositionRow & { key: string };
 
 const refKey = (ref: IncomingRef) => `${ref.kind}/${ref.id}`;
 const kindLabel = (kind: string) => KIND_LABELS[kind] ?? kind;
 
-const STATE_LABELS: Record<State, string> = {
-  conflict: "conflict", update: "update pending", new: "new in the world",
+const STATE_LABELS: Record<CompositionState, string> = {
+  conflict: "conflict", update: "update pending",
   diverged: "campaign override", insync: "following the world",
 };
 
@@ -59,8 +36,6 @@ function stateHint(row: Row): string {
       return "Both sides changed. Neither wins until you choose one in World updates.";
     case "update":
       return "The world moved and this campaign's copy did not, so taking the world's loses nothing.";
-    case "new":
-      return "The world has this record and this campaign has no copy of it.";
     case "diverged":
       return "This campaign's copy wins: it was changed here and the world has not moved since.";
     default:
@@ -75,54 +50,18 @@ function stateHint(row: Row): string {
  *  appearing in the world does not reach this campaign at all until somebody
  *  imports it. Saying so here is the whole reason the lock is rendered
  *  separately from the state. */
-function lockHint(rec: RosterEntry): string {
+function lockHint(rec: CompositionLock): string {
   const scenes = rec.scenes.length;
   return `Pinned to world version “${rec.version}” as ${rec.role}, in `
     + `${scenes} ${scenes === 1 ? "scene" : "scenes"}. Another version of this actor `
     + "reaches the campaign only by being imported, never by accepting an update.";
 }
 
-/** Every ref this campaign holds that has something to say about itself, folded
- *  into one row each.
- *
- *  Three reads, because there are three systems and no endpoint that joins them:
- *  `/incoming` (the world moved), `/diverged` (this campaign moved) and
- *  `/appearances` (an actor is pinned to a version). A ref in more than one is
- *  ONE row — the whole point of the view is that a reader should not have to
- *  hold three lists side by side to answer "where does this record stand". */
-function rowsOf(incoming: IncomingItem[], diverged: DivergedRecord[],
-                roster: RosterEntry[], nameOf: (ref: IncomingRef) => string): Row[] {
-  const by = new Map<string, Row>();
-
-  for (const item of incoming) {
-    const key = refKey(item.ref);
-    by.set(key, { key, ref: item.ref, name: item.world.name || nameOf(item.ref),
-                  state: item.status });
-  }
-  for (const rec of diverged) {
-    const key = refKey(rec.ref);
-    // Only when `/incoming` has nothing to say about it: a ref both lists claim
-    // is already a conflict, and that is the stronger statement.
-    if (!by.has(key))
-      by.set(key, { key, ref: rec.ref, name: rec.name || nameOf(rec.ref), state: "diverged" });
-  }
-  for (const rec of roster) {
-    const ref = { kind: rec.kind, id: rec.id };
-    const key = refKey(ref);
-    const found = by.get(key);
-    if (found) found.locked = rec;
-    else by.set(key, { key, ref, name: nameOf(ref), state: "insync", locked: rec });
-  }
-
-  return [...by.values()].sort((a, b) => {
-    const ka = KIND_ORDER.indexOf(a.ref.kind), kb = KIND_ORDER.indexOf(b.ref.kind);
-    if (ka !== kb) return ka - kb;
-    return a.name.localeCompare(b.name);
-  });
-}
-
-function Detail({ row, onReview }: { row: Row; onReview: (ref: IncomingRef) => void }) {
-  const pending = row.state === "conflict" || row.state === "update" || row.state === "new";
+function Detail({ row, busy, onReview, onPin }: {
+  row: Row; busy: boolean; onReview: (ref: IncomingRef) => void;
+  onPin: (row: Row, pinned: boolean) => void;
+}) {
+  const pending = row.state === "conflict" || row.state === "update";
   return (
     <div className="detail-view">
       <div className="detail-main">
@@ -133,11 +72,18 @@ function Detail({ row, onReview }: { row: Row; onReview: (ref: IncomingRef) => v
         <div className="side-section">
           <h4>Where it stands</h4>
           <p className="field-hint">{stateHint(row)}</p>
+          {row.pinned && (
+            <p className="field-hint">
+              Pinned: world updates for this record are not offered while the
+              pin holds. Nothing is rejected — resuming restores exactly the
+              update that was waiting.
+            </p>
+          )}
         </div>
-        {row.locked && (
+        {row.lock && (
           <div className="side-section">
             <h4>Version lock</h4>
-            <p className="field-hint">{lockHint(row.locked)}</p>
+            <p className="field-hint">{lockHint(row.lock)}</p>
           </div>
         )}
       </div>
@@ -147,9 +93,14 @@ function Detail({ row, onReview }: { row: Row; onReview: (ref: IncomingRef) => v
               updates — one panel that owns the comparison, field by field, with
               the hint about what a blob cannot show. Sending the reader there
               on this exact ref beats a second, thinner rendering of the same
-              change beside it. */}
-          <button className="primary" disabled={!pending}
+              change beside it. A pinned ref's change is held out of that panel
+              by the pin itself, so the door is closed while the pin holds. */}
+          <button className="primary" disabled={!pending || row.pinned}
                   onClick={() => onReview(row.ref)}>See the change</button>
+          <button className="subtle" disabled={busy}
+                  onClick={() => onPin(row, !row.pinned)}>
+            {row.pinned ? "Resume world updates" : "Stop offering world updates"}
+          </button>
         </div>
         {!pending && (
           <p className="field-hint">
@@ -163,7 +114,8 @@ function Detail({ row, onReview }: { row: Row; onReview: (ref: IncomingRef) => v
           <span className={"chip composition-badge composition-" + row.state}>
             {STATE_LABELS[row.state]}
           </span>
-          {row.locked && <span className="chip on">version-locked</span>}
+          {row.pinned && <span className="chip on">pinned</span>}
+          {row.lock && <span className="chip on">version-locked</span>}
         </div>
         <div className="side-section">
           <h4>Ref</h4>
@@ -177,19 +129,24 @@ function Detail({ row, onReview }: { row: Row; onReview: (ref: IncomingRef) => v
 /** The composition view (#199): what this campaign is made of, and which side of
  *  the world/campaign split currently holds each piece.
  *
- *  Assembled client-side from `/incoming`, `/diverged` and `/appearances`
- *  because there is no endpoint that joins them — #71 proposes one, and this
- *  view is what it is for. Until then two things follow, and the panel says both
- *  rather than implying otherwise: a record the campaign follows with nothing
- *  pending is invisible here (no read enumerates the manifest), and pinning a
- *  ref is not offered (there is nothing to write it to).
+ *  One read, `/composition` (#71): every sync.md ref plus every version-locked
+ *  actor, each with the state the engine's own hash comparison derives — so a
+ *  record the campaign follows with nothing pending IS a row here, and so is a
+ *  character edited without ever being version-locked, the two answers the
+ *  panel could not give while it joined `/incoming` and `/diverged` by hand.
  *
- *  Read-only on purpose. Accepting a world change is destructive and has no
- *  undo, and the panel that owns that decision shows the diff it turns on; a
- *  second Accept button next to a status word would be the same irreversible
- *  call made with less in front of the reader. */
-export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
+ *  Read-only for accept, on purpose. Accepting a world change is destructive
+ *  and has no undo, and the panel that owns that decision shows the diff it
+ *  turns on; a second Accept button next to a status word would be the same
+ *  irreversible call made with less in front of the reader. The one write this
+ *  panel makes is the pin — reversible by construction, since it never touches
+ *  a base hash. */
+export function CompositionPanel({ cid, onReview, onPinned, refreshKey = 0 }: {
   cid: string; onReview: (ref: IncomingRef) => void;
+  /** Fired after a pin toggle has landed and this panel has re-read: a pin
+   *  changes what `/incoming` answers, and `IncomingReview` is mounted beside
+   *  this panel over that same read — the mirror of its `onResolved`. */
+  onPinned?: () => void;
   /** Bumped when something this panel reports has been resolved elsewhere —
    *  today, an accept or reject landing in the World updates panel beside it.
    *  A number rather than a callback handed the other way because the two
@@ -199,6 +156,7 @@ export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   // `cid` is a route param and `/campaigns/:cid` keeps this instance across a
   // switch, so a read started for one campaign can settle while another is on
@@ -207,24 +165,17 @@ export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
   useEffect(() => { liveCid.current = cid; }, [cid]);
 
   const load = useCallback(async () => {
-    const scope: EntityScope = { kind: "campaign", id: cid };
     setErr(null);
     try {
-      const [incoming, diverged, roster, chars, pcs] = await Promise.all([
-        api.getIncoming(cid), api.listDiverged(cid), api.listAppearances(cid),
-        api.listCharacters(scope), api.listPCs(scope),
-      ]);
+      const got = await api.getComposition(cid);
       if (liveCid.current !== cid) return;
-      // `/appearances` answers with ids and no names, deliberately: it runs over
-      // the whole record on every read and a name costs a card read per actor.
-      // The two listings the campaign already publishes carry them, so the name
-      // is resolved here rather than paid for there.
-      const names = new Map<string, string>([
-        ...chars.map((c) => [`characters/${c.id}`, c.name] as const),
-        ...pcs.map((p) => [`pcs/${p.id}`, p.name] as const),
-      ]);
-      setRows(rowsOf(incoming, diverged, roster,
-                     (ref) => names.get(refKey(ref)) ?? ref.id));
+      setRows(got.rows
+        .map((r) => ({ ...r, key: refKey(r.ref) }))
+        .sort((a, b) => {
+          const ka = KIND_ORDER.indexOf(a.ref.kind), kb = KIND_ORDER.indexOf(b.ref.kind);
+          if (ka !== kb) return ka - kb;
+          return a.name.localeCompare(b.name);
+        }));
     } catch (e) {
       if (liveCid.current !== cid) return;
       // Reported, not swallowed: an unread failure looks exactly like a campaign
@@ -240,10 +191,28 @@ export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
   // see is unused. Bumping it re-runs the read without rebuilding the reader.
   useEffect(() => { void load(); }, [load, refreshKey]);
 
+  const pin = useCallback(async (row: Row, pinned: boolean) => {
+    setBusy(true);
+    try {
+      await api.setSyncPin(cid, row.ref, pinned);
+      if (liveCid.current !== cid) return;
+      await load();
+      onPinned?.();
+    } catch (e) {
+      if (liveCid.current !== cid) return;
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (liveCid.current === cid) setBusy(false);
+    }
+  }, [cid, load, onPinned]);
+
   const all = rows ?? [];
-  const pending = all.filter((r) => r.state === "conflict" || r.state === "update"
-                                    || r.state === "new");
-  const conflicts = all.filter((r) => r.state === "conflict");
+  // A pinned ref's pending change is deliberately out of this count: the
+  // banner advertises what the review panel will show, and the pin holds that
+  // change out of it.
+  const pending = all.filter((r) => !r.pinned
+                                    && (r.state === "conflict" || r.state === "update"));
+  const conflicts = pending.filter((r) => r.state === "conflict");
   const active = all.find((r) => r.key === sel) ?? null;
 
   return (
@@ -276,10 +245,9 @@ export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
       )}
       {rows !== null && all.length === 0 && !err && (
         <p className="field-hint">
-          Nothing outstanding: no world change waiting, no flat record changed
-          here, and no actor pinned to a version. A character or PC this
-          campaign has edited without pinning is not among the three reads —
-          see below.
+          Nothing here yet. A record joins the composition when this campaign
+          takes a copy of its own — an edit here, or a version lock on an actor
+          — and until then it simply follows the world through the overlay.
         </p>
       )}
       {rows !== null && all.length > 0 && (
@@ -298,7 +266,8 @@ export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
                       <span className={"chip composition-badge composition-" + row.state}>
                         {STATE_LABELS[row.state]}
                       </span>
-                      {row.locked && <span className="chip on">v{row.locked.version}</span>}
+                      {row.pinned && <span className="chip on">pinned</span>}
+                      {row.lock && <span className="chip on">v{row.lock.version}</span>}
                     </button>
                   ))}
                 </div>
@@ -307,16 +276,8 @@ export function CompositionPanel({ cid, onReview, refreshKey = 0 }: {
           </div>
           <div className="editor-body">
             {active
-              ? <Detail row={active} onReview={onReview} />
-              : <p className="field-hint">
-                  Select a record to see where it stands. Two things are absent
-                  rather than in-sync, because no read this panel makes reports
-                  them: a record the campaign follows with nothing pending, and
-                  a character or PC edited here but never pinned —
-                  <code>/diverged</code> covers flat records only, and an actor
-                  carries its base in the appearance record instead. #71’s
-                  endpoint is what closes both.
-                </p>}
+              ? <Detail row={active} busy={busy} onReview={onReview} onPin={(r, p) => void pin(r, p)} />
+              : <p className="field-hint">Select a record to see where it stands.</p>}
           </div>
         </div>
       )}
