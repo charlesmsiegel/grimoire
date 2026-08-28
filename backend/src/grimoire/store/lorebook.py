@@ -53,7 +53,9 @@ _ST_EXTENSION_FIELDS = (
     "secondary_keys", "keysecondary", "selective", "selectiveLogic",
     "position", "insertion_order", "order", "priority",
     "probability", "useProbability", "case_sensitive", "caseSensitive",
-    "constant",
+    "constant", "use_regex", "useRegex", "excludeRecursion",
+    "exclude_recursion", "scanDepth", "scan_depth", "depth", "role",
+    "matchWholeWords", "match_whole_words",
 )
 
 
@@ -73,6 +75,13 @@ def _normalize(book) -> list[dict]:
             "category": "lore",
         }
         ext = {k: e[k] for k in _ST_EXTENSION_FIELDS if k in e}
+        if e.get("extensions"):
+            # The V3 entry's own extensions object (sticky/cooldown/delay and
+            # whatever else a frontend filed there) -- the spec says importers
+            # SHOULD preserve it, and it nests inside the stash as itself.
+            # Only when non-empty: V3 entries routinely carry `extensions: {}`,
+            # and stashing that would put frontmatter on every simple import.
+            ext["extensions"] = e["extensions"]
         if e.get("constant") and keys:
             # `constant` still means keyless activation above, but the raw keys
             # it suppressed are recorded so "keyless because constant" stays
@@ -147,6 +156,12 @@ def commit(root: Path, entries: list[dict]) -> list[dict]:
         category = e.get("category", "lore")
         if category not in seen:
             seen[category] = _existing_signatures(root, category)
+        # `extensions` is deliberately NOT in the signature: it is metadata
+        # about the same entry, and including it would make a re-import of a
+        # pre-#20 book create a slug-suffixed twin of every entry instead of
+        # skipping it. The cost of that choice is that a re-import cannot
+        # backfill `st_extensions` onto entries imported before the stash
+        # existed -- that needs an update path, not a second create.
         sig = (e.get("name", "Imported entry"), ",".join(e.get("keys", [])), e.get("body", "").strip())
         if sig in seen[category]:
             continue

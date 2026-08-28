@@ -339,3 +339,23 @@ def test_repoint_with_body_bakes_char_to_the_new_character(tmp_path):
     greetings.update_greeting(root, gid, character="mara", version="main",
                               body="{{char}} waves.")
     assert greetings.read_greeting(root, gid)["body"].strip() == "Mara waves."
+
+
+def test_save_echoing_a_dangling_pointer_still_lands(tmp_path):
+    # The editor echoes character/version back on every save, and a dangling
+    # pointer is a tolerated state everywhere else (char_name falls back), so
+    # an UNCHANGED pair is not re-validated -- only an actual re-point is.
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "Open", "ghost", "gone")  # never existed
+    greetings.update_greeting(root, gid, name="Renamed", character="ghost", version="gone")
+    g = greetings.read_greeting(root, gid)
+    assert g["meta"]["name"] == "Renamed"
+    assert (g["meta"]["character"], g["meta"]["version"]) == ("ghost", "gone")
+
+
+def test_version_with_no_character_is_refused_not_dropped(tmp_path):
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "Cold open", "", "")
+    with pytest.raises(characters.CharacterNotFound):
+        greetings.update_greeting(root, gid, version="main")
+    assert greetings.read_greeting(root, gid)["meta"]["version"] == ""

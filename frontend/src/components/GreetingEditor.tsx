@@ -601,9 +601,29 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
           <Field label="Character"
                  hint={gid ? "re-pointing keeps this greeting's id and plot-map edges; {{char}} already baked into the text does not change" : undefined}>
             <select value={form.character} aria-label="Character"
-                    onChange={(e) => setForm({ ...form, character: e.target.value, version: "" })}>
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      // A re-point follows the primary into the cast: the old
+                      // character's own chip becomes the new one's (deduped if
+                      // both were present), so the greeting's speaker is never
+                      // absent from its own opener. Chips the reader set stay.
+                      const present = form.character && next
+                        ? form.present.map((id) => (id === form.character ? next : id))
+                            .filter((id, i, arr) => arr.indexOf(id) === i)
+                        : form.present;
+                      setForm({ ...form, character: next, version: "", present });
+                    }}>
               <option value="">— no character (narrator-only) —</option>
               {chars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {/* A stored character the list does not offer (deleted since, or
+                  the list failed). Without this the controlled select renders
+                  the narrator option while the field still holds the dead id —
+                  same rule as the location picker below. */}
+              {form.character && !chars.some((c) => c.id === form.character) && (
+                <option value={form.character}>
+                  {listsReady ? `${form.character} (missing)` : form.character}
+                </option>
+              )}
             </select>
           </Field>
           {form.character && (
@@ -612,6 +632,11 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
                       onChange={(e) => setForm({ ...form, version: e.target.value })}>
                 <option value="">— pick a version —</option>
                 {versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                {form.version && !versions.some((v) => v.id === form.version) && (
+                  <option value={form.version}>
+                    {listsReady ? `${form.version} (missing)` : form.version}
+                  </option>
+                )}
               </select>
             </Field>
           )}

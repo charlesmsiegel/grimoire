@@ -221,3 +221,16 @@ def test_parse_to_commit_preserves_extensions_through_a_card(tmp_path):
     stored = json.loads(entities.read_entity(tmp_path, "lore", created["id"])["meta"]["st_extensions"])
     assert stored["secondary_keys"] == ["salt"]
     assert stored["insertion_order"] == 7
+
+
+def test_normalize_preserves_regex_flag_and_entry_extensions():
+    out = lorebook._normalize({"entries": [
+        {"keys": ["/salt.*/"], "name": "Rx", "content": "x", "use_regex": True,
+         "extensions": {"sticky": 2, "cooldown": 3}},
+        # V3 entries routinely carry an EMPTY extensions object; that alone
+        # must not put a stash (and so frontmatter) on a simple import.
+        {"keys": ["sea"], "name": "Sea", "content": "y", "extensions": {}},
+    ]})
+    assert out[0]["extensions"] == {"use_regex": True,
+                                    "extensions": {"sticky": 2, "cooldown": 3}}
+    assert "extensions" not in out[1]
