@@ -52,6 +52,10 @@ def test_build_prompt_includes_the_steering_snapshot():
     # ...by a phrase unique to the paragraph (the evals' needle), so the
     # contract and the user-side heading cannot stand in for each other
     assert "Treat them as pointers, not as story" in msgs[0]["content"]
+    # ...and an unestablished correction carries a certainty that routes it to
+    # the UNCHECKED band (0.3 x WEIGHTS[UNCITED] < LOW) — the player's own
+    # correction still needs the player's explicit tick
+    assert "0.3 or lower" in msgs[0]["content"]
 
 
 def test_build_prompt_without_steering_is_byte_identical():

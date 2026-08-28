@@ -56,6 +56,24 @@ def test_the_band_edges_hold_the_properties_the_weights_are_chosen_for():
     assert routing.band(routing.ASSUMED_CERTAINTY * routing.WEIGHTS[routing.UNCITED]) == "medium"
     # Hearsay is not collapsed merely for being hearsay.
     assert routing.band(routing.ASSUMED_CERTAINTY * routing.WEIGHTS[routing.OTHER]) == "medium"
+    # A steering-driven edit follows the absorb prompt's instruction — uncited,
+    # certainty 0.3 or lower — and that must land it in the UNCHECKED band:
+    # the player's own correction still needs the player's explicit tick, or
+    # "Accept all & save" applies it without anyone adjudicating (Codex review).
+    assert routing.band(0.3 * routing.WEIGHTS[routing.UNCITED]) == "low"
+
+
+def test_an_uncited_row_with_low_certainty_bands_low(monkeypatch, tmp_path):
+    """End-to-end for the steering contract's exception path: `_cite` keeps a
+    lone certainty (no quote, no speaker), and `review` then bands the row low
+    rather than substituting ASSUMED_CERTAINTY's medium."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _sera, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+    r = routing.review(index, {"certainty": 0.3}, ())
+    assert r["authority"] == routing.UNCITED
+    assert r["certainty"] == 0.3
+    assert r["band"] == "low"
 
 
 def test_band_edges_belong_to_the_more_visible_side():
