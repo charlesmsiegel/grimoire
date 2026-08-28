@@ -453,6 +453,27 @@ LIBRARY_IDS = frozenset(i for i, _b in LIBRARY_BUILDERS)
 #: forever and silences things nobody can name.
 KNOWN = frozenset(i for i, _b in BUILDERS)
 
+#: The order the groups are read in, most urgent first.
+#:
+#: Declared rather than derived, and that is the fix rather than the taste.
+#: `BUILDERS` orders CHORES deliberately -- unreviewed proposals before open
+#: scenes before sheet coverage -- and the view groups them for display, which
+#: silently reordered the groups by whichever chore happened to be first in
+#: each. So a library whose only voice chore was a world anchor put "Voice &
+#: character" last, and the same library one tagline later put it third: an
+#: order that moves with the data is one nobody can learn.
+#:
+#: A group a chore names but this tuple does not is appended in chore order, so
+#: adding a chore under a new heading is never invisible -- but it does belong
+#: here, and `test_todo_route.py` says so.
+GROUP_ORDER = (
+    "Waiting on you",
+    "Voice & character",
+    "World content",
+    "Continuity",
+    "Housekeeping",
+)
+
 
 def _any_undescribed(ctx: _Ctx) -> bool:
     """`_chore_world_describe` at `n > 0`, stopping at the first image it finds.
@@ -697,13 +718,36 @@ def live(cid: str) -> dict:
     """The chore list split into what counts and what has been waved off."""
     off = store.chores.ignored()
     every = _chores(cid)
+    live_chores = [c for c in every if c["id"] not in off]
     return {
-        "chores": [c for c in every if c["id"] not in off],
+        "chores": live_chores,
         "ignored": [c for c in every if c["id"] in off],
         # The badge number, and it is the one the reader still cares about:
         # an ignored chore is not counted anywhere.
         "count": sum(1 for c in every if c["id"] not in off),
+        # The headings, in reading order, and only the ones that have
+        # something under them. Sent rather than inferred by the view: a view
+        # that derived the order from the chore list would reorder its own
+        # headings whenever the data moved, which is the defect this replaces.
+        "groups": _groups(live_chores),
     }
+
+
+def _groups(chores: list[dict]) -> list[str]:
+    """The groups present in `chores`, in `GROUP_ORDER`, unknowns last.
+
+    Unknowns are appended in chore order rather than dropped: a heading this
+    module can emit but did not think to list is a bug in `GROUP_ORDER`, and
+    hiding the chores under it would make that bug invisible instead of merely
+    misplaced.
+    """
+    present = {c["group"] for c in chores}
+    known = [g for g in GROUP_ORDER if g in present]
+    rest: list[str] = []
+    for c in chores:
+        if c["group"] not in GROUP_ORDER and c["group"] not in rest:
+            rest.append(c["group"])
+    return known + rest
 
 
 @router.get("/todo")

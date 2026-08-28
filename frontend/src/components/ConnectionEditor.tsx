@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api, type HealthCheckResult, type LLMConnection, type LLMConnectionDetail,
-  type LLMConnectionKind, type Model, type ProviderHealth,
+  type LLMConnectionKind, type Model, type ProviderHealth, type RoutingBundle,
 } from "../api/client";
 import { BLANK_CONNECTION, ConnectionForm } from "./ConnectionForm";
 import { ErrorNote } from "./ErrorNote";
@@ -41,6 +41,7 @@ export function ConnectionEditor() {
   const [models, setModels] = useState<Model[]>([]);
   const [modelsError, setModelsError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [routing, setRouting] = useState<RoutingBundle | null>(null);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<HealthCheckResult | null>(null);
   // Connections whose empty catalog has already been fetched once this mount.
@@ -76,6 +77,14 @@ export function ConnectionEditor() {
   const reload = useCallback(() => api.listConnections().then(setConnections), []);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => { api.getConfig().then((c) => setActiveId(c.active_connection_id)); }, []);
+  // What is routed where, so a connection can say which jobs it is answering
+  // for. Read once: this page edits connections, not routes, and the only
+  // thing here that can move it is setting the active connection -- which
+  // `setActive` re-reads for. A failed read leaves `null`, which the panel
+  // renders as "reading" rather than as "nothing is routed here": the second
+  // is a claim, and it is the dangerous one to make wrongly on a page with a
+  // delete button.
+  useEffect(() => { api.getGlobalRouting().then(setRouting).catch(() => {}); }, []);
 
   // The catalog for a connection that does not exist yet (#149). OpenRouter's
   // is public and needs no key, so the New-connection form can fill its picker
@@ -292,6 +301,26 @@ export function ConnectionEditor() {
   }
 
   const listable = LISTABLE.includes(form.kind);
+
+  /** Which routing slots resolve to the connection on screen.
+   *
+   *  The design's "which tasks inherit each" — and the reason it matters is
+   *  that this page is where a connection is edited or deleted, and the cost
+   *  of getting that wrong is every job in the list stopping. `effective` is
+   *  the cascade's ANSWER rather than what the global scope typed, so a slot
+   *  that lands here by inheriting the active connection is listed too: what
+   *  the reader needs is what would break, not what was written down.
+   *
+   *  Global scope only. A campaign may override any of these, so this cannot
+   *  claim to be every job in the library that reaches this connection — the
+   *  copy beside it says so rather than overstating.
+   */
+  const routedHere = routing
+    ? routing.catalog.filter((r) => {
+        const got = routing.effective[r.key];
+        return got === id || (!got && routing.active_connection_id === id);
+      })
+    : [];
   const fetchLabel = refreshing ? "Fetching…" : "Fetch models";
 
   return (
@@ -330,6 +359,35 @@ export function ConnectionEditor() {
                   ? <span className="chip on">Active</span>
                   : <button className="subtle" onClick={() => setActive(id)}>Set as active</button>}
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
+              </div>
+              {/* What stops running if this connection is deleted or has its
+                  key removed. It goes above Credentials because that is the
+                  order the question arrives in: "what is this for" before
+                  "is it working". */}
+              <div className="side-section">
+                <h4>Jobs routed here</h4>
+                {routing === null ? (
+                  <span className="field-hint">Reading the routing…</span>
+                ) : routedHere.length === 0 ? (
+                  <span className="field-hint">
+                    Nothing is routed here. It can still be picked for one
+                    reroll at a time from the scene inspector.
+                  </span>
+                ) : (
+                  <>
+                    <div className="chips">
+                      {routedHere.map((r) => (
+                        <span key={r.key} className="chip on" title={r.hint}>
+                          {r.label}
+                        </span>
+                      ))}
+                    </div>
+                    <span className="field-hint">
+                      Globally. A campaign can route any of these somewhere
+                      else, which this list does not see.
+                    </span>
+                  </>
+                )}
               </div>
               <div className="side-section">
                 <h4>Credentials</h4>

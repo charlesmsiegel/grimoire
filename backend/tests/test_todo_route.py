@@ -12,12 +12,15 @@ Neither survives a refactor on its own, so both are held here.
 from __future__ import annotations
 
 import importlib
+import inspect
+import re
 
 import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
+from grimoire.routes import todo
 
 
 @pytest.fixture
@@ -136,7 +139,7 @@ def test_a_malformed_ignore_file_is_an_empty_set_not_an_error(client, campaign, 
 def test_no_campaign_asked_for_answers_an_empty_list(client):
     r = client.get("/api/todo")
     assert r.status_code == 200
-    assert r.json() == {"chores": [], "ignored": [], "count": 0}
+    assert r.json() == {"chores": [], "ignored": [], "count": 0, "groups": []}
 
 
 def _items(client, chore_id: str, cid: str) -> dict:
@@ -443,3 +446,78 @@ def test_a_world_chore_can_be_ignored(client):
     assert "world-taglines" not in {c["id"] for c in body["chores"]}
     assert "world-taglines" in {c["id"] for c in body["ignored"]}
     assert body["count"] == len(body["chores"])
+
+
+# ---- the headings, and who decides their order ----
+def _with_two_groups(client, cid: str) -> None:
+    """Enough outstanding work that more than one heading is on the page.
+
+    Two open scenes ("Continuity") plus a scene holding a review is what the
+    ordering tests need; a fixture with one chore proves nothing about order.
+    """
+    for title in ("The Lower Step", "The Weir"):
+        client.post(f"/api/campaigns/{cid}/scenes", json={"title": title})
+
+
+def test_groups_are_ordered_by_urgency_rather_than_by_the_data(client, campaign):
+    """The order must not move when the library does.
+
+    `BUILDERS` orders CHORES deliberately, and the view used to group them by
+    whichever chore happened to come first under each heading -- so a library
+    whose only voice chore was a world anchor put "Voice & character" last, and
+    the same library one tagline later put it third. An order that moves with
+    the data is one nobody can learn.
+    """
+    cid, _ = campaign
+    _with_two_groups(client, cid)
+    body = client.get("/api/todo", params={"campaign": cid}).json()
+    groups = body["groups"]
+
+    # Whatever this library happens to have outstanding, the headings it does
+    # have are in the declared order.
+    assert groups == [g for g in todo.GROUP_ORDER if g in groups]
+    # ...and every heading a chore names is present, so none is hidden.
+    assert set(groups) == {c["group"] for c in body["chores"]}
+
+
+def test_every_group_a_builder_can_emit_is_declared(client):
+    """A heading missing from `GROUP_ORDER` is appended, not dropped -- but it
+    should not be missing, and this is what says so.
+
+    Read off the builders rather than off one library's output: a chore that
+    only fires under conditions this test does not set up would otherwise be
+    the one whose heading nobody declared.
+    """
+    emitted = set()
+    for name in dir(todo):
+        if not name.startswith("_chore_"):
+            continue
+        src = inspect.getsource(getattr(todo, name))
+        for group in re.findall(r'"group":\s*"([^"]+)"', src):
+            emitted.add(group)
+
+    assert emitted, "no chore builder was found -- this test has gone stale"
+    assert emitted <= set(todo.GROUP_ORDER), (
+        f"undeclared heading(s): {sorted(emitted - set(todo.GROUP_ORDER))}")
+
+
+def test_an_ignored_chore_takes_its_heading_with_it(client, campaign):
+    """A heading over nothing is a heading the reader has to check.
+
+    An ignored chore is counted nowhere -- that is the whole point of ignoring
+    one -- so the group it was the only member of goes quiet too.
+    """
+    cid, _ = campaign
+    _with_two_groups(client, cid)
+    body = client.get("/api/todo", params={"campaign": cid}).json()
+    assert body["chores"], "the fixture produced nothing to ignore"
+    victim = body["chores"][0]
+    same_group = [c for c in body["chores"] if c["group"] == victim["group"]]
+
+    client.put(f"/api/todo/{victim['id']}/ignored", json={"ignored": True})
+    after = client.get("/api/todo", params={"campaign": cid}).json()
+
+    if len(same_group) == 1:
+        assert victim["group"] not in after["groups"]
+    else:
+        assert victim["group"] in after["groups"]

@@ -154,8 +154,19 @@ export default function TodoView({ cid }: { cid: string | null }) {
   }
 
   const chores = data?.chores ?? [];
-  const groups: string[] = [];
-  for (const c of chores) if (!groups.includes(c.group)) groups.push(c.group);
+  /** The headings, in reading order.
+   *
+   *  The server's, because it is the server that decides which chore is more
+   *  urgent than which and grouping them here used to quietly reorder that:
+   *  the order fell out of whichever chore happened to be first in each group,
+   *  so it moved with the data. The fallback is that old first-appearance
+   *  order, for a payload from before `groups` existed -- which renders
+   *  something reasonable rather than nothing. */
+  const groups: string[] = data?.groups ?? (() => {
+    const seen: string[] = [];
+    for (const c of chores) if (!seen.includes(c.group)) seen.push(c.group);
+    return seen;
+  })();
 
   // The chip earns its place only where it tells two rows apart, so it appears
   // exactly when both kinds are on the page. With no campaign open every row is

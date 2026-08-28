@@ -11,12 +11,33 @@ vi.mock("../api/client", async () => ({
     listConnections: vi.fn(), readConnection: vi.fn(), createConnection: vi.fn(),
     updateConnection: vi.fn(), deleteConnection: vi.fn(), refreshConnectionModels: vi.fn(),
     getConfig: vi.fn(), putConfig: vi.fn(), previewModels: vi.fn(), checkConnection: vi.fn(),
+    getGlobalRouting: vi.fn(),
   },
 }));
 vi.mock("../api/models", () => ({ priceLabel: () => "", contextLabel: () => "" }));
 import { api, ApiError } from "../api/client";
 
 const UNCHECKED = { state: "unknown", kind: "", detail: "", at: "" };
+
+/** The global routing bundle, with two slots pointed somewhere on purpose:
+ *  one named explicitly, one left to inherit the active connection. */
+function routing(over: Record<string, string> = {}) {
+  const effective = { scene: "zai-glm", absorb: "", dossier: "", ...over };
+  return {
+    scope: "global" as const,
+    routes: {}, effective,
+    provenance: {}, inherited: {}, inherited_from: {},
+    catalog: [
+      { key: "scene", label: "Scene turns", hint: "Every streamed turn.",
+        tasks: ["chat"] },
+      { key: "absorb", label: "Absorb & mechanics audit", hint: "End of scene.",
+        tasks: ["absorb"] },
+      { key: "dossier", label: "Dossier refresh", hint: "One call per NPC.",
+        tasks: ["dossier"] },
+    ],
+    connections: [], active_connection_id: "openrouter",
+  };
+}
 const OPENROUTER = { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "anthropic/claude-opus-4.1", post_process: "none", key_set: true, rev: "r1", health: UNCHECKED };
 const CUSTOM = { id: "zai-glm", kind: "openai_compatible", name: "z.ai GLM", base_url: "https://api.z.ai/v4", model: "glm-4.6", post_process: "strict", key_set: true, rev: "r2", health: UNCHECKED };
 
@@ -28,6 +49,7 @@ beforeEach(() => {
   });
   (api.listConnections as any).mockResolvedValue([OPENROUTER, CUSTOM]);
   (api.getConfig as any).mockResolvedValue({ active_connection_id: "openrouter" });
+  (api.getGlobalRouting as any).mockResolvedValue(routing());
   (api.readConnection as any).mockImplementation((id: string) => Promise.resolve(
     id === "openrouter"
       ? { ...OPENROUTER, models: [], fetched_at: "", health: UNCHECKED }
@@ -423,4 +445,56 @@ test("a stored failure is shown when the connection is opened, not only after a 
   fireEvent.click(await within(rail).findByText("z.ai GLM"));
 
   expect(await screen.findByText(/connection refused/)).toBeInTheDocument();
+});
+
+
+// ---- which jobs reach this connection ----
+
+test("a connection says which jobs are routed to it", async () => {
+  // This page is where a connection is edited and deleted, so what would stop
+  // running is the thing worth knowing before either.
+  render(<ConnectionEditor />);
+  fireEvent.click(await screen.findByRole("button", { name: /z\.ai GLM/ }));
+
+  const heading = await screen.findByRole("heading", { name: "Jobs routed here" });
+  const section = heading.closest(".side-section") as HTMLElement;
+  expect(within(section).getByText("Scene turns")).toBeInTheDocument();
+  // The two that inherit the active connection belong to the OTHER one.
+  expect(within(section).queryByText("Absorb & mechanics audit")).not.toBeInTheDocument();
+});
+
+test("a slot that inherits the active connection is listed on it", async () => {
+  // `effective` is the cascade's answer, not what the global scope typed. What
+  // a reader needs before deleting a connection is what would break, and an
+  // inheriting slot breaks exactly as loudly as an explicit one.
+  render(<ConnectionEditor />);
+  fireEvent.click(await screen.findByRole("button", { name: /OpenRouter/ }));
+
+  const heading = await screen.findByRole("heading", { name: "Jobs routed here" });
+  const section = heading.closest(".side-section") as HTMLElement;
+  expect(within(section).getByText("Absorb & mechanics audit")).toBeInTheDocument();
+  expect(within(section).getByText("Dossier refresh")).toBeInTheDocument();
+  expect(within(section).queryByText("Scene turns")).not.toBeInTheDocument();
+});
+
+test("a routing read that failed does not claim nothing is routed here", async () => {
+  // The dangerous wrong answer on a page with a delete button.
+  (api.getGlobalRouting as any).mockRejectedValue(new Error("busy"));
+  render(<ConnectionEditor />);
+  fireEvent.click(await screen.findByRole("button", { name: /z\.ai GLM/ }));
+
+  const heading = await screen.findByRole("heading", { name: "Jobs routed here" });
+  const section = heading.closest(".side-section") as HTMLElement;
+  expect(within(section).queryByText(/nothing is routed here/i)).not.toBeInTheDocument();
+});
+
+test("a connection nothing points at says so", async () => {
+  (api.getGlobalRouting as any).mockResolvedValue(
+    routing({ scene: "openrouter" }));
+  render(<ConnectionEditor />);
+  fireEvent.click(await screen.findByRole("button", { name: /z\.ai GLM/ }));
+
+  const heading = await screen.findByRole("heading", { name: "Jobs routed here" });
+  const section = heading.closest(".side-section") as HTMLElement;
+  expect(within(section).getByText(/nothing is routed here/i)).toBeInTheDocument();
 });

@@ -616,24 +616,35 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .scene-action.end { color: var(--accent); border-color: var(--line-strong); }
 .scene-action.end:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 
-.sub-export-menu { position: relative; }
-.sub-export {
-  display: flex; align-items: center; min-height: 34px; color: var(--muted);
-  font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; line-height: 22px;
-  text-transform: uppercase; padding: 4px 10px; cursor: pointer; list-style: none;
+/* The scene bar's overflow. These rules were written for an export menu that
+   was never built and had no reference in any .tsx; they are the `Scene ⋯`
+   disclosure now, which is the shape they always described. */
+.scene-menu { position: relative; }
+.scene-menu > summary {
+  /* `.scene-action` supplies the type and the border; this is what a summary
+     needs on top of it. `list-style: none` plus the webkit rule below drops
+     the disclosure triangle -- the ⋯ in the label is the affordance. */
+  list-style: none; cursor: pointer;
 }
-.sub-export::-webkit-details-marker { display: none; }
-.sub-export:hover { color: var(--ink); }
-.sub-export-options {
-  position: absolute; left: 0; top: 100%; z-index: 10; display: flex; flex-direction: column;
-  min-width: 150px; background: var(--surface); border: 1px solid var(--line-strong);
+.scene-menu > summary::-webkit-details-marker { display: none; }
+.scene-menu-options {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 10;
+  display: flex; flex-direction: column; min-width: 168px;
+  background: var(--surface); border: 1px solid var(--line-strong);
   border-radius: 4px; box-shadow: var(--shadow-pop);
 }
-.sub-export-options a {
-  padding: 10px 16px; color: var(--ink); font-family: var(--fm); font-size: 10px;
-  letter-spacing: 0.1em; text-decoration: none;
+.scene-menu-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; min-height: 38px; background: transparent; border: 0;
+  color: var(--ink); font-family: var(--fm); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase; text-align: left;
+  cursor: pointer;
 }
-.sub-export-options a:hover { background: var(--track); color: var(--accent); }
+.scene-menu-item:hover { background: var(--track); color: var(--accent); }
+@media (max-width: 1180px) {
+  /* The touch target the bar's own comment names. */
+  .scene-menu-item { min-height: 44px; }
+}
 
 /* A panel (mechanics, calendar, cover, the inspector) opens above the
    transcript rather than beside it. Beside it was the old third column, which
@@ -3907,6 +3918,14 @@ a.column-back { text-decoration: none; }
 
 /* ---- the three money columns ---- */
 /* Side by side, never added. A UI that offers the sum is a UI that gets quoted. */
+/* The Costs page's headline, across the body rather than down the column.
+   The one page whose subject IS the money gets the width for it. */
+.costs-headline {
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  padding: 16px 18px; margin: 14px 0 18px;
+}
+.costs-headline .money-columns { margin: 0; }
+
 .money-columns {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px;
   margin: 10px 0 4px;

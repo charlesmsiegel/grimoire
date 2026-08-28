@@ -228,6 +228,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [showMechanics, setShowMechanics] = useState(false);
   const [showStyle, setShowStyle] = useState(false);
   const [showCover, setShowCover] = useState(false);
+  /** The `Scene ⋯` disclosure, so picking an item can shut it.
+   *
+   *  A ref onto the element rather than a controlled `open`: `<details>` owns
+   *  that state and driving it from React means fighting the browser for it on
+   *  every keyboard toggle. */
+  const sceneMenu = useRef<HTMLDetailsElement>(null);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   // Which campaign `scenes` describes. The router reuses this component across
   // /campaigns/A → /campaigns/B, so between the switch and B's list landing
@@ -3839,6 +3845,41 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     },
   ]);
 
+  /** Which panel is above the transcript, if any.
+   *
+   *  Derived rather than stored beside the seven flags, so it cannot disagree
+   *  with them. Only ONE can be open at a time in practice — every menu item
+   *  toggles and the panels stack — but the first match is what the Close
+   *  button names, and closing clears all seven anyway.
+   */
+  const openPanel = ([
+    [showChanges, "Changes"], [showIncoming, "World updates"],
+    [showComposition, "Composition"], [showMechanics, "Mechanics"],
+    [showCalendar, "Calendar"], [showStyle, "Response"], [showCover, "Cover"],
+  ] as const).flatMap(([open, label]) => (open ? [{ label }] : []))[0];
+
+  /** Run a menu item, then shut the menu it was picked from.
+   *
+   *  On each item rather than one handler on the container: a click handler on
+   *  a `<div>` is a control a keyboard cannot reach, and every item here is
+   *  already a button that can carry it.
+   */
+  function pickFromMenu(run: () => void) {
+    if (sceneMenu.current) sceneMenu.current.open = false;
+    run();
+  }
+
+  /** Shut everything the menu can open.
+   *
+   *  All seven rather than the one `openPanel` named: two can be open at once
+   *  (nothing forbids it), and a Close that shut only the one it happened to
+   *  name would leave the other with no control on the bar at all. */
+  function closePanels() {
+    setShowChanges(false); setShowIncoming(false); setShowComposition(false);
+    setShowMechanics(false); setShowCalendar(false); setShowStyle(false);
+    setShowCover(false);
+  }
+
   // The column is one swap zone: cast, or one actor. `columnMode` is derived
   // from `selectedActor` rather than stored beside it, so the two can never
   // disagree about which is showing.
@@ -3958,22 +3999,57 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               the chrome, on the page, and in the palette. What is left on this
               bar is what is about the SCENE in front of you; what belongs to
               the campaign moved to the hub. */}
-          <button className="scene-action" onClick={() => setShowChanges((v) => !v)}>
-            {showChanges ? "Close" : "Changes"}
-          </button>
-          <button className="scene-action" onClick={() => setShowIncoming((v) => !v)}>
-            {showIncoming ? "Close" : "World updates"}
-          </button>
-          <button className="scene-action" onClick={() => setShowComposition((v) => !v)}>
-            {showComposition ? "Close" : "Composition"}
-          </button>
-          <button className="scene-action" onClick={() => setShowMechanics((v) => !v)}>
-            {showMechanics ? "Close" : "Mechanics"}
-          </button>
-          <button className="scene-action" onClick={() => setShowCalendar((v) => !v)}>Calendar</button>
-          <button className="scene-action" onClick={() => setShowStyle((v) => !v)}>Response</button>
-          <button className="scene-action" onClick={() => setShowCover((v) => !v)}>Cover</button>
-          <button className="scene-action" onClick={newScene}>+ New scene</button>
+          {/* Seven panels behind one control (`Scene ⋯`), which is the design's
+              overflow and is the mobile-clutter half of the brief. The bar's
+              own focus-mode comment already conceded the cost of not having
+              one: "eleven controls at the 44px touch target this width
+              mandates wrap into four rows".
+
+              What stays outside it is what the bar is FOR: the way back to the
+              campaign, and End scene. Everything in the menu opens a panel
+              above the transcript, and none of them is something you press
+              mid-turn.
+
+              A `<details>` rather than a hand-built popover: it is a disclosure
+              and the browser already knows how to open one from the keyboard.
+              The menu closes on pick, because a menu still standing over the
+              panel it just opened is in the way of the thing you asked for. */}
+          <details className="scene-menu" ref={sceneMenu}>
+            <summary className="scene-action">Scene ⋯</summary>
+            <div className="scene-menu-options">
+              {/* One list, so a panel added tomorrow is one row rather than a
+                  button, a label and a place in the wrap order. `open` is the
+                  panel's own flag, which is what lets the bar say which one is
+                  showing without a second copy of that state. */}
+              {([
+                ["Changes", showChanges, setShowChanges],
+                ["World updates", showIncoming, setShowIncoming],
+                ["Composition", showComposition, setShowComposition],
+                ["Mechanics", showMechanics, setShowMechanics],
+                ["Calendar", showCalendar, setShowCalendar],
+                ["Response", showStyle, setShowStyle],
+                ["Cover", showCover, setShowCover],
+              ] as const).map(([label, open, set]) => (
+                <button key={label} className="scene-menu-item"
+                        aria-pressed={open}
+                        onClick={() => pickFromMenu(() => set((v: boolean) => !v))}>
+                  {label}{open ? " ✓" : ""}
+                </button>
+              ))}
+              <button className="scene-menu-item"
+                      onClick={() => pickFromMenu(newScene)}>+ New scene</button>
+            </div>
+          </details>
+          {/* The one control the menu cannot carry. A panel is open ABOVE the
+              transcript and the button that closes it is behind a disclosure,
+              so closing costs two clicks and a hunt for which row has the tick.
+              It renders only while something is open, which is exactly when it
+              is worth the width. */}
+          {openPanel && (
+            <button className="scene-action" onClick={closePanels}>
+              Close {openPanel.label}
+            </button>
+          )}
           {/* `busy` is not the whole of "a turn can still write here": it clears
               when the socket dies, and the backend's shielded abort write lands
               seconds later — which is the window `streamingId` covers. Absorb

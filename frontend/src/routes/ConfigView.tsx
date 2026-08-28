@@ -90,6 +90,7 @@ function draftOf(c: Config): Draft {
 
 type SectionId =
   | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
+  | "setup"
   | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
@@ -114,6 +115,10 @@ const SECTIONS: SectionDef[] = [
   // No draft fields: the rate table is a file of its own behind its own route,
   // so it saves itself rather than through this page's Save (#158).
   { id: "pricing", group: "The install", label: "Token rates", fields: [] },
+  // No fields: the wizard writes each step as it is answered, which is what
+  // makes Back navigation rather than undo. This section is the way back INTO
+  // it once setup is done, which the router otherwise makes unreachable.
+  { id: "setup", group: "The install", label: "First-run setup", fields: [] },
   { id: "context", group: "What the model sees", label: "Context",
     fields: ["context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
              "offscene_known_limit", "speaker_turn_taking"] },
@@ -306,6 +311,40 @@ export default function ConfigView() {
   const dirtyIn = (s: SectionDef) =>
     s.fields.some((f) => dirty.includes(f)) || (s.id === "layout" && layoutDirty);
 
+  /** What a column row says it is currently set to, or "" for no answer.
+   *
+   *  The design gives every row its current value, and the reason is that a
+   *  settings index of bare nouns makes you open each one to find out what it
+   *  says. Not every row HAS a one-word answer, though, and inventing one is
+   *  worse than leaving the slot empty -- so this covers the rows whose value
+   *  is genuinely a word or a number, and the rest render nothing.
+   *
+   *  Read off the DRAFT, not the saved config, so a row shows what the form in
+   *  front of you says. That is only reachable when the row is not dirty (see
+   *  the call site), so the two can never contradict each other.
+   */
+  function valueOf(id: SectionId): string {
+    switch (id) {
+      case "connection":
+        // The name, not the id: an id is what the file stores and a name is
+        // what the reader picked.
+        return connections.find((k) => k.id === draft?.active_connection_id)?.name
+          ?? (draft?.active_connection_id ? "unknown" : "none");
+      case "logging": return draft?.log_level ?? "";
+      case "backups": return draft?.backup_enabled === "on" ? "on" : "off";
+      case "context": return draft?.context_budget ? `${draft.context_budget} tok` : "";
+      case "timeouts": return draft?.llm_timeout ? `${draft.llm_timeout}s` : "";
+      case "storage": return config?.data_dir ? "set" : "";
+      case "appearance": return theme.mode;
+      case "layout": return draft?.prompt_layout_enabled === "on" ? "on" : "off";
+      case "semantic": return recallOff ? "off" : "on";
+      // Deliberately blank: the rate table, the routing records and the
+      // response preset are each a document of their own, and "12 entries" is
+      // a size rather than a setting.
+      default: return "";
+    }
+  }
+
   function edit(field: DraftField, value: string) {
     setDraft((d) => (d ? { ...d, [field]: value } : d));
   }
@@ -436,16 +475,22 @@ export default function ConfigView() {
                     <span className="sr-only">{config.ready ? " ready" : " no key set"}</span>
                   </>
                 )}
-                {s.id === "semantic" && recallOff && <span className="column-row-off"> off</span>}
-                {s.id === "backups" && draft?.backup_enabled !== "on" &&
-                  <span className="column-row-off"> off</span>}
+                {/* `off` used to be appended to these two labels. It is the
+                    row's VALUE now, in the slot every other row uses, so it is
+                    said once and in the same place. */}
               </span>
-              {dirtyIn(s) && (
+              {/* The dot and the value share one slot, and the dot wins:
+                  "this row has an edit you have not saved" is the more urgent
+                  of the two, and showing the SAVED value beside an unsaved
+                  edit would be the row contradicting the form. */}
+              {dirtyIn(s) ? (
                 <>
                   <span className="sr-only">unsaved</span>
                   <span className="column-row-dirty" aria-hidden>●</span>
                 </>
-              )}
+              ) : valueOf(s.id) ? (
+                <span className="column-row-count">{valueOf(s.id)}</span>
+              ) : null}
             </button>
           ))}
         </ColumnSection>
@@ -485,6 +530,32 @@ export default function ConfigView() {
             {/* Remounted on a move: the notice describes one library, and the
                 pointer now names a different one. */}
             <StoreConflictNotice key={storeEpoch} />
+          </>
+        )}
+
+        {draft && section === "setup" && (
+          <>
+            <p className="config-copy">
+              The four questions a new library is asked: where it lives, which
+              model runs it, how it looks, and the first world to play in.
+              Every step commits as it is answered, so Back is navigation
+              rather than undo — walking it again does not put anything back.
+            </p>
+            <p className="config-copy">
+              Worth re-running when you move to another machine, or point the
+              storage location at a library that has never been set up here.
+              Nothing in it is destructive: the storage step is the same
+              control as <em>Storage</em> above, and the world step offers a
+              new world rather than replacing the ones you have.
+            </p>
+            <div className="form-actions">
+              {/* The explicit re-entry signal. `/welcome` is a redirect once
+                  setup is done, so a bare link would bounce straight back
+                  here -- see the route's own comment in `App.tsx`. */}
+              <Link className="hub-primary" to="/welcome?again=1">
+                Run first-run setup again →
+              </Link>
+            </div>
           </>
         )}
 

@@ -7362,7 +7362,13 @@ test("the scene bar opens the incoming-changes review, and closes it again", asy
   expect(await screen.findByRole("heading", { name: "Incoming world changes" })).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: /Saltmarch Harbor/ })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  // The menu item ticks to say which panel is showing, and the bar grows the
+  // one control the menu cannot carry: a Close that names what it will close,
+  // because a panel above the transcript whose only control is behind a
+  // disclosure costs two clicks and a hunt for the tick.
+  expect(screen.getByRole("button", { name: /World updates ✓/ }))
+    .toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "Close World updates" }));
   expect(screen.queryByRole("heading", { name: "Incoming world changes" })).toBeNull();
 });
 
@@ -7566,4 +7572,51 @@ test("the reattach asks from one past what was read, not from the live tail", as
   await waitFor(() => expect(api.findRun).toHaveBeenCalled());
   await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
   expect((api.attachRun as any).mock.calls[0][3]).toBe(1);   // not 12
+});
+
+
+// ---- the scene bar's overflow ----
+
+test("the seven panels are behind one control, and End scene is not", async () => {
+  // The mobile-clutter half of the brief. The bar's own focus-mode comment
+  // conceded the cost of not having this: "eleven controls at the 44px touch
+  // target this width mandates wrap into four rows".
+  renderCampaign();
+  await screen.findByText("Scene ⋯");
+
+  // What the bar is FOR stays on the bar.
+  expect(screen.getByRole("button", { name: "End scene" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /back to the campaign/i }))
+    .toBeInTheDocument();
+
+  // Everything that opens a panel is one control now.
+  for (const label of ["Changes", "World updates", "Composition", "Mechanics",
+                       "Calendar", "Response", "Cover", "+ New scene"]) {
+    expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  }
+  // ...and they are inside the disclosure rather than beside it.
+  const menu = screen.getByText("Scene ⋯").closest("details")!;
+  expect(within(menu).getByRole("button", { name: "Calendar" })).toBeInTheDocument();
+});
+
+test("picking from the menu shuts the menu it was picked from", async () => {
+  // A menu still standing over the panel it just opened is in the way of the
+  // thing that was asked for.
+  renderCampaign();
+  const summary = await screen.findByText("Scene ⋯");
+  const menu = summary.closest("details") as HTMLDetailsElement;
+  menu.open = true;
+
+  fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
+
+  expect(menu.open).toBe(false);
+});
+
+test("with nothing open the bar grows no Close", async () => {
+  // It renders only while something is above the transcript, which is exactly
+  // when its width is worth spending.
+  renderCampaign();
+  await screen.findByText("Scene ⋯");
+
+  expect(screen.queryByRole("button", { name: /^Close / })).not.toBeInTheDocument();
 });

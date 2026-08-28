@@ -115,50 +115,23 @@ export function CostsView() {
         <div className="eyebrow">What this campaign has cost</div>
         <h2 className="ledger-ident-name">{name || cid}</h2>
       </div>
+      {/* The headline is NOT here any more. This is the one page whose whole
+          subject is the money, and the three columns were being read at 274px
+          in the slot that is meant to answer "what am I navigating" — so they
+          were both cramped and in the wrong place. They are across the top of
+          the body now (`<Money/>` below), and what is left in the column is
+          the campaign, the order, and a summary line that says whether the
+          headline can be trusted at all. */}
       <ColumnSection label="All time">
-        {/* The headline this page exists for. Rendered only once the read has
-            landed: a `$0.00` under "All time" while a request is in flight is
-            the one figure a cost page must not print casually. */}
         {failed && <p className="column-empty">Unread — no total to show.</p>}
         {!failed && totals === undefined
           && <p className="column-empty">Reading the ledger…</p>}
         {!failed && totals !== undefined && (
-          <>
-            {/* The three columns ARE the headline now. One combined figure
-                beside them would be a fourth number for the reader to
-                reconcile against three that are already exact. */}
-            <MoneyColumns bucket={totals} />
-            {/* The count says how many calls nobody priced; this says WHY, and
-                the why is almost always a model string that does not match.
-                Without it the only way to find a typo'd key is to compare a
-                rollup against a table by eye. */}
-            {!!report?.unpriced_models?.length && (
-              <div className="unpriced-models">
-                <div className="money-label">No rate matches these</div>
-                <ul>
-                  {report.unpriced_models.map((m) => (
-                    <li key={m.model}>
-                      <code>{m.model}</code>
-                      <span className="field-hint">
-                        {" "}— {m.calls} call{m.calls === 1 ? "" : "s"} that could be priced
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="field-hint">
-                  A pricing entry is matched on the model string exactly. Add one
-                  under <Link to="/config">Configuration → Pricing</Link>, or a
-                  wildcard like <code>vendor/*</code>.
-                </p>
-              </div>
-            )}
-            <div className="ctx-tokens">
-              {totals.calls.toLocaleString()}{" "}
-              {totals.calls === 1 ? "generation" : "generations"}
-              {" · "}{totals.total_tokens.toLocaleString()} tok
-            </div>
-            <Footnotes bucket={totals} />
-          </>
+          <div className="ctx-tokens">
+            {totals.calls.toLocaleString()}{" "}
+            {totals.calls === 1 ? "generation" : "generations"}
+            {" · "}{totals.total_tokens.toLocaleString()} tok
+          </div>
         )}
       </ColumnSection>
       <ColumnSection label="Order">
@@ -197,6 +170,42 @@ export function CostsView() {
             <h1 className="screen-title">Costs by scene</h1>
           </div>
         </div>
+
+        {/* Across the body, above the table it is the total of. Three separate
+            claims about money and no total, exactly as everywhere else — this
+            is the same `MoneyColumns` the hub's card and the shell payload
+            draw, which is what stops this page and the rail disagreeing about
+            what a call cost. */}
+        {!failed && totals !== undefined && (
+          <div className="costs-headline">
+            <MoneyColumns bucket={totals} />
+            <Footnotes bucket={totals} />
+            {/* The count says how many calls nobody priced; this says WHY, and
+                the why is almost always a model string that does not match.
+                Without it the only way to find a typo'd key is to compare a
+                rollup against a table by eye. */}
+            {!!report?.unpriced_models?.length && (
+              <div className="unpriced-models">
+                <div className="money-label">No rate matches these</div>
+                <ul>
+                  {report.unpriced_models.map((m) => (
+                    <li key={m.model}>
+                      <code>{m.model}</code>
+                      <span className="field-hint">
+                        {" "}— {m.calls} call{m.calls === 1 ? "" : "s"} that could be priced
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="field-hint">
+                  A pricing entry is matched on the model string exactly. Add one
+                  under <Link to="/config">Configuration → Pricing</Link>, or a
+                  wildcard like <code>vendor/*</code>.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {failed && (
           <p className="empty-state">

@@ -61,6 +61,12 @@ function renderCosts() {
 }
 
 const column = () => within(screen.getByRole("complementary"));
+/** The three money columns, which live across the top of the BODY now.
+ *
+ *  This is the one page whose whole subject is the money, and they were being
+ *  read at 274px in the slot that answers "what am I navigating". What is left
+ *  in the column is the campaign, the order, and the generation count. */
+const headline = () => within(screen.getByRole("main"));
 const bodyRows = () => screen.getAllByRole("row").slice(1);
 
 test("each scene is listed with what it cost", async () => {
@@ -76,8 +82,20 @@ test("each scene is listed with what it cost", async () => {
 test("the campaign's all-time total is the headline", async () => {
   renderCosts();
 
-  expect(await column().findByText("$1.50")).toBeInTheDocument();
+  expect(await headline().findByText("$1.50")).toBeInTheDocument();
+  // The count stays in the column: it says how much of the ledger the figure
+  // is built on, which is a fact about the report rather than the report.
   expect(column().getByText(/9 generations/)).toBeInTheDocument();
+});
+
+test("the money is across the body, not down the 274px column", async () => {
+  // The layout complaint this page had: three columns of money in a slot that
+  // is 274px wide and is meant for navigation.
+  renderCosts();
+  await headline().findByText("$1.50");
+
+  expect(column().queryByText("$1.50")).not.toBeInTheDocument();
+  expect(headline().getByText(/never summed/i)).toBeInTheDocument();
 });
 
 test("a scene row links into the scene it names", async () => {
@@ -92,7 +110,7 @@ test("re-ordering asks the SERVER, because the list is capped there", async () =
   // "…of the most expensive N", so a campaign past the cap would be missing a
   // recent cheap scene from a list headed "most recent".
   renderCosts();
-  await column().findByText("$1.50");
+  await headline().findByText("$1.50");
   (api.getCampaignSceneCosts as any).mockResolvedValue({
     ...REPORT, order: "recent", scenes: [...REPORT.scenes].reverse(),
   });
@@ -215,10 +233,10 @@ test("subscription and modelled spend are reported apart from the bill", async (
   });
   renderCosts();
 
-  expect(await column().findByText(
+  expect(await headline().findByText(
     /2 calls billed to a subscription, not charged \(≈ \$0\.90 at the provider's per-token rates\)/))
     .toBeInTheDocument();
-  expect(column().getByText(
+  expect(headline().getByText(
     /1 call the provider did not price \(≈ \$0\.10 at your per-token rates\)/))
     .toBeInTheDocument();
 });
@@ -252,14 +270,14 @@ test("a failed read can be retried", async () => {
 
   fireEvent.click(await screen.findByText("Try again"));
 
-  expect(await column().findByText("$1.50")).toBeInTheDocument();
+  expect(await headline().findByText("$1.50")).toBeInTheDocument();
 });
 
 test("the heading describes the order that came back, not the one just clicked", async () => {
   // An all-time rescan can be slow, and until it lands the rows are still in
   // the previous order.
   renderCosts();
-  await column().findByText("$1.50");
+  await headline().findByText("$1.50");
   let release: (v: unknown) => void = () => {};
   (api.getCampaignSceneCosts as any).mockReturnValue(
     new Promise((res) => { release = res; }));

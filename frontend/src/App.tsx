@@ -52,6 +52,12 @@ function Shell(
   },
 ) {
   const location = useLocation();
+  /** Whether the reader asked for the wizard again, rather than being sent to
+   *  it. Read off the query string because that is the only place the request
+   *  can live: it has to survive the redirect this route otherwise is, and it
+   *  must not become a stored setting — "run setup again" is one act, not a
+   *  mode the app can get stuck in. */
+  const rerunSetup = new URLSearchParams(location.search).get("again") === "1";
   usePaletteHotkey();
   const { focus } = useFocus();
 
@@ -133,8 +139,16 @@ function Shell(
             longer calls it a first run — from restarting at step one and
             creating a second world. */}
         <Route path="/" element={inSetup ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
+        {/* `?again=1` is the explicit re-entry signal Configuration's own
+            First-run setup row links with. Without one this route is a
+            redirect the moment setup is done, so nothing could offer the
+            wizard again -- and the four things it walks (storage, model, look,
+            world) are exactly what somebody moving to a new machine wants to
+            be walked through a second time. It has to be explicit rather than
+            inferred: `inSetup` answers "has this library been set up", and
+            re-running is a decision, not a state. */}
         <Route path="/welcome" element={
-          inSetup
+          inSetup || rerunSetup
             ? <SetupWizard onDone={(dir) => onLeftSetup(dir ?? dataDir)} />
             : <Navigate to="/" replace />} />
         <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
