@@ -169,9 +169,14 @@ The scene's reroll-steering log. Third per-scene sidecar,
   lost its entries, and refusing to log new ones on top serves nobody.
 - `texts(cid, sid) -> list[str]` — entry texts, oldest first; `[]` on a
   missing or garbled file (the absorb-snapshot tolerance rule).
-- `drop_scene(cid, sid)` — unlink, for delete.
 - `repoint_scenes(cid, mapping)` — move the file on rename, exactly as the
   alternates and review sidecars move.
+- `clear_destinations(cid, sids)` — the orphan sweep `repad` and the legacy
+  migration run before any transcript moves, exactly as the other two
+  sidecars have. (An earlier draft also specified a `drop_scene`; it was
+  dropped at implementation because nothing would call it —
+  `scenes.lifecycle.delete_scene` unlinks all three sidecars directly, and
+  the fan-out reaches this store only through `repoint_scenes`.)
 
 Entries carry no transcript index or anchor on purpose. The absorb consumes
 text and order; an index would renumber under cuts (the ledger's own
