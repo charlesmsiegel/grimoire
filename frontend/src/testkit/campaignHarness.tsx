@@ -260,6 +260,8 @@ export function installCampaignMocks() {
   (api.campaignChanges as any).mockResolvedValue([]);
   (api.getIncoming as any).mockResolvedValue([]);
   (api.listDiverged as any).mockResolvedValue([]);
+  (api.getComposition as any).mockResolvedValue({ rows: [] });
+  (api.setSyncPin as any).mockResolvedValue({ pinned: [] });
   (api.acceptIncoming as any).mockResolvedValue({ ok: true });
   (api.rejectIncoming as any).mockResolvedValue({ ok: true });
   (api.campaignProvenance as any).mockResolvedValue({});
