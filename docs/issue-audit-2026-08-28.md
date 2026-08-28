@@ -31,7 +31,7 @@ These change the list before any prioritization of it means anything.
 | #113 | **Close (or narrow)** | Option A is built end-to-end: `sync.diverged` (`store/sync.py:670`), `GET /campaigns/{cid}/diverged`, rendered as "campaign override" in `CompositionPanel.tsx`. Residue if kept: the `source: absorb|manual` distinction, and drift trails for relationship/bond/plot edits. |
 | #119 | **Close (or narrow to lore→character)** | `entities.reclassify` + `store/reclassify.py` implement the entity-kind case including the cross-campaign sync sweep the issue predicted; frontend picker exists. Only Option B (lore→*character* conversion, a different record shape) remains. |
 | #26 | Narrowed already | Avatar half shipped (#25); what's left is iterating `data.assets` past `AVATAR` in `import_card`, reusing the existing safe-zip machinery. Small. |
-| #40 | **Narrow to "world default climate"** | World calendar editor shipped (#223); mechanics default exists. Atmosphere exists but campaign-scoped (`store/campaign_climate.py`); the world-level default is the only open slice. Small. |
+| #40 | **Close** | World calendar editor shipped (#223); mechanics default exists; the climate editor (`/api/climates` + `ClimateEditor.tsx`) is the atmosphere control the weather design assigned to #40. That design also *deliberately cut* the world-level default climate as a scope decision (campaign default + wizard cover it) — so no residue remains unless that decision is reversed, which is a new decision, not this issue. |
 | #71 | **Narrow to freeze + the joining endpoint** | The composition overview and sync UI it asked for exist (`CompositionPanel`, `IncomingReview`, `sync.promote`/`push`). Two residues, and the panel's own comments name both: the per-ref pin, and the joined endpoint — without it a followed record with nothing pending is invisible (no read enumerates the manifest) and an edited character/PC is unreported (`/diverged` covers flat records only; actors carry their base in the appearance record). Small-medium. |
 | #22 | **Narrow to frontend** | The backend primitive shipped: `POST .../first-post` takes arbitrary text with the right guards. Missing is only a "paste your own opener" affordance in `SceneConfirmForm`/`OpenerComposer`. Small. |
 | #82 | **Decide, don't build** | The nominated-speaker layer exists and is gated off by default (`DEFAULT_SPEAKER_TURN_TAKING = "off"`). One playtest decides whether per-NPC calls are still wanted. Cheapest open item, and it gates how #58 should be sequenced. |
@@ -189,11 +189,17 @@ multiplier on all the coherence aspects: you can't fix what you can't see.
   doubly precedented (opener, director notes). New cost consideration: a
   preview runs a full assemble+pack, so the debounce interval is a real
   decision. Small-medium.
-- **#151 — replay a turn through the gateway.** All three named
-  dependencies (#150 prompt log, #72 fork, #77 model-override reroll)
-  shipped; what's missing is one ephemeral stream over stored messages.
-  Small now. Watch the name collision: `/replay` in `routes/scenes.py` is
-  #79's retcon replay, a different feature.
+- **#151 — replay a turn through the gateway.** Two of its dependencies
+  shipped (#72 fork, #77 model-override reroll) — but not the one that
+  matters most: the #157 prompt-log design says in as many words that
+  **#150 is not built**, and what `store/prompt_log.py` freezes is a
+  retention-limited *inventory* (`_breakdown` is "deliberately not a
+  transcript of the wire order", history collapsed, snapshots evictable and
+  capture disableable) — not replayable role-tagged messages. Replay
+  therefore still needs message-preserving capture, and a defined answer
+  for a missing/evicted snapshot, before the gateway can reproduce a
+  stored request. Medium, not small. Watch the name collision: `/replay`
+  in `routes/scenes.py` is #79's retcon replay, a different feature.
 - **#30 — named prompt-template variants.** `store/styles.py` is a working
   precedent for exactly the bundled+user overlay this asks for. Medium.
 - **#71 (narrowed) — per-ref sync freeze + the joining composition
@@ -238,8 +244,10 @@ Friction in the editors, wizards, and play surface.
   cast-locked version's card tags are the source. Small, not medium.
 - **#73 — campaign settings IA.** Substantially overtaken: routing,
   response, climate, calendar are all per-campaign already. What's left is
-  a consolidated surface plus three still-global keys (`recap_depth`,
-  `context_scan_depth`, `system_prompt`). Small-medium now.
+  a consolidated surface plus the still-global keys: `recap_depth`,
+  `context_scan_depth`, `system_prompt`, and the `user_label` /
+  `assistant_label` overrides (read only from global config in
+  `routes/config.py`). Small-medium now.
 - **#66 — merged PC card.** The divergence third has a cheap read now —
   but it is `sync.library_status` (the actor-aware per-record
   `/campaigns/{cid}/{kind}/{id}/library`), not `/diverged`, which skips
@@ -274,7 +282,7 @@ Friction in the editors, wizards, and play surface.
 - **#56 — create-world skill.** Smaller than filed: `populate-world-content`
   and its CLI cover the post-import half; the remaining gap is genuinely
   "a world from a concept, from nothing." Medium.
-- **#55, #40 (narrowed), #437** — see their entries above.
+- **#55, #437** — see their entries above.
 
 ## 6. Data portability
 
@@ -282,11 +290,15 @@ Getting content in and out without loss.
 
 **Now**
 
-- **#20 — preserve ST advanced lorebook fields.** Still dropped
-  irreversibly at import — and *every import that happens while this is
-  open loses the fields permanently*, which is why a small stash-only
-  change outranks its size. The typed-fields work (#222) created a
-  sanctioned place to land the stash that didn't exist at filing. Small.
+- **#20 — preserve ST advanced lorebook fields.** Still dropped at import
+  — but the permanence splits by path: an *embedded* `character_book`
+  survives in the stored card (`cards.to_v3` preserves unknown data
+  fields, and the lore import rereads the intact stored book), so those
+  fields are recoverable later; a *standalone* lorebook upload keeps no
+  source, and only there is the loss irreversible while this stays open.
+  That standalone path is still reason to do it early, and the
+  typed-fields work (#222) created a sanctioned place to land the stash.
+  Small.
 - **#136 — plaintext character import.** Still no path for pasted prose;
   the preview-then-persist convention it wants is now used by five
   features and `run_draft` gives drafts an async home. Medium; the
@@ -319,12 +331,12 @@ Getting content in and out without loss.
 
 If the next stretch of work took only the top of each aspect, in order:
 
-1. **Hygiene**: close #57/#113/#119; run the #82 playtest; write down the
-   #437 rail-vs-grid decision. (Hours, and the list shrinks by five.)
+1. **Hygiene**: close #57/#113/#119/#40; run the #82 playtest; write down
+   the #437 rail-vs-grid decision. (Hours, and the list shrinks by six.)
 2. **#61+#62** — emergent-NPC voice/capsule pass (character coherence,
    small, fully unblocked).
-3. **#20** — stash ST lorebook fields (portability, small, *lossy while
-   open*).
+3. **#20** — stash ST lorebook fields (portability, small; *standalone
+   uploads stay lossy while open*).
 4. **#17, #68, #22-residue** — three small greeting/opener frictions.
 5. **#220** — lore owners that can actually fire (continuity, small).
 6. **#86** — per-scene POV (small-medium, unlocks #122/#140 halves).
