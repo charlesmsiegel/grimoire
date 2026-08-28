@@ -44,6 +44,12 @@ export function CalendarConfig({ scope, onConfig }: {
   // The scope this render belongs to, readable from a settled promise -- see `save`.
   const current = useRef(`${scope.kind}/${scope.id}`);
   current.current = `${scope.kind}/${scope.id}`;
+  // The config on screen right now, readable from a settled promise. Every edit
+  // replaces the object, so identity against it answers "has the reader typed
+  // since this save went out?" -- which the scope guard cannot, because editing
+  // on does not change the scope. See `save`.
+  const latest = useRef(cfg);
+  latest.current = cfg;
   // A load that failed is not a load still running. Without the distinction
   // "Loading calendar…" is what an unreachable store shows forever, and on the
   // world Overview that is the first thing a new library puts on screen.
@@ -109,16 +115,27 @@ export function CalendarConfig({ scope, onConfig }: {
     // previous record's calendar on screen under the new record's Save button,
     // where the next edit writes it over the new one.
     const startedIn = `${scope.kind}/${scope.id}`;
+    // What was on screen when this save went out, for the same kind of check one
+    // scope narrower -- see below.
+    const startedFrom = cfg!;
     try {
       await api.setCalendarConfig(scope, outgoing);
       if (current.current !== startedIn) return;
       storedWarn.current = outgoing.warn_days;
-      setCfg(outgoing);   // the control shows the number that was actually saved
-      setSaved(true);
       // The saved config, not a re-read: the server normalizes but does not
       // decide any field the form shows, and a second GET would race this
-      // component's own scope effect if the reader had already moved on.
+      // component's own scope effect if the reader had already moved on. This
+      // one is what the STORE now holds, so it is reported whether or not the
+      // form has moved on from it.
       onConfig?.(outgoing);
+      // Kept editing while the request was out? Then `outgoing` is a snapshot
+      // from before those keystrokes, and installing it would silently undo them
+      // -- and stamp "Saved." over a form that no longer matches what was saved,
+      // which is the reading a reader cannot recover from. The scope guard above
+      // does not catch this: editing on stays in the same scope.
+      if (latest.current !== startedFrom) return;
+      setCfg(outgoing);   // the control shows the number that was actually saved
+      setSaved(true);
     } catch (err: any) {
       // Guarded like the success path above, and for the same reason: a
       // rejection from the scope the reader has already left would otherwise

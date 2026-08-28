@@ -238,3 +238,21 @@ test("a failed save from an earlier scope does not banner the new one", async ()
   await act(async () => { failOld({ detail: "the campaign's calendar is bad" }); });
   expect(screen.queryByText("the campaign's calendar is bad")).toBeNull();
 });
+
+
+test("an edit made while the save is in flight survives it", async () => {
+  // `save` snapshots the form before the request goes out and installs that
+  // snapshot on success. Kept editing meanwhile and the snapshot silently undoes
+  // those keystrokes -- and stamps "Saved." over a form that no longer matches
+  // what was saved, which is the reading a reader cannot recover from. The scope
+  // guard does not catch it: editing on stays in the same scope.
+  let land: (v: any) => void = () => {};
+  (api.setCalendarConfig as any).mockReturnValue(new Promise((r) => { land = r; }));
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  const region = await screen.findByLabelText("Holidays region");
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  fireEvent.change(region, { target: { value: "GB" } });
+  await act(async () => { land({ ok: true }); });
+  expect(screen.getByLabelText<HTMLSelectElement>("Holidays region").value).toBe("GB");
+  expect(screen.queryByText("Saved.")).toBeNull();
+});

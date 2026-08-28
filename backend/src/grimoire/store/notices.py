@@ -45,7 +45,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import atomic, calendars, events, locks, paths
+from . import atomic, calendars, events, locks, paths, scene_ids
 from .campaigns import paths as campaigns_paths
 
 #: How many acknowledgements are kept. The ledger only ever grows — one row per
@@ -97,7 +97,13 @@ NAME_BUDGET = 120
 #: the KEY and the row COUNT bounds nothing if one field beside them is free to
 #: be a megabyte. Truncation is right here where it is wrong for a key --
 #: nothing compares this value, so a shortened one still says where it happened.
-SCENE_LIMIT = 200
+#:
+#: `MAX_SID` and not a round number of its own, because a cap BELOW it truncates
+#: an id this app actually mints -- and `repoint_scenes` then cannot repair the
+#: row when that scene is renamed, since its mapping is keyed by the full old id.
+#: A field naming a scene that no longer exists is the thing that function is
+#: there to prevent, so the two bounds have to be the same bound.
+SCENE_LIMIT = scene_ids.MAX_SID
 
 
 def _path(cid: str) -> Path:
@@ -223,8 +229,16 @@ def forget(cid: str, keys: list[str]) -> list[str]:
     The undo for a banner dismissed by mistake, and the only way back: `mark`
     refuses to overwrite a stamp, so without this a misclick silences an event
     permanently. Returns the keys that were actually there.
+
+    Bounded exactly as `mark` is, and before the lock rather than inside it.
+    This route is public and takes a list too, so an unbounded one costs a
+    membership test per key while holding the lock every other mutator in the
+    campaign is waiting on -- a cost `mark`'s cap already refuses to pay. Keys
+    past `KEY_LIMIT` are dropped rather than looked up because `mark` refuses to
+    write one, so no key that long can be an acknowledgement this app made.
     """
-    wanted = [k for k in keys if isinstance(k, str) and k]
+    wanted = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
+    wanted = [k for k in wanted if len(k) <= KEY_LIMIT][:BATCH_LIMIT]
     if not wanted:
         return []
     with locks.campaign_lock(cid):
@@ -399,4 +413,16 @@ def pending(cid: str, croot: Path, native: str, window: int | None = None) -> li
     # authored event and an observance leads with the event, which is the one
     # the reader wrote down and the one a scene is likelier to be planned around.
     rows.sort(key=lambda r: (r["in_days"], r["kind"] != "event", r["name"]))
-    return rows
+    # Then one row per KEY, because the key is what a dismissal writes and two
+    # rows sharing one would mean dismissing either silences both -- the reader
+    # acknowledging a warning they were never shown. `_upcoming` already dedupes
+    # on (day, name), but the key is built from a NORMALIZED name: `_bounded`
+    # strips, and has to, or a name carrying edge whitespace would generate a key
+    # that never matches the one stored. Two observances the calendar keeps
+    # distinct therefore collide here -- `"Eve"` and `"Eve "` are both names
+    # `validate_rule` accepts, and calendar.json is hand-written. Sorted first,
+    # so the row kept is the one the order above put ahead.
+    unique: dict[str, dict] = {}
+    for row in rows:
+        unique.setdefault(row["key"], row)
+    return list(unique.values())
