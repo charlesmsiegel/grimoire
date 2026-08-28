@@ -493,6 +493,9 @@ would answer neither question.
   follow-ups a landed turn schedules (#397), and `routes/streaming._turn_settled`
   at each of a turn's terminal points, which is not the same thing as "a post
   landed": a closed roll fence writes a proposal and no post at all. A route
+  A multi-campaign write reached from a
+  world route stamps every campaign it wrote, inside its `hold_all` — nothing
+  under `/api/campaigns/` runs for one. A route
   that mutates a *different*
   campaign than the one in its path says so with `@leaves_campaign_unchanged`
   (`POST /fork`, whose source is never written to) — otherwise a fork would

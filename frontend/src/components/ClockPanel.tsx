@@ -334,6 +334,15 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       if (!stillShowing(cid)) return;
       setDigest(priced);
       setPricedNow(clock?.now ?? "");
+      // A checkpoint stops being one the moment the campaign moves on, and this
+      // is the only place that can notice it moving in ANOTHER TAB. `refreshKey`
+      // is this tab's signal — it does not fire for a write somebody else made,
+      // so a copy taken before that write would otherwise survive into the
+      // reopened question, which offers "Retry the skip", takes no copy at all,
+      // and skips on a restore point missing whatever they did (Codex review).
+      // Compared against the token the copy was keyed on, which is what
+      // `pricedRevision` held until this line replaced it.
+      if (revision !== pricedRevision) setCheckpointed(false);
       setPricedRevision(revision);
       setOutcome("preview");
       if (priced.fork) {

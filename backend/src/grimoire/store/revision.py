@@ -60,10 +60,19 @@ of a turn's terminal points. That last one is deliberately not "a post landed":
 a roll fence that closes with no narration writes a proposal record and nothing
 else, and a failed turn's rollback takes a post back OFF.
 
-What all of that leaves out is worth saying plainly:
-a store written by something other than this app (a hand edit, a sync client
-landing a file, a second grimoire process older than this module) moves
-nothing here. So a token that has not changed is evidence and not proof, which
+A multi-campaign write reached from a WORLD route stamps every campaign it
+wrote, for the same reason and one step further out: nothing under
+`/api/campaigns/...` runs at all. `sync.demote`, `store.reclassify` and the
+world-module rebind each do it inside the `hold_all` that covers their writes.
+
+What all of that leaves out is worth saying plainly. A store written by
+something other than this app (a hand edit, a sync client landing a file, a
+second grimoire process older than this module) moves nothing here. Neither
+does an edit to a campaign's WORLD, unless it writes into the campaign: the
+token records writes to the campaign, and a campaign renders inherited content
+it does not hold a copy of, so a world edit can change what a digest reads
+without moving a thing. Stamping every campaign of a world on every world edit
+is a fan-out this value is not worth. So a token that has not changed is evidence and not proof, which
 is the honest shape for a guard whose failure mode is a re-priced retry rather
 than a lost write.
 

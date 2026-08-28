@@ -23,7 +23,7 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import atomic, characters, entities, greetings, locks, overlay, pcs
+from . import atomic, characters, entities, greetings, locks, overlay, pcs, revision
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import lifecycle as campaigns_lifecycle
@@ -953,6 +953,14 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
         else:
             entities.delete_entity(wroot, kind, eid)
         overlay.forget_world_record(wroot, kind, eid)
+        # Every dependent's write token (#409), inside the hold that covers the
+        # writes. This is a WORLD route, so nothing in `/api/campaigns/...`
+        # stamps it -- and the sweep above rewrote sync.md and detached.json in
+        # all of them, whether or not they took a copy. A caller holding one of
+        # their tokens would otherwise confirm an operation priced before a
+        # record it depends on was demoted into it (Codex review).
+        for dep in every:
+            revision.bump(dep["id"])
     _touch_world(wroot)
     return {"copied_down": sorted(copied),
             "dependents": [d["id"] for d in deps]}

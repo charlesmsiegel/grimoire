@@ -361,6 +361,69 @@ def test_a_reply_that_lands_nothing_moves_nothing(client):
     assert _token(client, cid) == before
 
 
+def test_a_world_route_that_writes_campaigns_stamps_every_one_of_them(client):
+    """The middleware only sees `/api/campaigns/...`, and a world route can
+    write into every campaign that depends on it.
+
+    Demoting a world record copies it down and rewrites `sync.md` and
+    `detached.json` in each dependent under one `hold_all`, so a caller holding
+    one of their tokens would otherwise confirm an operation priced before a
+    record it depends on landed in it.
+    """
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.post(f"/api/worlds/{wid}/lore", json={"name": "The Blend", "body": "A smoked oolong."})
+    before = _token(client, cid)
+    r = client.post(f"/api/worlds/{wid}/lore/the-blend/demote", json={})
+    assert r.status_code == 200, r.text
+    assert _token(client, cid) != before
+
+
+def test_rebinding_a_worlds_module_stamps_the_campaigns_it_clears(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    before = _token(client, cid)
+    r = client.put(f"/api/worlds/{wid}/module", json={"module": "d20-basic"})
+    assert r.status_code == 200, r.text
+    assert _token(client, cid) != before
+
+
+def _opener(client, cid, sid):
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
+                       json={"prompt": "They arrive at the gate."}) as r:
+        assert r.status_code == 200
+        for _ in r.iter_lines():
+            pass
+
+
+def test_an_opener_draft_nobody_adopted_moves_nothing(client):
+    """`_ephemeral_stream` persists nothing, so a draft the reader discards must
+    not invalidate somebody's clock price — `POST .../first-post` is what adopts
+    one. With prompt capture off there is no other write in the path, which is
+    what makes the marker's effect visible on its own.
+    """
+    cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    store.write_config(prompt_log_depth="0")
+    before = _token(client, cid)
+    _opener(client, cid, sid)
+    assert _token(client, cid) == before
+
+
+def test_an_opener_that_captured_a_prompt_stamps_for_that(client):
+    # The other half, and the reason the marker could not simply be the whole
+    # answer: a capture IS a campaign write (`prompts/index.json`), it is on by
+    # default, and `@computes_only` would have taken its stamp with it.
+    cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    assert store.prompt_log.capturing(), "capture is on by default; this asserts nothing otherwise"
+    before = _token(client, cid)
+    _opener(client, cid, sid)
+    assert _token(client, cid) != before
+
+
 # --- POST /advance spends one ---------------------------------------------
 
 

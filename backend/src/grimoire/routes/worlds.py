@@ -256,6 +256,11 @@ def put_world_module(wid: str, body: ModuleSetting):
                 setting = (meta.get("module") or "").strip()
                 if not setting:                  # no per-campaign override (fresh read)
                     store.audit.clear_baselines(c)
+                    # Inside the hold that covers the clear (#409). A world route
+                    # writes these campaigns and nothing in `/api/campaigns/...`
+                    # stamps them -- the same call `sync.demote` and
+                    # `store.reclassify` make, for the same reason.
+                    store.revision.bump(c)
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found")
     except store.modules.ModuleNotFound:

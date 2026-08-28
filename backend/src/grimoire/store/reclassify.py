@@ -88,7 +88,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from . import entities, locks, overlay, record_refs, sheets
+from . import entities, locks, overlay, record_refs, revision, sheets
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .worlds import paths as worlds_paths
@@ -217,6 +217,11 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
             try:
                 if _follow_in_campaign(cid, wroot, kind, eid, new_kind, new_eid):
                     swept.append(cid)
+                    # Inside the hold that covers the repoint (#409). A world
+                    # route reaches this, so nothing in `/api/campaigns/...`
+                    # stamps the campaigns it rewrites -- see `sync.demote`,
+                    # which makes the same call for the same reason.
+                    revision.bump(cid)
             except (OSError, ValueError, entities.EntityNotFound) as exc:
                 # Per campaign, not per sweep, and for `overlay.forget_world_record`'s
                 # reason: the world record has already moved by the time we get

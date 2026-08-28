@@ -430,6 +430,14 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     # off. Nothing to record, and nothing was built to record.
     if breakdown is None:
         return
+    # A capture IS a campaign write (`prompts/index.json`), and the one route
+    # that reaches this while persisting nothing else is `post_opener` -- a
+    # draft, and now `@computes_only` so a discarded one cannot invalidate
+    # somebody's clock price. That marker would have taken this write's stamp
+    # with it, so the write stamps for itself (#409). Every other caller here is
+    # a turn that stamps at its terminal points anyway; a second bump costs a
+    # caller holding an older token nothing it was not already going to be told.
+    store.revision.bump(cid)
     # The scene check and the append are ONE critical section, on the same lock
     # `record` uses. Another client can rename or delete the scene between the
     # composition and this call, and its cleanup (`repoint_scenes` /
