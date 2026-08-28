@@ -77,3 +77,26 @@ def test_sid_taken_counts_an_orphan_steering_sidecar(monkeypatch, tmp_path):
     steering.record(cid, sid, "orphan-to-be")
     scenes_paths._scene_path(cid, sid).unlink()
     assert scenes_paths._sid_taken(cid, sid)
+
+
+def test_delete_scene_takes_the_log_with_it(monkeypatch, tmp_path):
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    steering.record(cid, sid, "gone with the scene")
+    scenes.delete_scene(cid, sid)
+    assert not scenes_paths._steering_path(cid, sid).exists()
+
+
+def test_rename_carries_the_log(monkeypatch, tmp_path):
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    steering.record(cid, sid, "follows the rename")
+    new_sid = scenes.rename_scene(cid, sid, "Quay At Night")
+    assert new_sid != sid
+    assert steering.texts(cid, new_sid) == ["follows the rename"]
+    assert not scenes_paths._steering_path(cid, sid).exists()
+
+
+def test_clear_destinations_drops_orphans(monkeypatch, tmp_path):
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    steering.record(cid, sid, "somebody else's corrections")
+    steering.clear_destinations(cid, {sid})
+    assert steering.texts(cid, sid) == []

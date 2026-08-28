@@ -16,6 +16,7 @@ from . import (
     overlay,
     scene_ids,
     scene_refs,
+    steering,
     worlds,
 )
 from .appearances import paths as appearances_paths
@@ -170,6 +171,7 @@ def _migrate_campaign_locked(cid: str) -> None:
     # end, that failure lands with every legacy scene already renamed and every
     # other store still pointing at the old ids, on a startup migration.
     alternates.clear_destinations(cid, set(mapping.values()))
+    steering.clear_destinations(cid, set(mapping.values()))
     for old, new in mapping.items():
         (d / f"{old}.md").rename(d / f"{new}.md")
     scene_refs.repoint(cid, mapping)

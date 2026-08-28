@@ -35,13 +35,15 @@ Readers treat entry keys as open, so a later field needs no migration.
 The log is never cleared — not by a chronicle save, so a ``force`` re-absorb
 is primed with the same notes the first absorb saw: a re-absorb redoes the
 extraction, it does not forget the extraction's inputs. Only scene deletion
-(`scenes.lifecycle.delete_scene`, and `drop_scene` here for the fan-out) and
-the rename fan-out (`scene_refs.repoint` -> `repoint_scenes`) touch the file
-from outside.
+(`scenes.lifecycle.delete_scene` unlinks the path itself, with the other two
+sidecars), the rename fan-out (`scene_refs.repoint` -> `repoint_scenes`) and
+the repad/migration orphan sweep (`clear_destinations`) touch the file from
+outside.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 
 from . import atomic, locks
@@ -104,3 +106,65 @@ def record(cid: str, sid: str, text: str) -> None:
 def texts(cid: str, sid: str) -> list[str]:
     """Entry texts, oldest first. [] for a scene with no log."""
     return [e["text"] for e in _read_raw(cid, sid)]
+
+
+def clear_destinations(cid: str, sids) -> None:
+    """Drop the logs sitting on ids that are about to change hands.
+
+    `alternates.clear_destinations`' argument, for the third sidecar that
+    shares its hazard: `repad` and the legacy migration rename every scene and
+    deliberately do not skip a taken id, so a destination orphan is a scene
+    about to inherit another scene's corrections — fed straight to its absorb.
+    Cleared before a single transcript moves, where a failure costs only the
+    request; `repoint_scenes`' own clear runs after and cannot afford to raise.
+    """
+    with locks.campaign_lock(cid):
+        for sid in sids:
+            scenes_paths._steering_path(cid, sid).unlink(missing_ok=True)
+
+
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids: carry each log to its scene's new id.
+
+    The shape is `pending_reviews.repoint_scenes`', and for its reasons: read
+    every source before writing any target so a swapped mapping cannot land
+    one log on top of another; publish before clearing so a crash leaves the
+    entries readable at one path or the other; and never raise, because the
+    caller has *already renamed the transcript* by the time this runs and the
+    rest of `scene_refs.repoint` still owes a dozen stores their new id. A log
+    that could not be carried is left where it is — an orphan `_sid_taken`
+    already declines to hand out — rather than deleted.
+
+    Bytes, verbatim: unlike a pending review, a steering entry stores no scene
+    id to follow, and moving an undecodable file unchanged keeps `texts`'
+    judgement ("unreadable reads as no log") where it belongs.
+    """
+    with locks.campaign_lock(cid):
+        moving, stranded = {}, set()
+        for old in mapping:
+            try:
+                moving[old] = scenes_paths._steering_path(cid, old).read_bytes()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                stranded.add(old)
+        published = set()
+        # Destinations that are themselves sources go last: publishing over one
+        # would destroy the last durable copy of what it still owes elsewhere.
+        for old in sorted(moving, key=lambda o: mapping[o] in moving):
+            try:
+                atomic.write_bytes(
+                    scenes_paths._steering_path(cid, mapping[old]), moving[old])
+            except OSError:
+                stranded.add(old)
+                continue
+            published.add(mapping[old])
+        for sid in (*mapping, *mapping.values()):
+            if sid in published or sid in stranded:
+                continue
+            # A source whose bytes are already published, or a destination
+            # whose orphan will not go. Either costs one stale file that
+            # `_sid_taken` keeps out of circulation; raising would abort the
+            # fan-out and strand every other store on an id whose scene is gone.
+            with contextlib.suppress(OSError):
+                scenes_paths._steering_path(cid, sid).unlink(missing_ok=True)
