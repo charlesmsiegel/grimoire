@@ -29,9 +29,9 @@ These cost nothing but reading, and closing them makes the backlog honest.
 |---|---|
 | #119 Reclassify a lore entry | Implemented wholesale: `store/reclassify.py` cites the issue in its docstring, handles both scopes, sweeps campaigns, repoints ledgers. |
 | #113 Show drifted campaign records | `CompositionPanel.tsx` renders a per-ref `diverged` state (in the `conflict > update > diverged > insync` ladder) from the sync manifest — exactly the "explicit provenance" half the issue said was missing. |
-| #57 Bulk taglines / dossier staleness | `POST /worlds/{wid}/characters/taglines/generate` exists and cites #57; the todo surface lists untaglined and anchorless characters per world. All that remains is the one-line decision on dossier staleness — record it and close. |
+| #57 Bulk taglines / dossier staleness | `POST /worlds/{wid}/characters/taglines/generate` exists and cites #57; the todo surface lists untaglined and anchorless characters per world. The dossier-staleness decision is **also already recorded**: `store/dossiers.py` opens with "No staleness hash, and that is a decision (#57)" and `test_a_dossier_does_not_expire_when_the_card_moves_on` pins it as behavior. Nothing remains — close. |
 | #61 Auto-draft a voice anchor | Both its dependencies (#59 anchors, #60 emergent characters) landed, and generate routes exist at **both** scopes: `POST /worlds/{wid}/characters/{cid}/voice-anchor/generate` and `POST /campaigns/{cid}/characters/{char}/voice-anchor/generate` (202 + draft run). Verify the campaign route covers the emergent case, then close. |
-| #189 Suppression invariants for aux tasks | The draft-run class **is** this contract: no exclusion key, no durable result, no writes, one shape for all twelve computing previews. The things the issue asked to suppress are structurally unreachable from a draft. |
+| #189 Suppression invariants for aux tasks | Mostly overtaken, but a **trim rather than a close**: the draft-run class supplies the lifecycle half (no exclusion key, no durable result, one shape for all twelve previews), and today's draft callbacks write nothing but the usage ledger — yet `run_draft` executes an arbitrary `work` coroutine, so no-campaign-writes is a per-callback convention, not an enforced invariant. Re-scope #189 to the enforcement piece — a guard in the style of the repo's AST-guard tests over what a draft callback may call — and close the rest. |
 | #22 Seed a scene from arbitrary text | `POST .../first-post` takes `FirstPost{text}` — arbitrary text, not just the streamed opener. Verify the UI lets a pasted text reach it (and that substitution applies), then close or trim to a UI-only remnant. |
 | #40 World metadata editors | The half the issue called missing exists: `GET/PUT /worlds/{wid}/calendar` routes are live, and "atmosphere" became the climates system (`store/climates`, `ClimateEditor`, `ClimatesView`). Trim to whatever "per-world defaults" still means, or close. |
 | #187 Auxiliary task framework | `runs.run_draft` / `common.draft_completion` / `api.draftRun` is the general `(kind, subject)` contract the issue asked for — twelve kinds already ride it. The user-facing remainder is #188/#190; fold and close. |
@@ -137,14 +137,19 @@ The mechanics engine the parked items were waiting for exists now.
 
 *Is the prompt the best version of the campaign the budget can buy?*
 
-- **#377 Send post images to the model — HIGH (cost collapsed).** The issue
-  costs itself as "change message content from `str` to content parts across
-  all clients — the bulk of the work." That work is **done**: `llm.py` already
-  carries content-part messages and documents which connection kinds can't
-  (the Claude SDK path joins to string). What is left is the cheap half:
-  capability detection from the model catalog plus assembling image parts from
-  localized transcript images. Visual scenes are already first-class in the
-  transcript; the model is the only reader still blind to them.
+- **#377 Send post images to the model — HIGH (cost dropped, not gone).** The
+  issue costs itself as "change message content from `str` to content parts
+  across all clients — the bulk of the work." The dispatch half of that is
+  **done**: `llm.py` already carries content-part messages and documents which
+  connection kinds can't (the Claude SDK path joins to string). Real transport
+  work does remain, though: `openai_compatible._strict_messages` still folds
+  by string concatenation (`+= "\n\n" + content`), so a content-parts message
+  through a `strict` connection breaks before send — it needs parts-aware
+  folding or those connections classified unsupported — and the model catalog
+  still discards all modality metadata, so capability detection needs the
+  catalog contract extended, not just read. Still the best value-per-effort
+  feature here: visual scenes are first-class in the transcript, and the model
+  is the only reader still blind to them.
 - **#109 Extraction modes with auto-select — MEDIUM-LOW (re-scope down).**
   The "separate" mode grew watermarks, pending reviews and detached runs, and
   `turnstate.py` is a working in-reply structured block (fenced, stripped,
@@ -171,11 +176,14 @@ labels — the remaining items are about granularity, not existence.
 - **#128 Say why each chunk is in the prompt — MEDIUM-LOW.** `activate()`
   still discards the matched key. Small, honest feature; pairs naturally with
   #131 (one payload can carry both).
-- **#151 Replay a turn — MEDIUM-LOW (dependency landed).** Its blocker was
-  "nothing stores what was sent"; `store/prompt_log.py` now freezes exactly
-  that per turn. An ephemeral re-run of a frozen prompt through the draft
-  machinery is now a modest build. "Gateway, fork and seed" remain out of
-  scope — re-title accordingly.
+- **#151 Replay a turn — MEDIUM-LOW (dependency partially landed).** Its
+  blocker was "nothing stores what was sent"; `store/prompt_log.py` now
+  freezes a per-turn snapshot — but as the breakdown payload (an inventory:
+  history joined into one text, roles and message boundaries discarded), not
+  the wire-order message list, so a replay from it is an approximation, and an
+  exact one needs the capture format to keep reconstructable message
+  structure first. Nearer than filed, but a two-step build. "Gateway, fork
+  and seed" remain out of scope — re-title accordingly.
 - **#132 Live prompt preview while typing — LOW.** Unchanged, and the least
   urgent: it burns composition work per keystroke to answer a question the
   frozen snapshots mostly answer after the fact.
@@ -247,9 +255,9 @@ labels — the remaining items are about granularity, not existence.
   import. Stashing the fields is cheap insurance whether or not activation
   ever honors them.
 - **#26 CHARX bundled non-avatar images — MEDIUM-LOW.** The avatar half is
-  done (bundled `embeded://` avatars land, budgeted and sniffed); the gallery/
-  expression assets remain ignored. `store/expressions.py` exists now, which
-  strengthens the case for landing the rest.
+  done (bundled `embeded://` avatars land, budgeted and sniffed); the gallery
+  and emotion assets remain ignored, and the per-version image store they
+  would land in is unchanged from the issue's plan.
 - **#136 Free-text character import — MEDIUM-LOW.** Unbuilt, but the
   scenario-card pipeline (`store/scenario.py`) established the exact
   LLM-parse → review → commit shape this should reuse; the heuristic-only
@@ -273,7 +281,8 @@ If the next stretch of work took only ten items, in order:
 
 1. **Close-out sweep** (§0): verify and close/trim #119, #113, #57, #61,
    #189, #22, #40, #187, #71 — nine issues off the board for an afternoon.
-2. **#377** — images to the model (the hard half is already in `llm.py`).
+2. **#377** — images to the model (dispatch already carries content parts;
+   strict-mode folding and the catalog's modality contract are what's left).
 3. **#17 + #20 + #27** — three small, confirmed-open fidelity fixes.
 4. **#82** — run the playtest, settle the speaker-loop question.
 5. **#58** — presence tiers for seated NPCs.
