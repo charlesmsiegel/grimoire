@@ -2,8 +2,17 @@ import json
 
 import pytest
 
-from grimoire.store import (absorb, audit, campaigns, changes, playstate, scenes,
-                            sheets, steering, worlds)
+from grimoire.store import (
+    absorb,
+    audit,
+    campaigns,
+    changes,
+    playstate,
+    scenes,
+    sheets,
+    steering,
+    worlds,
+)
 
 
 def _campaign(monkeypatch, tmp_path):

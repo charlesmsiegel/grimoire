@@ -4112,7 +4112,7 @@ def test_regenerate_guidance_lands_in_the_steering_log(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
     store.scenes.append_message(cid, sid, "assistant", "old reply")
-    client.app.dependency_overrides[routes.get_llm] = lambda: CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
     for _ in range(2):    # the error banner's Retry re-sends the same guidance
         with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                            json={"guidance": "Mara already knows about the ledger"}) as r:
@@ -4127,7 +4127,7 @@ def test_regenerate_without_guidance_logs_no_steering(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
     store.scenes.append_message(cid, sid, "assistant", "old reply")
-    client.app.dependency_overrides[routes.get_llm] = lambda: CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate") as r:
         for _ in r.iter_lines():
             pass

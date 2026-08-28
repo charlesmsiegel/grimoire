@@ -311,8 +311,8 @@ for label, snap, cands, off, direction in (
           render("scene_suggestions/user.j2", s=snap, offscreen=off,
                  greeting_candidates=cands, direction=direction))
 
-for label, facts, st, rel, plt, grp, cmt, fct in (
-        ("bare", {}, None, None, None, None, None, None),
+for label, facts, st, rel, plt, grp, cmt, fct, strg in (
+        ("bare", {}, None, None, None, None, None, None, None),
         ("full", {"location": "Night Dock", "date": "2026-07-05",
                   "cast": ["characters/seraphine-vale", "pcs/hero"]},
          {"Seraphine Vale": "Wounded. Knows: The ledger is real."},
@@ -321,13 +321,14 @@ for label, facts, st, rel, plt, grp, cmt, fct in (
          "- groups/salt-circle (Salt Circle): Goals: Expand.",
          "the-deadline: Midnight deadline (threat, open), due midnight "
          "— Hero was given until midnight.",
-         "f1: The warehouse belongs to the Salt Circle. (the third night)")):
-    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct)
+         "f1: The warehouse belongs to the Salt Circle. (the third night)",
+         "- Seraphine was told about the tail at the Night Dock")):
+    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg)
     check(f"absorb system ({label})", exp[0]["content"], render("absorb/system.j2"))
     check(f"absorb user ({label})", exp[1]["content"],
           render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
                  plot_snapshot=plt, group_snapshot=grp, commitment_snapshot=cmt,
-                 fact_snapshot=fct, transcript=transcript))
+                 fact_snapshot=fct, steering_snapshot=strg, transcript=transcript))
     if grp:
         assert "Groups:" in exp[1]["content"], f"absorb user ({label}) missing Groups: head line"
     if cmt:
@@ -336,6 +337,9 @@ for label, facts, st, rel, plt, grp, cmt, fct in (
     if fct:
         assert "Standing facts:" in exp[1]["content"], \
             f"absorb user ({label}) missing Standing facts: head line"
+    if strg:
+        assert "Player steering notes" in exp[1]["content"], \
+            f"absorb user ({label}) missing Player steering notes head line"
 
 msgs = [{"role": "user", "content": "hi"},
         {"role": "user", "speaker": "Hero", "content": "yo"},
@@ -384,6 +388,7 @@ from grimoire.store import (  # noqa: E402
     response_presets,
     scenes,
     sheets,
+    steering,
     styles,
     turnstate,
     worlds,
@@ -1059,11 +1064,15 @@ plot_snap = absorb.plot_snapshot(cid)
 grp_snap = absorb.group_snapshot(cid)
 cmt_snap = absorb.commitment_snapshot(cid)
 fct_snap = absorb.fact_snapshot(cid)
-exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap, cmt_snap, fct_snap)
+steering.record(cid, sid, "Seraphine was told about the tail at the Night Dock")
+strg_snap = absorb.steering_snapshot(cid, sid)
+exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap, cmt_snap, fct_snap,
+                          strg_snap)
 check("absorb user (store)", exp[1]["content"],
       render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
              plot_snapshot=plot_snap, group_snapshot=grp_snap,
-             commitment_snapshot=cmt_snap, fact_snapshot=fct_snap, transcript=tr))
+             commitment_snapshot=cmt_snap, fact_snapshot=fct_snap,
+             steering_snapshot=strg_snap, transcript=tr))
 for name, line in st_snap.items():
     st = playstate.read_state(croot, sera)
     check(f"state snapshot line (store, {name})", line,
