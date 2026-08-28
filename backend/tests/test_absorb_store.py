@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from grimoire.store import absorb, audit, campaigns, changes, playstate, sheets, worlds
+from grimoire.store import (absorb, audit, campaigns, changes, playstate, scenes,
+                            sheets, steering, worlds)
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -25,6 +26,39 @@ def test_build_prompt_includes_the_standing_fact_snapshot():
     assert "Standing facts:" in user and "f1: The bridge stands." in user
     # ...and it is omitted entirely when the campaign has none
     assert "Standing facts:" not in absorb.build_prompt("**You:** hi", {})[1]["content"]
+
+
+def test_build_prompt_includes_the_steering_snapshot():
+    """Without it the absorb never sees the corrections the player typed
+    mid-scene — the loop the steering log exists to close."""
+    msgs = absorb.build_prompt(
+        "**You:** hi", {},
+        steering_snapshot="- Mara already knows about the ledger")
+    user = msgs[1]["content"]
+    assert "Player steering notes" in user
+    assert "- Mara already knows about the ledger" in user
+    assert "Player steering notes" in msgs[0]["content"]   # the system contract
+    # ...never cited: the contract paragraph forbids quoting a note
+    assert "never cite one" in msgs[0]["content"]
+
+
+def test_build_prompt_without_steering_is_byte_identical():
+    """Existing cassettes and recorded prompts must not need re-matching."""
+    assert absorb.build_prompt("**You:** hi", {}) == \
+        absorb.build_prompt("**You:** hi", {}, steering_snapshot=None)
+    assert "Player steering notes" not in \
+        absorb.build_prompt("**You:** hi", {})[1]["content"]
+
+
+def test_steering_snapshot_reads_the_log(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Quay")
+    steering.record(cid, sid, "the east gate is barred at dusk")
+    steering.record(cid, sid, "Winifred limps on the left side")
+    assert absorb.steering_snapshot(cid, sid) == (
+        "- the east gate is barred at dusk\n"
+        "- Winifred limps on the left side")
+    assert absorb.steering_snapshot(cid, "does-not-exist") == ""
 
 
 def test_build_prompt_includes_facts_transcript_and_state():

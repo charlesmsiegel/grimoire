@@ -101,6 +101,26 @@ def test_the_absorb_answers_at_once_and_lands_without_a_listener(client, scene):
     assert review["one_line"] == "They met." and review["commit_token"]
 
 
+def test_the_absorb_prompt_carries_the_scenes_steering_log(client, scene):
+    """A reroll's guidance reaches the extraction as "Player steering notes" —
+    the loop `store/steering.py` exists to close — and a scene with no log
+    keeps the prompt free of the block."""
+    cid, sid = scene
+    fake = _fake()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    store.steering.record(cid, sid, "Mara already knows about the ledger")
+    _absorb(client, cid, sid)
+    extraction = next(
+        r["messages"] for r in fake.requests
+        if _EXTRACTION["system_contains"] in r["messages"][0]["content"])
+    user = extraction[1]["content"]
+    assert "Player steering notes" in user
+    assert "- Mara already knows about the ledger" in user
+    # the note is context, never transcript
+    assert "Mara already knows" not in store.chronicle.transcript_text(
+        store.scenes.read_scene(cid, sid)["messages"])
+
+
 def test_the_review_survives_the_process_that_made_it(client, scene, tmp_path):
     """The registry is memory, so a review that lived only in it would be gone
     with the process -- and on Android the process is reclaimed routinely. A

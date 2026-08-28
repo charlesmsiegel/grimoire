@@ -21,6 +21,7 @@ from .. import (
     playstate,
     plot,
     relationships,
+    steering,
 )
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
@@ -113,6 +114,15 @@ def group_snapshot(cid: str) -> str:
         return "\n".join(lines)
     except Exception:  # noqa: BLE001 — garbled store: omit, don't fail the extraction
         return ""
+
+
+def steering_snapshot(cid: str, sid: str) -> str:
+    """Rendered reroll-steering notes, oldest first — feeds the prompt so the
+    model checks the lore the player had to correct mid-scene (the system
+    prompt's "Player steering notes" contract: pointers to sharpen or extend
+    records, never citable). "" for a scene with no log; `steering.texts` is
+    already tolerant of a garbled file, so this cannot fail the extraction."""
+    return "\n".join(f"- {t}" for t in steering.texts(cid, sid))
 
 
 def state_snapshot(cid: str, sid: str) -> dict:
