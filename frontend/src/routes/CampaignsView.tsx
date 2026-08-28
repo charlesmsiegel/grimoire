@@ -5,6 +5,7 @@ import { ColumnSection, PageShell } from "../components/PageShell";
 import { errorText } from "../api/errors";
 import { forkNotes } from "../components/forkNotes";
 import { lineage } from "./campaignLineage";
+import { byName } from "../sortByName";
 
 /** How far a fork of `depth` generations is indented, in pixels.
  *
@@ -33,6 +34,41 @@ function ago(stamp: string | undefined): string {
   return months === 1 ? "last played a month ago" : `last played ${months} months ago`;
 }
 
+/** How the shelf is ordered. Remembered across visits, and NOT keyed by store
+ *  root the way `useOpenCampaign` keys the id it remembers: that is a
+ *  reference to a record inside one library and means nothing in another,
+ *  where this is a preference about how a page reads and travels with the
+ *  reader.
+ *
+ *  A-Z is the default. Recency is what the shelf was built on and it is still
+ *  a click away, but it answers "what was I playing" - a question the rail now
+ *  answers on every page, and one the `ago(...)` line on each card answers
+ *  again. Nothing answered "where is the campaign called X" except reading
+ *  every card.
+ *
+ *  Anything unrecognised in storage reads as A-Z rather than throwing: this is
+ *  a value another version of the app may have written, and a shelf that
+ *  refuses to render over it would be worse than one that ignores it.
+ */
+type Sort = "name" | "played";
+const SORT_KEY = "grimoire.sort.campaigns";
+
+function loadSort(): Sort {
+  // Storage throws rather than returning null in a locked-down WebView, the
+  // same bargain `useOpenCampaign` and `focus.tsx` make.
+  try { return localStorage.getItem(SORT_KEY) === "played" ? "played" : "name"; }
+  catch { return "name"; }
+}
+
+function saveSort(next: Sort): void {
+  try { localStorage.setItem(SORT_KEY, next); } catch { /* see loadSort() */ }
+}
+
+/** What the toggle prints for a given order. Uppercase because the control
+ *  wears `.data-label`, which small-caps everything it holds anyway - spelling
+ *  it out here keeps the two states the same width in the source as on screen. */
+const sortLabel = (s: Sort) => (s === "name" ? "A–Z" : "LAST PLAYED");
+
 export default function CampaignsView() {
   const navigate = useNavigate();
   const [campaigns, setCampaigns] = useState<CampaignMeta[]>([]);
@@ -50,6 +86,7 @@ export default function CampaignsView() {
   /** "" is All worlds. The column's worlds are a filter over the shelf, not a
    *  navigation away from it — picking one must not cost you the page. */
   const [world, setWorld] = useState("");
+  const [sort, setSort] = useState<Sort>(loadSort);
 
   useEffect(() => {
     api.listCampaigns().then(setCampaigns);
@@ -66,8 +103,11 @@ export default function CampaignsView() {
   // value, so `??` would keep it and sort a perfectly good `updated` to the
   // bottom. The trailing "" is for the campaign.md that carries neither.
   const stamp = (c: CampaignMeta) => c.activity || c.updated || "";
-  const ranked = useMemo(() => [...campaigns].sort((a, b) => stamp(b).localeCompare(stamp(a))),
-    [campaigns]);
+  const ranked = useMemo(
+    () => (sort === "name"
+      ? byName(campaigns)
+      : [...campaigns].sort((a, b) => stamp(b).localeCompare(stamp(a)))),
+    [campaigns, sort]);
   // Memoized, not because filtering is expensive but because `rows` below is
   // keyed on this array's identity: `ranked.filter(...)` returns a fresh array
   // every render, so a bare expression here would make that memo miss on every
@@ -78,19 +118,44 @@ export default function CampaignsView() {
   // and the only rename/delete controls on the page: those are rare, and a ✕
   // on every card is a ✕ you can hit by accident on the wrong campaign.
   //
-  // Taken from `shown`, deliberately, and not from the tree below: the tree
-  // groups a fork under the campaign it came from, so its first row is a root
-  // rather than the campaign you last played. Ranking decides "most likely
-  // meant"; the tree only decides where each row sits.
-  const activeId = shown[0]?.id;
-  // Forks nested under the campaign they came from, siblings still in "last
-  // played" order (`campaignLineage`). Derived from `shown`, so the world
+  // Computed from the stamps rather than read off row zero, which is what it
+  // used to be. Row zero only meant "most recently played" while the shelf was
+  // sorted that way, and under A-Z it means "alphabetically first" - which
+  // would have put the destructive controls on a campaign chosen by spelling.
+  // Asking the stamps directly is what makes the sort a presentation choice
+  // instead of a change to what the page thinks you meant.
+  //
+  // Taken from `shown` rather than from all campaigns, so the world filter
+  // moves the glow to the filtered set's own most recent - and from `shown`
+  // rather than the tree below, which groups a fork under its parent and so
+  // starts with a root rather than with anything about recency.
+  const activeId = useMemo(
+    () => shown.reduce<CampaignMeta | null>(
+      (best, c) => (!best || stamp(c).localeCompare(stamp(best)) > 0 ? c : best),
+      null)?.id,
+    [shown]);
+  // Forks nested under the campaign they came from, roots and siblings each
+  // still in whatever order `shown` is in (`campaignLineage`). So the sort
+  // orders each generation rather than the page: a fork called "Ashfall" sits
+  // under a parent called "Winterlight" even under A-Z, because the tree is
+  // answering "where did this come from" and the sort is only answering
+  // "where in its family does it sit". Derived from `shown`, so the world
   // column filters the family and not just the rows.
   const rows = useMemo(() => lineage(shown), [shown]);
   const nameOf = (id: string) => campaigns.find((c) => c.id === id)?.name ?? "";
 
+  /** The filter column's worlds, A-Z. Same order as the Worlds grid itself, so
+   *  a world sits in the same place on both pages. */
+  const worldRows = useMemo(() => byName(worlds), [worlds]);
+
   const worldName = (id: string) => worlds.find((w) => w.id === id)?.name ?? id;
   const countIn = (id: string) => campaigns.filter((c) => c.world === id).length;
+
+  function toggleSort() {
+    const next: Sort = sort === "name" ? "played" : "name";
+    setSort(next);
+    saveSort(next);
+  }
 
   async function rename() {
     if (!renaming) return;
@@ -140,7 +205,7 @@ export default function CampaignsView() {
         ＋ New campaign
       </button>
       <ColumnSection label="Worlds" count={worlds.length}>
-        {worlds.map((w) => (
+        {worldRows.map((w) => (
           <button key={w.id}
                   className={"column-row" + (world === w.id ? " active" : "")}
                   onClick={() => setWorld(w.id)}>
@@ -176,7 +241,14 @@ export default function CampaignsView() {
             <h1 className="screen-title">Campaigns</h1>
           </div>
           <div className="shelf-head-meta">
-            <span className="data-label">SORT · LAST PLAYED ▾</span>
+            {/* The label this replaced said "SORT · LAST PLAYED ▾" and did
+                nothing — a control that looks like a control and is not is
+                worse than no control at all. Two states, so it cycles on click
+                rather than opening a menu over a choice of two. */}
+            <button type="button" className="data-label sort-toggle" onClick={toggleSort}
+                    aria-label={sort === "name" ? "Sort by last played" : "Sort by name"}>
+              SORT · {sortLabel(sort)} ▾
+            </button>
           </div>
         </div>
 

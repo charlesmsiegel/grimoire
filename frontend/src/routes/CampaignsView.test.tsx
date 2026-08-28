@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import CampaignsView from "./CampaignsView";
 
@@ -23,6 +23,7 @@ import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   (api.listCampaigns as any).mockResolvedValue([]);
   (api.listWorlds as any).mockResolvedValue([
     { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
@@ -84,33 +85,83 @@ test("a campaign nothing has been absorbed from counts zero rather than nothing"
   expect(c.getByRole("link", { name: /open/i })).toBeInTheDocument();
 });
 
-test("only the campaign at the top of the shelf carries rename and delete", async () => {
-  // A ✕ on every card is a ✕ you can hit by accident on the wrong campaign,
-  // and the shelf's ordering already says which one you meant.
+test("the most recently played campaign carries rename and delete, wherever it sits", async () => {
+  // A delete control on every card is one you can hit by accident on the wrong
+  // campaign, so exactly one card gets it -- and which one is decided by the
+  // stamps, not by the shelf's current order. Tidewrack is second under the
+  // default A-Z sort and still the campaign you were playing.
   (api.listCampaigns as any).mockResolvedValue([
-    { id: "old", name: "Tidewrack", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
-    { id: "new", name: "Saltmarch", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
+    { id: "old", name: "Saltmarch", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
+    { id: "new", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
   ]);
   renderView();
-  await screen.findByText("Saltmarch");
-  expect(card("Saltmarch")).toHaveClass("active");
-  expect(within(card("Saltmarch")).getByRole("button", { name: /delete/i })).toBeInTheDocument();
-  expect(within(card("Tidewrack")).queryByRole("button", { name: /delete/i })).toBeNull();
+  await screen.findByText("Tidewrack");
+  expect(card("Tidewrack")).toHaveClass("active");
+  expect(within(card("Tidewrack")).getByRole("button", { name: /delete/i })).toBeInTheDocument();
+  expect(within(card("Saltmarch")).queryByRole("button", { name: /delete/i })).toBeNull();
 });
 
-test("the shelf ranks by activity, not by campaign.md's updated stamp", async () => {
-  // `updated` only moves on metadata writes, so ordering by it ranks a
-  // campaign renamed months ago above one played into last night.
+test("the shelf defaults to A-Z", async () => {
+  // The order you want when you came here to find a campaign by name, which is
+  // the only question the shelf could not previously answer without reading
+  // every card. Recency is still on each card's own line, and one click away.
   (api.listCampaigns as any).mockResolvedValue([
-    { id: "renamed", name: "Tidewrack", world: "w1", updated: "2026-06-01",
+    { id: "t", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
+    { id: "a", name: "ashfall", world: "w1", activity: "2026-05-01", scenes: 1, last_scene: "" },
+    { id: "s", name: "The Saltmarch", world: "w1", activity: "2026-01-01", scenes: 1,
+      last_scene: "" },
+  ]);
+  renderView();
+  await screen.findByText("The Saltmarch");
+  const names = Array.from(document.querySelectorAll(".campaign-name")).map((n) => n.textContent);
+  // Case-insensitively, and past the article: a campaign typed in lower case
+  // belongs in the sequence rather than in a block of its own below the
+  // capitalised ones, and "The Saltmarch" files under S -- which is what says
+  // this page sorts through `byName` and not through a `localeCompare` of its
+  // own. Filed there, displayed whole.
+  expect(names).toEqual(["ashfall", "The Saltmarch", "Tidewrack"]);
+});
+
+test("the sort control switches to last played and back, and ranks by activity", async () => {
+  // `updated` only moves on metadata writes, so ordering by it would rank a
+  // campaign renamed months ago above one played into last night. The recency
+  // mode reads `activity`, which is the whole campaign's high-water mark.
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "renamed", name: "Ashfall", world: "w1", updated: "2026-06-01",
       activity: "2026-01-01", scenes: 1, last_scene: "" },
-    { id: "played", name: "Saltmarch", world: "w1", updated: "2026-01-01",
+    { id: "played", name: "Tidewrack", world: "w1", updated: "2026-01-01",
       activity: "2026-06-01", scenes: 1, last_scene: "" },
   ]);
   renderView();
-  await screen.findByText("Saltmarch");
-  const names = Array.from(document.querySelectorAll(".campaign-name")).map((n) => n.textContent);
-  expect(names).toEqual(["Saltmarch", "Tidewrack"]);
+  await screen.findByText("Tidewrack");
+  const names = () =>
+    Array.from(document.querySelectorAll(".campaign-name")).map((n) => n.textContent);
+  expect(names()).toEqual(["Ashfall", "Tidewrack"]);
+
+  fireEvent.click(screen.getByRole("button", { name: /sort by last played/i }));
+  expect(names()).toEqual(["Tidewrack", "Ashfall"]);
+
+  fireEvent.click(screen.getByRole("button", { name: /sort by name/i }));
+  expect(names()).toEqual(["Ashfall", "Tidewrack"]);
+});
+
+test("the chosen sort survives leaving the page", async () => {
+  // A preference about how a page reads, so it is remembered -- and not keyed
+  // by store root, unlike an id that names a record inside one library.
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "a", name: "Ashfall", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
+    { id: "t", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
+  ]);
+  renderView();
+  await screen.findByText("Tidewrack");
+  fireEvent.click(screen.getByRole("button", { name: /sort by last played/i }));
+
+  screen.getByRole("button", { name: /sort by name/i });   // the toggle flipped
+  cleanup();
+  renderView();
+  await screen.findByText("Tidewrack");
+  expect(Array.from(document.querySelectorAll(".campaign-name")).map((n) => n.textContent))
+    .toEqual(["Tidewrack", "Ashfall"]);
 });
 
 test("the column's worlds filter the shelf without leaving the page", async () => {

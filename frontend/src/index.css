@@ -397,6 +397,15 @@ body::before {
 .empty-state a { color: var(--accent); }
 
 /* ---- campaigns shelf (3a) ---- */
+/* The shelf's order control. Button reset only -- the type is `.data-label`'s,
+   because this reads as the page's own annotation rather than as a form
+   control sitting in the header. */
+.sort-toggle {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: inherit; font-size: inherit; letter-spacing: inherit;
+  text-transform: inherit; color: inherit;
+}
+.sort-toggle:hover { color: var(--accent); }
 .shelf { display: flex; flex-direction: column; gap: 14px; }
 .campaign-card {
   display: grid; grid-template-columns: 104px 1fr auto; gap: 20px;

@@ -275,6 +275,25 @@ test("a world with an unreadable calendar leaves the picker on its own default",
   expect(screen.getByLabelText("Calendar")).toHaveValue("gregorian");
 });
 
+test("the world picker lists A-Z but still defaults to the most recent world", async () => {
+  // Two different questions with two different answers. The options are a list
+  // you scan for a name, so they are alphabetical; the default is the world
+  // you are most likely starting a campaign in, which is the one you touched
+  // last -- and `listWorlds` answers newest-first, so that is its first entry.
+  // Picking whichever world happens to sort first would be a choice made by
+  // spelling.
+  (api.listWorlds as any).mockResolvedValue([
+    { id: "w2", name: "Tidewrack", created: "", updated: "", counts: {} },
+    { id: "w1", name: "Ashfall", created: "", updated: "", counts: {} },
+  ]);
+  renderWizard();
+  await screen.findByText("Ashfall");
+  const picker = screen.getByLabelText("World");
+  expect(Array.from(picker.querySelectorAll("option")).map((o) => o.textContent))
+    .toEqual(["Ashfall", "Tidewrack"]);
+  expect(picker).toHaveValue("w2");
+});
+
 test("switching worlds mid-flight keeps the world you landed on", async () => {
   // The seed is a controlled input the reader will commit. A slower answer for
   // the world they left must not overwrite the one they are looking at.

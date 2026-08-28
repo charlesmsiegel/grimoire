@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type CampaignMeta, type WorldMeta } from "../api/client";
 import { LIBRARY_SECTIONS } from "../librarySections";
+import { byName } from "../sortByName";
 import { useFocus } from "./focus";
 import { usePalette, usePaletteSource, type PaletteItem } from "./palette";
 
@@ -30,13 +31,17 @@ export default function AppPaletteSource() {
 
   const source = useCallback((query: string): PaletteItem[] => {
     const out: PaletteItem[] = [];
-    for (const c of campaigns) {
+    // A-Z, because with no query typed this list IS the offer: the palette
+    // ranks by what you type, and until you type anything the order it was
+    // handed - newest first - is the only order there is. Sorted here rather
+    // than at the fetch so the two lists cannot drift apart.
+    for (const c of byName(campaigns)) {
       out.push({
         id: `campaign:${c.id}`, group: "ELSEWHERE", label: c.name,
         meta: "campaign", to: `/campaigns/${c.id}`,
       });
     }
-    for (const w of worlds) {
+    for (const w of byName(worlds)) {
       out.push({
         id: `world:${w.id}`, group: "ELSEWHERE", label: w.name,
         meta: "world", to: `/worlds/${w.id}`,

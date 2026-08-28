@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   api, type Availability, type ModuleSummary, type PCSummary, type Persona, type WorldMeta,
@@ -6,6 +6,7 @@ import {
 import type { ChatEvent } from "../api/stream";
 import { ErrorNote } from "../components/ErrorNote";
 import { PlainShell } from "../components/PageShell";
+import { byName } from "../sortByName";
 
 type LocationDraft = { name: string; body: string; keys: string };
 const blankPersona: Persona = { name: "", pronouns: "", summary: "", description: "" };
@@ -52,12 +53,22 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   useEffect(() => {
     api.listWorlds().then((ws) => {
       setWorlds(ws);
+      // Seeded from the response's own order, which is newest-first, and NOT
+      // from the A-Z order the picker below renders in. A default is not an
+      // ordering: the world you touched last is the one you are most likely
+      // starting a campaign in, and picking whichever world happens to sort
+      // first would be an answer chosen by spelling.
       if (ws.length) setWorld(ws[0].id);
     });
     api.getCalendarProviders().then((r) => setCalendars(r.providers)).catch(() => setCalendars([]));
     api.listClimates().then((r) => setClimates(r.climates)).catch(() => setClimates([]));
     api.listModules().then(setModules).catch(() => setModules([]));
   }, []);
+
+  /** The picker's own order, A-Z. A dropdown you scan for a name is the case
+   *  alphabetical exists for; `setWorld` above deliberately reads the
+   *  unsorted response instead. */
+  const worldOptions = useMemo(() => byName(worlds), [worlds]);
 
   useEffect(() => {
     if (!world) return;
@@ -201,7 +212,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
             <div className="field">
               <label htmlFor="wiz-world">World</label>
               <select id="wiz-world" value={world} onChange={(e) => setWorld(e.target.value)}>
-                {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                {worldOptions.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </div>
             <div className="field">

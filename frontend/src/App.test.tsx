@@ -153,6 +153,34 @@ test("a rail row whose page does not exist yet is absent, not disabled", async (
   expect(camp === null || within(camp).queryByText(/^Wrap-up$/) === null).toBe(true);
 });
 
+test("with no campaign remembered the rail opens on the one the shell resolved", async () => {
+  widthOf(1400);
+  // A fresh browser -- a new device, cleared storage -- has no id to ask with,
+  // and the rail used to stay one tier tall until the reader navigated into a
+  // campaign. `GET /api/shell` answers an empty ask with the campaign last
+  // played, and the chrome is about THAT campaign: not just its heading, but
+  // the hrefs its rows are built from. A row whose `to()` is null is absent
+  // from the DOM entirely, so a tier taking its name from the payload and its
+  // links from the (empty) remembered id would draw a heading over nothing.
+  (api.getShell as any).mockResolvedValue({
+    campaigns: 1,
+    campaign: {
+      id: "last-played", name: "Tidewrack", world: "w1", world_name: "Saltmarch",
+      scenes: 2, open: [], ledger_open: 0, sheets: null, unreviewed: null,
+      pending: [], images_undescribed: null,
+    },
+    todo: null,
+  });
+  render(<MemoryRouter><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  const camp = await screen.findByRole("navigation", { name: /open campaign/i });
+  expect(within(camp).getByText("Tidewrack")).toBeInTheDocument();
+  expect(within(camp).getByRole("link", { name: /^overview$/i }))
+    .toHaveAttribute("href", "/campaigns/last-played");
+  expect(within(camp).getByRole("link", { name: /^scenes/i }))
+    .toHaveAttribute("href", "/campaigns/last-played/scenes");
+});
+
 test("the rail is not rendered beside either wizard", async () => {
   widthOf(1400);
   // `PlainShell` calls these one centred question at a time. On a first run the

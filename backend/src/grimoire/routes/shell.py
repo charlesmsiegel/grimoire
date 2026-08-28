@@ -221,18 +221,68 @@ def _money(cid: str) -> dict:
     return store.usage_rollup.campaign_totals(cid)
 
 
+def _most_recent(campaigns: list[dict]) -> str:
+    """Which campaign the rail opens on when the browser remembers none.
+
+    A fresh browser has no id to ask with, so without this the rail stays one
+    tier tall until the reader navigates into a campaign -- on exactly the
+    devices where navigating there is hardest. The campaign last played is the
+    one they are most likely to have meant.
+
+    Ranked the way the shelf ranks, and for the shelf's reason: `campaign.md`'s
+    `updated` only moves on a metadata write, so ordering by it alone puts a
+    campaign renamed months ago above one played into last night. The activity
+    stamp is the campaign's high-water mark, and `best_stamp` is what keeps a
+    `zzzz` out of a bad sync from winning the comparison and then blocking its
+    own replacement.
+
+    What this deliberately does NOT do is what `GET /campaigns` does -- fold in
+    every scene's `updated`. That is a directory listing per campaign, and this
+    route runs on every navigation; the standalone stamp is one small read per
+    campaign and is written by every campaign-scoped mutation, so it answers
+    the same question without the walk. A campaign whose stamp file is missing
+    or unreadable falls back to `updated`, and a store where none of them has
+    either keeps `list_campaigns`' own order -- newest `updated` first -- by
+    accepting only a strictly greater stamp.
+    """
+    best_id, best = "", ""
+    for c in campaigns:
+        cid = str(c["id"])
+        stamp = store.campaigns.read.best_stamp(
+            str(c.get("updated", "")), store.campaigns.read.read_activity(cid))
+        if not best_id or stamp > best:
+            best_id, best = cid, stamp
+    return best_id
+
+
 @router.get("/shell")
 def get_shell(campaign: str = ""):
     """The rail's badges. `campaign` is the id the browser remembers, if any.
+
+    An id that was asked for and does not resolve stays `campaign: null` rather
+    than falling back to `_most_recent`, and the asymmetry is load-bearing. The
+    client clears its remembered id only when a successful read says that id
+    resolves to nothing; handing it a substitute would leave a deleted
+    campaign's id in storage permanently, and the rail would go on asking with
+    it. The fallback answers the read *after* that clear.
 
     `library` is deliberately absent: the number of library sections is a fact
     the frontend already holds in `librarySections.ts`, and answering it from
     here as well would be one manifest in two languages with nothing holding
     them level -- a seventh section would ship a badge of six.
     """
+    campaigns = store.campaigns.read.list_campaigns()
+    block = _campaign_block(campaign) if campaign else None
+    if not campaign:
+        fallback = _most_recent(campaigns)
+        block = _campaign_block(fallback) if fallback else None
+    # The badge is scoped to the campaign the payload actually carries, so the
+    # rail's count and the Todo page below it are answering about the same
+    # campaign. An id that resolved to nothing scopes to the library, which is
+    # what the reader is left looking at.
     return {
-        "campaigns": len(store.campaigns.read.list_campaigns()),
-        "campaign": _campaign_block(campaign) if campaign else None,
+        "campaigns": len(campaigns),
+        "campaign": block,
         # How many things the app noticed that the user has not waved off. The
         # badge is the number they still care about, so an ignored chore is not
         # in it -- see `store.chores`.
@@ -241,5 +291,5 @@ def get_shell(campaign: str = ""):
         # before a campaign is chosen, and that is exactly when a freshly
         # imported world's backlog is largest. A `null` here would draw no
         # tail over a list that has entries.
-        "todo": todo_routes.badge_count(campaign),
+        "todo": todo_routes.badge_count(block["id"] if block else ""),
     }

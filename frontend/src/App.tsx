@@ -81,6 +81,23 @@ function Shell(
   // from storage, so a rename cannot leave a stale name in the chrome.
   const { cid, reconcile } = useOpenCampaign(dataDir);
   const shell = useShellPayload(dataDir, cid, reconcile);
+  /** The campaign the chrome is actually about.
+   *
+   *  `cid` is what the browser remembers and what the read ASKS with; this is
+   *  what came back. They differ in exactly one case, and it is the one the
+   *  rail was previously blank for: a browser that has never opened a campaign
+   *  asks with nothing, and `GET /api/shell` answers with the most recently
+   *  played one. Every consumer of "which campaign" wants that answer rather
+   *  than the empty question - the rail's rows build their hrefs from it (a
+   *  row whose `to()` is null is not rendered at all, so the tier would draw
+   *  its heading and nothing under it), and the Todo page must scope to the
+   *  same campaign the rail's badge counted.
+   *
+   *  Deliberately not fed back into `useOpenCampaign`: nothing is written to
+   *  storage, so opening a campaign explicitly still wins, and the default
+   *  keeps tracking what was last played instead of freezing on whichever
+   *  campaign it happened to pick first. */
+  const openCid = shell.payload?.campaign?.id ?? cid;
 
   // `innerWidth` rather than `matchMedia`, and event-driven rather than polled
   // -- the same reading `PageShell` takes for its own breakpoint, and the one
@@ -140,7 +157,7 @@ function Shell(
           reading, which is why `PageShell` is untouched by this. */}
       <div className="app-body">
         {!noRail && (
-          <AppRail payload={shell.payload} status={shell.status} cid={cid}
+          <AppRail payload={shell.payload} status={shell.status} cid={openCid}
                    dataDir={dataDir} docked={docked} open={railOpen}
                    onClose={closeRail} onRetry={shell.retry} />
         )}
@@ -232,7 +249,7 @@ function Shell(
             top to bottom, and a drawer over the transcript is not where a list
             like that goes. */}
         <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
-        <Route path="/todo" element={<TodoView cid={cid} />} />
+        <Route path="/todo" element={<TodoView cid={openCid} />} />
         <Route path="/library" element={<LibraryView />} />
         {/* Search keeps its query in the URL, so a result page is a link and
             the back button returns to it after following a hit. */}
@@ -263,7 +280,7 @@ function Shell(
           the foot is the one surface that would keep arguing. CSS draws it
           only below `PHONE_PX`, where the rail has already become a drawer. */}
       {!noRail && (
-        <PhoneTabs payload={shell.payload} cid={cid}
+        <PhoneTabs payload={shell.payload} cid={openCid}
                    onOpenRail={() => setRailOpen(true)} />
       )}
     </>

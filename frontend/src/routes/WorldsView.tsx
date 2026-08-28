@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
 import { errorText } from "../api/errors";
 import LibraryPage from "../components/LibraryPage";
+import { byName } from "../sortByName";
 
 function footerLabel(counts: Record<string, number> | undefined): string {
   const c = counts ?? {};
@@ -27,6 +28,15 @@ export default function WorldsView() {
   useEffect(() => {
     api.listWorlds().then(setWorlds);
   }, []);
+
+  /** The grid, A-Z. `listWorlds` answers newest-first, which is the right
+   *  order for a feed and the wrong one for a shelf you come to looking for a
+   *  particular world by name: recency puts it wherever it happens to be, and
+   *  the only way to find it is to read every card. A world is a reference
+   *  library rather than something you play, so there is no toggle here --
+   *  each card still carries its own counts, and none of them is a stamp
+   *  anybody scans this page for. */
+  const shown = useMemo(() => byName(worlds), [worlds]);
 
   async function create() {
     const trimmed = name.trim();
@@ -56,11 +66,12 @@ export default function WorldsView() {
 
   /** Fork a world into a copy of its own, from the card of the world to copy.
    *
-   *  The grid is refreshed rather than navigated to: `listWorlds` orders by
-   *  `updated` and the fork stamps its own, so the copy lands at the front of
-   *  the grid the user is already looking at. An import navigates instead
-   *  because it has no such anchor — nothing on screen said where it came
-   *  from.
+   *  The grid is refreshed rather than navigated to: the copy is named after
+   *  its source, so in an A-Z grid it lands directly beside the card the user
+   *  just clicked - a better anchor than the front of the grid was, which is
+   *  where it used to land back when this page ordered by `updated`. An import
+   *  navigates instead because it has no such anchor at all: nothing on screen
+   *  said where it came from.
    *
    *  Reported, not dropped, and with the row's button disabled meanwhile: a
    *  world runs to a gigabyte of character art, so this is a request that can
@@ -164,7 +175,7 @@ export default function WorldsView() {
         {error && <div className="error" role="alert">{error}</div>}
         <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
         <div className="world-grid">
-          {worlds.map((w) => (
+          {shown.map((w) => (
             <div className="world-card" key={w.id}>
               {renaming?.id === w.id ? (
                 <input

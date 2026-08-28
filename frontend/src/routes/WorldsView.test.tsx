@@ -40,6 +40,25 @@ function renderView() {
   );
 }
 
+test("the grid is alphabetical, whatever order the listing arrives in", async () => {
+  // `listWorlds` answers newest-first, which is the right order for a feed and
+  // the wrong one for a shelf you come to looking for one world by name. No
+  // toggle: a world is a reference library rather than something you play.
+  (api.listWorlds as any).mockResolvedValue([
+    { id: "w1", name: "Tidewrack", counts: {} },
+    { id: "w2", name: "ashfall", counts: {} },
+    { id: "w3", name: "The Saltmarch", counts: {} },
+  ]);
+  renderView();
+  await screen.findByText("The Saltmarch");
+  // Case-insensitively and past the article, so a world typed in lower case
+  // sits in the sequence rather than in a block of its own below the
+  // capitalised ones, and "The Saltmarch" files under S rather than filling
+  // the T section along with everything else named that way.
+  expect(Array.from(document.querySelectorAll(".world-card h3")).map((h) => h.textContent))
+    .toEqual(["ashfall", "The Saltmarch", "Tidewrack"]);
+});
+
 test("lists worlds as cards with count footers", async () => {
   (api.listWorlds as any).mockResolvedValue([
     { id: "w1", name: "Saltmarch", created: "", updated: "",

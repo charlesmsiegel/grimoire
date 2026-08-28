@@ -18,6 +18,7 @@ worth holding to the code rather than to a docstring:
 from __future__ import annotations
 
 import importlib
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -47,10 +48,80 @@ def _shell(client, cid: str | None = None) -> dict:
     return r.json()
 
 
-def test_no_campaign_asked_for_answers_null(client):
+def test_no_campaigns_at_all_answers_null(client):
     body = _shell(client)
     assert body["campaign"] is None
     assert body["campaigns"] == 0
+
+
+def _stamp_ahead(hours: int) -> str:
+    """A stamp the store itself would believe, `hours` ahead of this clock.
+
+    Ahead rather than behind because the campaigns in these fixtures are
+    created now, so their `campaign.md` stamps are all "now" -- an older
+    activity stamp would lose to `updated` and prove nothing. Inside
+    `_FUTURE_TOLERANCE` (a day), so this is a value `_valid_stamp` accepts
+    rather than one it discards as a bad clock.
+
+    The format is `now_iso()`'s, including the `Z`. Writing one without it
+    produced a test that passed for two runs while asserting nothing: the
+    stamp was rejected, both campaigns fell back to `updated`, they tied, and
+    the tie happened to keep the campaign the assertion named.
+    """
+    return (datetime.now(UTC) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_no_campaign_asked_for_falls_back_to_the_most_recently_active(client):
+    """The rail's second tier before the browser has remembered anything.
+
+    A fresh browser -- a new device, cleared storage, a library just pointed
+    at -- has no id to ask with, and the rail would otherwise stay one tier
+    tall until the reader navigated into a campaign. The one it is most likely
+    to have meant is the one last played, so that is what an empty `campaign`
+    resolves to.
+
+    Ranked by the activity stamp, not by `campaign.md`'s `updated`: playing a
+    scene touches the scene file and nothing else, so `updated` alone would
+    rank a campaign renamed months ago above one played into last night --
+    the same distinction `GET /campaigns` draws for the shelf.
+
+    Asserted twice, moving the stamp between them. Once is not enough: both
+    campaigns are created in the same second, so they tie on `updated` and the
+    listing order decides -- and a single assertion naming whichever campaign
+    that order already favours passes without the ranking working at all.
+    Moving the stamp and watching the answer follow is what cannot pass by
+    accident.
+    """
+    wid = client.post("/api/worlds", json={"name": "Saltmarch"}).json()["id"]
+    first = client.post("/api/campaigns", json={"name": "A Long Run", "world": wid}).json()["id"]
+    second = client.post("/api/campaigns", json={"name": "The Second", "world": wid}).json()["id"]
+
+    ahead = _stamp_ahead(hours=1)
+    store.campaigns.paths.campaign_activity_path(first).write_text(ahead, encoding="utf-8")
+    # The fixture is only a fixture if the store believes it. `read_activity`
+    # shape-checks what it reads and answers "" for anything it would not have
+    # written itself, so without this the rest of the test can assert against a
+    # stamp that was silently discarded.
+    assert store.campaigns.read.read_activity(first) == ahead
+    assert _shell(client)["campaign"]["id"] == first
+
+    store.campaigns.paths.campaign_activity_path(second).write_text(
+        _stamp_ahead(hours=2), encoding="utf-8")
+    assert _shell(client)["campaign"]["id"] == second
+
+
+def test_the_fallback_is_not_reached_by_an_id_that_does_not_resolve(client, campaign):
+    """A remembered id naming a deleted campaign must answer `null`.
+
+    Falling back here would be worse than useless: the client clears its
+    memory only when a successful read says the id resolves to nothing, so a
+    substitute campaign in the payload would leave the dead id in storage
+    forever -- and the rail would go on asking with it. It clears, and the
+    NEXT read (with no id) is the one the fallback answers.
+    """
+    r = client.get("/api/shell", params={"campaign": "no-such-campaign"})
+    assert r.status_code == 200
+    assert r.json()["campaign"] is None
 
 
 def test_unknown_campaign_is_null_not_404(client):
