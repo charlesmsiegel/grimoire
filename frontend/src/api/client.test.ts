@@ -2234,3 +2234,58 @@ test("aborting a draft stops the request in flight, not only the wait between th
 
   expect(seen[0]).toBe(stop.signal);
 });
+
+test("an identity lookup that could not be made does not end the opener recovery",
+     async () => {
+  // The same rule as the run lookup, in the one place I had written its
+  // opposite: a `scene-by-identity` that fails transiently has NOT established
+  // that the scene stayed put, so concluding no-move abandons an opener still
+  // buffered under the new id. Only a 404 is an answer.
+  const seen: string[] = [];
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(sseCutOff([
+      'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
+        + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
+      'id: 0\ndata: {"delta":"The "}\n\n',
+    ]))
+    .mockResolvedValueOnce(jsonOk({ run: null }))
+    // The resolver itself falls over -- a 409 while the scan could not read
+    // every candidate is the server's own "ask me again".
+    .mockResolvedValueOnce({ ok: false, status: 409,
+                             json: async () => ({ detail: "busy", kind: "busy" }) })
+    // Second attempt: the lookup answers, and the scene has moved.
+    .mockResolvedValueOnce(jsonOk({ run: null }))
+    .mockResolvedValueOnce(jsonOk({ id: "s2-renamed" }))
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1",
+                                           state: "running", next_index: 2,
+                                           cls: "draft" } }))
+    .mockResolvedValueOnce(sseResponse([
+      'id: 1\ndata: {"delta":"quay."}\n\n', 'id: 2\ndata: {"done":true}\n\n',
+    ]));
+  globalThis.fetch = fetchMock;
+
+  await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
+
+  expect(seen.join("")).toBe("The quay.");
+});
+
+test("a scene that really is gone ends the opener recovery rather than looping",
+     async () => {
+  // The other half: a 404 from `scene-by-identity` IS an answer -- nothing
+  // carries that identity any more -- so the original failure stands instead
+  // of burning every remaining attempt on a scene that is not coming back.
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(sseCutOff([
+      'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
+        + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
+    ]))
+    .mockResolvedValueOnce(jsonOk({ run: null }))
+    .mockResolvedValueOnce({ ok: false, status: 404,
+                             json: async () => ({ detail: "no scene carries that identity",
+                                                  kind: "scene_gone" }) });
+  globalThis.fetch = fetchMock;
+
+  await expect(api.opener("run", "s1", "begin", () => {}))
+    .rejects.toThrow("Failed to fetch");
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+});
