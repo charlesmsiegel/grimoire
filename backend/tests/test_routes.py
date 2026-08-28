@@ -10953,6 +10953,42 @@ def test_a_director_turn_with_no_note_is_charged_to_nothing(client):
     assert all(b["post"] != 0 for b in by_post)
 
 
+def test_a_reroll_of_a_director_turn_buckets_with_its_note(client):
+    """The gutter's "reply + 1 reroll", for a director turn.
+
+    A post and every generation that answered it bucket together, which is the
+    one figure a reader cannot get any other way. A reroll re-answers what is
+    already sitting there — and for a director turn that is the note, which is
+    assistant-role by the transcript format's construction. A plain user-role
+    scan steps over it to some earlier, visible post, and charges the player
+    for a turn they made ten posts ago.
+    """
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    # A real post first, so there IS an earlier one to be charged by mistake.
+    store.scenes.append_message(cid, sid, "user", "I knock.")
+    store.scenes.append_message(cid, sid, "assistant", "The door opens.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "the storm intensifies", "director": True}) as r:
+        r.read()
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={}) as r:
+        r.read()
+
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    at = next(i for i, m in enumerate(msgs) if store.scenes.is_director_note(m))
+    buckets = {b["post"]: b for b in
+               client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()["by_post"]}
+
+    # Both generations under the note, and none of it under "I knock." at 0.
+    assert at in buckets
+    assert buckets[at]["calls"] == 2
+    assert 0 not in buckets
+
+
 def test_no_export_carries_a_director_note(client):
     """A book of the campaign is what happened, not what the author asked for
     off-stage. The app hides a note behind a toggle; an export has no toggle,

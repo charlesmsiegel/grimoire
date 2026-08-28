@@ -572,15 +572,24 @@ def _continuation_post(cid: str, sid: str, pid: str) -> int | None:
 
 
 def _answering_post(messages: list[dict]) -> int | None:
-    """The index of the player post a turn generated against this transcript is
+    """The index of the thing a turn generated against this transcript is
     answering, or None when there is not one.
 
-    The last user-role message, which is what every producing route is replying
-    to: a send appends it and streams, a retry and a regenerate re-answer the
-    one already sitting there, and a replay re-runs the turn that followed it.
-    A scene whose transcript is all narration -- an opener, a director-driven
-    scene before the player has said anything -- has no such post, and gets no
-    attribution rather than a wrong one.
+    The last message the PLAYER put there, which is what every producing route
+    is replying to: a send appends it and streams, a retry and a regenerate
+    re-answer the one already sitting there, and a replay re-runs the turn that
+    followed it. A scene whose transcript is all narration -- an opener, a
+    director-driven scene before the player has said anything -- has no such
+    message, and gets no attribution rather than a wrong one.
+
+    A director note counts, and that is the half worth reading twice. It is
+    assistant-role by the transcript format's construction (the role is derived
+    from the label and `You` is the only label that means user), so a plain
+    user-role scan would step straight over it to some earlier, visible post --
+    and a retry or a reroll of a director turn would then be charged to a post
+    the player made ten turns ago. The question this answers is "what did the
+    player put there that this turn is about", and a note is one of the two
+    ways they can put something there.
 
     Reads the message list defensively because it is the one thing here that
     came off disk: a `messages` that is not a list of dicts must cost the
@@ -590,28 +599,23 @@ def _answering_post(messages: list[dict]) -> int | None:
         return None
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
-        if isinstance(message, dict) and message.get("role") == "user":
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user" or store.scenes.is_director_note(message):
             return index
     return None
 
 
-def _director_note(messages: list[dict]) -> int | None:
-    """The index of the note a director turn is about to answer, or None.
-
-    The LAST message, and only if it is a note. At the moment this is read the
-    route has just appended it and the reply has not landed, so the note this
-    turn answers is the one at the tail -- scanning further back would find an
-    earlier note whose own turn was paid for long ago.
+def _is_director_note(messages: list[dict], index: int | None) -> bool:
+    """Whether `index` names a director note in `messages`.
 
     Reads defensively for `_answering_post`'s reason: the list came off disk,
     and a malformed row must cost the attribution rather than the turn.
     """
-    if not isinstance(messages, list) or not messages:
-        return None
-    last = messages[-1]
-    if isinstance(last, dict) and store.scenes.is_director_note(last):
-        return len(messages) - 1
-    return None
+    if index is None or not isinstance(messages, list) or not 0 <= index < len(messages):
+        return False
+    message = messages[index]
+    return isinstance(message, dict) and store.scenes.is_director_note(message)
 
 
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
@@ -896,16 +900,20 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         # all three land on the same index -- which is the point: a post and its
         # rerolls have to bucket together or the per-post figure would show only
         # the attempt still on screen.
+        post = _answering_post(owned)
         # A director turn attributes to its own note and to nothing else.
         #
-        # A TYPED note is written to the transcript now, so the cost lands on
-        # the line that bought it -- which is the whole reason notes are
-        # stored. The other two director turns store nothing: an offscreen
-        # scene has no note, and an empty send means "next NPC round". For
-        # those this is None, rather than the last player post: charging that
-        # would inflate a post the player can see with the cost of a turn they
-        # did not send, the same error `_continuation_post` refuses.
-        post = _director_note(owned) if task == DIRECTOR else _answering_post(owned)
+        # A TYPED note is written to the transcript now, so `_answering_post`
+        # finds it and the cost lands on the line that bought it -- which is
+        # the whole reason notes are stored, and what also makes a retry or a
+        # reroll of that turn bucket with it. The other two director turns
+        # store nothing: an offscreen scene has no note, and an empty send
+        # means "next NPC round". For those the scan reaches some earlier,
+        # visible post, and charging it would inflate a post the player can see
+        # with the cost of a turn they did not send -- the same error
+        # `_continuation_post` refuses for the same reason.
+        if task == DIRECTOR and not _is_director_note(owned, post):
+            post = None
 
     def finalize(watcher) -> list[str]:
         # The WHOLE of it under one acquisition, which the identity fence
