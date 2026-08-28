@@ -529,6 +529,24 @@ def test_a_scene_date_that_failed_its_reconciliation_still_stamps(client, monkey
     assert _token(client, cid) != before
 
 
+def test_a_module_rebind_that_failed_part_way_still_stamps(client, monkeypatch):
+    """`PUT /campaigns/{cid}/module` is two writes under one hold:
+    `set_campaign_module` rewrites `campaign.md` atomically, and
+    `clear_baselines` can then fail. That answers 500 over a campaign that has
+    genuinely changed module, and the middleware stamps success only (Codex
+    review)."""
+    cid = _campaign(client)
+    before = _token(client, cid)
+
+    def die(*a, **kw):
+        raise OSError(5, "the baselines could not be cleared")
+
+    monkeypatch.setattr(store.audit, "clear_baselines", die)
+    with pytest.raises(OSError):
+        client.put(f"/api/campaigns/{cid}/module", json={"module": "d20-basic"})
+    assert _token(client, cid) != before
+
+
 def _opener(client, cid, sid):
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
                        json={"prompt": "They arrive at the gate."}) as r:
@@ -687,12 +705,21 @@ def test_the_stale_check_runs_before_the_calendar_does(client, monkeypatch):
                              "expect_revision": token}).status_code == 409
 
 
-def test_an_advance_that_fired_events_stamps_again_afterwards(cid, monkeypatch):
-    """`_fire` writes events.json OUTSIDE the commit's hold, so the token
-    published inside it is current-looking while the advance is still half-made.
+def test_an_advance_publishes_no_token_until_its_events_are_stamped(cid, monkeypatch):
+    """An advance that crosses an event is two writes -- the clock, then the
+    stamps in `events.json` -- and they are one operation to every reader: a
+    campaign whose present has moved past an event still marked unfired is a
+    state that never legitimately exists.
 
-    Sampled from inside `_fire`, which is exactly where a reader would pick it
-    up: after the clock landed, before the events were stamped.
+    Firing outside the hold and stamping twice was not enough, which is what
+    this test used to assert. The FIRST token was published while the fire was
+    still to come, so a reader could pick it up, price a checkpoint against it
+    and have `/fork` accept it -- copying exactly that half-made state, which no
+    later stamp can reach (Codex review). Both writes are now under one hold and
+    one token is published after both.
+
+    Sampled from inside `_fire`, which is exactly where such a reader would be
+    looking: after the clock landed, before the events were stamped.
     """
     monkeypatch.setattr(clock, "_provider", lambda *a, **k: object())
     monkeypatch.setattr(clock, "_resolve", lambda *a, **k: ("2026-05-01", "2026-05-04"))
@@ -703,9 +730,13 @@ def test_an_advance_that_fired_events_stamps_again_afterwards(cid, monkeypatch):
     monkeypatch.setattr(clock, "_fire",
                         lambda c, *a, **k: (seen.append(revision.current(c)),
                                             [{"id": "the-coronation"}])[1])
+    before = revision.current(cid)
     clock.advance(cid, days=3, reason="travel")
     assert seen, "the fire never ran, so this proved nothing"
-    assert revision.current(cid) != seen[0]
+    # Mid-advance the token is still the one from BEFORE the move: there is no
+    # moment at which a reader can hold a value certifying the half-made state.
+    assert seen[0] == before
+    assert revision.current(cid) != before
 
 
 def test_an_advance_that_fired_nothing_does_not_stamp_twice(cid, monkeypatch):

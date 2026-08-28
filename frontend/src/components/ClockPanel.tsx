@@ -284,19 +284,30 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setError(refusal(err));
     if (!campaignMoved(err)) return;
     forgetPricing();
-    void reload();
   }
 
-  /** Throw away the shown numbers, the open question and the token behind them.
+  /** Throw away the shown numbers, the open question and the token behind them,
+   *  and re-read the clock.
    *
-   *  Three callers, one rule: the campaign has been written since this pricing,
-   *  so everything derived from it describes a state the campaign has left — the
-   *  digest, the question asked about it, and the token that would have been
-   *  spent on the skip and on the copy's idempotency key. The reader goes back
-   *  to Preview, which is the only thing that can produce a set that agrees. */
+   *  Every caller means one thing: the campaign has been written since this
+   *  pricing, so everything derived from it describes a state the campaign has
+   *  left — the digest, the question asked about it, and the token that would
+   *  have been spent on the skip and on the copy's idempotency key. The reader
+   *  goes back to Preview, which is the only thing that can produce a set that
+   *  agrees.
+   *
+   *  The RELOAD is part of that and not a separate courtesy. `Now:` is the one
+   *  number this panel shows that no re-preview replaces —
+   *  `/advance/preview` answers with a digest and a token and says nothing
+   *  about where the campaign's present is — so a clock another tab moved would
+   *  otherwise sit on screen through the whole recovery, and `pricedNow` would
+   *  be seeded from it (Codex review). It used to live in `onRefusal` alone,
+   *  which covered the server's `campaign_moved` and neither of the two places
+   *  this panel decides the same thing for itself. */
   function forgetPricing() {
     setDigest(null); setGate(null); setCheckpointed(false);
     setPricedNow(null); setPricedRevision("");
+    void reload();
   }
 
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
