@@ -147,8 +147,12 @@ Game rules meaning what they say.
   free today" claim is now decisively false: mechanics (#160), two drift
   checkers, and the turnstate ledger all exist, so an auxiliary path must
   *actively* skip mechanics sections, drift staging, turnstate writes and
-  cost bucketing. Write the invariants + regression test **before** #187
-  builds the framework — this is the integrity half of the aux epic.
+  per-post cost *attribution* (no transcript index to charge) — while
+  still metering the call itself into the usage ledger, as the ephemeral
+  opener path already does: an auxiliary call costs tokens and money and
+  must reach campaign and lifetime totals. Write the invariants +
+  regression test **before** #187 builds the framework — this is the
+  integrity half of the aux epic.
 - **#221 — sheets on world records: verify and close.** The question "can
   a creature/item/group carry a module sheet" is answered end-to-end:
   `sheets.FILE_KINDS` covers every entity kind, world-scope sheet routes
@@ -340,8 +344,11 @@ Getting content in and out without loss.
 
 If the next stretch of work took only the top of each aspect, in order:
 
-1. **Hygiene**: close #57/#113/#119/#40/#221; run the #82 playtest; write
-   down the #437 rail-vs-grid decision. (Hours, and the list shrinks by
+1. **Hygiene**: close #57/#40/#221 outright; close-or-narrow #113 (residue:
+   the absorb-vs-manual source distinction, drift trails for
+   relationship/bond/plot edits) and #119 (residue: lore→character
+   conversion) per their table rows; run the #82 playtest; write down the
+   #437 rail-vs-grid decision. (Hours, and the list shrinks by up to
    seven.)
 2. **#61+#62** — emergent-NPC voice/capsule pass (character coherence,
    small, fully unblocked).
