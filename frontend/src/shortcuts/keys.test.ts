@@ -35,6 +35,24 @@ test("shift is named for keys it cannot change", () => {
   expect(chordOf(key({ key: "Enter", shiftKey: true, metaKey: true }))).toBe("mod+shift+enter");
 });
 
+// ...and so does a printable key with another modifier already held. Bare,
+// the reader is choosing a CHARACTER and shift is how their layout produces
+// it; holding a modifier they are choosing a KEY, and every app on the machine
+// spells that "⌘⇧F". Folding shift in there made ⌘F and ⌘⇧F one chord, which
+// is why the design's Search shortcut could not be expressed at all.
+test("shift is named once another modifier is holding the key down", () => {
+  expect(chordOf(key({ key: "F", shiftKey: true, metaKey: true }))).toBe("mod+shift+f");
+  expect(chordOf(key({ key: "f", metaKey: true }))).toBe("mod+f");
+  expect(chordOf(key({ key: "F", shiftKey: true, altKey: true }))).toBe("alt+shift+f");
+});
+
+test("the two are still different chords, which is the whole point", () => {
+  const find = chordOf(key({ key: "f", metaKey: true }));
+  const search = chordOf(key({ key: "F", shiftKey: true, metaKey: true }));
+  // ⌘F is the browser's Find and must never be taken; ⌘⇧F is ours.
+  expect(find).not.toBe(search);
+});
+
 test("alt is named", () => {
   expect(chordOf(key({ key: "ArrowLeft", altKey: true }))).toBe("alt+arrowleft");
 });

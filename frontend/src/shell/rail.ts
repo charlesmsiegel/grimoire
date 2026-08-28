@@ -1,4 +1,5 @@
 import { money } from "../components/cost";
+import { formatChord } from "../shortcuts/keys";
 import { LIBRARY_SECTIONS, inLibrary, isUnder } from "../librarySections";
 import type { ShellPayload } from "../api/types";
 
@@ -85,6 +86,12 @@ const LIBRARY_SECTION_COUNT = LIBRARY_SECTIONS.length;
 const campaignPath = (ctx: RailCtx, suffix = "") =>
   ctx.cid ? `/campaigns/${ctx.cid}${suffix}` : null;
 
+/** The chord that opens Search, named once.
+ *
+ *  Bound in `App.tsx` and printed here, so the rail can never advertise a key
+ *  the app does not answer. */
+export const SEARCH_CHORD = "mod+shift+f";
+
 /** Where one scene's review lives. */
 const wrapPath = (cid: string, sid: string) =>
   `/campaigns/${cid}/scenes/${sid}/wrap-up`;
@@ -142,12 +149,18 @@ export const APP_ROWS: RailRow[] = [
     id: "search", label: "Search", icon: "⌕",
     to: () => "/search",
     match: (p) => isUnder(p, "/search"),
-    // The design's tail reads ⌘⇧F. That chord cannot exist here: `chordOf`
-    // folds shift into the character a printable key produces, so Cmd+Shift+F
-    // and Cmd+F both normalize to `mod+f` — a `mod+shift+f` binding would never
-    // fire and a `mod+f` one would take the browser's Find. Rather than ship a
-    // tail advertising a key that does nothing, there is no tail and no
-    // binding.
+    // The design's tail, and it is a real key now. `chordOf` used to fold
+    // shift into the character a printable key produces even when a modifier
+    // was already held, so ⌘⇧F and ⌘F were one chord — the first could not be
+    // bound and the second would have taken the browser's Find. Shift is named
+    // whenever another modifier is present, so this fires and the tail is not
+    // advertising something that does nothing.
+    //
+    // The tail is the CHORD rather than a count, which is the one row where
+    // that is the right answer: Search has nothing to count, and what a reader
+    // wants from it is the way to reach it without the mouse.
+    tail: () => formatChord(SEARCH_CHORD),
+    tailLabel: () => `shortcut ${formatChord(SEARCH_CHORD)}`,
   },
   {
     // Scoped to the open campaign, which is what the design's figure is. With

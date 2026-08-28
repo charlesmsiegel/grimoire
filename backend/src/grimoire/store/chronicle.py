@@ -158,5 +158,12 @@ def transcript_text(messages: list[dict]) -> str:
     normalized = [
         {**m, "speaker": None} if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER else m
         for m in messages
+        # A director note is dropped, not unlabelled. Every caller of this is
+        # either showing the reader what happened or asking a model to
+        # summarise it, and a note is neither: absorbed as though it were
+        # dialogue it would put the author's own instructions into the
+        # chronicle, and cited as evidence for a proposal it would be the
+        # reviewer's own words coming back as a finding.
+        if not scenes_serialize.is_director_note(m)
     ]
     return prompts.render("snippets/transcript.j2", messages=normalized)

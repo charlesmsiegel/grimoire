@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api, type ProviderHealth } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_MODE } from "./theme/themes";
@@ -8,6 +8,8 @@ import AppRail from "./components/AppRail";
 import PhoneTabs from "./components/PhoneTabs";
 import AppPaletteSource from "./components/AppPaletteSource";
 import CommandPalette, { usePaletteHotkey } from "./components/CommandPalette";
+import { useHotkeys } from "./shortcuts/useHotkeys";
+import { SEARCH_CHORD } from "./shell/rail";
 import { FocusProvider, FocusRestore, useFocus } from "./components/focus";
 import { PaletteProvider } from "./components/palette";
 import { ShellStatusProvider } from "./components/ShellStatus";
@@ -60,6 +62,19 @@ function Shell(
   const rerunSetup = new URLSearchParams(location.search).get("again") === "1";
   usePaletteHotkey();
   const { focus } = useFocus();
+  const navigate = useNavigate();
+  // The design's Search shortcut, expressible since `chordOf` stopped folding
+  // shift into a chord that already has a modifier in it.
+  //
+  // `global`, like the palette's, because Search is the other thing that has
+  // to be reachable from anywhere -- an overlay must not be able to strand
+  // you. NOT `whileTyping`: the palette earns that by being the thing you
+  // reach for mid-sentence without losing the draft, and a chord that
+  // navigated away from a half-written post would lose it.
+  useHotkeys([{
+    keys: SEARCH_CHORD, label: "Search everything", group: "ANYWHERE",
+    global: true, run: () => navigate("/search"),
+  }]);
 
   // Which campaign the rail's second tier is about. A hint the payload
   // validates -- what actually renders comes from `payload.campaign`, never

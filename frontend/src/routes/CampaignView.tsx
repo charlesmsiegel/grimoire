@@ -67,6 +67,19 @@ const ROLL_SPEAKER = "⁣Roll";
 // separator and reroll steps over it, but it is NEVER displayed — a transition
 // renders as the unlabelled narration it was before the tag existed.
 const TRANSITION_SPEAKER = "⁣Scene";
+// Marks a stored director note (backend: scenes.DIRECTOR_SPEAKER) — what the
+// player typed to STEER a turn rather than to say in it. Same
+// invisible-separator prefix as the two above.
+//
+// It is in the transcript so the generation it bought has an index to be
+// charged against; it is not prose, so it is hidden by default and revealed by
+// a per-scene toggle. Shown, it renders under a dashed rule rather than a
+// speaker plate: it is a stage direction in the margin, not a line in the
+// scene.
+const DIRECTOR_SPEAKER = "⁣Note";
+// What a shown note is labelled. Never the model's label and never the
+// player's: it is neither of them speaking.
+const DIRECTOR_LABEL = "Note";
 // The window token of a transcript that has been edited optimistically. Real
 // tokens come from `++windowTokenRef` and so start at 1; this identifies posts
 // that no fetch produced, so every readiness gate comparing against a fetch's
@@ -228,6 +241,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [showMechanics, setShowMechanics] = useState(false);
   const [showStyle, setShowStyle] = useState(false);
   const [showCover, setShowCover] = useState(false);
+  /** Whether this scene's director notes are visible.
+   *
+   *  Per scene and not persisted: it is a way of looking at what is on screen,
+   *  like scrolling, and a reader who turned notes on to check one turn should
+   *  not find them on in a scene they open next week. Reset by the effect that
+   *  reads a scene, beside every other piece of per-scene view state. */
+  const [showNotes, setShowNotes] = useState(false);
   /** The `Scene ⋯` disclosure, so picking an item can shut it.
    *
    *  A ref onto the element rather than a controlled `open`: `<details>` owns
@@ -1296,6 +1316,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // the scene they picked it on — switching scenes must not carry it
       // silently onto an unrelated scene's next reply.
       setPendingResponse(null);
+      // Director notes are per scene, and the toggle is a way of looking at
+      // the one on screen. Carried across, a reader who turned them on to
+      // check one turn would find them on in every scene they opened after.
+      setShowNotes(false);
       // Same reasoning for the error banner: it reports what happened to a turn
       // in the scene being left, and its Retry acts on whatever scene is open.
       // Leaving it up invites the player to re-run one scene's failure against
@@ -3644,7 +3668,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // transition renders as the unlabelled narration it was before the tag
   // existed, so tagged and pre-existing untagged transitions look the same.
   const speakerOf = (m: Message) =>
-    (m.speaker === TRANSITION_SPEAKER ? undefined : m.speaker)
+    (m.speaker === TRANSITION_SPEAKER ? undefined
+     // A note is assistant-role by the transcript format's construction (the
+     // role is derived from the label, and `You` is the only user label), so
+     // without this it would be plated as the narrator — the one thing it is
+     // definitely not.
+     : m.speaker === DIRECTOR_SPEAKER ? DIRECTOR_LABEL
+     : m.speaker)
     ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant);
 
   // A speaker label names a cast member if it matches exactly (case-insensitive)
@@ -3673,9 +3703,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // consecutive messages by the same speaker form one run under a single plate
   type Run = { speaker: string; pc: boolean; actor: Actor | undefined;
                posts: { m: Message; index: number }[] };
+  /** How many notes this scene is holding, for the toggle's label.
+   *
+   *  Counted over the loaded window rather than the whole scene, like
+   *  everything else on this screen: the number says how many are on the page
+   *  the toggle governs. */
+  const noteCount = messages.filter((m) => m.speaker === DIRECTOR_SPEAKER).length;
+
   const runs: Run[] = [];
   messages.forEach((m, i) => {
     const index = firstIndex + i; // absolute: what edit/reroll address it by
+    // Hidden, not removed. The index above is computed from the position in the
+    // loaded window, so skipping here leaves every other post addressed
+    // exactly as before — filtering `messages` first would renumber them and
+    // send an edit to the wrong post.
+    if (m.speaker === DIRECTOR_SPEAKER && !showNotes) return;
     const speaker = speakerOf(m);
     const last = runs[runs.length - 1];
     if (last && last.speaker === speaker) {
@@ -4014,6 +4056,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               and the browser already knows how to open one from the keyboard.
               The menu closes on pick, because a menu still standing over the
               panel it just opened is in the way of the thing you asked for. */}
+          {/* The director-notes toggle. On the bar rather than in the menu:
+              it is a way of LOOKING at what is on screen, and everything in
+              the menu opens something over the transcript. It renders only
+              where there is a note to show, so a scene played without them
+              never grows a control for them. */}
+          {noteCount > 0 && (
+            <button className="scene-action" aria-pressed={showNotes}
+                    onClick={() => setShowNotes((v) => !v)}>
+              {showNotes ? "Hide" : "Show"} director notes · {noteCount}
+            </button>
+          )}
           <details className="scene-menu" ref={sceneMenu}>
             <summary className="scene-action">Scene ⋯</summary>
             <div className="scene-menu-options">
@@ -4339,7 +4392,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               </div>
             )}
             {runs.map((run) => (
-              <div className={"run" + (run.pc ? " pc" : "")} key={run.posts[0].index}>
+              <div className={"run" + (run.pc ? " pc" : "")
+                               + (run.speaker === DIRECTOR_LABEL ? " director-note" : "")}
+                   key={run.posts[0].index}>
                 <div className={"plate" + (run.pc ? " pc" : "")}>
                   {run.actor ? (
                     <>

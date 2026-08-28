@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from ... import prompts
 from .. import chronicle, config, export, relationships
+from ..scenes import serialize as scenes_serialize
 
 
 def _project_history(messages: list[dict]) -> list[dict]:
@@ -40,6 +41,16 @@ def _project_history(messages: list[dict]) -> list[dict]:
     """
     out: list[dict] = []
     for message in messages:
+        # A director note is an instruction to the narrator, not a line in the
+        # scene, and it is stored only so the turn it produced can be
+        # attributed to it. Dropping it here is what keeps a prompt
+        # byte-identical to what it was before notes were persisted: the note
+        # still reaches the model exactly once, as the final user message
+        # `compose_director_turn` appends. Left in, every later turn of the
+        # scene would carry the player's stage directions as though they were
+        # dialogue -- and the model would learn to write them back.
+        if scenes_serialize.is_director_note(message):
+            continue
         m = {**message, "content": export.drop_images(message["content"])}
         line = prompts.render("scene/history_line.j2", m=m)
         if out and out[-1]["role"] == m["role"]:

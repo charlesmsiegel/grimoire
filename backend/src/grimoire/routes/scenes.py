@@ -648,12 +648,23 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     `return` statements (any mutator below can raise), which is why this is a
     wrapper rather than a checklist.
     """
-    # ephemeral turn, never stored: a director note steering one generation --
-    # asked for outright (`director`, the composer's Direct mode), implied by an
-    # offscreen scene, which has no other kind of turn, or implied — in any
-    # scene — by an empty send meaning "next NPC round".
+    # A turn that posts no player dialogue: a director note steering one
+    # generation -- asked for outright (`director`, the composer's Direct
+    # mode), implied by an offscreen scene, which has no other kind of turn, or
+    # implied — in any scene — by an empty send meaning "next NPC round".
     ephemeral = (turn.director or store.scenes.is_pcless(cid, sid)
                  or not turn.content.strip())
+    # ...of which exactly one kind leaves a record. A typed note is a thing the
+    # player wrote and paid for a generation against, and it is stored as a
+    # marked user message so that generation can be attributed to it --
+    # `usage.record`'s `post` is a transcript index, and until now a director
+    # turn was the one generation in the app whose cost had nowhere to sit.
+    #
+    # The other two store nothing, and must not: an empty send has no note, and
+    # the default text `prompts.render` supplies for it is this module's
+    # wording rather than the player's. Writing that into the transcript would
+    # be the app putting words in their mouth once per NPC round.
+    note_text = turn.content.strip() if turn.director else ""
     # Heal, then the sidecar, then retire — the same split regenerate makes, and
     # for the same reason. `_disown_dead_pending` writes a file that can refuse
     # the write, and it used to run AFTER the retirement: an empty send over an
@@ -679,6 +690,30 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
         posted_at, content, speaker = None, "", None
+        if note_text:
+            # In the same locked, fenced hold the player's post is written in,
+            # and for its reasons. Macros are expanded at persist time exactly
+            # as they are for a post, so a `{{roll:1d20}}` in a note cannot
+            # re-roll on every later read of the scene.
+            #
+            # Assistant-role, because that is what the format means: the role
+            # is derived from the label on read and `You` is the only label
+            # that means user. `DIRECTOR_SPEAKER` is what tells it apart, and
+            # it is in `SYNTHETIC_SPEAKERS`, so nothing counts it as a reply.
+            #
+            # **There is no undo for it, unlike the player's post.** A post
+            # with no reply is a half-turn nobody asked for and comes back off;
+            # a note is a thing the player wrote, and a failed generation does
+            # not unwrite it. Removing it silently would discard the only copy
+            # of what they typed, which is the side of that ambiguity every
+            # other decision here refuses (see `_take_the_post_back`). Left in
+            # place it is visible and deletable, and re-sending is a fresh
+            # note rather than a resurrection.
+            content = store.context.expand_macros(
+                note_text, store.context.scene_substitutions(cid, sid), cid, sid)
+            store.scenes.append_message(
+                cid, sid, "assistant", content,
+                speaker=store.scenes.DIRECTOR_SPEAKER)
         if not ephemeral:
             names = store.appearances.player_names(cid, sid)
             speaker = names[0] if len(names) == 1 else None
@@ -706,7 +741,12 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             with contextlib.suppress(OSError):
                 store.attempts.remember(cid, run.scene_identity, run.attempt_id)
     if ephemeral:
-        note = turn.content.strip() or prompts.render("scene/director_note.j2")
+        # `content` when a note was stored (macros already resolved, so the
+        # model sees exactly what the transcript holds), the template's default
+        # otherwise. `compose_director_turn` still appends it as the final user
+        # message and `_project_history` drops the stored copy, so the prompt
+        # is byte-identical to what it was before notes were persisted.
+        note = content or prompts.render("scene/director_note.j2")
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
             describe=store.prompt_log.capturing())

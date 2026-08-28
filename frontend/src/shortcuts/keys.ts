@@ -22,7 +22,16 @@ export function chordOf(e: KeyboardEvent): string {
   // else on a German one, so naming both would fire on only one of them. A key
   // whose identity shift cannot change ("Enter") still needs it named, or
   // shift+Enter — a newline in the composer — would be the send chord.
-  if (e.shiftKey && key.length > 1) parts.push("shift");
+  //
+  // ...and so does a printable key with mod or alt ALSO held, which is the
+  // other half of the same reasoning rather than an exception to it. The rule
+  // above is about the reader choosing a CHARACTER: bare, "?" is what they
+  // meant and shift is how their layout produces it. Holding ⌘ they are
+  // choosing a KEY, and every app on the machine spells that "⌘⇧F" — so
+  // folding shift in there made ⌘F and ⌘⇧F the same chord, which meant the
+  // design's Search shortcut could not be expressed and a binding for it would
+  // have taken the browser's Find.
+  if (e.shiftKey && (key.length > 1 || parts.length > 0)) parts.push("shift");
   parts.push(key.toLowerCase());
   return parts.join("+");
 }

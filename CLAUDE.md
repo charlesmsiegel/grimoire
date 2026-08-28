@@ -72,14 +72,23 @@ a second surface to answer the rail's question has misread the rail; a page
 that puts its records in the rail has misread its column.
 
 Rows come from the tables in `src/shell/rail.ts`, and **a row whose `to()`
-returns `null` is not rendered at all** — that is how the rail ships complete in
-shape while most of the redesign's pages are still to be built. Badge counts
-come from `GET /api/shell` in one read; a count nobody can answer cheaply is
-`null` and draws no tail, which is the cost rule ("a price nobody reported is
-never rendered as zero") one domain over. The rail carries **no money**: the
-figure the design wanted is an all-time ledger rollup, and `store/usage.py`'s
-`lifetime_since` reserves that scan for the all-time view rather than the play
-path.
+returns `null` is not rendered at all** — which is what lets a row ship
+complete in shape and sparse in fact (Sheets is absent where no mechanics
+module is bound; Wrap-up is absent where nothing is pending). Badge counts come
+from `GET /api/shell` in one read; a count nobody can answer cheaply is `null`
+and draws no tail, which is the cost rule ("a price nobody reported is never
+rendered as zero") one domain over.
+
+The Costs row carries **spend only**, and it is the ledger's all-time figure
+rather than a bounded window wearing its name. `store/usage.py`'s
+`lifetime_since` reserves the all-history scan for the all-time view and not
+the play path, so the rail was given a maintained aggregate instead —
+`store/usage_rollup.py`, a byte bookmark into each month file, so the read
+costs what has been played since the last navigation rather than the library's
+age. One tail cannot carry three columns that may never be added, so estimated
+and modelled stay on the hub's card where they can be labelled — and a campaign
+whose calls were all subscription-billed or all unpriced draws no tail rather
+than `$0.00`.
 
 **Where a record rail goes depends on whether the page owns the screen.** An
 editor that sits *inside* another page — a library section, a world tab, a
@@ -220,6 +229,22 @@ the transcript can say what getting one reply actually cost. The index is only
 as stable as indices are — a cut renumbers what follows it and the ledger
 cannot follow — so it is a breakdown, and the scene's own totals are the number
 that is always right.
+
+**A director note is in the transcript for exactly that reason.** It is what
+the player typed to steer a turn rather than to say in it, and it used to be
+ephemeral — which made a director turn the one generation in the app whose cost
+had no index to sit against. It is stored as a `DIRECTOR_SPEAKER` line now
+(`store/scenes/serialize.py`), which is a *synthetic* speaker: assistant-role,
+because the transcript format derives the role from the label and `You` is the
+only label that means user, and in `SYNTHETIC_SPEAKERS`, so nothing counts it
+as a reply, rerolls it, or measures it for drift. It is an instruction rather
+than story, so `context.story._project_history` drops it (the prompt is
+byte-identical to what it was before notes were stored — the note still reaches
+the model exactly once, as the final user message), no export and no absorb
+prompt contains it, and the play view hides it behind a per-scene toggle. The
+two director turns that store no note — an offscreen scene, and an empty send
+meaning "next NPC round" — are still charged to nothing rather than to the last
+post the player can see.
 
 ## Detached runs: a turn outlives the request that asked for it
 

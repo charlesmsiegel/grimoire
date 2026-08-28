@@ -595,6 +595,25 @@ def _answering_post(messages: list[dict]) -> int | None:
     return None
 
 
+def _director_note(messages: list[dict]) -> int | None:
+    """The index of the note a director turn is about to answer, or None.
+
+    The LAST message, and only if it is a note. At the moment this is read the
+    route has just appended it and the reply has not landed, so the note this
+    turn answers is the one at the tail -- scanning further back would find an
+    earlier note whose own turn was paid for long ago.
+
+    Reads defensively for `_answering_post`'s reason: the list came off disk,
+    and a malformed row must cost the attribution rather than the turn.
+    """
+    if not isinstance(messages, list) or not messages:
+        return None
+    last = messages[-1]
+    if isinstance(last, dict) and store.scenes.is_director_note(last):
+        return len(messages) - 1
+    return None
+
+
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                   client: LLMClient, finalize, on_error=None, on_abort=None,
                   task: str = "chat", outcome: StreamOutcome | None = None,
@@ -877,11 +896,16 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         # all three land on the same index -- which is the point: a post and its
         # rerolls have to bucket together or the per-post figure would show only
         # the attempt still on screen.
-        # Not a director turn: the player typed a note that is never written to
-        # the transcript, so the generation answers no post of theirs. Charged
-        # to the last one anyway it would inflate a post the player can see
-        # with the cost of a turn they did not send.
-        post = None if task == DIRECTOR else _answering_post(owned)
+        # A director turn attributes to its own note and to nothing else.
+        #
+        # A TYPED note is written to the transcript now, so the cost lands on
+        # the line that bought it -- which is the whole reason notes are
+        # stored. The other two director turns store nothing: an offscreen
+        # scene has no note, and an empty send means "next NPC round". For
+        # those this is None, rather than the last player post: charging that
+        # would inflate a post the player can see with the cost of a turn they
+        # did not send, the same error `_continuation_post` refuses.
+        post = _director_note(owned) if task == DIRECTOR else _answering_post(owned)
 
     def finalize(watcher) -> list[str]:
         # The WHOLE of it under one acquisition, which the identity fence

@@ -7620,3 +7620,85 @@ test("with nothing open the bar grows no Close", async () => {
 
   expect(screen.queryByRole("button", { name: /^Close / })).not.toBeInTheDocument();
 });
+
+
+// ---- director notes in the transcript ----
+
+const NOTE = "⁣Note";
+
+function sceneWithNote() {
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockResolvedValue({
+    meta: {},
+    messages: [
+      { role: "user", content: "I knock." },
+      { role: "assistant", content: "make it rain", speaker: NOTE },
+      { role: "assistant", content: "Rain begins." },
+    ],
+  });
+}
+
+test("a scene with no notes grows no toggle for them", async () => {
+  renderCampaign();
+  await screen.findByText("Scene ⋯");
+
+  expect(screen.queryByRole("button", { name: /director notes/i }))
+    .not.toBeInTheDocument();
+});
+
+test("director notes are hidden until asked for, and counted on the toggle", async () => {
+  // A note is in the transcript so the turn it bought has an index to be
+  // charged against — not because it happened in the scene. Read back later,
+  // the scene is prose and these are stage directions in the margin.
+  sceneWithNote();
+  renderCampaign();
+  await screen.findByText("Rain begins.");
+
+  expect(screen.queryByText("make it rain")).not.toBeInTheDocument();
+  const toggle = screen.getByRole("button", { name: "Show director notes · 1" });
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+  fireEvent.click(toggle);
+
+  expect(await screen.findByText("make it rain")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Hide director notes · 1" }))
+    .toHaveAttribute("aria-pressed", "true");
+});
+
+test("a hidden note does not renumber the posts around it", async () => {
+  // The index a post is edited by is its position in the transcript. Filtering
+  // the list before numbering would send an edit to the wrong post — so a note
+  // is skipped at render, after its neighbours have their numbers.
+  sceneWithNote();
+  renderCampaign();
+  await screen.findByText("Rain begins.");
+
+  // "Rain begins." is index 2 whether or not the note at index 1 is drawn, so
+  // its controls address message 3 (1-based in the label).
+  const rain = screen.getByText("Rain begins.").closest(".msg") as HTMLElement;
+  // The edit control names the post it acts on. Several controls on the row
+  // do, so this asserts they all agree rather than picking one.
+  const named = within(rain).getAllByRole("button", { name: /message 3/i });
+  expect(named.length).toBeGreaterThan(0);
+  // ...and nothing on the row addresses message 2, which is the note.
+  expect(within(rain).queryByRole("button", { name: /message 2/i }))
+    .not.toBeInTheDocument();
+});
+
+test("a shown note is not plated as the narrator", async () => {
+  // It is assistant-role by the transcript format's construction, so without
+  // its own label it would carry the narrator's plate — the one thing it is
+  // definitely not.
+  sceneWithNote();
+  renderCampaign();
+  await screen.findByText("Rain begins.");
+  fireEvent.click(screen.getByRole("button", { name: /show director notes/i }));
+
+  const note = (await screen.findByText("make it rain")).closest(".run")!;
+  expect(note).toHaveClass("director-note");
+  // The rule says what it is; a fourth kind of speaker plate in a column of
+  // three would not.
+  expect(within(note as HTMLElement).queryByText("Grimoire")).not.toBeInTheDocument();
+});

@@ -43,7 +43,51 @@ TRANSITION_SPEAKER = "⁣Scene"
 # drift metrics and neither is ever consumed by reroll — a roll BLOCKS reroll
 # (its transcript line must stay in lockstep with rolls.json), a trailing
 # transition is stepped over and preserved.
-SYNTHETIC_SPEAKERS = (ROLL_SPEAKER, TRANSITION_SPEAKER)
+# A director note: what the player typed to STEER a turn rather than to say in
+# it. Stored so the turn it produced can be attributed to it -- `usage.record`'s
+# `post` is a transcript index, and a note that is nowhere in the transcript has
+# no index, which is why a director turn used to be the one generation in the
+# app whose cost could not be shown beside the thing it bought.
+#
+# Same U+2063 prefix as the two above, and a SYNTHETIC SPEAKER for the same
+# reason they are: it is not model output. The role follows from the format
+# rather than from a preference -- `_speaker_and_role` derives the role from
+# the label on read, and `You` is the only label that means user, so a marked
+# message is assistant-role by construction. That turns out to be exactly
+# right: everything that filters on `SYNTHETIC_SPEAKERS` should skip a note
+# (reroll must not consume one, drift must not measure one, turn counting must
+# not count one as a reply), and being in the tuple is what makes all of that
+# true at once rather than seven times over.
+#
+# It is an INSTRUCTION, not story, and three rules follow from that:
+#   * the model never sees it as history -- `context.story._project_history`
+#     drops it, so a prompt is byte-identical to what it was before notes were
+#     stored, and the note still reaches the model exactly once, as the final
+#     user message `compose_director_turn` appends;
+#   * no export and no absorb prompt contains it -- a book of the campaign is
+#     what happened, not what the author asked for off-stage, and a chronicle
+#     built from one would be summarising the reader's own instructions;
+#   * the app hides it behind a per-scene toggle, because a transcript read
+#     back later is prose and these are stage directions in the margin.
+DIRECTOR_SPEAKER = "\u2063Note"
+
+
+def is_director_note(m: dict) -> bool:
+    """Whether this message is a stored director note rather than transcript.
+
+    A function rather than a comparison at eight call sites: "the player typed
+    this to steer rather than to say" is one idea, and the places that have to
+    agree about it are in five different modules.
+    """
+    return m.get("speaker") == DIRECTOR_SPEAKER
+
+
+# Speakers that mark a message as not-model-output. None is consumed by reroll,
+# measured for drift or counted as a turn -- a roll BLOCKS reroll (its
+# transcript line must stay in lockstep with rolls.json), a trailing transition
+# is stepped over and preserved, and a director note is neither prose nor a
+# reply so every one of those questions answers "not this".
+SYNTHETIC_SPEAKERS = (ROLL_SPEAKER, TRANSITION_SPEAKER, DIRECTOR_SPEAKER)
 # How a transition line reads for each of the scene's OWN moves. `moment.py`
 # formats them and `write.delete_from` reads them back to work out how much of
 # `location_history` / `time_history` a cut leaves standing (#75) — so the two

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { APP_ROWS, CAMPAIGN_ROWS, RAIL_PX, railless, titleFor } from "./rail";
+import { APP_ROWS, CAMPAIGN_ROWS, RAIL_PX, SEARCH_CHORD, railless, titleFor } from "./rail";
+import { formatChord } from "../shortcuts/keys";
 
 /** Every pathname the app can actually be standing on.
  *
@@ -181,11 +182,16 @@ test("Costs is absent with no campaign open, present with one", () => {
     .toBe("/campaigns/c1/costs");
 });
 
-test("Search advertises no shortcut", () => {
-  // `chordOf` folds shift into the character a printable key produces, so the
-  // design's ⌘⇧F and a plain ⌘F are the same chord — and that one is the
-  // browser's Find. A tail naming a key that does nothing is worse than none.
-  expect(APP_ROWS.find((r) => r.id === "search")!.tail).toBeUndefined();
+test("Search advertises the chord the app actually answers", () => {
+  // ⌘⇧F used to be unexpressible: `chordOf` folded shift into the character a
+  // printable key produces even with a modifier held, so ⌘⇧F and ⌘F were one
+  // chord — and that one is the browser's Find. Shift is named whenever
+  // another modifier is present now, so the tail is a key that works.
+  const tail = APP_ROWS.find((r) => r.id === "search")!.tail!(null);
+  expect(tail).toBe(formatChord(SEARCH_CHORD));
+  // Printed from the constant the binding uses, so the rail cannot advertise
+  // one key while the app answers another.
+  expect(SEARCH_CHORD).toBe("mod+shift+f");
 });
 
 describe("the Costs tail", () => {
@@ -251,7 +257,7 @@ test("no OTHER row carries a money tail", () => {
   // would be a second figure with nothing saying which of the three it is.
   const payload = { campaigns: 3, campaign: null, todo: null } as const;
   for (const row of [...APP_ROWS, ...CAMPAIGN_ROWS]) {
-    if (row.id === "costs") continue;
+    if (row.id === "costs" || row.id === "search") continue;
     expect(row.tail?.(payload) ?? "").not.toMatch(/\$/);
   }
 });
@@ -279,9 +285,11 @@ describe("tails tell 0 apart from unmeasured", () => {
   test("no payload at all renders no tails", () => {
     for (const row of [...APP_ROWS, ...CAMPAIGN_ROWS]) {
       const t = row.tail?.(null);
-      // The library count is a frontend fact and needs no payload; everything
-      // else must stay quiet until it has been told something.
-      if (row.id !== "library") expect(t).toBeUndefined();
+      // Two rows answer without a payload because neither is a COUNT: the
+      // library's section total is a frontend fact, and Search's tail is the
+      // chord that opens it. Everything that measures something must stay
+      // quiet until it has been told what.
+      if (row.id !== "library" && row.id !== "search") expect(t).toBeUndefined();
     }
   });
 });

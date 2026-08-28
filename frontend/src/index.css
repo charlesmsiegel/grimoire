@@ -26,7 +26,17 @@ body::before {
 .view-anim { animation: view-in 0.3s ease; }
 
 /* ---- page scaffold ---- */
-.page { width: 100%; max-width: 940px; margin: 0 auto; padding: 44px 56px; }
+/* ONE page box, three measures. The 375px rules at the bottom of this file
+   already say why: "a reader moving between a `.page` screen and a
+   `.page-wide` one does not cross a seam." That was true on a phone and false
+   everywhere else -- `.page` sat at 44px/56px of padding and `.page-wide` at
+   26px/40px, so every move between the library and a campaign page shifted the
+   content under the reader.
+   The padding is the design's, and it is the same on every screen. What varies
+   is the MEASURE, because a settings form, a record list and a transcript want
+   different ones -- which is the only thing a page-width class should be
+   deciding. */
+.page { width: 100%; max-width: 940px; margin: 0 auto; padding: 24px 34px 60px; }
 .page-narrow { max-width: 680px; }
 .page-head {
   display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
@@ -46,7 +56,7 @@ body::before {
    content be squeezed into what is left. Matches App.tsx's NARROW_PX, which
    is where the sidebar makes the same decision. */
 @media (max-width: 640px) {
-  .page { padding: 24px 16px; }
+  .page { padding: 20px 16px 48px; }   /* the same step `.page-wide` takes */
   /* The head is a title beside its action, and at this width the two do not
      fit on one line — unwrapped they push the button past the column edge and
      the whole page scrolls sideways. */
@@ -358,7 +368,9 @@ body::before {
 .column-link:hover { color: var(--accent); }
 
 /* ---- shared page furniture in the new shape ---- */
-.page-wide { width: 100%; max-width: 1000px; padding: 26px 40px 60px; }
+/* The wide measure, and it is the design's 1120px. Same padding as `.page`
+   above -- see the note there. */
+.page-wide { width: 100%; max-width: 1120px; padding: 24px 34px 60px; }
 .eyebrow, .data-label {
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--muted); line-height: 1.45;
@@ -2216,8 +2228,18 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   background: var(--accent); color: var(--on-accent);
 }
 
-/* offscreen scenes: transient director note + badge */
+/* Director notes: the one in flight (transient, while a director turn runs)
+   and the ones on file, which read the same way on purpose -- what you typed
+   and what was kept are the same thing, so they should not look like two.
+
+   A dashed rule rather than a speaker plate. A note is a stage direction in
+   the margin: it is in the transcript so the turn it bought has an index to be
+   charged against, not because it happened in the scene. */
 .director-note .msg-body { opacity: 0.65; font-style: italic; }
+.director-note .msg { border-left: 1px dashed var(--muted); }
+/* No plate. The label would be a fourth kind of speaker in a column of three,
+   and the rule already says what this is. */
+.director-note .plate { display: none; }
 .offscreen-badge { margin-left: 0.5em; }
 
 /* mechanics sheet editor: full takeover over the detail area (#161) */
@@ -4099,12 +4121,13 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
     padding: 0 14px 11px; background: var(--panel);
     border-bottom: 1px solid var(--line);
   }
-  /* The older `.page` layout, which the library family still uses, gets the
-     same treatment from its own two classes. 44px of padding and a 64px
-     display face is a desktop measure; the 640px rule above already pulled
-     the face to 40, which is still most of a phone's first screenful before
-     any content. Same 18px, same gutter, so a reader moving between a
-     `.page` screen and a `.page-wide` one does not cross a seam. */
+  /* The `.page` layout, which the library family uses, gets the same treatment
+     from its own two classes. A 64px display face is a desktop measure; the
+     640px rule above already pulled the face to 40, which is still most of a
+     phone's first screenful before any content. Same 18px, same gutter, so a
+     reader moving between a `.page` screen and a `.page-wide` one does not
+     cross a seam -- which the two base rules now keep true at every width
+     rather than only at this one. */
   .page { padding: 0 14px 18px; max-width: none; }
   .page-head { padding-top: 12px; }
   .page-h1, .page-narrow .page-h1 {

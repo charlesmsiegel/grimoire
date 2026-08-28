@@ -10860,11 +10860,18 @@ def test_empty_chat_in_a_normal_scene_is_an_ephemeral_npc_round(client):
     assert all(m["role"] == "assistant" for m in msgs)
 
 
-def test_director_note_in_a_normal_scene_is_ephemeral(client):
+def test_director_note_in_a_normal_scene_is_recorded_but_is_not_a_post(client):
     """#83: the note has its own control now, so it is no longer blank-only and
     no longer offscreen-only. A `director` send in an ORDINARY scene steers one
-    generation without becoming a player post -- which is what the composer's
-    Direct mode sends, and what an empty send has always done underneath."""
+    generation.
+
+    It USED to leave no trace at all, and that was the one thing wrong with it:
+    `usage.record`'s `post` is a transcript index, so a note that is nowhere in
+    the transcript has no index, and a director turn was the only generation in
+    the app whose cost had nowhere to sit. It is stored now -- as a marked
+    user-role message, which is not a player post: it is what the player typed
+    to steer the turn rather than to say in it.
+    """
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
@@ -10874,12 +10881,93 @@ def test_director_note_in_a_normal_scene_is_ephemeral(client):
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "the storm intensifies", "director": True}) as r:
         r.read()
-    # the note rode the call as the final user turn...
+    # The note rode the call as the final user turn, exactly as before...
     assert cap.messages[-1] == {"role": "user", "content": "the storm intensifies"}
-    # ...and nothing of it reached the transcript
+    # ...and exactly ONCE. The stored copy must not also arrive as history, or
+    # every later turn of the scene would carry the player's stage directions
+    # as though they were dialogue.
+    assert sum(1 for m in cap.messages
+               if "storm intensifies" in m.get("content", "")) == 1
+
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert all(m["role"] == "assistant" for m in msgs)
-    assert "storm intensifies" not in json.dumps(msgs)
+    note = [m for m in msgs if store.scenes.is_director_note(m)]
+    assert len(note) == 1
+    assert note[0]["content"] == "the storm intensifies"
+    # The MARKER is what tells it apart, not the role: the transcript format
+    # derives the role from the label and `You` is the only label that means
+    # user, so a marked message is assistant-role by construction. It must
+    # therefore never be counted as a reply, and being in `SYNTHETIC_SPEAKERS`
+    # is what makes that true everywhere at once.
+    assert store.scenes.DIRECTOR_SPEAKER in store.scenes.SYNTHETIC_SPEAKERS
+    # ...and it is not a player post either. Nothing here is user-role.
+    assert not any(m["role"] == "user" for m in msgs)
+
+
+def test_a_director_turn_is_charged_to_its_own_note(client):
+    """The reason notes are stored at all.
+
+    A turn's ledger row carries the transcript index it was answering, so a
+    post and its rerolls bucket together. A director turn had no such index and
+    was recorded against nothing -- the cost landed in the scene's totals and
+    could not be shown beside the line that bought it.
+    """
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "the storm intensifies", "director": True}) as r:
+        r.read()
+
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    at = next(i for i, m in enumerate(msgs) if store.scenes.is_director_note(m))
+    by_post = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()["by_post"]
+    assert [b["post"] for b in by_post] == [at]
+
+
+def test_a_director_turn_with_no_note_is_charged_to_nothing(client):
+    """The counterweight, and the case that made this `None` in the first place.
+
+    An empty send means "next NPC round" and an offscreen scene has no note at
+    all, so nothing is stored -- and the last user message is then some
+    earlier, visible post. Charging it would inflate a post the player can see
+    with the cost of a turn they did not send.
+    """
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "I wait.")
+    store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "", "director": True}) as r:
+        r.read()
+
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert not any(store.scenes.is_director_note(m) for m in msgs)
+    by_post = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()["by_post"]
+    # The player's "I wait." is at index 0 and must not be charged for this.
+    assert all(b["post"] != 0 for b in by_post)
+
+
+def test_no_export_carries_a_director_note(client):
+    """A book of the campaign is what happened, not what the author asked for
+    off-stage. The app hides a note behind a toggle; an export has no toggle,
+    so it drops it."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
+    store.scenes.append_message(cid, sid, "assistant", "make it rain",
+                                speaker=store.scenes.DIRECTOR_SPEAKER)
+    store.scenes.append_message(cid, sid, "assistant", "Rain begins.")
+
+    for path in (f"/api/campaigns/{cid}/export.txt", f"/api/campaigns/{cid}/export.html"):
+        body = client.get(path).text
+        assert "make it rain" not in body, path
+        assert "Rain begins." in body, path
 
 
 def test_director_note_in_a_normal_scene_expands_macros(client):
@@ -10895,10 +10983,15 @@ def test_director_note_in_a_normal_scene_expands_macros(client):
         r.read()
     note = cap.messages[-1]
     assert note["role"] == "user" and "{{roll" not in note["content"]
-    # and it is still the ephemeral path, not a player post that happens to
-    # have been expanded on the way in
+    # ...and the STORED copy is the expanded one, so a `{{roll:1d20}}` in a
+    # note cannot re-roll on every later read of the scene -- the same reason
+    # a player's post is expanded at persist time rather than at render time.
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert all(m["role"] == "assistant" for m in msgs)
+    stored = next(m for m in msgs if store.scenes.is_director_note(m))
+    assert "{{roll" not in stored["content"]
+    assert stored["content"] == note["content"]
+    # It is still not a player post.
+    assert not any(m["role"] == "user" for m in msgs)
 
 
 def test_director_flag_with_a_blank_note_still_sends_continue(client):

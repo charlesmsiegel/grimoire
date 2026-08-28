@@ -68,6 +68,7 @@ from .read import (  # noqa: F401
 from .serialize import (  # noqa: F401
     _MARKER,
     _SAFE_LABEL,
+    DIRECTOR_SPEAKER,
     RESERVED_LABELS,
     ROLE_TO_LABEL,
     ROLL_SPEAKER,
@@ -82,6 +83,7 @@ from .serialize import (  # noqa: F401
     _serialize_messages,
     _speaker_and_role,
     confusable,
+    is_director_note,
     label_preserved,
     match_name,
     speaker_base,

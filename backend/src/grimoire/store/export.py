@@ -303,11 +303,17 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
     # here keeps HTML, plain text and EPUB — all of which build from collect() —
     # rendering a transition as the unlabelled narration it has always been, and
     # makes pre-tag and post-tag transitions look identical in a book.
+    # ...and a director note is dropped outright rather than unlabelled. It is
+    # what the author asked for off-stage, not something that happened in the
+    # scene, so a book of the campaign has no place for it -- the same
+    # judgement the app makes by hiding it behind a toggle, one step further
+    # because an export has no toggle.
     messages = [{"role": m["role"],
                  "speaker": None if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER
                             else m.get("speaker"),
                  "content": rewrite_images(m["content"], cid, images, prefix)}
-                for m in scene["messages"]]
+                for m in scene["messages"]
+                if not scenes_serialize.is_director_note(m)]
     return {"sid": sid, "number": number, "title": title, "date": date, "location": location,
             "cast": cast, "epigraph": meta.get("one_line") or None, "messages": messages}
 
