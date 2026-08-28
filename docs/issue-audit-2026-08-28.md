@@ -358,8 +358,10 @@ If the next stretch of work took only the top of each aspect, in order:
    the documented rail convention to `CharacterEditor` (or explicitly
    propose changing the rule) and decide the Images half. (Hours, and the
    list shrinks by up to seven.)
-2. **#61+#62** — emergent-NPC voice/capsule pass (character coherence,
-   small, fully unblocked).
+2. **#61+#62** — the emergent-NPC pieces absorb doesn't yet draft: the
+   voice-anchor trigger, tagline and tags (character coherence, small,
+   fully unblocked — the capsule extraction itself already ships in
+   absorb's `new_character` path).
 3. **#20** — stash ST lorebook fields (portability, small; *standalone
    uploads stay lossy while open*).
 4. **#17, #68, #22-residue** — three small greeting/opener frictions.
