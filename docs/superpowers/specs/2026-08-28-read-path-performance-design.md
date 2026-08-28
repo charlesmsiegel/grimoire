@@ -33,9 +33,10 @@ Where the time goes today, traced through the code:
   reads the tagline, voice-anchor and focus sidecars. Every section switch
   fires all of the counts again.
 - **Nothing is cached.** The backend re-derives everything from disk per
-  request (`statcache` exists but only memoizes card summaries and sync
-  hashes); there are no conditional requests, and the client only dedupes
-  GETs that are literally in flight at the same moment.
+  request (`statcache` memoizes record-level derivations — card, PC and
+  entity summaries, token counts, content hashes — but no *listing* path
+  goes through it); there are no conditional requests, and the client only
+  dedupes GETs that are literally in flight at the same moment.
 
 The store's design — plain files, re-read on demand, no indexes — is a
 feature and is not in question here. What this spec adds is memory *around*
@@ -54,9 +55,13 @@ render what it already had while it re-asks.
 - **No per-campaign ETag granularity.** One library-wide epoch is enough to
   start (see "Conditional reads"); refining the campaign-scoped routes onto
   `store/revision.py` tokens is future work the design leaves room for.
-- **The synced-store failure mode is out of scope** — the reference setup
-  syncs with syncthing (real local files), so there is no hydration cost to
-  design around.
+- **Synced-store *hydration* cost is out of scope** — the reference setup
+  syncs with syncthing (real local files), so there are no cloud
+  placeholders to design around. Synced-store *correctness* is NOT out of
+  scope: a sync client writing the store from another device is an ordinary
+  event (`statcache`'s and `revision.py`'s docstrings both plan for it), and
+  the conditional-read layer below is designed so such a write can never be
+  hidden for more than one time bucket.
 
 ## Design
 
@@ -132,29 +137,71 @@ cheap instead of making it two sources.
 
 ### 3. Conditional reads: a library epoch and `ETag`/`304`
 
-**`store/epoch.py`** — a process-local, in-memory read epoch: one opaque
-token (a fresh `uuid4`), replaced by `bump()`. Not persisted, on purpose: a
-restart mints a new token, so no client can ever get a false `304` from a
-value that survived a restart. Assignment is atomic under the GIL; there is
-nothing to lock.
+**`store/epoch.py`** — a process-local, in-memory read epoch. The token a
+client sees is a pair rendered into one opaque string: a fresh `uuid4`
+replaced by `bump()`, **plus the current time bucket** (`now // EPOCH_TTL`).
+The bucket is what bounds belief: this process cannot see a write it did not
+make — a sync client landing a file from another device, a hand edit, a
+second grimoire process — and a pure in-memory token would answer `304`
+for such a change *forever*, until an unrelated local write happened to
+land. Folding the bucket in caps that: when the bucket rolls over, every
+held token stops matching and the next revalidation is a full recompute —
+which layer 1 has made a stat sweep rather than a parse sweep, because
+`statcache` signatures (unlike the epoch) *do* see external writes. So an
+external change is visible within one navigation or one `EPOCH_TTL`,
+whichever is later. `EPOCH_TTL` starts at 30 seconds — long enough that
+idle navigation is almost always `304`s, short enough that another device's
+edits don't outlive a coffee sip; it is a structural guess and should be
+tuned against real use later, per this repo's rule about constants.
+
+Not persisted, on purpose: a restart mints a new uuid, so no client can
+get a false `304` from a value that survived a restart. Assignment is
+atomic under the GIL; there is nothing to lock. Module scope rather than
+`app.state`, despite the run registry's precedent: a value leaked across
+`TestClient` app instances can only *fail to match* a token no test client
+is holding — over-invalidation, the direction this value is allowed to be
+wrong in — where a leaked run is live state answering for the wrong app.
+The tests that assert a `304` mint their token and replay it against the
+same app, so the leak is unobservable.
 
 **What bumps it** — the same "one funnel, plus the writers that outlive
 their response" argument `store/revision.py` is built on:
 
 - `revision.bump(cid)` bumps the epoch as a side effect. That covers every
-  campaign write: the activity middleware's stamp, and every detached-run
+  campaign write: the activity middleware's stamp, every detached-run
   self-stamp (turn terminals, review saves, follow-up commits, prompt
-  captures, steering appends) — those already converge on `bump`.
-- A new, deliberately coarse trigger in the middleware layer for everything
-  `revision` does not see: any **mutating method** under `/api/` that
-  answers 2xx and is not `@computes_only` bumps the epoch — worlds, config,
-  modules, connections included. The campaign-scoped subset double-bumps
-  (once here, once via `revision.bump`); a second bump is free and the
-  redundancy is what makes "a route added tomorrow is covered" true in both
-  directions.
-- The middleware's exception path (a write that raised mid-way) bumps too,
-  exactly as it stamps the revision today: over-invalidation is the
-  direction this value is allowed to be wrong in.
+  captures, steering appends), and the lazy migrations that funnel through
+  it — those already converge on `bump`.
+- **The usage-ledger append bumps.** A detached draft (`@computes_only`,
+  202) persists nothing — except its metered ledger row, which lands
+  minutes after the response and moves `/api/shell`'s money for the
+  campaign it was metered against. Nothing else sees that write: not the
+  middleware (the response is long gone), not `revision.bump` (drafts
+  deliberately never call it). The bump goes where the row lands — the
+  same "the meter is the one place that sees all of them" argument
+  CLAUDE.md already makes for error instrumentation.
+- A new, deliberately coarse trigger for everything the funnel does not
+  see: any **mutating method** under `/api/` that answers 2xx and is not
+  `@computes_only` bumps the epoch — worlds, config, modules, connections
+  included. This is a **new, separate ASGI wrapper**, not a widened
+  condition on `_CampaignActivityStamp`: the existing middleware
+  early-returns for everything outside `/api/campaigns/`, exception path
+  included, so its shape cannot carry this. The campaign-scoped subset
+  double-bumps (once here, once via `revision.bump`); a second bump is
+  free, and the redundancy is what makes "a route added tomorrow is
+  covered" true in both directions. `@computes_only` today exists only on
+  campaign-scoped routes; world- and global-scoped draft POSTs carry no
+  marker, so each 202 preview over-bumps. Accepted knowingly — previews
+  are rare beside navigations, and the marker can be extended later
+  (remembering the greeting-opener lesson: a `computes_only` route that
+  *does* write still bumps via the funnel).
+- **The bump lands before the response line is forwarded**, for exactly
+  the reason the activity stamp does (`main.py`): stamped after send, the
+  client can navigate on the response and have its refetch revalidate
+  against the pre-write token — a `304` on a stale body, which is the one
+  failure this layer may never produce from its own writes. The wrapper's
+  exception path (a write that raised mid-way) bumps too, as the revision
+  stamp does today.
 - `PUT /config/data-dir` is a mutating 2xx, so repointing the store
   invalidates everything — no special case needed, but the test suite
   proves it.
@@ -171,7 +218,16 @@ def read_cache(request: Request, response: Response) -> Response | None:
 ```
 
 Each cacheable route takes `request`/`response` params, calls the helper
-first, and returns the `304` before doing any work. The opt-in set is the
+first, and returns the `304` before doing any work — **with one stated
+exception**: `GET /campaigns/{cid}` runs `ensure_campaign_slim` before its
+read, a durable lazy migration reached from a GET, and a helper-first
+`304` would skip it for as long as the epoch stands. On that route the
+check sits *after* the migration call; since the migration funnels through
+`revision.bump`, a run that migrated mints a new epoch and the same
+request answers `200` with fresh state. (`GET /api/shell` also writes — the
+usage rollup's byte bookmark — but a `304` merely defers bookkeeping the
+next `200` performs identically, so it stays helper-first.) The opt-in set
+is the
 hot read surface: `GET /campaigns`, `/worlds`, `/shell`, `/campaigns/{cid}`,
 `/worlds/{wid}`, the scenes list, the chronicle, the campaign changes sweep,
 and the world- and campaign-scoped record lists (characters, PCs, entities,
@@ -209,11 +265,20 @@ reads). Play-path and editor reads do **not** opt in — a transcript or a
 record body rendered stale is wrong in a way a count or a card shelf is
 not.
 
-**Invalidation reuses what exists:**
+**Invalidation reuses what exists — and says plainly where nothing exists:**
 
-- The `appEvents` bus already broadcasts `campaignsChanged` /
-  `configChanged` / `shellChanged` after mutations; the cache subscribes
-  and drops the affected entries.
+- The `appEvents` bus broadcasts `campaignsChanged` / `configChanged` /
+  `shellChanged` / `noticesChanged` after the mutations that fire them; the
+  cache subscribes and drops the affected entries.
+- **There is no worlds channel, and most world-scoped mutations emit
+  nothing** (`deleteWorld` fires no event; record CRUD under a world —
+  characters, entities, greetings, tags — fires none). The world surfaces
+  therefore rely on the other two mechanisms alone: every render
+  revalidates (stale is only ever the first frame), and the views already
+  re-fetch explicitly after their own mutations, which replaces the cache
+  entry. Adding a worlds channel is not part of this design; if a stale
+  first frame after a world mutation proves confusing in practice, that is
+  the follow-up, done as an emission audit rather than piecemeal.
 - A store-root change (`configChanged` with a new `data_dir`) clears the
   whole cache — the same identity rule `useShellPayload.keyOf` enforces:
   never render the previous library's numbers, not even as a stale frame.
@@ -233,9 +298,15 @@ corrects at most one of them.
   `store.atomic` (guard-enforced), which replaces via rename — mtime and
   dir entries move on every write, including one from another process
   syncing the folder. The racy window covers coarse filesystem clocks.
-- **The epoch can only be wrong in the safe direction.** Missed-bump bugs
-  are the dangerous class; the design makes the bump redundant (funnel +
-  middleware) and accepts over-bumping everywhere else.
+- **The epoch is wrong in the safe direction for this process's writes,
+  and boundedly wrong for everyone else's.** Missed-bump bugs are the
+  dangerous class; for writes this process makes, the design makes the
+  bump redundant (funnel + middleware + ledger append) and accepts
+  over-bumping everywhere else. For writes it *cannot* see — a sync
+  client, a hand edit, a second process — no bump exists to miss, and the
+  time bucket is the guarantee instead: a `304` is never believed past
+  `EPOCH_TTL`, and the recompute it forces reads through `statcache`
+  signatures, which external writes do move.
 - **Stale frames on the client are always *the user's own last view*,**
   never another library's, never rendered without a revalidation in
   flight.
@@ -249,12 +320,21 @@ corrects at most one of them.
   second `list_scenes`/`list_campaigns`/`_scene_turns` call re-reads
   nothing; a write through `store.atomic` invalidates; the turns memo
   invalidates on an actor rename (name-in-key); pool isolation proves a
-  library-wide sweep leaves the shared cache's entries alone.
+  library-wide sweep leaves the shared cache's entries alone. **Fixture
+  mtimes must be backdated with `os.utime`** past the racy window, or the
+  cache refuses to engage — the suite's established pattern
+  (`test_statcache.py`, `test_characters_store.py`, `test_search_store.py`);
+  the Testing plan inherits it rather than rediscovering it red.
 - **Epoch + ETag** (TestClient): a cacheable GET carries `ETag` and
   `Cache-Control: no-cache`; a repeat with `If-None-Match` answers `304`
   with no store reads (counting fake again); any write — campaign-scoped,
   world-scoped, config — flips the answer back to `200` with a new tag; a
-  run-poll GET never carries an `ETag`; `@computes_only` routes don't bump.
+  usage-ledger append (a detached draft's metered row) flips it too; a
+  clock stepped past `EPOCH_TTL` flips it with **no** write, which is the
+  external-writer guarantee stated as a test; `GET /campaigns/{cid}` still
+  performs its slim migration when answering `304`-eligible requests (the
+  ordering exception); a run-poll GET never carries an `ETag`;
+  campaign-scoped `@computes_only` routes don't bump.
 - **Intra-request dedup**: read-counting tests per fixed handler (shell
   parses each `campaign.md` at most once per request, etc.).
 - **Frontend** (vitest): the hook renders a cached payload synchronously
