@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from grimoire.store import calendars, campaigns, events, notices, worlds
+from grimoire.store import calendars, campaigns, events, notices, scene_ids, worlds
 
 # The campaign's present, and the days around it, in the primary calendar's own
 # notation. A fixed literal rather than "today": every assertion below is
@@ -382,6 +382,20 @@ def test_the_dismissing_scene_is_bounded(monkeypatch, tmp_path):
     assert len(notices.read(cid)["holiday:1:Saltmarch Eve"]["scene"]) == notices.SCENE_LIMIT
 
 
+def test_the_scene_cap_is_not_below_the_longest_id_this_app_mints(monkeypatch, tmp_path):
+    """Truncation is right for this field — nothing compares it — but only above
+    `MAX_SID`. Below it, an id the app actually mints is stored short, and
+    `repoint_scenes` then cannot repair the row when that scene is renamed: its
+    mapping is keyed by the full old id, so the row is left naming a scene that
+    no longer exists."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = "0001--" + "a" * (scene_ids.MAX_SID - len("0001--"))
+    notices.mark(cid, ["holiday:1:Saltmarch Eve"], scene=sid)
+    assert notices.read(cid)["holiday:1:Saltmarch Eve"]["scene"] == sid
+    notices.repoint_scenes(cid, {sid: "0002--after"})
+    assert notices.read(cid)["holiday:1:Saltmarch Eve"]["scene"] == "0002--after"
+
+
 def test_a_non_string_holiday_name_does_not_break_the_scan(monkeypatch, tmp_path):
     """`validate_rule` accepts any TRUTHY name, so a hand-written list reaches
     the dedup below — where an unhashable name would raise `TypeError` past
@@ -496,6 +510,32 @@ def test_a_name_with_edge_whitespace_still_dismisses(monkeypatch, tmp_path):
     assert key == key.strip()
     assert notices.mark(cid, [key]) == [key]
     assert _pending(cid) == []
+
+
+def test_two_names_differing_only_in_whitespace_get_one_row_each(monkeypatch, tmp_path):
+    """The strip that makes a dismissal stick (above) is also what lets two
+    observances the calendar keeps distinct collide into one key — and two rows
+    sharing a key means dismissing either silences both, so the reader
+    acknowledges a warning they were never shown."""
+    cid = _campaign(monkeypatch, tmp_path,
+                    holidays=[_rule("Saltmarch Eve", "05", 13),
+                              _rule("Saltmarch Eve ", "05", 13)])
+    rows = _pending(cid)
+    assert len(rows) == 1
+    notices.mark(cid, [rows[0]["key"]])
+    assert _pending(cid) == []
+
+
+def test_one_request_cannot_restore_unboundedly_many(monkeypatch, tmp_path):
+    """The undo route is public and takes a list too. Unbounded it costs a
+    membership test per key while holding the lock every other mutator in the
+    campaign is waiting on — the cost `mark`'s cap already refuses to pay."""
+    cid = _campaign(monkeypatch, tmp_path)
+    keys = [f"holiday:{n}:x" for n in range(notices.BATCH_LIMIT * 3)]
+    _mark_many(cid, keys)
+    assert len(notices.forget(cid, keys)) == notices.BATCH_LIMIT
+    # And a key no `mark` would ever have written is not looked up at all.
+    assert notices.forget(cid, ["x" * (notices.KEY_LIMIT + 1)]) == []
 
 
 def test_one_request_cannot_dismiss_unboundedly_many(monkeypatch, tmp_path):

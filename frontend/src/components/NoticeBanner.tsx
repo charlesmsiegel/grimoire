@@ -60,6 +60,11 @@ export function NoticeBanner({ cid, notices, scene = "" }: {
   // control is what keeps the two from being in flight together at all.
   const [writing, setWriting] = useState<string[]>([]);
 
+  // See the handshake below `shown`. A ref and not state because nothing renders
+  // from it: it only decides whether a key reappearing in `notices` is a
+  // retirement or the ordinary gap before the owner refetches.
+  const retired = useRef<Set<string>>(new Set());
+
   // Reset when the campaign changes. This component stays mounted across a
   // `cid` navigation (the inspector's rail and the new-scene chooser both do),
   // and an occurrence key is NOT unique across campaigns -- the same built-in
@@ -73,6 +78,7 @@ export function NoticeBanner({ cid, notices, scene = "" }: {
     setSeenCid(cid);
     setDismissed([]);
     setWriting([]);
+    retired.current.clear();
   }
 
   // The campaign this render belongs to, readable from a settled promise. The
@@ -84,6 +90,31 @@ export function NoticeBanner({ cid, notices, scene = "" }: {
   // that it is still answering the campaign it was started for.
   const current = useRef(cid);
   current.current = cid;
+
+  // Dismissed keys the owner has since refetched away -- the ledger has the
+  // acknowledgement and `pending` no longer offers the notice. That is the
+  // handshake, and it is what lets the row below come BACK: the store retires
+  // acknowledgements of its own accord (deleting an event drops every notice
+  // keyed to its id, so that a recreation of the same id is not born already
+  // dismissed), and when it does, `pending` offers the key again. Without this,
+  // the optimistic list still holds it and the banner filters out a live warning
+  // until something happens to unmount it -- the one failure this whole feature
+  // exists to avoid.
+  //
+  // Two states rather than one, because "in `notices` again" alone is not
+  // evidence of a retirement: between a dismissal landing and the owner's
+  // refetch arriving, the key is still in `notices` for perfectly ordinary
+  // reasons, and treating that as a return would un-dismiss every row a moment
+  // after it was dismissed.
+  for (const row of dismissed) {
+    if (!notices.some((n) => n.key === row.key)) retired.current.add(row.key);
+  }
+  const back = dismissed.filter(
+    (d) => retired.current.has(d.key) && notices.some((n) => n.key === d.key));
+  if (back.length > 0) {
+    for (const row of back) retired.current.delete(row.key);
+    setDismissed((rows) => rows.filter((r) => !back.some((b) => b.key === r.key)));
+  }
 
   const shown = notices.filter((n) => !dismissed.some((d) => d.key === n.key));
   if (shown.length === 0 && dismissed.length === 0) return null;

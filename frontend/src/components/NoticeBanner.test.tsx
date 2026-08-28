@@ -116,6 +116,37 @@ test("a failed Undo leaves the row dismissed", async () => {
     screen.getByLabelText("Undo dismissing Saltmarch Eve")).toBeTruthy());
 });
 
+// ---- the store retires acknowledgements of its own accord ------------------
+
+test("a notice whose acknowledgement the store retired warns again", async () => {
+  // Deleting an event drops every notice keyed to its id, so a recreation of
+  // the same id is not born already dismissed -- and `pending` then offers the
+  // key again. The optimistic list must let go of it, or the banner filters out
+  // a live warning until something happens to unmount it.
+  const { rerender } = render(<NoticeBanner cid="c" notices={[EVENT]} />);
+  fireEvent.click(screen.getByLabelText("Dismiss The envoy arrives"));
+  await waitFor(() => expect(api.dismissNotices).toHaveBeenCalled());
+  // The owner refetches: the ledger holds the acknowledgement, so the row is
+  // gone from `notices` and only the Undo receipt is left.
+  rerender(<NoticeBanner cid="c" notices={[]} />);
+  await screen.findByLabelText("Undo dismissing The envoy arrives");
+  // Retired, and offered again.
+  rerender(<NoticeBanner cid="c" notices={[EVENT]} />);
+  expect(await screen.findByLabelText("Dismiss The envoy arrives")).toBeTruthy();
+});
+
+test("the window before the owner refetches is not read as a retirement", async () => {
+  // The guard on the test above rather than a second bug: between a dismissal
+  // landing and the owner's refetch arriving, the key is still in `notices` for
+  // ordinary reasons, and "in `notices` again" alone would un-dismiss every row
+  // a moment after it was dismissed.
+  render(<NoticeBanner cid="c" notices={[EVENT]} />);
+  fireEvent.click(screen.getByLabelText("Dismiss The envoy arrives"));
+  await waitFor(() => expect(api.dismissNotices).toHaveBeenCalled());
+  expect(screen.queryByLabelText("Dismiss The envoy arrives")).toBeNull();
+});
+
+
 // ---- one occurrence key is not unique across campaigns --------------------
 
 test("a campaign change forgets what was dismissed in the last one", async () => {
