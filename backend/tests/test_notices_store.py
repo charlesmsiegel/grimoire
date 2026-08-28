@@ -506,3 +506,30 @@ def test_one_request_cannot_dismiss_unboundedly_many(monkeypatch, tmp_path):
     done = notices.mark(cid, [f"holiday:{n}:x" for n in range(notices.BATCH_LIMIT * 20)])
     assert len(done) == notices.BATCH_LIMIT
     assert len(notices.read(cid)) == notices.BATCH_LIMIT
+
+
+def test_a_broken_secondary_calendar_still_reports_events(monkeypatch, tmp_path):
+    """`upcoming_holidays` builds EVERY configured calendar, so an unknown
+    secondary raises even where the primary is fine. Folded in with the events
+    it would cost the campaign its scheduled ones too — and those are its own
+    authored rows, nothing to do with the calendar that broke."""
+    cid = _campaign(monkeypatch, tmp_path)
+    (_root(cid) / "calendar.json").write_text(json.dumps({
+        "primary": {"provider": "gregorian", "region": "", "custom_holidays": [],
+                    "anchor": None},
+        "secondary": {"provider": "no-such-calendar"}}), encoding="utf-8")
+    events.create(cid, "The envoy arrives", "2026-05-12")
+    assert _names(_pending(cid)) == ["The envoy arrives"]
+
+
+def test_forget_removes_a_row_whose_value_is_null(monkeypatch, tmp_path):
+    """`pending` filters on the KEY, so a hand-edited `null` row silences a
+    notice — but reading the value as the existence sentinel made the undo
+    report nothing forgotten and never rewrite the file, leaving the reader no
+    way back at all."""
+    cid = _campaign(monkeypatch, tmp_path, holidays=[_rule("Saltmarch Eve", "05", 13)])
+    key = _pending(cid)[0]["key"]
+    notices._path(cid).write_text(json.dumps({key: None}), encoding="utf-8")
+    assert _pending(cid) == []                      # the null row does silence it
+    assert notices.forget(cid, [key]) == [key]      # and the undo reaches it
+    assert _names(_pending(cid)) == ["Saltmarch Eve"]

@@ -229,7 +229,14 @@ def forget(cid: str, keys: list[str]) -> list[str]:
         return []
     with locks.campaign_lock(cid):
         data = _mutable(cid)
-        done = [k for k in wanted if data.pop(k, None) is not None]
+        # `k in data`, not `pop(...) is not None`: a hand-edited row whose value
+        # is JSON `null` IS an acknowledgement as far as `pending` is concerned
+        # (it filters on the key), but the value sentinel reads it as absent --
+        # so the undo reported nothing forgotten, never rewrote the file, and
+        # left the notice dismissed with no way back.
+        done = [k for k in wanted if k in data]
+        for key in done:
+            del data[key]
         if done:
             _write(cid, data)
     return done
@@ -359,9 +366,18 @@ def pending(cid: str, croot: Path, native: str, window: int | None = None) -> li
         return []
     try:
         fixed = calendars.fixed_of(provider, native)
+    except calendars.CalendarError:
+        return []
+    # Holidays are resolved separately from the moment, and a failure here costs
+    # only them. `upcoming_holidays` builds EVERY configured calendar, so a
+    # secondary that is unknown or malformed raises even though the primary is
+    # fine -- and folded into one `try` with the events below that would report
+    # a campaign no imminent scheduled events either, which are its own authored
+    # rows and nothing to do with the calendar that broke.
+    try:
         ahead = calendars.upcoming_holidays(calendars.read_calendar(croot), native, window)
     except (calendars.CalendarError, KeyError, TypeError, ValueError, OverflowError, OSError):
-        return []
+        ahead = []
 
     def label(day: int) -> str:
         # A day the primary calendar can enumerate but not describe is a broken

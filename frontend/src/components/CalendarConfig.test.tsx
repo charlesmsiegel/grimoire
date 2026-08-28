@@ -225,3 +225,16 @@ test("a save that settles after a scope change does not install itself", async (
   // The campaign's 21 must not land on the world's form.
   expect(screen.getByLabelText<HTMLInputElement>("Warn ahead days").value).toBe("3");
 });
+
+test("a failed save from an earlier scope does not banner the new one", async () => {
+  // The success path was guarded first; a rejection has the same reach.
+  let failOld: (e: unknown) => void = () => {};
+  (api.setCalendarConfig as any).mockReturnValueOnce(
+    new Promise((_res: any, rej: any) => { failOld = rej; }));
+  const { rerender } = render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  await screen.findByLabelText("Warn ahead days");
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  rerender(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  await act(async () => { failOld({ detail: "the campaign's calendar is bad" }); });
+  expect(screen.queryByText("the campaign's calendar is bad")).toBeNull();
+});
