@@ -48,6 +48,17 @@ def _review_path(cid: str, sid: str) -> Path:
     return _scenes_dir(cid) / f"{sid}.review.json"
 
 
+def _steering_path(cid: str, sid: str) -> Path:
+    """The scene's reroll-steering log (`store/steering.py`).
+
+    The third per-scene sidecar, in `_review_path`'s classification: per-scene
+    JSON a deleted scene must take with it, keyed by filename, reachable only
+    through this resolver. Enumeration is unaffected — every scan of this
+    directory globs `*.md`.
+    """
+    return _scenes_dir(cid) / f"{sid}.steering.json"
+
+
 def _sid_taken(cid: str, sid: str) -> bool:
     """Whether an id is spoken for — by a transcript, or by a sidecar left
     beside one that is gone.
@@ -56,12 +67,14 @@ def _sid_taken(cid: str, sid: str) -> bool:
     a deleted scene is free for the next one to take. `delete_scene` removes the
     sidecars first so an orphan should not exist, but a crash between the
     unlinks, or one written by an older build, still could — and adopting that
-    id would hand a fresh scene the deleted scene's parked transcripts, or its
-    pending review: a whole end-of-scene generation describing a transcript the
-    new scene has never had, offered against the new scene's own posts.
+    id would hand a fresh scene the deleted scene's parked transcripts, its
+    pending review — a whole end-of-scene generation describing a transcript
+    the new scene has never had, offered against the new scene's own posts —
+    or its steering log, another scene's corrections fed to this one's absorb.
     """
     return (_scene_path(cid, sid).exists() or _alts_path(cid, sid).exists()
-            or _review_path(cid, sid).exists())
+            or _review_path(cid, sid).exists()
+            or _steering_path(cid, sid).exists())
 
 
 def _require_campaign(cid: str) -> None:

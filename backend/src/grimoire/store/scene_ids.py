@@ -33,11 +33,15 @@ _MAX_COMPONENT = 255
 #: so budgeting for it alone is what let an id fit `<sid>.md` and overflow
 #: `<sid>.alts.json` — and since `_sid_taken` stats the sidecar on every
 #: allocation, such an id could not even be created, let alone deleted.
-#: `.review.json` (#396) is two bytes longer again, and it is the one that has
-#: to be budgeted for now: an id that fits every other sidecar and not that one
-#: is a scene whose absorb is refused after it is minted, permanently, for a
-#: reason the reader cannot act on except by renaming.
-_LONGEST_SUFFIX = max(len(".alts.json"), len(".review.json"))
+#: `.review.json` (#396) is two bytes longer again: an id that fits every
+#: other sidecar and not that one is a scene whose absorb is refused after it
+#: is minted, permanently, for a reason the reader cannot act on except by
+#: renaming. `.steering.json` is the longest now — its writes are failsoft
+#: (`steering.record` drops the row rather than failing the reroll), so an id
+#: past it loses hints instead of features, but minting one on purpose would
+#: be choosing that loss.
+_LONGEST_SUFFIX = max(len(".alts.json"), len(".review.json"),
+                      len(".steering.json"))
 #: Room left for what is appended to a finished id: `uniquify`'s `-2`.. tail
 #: when a truncation collides, and `repad` widening the number prefix.
 _ID_HEADROOM = 8
