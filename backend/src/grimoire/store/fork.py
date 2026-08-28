@@ -112,6 +112,20 @@ FORKED_AT_KEY = campaigns_read.FORKED_AT_KEY
 #: only against the campaigns that name this one as `parent` -- `list_campaigns`
 #: already reads every campaign's frontmatter for the shelf, so this is one
 #: existing read plus a small JSON file per child.
+#:
+#: **A replay is keyed to a SLUG, and slugs are reusable.** `parent` is a
+#: campaign id, so a source forked under a key, then deleted, then replaced by a
+#: new campaign that lands on the same id, still has its old child's marker
+#: matched against it -- and a retry under that key is answered with a fork of
+#: the campaign that is gone (Codex review). Naming it rather than guarding it,
+#: for two reasons. The proper fix is an immutable per-campaign identity, which
+#: nothing in this store has: `parent` carries this hazard generally, and
+#: `campaigns.read` already documents a `parent` naming nothing as reading like
+#: a root. And the cheap approximation -- refusing a marker older than the
+#: source's `created` -- cannot work at `paths.now_iso`'s one-second
+#: granularity, where a fork and a same-slug recreate land in the same second
+#: routinely; the comparison would be false exactly when it mattered, so the
+#: guard would never fire while looking like it had closed the hole.
 MARKER = "fork.json"
 
 #: The longest key this will record. Refused rather than truncated, deliberately:
