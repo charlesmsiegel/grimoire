@@ -482,6 +482,12 @@ carefully — the plan implements them where it implements the mechanism:
   not at import: the Android entry point rebuilds the app in-process, and
   a module-scope value would let a WebView's held ETag survive into the
   rebuilt app.
+- A `fresh` read **advances its path's cache generation before issuing**:
+  `fresh` retires the pre-mutation promise from the in-flight map but
+  cannot stop it settling, and on the world surfaces no event bumps the
+  generation — so without this, an older response settling after the
+  fresh one could overwrite the entry with the pre-mutation list. The
+  bump makes the existing generation check discard it.
 
 ## Success criteria
 
