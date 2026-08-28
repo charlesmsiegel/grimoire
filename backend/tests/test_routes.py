@@ -7708,10 +7708,22 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     assert after == snapshot
     # ...and discarding it puts the campaign back exactly as it was, which is
     # the half of #235 the exclusion above must not be allowed to weaken.
+    #
+    # `activity.txt` is excluded HERE and not above, and naming it is the point
+    # in the same way the review sidecar is. The discard is a real interaction
+    # with the campaign, so it stamps the activity file like every other
+    # campaign-scoped write -- which is correct, and is not the absorb leaving
+    # something behind. Comparing it made this assertion pass only while the
+    # setup and the discard landed in the SAME WALL-CLOCK SECOND: true almost
+    # always, and false about one run in twenty, in whichever CI job drew the
+    # short straw. Nothing else may move.
     generation = client.get(
         f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()["generation"]
     review_runs.cancel(client, cid, sid, generation)
-    assert {p: p.read_bytes() for p in croot.rglob("*") if p.is_file()} == snapshot
+    stamp = store.campaigns.campaign_activity_path(cid)
+    assert {p: p.read_bytes() for p in croot.rglob("*")
+            if p.is_file() and p != stamp} == {p: b for p, b in snapshot.items()
+                                               if p != stamp}
 
 
 # ---- absorb: re-absorb guard (#235) ----
