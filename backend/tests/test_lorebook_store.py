@@ -159,3 +159,65 @@ def test_commit_accepts_new_kind_categories(monkeypatch, tmp_path):
     created = lorebook.commit(tmp_path, [
         {"name": "Salt Knife", "keys": ["knife"], "body": "sharp", "category": "items"}])
     assert created == [{"kind": "items", "id": "salt-knife"}]
+
+
+# ---- preserving ST's advanced fields on import (#20) ----
+
+ADVANCED_ENTRY = {
+    "keys": ["pact"], "secondary_keys": ["salt"], "selective": True,
+    "name": "Salt Pact", "content": "The pact binds.",
+    "position": "after_char", "insertion_order": 7, "priority": 2,
+    "probability": 50, "useProbability": True, "case_sensitive": True,
+}
+
+
+def test_normalize_stashes_advanced_st_fields():
+    out = lorebook._normalize({"entries": [dict(ADVANCED_ENTRY)]})
+    [e] = out
+    assert e["name"] == "Salt Pact" and e["keys"] == ["pact"]
+    assert e["extensions"] == {
+        "secondary_keys": ["salt"], "selective": True, "position": "after_char",
+        "insertion_order": 7, "priority": 2, "probability": 50,
+        "useProbability": True, "case_sensitive": True,
+    }
+
+
+def test_normalize_constant_keeps_raw_keys_in_extensions():
+    # `constant` still means keyless activation, but the stash records the raw
+    # flag and the keys it suppressed, so "keyless because constant" stays
+    # distinguishable from "keyless because no keys".
+    out = lorebook._normalize({"entries": [
+        {"keys": ["king"], "name": "Crown", "content": "Always on.", "constant": True}]})
+    [e] = out
+    assert e["keys"] == []
+    assert e["extensions"] == {"constant": True, "keys": ["king"]}
+
+
+def test_normalize_simple_entry_carries_no_extensions_key():
+    out = lorebook._normalize({"entries": [{"keys": ["sea"], "name": "Sea", "content": "x"}]})
+    assert "extensions" not in out[0]
+
+
+def test_commit_stashes_extensions_as_frontmatter_and_roundtrips(tmp_path):
+    entries = lorebook._normalize({"entries": [dict(ADVANCED_ENTRY)]})
+    [created] = lorebook.commit(tmp_path, entries)
+    e = entities.read_entity(tmp_path, created["kind"], created["id"])
+    stored = json.loads(e["meta"]["st_extensions"])
+    assert stored == entries[0]["extensions"]
+
+
+def test_commit_writes_no_st_extensions_when_absent(tmp_path):
+    [created] = lorebook.commit(
+        tmp_path, [{"name": "Plain", "keys": ["p"], "body": "x", "category": "lore"}])
+    meta = entities.read_entity(tmp_path, "lore", created["id"])["meta"]
+    assert "st_extensions" not in meta
+
+
+def test_parse_to_commit_preserves_extensions_through_a_card(tmp_path):
+    card = characters.blank_card("Hero")
+    card["data"]["character_book"] = {"entries": [dict(ADVANCED_ENTRY)]}
+    entries = lorebook.parse(json.dumps(card).encode(), "json")
+    [created] = lorebook.commit(tmp_path, entries)
+    stored = json.loads(entities.read_entity(tmp_path, "lore", created["id"])["meta"]["st_extensions"])
+    assert stored["secondary_keys"] == ["salt"]
+    assert stored["insertion_order"] == 7

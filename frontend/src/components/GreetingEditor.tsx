@@ -245,7 +245,11 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
         await api.updateGreeting(scope, id, {
           name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
-          pcless: form.pcless, location: form.location, ...(base ? { rev: base } : {}),
+          pcless: form.pcless, location: form.location,
+          // re-point (#17): the id and its plot-map edges survive, which is
+          // what delete-and-recreate loses. Unchanged values are a no-op.
+          character: form.character, version: form.version,
+          ...(base ? { rev: base } : {}),
         });
       } else {
         id = (await api.createGreeting(scope, { ...form })).id;
@@ -594,8 +598,9 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
           <Field label="Name">
             <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
-          <Field label="Character" hint={gid ? "character and version are fixed after creation" : undefined}>
-            <select value={form.character} aria-label="Character" disabled={!!gid}
+          <Field label="Character"
+                 hint={gid ? "re-pointing keeps this greeting's id and plot-map edges; {{char}} already baked into the text does not change" : undefined}>
+            <select value={form.character} aria-label="Character"
                     onChange={(e) => setForm({ ...form, character: e.target.value, version: "" })}>
               <option value="">— no character (narrator-only) —</option>
               {chars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -603,7 +608,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
           </Field>
           {form.character && (
             <Field label="Version">
-              <select value={form.version} aria-label="Version" disabled={!!gid}
+              <select value={form.version} aria-label="Version"
                       onChange={(e) => setForm({ ...form, version: e.target.value })}>
                 <option value="">— pick a version —</option>
                 {versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}

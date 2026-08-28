@@ -169,14 +169,45 @@ def greeting_count(root: Path) -> int:
     return sum(1 for p in d.glob("*.md") if safe_id(p.stem)) if d.exists() else 0
 
 
+def _repoint(meta: dict, character: str | None, version: str | None, vroot: Path) -> None:
+    """Set `meta`'s character/version pointer for `update_greeting` (#17),
+    validating the new pair against `vroot`'s characters before anything is
+    written -- a bad pointer raises `characters.CharacterNotFound` /
+    `VersionNotFound` and changes nothing. A `None` half keeps what is stored;
+    an empty character clears the version with it (narrator-only)."""
+    new_char = meta.get("character", "") if character is None else character
+    new_ver = meta.get("version", "") if version is None else version
+    if not new_char:
+        new_ver = ""
+    else:
+        characters.read_card(vroot, new_char, new_ver)
+    meta["character"] = new_char
+    meta["version"] = new_ver
+
+
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,
                     requires_tags: list[str] | None = None, predecessor_join: str | None = None,
                     present: list[str] | None = None, pcless: bool | None = None,
-                    location: str | None = None) -> None:
+                    location: str | None = None, character: str | None = None,
+                    version: str | None = None, char_root: Path | None = None) -> None:
+    """`character`/`version` re-point the greeting at a different character or
+    version (#17) -- the id and its plot-map edges stay, which is what delete-
+    and-recreate loses. The new pair is validated against `char_root` (the root
+    whose characters the greeting's pointer resolves in -- `root` itself unless
+    an overlay says otherwise), raising `characters.CharacterNotFound` /
+    `VersionNotFound` before anything is written; `character=""` clears the
+    pointer (narrator-only) and the version with it. `present` is deliberately
+    NOT rewritten on a re-point: the cast is the caller's field and the editor
+    sends it explicitly, while `_meta_dict` already falls back to the new
+    primary when it is empty. A body already on disk keeps its baked `{{char}}`
+    prose; only a body sent in the same patch bakes against the new pointer.
+    """
     p = _greeting_path(root, gid)
     if not safe_id(gid) or not p.exists():
         raise GreetingNotFound(gid)
     meta, cur_body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    if character is not None or version is not None:
+        _repoint(meta, character, version, char_root or root)
     if name is not None:
         meta["name"] = name
     if requires_tags is not None:
@@ -193,8 +224,11 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
     if pcless is not None:
         meta["pcless"] = "true" if pcless else ""
     if body is not None:
+        # After the re-point above, so a body sent alongside one bakes to the
+        # character the greeting now points at; `char_root` resolves the name
+        # in the same root the pointer was validated against.
         body = cards.bake_char_token(
-            body, char_name(root, meta.get("character", ""), meta.get("version", "")))
+            body, char_name(char_root or root, meta.get("character", ""), meta.get("version", "")))
     new_body = cur_body if body is None else body
     atomic.write_text(p, dump_frontmatter(meta, new_body))
 

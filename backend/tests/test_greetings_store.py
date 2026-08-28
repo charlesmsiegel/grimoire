@@ -269,3 +269,73 @@ def test_availability_carries_the_location(tmp_path):
     [row] = greetings.availability(greetings.list_greetings(root), {}, set(), set())
     assert row["id"] == gid
     assert row["location"] == "counting-house"
+
+
+# ---- re-pointing a greeting at a different character/version (#17) ----
+
+def test_repoint_preserves_id_and_plotmap_edges(tmp_path):
+    root = _world(tmp_path)
+    characters.create_character(root, "Seraphine", "default")
+    characters.create_character(root, "Mara", "main")
+    gid = greetings.create_greeting(root, "Open", "seraphine", "default",
+                                    body="At the quay.", requires_tags=["sailor"],
+                                    location="quay")
+    other = greetings.create_greeting(root, "Later", "seraphine", "default")
+    greetings.set_edges(root, gid, leads_to=[other], excludes=[other])
+
+    greetings.update_greeting(root, gid, character="mara", version="main")
+
+    g = greetings.read_greeting(root, gid)
+    assert g["meta"]["character"] == "mara"
+    assert g["meta"]["version"] == "main"
+    # everything the patch did not name is untouched
+    assert g["meta"]["name"] == "Open"
+    assert g["meta"]["requires_tags"] == ["sailor"]
+    assert g["meta"]["location"] == "quay"
+    assert g["body"].strip() == "At the quay."
+    # the id is the same file, so the plot map still describes it
+    assert greetings.read_plotmap(root)[gid] == {"leads_to": [other], "excludes": [other]}
+
+
+def test_repoint_version_only_within_same_character(tmp_path):
+    root = _world(tmp_path)
+    cid, _ = characters.create_character(root, "Seraphine", "default")
+    characters.create_version(root, cid, "alter", characters.blank_card("Sera Alter"))
+    gid = greetings.create_greeting(root, "Open", cid, "default")
+    greetings.update_greeting(root, gid, version="alter")
+    g = greetings.read_greeting(root, gid)
+    assert (g["meta"]["character"], g["meta"]["version"]) == (cid, "alter")
+
+
+def test_repoint_to_missing_character_or_version_raises_and_writes_nothing(tmp_path):
+    root = _world(tmp_path)
+    characters.create_character(root, "Seraphine", "default")
+    gid = greetings.create_greeting(root, "Open", "seraphine", "default")
+    with pytest.raises(characters.CharacterNotFound):
+        greetings.update_greeting(root, gid, character="nobody", version="default")
+    with pytest.raises(characters.VersionNotFound):
+        greetings.update_greeting(root, gid, character="seraphine", version="typo")
+    # a version alone is validated against the character already stored
+    with pytest.raises(characters.VersionNotFound):
+        greetings.update_greeting(root, gid, version="typo")
+    g = greetings.read_greeting(root, gid)
+    assert (g["meta"]["character"], g["meta"]["version"]) == ("seraphine", "default")
+
+
+def test_repoint_to_no_character_clears_version(tmp_path):
+    root = _world(tmp_path)
+    characters.create_character(root, "Seraphine", "default")
+    gid = greetings.create_greeting(root, "Open", "seraphine", "default")
+    greetings.update_greeting(root, gid, character="")
+    g = greetings.read_greeting(root, gid)
+    assert (g["meta"]["character"], g["meta"]["version"]) == ("", "")
+
+
+def test_repoint_with_body_bakes_char_to_the_new_character(tmp_path):
+    root = _world(tmp_path)
+    characters.create_character(root, "Seraphine", "default")
+    characters.create_character(root, "Mara", "main")
+    gid = greetings.create_greeting(root, "Open", "seraphine", "default", body="Hello.")
+    greetings.update_greeting(root, gid, character="mara", version="main",
+                              body="{{char}} waves.")
+    assert greetings.read_greeting(root, gid)["body"].strip() == "Mara waves."

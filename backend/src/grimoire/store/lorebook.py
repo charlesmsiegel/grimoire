@@ -43,6 +43,20 @@ def _importable(e) -> bool:
     return bool(enabled and isinstance(content, str) and content.strip())
 
 
+# The advanced ST activation fields, in both spellings the two schemas use
+# (V3 character_book / standalone world-info). Preserved verbatim under an
+# `extensions` stash at parse time and an `st_extensions` frontmatter key at
+# commit (#20): the context builder does not honor them yet, but dropping them
+# at import is lossy and irreversible, and keeping them lets higher-fidelity
+# activation be built later without re-importing.
+_ST_EXTENSION_FIELDS = (
+    "secondary_keys", "keysecondary", "selective", "selectiveLogic",
+    "position", "insertion_order", "order", "priority",
+    "probability", "useProbability", "case_sensitive", "caseSensitive",
+    "constant",
+)
+
+
 def _normalize(book) -> list[dict]:
     out: list[dict] = []
     for e in _entries_container(book):
@@ -52,12 +66,21 @@ def _normalize(book) -> list[dict]:
         keys = e.get("keys") or e.get("key") or []
         keys = [str(k) for k in keys if str(k).strip()]
         name = e.get("comment") or e.get("name") or (keys[0] if keys else "Imported entry")
-        out.append({
+        entry = {
             "name": name,
             "keys": [] if e.get("constant") else keys,
             "body": content,
             "category": "lore",
-        })
+        }
+        ext = {k: e[k] for k in _ST_EXTENSION_FIELDS if k in e}
+        if e.get("constant") and keys:
+            # `constant` still means keyless activation above, but the raw keys
+            # it suppressed are recorded so "keyless because constant" stays
+            # distinguishable from "keyless because no keys".
+            ext["keys"] = keys
+        if ext:                                     # simple imports stay unchanged
+            entry["extensions"] = ext
+        out.append(entry)
     return out
 
 
@@ -128,7 +151,14 @@ def commit(root: Path, entries: list[dict]) -> list[dict]:
         if sig in seen[category]:
             continue
         seen[category].add(sig)
+        # The advanced ST fields ride as one opaque JSON frontmatter key, so the
+        # round trip through parse/dump_frontmatter (single-line string scalars)
+        # cannot reshape them. Absent entirely when there is nothing to stash --
+        # a simple import's frontmatter is byte-identical to what it always was.
+        ext = e.get("extensions") or {}
+        fields = {"st_extensions": json.dumps(ext, sort_keys=True)} if ext else None
         eid = entities.create_entity(root, category, e.get("name", "Imported entry"),
-                                     e.get("body", ""), ",".join(e.get("keys", [])))
+                                     e.get("body", ""), ",".join(e.get("keys", [])),
+                                     fields=fields)
         created.append({"kind": category, "id": eid})
     return created

@@ -1643,6 +1643,9 @@ export const api = {
   updateGreeting: (scope: EntityScope, gid: string,
                    patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[];
                             predecessor_join?: string; pcless?: boolean; location?: string;
+                            /** re-point at a different character/version, keeping the
+                             *  greeting id and its plot-map edges (#17); "" clears */
+                            character?: string; version?: string;
                             rev?: string }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/greetings/${gid}`, patch),
   deleteGreeting: (scope: EntityScope, gid: string) =>

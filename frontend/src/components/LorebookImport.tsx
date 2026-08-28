@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { api, type LoreEntryDraft } from "../api/client";
-import { kindOptions, useEntityKinds } from "./useEntityKinds";
+import { LoreReviewTable } from "./LoreReviewTable";
+import { useEntityKinds } from "./useEntityKinds";
 
 const FORMATS = ["lorebook", "json", "png", "charx"];
 
@@ -63,45 +64,7 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
       </div>
 
       {entries && (
-        <>
-          {entries.length === 0 ? (
-            <div className="editor-empty">No importable entries found in that file.</div>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr><th>Name</th><th>Keys</th><th>Category</th><th>Body</th></tr>
-              </thead>
-              <tbody>
-                {entries.map((e, i) => (
-                  <tr key={i}>
-                    <td>
-                      <input type="text" aria-label={`name ${i}`} value={e.name}
-                             onChange={(ev) => patch(i, { name: ev.target.value })} />
-                    </td>
-                    <td>
-                      <input type="text" aria-label={`keys ${i}`} value={e.keys.join(",")}
-                             onChange={(ev) => patch(i, { keys: ev.target.value.split(",").map((k) => k.trim()).filter(Boolean) })} />
-                    </td>
-                    <td>
-                      <select aria-label={`category ${i}`} value={e.category}
-                              onChange={(ev) => patch(i, { category: ev.target.value })}>
-                        {kindOptions(kinds, e.category).map((k) => <option key={k} value={k}>{k}</option>)}
-                      </select>
-                    </td>
-                    <td>{e.body.length > 80 ? e.body.slice(0, 80) + "…" : e.body}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {entries.length > 0 && (
-            <div className="form-actions">
-              <button className="primary" onClick={commit}>
-                Import {entries.length} {entries.length === 1 ? "entry" : "entries"}
-              </button>
-            </div>
-          )}
-        </>
+        <LoreReviewTable entries={entries} kinds={kinds} onPatch={patch} onCommit={commit} />
       )}
     </div>
   );

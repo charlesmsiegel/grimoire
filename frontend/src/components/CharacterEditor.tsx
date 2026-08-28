@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type UndescribedImage, type VersionRef } from "../api/client";
+import { api, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type LoreEntryDraft, type ModuleDetail, type UndescribedImage, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
@@ -9,7 +9,9 @@ import { DescribeQueue } from "./DescribeQueue";
 import { HtmlNote } from "./HtmlNote";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 import { LibraryPanel } from "./LibraryPanel";
+import { LoreReviewTable } from "./LoreReviewTable";
 import { OwnedLorePanel } from "./OwnedLorePanel";
+import { useEntityKinds } from "./useEntityKinds";
 import SheetPanel from "./SheetPanel";
 import { ErrorNote } from "./ErrorNote";
 import { TaglinePrompt } from "./TaglinePrompt";
@@ -261,6 +263,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [imageAppearances, setImageAppearances] = useState<Appearance[]>([]);
   const [worldGreetings, setWorldGreetings] = useState<Greeting[]>([]);
   const [bookMsg, setBookMsg] = useState<string | null>(null);
+  // The embedded-book review rows (#27): parsed from the STORED card, edited in
+  // place, committed through the same route as the standalone lorebook dialog
+  // so per-entry categories are honored. null = no review open.
+  const [bookReview, setBookReview] = useState<LoreEntryDraft[] | null>(null);
+  const bookKinds = useEntityKinds((bookReview?.length ?? 0) > 0);
+  // A review describes one version's stored book; rows left up across a
+  // version or character switch would commit the previous card's entries.
+  const detailId = detail?.meta.id ?? null;
+  useEffect(() => { setBookReview(null); }, [vid, detailId]);
   const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
   const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
   const [galleryProg, setGalleryProg] = useState<{ done: number; total: number } | null>(null);
@@ -1239,17 +1250,36 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     backToGrid();
   }
 
-  async function importBook() {
-    if (!detail) return;
+  // The embedded-book import used to be a blind one-click commit that filed
+  // everything under `lore` (#27). It is the same parse → review → re-route
+  // flow the standalone lorebook dialog runs now: parse the STORED card
+  // through the world's parse route (which extracts its `character_book` and
+  // writes nothing), review in the shared table, commit with each row's own
+  // category. The bulk URL pipeline keeps the blind route on purpose -- it is
+  // unattended, and a review table nobody is watching is a hung import.
+  async function reviewBook() {
+    if (!storedCard) return;
     setBookMsg(null);
     try {
-      const { created } = await api.importCharacterBook(wid, detail.meta.id, vid);
-      // `lorebook.commit` drops entries already in world lore, so a second
-      // click on an unchanged book legitimately creates nothing. "Imported 0
+      const file = new File([JSON.stringify(storedCard)], "card.json", { type: "application/json" });
+      const { entries } = await api.lorebookParse(wid, file, "json");
+      setBookReview(entries);
+    } catch (err: unknown) {
+      setError(err);
+    }
+  }
+
+  async function commitBook() {
+    if (!bookReview) return;
+    try {
+      const { created } = await api.lorebookImport(wid, bookReview);
+      setBookReview(null);
+      // `lorebook.commit` drops entries already in the world, so a second
+      // import of an unchanged book legitimately creates nothing. "Imported 0
       // entries" reads as a failure; say what actually happened instead.
       setBookMsg(created.length === 0
-        ? "Already in world lore — nothing new to import"
-        : `Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
+        ? "Already in the world — nothing new to import"
+        : `Imported ${created.length} entr${created.length === 1 ? "y" : "ies"}`);
     } catch (err: unknown) {
       setError(err);
     }
@@ -2311,13 +2341,33 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
           {worldScope && bookCount > 0 && (
             <div className="book-import">
-              <button className="subtle" type="button" disabled={dirty} onClick={importBook}>
-                Import {bookCount} embedded lore {bookCount === 1 ? "entry" : "entries"} to world
-              </button>
-              {/* The import reads the stored card, so while the form is dirty the
-                  entries it would commit are not the ones the editor is showing. */}
-              {dirty && <span className="field-hint">Save your changes before importing embedded lore</span>}
-              {bookMsg && <span className="field-hint">{bookMsg}</span>}
+              {bookReview === null ? (
+                <>
+                  <button className="subtle" type="button" disabled={dirty}
+                          onClick={() => void reviewBook()}>
+                    Review {bookCount} embedded lore {bookCount === 1 ? "entry" : "entries"} to import
+                  </button>
+                  {/* The review parses the stored card, so while the form is dirty
+                      the entries it would show are not the ones the editor is showing. */}
+                  {dirty && <span className="field-hint">Save your changes before importing embedded lore</span>}
+                  {bookMsg && <span className="field-hint">{bookMsg}</span>}
+                </>
+              ) : (
+                <>
+                  <div className="field-hint">
+                    Review and route each entry, then import — nothing is written until then.
+                  </div>
+                  <LoreReviewTable entries={bookReview} kinds={bookKinds}
+                                   onPatch={(i, patch) => setBookReview(
+                                     (cur) => cur!.map((e, j) => (j === i ? { ...e, ...patch } : e)))}
+                                   onCommit={() => void commitBook()} />
+                  <div className="form-actions">
+                    <button className="subtle" type="button" onClick={() => setBookReview(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
 

@@ -868,13 +868,26 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
 
 
 def update_greeting(cid: str, gid: str, **kwargs) -> None:
+    # The greeting's character commonly still lives only in the world (a thin
+    # campaign), so both the `{{char}}` bake and a re-point's validation (#17)
+    # must resolve through `char_root`, not `croot_of` -- passed down as the
+    # store's `char_root` so validation, bake and write agree on one root. The
+    # effective character is the incoming re-point when the patch carries one,
+    # the stored pointer otherwise; validated HERE, before `_materialize_flat`,
+    # so a refused re-point does not leave a world greeting copied campaign-side.
+    character = kwargs.get("character")
+    version = kwargs.get("version")
+    repoint = character is not None or version is not None
+    if repoint or kwargs.get("body") is not None:
+        meta = read_greeting(cid, gid)["meta"]
+        effective = meta.get("character", "") if character is None else character
+        if effective:
+            kwargs["char_root"] = char_root(cid, effective)
+            if repoint:
+                new_ver = meta.get("version", "") if version is None else version
+                characters.read_card(kwargs["char_root"], effective, new_ver)
     if not _materialize_flat(cid, "greetings", gid):
         raise greetings.GreetingNotFound(gid)
-    if kwargs.get("body") is not None:
-        meta = greetings.read_greeting(croot_of(cid), gid)["meta"]
-        character = meta.get("character", "")
-        name = greetings.char_name(char_root(cid, character), character, meta.get("version", ""))
-        kwargs["body"] = cards.bake_char_token(kwargs["body"], name)
     greetings.update_greeting(croot_of(cid), gid, **kwargs)
 
 

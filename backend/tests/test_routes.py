@@ -5492,6 +5492,66 @@ def test_greeting_present_cast_roundtrips_over_api(client):
     assert read["meta"]["present"] == ["mara", "rowan"]
 
 
+def test_repoint_world_greeting_over_api(client):
+    """#17: PUT accepts character/version; the id and its plot-map edges stay,
+    and an unknown character or version answers 404 without writing."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Rowan"})
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Arrival", "character": "mara", "version": "default",
+                            "body": "Hello."}).json()["id"]
+    g2 = client.post(f"/api/worlds/{wid}/greetings",
+                     json={"name": "Later", "character": "mara", "version": "default"}).json()["id"]
+    client.put(f"/api/worlds/{wid}/greetings/{gid}/edges", json={"leads_to": [g2]})
+
+    rev = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()["rev"]
+    assert client.put(f"/api/worlds/{wid}/greetings/{gid}",
+                      json={"character": "rowan", "version": "default", "rev": rev}
+                      ).status_code == 200
+    read = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()
+    assert (read["meta"]["character"], read["meta"]["version"]) == ("rowan", "default")
+    assert read["edges"]["leads_to"] == [g2]
+
+    rev = read["rev"]
+    r = client.put(f"/api/worlds/{wid}/greetings/{gid}",
+                   json={"character": "nobody", "version": "default", "rev": rev})
+    assert (r.status_code, r.json()["detail"]) == (404, "character not found")
+    r = client.put(f"/api/worlds/{wid}/greetings/{gid}",
+                   json={"character": "rowan", "version": "typo", "rev": rev})
+    assert (r.status_code, r.json()["detail"]) == (404, "version not found")
+    read = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()
+    assert (read["meta"]["character"], read["meta"]["version"]) == ("rowan", "default")
+
+
+def test_repoint_campaign_greeting_resolves_world_characters(client):
+    """A thin campaign's characters commonly live only in the world, so the
+    re-point's validation has to resolve through the overlay -- and a refused
+    one must not materialize the world greeting campaign-side (#17)."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Rowan"})
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Arrival", "character": "mara",
+                            "version": "default", "body": "Hello."}).json()["id"]
+
+    rev = client.get(f"/api/campaigns/{cid}/greetings/{gid}").json()["rev"]
+    r = client.put(f"/api/campaigns/{cid}/greetings/{gid}",
+                   json={"character": "rowan", "version": "typo", "rev": rev})
+    assert (r.status_code, r.json()["detail"]) == (404, "version not found")
+    croot = store.campaigns.campaign_root(cid)
+    assert not (croot / "greetings" / f"{gid}.md").exists()   # never materialized
+
+    assert client.put(f"/api/campaigns/{cid}/greetings/{gid}",
+                      json={"character": "rowan", "version": "default", "rev": rev}
+                      ).status_code == 200
+    read = client.get(f"/api/campaigns/{cid}/greetings/{gid}").json()
+    assert (read["meta"]["character"], read["meta"]["version"]) == ("rowan", "default")
+    # the world's copy is untouched -- the write landed campaign-side
+    wread = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()
+    assert wread["meta"]["character"] == "mara"
+
+
 def test_greeting_location_roundtrips_and_seeds_the_scene(client):
     """#218: a greeting references a location the way it references its
     character, over both scopes, and the scene it opens starts there."""
@@ -5701,6 +5761,28 @@ def test_lorebook_parse_then_import(client):
     assert kinds == {"lore", "locations"}
     assert [e["name"] for e in client.get(f"/api/worlds/{wid}/lore").json()] == ["Salt Pact"]
     assert [e["name"] for e in client.get(f"/api/worlds/{wid}/locations").json()] == ["The Docks"]
+
+
+def test_lorebook_import_preserves_st_extensions_over_api(client):
+    """#20: the advanced ST fields survive parse -> review -> import -- the
+    `LoreEntry` model is the funnel that could silently drop the stash."""
+    wid = _world(client)
+    book = {"entries": {"0": {
+        "key": ["pact"], "keysecondary": ["salt"], "selective": True,
+        "comment": "Salt Pact", "content": "It binds.", "order": 7,
+        "probability": 50, "useProbability": True,
+    }}}
+    files = {"file": ("wi.json", io.BytesIO(json.dumps(book).encode()), "application/json")}
+    [entry] = client.post(f"/api/worlds/{wid}/lorebook/parse", files=files,
+                          data={"format": "lorebook"}).json()["entries"]
+    assert entry["extensions"]["keysecondary"] == ["salt"]
+    [made] = client.post(f"/api/worlds/{wid}/lorebook/import",
+                         json={"entries": [entry]}).json()["created"]
+    root = store.worlds.world_root(wid)
+    stored = json.loads(
+        store.entities.read_entity(root, "lore", made["id"])["meta"]["st_extensions"])
+    assert stored == {"keysecondary": ["salt"], "selective": True, "order": 7,
+                      "probability": 50, "useProbability": True}
 
 
 def test_entity_kinds_endpoint_is_the_stores_own_tuple(client):
