@@ -57,9 +57,12 @@ def test_the_band_edges_hold_the_properties_the_weights_are_chosen_for():
     # Hearsay is not collapsed merely for being hearsay.
     assert routing.band(routing.ASSUMED_CERTAINTY * routing.WEIGHTS[routing.OTHER]) == "medium"
     # A steering-driven edit follows the absorb prompt's instruction — uncited,
-    # certainty 0.3 or lower — and that must land it in the UNCHECKED band:
-    # the player's own correction still needs the player's explicit tick, or
-    # "Accept all & save" applies it without anyone adjudicating (Codex review).
+    # certainty 0.3 or lower — and that must land it in the NEEDS-YOU band:
+    # it arrives unticked in the review's drawers and counted on the footer,
+    # so a correction nobody read is visible rather than silently pre-approved
+    # at medium (Codex review). Application is still the panel's standing
+    # untouched-lands-unless-rejected rule; the band buys legibility, not a
+    # gate — `editRows.approvedByDefault` documents that reversal.
     assert routing.band(0.3 * routing.WEIGHTS[routing.UNCITED]) == "low"
 
 

@@ -139,10 +139,14 @@ never inside the transcript, and the system prompt instructs:
   rather than invented or dropped. Certainty grades transcript support and a
   note-only edit has none, so the honest self-report also does the routing:
   `0.3 × WEIGHTS[UNCITED]` sits below the low band edge, landing the row in
-  the review's **unchecked** collapsed section — a bare uncited row would
-  band medium and pre-check (Codex review finding), and the player's own
-  correction still needs the player's explicit tick. The player's own words
-  never come back as a citation.
+  the review's **"Needs you"** drawers, arriving unticked — a bare uncited
+  row would band medium and arrive looking finished (Codex review finding).
+  What the band buys is the panel's standing legibility contract, not an
+  application gate: `useSceneReview.saveAbsorb` deliberately applies every
+  row the reviewer did not *reject* and says so in the footer's count
+  (`editRows.approvedByDefault` documents why that reversal was made), and
+  steering rows inherit exactly that contract rather than a new one. The
+  player's own words never come back as a citation.
 - The system paragraph renders **only when the scene has steering notes**
   (`build_prompt` passes `steering=bool(steering_snapshot)`), so a
   steering-less absorb's prompt — both messages — is byte-identical to the
