@@ -372,6 +372,28 @@ def test_a_deleted_campaigns_runs_stop_being_reachable(client, campaign):
     assert client.get(f"/api/campaigns/{cid}/runs/{run_id}").status_code == 404
 
 
+def test_an_unexpected_preflight_failure_reports_the_500_it_is(client, world):
+    """The third of `reservation`'s arms. A scenario parse reserves before its
+    slow preflight, so an exception in there -- reading the upload, parsing the
+    card -- terminates the run rather than the producer, and a client that lost
+    the response reads THAT record. Without the status it fell back to 409 on
+    the client, so an internal failure arrived as a conflict."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+
+    def explode(_url):
+        raise RuntimeError("the downloader blew up")
+
+    with mock.patch.object(store.characters, "download_card", explode), \
+            pytest.raises(RuntimeError):
+        client.post(f"/api/worlds/{world}/scenario/parse-url",
+                    json={"url": "https://chub.ai/characters/creator/x"},
+                    headers={"X-Grimoire-Attempt": "a1"})
+
+    found = client.get(f"/api/worlds/{world}/runs?attempt=a1").json()["runs"]
+    assert [r["state"] for r in found] == ["failed"]
+    assert found[0]["error"]["status"] == 500
+
+
 def test_an_unexpected_failure_reports_the_500_it_is(client, world):
     """A parser bug is a 500, and has to say so. The status is what a client
     builds its HTTP failure from, and an absent one falls back to 409 -- so an

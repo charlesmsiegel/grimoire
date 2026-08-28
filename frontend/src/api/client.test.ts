@@ -2158,3 +2158,57 @@ test("an opener whose scene was renamed under it is still picked back up", async
   expect(String(fetchMock.mock.calls[4][0]))
     .toBe("/api/campaigns/run/scenes/s2-renamed/runs/r1/stream?from=1");
 });
+
+test("an opener renamed between the lookup and the attach is still picked back up",
+     async () => {
+  // The rename can land in the gap AFTER discovery answered and BEFORE the
+  // attach goes out, and then it is the attach that 404s. Re-resolving only on
+  // an empty lookup leaves that window open.
+  const seen: string[] = [];
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(sseCutOff([
+      'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
+        + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
+      'id: 0\ndata: {"delta":"The "}\n\n',
+    ]))
+    // Discovery still answers on the old id...
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1",
+                                           state: "running", next_index: 2,
+                                           cls: "draft" } }))
+    // ...and the attach is what finds it gone.
+    .mockResolvedValueOnce({ ok: false, status: 404,
+                             json: async () => ({ detail: "no such run",
+                                                  kind: "run_gone" }) })
+    .mockResolvedValueOnce(jsonOk({ id: "s2-renamed" }))
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1",
+                                           state: "running", next_index: 2,
+                                           cls: "draft" } }))
+    .mockResolvedValueOnce(sseResponse([
+      'id: 1\ndata: {"delta":"quay."}\n\n', 'id: 2\ndata: {"done":true}\n\n',
+    ]));
+  globalThis.fetch = fetchMock;
+
+  await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
+
+  expect(seen.join("")).toBe("The quay.");
+  expect(String(fetchMock.mock.calls[5][0]))
+    .toBe("/api/campaigns/run/scenes/s2-renamed/runs/r1/stream?from=1");
+});
+
+test("aborting a draft stops the request in flight, not only the wait between them",
+     async () => {
+  // `sleepUnlessAborted` covers the gap BETWEEN requests. A caller that aborts
+  // while a poll or a start is actually in flight -- an unreachable local
+  // server on Android is the case -- would otherwise wait out the transport.
+  const seen: (AbortSignal | undefined)[] = [];
+  globalThis.fetch = vi.fn().mockImplementation(
+    (_p: string, init: { signal?: AbortSignal }) => {
+      seen.push(init.signal);
+      return Promise.resolve(draftRunResponse("landed", { result: { tagline: "x" } }));
+    });
+  const stop = new AbortController();
+
+  await api.generateCharacterTagline("realm", "mara", stop.signal);
+
+  expect(seen[0]).toBe(stop.signal);
+});
