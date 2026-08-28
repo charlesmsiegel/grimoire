@@ -86,8 +86,17 @@ to the derivations navigation actually repeats:
   and the campaign's appearances record **plus the player-name tuple
   itself**. The names are recomputed each time — a handful of small reads
   bounded by cast size — and go into the key rather than being trusted to a
-  signature, so an actor rename invalidates naturally. This removes the
-  full-transcript parse from the navigation path.
+  signature, so an actor rename invalidates naturally. One wrinkle the key
+  must carry: an **absent** appearances record is a valid state, not a
+  missing file (`appearances.record` reads it as the empty record), while
+  `statcache.signature` answers `None` for any missing path and `memo`
+  refuses to cache that — which would leave every scene of a campaign with
+  no cast record parsing its full transcript on each recompute, the common
+  state of a fresh or PC-less campaign. The key therefore uses an explicit
+  "absent" sentinel for that file instead of an uncacheable `None`; the
+  record's later creation replaces the sentinel with a real signature and
+  invalidates. This removes the full-transcript parse from the navigation
+  path.
 - **Campaign listing rows** (`campaigns/read.list_campaigns`): memoize the
   parsed frontmatter + blurb per `campaign.md`.
 - **World listing rows** (`worlds/read.list_worlds`): memoize the parsed
@@ -201,7 +210,17 @@ their response" argument `store/revision.py` is built on:
   against the pre-write token — a `304` on a stale body, which is the one
   failure this layer may never produce from its own writes. The wrapper's
   exception path (a write that raised mid-way) bumps too, as the revision
-  stamp does today.
+  stamp does today. For a **streaming mutator** the response line is *too
+  early* to be the only bump: a non-detached SSE route can persist while
+  its generator runs — the localize stream saves the rewritten card, the
+  tagline batch writes as it yields, a gallery import downloads mid-stream
+  — all after the 200 was sent, under an epoch already minted. The wrapper
+  therefore bumps a mutating stream **twice**: at the response line (the
+  navigation-ordering bound) and again when the final body frame is
+  forwarded (covering everything the generator wrote). Campaign-scoped
+  streams already self-bump at their terminals via the funnel; the second
+  bump is what covers the world-scoped ones, which have no revision to
+  call.
 - `PUT /config/data-dir` is a mutating 2xx, so repointing the store
   invalidates everything — no special case needed, but the test suite
   proves it.
@@ -267,16 +286,28 @@ revalidation scheduled behind it. `api/client.ts` already solves exactly
 this ordering for its in-flight dedupe (`retireInflight` / the `fresh`
 flag); the cache carries the same idea as a per-path generation: an
 invalidation bumps the generation, and a settling response stamped with an
-older generation is discarded instead of stored. `useShellPayload`
+older generation is discarded instead of stored. The generation protects
+the *cache*; it does not protect a **direct post-mutation refetch** from
+joining a pre-mutation promise still sitting in the client's in-flight
+map — and SWR widens that window, since every render now starts a
+background revalidation for such a promise to be. So the rule the fork and
+import paths already follow becomes general: a refetch issued *because a
+mutation just succeeded* passes `fresh` (the world views' rename and
+delete refreshes are the two that don't today), and the fresh answer
+replaces the cache entry as any settling fresh response does. `useShellPayload`
 already implements exactly this posture ("the rail's first job is
 navigation, and navigation must survive a server that stopped answering");
 this generalizes it to the pages.
 
 Consumers: `CampaignsView` (campaign + world lists), `WorldsView`,
 `WorldView` (the index counts), `CampaignHub` (its parallel block of
-reads). Play-path and editor reads do **not** opt in — a transcript or a
-record body rendered stale is wrong in a way a count or a card shelf is
-not.
+reads, **minus the chronicle**: the hub renders the newest chronicle entry
+as the campaign's current recap, and a pre-absorb recap painted as current
+is a stale record body in exactly the sense the next sentence excludes —
+the chronicle read still benefits from `304`s, it just never renders from
+the stale cache). Play-path and editor reads do **not** opt in — a
+transcript or a record body rendered stale is wrong in a way a count or a
+card shelf is not.
 
 **Invalidation reuses what exists — and says plainly where nothing exists:**
 
@@ -336,7 +367,9 @@ instantly and corrects at most the ones that could have moved.
 - **Memo behaviour** (pytest): a counting fake around the parser proves a
   second `list_scenes`/`list_campaigns`/`_scene_turns` call re-reads
   nothing; a write through `store.atomic` invalidates; the turns memo
-  invalidates on an actor rename (name-in-key); pool isolation proves a
+  invalidates on an actor rename (name-in-key); a scene in a campaign with
+  **no appearances record** caches (the absent-sentinel), and the record's
+  creation invalidates; pool isolation proves a
   library-wide sweep leaves the shared cache's entries alone. **Fixture
   mtimes must be backdated with `os.utime`** past the racy window, or the
   cache refuses to engage — the suite's established pattern
@@ -348,7 +381,9 @@ instantly and corrects at most the ones that could have moved.
   world-scoped, config — flips the answer back to `200` with a new tag; a
   usage-ledger append (a detached draft's metered row) flips it too; a
   clock stepped past `EPOCH_TTL` flips it with **no** write, which is the
-  external-writer guarantee stated as a test; `GET /campaigns/{cid}` still
+  external-writer guarantee stated as a test; a mutating SSE route whose
+  generator writes after the response line answers `200` with a new tag to
+  the next conditional read (the final-frame bump); `GET /campaigns/{cid}` still
   performs its slim migration when answering `304`-eligible requests (the
   ordering exception); a run-poll GET never carries an `ETag`;
   campaign-scoped `@computes_only` routes don't bump.
