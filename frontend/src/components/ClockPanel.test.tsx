@@ -458,7 +458,8 @@ test("a checkpoint stops counting once the campaign has moved on", async () => {
   await screen.findByText(/campaign is busy/);
   expect(screen.getByText("Retry the skip")).toBeInTheDocument();
 
-  rerender(<ClockPanel cid="c" refreshKey={1} />);      // a turn lands
+  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalled());
+  rerender(<ClockPanel cid="c" refreshKey={1} />);      // a turn lands mid-copytree
   await waitFor(() =>
     expect(screen.getByText("Checkpoint, then advance")).toBeInTheDocument());
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
@@ -512,7 +513,11 @@ test("an invalidated copy leaves a way forward, not a dead end", async () => {
   await screen.findByText(/large time skip/);
 
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
-  rerender(<ClockPanel cid="c" refreshKey={1} />);      // a turn lands mid-copytree
+  // MID-copytree, which is the whole case: the gate answer re-prices before it
+  // copies, so waiting for the fork to have been asked for is what puts the
+  // turn inside the copy rather than before it.
+  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalled());
+  rerender(<ClockPanel cid="c" refreshKey={1} />);
   release(FORK_REPORT);
   await screen.findByText(/was not taken/);
   expect(api.advanceTime).not.toHaveBeenCalled();
@@ -546,7 +551,10 @@ test("a copy taken across a change does not carry the skip with it", async () =>
   await screen.findByText(/large time skip/);
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
 
-  rerender(<ClockPanel cid="c" refreshKey={1} />);   // a turn lands mid-copytree
+  // MID-copytree: the gate answer re-prices before it copies, so waiting for
+  // the fork to have been asked for is what puts the turn inside the copy.
+  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalled());
+  rerender(<ClockPanel cid="c" refreshKey={1} />);
   release(FORK_REPORT);
   await screen.findByText(/may not hold the latest turn/);
 
@@ -915,7 +923,11 @@ test("a disowned copy costs one more copy, not two", async () => {
   fireEvent.click(screen.getByText("Advance time"));
   await screen.findByText(/large time skip/);
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
-  rerender(<ClockPanel cid="c" refreshKey={1} />);      // a turn lands mid-copytree
+  // MID-copytree, which is the whole case: the gate answer re-prices before it
+  // copies, so waiting for the fork to have been asked for is what puts the
+  // turn inside the copy rather than before it.
+  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalled());
+  rerender(<ClockPanel cid="c" refreshKey={1} />);
   release(FORK_REPORT);
   await screen.findByText(/may not hold the latest turn/);
 
@@ -1022,6 +1034,55 @@ test("a changed digest re-prices even when the token has not moved", async () =>
   await screen.findByText(/preview it again/);
   expect(api.forkCampaign).not.toHaveBeenCalled();
   expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("skipping without a checkpoint re-prices too", async () => {
+  // The gate has two answers and only one of them was guarded. This one writes
+  // no checkpoint, so there is nothing to abandon — but it still moves the
+  // clock and can still fire events, and a price nobody rechecked is exactly as
+  // stale here (Codex review).
+  const WITH_EVENT: AdvanceDigest = { ...BIG, events: [
+    { id: "the-coronation", name: "The coronation", date: "2027-02-01",
+      friendly: "1 February 2027", note: "", fired: null, passed: false,
+      in_days: 39 }] };
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: WITH_EVENT });
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Skip without one"));
+
+  await screen.findByText(/preview it again/);
+  expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("a retry after the checkpoint landed re-prices before it advances", async () => {
+  // The third way through the gate: the copy succeeded, its advance failed, and
+  // the reader presses again. `checkpointed` short-circuits the copy, which
+  // used to carry the re-price with it — so the retry advanced on a price from
+  // before the copy.
+  const WITH_EVENT: AdvanceDigest = { ...BIG, events: [
+    { id: "the-coronation", name: "The coronation", date: "2027-02-01",
+      friendly: "1 February 2027", note: "", fired: null, passed: false,
+      in_days: 39 }] };
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.advanceTime).mockRejectedValueOnce({ detail: "an advance needs a reason" });
+  // ...and by the retry, something outside this app has changed the span.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: WITH_EVENT });
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/an advance needs a reason/);
+  expect(api.forkCampaign).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByText("Retry the skip"));
+  await screen.findByText(/preview it again/);
+  // No second copy — `checkpointed` still holds — and no advance on the stale
+  // price either, which is the half that was missing.
+  expect(api.forkCampaign).toHaveBeenCalledTimes(1);
+  expect(api.advanceTime).toHaveBeenCalledTimes(1);
 });
 
 test("an unchanged digest under an unchanged token goes ahead", async () => {

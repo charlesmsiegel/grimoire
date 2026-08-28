@@ -4354,10 +4354,23 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime, request: Request
     # here, and the sweep resolves a climate and a provider per visited location.
     # Leaving the clock behind because the *weather* failed would be the worst of
     # the three outcomes.
-    clock = store.clock.observe(cid, body.datetime, f"scene {result.get('id', sid)}")
-    # Names the transitions for the advance digest. Generation is pure, so the
-    # changes happen either way; without this they are simply never reported.
-    weather_changes = store.weather.sweep(cid, result.get("id", sid), previous, body.datetime)
+    #
+    # Everything from here is stamped on the way out even when it raises (#409).
+    # `set_datetime` above has already landed -- it renames the scene and writes
+    # its date -- and `observe` commits the clock, so a failure in the sweep
+    # answers non-2xx over a campaign that has genuinely changed, and the
+    # middleware stamps success only (Codex review). A raise before either wrote
+    # costs an over-bump, which is a re-price for somebody and the direction
+    # this value is deliberately wrong in.
+    try:
+        clock = store.clock.observe(cid, body.datetime, f"scene {result.get('id', sid)}")
+        # Names the transitions for the advance digest. Generation is pure, so the
+        # changes happen either way; without this they are simply never reported.
+        weather_changes = store.weather.sweep(cid, result.get("id", sid),
+                                              previous, body.datetime)
+    except BaseException:
+        store.revision.bump(cid)
+        raise
     return {"ok": True, **result, "weather_changes": weather_changes, "clock": clock}
 
 
