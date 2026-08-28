@@ -232,8 +232,17 @@ export function CalendarConfig({ scope, onConfig }: {
                onChange={(e) => {
                  setSaved(false);
                  const raw = e.target.value.trim();
+                 // `Number`, not `parseInt`: a number input accepts exponent
+                 // notation, and `parseInt("1e2", 10)` stops at the `e` and
+                 // answers 1 -- so typing a hundred days would silently save a
+                 // one-day window. Truncated rather than rounded, because the
+                 // store keeps whole days and that is what the old parse did
+                 // with "1.5". A blank stays `null` ("no opinion"); anything
+                 // unparseable becomes 0, which is a real setting here.
+                 const n = Number(raw);
+                 const days = Number.isFinite(n) ? Math.trunc(n) : 0;
                  setCfg({ ...cfg, warn_days: raw === "" ? null
-                            : Math.min(MAX_WARN_DAYS, Math.max(0, parseInt(raw, 10) || 0)) });
+                            : Math.min(MAX_WARN_DAYS, Math.max(0, days)) });
                }} />
       </label>
       <div className="field-hint">

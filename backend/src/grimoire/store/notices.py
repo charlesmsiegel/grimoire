@@ -182,6 +182,29 @@ def _trim(data: dict) -> dict:
     return dict(ordered[len(data) - LEDGER_LIMIT:])
 
 
+def _batch(keys: list[str]) -> list[str]:
+    """The keys of one request, normalized: stripped, bounded, and each once.
+
+    Stripped because a key is opaque but a blank one is not a key, and because
+    the keys `pending` generates are stripped -- an unstripped one would name an
+    acknowledgement that never matches. Bounded by `KEY_LIMIT` (a longer key is
+    dropped, never shortened: every key this app generates fits, so an overlong
+    one is crafted, and storing a truncated version records an acknowledgement of
+    something nobody can be warned about) and by `BATCH_LIMIT`, before the lock.
+
+    Deduplicated because the callers do different things with a repeat and one
+    of them cannot survive it: `forget` reads which keys are present and then
+    deletes them, so a key named twice is deleted twice and the second `del`
+    raises -- 500ing the undo and leaving the notice dismissed, which is the one
+    state this feature has no other way out of. `mark` happens to be idempotent
+    (it skips what is already stamped), but a repeat still spends one of its
+    hundred, so both want the same list.
+    """
+    seen = (k.strip() for k in keys if isinstance(k, str))
+    kept = (k for k in seen if k and len(k) <= KEY_LIMIT)
+    return list(dict.fromkeys(kept))[:BATCH_LIMIT]
+
+
 def mark(cid: str, keys: list[str], scene: str = "") -> list[str]:
     """Acknowledge these notice keys. Returns the ones newly written.
 
@@ -199,8 +222,7 @@ def mark(cid: str, keys: list[str], scene: str = "") -> list[str]:
     `BATCH_LIMIT` keys the request is cut for the same reason and reports the
     same way — what it actually marked.
     """
-    wanted = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
-    wanted = [k for k in wanted if len(k) <= KEY_LIMIT][:BATCH_LIMIT]
+    wanted = _batch(keys)
     if not wanted:
         return []
     stamp = paths.now_iso()
@@ -237,8 +259,7 @@ def forget(cid: str, keys: list[str]) -> list[str]:
     past `KEY_LIMIT` are dropped rather than looked up because `mark` refuses to
     write one, so no key that long can be an acknowledgement this app made.
     """
-    wanted = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
-    wanted = [k for k in wanted if len(k) <= KEY_LIMIT][:BATCH_LIMIT]
+    wanted = _batch(keys)
     if not wanted:
         return []
     with locks.campaign_lock(cid):
