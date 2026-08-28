@@ -59,6 +59,7 @@ from grimoire.store import (
     response_presets,
     scenes,
     sheets,
+    steering,
     worlds,
 )
 from grimoire.store.context import art
@@ -346,6 +347,9 @@ def build_absorb() -> dict:
     scenes.append_reply(cid, sid, [
         {"speaker": "Seraphine Vale", "content": "Then you know why I don't sleep."},
     ])
+    # A reroll's steering prompt, so the extraction is primed with the one
+    # correction the player had to make mid-scene.
+    steering.record(cid, sid, "Seraphine already knows Winifred saw the ledger — she was there.")
     return {"cid": cid, "sid": sid}
 
 
@@ -358,10 +362,14 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
     # sections. They live INSIDE each row, so the contract derived from
     # `parse_output("{}")` cannot see them and dropping the ask from the
     # template would otherwise go unnoticed until a live run.
+    # The steering contract rides along: the system paragraph that makes the
+    # notes signal-never-evidence must still be asked, or a template edit that
+    # drops it goes unnoticed until a live run cites the player's own words.
     prompt = graders.grade_prompt(
         ctx["messages"],
         {f"asks_{k}": f'"{k}"'
-         for k in graders.ABSORB_TEXT + graders.ABSORB_LISTS + absorb_store.CITATION_FIELDS})
+         for k in graders.ABSORB_TEXT + graders.ABSORB_LISTS + absorb_store.CITATION_FIELDS}
+        | {"asks_steering_contract": "Player steering notes"})
 
     out, parsed = graders.grade_absorb(output)
     if not all(c.ok for c in out):
@@ -625,7 +633,8 @@ def _absorb_prompt(ctx: dict) -> list[dict]:
                                      absorb_store.plot_snapshot(cid),
                                      absorb_store.group_snapshot(cid),
                                      absorb_store.commitment_snapshot(cid),
-                                     absorb_store.fact_snapshot(cid))
+                                     absorb_store.fact_snapshot(cid),
+                                     absorb_store.steering_snapshot(cid, sid))
 
 
 CASES: tuple[Case, ...] = (

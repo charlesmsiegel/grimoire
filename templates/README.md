@@ -134,8 +134,11 @@ lines), `rel_snapshot` (`absorb.relationships_snapshot()` — lines per
 (`absorb.plot_snapshot()` — lines per `snippets/plot_thread_line/absorb.j2`),
 `commitment_snapshot` (`absorb.commitment_snapshot()` — lines per
 `snippets/commitment_line/absorb.j2`), `fact_snapshot`
-(`absorb.fact_snapshot()` — lines per `snippets/fact_line.j2`), `transcript`
-(`snippets/transcript.j2`).
+(`absorb.fact_snapshot()` — lines per `snippets/fact_line.j2`),
+`steering_snapshot` (`absorb.steering_snapshot()` — the scene's reroll
+steering log as `- <text>` lines; `system.j2`'s "Player steering notes"
+paragraph makes them signals to sharpen or extend lore, never citable
+evidence), `transcript` (`snippets/transcript.j2`).
 
 ### `audit/` — the post-absorb mechanics audit inside POST …/absorb
 Mirrors `store/audit.py:build_prompt`. Messages: system, user.
