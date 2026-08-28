@@ -763,6 +763,10 @@ class GreetingUpdate(BaseModel):
     pcless: bool | None = None
     # "" clears the location; None leaves whatever is on disk (#218)
     location: str | None = None
+    # re-point the greeting at a different character/version, keeping its id
+    # and plot-map edges (#17); "" clears the character (narrator-only)
+    character: str | None = None
+    version: str | None = None
     rev: str | None = None      # see EntityUpdate.rev (#35)
 
 
@@ -827,6 +831,9 @@ class LoreEntry(BaseModel):
     keys: list[str] = []
     body: str = ""
     category: str = "lore"
+    # The advanced ST activation fields `parse` stashed (#20) -- carried through
+    # the review table untouched and committed as `st_extensions` frontmatter.
+    extensions: dict = {}
 
 
 class LorebookCommit(BaseModel):

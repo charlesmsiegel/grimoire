@@ -89,9 +89,14 @@ def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
         store.greetings.update_greeting(root, gid, name=body.name,
                                         body=body.body, requires_tags=body.requires_tags,
                                         predecessor_join=body.predecessor_join, present=body.present,
-                                        pcless=body.pcless, location=body.location)
+                                        pcless=body.pcless, location=body.location,
+                                        character=body.character, version=body.version)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found") from None
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found") from None
     return {"ok": True}
 
 
@@ -264,9 +269,14 @@ def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
                                      requires_tags=body.requires_tags,
                                      predecessor_join=body.predecessor_join,
                                      present=body.present, pcless=body.pcless,
-                                     location=body.location)
+                                     location=body.location,
+                                     character=body.character, version=body.version)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found") from None
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found") from None
     return {"ok": True}
 
 

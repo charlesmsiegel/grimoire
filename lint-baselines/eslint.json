@@ -55,7 +55,7 @@
   },
   "frontend/src/components/CharacterEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 8,
-    "@typescript-eslint/no-misused-promises": 37,
+    "@typescript-eslint/no-misused-promises": 36,
     "@typescript-eslint/no-unnecessary-type-assertion": 1,
     "react/no-array-index-key": 2
   },
@@ -161,8 +161,7 @@
     "@typescript-eslint/no-explicit-any": 2,
     "@typescript-eslint/no-misused-promises": 2,
     "@typescript-eslint/no-unsafe-argument": 2,
-    "@typescript-eslint/no-unsafe-member-access": 2,
-    "react/no-array-index-key": 1
+    "@typescript-eslint/no-unsafe-member-access": 2
   },
   "frontend/src/components/MechanicsConfig.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 2

@@ -24,6 +24,7 @@ vi.mock("../api/client", async () => {
       draftCharacterImageDescription: vi.fn(),
       listUndescribedImages: vi.fn(),
       importCharacterBook: vi.fn(),
+      lorebookParse: vi.fn(), lorebookImport: vi.fn(), entityKinds: vi.fn(),
       importCharacterFromChub: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
       setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
@@ -94,6 +95,10 @@ beforeEach(() => {
   (api.setAvatarFocus as any).mockResolvedValue({ ok: true });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
+  (api.lorebookParse as any).mockResolvedValue(
+    { entries: [{ name: "pact", keys: ["pact"], body: "x", category: "lore" }] });
+  (api.lorebookImport as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
+  (api.entityKinds as any).mockResolvedValue({ kinds: ["locations", "lore", "items", "groups", "creatures"] });
   (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
   (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "" });
@@ -304,35 +309,59 @@ test("edit view saves an edited tagline via PUT", async () => {
   await waitFor(() => expect(api.setCharacterTagline).toHaveBeenCalledWith("w", "seraphine", "A new tagline."));
 });
 
-test("imports an embedded character_book and shows the result", async () => {
+// #27: the embedded-book import is the same parse -> review -> re-route flow
+// the standalone lorebook dialog runs, not a blind one-click commit. Parsing
+// writes nothing; the commit goes through the per-entry-category route.
+test("the embedded character_book opens a review table and commits with per-entry categories", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
-  fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
-  await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "seraphine", "default"));
+  fireEvent.click(screen.getByRole("button", { name: /review .* lore/i }));
+  // the STORED card is what gets parsed, through the world's parse route
+  await waitFor(() => expect(api.lorebookParse).toHaveBeenCalledWith("w", expect.any(File), "json"));
+  expect(api.lorebookImport).not.toHaveBeenCalled();   // parsing writes nothing
+
+  // review: rename the entry and re-route it to locations
+  fireEvent.change(await screen.findByLabelText("name 0"), { target: { value: "The Salt Pact" } });
+  fireEvent.change(screen.getByLabelText("category 0"), { target: { value: "locations" } });
+  fireEvent.click(screen.getByRole("button", { name: /^import 1 entry$/i }));
+  await waitFor(() => expect(api.lorebookImport).toHaveBeenCalledWith("w",
+    [expect.objectContaining({ name: "The Salt Pact", category: "locations" })]));
   await screen.findByText(/imported 1/i);
+  expect(api.importCharacterBook).not.toHaveBeenCalled();   // the blind route stays unused here
+});
+
+test("cancelling the embedded-book review commits nothing", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.click(screen.getByRole("button", { name: /review .* lore/i }));
+  await screen.findByLabelText("category 0");
+  fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+  await screen.findByRole("button", { name: /review .* lore/i });
+  expect(api.lorebookImport).not.toHaveBeenCalled();
 });
 
 // Re-importing an unchanged book is a no-op by design (`lorebook.commit`
-// drops entries already in world lore), and "Imported 0 entries" reads as a
+// drops entries already in the world), and "Imported 0 entries" reads as a
 // failure of the thing that in fact worked.
 test("re-importing an already-imported book says so instead of reporting zero", async () => {
-  (api.importCharacterBook as any).mockResolvedValue({ created: [] });
+  (api.lorebookImport as any).mockResolvedValue({ created: [] });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
-  fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
-  await screen.findByText(/already in world lore/i);
+  fireEvent.click(screen.getByRole("button", { name: /review .* lore/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /^import 1 entry$/i }));
+  await screen.findByText(/already in the world/i);
   expect(screen.queryByText(/imported 0/i)).toBeNull();
 });
 
-// The import posts no card -- the route commits whatever character_book is
-// stored for the version. It does not write the card back (unlike localize),
-// so unsaved edits survive it; what they do is make the click act on a version
-// of the book the editor is no longer showing. Blocked until saved, so the
-// entries committed are the ones the user is looking at (#16).
-test("the embedded-lore import is blocked while the form has unsaved edits", async () => {
+// The review parses the STORED card, not the editor's state. It does not write
+// the card back (unlike localize), so unsaved edits survive it; what they do is
+// make the click act on a version of the book the editor is no longer showing.
+// Blocked until saved, so the entries reviewed are the ones the user is looking
+// at (#16).
+test("the embedded-lore review is blocked while the form has unsaved edits", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
-  const button = screen.getByRole("button", { name: /import .* lore/i });
+  const button = screen.getByRole("button", { name: /review .* lore/i });
   expect(button).not.toBeDisabled();
 
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "keeper of the salt ledgers" } });
@@ -340,7 +369,7 @@ test("the embedded-lore import is blocked while the form has unsaved edits", asy
   expect(button).toBeDisabled();
   expect(screen.getByText(/save your changes before importing embedded lore/i)).toBeInTheDocument();
   fireEvent.click(button);
-  expect(api.importCharacterBook).not.toHaveBeenCalled();
+  expect(api.lorebookParse).not.toHaveBeenCalled();
 });
 
 // `character_book.entries` is the raw list; the import commits it normalized,
@@ -363,8 +392,8 @@ test("the embedded-lore count is the server's importable count, not the raw entr
   });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
-  await screen.findByRole("button", { name: /^import 1 embedded lore entry to world$/i });
-  expect(screen.queryByRole("button", { name: /import 4 /i })).toBeNull();
+  await screen.findByRole("button", { name: /^review 1 embedded lore entry to import$/i });
+  expect(screen.queryByRole("button", { name: /review 4 /i })).toBeNull();
 });
 
 // A version whose card offers nothing importable shows no button at all, and
@@ -379,10 +408,10 @@ test("the embedded-lore button follows the selected version and vanishes when it
   });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
-  await screen.findByRole("button", { name: /^import 2 embedded lore entries to world$/i });
+  await screen.findByRole("button", { name: /^review 2 embedded lore entries to import$/i });
 
   fireEvent.change(screen.getByLabelText("Version"), { target: { value: "young" } });
-  await waitFor(() => expect(screen.queryByRole("button", { name: /import .* lore/i })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("button", { name: /review .* lore/i })).toBeNull());
 });
 
 test("editing the birthdate persists it on the character", async () => {

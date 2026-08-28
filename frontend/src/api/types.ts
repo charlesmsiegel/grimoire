@@ -1690,7 +1690,13 @@ export type SceneImportDraft = {
 // said a row may be filed under (`GET /api/entity-kinds`), which is allowed to
 // name a kind added after this build shipped (#138). Narrowing it to the local
 // union would only be a cast that claims something the round trip does not.
-export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKindName };
+export type LoreEntryDraft = {
+  name: string; keys: string[]; body: string; category: EntityKindName;
+  /** The advanced ST activation fields parse stashed (#20) — carried through
+   *  the review table untouched and committed as `st_extensions` frontmatter.
+   *  Absent when the source entry had none. */
+  extensions?: Record<string, unknown>;
+};
 
 // scenario-card import (#217) — one card describing a whole setting, split into
 // the records a world is made of. A proposal speaks in cast NAMES, not ids: the
