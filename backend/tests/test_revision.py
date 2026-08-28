@@ -547,6 +547,88 @@ def test_a_module_rebind_that_failed_part_way_still_stamps(client, monkeypatch):
     assert _token(client, cid) != before
 
 
+def test_a_route_that_raised_after_writing_still_stamps(client, monkeypatch):
+    """The class, closed in one place rather than one route at a time.
+
+    A route that RAISES writes no response line, so the success stamp never
+    runs — and it may well have written first. Four rounds reported one
+    instance each (`set_datetime`, `set_location`, the module rebind, the
+    weather reconciliation); the middleware is where the activity stamp already
+    argues that enumerating writers does not converge, and the same argument
+    applies to the failure path (Codex review).
+
+    Driven through a scene rename, which is not one of the reported instances
+    on purpose: the point is that a route nobody thought about is covered.
+    """
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    before = _token(client, cid)
+
+    def die(*a, **kw):
+        raise RuntimeError("the rename failed part-way")
+
+    monkeypatch.setattr(store.scenes, "rename_scene", die)
+    with pytest.raises(RuntimeError):
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Departure"})
+    assert _token(client, cid) != before
+
+
+def test_a_deliberate_refusal_stamps_nothing(client):
+    """The other half, and the reason the `except` is not a blanket rule about
+    non-2xx. `HTTPException` is turned into a response by Starlette's
+    `ExceptionMiddleware`, which sits INSIDE this one, so every deliberate 4xx
+    comes through the response path and is skipped there. Only a write that
+    failed part-way reaches the `except`.
+
+    Without this distinction every refused request — a bad body, an unknown
+    scene, a `scene_busy` during play — would invalidate every outstanding
+    price, which is a far commoner event than a 500.
+    """
+    cid = _campaign(client)
+    before = _token(client, cid)
+    assert client.put(f"/api/campaigns/{cid}/scenes/404--nope",
+                      json={"title": "Departure"}).status_code == 404
+    assert _token(client, cid) == before
+
+
+def test_a_scene_location_that_failed_part_way_stamps(client, monkeypatch):
+    """One of the reported instances, covered by the rule above rather than by a
+    stamp of its own. `set_location` appends the transition message and then
+    rewrites `location_history` in a second atomic write; a failure between them
+    leaves the transcript changed and answers non-2xx.
+
+    The scene needs a location already, because the FIRST setting is silent —
+    no transition, so nothing is written before the failure.
+    """
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    for name in ("The Tearoom", "The Quay"):
+        store.overlay.create_entity(cid, "locations", name, "Somewhere.")
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/location",
+                      json={"location": "the-tearoom"}).status_code == 200
+    before = _token(client, cid)
+
+    calls = []
+
+    def die(*a, **kw):
+        calls.append(a)
+        raise OSError(5, "the history could not be written")
+
+    # `dump_frontmatter` on THIS module is only reached for the history
+    # rewrite: the transition message went through `write.append_message`,
+    # which has its own. Patching the shared `atomic.write_text` instead would
+    # break the append *and* the stamp, and prove nothing.
+    monkeypatch.setattr(store.scenes.moment, "dump_frontmatter", die)
+    with pytest.raises(OSError):
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/location",
+                   json={"location": "the-quay"})
+    assert calls, "the history write never ran, so this asserts nothing"
+    # The transition really did land, which is what makes the stamp owed.
+    scene = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()
+    assert any("Quay" in m["content"] for m in scene["messages"])
+    assert _token(client, cid) != before
+
+
 def _opener(client, cid, sid):
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
                        json={"prompt": "They arrive at the gate."}) as r:

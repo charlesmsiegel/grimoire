@@ -22,9 +22,6 @@
     "C901": 1,
     "SIM105": 1
   },
-  "backend/src/grimoire/main.py": {
-    "RET503": 1
-  },
   "backend/src/grimoire/openai_compatible.py": {
     "C901": 2
   },
