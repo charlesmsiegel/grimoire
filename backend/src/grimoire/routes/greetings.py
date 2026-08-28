@@ -18,6 +18,7 @@ from .common import (
     _require_scene,
     _world_char_version_or_404,
     _world_root_or_404,
+    computes_only,
     get_llm,
 )
 from .models import (
@@ -322,6 +323,7 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/opener")
+@computes_only
 def post_opener(cid: str, sid: str, body: Opener, request: Request,
                 client: LLMClient = Depends(get_llm),
                 x_grimoire_attempt: str | None = Header(default=None)):
@@ -344,6 +346,13 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
     can be in flight, re-generating one the player did not like is an ordinary
     thing to do twice, and holding the scene would refuse the very
     `post_first_post` the opener exists to feed.
+
+    `@computes_only` follows from the same fact as the class: nothing is
+    persisted here, so a draft the reader discards must not move the campaign's
+    write token and refuse somebody's clock price (#409). The one real write
+    this path can make is a prompt capture, which is on by default and stamps
+    for itself in `_record_prompt` -- the marker would otherwise have taken that
+    write's stamp with it.
     """
     # BEFORE the preflight, exactly as `post_chat` does it: this is a REPLAY of
     # work that already ran, and a connection removed since would otherwise

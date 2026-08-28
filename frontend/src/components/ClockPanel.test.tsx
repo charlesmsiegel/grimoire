@@ -971,3 +971,33 @@ test("the copy carries the token it was priced against, not only its key", async
   expect(vi.mocked(api.forkCampaign).mock.calls[0][3]).toEqual({
     idempotencyKey: `checkpoint:${BIG.to}:${REV}`, expectRevision: REV });
 });
+
+test("a checkpoint another tab outlived is retired by the re-price", async () => {
+  // `refreshKey` is THIS tab's signal and does not fire for somebody else's
+  // write, so the token is the only thing that notices. Without retiring the
+  // marker, the reopened question offers "Retry the skip", takes no copy, and
+  // skips on a restore point from before the other tab's write.
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: "rev-2", digest: BIG });
+  vi.mocked(api.advanceTime).mockRejectedValueOnce({ detail: "an advance needs a reason" });
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/an advance needs a reason/);
+  expect(screen.getByText("Retry the skip")).toBeInTheDocument();
+
+  // Dismiss and ask again — no turn landed here, so `refreshKey` never moved.
+  fireEvent.click(screen.getByText("Cancel"));
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+
+  // The marker is gone, so this is a fresh copy rather than a bare retry...
+  expect(screen.getByText("Checkpoint, then advance")).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
+  expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
+});
