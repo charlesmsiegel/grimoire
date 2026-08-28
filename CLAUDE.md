@@ -498,8 +498,12 @@ would answer neither question.
   nothing else is the greeting opener, which is `@computes_only` — and a token
   minted before the write is one a reader can hold while that write is still
   landing. A multi-campaign write reached from a
-  world route stamps every campaign it wrote, inside its `hold_all` — nothing
-  under `/api/campaigns/` runs for one. A route
+  world or module route stamps every campaign it wrote, inside its `hold_all` —
+  nothing under `/api/campaigns/` runs for one, and `module_edit`'s sheet
+  migration is the one part of a module edit that writes a campaign's *own*
+  file rather than what it inherits. A write answered **non-2xx** stamps for
+  itself too, since the middleware only sees success: `proposals.project` is
+  reached by a recovery that heals a transcript and then answers 409. A route
   that mutates a *different*
   campaign than the one in its path says so with `@leaves_campaign_unchanged`
   (`POST /fork`, whose source is never written to) — otherwise a fork would

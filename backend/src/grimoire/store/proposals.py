@@ -28,7 +28,7 @@ import json
 import uuid
 from contextlib import contextmanager
 
-from . import atomic, checks, locks, rolls
+from . import atomic, checks, locks, revision, rolls
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 from .scenes import (
@@ -288,6 +288,23 @@ def project(cid: str, sid: str, pid: str) -> dict | None:
                    for m in scenes_read.read_scene(cid, sid)["messages"][res["line_intent"]:]):
             scenes_write.append_message(cid, sid, "assistant", line,
                                         speaker=scenes_serialize.ROLL_SPEAKER)
+        # The campaign's write token (#409), stamped HERE rather than left to
+        # the response line, because one of this function's callers has no
+        # usable one: the stale-retry heal in `POST .../roll-proposal` projects
+        # a same-id superseded record -- appending the roll, its metadata and
+        # the transcript's line -- and then deliberately answers 409, since no
+        # continuation is ever offered for a superseded record. The middleware
+        # stamps 2xx only, so that recovery moved the transcript and left the
+        # token where it was, which is an under-bump and the one direction that
+        # breaks what the token promises (Codex review).
+        #
+        # Inside the hold that covers the writes, and only on the path that
+        # reached them: the `return None` above is the lost-race case, where
+        # nothing was projected and there is nothing to record. A repeat
+        # projection is idempotent and writes nothing new, so its bump is an
+        # over-bump -- a re-price for somebody, and the direction this value is
+        # deliberately wrong in.
+        revision.bump(cid)
         return res
 
 

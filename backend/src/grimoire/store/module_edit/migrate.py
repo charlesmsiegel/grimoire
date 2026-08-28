@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from .. import atomic, locks
+from .. import atomic, locks, revision
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..modules import binding as modules_binding
@@ -287,14 +287,33 @@ def _run_migration(mid: str, migration: dict) -> dict:
     """Sheet migration for rename ops: rewrite every stored sheet governed by
     this module that the migration op touches, bumping `gen` on each changed
     file. Idempotent (old key absent ⇒ no-op) so journal replay after a crash
-    is safe to repeat."""
-    migrated, skipped = 0, []
-    for p, _cid in _sheet_files(mid):
+    is safe to repeat.
+
+    A campaign whose sheet was rewritten also gets its write token stamped
+    (#409). This is the one thing a module edit does that is NOT an edit to
+    what a campaign *inherits*: `<campaign>/sheets/*.json` is the campaign's
+    own file, rewritten in place, and no response line covers it -- the route
+    is under `/api/modules/...`, which the activity middleware never sees, and
+    journal replay after a crash has no request behind it at all. Left
+    unstamped, a token read before a field rename stayed valid after it, and a
+    priced fork or advance could not tell (Codex review, correcting the reason
+    given when `module_edit` was first left out).
+
+    Stamped per changed campaign rather than per file, and only for a file that
+    actually changed: `_migrate_file` answers False for a sheet the op does not
+    touch, and a world's own sheets carry no cid at all.
+    """
+    migrated, skipped, touched = 0, [], []
+    for p, cid in _sheet_files(mid):
         got = _migrate_file(p, migration)
         if got is None:
             skipped.append(str(p))
         elif got:
             migrated += 1
+            if cid is not None and cid not in touched:
+                touched.append(cid)
+    for cid in touched:
+        revision.bump(cid)
     return {"migrated": migrated, "skipped": skipped}
 
 
