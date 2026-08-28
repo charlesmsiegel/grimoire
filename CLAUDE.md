@@ -483,17 +483,21 @@ would answer neither question.
   the app records a write to it — the primitive `POST /advance` compares an
   expected state against and `POST /fork` keys a repeat on (#409). It is
   stamped by default in one place, the activity middleware in `main.py`, so a
-  route added tomorrow is covered without anyone remembering. Three writes stamp
-  for themselves on top of that, each because the response line is the wrong
-  moment for it: `clock.advance` bumps inside the lock hold that covers its
-  commit (a check the token has not moved under is not binding), and everything
-  a *detached* run writes bumps where it writes, since the run outlives the
-  response the middleware stamps — `routes/scenes._under_review_lock` for a
-  review's terminal write, `_rolling_commit` and `_break_commit` for the
+  route added tomorrow is covered without anyone remembering. What stamps for
+  itself on top of that always has the same reason in a different shape — the
+  response line is not the moment. `clock.advance` bumps inside the lock hold
+  that covers its commit (a check the token has not moved under is not binding).
+  Everything a *detached* run writes bumps where it writes, since the run
+  outlives the response the middleware stamps — `routes/scenes._under_review_lock`
+  for a review's terminal write, `_rolling_commit` and `_break_commit` for the
   follow-ups a landed turn schedules (#397), and `routes/streaming._turn_settled`
   at each of a turn's terminal points, which is not the same thing as "a post
-  landed": a closed roll fence writes a proposal and no post at all. A route
-  A multi-campaign write reached from a
+  landed": a closed roll fence writes a proposal and no post at all. A prompt
+  capture (`routes/common._record_prompt`) bumps after its write and under the
+  lock that covers it, because the one route reaching it while persisting
+  nothing else is the greeting opener, which is `@computes_only` — and a token
+  minted before the write is one a reader can hold while that write is still
+  landing. A multi-campaign write reached from a
   world route stamps every campaign it wrote, inside its `hold_all` — nothing
   under `/api/campaigns/` runs for one. A route
   that mutates a *different*

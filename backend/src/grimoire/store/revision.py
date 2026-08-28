@@ -60,6 +60,14 @@ of a turn's terminal points. That last one is deliberately not "a post landed":
 a roll fence that closes with no narration writes a proposal record and nothing
 else, and a failed turn's rollback takes a post back OFF.
 
+A PROMPT CAPTURE (`routes.common._record_prompt`) bumps after its write and
+inside the lock that covers it. The one route that reaches it while persisting
+nothing else is the greeting opener, which is correctly `@computes_only` -- so
+that marker would have taken this real write's stamp with it. After, not
+before: a token minted ahead of the write is readable while the write is still
+landing, and the reader holding it would then pass a check against a campaign
+that had been written since (Codex review).
+
 A multi-campaign write reached from a WORLD route stamps every campaign it
 wrote, for the same reason and one step further out: nothing under
 `/api/campaigns/...` runs at all. `sync.demote`, `store.reclassify` and the

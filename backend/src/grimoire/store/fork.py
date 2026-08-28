@@ -121,6 +121,32 @@ MARKER = "fork.json"
 KEY_LIMIT = 200
 
 
+#: How many times a fork will lose the id it computed and come back for the next
+#: one. `uniquify` has to run before the lock -- the id it picks is one of the
+#: two locks to take -- so two concurrent forks of one campaign asked for under
+#: the same name compute the same id and one of them loses the `mkdir`. Bounded
+#: rather than unbounded because a caller that loses this many in a row is up
+#: against contention another turn of the loop will not settle, and generous
+#: enough that reaching the bound means something other than two clients racing.
+_CLAIM_ATTEMPTS = 8
+
+
+class ForkContentionError(Exception):
+    """Every attempt to claim an id for the fork lost it to another writer.
+
+    A `StoreBusy` sibling in spirit -- the route answers 409, the caller retries
+    -- but not a subclass of it: nothing here timed out on a lock, and the whole
+    value of that class is that one handler can say "another grimoire process is
+    editing this" and be right. Nothing has been created by the time this is
+    raised, so a caller that gives up leaves no debris.
+    """
+
+    def __init__(self, cid: str, name: str) -> None:
+        super().__init__(f"could not claim an id for a fork of {cid} called "
+                         f"{name!r}; another writer took each one first")
+        self.cid, self.name = cid, name
+
+
 def _nothing_cut() -> dict:
     """The cut half of the report when there was no cut.
 
@@ -151,9 +177,11 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
 
     Raises `campaigns.CampaignNotFound` for an unknown source and
     `scenes.SceneNotFound` for a `from_scene` that is not one of its scenes.
-    Both are checked before anything is created — and the second of them after a
-    `key` has been looked up, so a repeat is answered even when the scene the
-    first call was cut at has since been deleted from the source.
+    Both are checked before anything is created — and BOTH after a `key` has
+    been looked up, so a repeat is answered even when the scene the first call
+    was cut at has since been deleted from the source, and even when the source
+    itself has been. A replay reads the children, which hold the record and the
+    lineage; nothing about it needs the campaign it came from to still be there.
 
     `key` is an optional idempotency key (#409). A repeat with the same key, from
     the same source, is answered with the fork the first call made and its report
@@ -180,8 +208,10 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
     expectation describes the copy this call would take, and a repeat is not
     taking one.
 
-    Raises `ValueError` for a key past `KEY_LIMIT` and
-    `revision.RevisionMismatchError` for a source that has moved.
+    Raises `ValueError` for a key past `KEY_LIMIT`,
+    `revision.RevisionMismatchError` for a source that has moved, and
+    `ForkContentionError` when every attempt to claim an id lost it to another
+    writer.
 
     The report is `{"id", "from_scene", "removed_scenes", "records", "refused",
     "failed", "replayed"}`. All but `id` and `replayed` are always present and
@@ -191,9 +221,33 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
     ensure_home()
     if len(key) > KEY_LIMIT:
         raise ValueError(f"an idempotency key may be at most {KEY_LIMIT} characters")
-    if not campaigns_paths.campaign_meta_path(cid).exists():
-        raise campaigns_paths.CampaignNotFound(cid)
-    new_cid = uniquify(slugify(name), lambda c: campaigns_paths.campaign_root(c).exists())
+    for _ in range(_CLAIM_ATTEMPTS):
+        # Outside the lock, because the id it computes is one of the two locks
+        # to take. That is exactly why it can be stale by the time the claim
+        # below runs, and why the claim is allowed to lose and come back here.
+        new_cid = uniquify(slugify(name), lambda c: campaigns_paths.campaign_root(c).exists())
+        out = _fork_once(cid, new_cid, name, from_scene, key, expect_revision)
+        if out is not None:
+            return out
+    # Every attempt lost its id to another writer between computing it and
+    # claiming it. Nothing has been created, so there is nothing to clean up --
+    # and a caller that reaches this is up against contention no number of
+    # retries would settle, which is the honest thing to say rather than to
+    # spin on.
+    raise ForkContentionError(cid, name)
+
+
+def _fork_once(cid: str, new_cid: str, name: str, from_scene: str | None,
+               key: str, expect_revision: str) -> dict | None:
+    """One attempt at the copy, under both locks, or None when the id was
+    claimed by somebody else between `uniquify` picking it and the `mkdir`
+    below -- the caller picks the next one and comes back.
+
+    Split out of `fork_campaign` so the retry can be a loop around a hold
+    rather than a second acquisition inside one: exactly one campaign lock
+    hold is ever live, which is the shape `test_lock_order_guard.py` allows
+    and the one this package's ordering rule is built on.
+    """
     # Both locks, through the one function allowed to hold two (#267): the
     # source's so the copy is not taken across a scene being written, and the
     # fork's for the same reason `create_campaign` holds one — `campaign.md` is
@@ -214,10 +268,18 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
             done = _replay(cid, key)
             if done is not None:
                 return {**done, "replayed": True}
-        # After the replay and before everything else: a repeat is answered
-        # whatever the campaign has done since (the copy it names was taken long
-        # ago), and a real copy is refused before the id is claimed so a stale
-        # request leaves nothing behind.
+        # AFTER the replay, and that ordering is the same one `from_scene`
+        # gets, one level further out: `_replay` reads the CHILDREN, whose
+        # `parent` line and `fork.json` hold everything the answer needs, so
+        # a source deleted since the first call does not stop its own fork
+        # being named. Checking here first answered a retry of a committed
+        # fork with a 404 while the fork it made was sitting on the shelf
+        # (Codex review). A real copy still needs a source, so this stands
+        # ahead of everything below it.
+        if not campaigns_paths.campaign_meta_path(cid).exists():
+            raise campaigns_paths.CampaignNotFound(cid)
+        # Before everything else: a real copy is refused before the id is
+        # claimed, so a stale request leaves nothing behind.
         revision.require(cid, expect_revision)
         if from_scene is not None:
             # Against the campaign's own enumeration rather than a bare
@@ -242,7 +304,18 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
         # own `FileExistsError` be the guard instead would put that campaign
         # inside the cleanup below, which would `rmtree` it. Same claim-then-fill
         # order as `create_campaign`, and for a sharper reason.
-        campaigns_paths.campaign_root(new_cid).mkdir(parents=True)
+        #
+        # Losing is not the end of the request. Two forks of one campaign
+        # asked for under the same name compute the same id before either
+        # takes a lock, and the loser used to raise `FileExistsError` out of
+        # the route -- a 500 for a request `uniquify` exists to answer with
+        # the next suffix (Codex review). Round again instead: the winner's
+        # directory is on disk now, so `uniquify` sees it and hands back the
+        # id after it.
+        try:
+            campaigns_paths.campaign_root(new_cid).mkdir(parents=True)
+        except FileExistsError:
+            return None
         try:
             _copy(cid, new_cid, name, from_scene)
         except BaseException:
@@ -275,7 +348,7 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
         # see mid-cut reads as `INITIAL` and every expectation built on it is
         # refused.
         revision.bump(new_cid)
-    return {**out, "replayed": False}
+        return {**out, "replayed": False}
 
 
 def _discard(new_cid: str) -> None:
