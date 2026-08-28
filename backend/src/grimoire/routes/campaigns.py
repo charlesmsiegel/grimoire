@@ -2109,10 +2109,23 @@ def put_campaign_pc(cid: str, pid: str, body: PCUpdate):
     _campaign_root_or_404(cid)
     try:
         root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
-        if body.tags is not None:
-            store.pcs.set_tags(root, pid, body.tags)
+        # The VERSION first, and that order is the fix rather than a
+        # preference: `set_default_version` validates before it writes
+        # (`require_version`), so an unknown or concurrently deleted version
+        # now refuses before anything has been saved. The other way round, the
+        # tags were already committed when the 404 went out -- a durable change
+        # answered non-2xx, which is the one shape a deliberate refusal shares
+        # with a crash and the one the middleware's failure stamp cannot see,
+        # because an `HTTPException` is a response rather than a raise (Codex
+        # review). Not stamped but PREVENTED: with nothing written there is
+        # nothing to record.
+        #
+        # The end state is unchanged when both are supplied: `set_tags` re-reads
+        # the metadata, so it carries the new default forward.
         if body.default_version is not None:
             store.pcs.set_default_version(root, pid, body.default_version)
+        if body.tags is not None:
+            store.pcs.set_tags(root, pid, body.tags)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
