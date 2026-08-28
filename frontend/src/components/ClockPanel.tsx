@@ -407,50 +407,51 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
    *  moment; moving past it on a copy that may not hold it would give them the
    *  one thing they said they did not want.
    */
+  /** Whether the answer the reader just gave is still an answer to the question
+   *  they were shown — asked immediately before anything is written, and the
+   *  gate's whole guard against acting on a stale price.
+   *
+   *  Both halves are needed, and the second is not redundant:
+   *
+   *   - the TOKEN is the campaign's answer to "has anything written you", which
+   *     is what the key is derived from. A stale token derives a stale key, and
+   *     the server would correctly replay a copy taken before whatever landed
+   *     since;
+   *   - the DIGEST catches exactly the class the token cannot. The token's
+   *     documented limit is that it only sees writes this app made, so a sync
+   *     client landing a scheduled event inside the span — or a hand edit —
+   *     changes what the skip would do and moves nothing (`store/revision.py`,
+   *     Codex review). The digest is the server's own account of what this move
+   *     would cross.
+   *
+   *  A mismatch takes the whole pricing with it and sends the reader back to
+   *  Preview, which is the same answer `campaign_moved` gets from the server.
+   *  Adopting the fresh values instead would keep the key honest and quietly
+   *  change what the skip does.
+   *
+   *  Asked by BOTH gate answers, and by a retry after a checkpoint already
+   *  landed: guarding only the copy left "Skip without checkpoint" and the
+   *  post-checkpoint retry advancing on a price nobody had rechecked (Codex
+   *  review).
+   */
+  async function gateAnswerStillHolds(): Promise<boolean> {
+    const { revision, digest } = await api.previewAdvance(cid, request());
+    if (!stillShowing(cid)) return false;
+    if (revision === pricedRevision && sameDigest(digest, gate)) return true;
+    forgetPricing();
+    setError("This campaign changed while the question was open, so nothing"
+             + " was copied and the skip was not taken — preview it again.");
+    return false;
+  }
+
   async function checkpointThenAdvance() {
     setError(null);
     setBusy(true);
     try {
+      if (!await gateAnswerStillHolds()) return;
       if (!checkpointed) {
         const name = forkName.trim();
         const took = refreshGen.current;
-        // Asked, immediately before the copy, whether the campaign is still the
-        // one this question was priced against — and nothing is written if it
-        // is not. Two things go wrong otherwise, and they are the same fact
-        // seen from either end:
-        //
-        //  - the KEY is derived from the operation (target and token) so that a
-        //    retry after a lost response, or after a reload that took this
-        //    panel's marker with it, reaches the server as the same request. A
-        //    stale token therefore derives a stale key, and the server would
-        //    correctly replay a copy taken before whatever landed since;
-        //  - the DIGEST can have changed without the clock moving at all. An
-        //    event scheduled inside the span from another tab is the case:
-        //    `pricedNow` watches the campaign's present and sees nothing, while
-        //    the skip would now fire something the reader was never shown
-        //    (Codex review).
-        //
-        // So a moved campaign takes the whole pricing with it and the reader
-        // previews again, which is the same answer `campaign_moved` gets from
-        // the server and the same one a disowned copy gets below. Adopting the
-        // fresh token instead would have kept the key honest and quietly
-        // changed what the skip does.
-        const { revision, digest } = await api.previewAdvance(cid, request());
-        if (!stillShowing(cid)) return;
-        // BOTH, and the second is not redundant. The token is the campaign's
-        // answer to "has anything written you", and its documented limit is
-        // that it only sees writes this app made — a sync client landing a
-        // scheduled event, or a hand edit, changes what the skip would do and
-        // moves no token at all (`store/revision.py`, Codex review). The digest
-        // is the server's own account of what this move would cross, so
-        // comparing it catches exactly the class the token cannot: same
-        // revision, different consequences.
-        if (revision !== pricedRevision || !sameDigest(digest, gate)) {
-          forgetPricing();
-          setError("This campaign changed while the question was open, so nothing"
-                   + " was copied and the skip was not taken — preview it again.");
-          return;
-        }
         // The token goes WITH the copy, not just into its key. The check above
         // is this panel's, and a client's check cannot bind: a whole request
         // separates it from the copy, and only the server holds the source's
@@ -538,6 +539,11 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setError(null);
     setBusy(true);
     try {
+      // The same guard the copy answer takes. This one writes no checkpoint, so
+      // there is nothing to abandon — but it still advances the clock and can
+      // still fire events, and a price nobody rechecked is exactly as stale
+      // here (Codex review).
+      if (!await gateAnswerStillHolds()) return;
       await runAdvance(pricedRevision);
     } catch (err: unknown) {
       if (stillShowing(cid)) onRefusal(err);

@@ -20,6 +20,7 @@ from .. import (
     modules,
     overlay,
     pcs,
+    revision,
     routing,
     sheets,
     usage,
@@ -115,6 +116,16 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
         calendars.write_calendar(root, cfg)
         campaign_climate.write_default(cid, wanted_climate)
         sheets.seed(cid)                 # reentrant: takes this same lock again
+        # LAST, and inside the lock, for the reason `fork` mints its own token
+        # there: `campaign.md` above is what makes this a campaign to
+        # `list_campaigns`, so from that line another process can find it and
+        # price something against it -- and with no token on disk it prices at
+        # `INITIAL`, which every write since would leave unchanged. `POST
+        # /api/campaigns` binds no `cid` in its path either, so the middleware
+        # never stamps it (Codex review). Minted here, everything a reader can
+        # see mid-creation reads as `INITIAL` and every expectation built on it
+        # is refused.
+        revision.bump(cid)
     return cid
 
 
@@ -155,88 +166,101 @@ def ensure_campaign_slim(cid: str) -> None:
     wroot = read.world_root_of(cid)
     if not wroot.exists():
         return
-    if meta.get(PRUNING_KEY):
-        _finish(mp, meta, body, root, wroot)   # decisions all made; only deleting left
-        return
+    # Every write below is stamped on the way out, including the failure path
+    # (#409). A lazy migration is a durable change to the campaign -- tombstones,
+    # a rewritten manifest, dematerialized records, a rewritten `campaign.md` --
+    # reached from a GET, which no method-based middleware stamps; a fork or an
+    # advance priced before the load that triggered it would otherwise still
+    # pass afterwards (Codex review). In a `finally` for the reason every other
+    # multi-write stamp in this change is: the phases land one at a time and an
+    # interruption leaves the earlier ones durable. The returns above it wrote
+    # nothing and stamp nothing. `revision.bump` never raises, so this cannot
+    # displace the error that got here.
+    try:
+        if meta.get(PRUNING_KEY):
+            _finish(mp, meta, body, root, wroot)   # decisions all made; only deleting left
+            return
 
-    locked = set(appearances_paths.record(cid))
-    manifest = paths.read_manifest(cid)
-    copied = set(manifest)   # every record the full copy tracked, before the loop prunes it
-    deleted_by_user: list[str] = []   # refs to tombstone: the copy is gone, the world's is not
-    redundant: list[str] = []         # refs whose copy the world still holds, identical
-    for ref, base in sorted(manifest.items()):
-        kind, _, eid = ref.partition("/")
-        # A ref the fork recorded with no hash at all copied nothing, so there
-        # has never been a copy here for the user to have deleted -- both
-        # historical writers stored `<hash of the world's> or ""`, and a plot
-        # map is simply absent from most worlds, so `plotmap: ''` sits in every
-        # campaign forked before its world had one. Reading that as a deletion
-        # tombstones the world's plot map out of the campaign the moment the
-        # world gains one, which is #270's own symptom (Codex review).
-        attributable = bool(base)
+        locked = set(appearances_paths.record(cid))
+        manifest = paths.read_manifest(cid)
+        copied = set(manifest)   # every record the full copy tracked, before the loop prunes it
+        deleted_by_user: list[str] = []   # refs to tombstone: the copy is gone, the world's is not
+        redundant: list[str] = []         # refs whose copy the world still holds, identical
+        for ref, base in sorted(manifest.items()):
+            kind, _, eid = ref.partition("/")
+            # A ref the fork recorded with no hash at all copied nothing, so there
+            # has never been a copy here for the user to have deleted -- both
+            # historical writers stored `<hash of the world's> or ""`, and a plot
+            # map is simply absent from most worlds, so `plotmap: ''` sits in every
+            # campaign forked before its world had one. Reading that as a deletion
+            # tombstones the world's plot map out of the campaign the moment the
+            # world gains one, which is #270's own symptom (Codex review).
+            attributable = bool(base)
 
-        def spent(mine_h: str | None, world_h: str | None) -> bool:
-            """The copy adds nothing the world does not already hold. A falsy
-            base counts: it is what the prune below reserves before unlinking,
-            so a run interrupted mid-prune re-derives the same verdict and
-            finishes the job (and it is what a materialization reserves, whose
-            unredeemed copy is the world's own bytes either way)."""
-            return mine_h is not None and mine_h == world_h and (base == mine_h or not base)
+            def spent(mine_h: str | None, world_h: str | None) -> bool:
+                """The copy adds nothing the world does not already hold. A falsy
+                base counts: it is what the prune below reserves before unlinking,
+                so a run interrupted mid-prune re-derives the same verdict and
+                finishes the job (and it is what a materialization reserves, whose
+                unredeemed copy is the world's own bytes either way)."""
+                return mine_h is not None and mine_h == world_h and (base == mine_h or not base)
 
-        if ref == "plotmap":
-            if not (root / "plotmap.json").exists():
-                if attributable and (wroot / "plotmap.json").exists():
-                    deleted_by_user.append(ref)   # keep the user's deletion deleted
-                manifest.pop(ref)
-            elif spent(greetings.plotmap_hash(root), greetings.plotmap_hash(wroot)):
-                redundant.append(ref)
-                manifest.pop(ref)
-            continue
-        if kind in appearances_paths.ACTOR_KINDS:
-            if ref in locked:
-                manifest.pop(ref)   # a lock owns its base in appearances.json
+            if ref == "plotmap":
+                if not (root / "plotmap.json").exists():
+                    if attributable and (wroot / "plotmap.json").exists():
+                        deleted_by_user.append(ref)   # keep the user's deletion deleted
+                    manifest.pop(ref)
+                elif spent(greetings.plotmap_hash(root), greetings.plotmap_hash(wroot)):
+                    redundant.append(ref)
+                    manifest.pop(ref)
                 continue
-            dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
-            mine_h = dh(root, eid)
-            if mine_h is None:
-                if attributable and dh(wroot, eid) is not None:
+            if kind in appearances_paths.ACTOR_KINDS:
+                if ref in locked:
+                    manifest.pop(ref)   # a lock owns its base in appearances.json
+                    continue
+                dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
+                mine_h = dh(root, eid)
+                if mine_h is None:
+                    if attributable and dh(wroot, eid) is not None:
+                        deleted_by_user.append(ref)   # keep the user's deletion deleted
+                    manifest.pop(ref)
+                elif spent(mine_h, dh(wroot, eid)):
+                    redundant.append(ref)
+                    manifest.pop(ref)
+                continue
+            if not (root / kind / f"{eid}.md").exists():
+                if attributable and (wroot / kind / f"{eid}.md").exists():
                     deleted_by_user.append(ref)   # keep the user's deletion deleted
                 manifest.pop(ref)
-            elif spent(mine_h, dh(wroot, eid)):
+            elif spent(entities.entity_hash(root, kind, eid), entities.entity_hash(wroot, kind, eid)):
                 redundant.append(ref)
                 manifest.pop(ref)
-            continue
-        if not (root / kind / f"{eid}.md").exists():
-            if attributable and (wroot / kind / f"{eid}.md").exists():
-                deleted_by_user.append(ref)   # keep the user's deletion deleted
-            manifest.pop(ref)
-        elif spent(entities.entity_hash(root, kind, eid), entities.entity_hash(wroot, kind, eid)):
-            redundant.append(ref)
-            manifest.pop(ref)
-    for ref in deleted_by_user:
-        overlay.add_deleted(cid, ref)
-    _tombstone_deleted_copied_assets(cid, root, wroot, copied)
-    # Reserve, unlink, drop -- the same two-step `overlay._recorded_base` uses,
-    # run backwards. Dropping the ref outright and then unlinking would leave an
-    # interrupted prune as a copy the manifest does not name, and nothing on
-    # disk tells that apart from a record the campaign owns: ids are
-    # `slugify(name)` and each root uniquifies against itself alone, so a
-    # campaign-local record whose slug the world later reuses with identical
-    # content looks exactly like residue. Deleting it there reads as harmless --
-    # the content is the same -- but the record has silently become inherited,
-    # so the next world edit rewrites it and a world deletion removes it
-    # (Codex review). Reserving instead makes the prune say so itself: a falsy
-    # base is not attributable to any user (see the loop above), and every
-    # interruption point below re-derives the same verdict on the next run.
-    for ref in redundant:
-        manifest[ref] = overlay.RESERVED_BASE
-    paths.write_manifest(cid, manifest)
-    for ref in redundant:
-        overlay.dematerialize(cid, ref)
-    for ref in redundant:
-        manifest.pop(ref, None)
-    paths.write_manifest(cid, manifest)
-    _finish(mp, meta, body, root, wroot)
+        for ref in deleted_by_user:
+            overlay.add_deleted(cid, ref)
+        _tombstone_deleted_copied_assets(cid, root, wroot, copied)
+        # Reserve, unlink, drop -- the same two-step `overlay._recorded_base` uses,
+        # run backwards. Dropping the ref outright and then unlinking would leave an
+        # interrupted prune as a copy the manifest does not name, and nothing on
+        # disk tells that apart from a record the campaign owns: ids are
+        # `slugify(name)` and each root uniquifies against itself alone, so a
+        # campaign-local record whose slug the world later reuses with identical
+        # content looks exactly like residue. Deleting it there reads as harmless --
+        # the content is the same -- but the record has silently become inherited,
+        # so the next world edit rewrites it and a world deletion removes it
+        # (Codex review). Reserving instead makes the prune say so itself: a falsy
+        # base is not attributable to any user (see the loop above), and every
+        # interruption point below re-derives the same verdict on the next run.
+        for ref in redundant:
+            manifest[ref] = overlay.RESERVED_BASE
+        paths.write_manifest(cid, manifest)
+        for ref in redundant:
+            overlay.dematerialize(cid, ref)
+        for ref in redundant:
+            manifest.pop(ref, None)
+        paths.write_manifest(cid, manifest)
+        _finish(mp, meta, body, root, wroot)
+    finally:
+        revision.bump(cid)
 
 
 def _finish(mp: Path, meta: dict, body: str, root: Path, wroot: Path) -> None:

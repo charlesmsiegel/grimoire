@@ -44,8 +44,22 @@ def cid(monkeypatch, tmp_path):
     return campaigns.create_campaign("Saltmarch", wid)
 
 
-def test_a_campaign_nothing_has_stamped_reads_as_initial(cid):
-    assert revision.current(cid) == revision.INITIAL
+@pytest.fixture
+def unstamped(cid):
+    """A campaign with no token file at all.
+
+    `create_campaign` mints one as its last act (#409), so this state is no
+    longer reachable by creating a campaign -- but it is exactly what an OLDER
+    campaign looks like, written before this module existed, and that is what
+    the absent-file rule is for. Produced by removing the file rather than by
+    skipping the mint, so the campaign is otherwise ordinary.
+    """
+    (campaigns.campaign_root(cid) / revision.FILENAME).unlink()
+    return cid
+
+
+def test_a_campaign_nothing_has_stamped_reads_as_initial(unstamped):
+    assert revision.current(unstamped) == revision.INITIAL
 
 
 def test_a_bump_changes_the_token_and_never_repeats_one(cid):
@@ -128,13 +142,13 @@ def test_a_matching_expectation_passes_and_a_stale_one_names_both_values(cid):
     assert exc.value.current == second
 
 
-def test_a_campaign_that_has_never_been_stamped_can_still_be_priced(cid):
+def test_a_campaign_that_has_never_been_stamped_can_still_be_priced(unstamped):
     # The other half of the rule: an ABSENT file is indistinguishable from a
     # campaign nothing has written, so it reads as `INITIAL` and `INITIAL`
-    # matches. Refusing here instead would leave a fresh campaign unpriceable —
+    # matches. Refusing here instead would leave such a campaign unpriceable —
     # every re-price would hand back the value that had just been refused.
-    assert revision.current(cid) == revision.INITIAL
-    revision.require(cid, revision.INITIAL)
+    assert revision.current(unstamped) == revision.INITIAL
+    revision.require(unstamped, revision.INITIAL)
 
 
 def test_stamping_a_campaign_that_is_gone_says_nothing(cid, caplog):
@@ -148,12 +162,14 @@ def test_stamping_a_campaign_that_is_gone_says_nothing(cid, caplog):
     assert caplog.records == []
 
 
-def test_a_bump_that_cannot_be_written_does_not_raise(cid, monkeypatch):
+def test_a_bump_that_cannot_be_written_does_not_raise(unstamped, monkeypatch):
     # It runs after the mutation it records has committed, so raising here would
-    # turn work the user already has into a reported failure.
+    # turn work the user already has into a reported failure. Against a campaign
+    # with no token on disk, so the degraded answer is `INITIAL` rather than the
+    # value the failed write was replacing.
     monkeypatch.setattr(atomic, "write_text",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("full disk")))
-    assert revision.bump(cid) == revision.INITIAL
+    assert revision.bump(unstamped) == revision.INITIAL
 
 
 # --- what moves it ---------------------------------------------------------
@@ -455,6 +471,62 @@ def test_a_lost_race_projects_nothing_and_stamps_nothing(client):
     before = _token(client, cid)
     assert store.proposals.project(cid, sid, "no-such-proposal") is None
     assert _token(client, cid) == before
+
+
+def test_a_new_campaign_is_minted_rather_than_left_at_initial(client):
+    """`POST /api/campaigns` binds no `cid` in its path, so the middleware never
+    stamps it — and creation publishes `campaign.md` before its remaining
+    initialization writes, so another process can find the campaign and price
+    something against it at `INITIAL` while those writes are still landing
+    (Codex review). The token is minted last, inside the creation lock."""
+    cid = _campaign(client)
+    assert _token(client, cid) != revision.INITIAL
+
+
+def test_a_lazy_migration_reached_from_a_read_stamps_what_it_wrote(client, monkeypatch):
+    """A GET can durably change a campaign: `ensure_campaign_slim` tombstones
+    refs, rewrites the manifest and rewrites `campaign.md`. No method-based
+    middleware stamps a GET, so a fork or an advance priced before the load that
+    triggered the migration would otherwise still pass afterwards."""
+    cid = _campaign(client)
+    # The baseline FIRST: `_token` reads `/clock`, which resolves the campaign
+    # root and would run the migration itself.
+    before = _token(client, cid)
+    # Now put the campaign back into the pre-overlay shape the migration exists
+    # for -- written directly, so nothing stamps it.
+    meta_path = store.campaigns.campaign_meta_path(cid)
+    text = meta_path.read_text(encoding="utf-8")
+    assert "world_copy: overlay\n" in text
+    meta_path.write_text(text.replace("world_copy: overlay\n", ""), encoding="utf-8")
+    assert client.get(f"/api/campaigns/{cid}").status_code == 200
+    assert _token(client, cid) != before, "the migration wrote and stamped nothing"
+
+
+def test_a_read_that_migrates_nothing_stamps_nothing(client):
+    """The other half: an ordinary GET of an already-slim campaign writes
+    nothing, and must not cost a reader its price."""
+    cid = _campaign(client)
+    before = _token(client, cid)
+    assert client.get(f"/api/campaigns/{cid}").status_code == 200
+    assert _token(client, cid) == before
+
+
+def test_a_scene_date_that_failed_its_reconciliation_still_stamps(client, monkeypatch):
+    """`PUT .../datetime` is several writes: `set_datetime` renames the scene and
+    writes its date, `clock.observe` commits the campaign clock, and only then
+    does the weather sweep run. A failure in the sweep answers non-2xx over a
+    campaign that has genuinely changed (Codex review)."""
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    before = _token(client, cid)
+
+    def die(*a, **kw):
+        raise OSError(5, "the weather store could not be read")
+
+    monkeypatch.setattr(store.weather, "sweep", die)
+    with pytest.raises(OSError):
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-01-01"})
+    assert _token(client, cid) != before
 
 
 def _opener(client, cid, sid):
