@@ -251,8 +251,8 @@ def delete_scene(cid: str, sid: str) -> None:
     # the id for reuse, so a crash between the unlinks must not be able to leave
     # a sidecar without one: that orphan would be adopted by the next scene to
     # take this id -- handing it someone else's parked transcripts, someone
-    # else's steering log, or someone
-    # else's end-of-scene review, complete with a commit token that would save
+    # else's steering log, or someone else's end-of-scene review, complete with
+    # a commit token that would save
     # the dead scene's summary onto the new one. The other order is recoverable
     # in the harmless direction: a scene that still exists merely loses them.
     _unlink_sidecar(paths._review_path(cid, sid))
