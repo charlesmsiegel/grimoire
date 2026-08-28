@@ -57,6 +57,16 @@ def _rule(name, month, day):
     return {"name": name, "month": month, "day": day}
 
 
+def _mark_many(cid, keys):
+    """Acknowledge `keys` in requests no larger than one is allowed to be.
+
+    `BATCH_LIMIT` bounds a single request, not a ledger — so a test about the
+    ROW cap has to fill it the way a reader would, one dismissal at a time.
+    """
+    for i in range(0, len(keys), notices.BATCH_LIMIT):
+        notices.mark(cid, keys[i:i + notices.BATCH_LIMIT])
+
+
 # ---- the window: what counts as imminent ----------------------------------
 
 def test_a_fresh_campaign_has_nothing_to_warn_about(monkeypatch, tmp_path):
@@ -243,7 +253,7 @@ def test_the_ledger_is_capped(monkeypatch, tmp_path):
     """`POST .../notices` is public and the ledger only ever grows, so the file
     needs a ceiling. Oldest acknowledgement goes first."""
     cid = _campaign(monkeypatch, tmp_path)
-    notices.mark(cid, [f"holiday:{n}:Old" for n in range(notices.LEDGER_LIMIT)])
+    _mark_many(cid, [f"holiday:{n}:Old" for n in range(notices.LEDGER_LIMIT)])
     notices.mark(cid, ["holiday:999999:New"])
     data = notices.read(cid)
     assert len(data) == notices.LEDGER_LIMIT
@@ -262,7 +272,7 @@ def test_eviction_can_re_warn_a_historical_scene(monkeypatch, tmp_path):
     key = _pending(cid)[0]["key"]
     notices.mark(cid, [key])
     assert _pending(cid) == []
-    notices.mark(cid, [f"holiday:{900000 + n}:Later" for n in range(notices.LEDGER_LIMIT)])
+    _mark_many(cid, [f"holiday:{900000 + n}:Later" for n in range(notices.LEDGER_LIMIT)])
     assert key not in notices.read(cid)
     assert _names(_pending(cid)) == ["Saltmarch Eve"]
 
@@ -473,3 +483,26 @@ def test_forget_event_steps_over_a_ledger_it_cannot_read(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     notices._path(cid).write_text("{not json", encoding="utf-8")
     assert notices.forget_event(cid, "the-envoy-arrives") == []
+
+
+def test_a_name_with_edge_whitespace_still_dismisses(monkeypatch, tmp_path):
+    """`mark` strips the keys it is given — a key is opaque, but a blank one is
+    not a key — so a name carrying edge whitespace generated a key that no
+    longer equalled the stored one: the dismissal reported success and the
+    banner came back on the next read. `validate_rule` accepts such a name and
+    calendar.json is hand-written, so it is reachable."""
+    cid = _campaign(monkeypatch, tmp_path, holidays=[_rule("Saltmarch Eve ", "05", 13)])
+    key = _pending(cid)[0]["key"]
+    assert key == key.strip()
+    assert notices.mark(cid, [key]) == [key]
+    assert _pending(cid) == []
+
+
+def test_one_request_cannot_dismiss_unboundedly_many(monkeypatch, tmp_path):
+    """`mark` builds the whole updated ledger before `_trim` cuts it back, so
+    the row cap alone bounds the FILE and not the work: a crafted batch would
+    still cost the memory and the sort."""
+    cid = _campaign(monkeypatch, tmp_path)
+    done = notices.mark(cid, [f"holiday:{n}:x" for n in range(notices.BATCH_LIMIT * 20)])
+    assert len(done) == notices.BATCH_LIMIT
+    assert len(notices.read(cid)) == notices.BATCH_LIMIT

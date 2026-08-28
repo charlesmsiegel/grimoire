@@ -79,6 +79,13 @@ LEDGER_LIMIT = 5000
 #: one.
 KEY_LIMIT = 200
 
+#: How many keys one request may acknowledge. `POST .../notices` is public and
+#: takes a list, and `mark` builds the whole updated ledger in memory before
+#: `_trim` cuts it back — so without this a crafted batch costs unbounded memory
+#: and an O(n log n) sort no matter what the row cap says. Sized well past any
+#: real banner, which shows the handful of things inside one warn window.
+BATCH_LIMIT = 100
+
 #: How much of an observance's name a key spells out before `_bounded` hashes
 #: the rest. A holiday name has no length limit anywhere -- `validate_rule`
 #: checks only that one is present, and a custom rule is hand-written -- so
@@ -182,10 +189,12 @@ def mark(cid: str, keys: list[str], scene: str = "") -> list[str]:
     A key past `KEY_LIMIT` is dropped rather than shortened, and the return value
     says so by not naming it: every key this app generates is bounded, so an
     overlong one is crafted, and storing a truncated version of it would be
-    recording an acknowledgement of something nobody can be warned about.
+    recording an acknowledgement of something nobody can be warned about. Past
+    `BATCH_LIMIT` keys the request is cut for the same reason and reports the
+    same way — what it actually marked.
     """
     wanted = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
-    wanted = [k for k in wanted if len(k) <= KEY_LIMIT]
+    wanted = [k for k in wanted if len(k) <= KEY_LIMIT][:BATCH_LIMIT]
     if not wanted:
         return []
     stamp = paths.now_iso()
@@ -229,12 +238,21 @@ def forget(cid: str, keys: list[str]) -> list[str]:
 def _bounded(text: str) -> str:
     """`text` for a key: itself when short, else a prefix plus a digest of it.
 
+    Stripped first, and that is not cosmetic: `mark` strips the keys it is given
+    (a key is opaque, but a blank one is not a key), so a name carrying edge
+    whitespace would generate a key that no longer equals the one stored — the
+    dismissal reports success and `pending`, comparing against the unstripped
+    original, shows the same banner on the next read. Normalizing where the key
+    is BUILT is what keeps the two sides agreeing; `validate_rule` accepts
+    `"Saltmarch Eve "` and calendar.json is hand-written, so this is reachable.
+
     Bounded AND collision-free, which a plain truncation is not: two observances
     sharing a 120-character prefix would otherwise share one acknowledgement, so
     dismissing the first would silence the second without the reader ever seeing
     it. The prefix is kept so the key stays legible in a hand-read notices.json,
     which is the whole reason the name is in the key rather than a hash of it.
     """
+    text = text.strip()
     if len(text) <= NAME_BUDGET:
         return text
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]

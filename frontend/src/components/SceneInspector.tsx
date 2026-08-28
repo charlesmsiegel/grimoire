@@ -402,6 +402,20 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // and reopening the When section remounts it and shows the acknowledged
   // warning again (#106). Only the newest read is allowed to apply.
   const whenGen = useRef(0);
+
+  // Clear `when` the moment the campaign or scene changes, before the reload
+  // below has settled. Until it does, this holds the PREVIOUS scene's payload
+  // -- and the banner reading its notices would be rendering them beside the
+  // new `cid`, so a dismissal in that window writes the old campaign's
+  // occurrence key into the new campaign's ledger, silencing a warning that
+  // campaign never showed (#106). Adjusted during render rather than from an
+  // effect, which is what makes it happen BEFORE the stale list can paint --
+  // the same reason `NewSceneChooser` clears its own list this way.
+  const [seenScene, setSeenScene] = useState(`${cid}/${sid}`);
+  if (seenScene !== `${cid}/${sid}`) {
+    setSeenScene(`${cid}/${sid}`);
+    setWhen(null);
+  }
   const reloadWhen = useCallback(
     (opts?: { fresh?: boolean }) => {
       const mine = ++whenGen.current;

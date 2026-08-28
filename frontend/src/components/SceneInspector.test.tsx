@@ -533,6 +533,30 @@ test("an older datetime read cannot replace a newer one", async () => {
   expect(screen.queryByText("The envoy arrives")).toBeNull();
 });
 
+test("a scene change drops the previous scene's notices before the reload lands", async () => {
+  // Until the reload settles, `when` holds the PREVIOUS scene's payload — and
+  // the banner would render its notices beside the new ids, so a dismissal in
+  // that window writes the old campaign's occurrence key into the new
+  // campaign's ledger (#106).
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
+               secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
+               notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
+                           name: "The envoy arrives", in_days: 2,
+                           friendly: "6 July 2026" }] },
+    history: ["2026-07-04"] });
+  const { rerender } = render(
+    <MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+                                  onSceneChanged={() => {}} /></MemoryRouter>);
+  await screen.findByText("The envoy arrives");
+  // The next scene's read never settles, so only the synchronous clear can help.
+  (api.getSceneDatetime as any).mockReturnValue(new Promise(() => {}));
+  rerender(
+    <MemoryRouter><SceneInspector cid="c" sid="s2" refreshKey={0}
+                                  onSceneChanged={() => {}} /></MemoryRouter>);
+  expect(screen.queryByText("The envoy arrives")).toBeNull();
+});
+
 test("a scene with nothing imminent shows no warning at all", async () => {
   (api.getSceneDatetime as any).mockResolvedValue({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
