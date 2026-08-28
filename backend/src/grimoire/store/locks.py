@@ -152,6 +152,11 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # of that has to be one critical section with the scene writes it brackets,
     # or a concurrent reply lands between the decision and the swap.
     "store.alternates",
+    # The steering log is a read-modify-write of one whole file, appended
+    # beside `alternates.archive` inside the regenerate route's lock hold
+    # (reentrant, so its own acquire is free) — two unserialized rerolls
+    # would lose one of the two appends.
+    "store.steering",
     # `provenance.record` is a read-modify-write of one whole file, so two
     # unserialized callers lose one of the two writes. Its only caller
     # (`absorb.apply.apply_edits`, under `PUT /chronicle`) already holds this
