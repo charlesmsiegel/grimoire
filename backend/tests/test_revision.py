@@ -629,6 +629,38 @@ def test_a_scene_location_that_failed_part_way_stamps(client, monkeypatch):
     assert _token(client, cid) != before
 
 
+def test_a_refused_pc_update_writes_nothing_at_all(client):
+    """The sub-class the middleware's failure stamp cannot reach, and the one
+    place it is better prevented than recorded.
+
+    `PUT .../pcs/{pid}` used to save the tags and then refuse an unknown
+    `default_version` with a 404 — a durable change answered non-2xx. That is
+    not a crash, so nothing raises past the middleware: an `HTTPException` is a
+    RESPONSE, and the response path deliberately skips 4xx so that ordinary
+    refusals do not invalidate every outstanding price (Codex review).
+
+    `set_default_version` validates before it writes, so doing it first refuses
+    with nothing saved. Asserted on the record rather than on the token,
+    because the point is that there is no write to stamp.
+    """
+    cid = _campaign(client)
+    made = client.post(f"/api/campaigns/{cid}/pcs", json={
+        "name": "Mara",
+        "persona": {"name": "Mara", "pronouns": "she/her", "summary": "a smuggler",
+                    "description": "Quiet, and owed to by several people."}})
+    assert made.status_code == 200, made.text
+    pid = made.json()["pc"]
+    before = _token(client, cid)
+
+    r = client.put(f"/api/campaigns/{cid}/pcs/{pid}",
+                   json={"tags": ["scarred"], "default_version": "no-such-version"})
+    assert r.status_code == 404
+    # The tags were the write that used to land ahead of the refusal.
+    got = next(p for p in client.get(f"/api/campaigns/{cid}/pcs").json() if p["id"] == pid)
+    assert got.get("tags", []) == []
+    assert _token(client, cid) == before
+
+
 def _opener(client, cid, sid):
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
                        json={"prompt": "They arrive at the gate."}) as r:

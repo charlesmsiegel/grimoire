@@ -430,11 +430,17 @@ def get_world_pc(wid: str, pid: str):
 def put_world_pc(wid: str, pid: str, body: PCUpdate):
     root = _world_root_or_404(wid)
     try:
+        # The VERSION first, for the reason the campaign-scoped twin of this
+        # route states at length: `set_default_version` validates before it
+        # writes, so an unknown one refuses before the tags are saved rather
+        # than after. No write token is involved on this side -- a world route
+        # stamps none -- but a 404 that has already changed the record is the
+        # same defect either way.
+        if body.default_version is not None:
+            store.pcs.set_default_version(root, pid, body.default_version)
         if body.tags is not None:
             _validate_tags(root, body.tags)
             store.pcs.set_tags(root, pid, body.tags)
-        if body.default_version is not None:
-            store.pcs.set_default_version(root, pid, body.default_version)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
