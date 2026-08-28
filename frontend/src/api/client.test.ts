@@ -2289,3 +2289,36 @@ test("a scene that really is gone ends the opener recovery rather than looping",
     .rejects.toThrow("Failed to fetch");
   expect(fetchMock).toHaveBeenCalledTimes(3);
 });
+
+test("aborting an opener stops its recovery lookups, not just its streams", async () => {
+  // The recovery makes two kinds of request of its own -- discovery and the
+  // rename resolution -- and both went out without a signal, so aborting while
+  // one was in flight waited out the transport. Same gap as the draft fetches,
+  // in the helpers `streamDraft` reaches for rather than in `draftRun`.
+  const signals: (AbortSignal | undefined)[] = [];
+  const stop = new AbortController();
+  globalThis.fetch = vi.fn().mockImplementation(
+    (path: string, init?: { signal?: AbortSignal }) => {
+      signals.push(init?.signal);
+      if (String(path).includes("/opener")) {
+        return Promise.resolve(sseCutOff([
+          'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
+            + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
+        ]));
+      }
+      if (String(path).includes("/run?attempt=")) return Promise.resolve(jsonOk({ run: null }));
+      if (String(path).includes("scene-by-identity")) {
+        return Promise.resolve({ ok: false, status: 404,
+                                 json: async () => ({ detail: "gone",
+                                                      kind: "scene_gone" }) });
+      }
+      return Promise.resolve(jsonOk({}));
+    });
+
+  await api.opener("run", "s1", "begin", () => {}, stop.signal)
+    .catch(() => null);
+
+  // The POST, the discovery, and the identity resolution: every one of them.
+  expect(signals.length).toBeGreaterThanOrEqual(3);
+  expect(signals.every((s) => s === stop.signal)).toBe(true);
+});
