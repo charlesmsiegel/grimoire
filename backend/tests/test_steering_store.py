@@ -2,7 +2,7 @@
 
 import json
 
-from grimoire.store import campaigns, scenes, steering, worlds
+from grimoire.store import campaigns, revision, scenes, steering, worlds
 from grimoire.store.scenes import paths as scenes_paths
 
 
@@ -70,6 +70,22 @@ def test_record_is_failsoft_on_oserror(monkeypatch, tmp_path):
     monkeypatch.setattr(steering.atomic, "write_text", boom)
     steering.record(cid, sid, "lost, and that is fine")   # must not raise
     assert steering.texts(cid, sid) == []
+
+
+def test_record_stamps_the_write_token_and_noops_do_not(monkeypatch, tmp_path):
+    """`record` is reachable on a reroll the route then REFUSES (the
+    TurnSizesDesynced 400), and the activity middleware only stamps success —
+    so the write must stamp for itself, or a reader holding the pre-request
+    token passes a check against a campaign that has been written since."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    before = revision.current(cid)
+    steering.record(cid, sid, "moved the campaign")
+    stamped = revision.current(cid)
+    assert stamped != before
+    steering.record(cid, sid, "moved the campaign")   # dedupe: no write, no stamp
+    assert revision.current(cid) == stamped
+    steering.record(cid, sid, "   ")                  # empty: no write, no stamp
+    assert revision.current(cid) == stamped
 
 
 def test_sid_taken_counts_an_orphan_steering_sidecar(monkeypatch, tmp_path):
