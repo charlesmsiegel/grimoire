@@ -24,20 +24,37 @@ RACY_WINDOW_NS = 1_000_000_000
 _cache: dict[tuple, object] = {}
 
 
-def signature(*paths: Path) -> tuple | None:
-    """Stat signature covering every path; None if any is missing."""
+def signature(*paths: Path, absent_ok: bool = False) -> tuple | None:
+    """Stat signature covering every path; None if any is missing.
+
+    `st_ino` rides along because a rename-replace cannot preserve it: a sync
+    client or restore landing a same-size file with the origin's old mtime
+    would otherwise produce an identical signature, and nothing would ever
+    invalidate. The residual is an in-place same-size rewrite with a restored
+    mtime — the racy-clean residual git also accepts.
+
+    `absent_ok` turns a missing path into the cacheable sentinel
+    `(path, "absent")` instead of voiding the signature. It exists for
+    companion files whose absence is a valid state (an appearances record a
+    campaign has not written yet): the sentinel differs from every real stat
+    tuple, so the file's creation invalidates naturally. Callers whose missing
+    file means "not found" keep the default.
+    """
     sig = []
     for p in paths:
         try:
             st = p.stat()
         except OSError:
+            if absent_ok:
+                sig.append((str(p), "absent"))
+                continue
             return None
-        sig.append((str(p), st.st_mtime_ns, st.st_size))
+        sig.append((str(p), st.st_mtime_ns, st.st_size, st.st_ino))
     return tuple(sig)
 
 
 def memo(kind: str, sig: tuple | None, compute: Callable[[], T],
-         *, pool: dict | None = None) -> T:
+         *, pool: dict | None = None, max_entries: int | None = None) -> T:
     """Return the cached value for (kind, sig), computing on miss. A None
     signature (file vanished between the caller's check and here) is never
     cached. Eviction is FIFO; races under the threadpool at worst recompute.
@@ -50,12 +67,14 @@ def memo(kind: str, sig: tuple | None, compute: Callable[[], T],
     cheap at the cost of everyone else's. It also keeps the memory that sweep
     holds (whole flattened transcripts, for `store/search.py`) inside a budget
     that can be reasoned about on its own.
+
+    `max_entries` overrides `MAX_ENTRIES` for caller pools.
     """
     if sig is None:
         return compute()
     cache = _cache if pool is None else pool
     now = time.time_ns()
-    if any(now - mtime_ns < RACY_WINDOW_NS for _, mtime_ns, _ in sig):
+    if any(len(entry) == 4 and now - entry[1] < RACY_WINDOW_NS for entry in sig):
         return compute()  # too fresh to trust the signature; compute, don't cache
     key = (kind, sig)
     try:
@@ -63,7 +82,8 @@ def memo(kind: str, sig: tuple | None, compute: Callable[[], T],
     except KeyError:
         pass
     val = compute()
-    while len(cache) >= MAX_ENTRIES:
+    budget = MAX_ENTRIES if max_entries is None else max_entries
+    while len(cache) >= budget:
         try:
             del cache[next(iter(cache))]
         except (StopIteration, KeyError, RuntimeError):

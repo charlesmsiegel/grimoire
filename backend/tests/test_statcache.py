@@ -117,3 +117,69 @@ def test_dir_hash_tracks_version_add_and_delete(tmp_path):
     assert h2 != h1
     characters.delete_version(tmp_path, cid, v2)
     assert characters.dir_hash(tmp_path, cid) == h1  # same content set again
+
+
+def test_signature_changes_on_inode_replacement(tmp_path):
+    """A rename-replace that preserves mtime and size still invalidates."""
+    p = tmp_path / "a.md"
+    p.write_text("aaaa", encoding="utf-8")
+    _age(p)
+    before = statcache.signature(p)
+    st = p.stat()
+    q = tmp_path / "a.md.tmp"
+    q.write_text("bbbb", encoding="utf-8")   # same size, new inode
+    os.utime(q, ns=(st.st_mtime_ns, st.st_mtime_ns))
+    os.replace(q, p)
+    assert statcache.signature(p) != before
+
+
+def test_signature_absent_ok_yields_cacheable_sentinel(tmp_path):
+    """A deliberately-absent companion file is a valid, cacheable state."""
+    p = tmp_path / "present.md"
+    p.write_text("x", encoding="utf-8")
+    _age(p)
+    missing = tmp_path / "missing.json"
+    sig = statcache.signature(p, missing, absent_ok=True)
+    assert sig is not None
+    # ...and its creation invalidates.
+    missing.write_text("{}", encoding="utf-8")
+    _age(missing)
+    assert statcache.signature(p, missing, absent_ok=True) != sig
+    # Without the flag, a missing path still voids the signature.
+    assert statcache.signature(p, tmp_path / "also-missing") is None
+
+
+def test_memo_pool_budget_override(tmp_path):
+    pool: dict = {}
+    paths = []
+    for i in range(4):
+        p = tmp_path / f"f{i}.md"
+        p.write_text(str(i), encoding="utf-8")
+        paths.append(p)
+    _age(*paths)
+    for p in paths:
+        statcache.memo("k", statcache.signature(p), lambda p=p: p.name,
+                       pool=pool, max_entries=2)
+    assert len(pool) <= 2
+
+
+def test_memo_pool_holds_working_set_larger_than_shared_budget(tmp_path):
+    """A repeated sweep bigger than MAX_ENTRIES still hits in its own pool."""
+    pool: dict = {}
+    n = statcache.MAX_ENTRIES + 8
+    paths = []
+    for i in range(n):
+        p = tmp_path / f"s{i}.md"
+        p.write_text("x", encoding="utf-8")
+        paths.append(p)
+    _age(*paths)
+    calls = []
+    def sweep():
+        for p in paths:
+            statcache.memo("s", statcache.signature(p),
+                           lambda p=p: calls.append(p) or p.name,
+                           pool=pool, max_entries=n + 16)
+    sweep()
+    first = len(calls)
+    sweep()
+    assert len(calls) == first   # second sweep: all hits
