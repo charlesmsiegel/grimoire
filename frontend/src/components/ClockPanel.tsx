@@ -44,6 +44,29 @@ function campaignMoved(err: unknown): boolean {
     && (err as { kind?: unknown }).kind === "campaign_moved";
 }
 
+/** A short, stable fingerprint of the move the reader was shown.
+ *
+ *  The checkpoint's idempotency key is derived from the operation so a retry
+ *  after a lost response — or after a reload, which takes this panel's state
+ *  with it — reaches the server as the same request. The token is part of that
+ *  derivation, but the token cannot see writes this app did not make: a sync
+ *  client landing a scheduled event inside the span leaves the token alone, so
+ *  after a reload the key would be identical and `/fork` would replay a copy
+ *  taken before that event, handing back a restore point that predates the
+ *  thing now being crossed (Codex review). Folding the digest in is what makes
+ *  a genuinely different move a genuinely different operation.
+ *
+ *  32 bits, which is not a collision-free identity and does not need to be: a
+ *  collision replays a copy for a different digest, which is exactly the
+ *  behaviour this replaces, and every other guard still stands in front of it.
+ */
+function digestFingerprint(shown: AdvanceDigest | null): string {
+  const text = shown === null ? "" : JSON.stringify(shown);
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 /** Whether a freshly priced digest still describes the move the reader is
  *  looking at.
  *
@@ -460,7 +483,8 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // would then reject anyway, leaving the copy on the shelf for nothing
         // (Codex review).
         const report = await api.forkCampaign(cid, name, undefined, {
-          idempotencyKey: `checkpoint:${gate?.to ?? ""}:${pricedRevision}`,
+          idempotencyKey:
+            `checkpoint:${gate?.to ?? ""}:${pricedRevision}:${digestFingerprint(gate)}`,
           expectRevision: pricedRevision,
         });
         // The sharpest case for the rule above. A copy of A recorded as B's

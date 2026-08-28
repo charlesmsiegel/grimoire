@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ClockPanel } from "./ClockPanel";
 import { api, type AdvanceDigest, type CampaignClock,
          type ForkReport } from "../api/client";
@@ -58,6 +58,15 @@ const BIG: AdvanceDigest = { ...DIGEST, elapsed_days: 90, to: "2027-03-24",
 const FORK_REPORT: ForkReport = { id: "before-24-march-2027", from_scene: "",
                       removed_scenes: [], records: 0, refused: [], failed: [],
                       replayed: false };
+
+/** The stable half of a checkpoint's idempotency key: the operation it names.
+ *
+ *  The key ends in a fingerprint of the digest the reader was shown, so that a
+ *  move whose contents changed under an unmoved token is a different operation
+ *  (#409). Tests assert this prefix and compare whole keys to each other rather
+ *  than pinning the hash, which is the panel's business and not a contract.
+ */
+const keyFor = (to: string, rev: string) => `checkpoint:${to}:${rev}:`;
 
 /** The campaign's write token (#409), as every pricing below hands one back.
  *
@@ -295,7 +304,8 @@ test("the checkpoint is taken before the skip, never after it", async () => {
   // the skip carries the token it was priced against.
   expect(api.forkCampaign).toHaveBeenCalledWith(
     "c", "Before 24 March 2027", undefined,
-    { idempotencyKey: `checkpoint:${BIG.to}:${REV}`, expectRevision: REV });
+    { idempotencyKey: expect.stringMatching(`^${keyFor(BIG.to, REV)}`),
+      expectRevision: REV });
   expect(api.advanceTime).toHaveBeenCalledWith(
     "c", { days: 90, reason: "a season passes", expect_revision: REV });
 });
@@ -853,7 +863,7 @@ test("a checkpoint retried after a lost response asks for the same copy", async 
 
   const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
   expect(keys).toHaveLength(2);
-  expect(keys[0]).toBe(`checkpoint:${BIG.to}:${REV}`);
+  expect(keys[0]?.startsWith(keyFor(BIG.to, REV))).toBe(true);
   expect(keys[1]).toBe(keys[0]);
   // ...and both name the state they were priced against, so the server refuses
   // the copy rather than taking one of a campaign that moved.
@@ -940,7 +950,8 @@ test("a disowned copy costs one more copy, not two", async () => {
   // the reader kept. The second names the state it was actually priced against,
   // and so does the skip.
   const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
-  expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
+  expect(keys[0]?.startsWith(keyFor(BIG.to, REV))).toBe(true);
+  expect(keys[1]?.startsWith(keyFor(BIG.to, "rev-2"))).toBe(true);
   expect(vi.mocked(api.advanceTime).mock.calls[0][1].expect_revision).toBe("rev-2");
 });
 
@@ -988,7 +999,8 @@ test("a checkpoint the campaign outlived is not replayed for the retry", async (
   await screen.findByText(/^Advanced/);
 
   const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
-  expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
+  expect(keys[0]?.startsWith(keyFor(BIG.to, REV))).toBe(true);
+  expect(keys[1]?.startsWith(keyFor(BIG.to, "rev-2"))).toBe(true);
   expect(vi.mocked(api.advanceTime).mock.calls[1][1].expect_revision).toBe("rev-2");
 });
 
@@ -1034,6 +1046,42 @@ test("a changed digest re-prices even when the token has not moved", async () =>
   await screen.findByText(/preview it again/);
   expect(api.forkCampaign).not.toHaveBeenCalled();
   expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("the checkpoint key names the move, not just the token", async () => {
+  // The reload case, which no in-panel check can reach: the panel's state is
+  // gone, so a fresh preview rebuilds the question from whatever the campaign
+  // now says and there is nothing stale left to compare. The key is the only
+  // thing that carries identity across that, and the token inside it cannot see
+  // writes this app did not make — so a sync client landing an event inside the
+  // span would leave the key identical and `/fork` would replay a copy taken
+  // before it (Codex review).
+  const WITH_EVENT: AdvanceDigest = { ...BIG, events: [
+    { id: "the-coronation", name: "The coronation", date: "2027-02-01",
+      friendly: "1 February 2027", note: "", fired: null, passed: false,
+      in_days: 39 }] };
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+
+  // ...the page reloads, and the same operation is priced again against a span
+  // something outside this app has changed. Same target, same token.
+  cleanup();
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: WITH_EVENT });
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+
+  const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
+  expect(keys).toHaveLength(2);
+  expect(keys[0]?.startsWith(keyFor(BIG.to, REV))).toBe(true);
+  expect(keys[1]?.startsWith(keyFor(BIG.to, REV))).toBe(true);
+  // Same operation by target and token, different move — so a different key,
+  // and the server takes a fresh copy instead of replaying the older one.
+  expect(keys[1]).not.toBe(keys[0]);
 });
 
 test("skipping without a checkpoint re-prices too", async () => {
@@ -1109,7 +1157,8 @@ test("the copy carries the token it was priced against, not only its key", async
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
   await screen.findByText(/^Advanced/);
   expect(vi.mocked(api.forkCampaign).mock.calls[0][3]).toEqual({
-    idempotencyKey: `checkpoint:${BIG.to}:${REV}`, expectRevision: REV });
+    idempotencyKey: expect.stringMatching(`^${keyFor(BIG.to, REV)}`),
+    expectRevision: REV });
 });
 
 test("a checkpoint another tab outlived is retired by the re-price", async () => {
@@ -1139,5 +1188,6 @@ test("a checkpoint another tab outlived is retired by the re-price", async () =>
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
   await screen.findByText(/^Advanced/);
   const keys = vi.mocked(api.forkCampaign).mock.calls.map((c) => c[3]?.idempotencyKey);
-  expect(keys).toEqual([`checkpoint:${BIG.to}:${REV}`, `checkpoint:${BIG.to}:rev-2`]);
+  expect(keys[0]?.startsWith(keyFor(BIG.to, REV))).toBe(true);
+  expect(keys[1]?.startsWith(keyFor(BIG.to, "rev-2"))).toBe(true);
 });
