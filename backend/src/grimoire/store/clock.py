@@ -586,7 +586,19 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
     # never reached it. Forward moves only (#101) -- a backward move is a
     # correction, and un-firing on the way back would erase the only record that
     # the story already played the event.
-    fired = _fire(cid, computed["events"], target) if computed["elapsed_days"] > 0 else []
+    fired: list = []
+    try:
+        if computed["elapsed_days"] > 0:
+            fired = _fire(cid, computed["events"], target)
+    except BaseException:
+        # `_fire` stamps events one at a time, so a raise part-way leaves some
+        # of them stamped in `events.json` while this call unwinds -- and the
+        # 5xx that follows reaches a middleware that only stamps success. Not
+        # reported by review; the same shape as the failure paths in
+        # `sync.demote` and `proposals.project`, found by auditing every stamp
+        # in the change for it.
+        revision.bump(cid)
+        raise
     if fired:
         # `_fire` writes events.json, and it writes it OUTSIDE the hold above --
         # so the token published in there is already current-looking while this

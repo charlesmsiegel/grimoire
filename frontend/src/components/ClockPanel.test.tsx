@@ -1001,6 +1001,41 @@ test("a span whose contents changed under an open question is not skipped", asyn
   expect(api.advanceTime).not.toHaveBeenCalled();
 });
 
+test("a changed digest re-prices even when the token has not moved", async () => {
+  // The token's documented limit, and the half the test above cannot reach: it
+  // only sees writes THIS app made. A sync client landing a scheduled event
+  // inside the span, or a hand edit to the store, changes what the skip would
+  // do and moves no token at all — so the token alone cannot answer "is this
+  // still the move I was shown", and the digest has to be compared too.
+  const WITH_EVENT: AdvanceDigest = { ...BIG, events: [
+    { id: "the-coronation", name: "The coronation", date: "2027-02-01",
+      friendly: "1 February 2027", note: "", fired: null, passed: false,
+      in_days: 39 }] };
+  vi.mocked(api.previewAdvance).mockResolvedValueOnce({ revision: REV, digest: BIG });
+  // The confirm-time re-price: the SAME token, a different move.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: WITH_EVENT });
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+
+  await screen.findByText(/preview it again/);
+  expect(api.forkCampaign).not.toHaveBeenCalled();
+  expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("an unchanged digest under an unchanged token goes ahead", async () => {
+  // The counterpart, so the comparison above is a check on the move rather than
+  // a new way to refuse every checkpoint: the same digest object priced twice
+  // must not read as a change.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+  expect(api.forkCampaign).toHaveBeenCalled();
+});
+
 test("the copy carries the token it was priced against, not only its key", async () => {
   // This panel's own check is not binding: a whole request separates it from
   // the copy, and only the server holds the source's lock across one. Without

@@ -730,6 +730,44 @@ def test_recovery_stamps_a_campaign_whose_sheet_the_dead_pass_already_migrated(
     assert revision.current(cid) != before
 
 
+def test_a_migration_that_failed_part_way_stamps_what_it_already_rewrote(monkeypatch, tmp_path):
+    """#409, the ordinary-exception sibling of the crash case above. A sheet
+    migration rewrites one campaign at a time, so an `OSError` out of a later
+    file unwinds past a post-loop stamp — and unlike a process death, nothing
+    replays the journal until the next module edit or a restart, so a fork or
+    an advance priced in that window would pass (Codex review)."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, first = _bound_campaign(mid)
+    _write_campaign_sheet(first, "characters", "mara", "warden", {"strength": 3})
+    second = campaigns.create_campaign("Branch", wid)
+    modules.set_campaign_module(second, mid)
+    _write_campaign_sheet(second, "characters", "winifred", "warden", {"strength": 4})
+
+    seen, real = [], me_migrate._migrate_file
+
+    def failing(path, mig):
+        seen.append(path)
+        if len(seen) > 1:
+            raise OSError(28, "No space left on device")
+        return real(path, mig)
+
+    monkeypatch.setattr(me_migrate, "_migrate_file", failing)
+    stamped = []
+    monkeypatch.setattr(me_migrate.revision, "bump", stamped.append)
+    with pytest.raises(OSError):
+        me_migrate._run_migration(mid, {"op": "field", "from": "strength", "to": "brawn",
+                                        "sheet_types": ["warden"]})
+    assert len(seen) > 1, "the migration never reached a second sheet"
+    # The campaign rewritten before the raise is stamped; the one that raised
+    # wrote nothing (`_migrate_file` writes atomically) and is rightly absent.
+    # Read off the path rather than named outright, because `_sheet_files` walks
+    # `list_campaigns()`, which is recency order — the invariant is "the one it
+    # got to", not "the one declared first here".
+    wrote_first = seen[0].parent.parent.name
+    assert wrote_first in (first, second), f"unexpected first sheet {seen[0]}"
+    assert stamped == [wrote_first]
+
+
 def test_dry_run_impact_counts(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     wid, cid = _bound_campaign(mid)

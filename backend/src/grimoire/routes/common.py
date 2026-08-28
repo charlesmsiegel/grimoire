@@ -459,30 +459,38 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
             # critical section exists for.
             meta = store.scenes.read_scene_meta(cid, sid)
             # `is None`, not `or`: see the docstring. "" is a real answer.
-            store.prompt_log.record(
-                cid, sid, task, breakdown,
-                model=meta.get("model", "") if model is None else model)
-            # A capture IS a campaign write (`prompts/index.json`), and the one
-            # route that reaches this while persisting nothing else is
-            # `post_opener` -- a draft, and now `@computes_only` so a discarded
-            # one cannot invalidate somebody's clock price. That marker would
-            # have taken this write's stamp with it, so the write stamps for
-            # itself (#409).
-            #
-            # AFTER the record and INSIDE the hold, which is the whole of the
-            # ordering. Stamped before the write, the new token is readable
-            # while the capture is still landing, so a preview taken in that gap
-            # is handed a token that outlives a write it never saw -- and
-            # `/advance` then passes a check against it, which is the one thing
-            # the token exists to refuse (Codex review). Here, no reader can
-            # hold this token until the write it records is on disk. The
-            # returns above are the same rule from the other end: a capture that
-            # was skipped or could not run wrote nothing, so it stamps nothing.
-            #
-            # Every other caller here is a turn that stamps at its terminal
-            # points anyway; a second bump costs a caller holding an older token
-            # nothing it was not already going to be told.
-            store.revision.bump(cid)
+            try:
+                store.prompt_log.record(
+                    cid, sid, task, breakdown,
+                    model=meta.get("model", "") if model is None else model)
+            finally:
+                # A capture IS a campaign write (`prompts/index.json`), and
+                # the one route that reaches this while persisting nothing else
+                # is `post_opener` -- a draft, and now `@computes_only` so a
+                # discarded one cannot invalidate somebody's clock price. That
+                # marker would have taken this write's stamp with it, so the
+                # write stamps for itself (#409).
+                #
+                # AFTER the record and INSIDE the hold, which is the whole of
+                # the ordering. Stamped before the write, the new token is
+                # readable while the capture is still landing, so a preview
+                # taken in that gap is handed a token that outlives a write it
+                # never saw -- and `/advance` then passes a check against it,
+                # which is the one thing the token exists to refuse (Codex
+                # review). Here, no reader can hold this token until the write
+                # it records is on disk.
+                #
+                # In a `finally` because `record` writes an index and a body and
+                # can fail between them; the returns and the `except` around
+                # this block are the rule from the other end, and both are
+                # reached without `record` having been entered at all -- a
+                # capture that was skipped, contended, or whose scene had gone
+                # wrote nothing, so it stamps nothing.
+                #
+                # Every other caller here is a turn that stamps at its terminal
+                # points anyway; a second bump costs a caller holding an older
+                # token nothing it was not already going to be told.
+                store.revision.bump(cid)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound,
             store.locks.StoreBusy, OSError):
         return   # gone, contended, or unreadable: capture nothing, cost nothing
