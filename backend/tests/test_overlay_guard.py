@@ -140,6 +140,8 @@ OWNERS: dict[str, dict[str, str]] = {
         "_advance": "advances a base against the copy the campaign actually holds",
         "_actor_incoming": "compares the campaign's actor bytes with the world's",
         "_plotmap_incoming": "same, for the plot map",
+        "_manifest_row": "derives a composition state from the campaign's own copy, unresolved (#71)",
+        "_locked_rows": "same, for a version-locked actor's campaign bytes",
     },
     "store/migrations.py": {
         "_bake_campaign": "a one-time migration, run on the raw store layout",
