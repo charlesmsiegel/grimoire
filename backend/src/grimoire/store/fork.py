@@ -226,9 +226,83 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
         # to take. That is exactly why it can be stale by the time the claim
         # below runs, and why the claim is allowed to lose and come back here.
         new_cid = uniquify(slugify(name), lambda c: campaigns_paths.campaign_root(c).exists())
-        out = _fork_once(cid, new_cid, name, from_scene, key, expect_revision)
-        if out is not None:
-            return out
+        # Both locks, through the one function allowed to hold two (#267): the
+        # source's so the copy is not taken across a scene being written, and the
+        # fork's for the same reason `create_campaign` holds one — `campaign.md` is
+        # what makes a directory a campaign to `list_campaigns`, so the fork is
+        # visible to another process the moment `copytree` lands it, and a
+        # retrospective fork is still deleting scenes for a while afterwards.
+        # Holding through the cut is what stops anyone seeing the branch with the
+        # future still in it. Everything inside is file work this package owns; no
+        # calendar provider or other plugin code runs under it.
+        with locks.hold_all([cid, new_cid]):
+            # The key is looked up INSIDE the hold, and that is what makes it a
+            # check rather than a hint: the source's lock is held from here through
+            # the copy and the record, so a second call with the same key either
+            # finds the first one's record or waits for it and then does. Ahead of
+            # the claim below because a replay creates nothing and should leave
+            # nothing to clean up.
+            if key:
+                done = _replay(cid, key)
+                if done is not None:
+                    return {**done, "replayed": True}
+            # After the replay and before the claim: everything a real copy
+            # needs to be true, none of which a repeat has to satisfy a second
+            # time. Refused here, a stale request leaves nothing behind.
+            _check_source(cid, from_scene, expect_revision)
+            # Claim the id with an empty directory FIRST, and outside the block that
+            # cleans up -- this is the one step whose failure must not delete
+            # anything. `uniquify` ran before the lock, so the id can have been taken
+            # in between; `mkdir` is what loses that race, and it loses it against a
+            # directory somebody else's campaign is living in. Letting `copytree`'s
+            # own `FileExistsError` be the guard instead would put that campaign
+            # inside the cleanup below, which would `rmtree` it. Same claim-then-fill
+            # order as `create_campaign`, and for a sharper reason.
+            #
+            # Losing is not the end of the request. Two forks of one campaign
+            # asked for under the same name compute the same id before either
+            # takes a lock, and the loser used to raise `FileExistsError` out of
+            # the route -- a 500 for a request `uniquify` exists to answer with
+            # the next suffix (Codex review). Round again instead: the winner's
+            # directory is on disk now, so `uniquify` sees it and hands back the
+            # id after it.
+            try:
+                campaigns_paths.campaign_root(new_cid).mkdir(parents=True)
+            except FileExistsError:
+                continue
+            try:
+                _copy(cid, new_cid, name, from_scene)
+            except BaseException:
+                # Everything past the claim is ours to undo. `copytree` publishes
+                # `campaign.md` partway through a copy that can still fail after it
+                # -- a full disk, an unreadable file, a symlink with no target --
+                # and that file is what makes a directory a campaign to
+                # `list_campaigns`. Without this, a failed fork leaves a phantom on
+                # the shelf: partial content under the SOURCE's name, with no
+                # `parent` to mark it as a copy and nothing to tell the user it is
+                # one.
+                #
+                # Best-effort, and the original error wins. A cleanup that fails
+                # leaves exactly the debris there would have been anyway, and
+                # replacing a full disk with "could not remove directory" would hide
+                # the reason the fork failed.
+                _discard(new_cid)
+                raise
+            report = _cut_after(new_cid, from_scene) if from_scene else _nothing_cut()
+            out = {"id": new_cid, "from_scene": from_scene or "", **report}
+            if key:
+                _record(cid, new_cid, key, out)
+            # LAST, after the cut and the record: the fork's own write token (#409).
+            # `_copy` removed the one it inherited rather than minting a fresh one
+            # here, because from `copytree` onwards this directory is a campaign to
+            # every reader -- and none of them takes this lock, since a read route
+            # does not. A token minted before the cut would be handed to a reader
+            # mid-cut and still be current once the cut had finished, which is a
+            # stale reading certified as good. Minted here, everything a reader can
+            # see mid-cut reads as `INITIAL` and every expectation built on it is
+            # refused.
+            revision.bump(new_cid)
+            return {**out, "replayed": False}
     # Every attempt lost its id to another writer between computing it and
     # claiming it. Nothing has been created, so there is nothing to clean up --
     # and a caller that reaches this is up against contention no number of
@@ -237,118 +311,30 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
     raise ForkContentionError(cid, name)
 
 
-def _fork_once(cid: str, new_cid: str, name: str, from_scene: str | None,
-               key: str, expect_revision: str) -> dict | None:
-    """One attempt at the copy, under both locks, or None when the id was
-    claimed by somebody else between `uniquify` picking it and the `mkdir`
-    below -- the caller picks the next one and comes back.
+def _check_source(cid: str, from_scene: str | None, expect_revision: str) -> None:
+    """Everything a real copy needs of its source, checked under the hold.
 
-    Split out of `fork_campaign` so the retry can be a loop around a hold
-    rather than a second acquisition inside one: exactly one campaign lock
-    hold is ever live, which is the shape `test_lock_order_guard.py` allows
-    and the one this package's ordering rule is built on.
+    Every one of these runs AFTER a keyed replay, and that ordering is the whole
+    of it: a key names an operation that already happened, so nothing about the
+    request repeating it needs to be true a second time. The source keeps
+    playing after a fork and can lose the scene it was cut at -- or be deleted
+    outright -- and either would otherwise answer a retry of a committed fork
+    with a 404 while the fork it made, and its record, sat on the shelf (Codex
+    review, twice: once for the scene and once for the campaign).
+
+    Raises `campaigns.CampaignNotFound`, `revision.RevisionMismatchError` or
+    `scenes.SceneNotFound`, in that order -- a missing source is a plainer
+    answer than a stale token against one.
     """
-    # Both locks, through the one function allowed to hold two (#267): the
-    # source's so the copy is not taken across a scene being written, and the
-    # fork's for the same reason `create_campaign` holds one — `campaign.md` is
-    # what makes a directory a campaign to `list_campaigns`, so the fork is
-    # visible to another process the moment `copytree` lands it, and a
-    # retrospective fork is still deleting scenes for a while afterwards.
-    # Holding through the cut is what stops anyone seeing the branch with the
-    # future still in it. Everything inside is file work this package owns; no
-    # calendar provider or other plugin code runs under it.
-    with locks.hold_all([cid, new_cid]):
-        # The key is looked up INSIDE the hold, and that is what makes it a
-        # check rather than a hint: the source's lock is held from here through
-        # the copy and the record, so a second call with the same key either
-        # finds the first one's record or waits for it and then does. Ahead of
-        # the claim below because a replay creates nothing and should leave
-        # nothing to clean up.
-        if key:
-            done = _replay(cid, key)
-            if done is not None:
-                return {**done, "replayed": True}
-        # AFTER the replay, and that ordering is the same one `from_scene`
-        # gets, one level further out: `_replay` reads the CHILDREN, whose
-        # `parent` line and `fork.json` hold everything the answer needs, so
-        # a source deleted since the first call does not stop its own fork
-        # being named. Checking here first answered a retry of a committed
-        # fork with a 404 while the fork it made was sitting on the shelf
-        # (Codex review). A real copy still needs a source, so this stands
-        # ahead of everything below it.
-        if not campaigns_paths.campaign_meta_path(cid).exists():
-            raise campaigns_paths.CampaignNotFound(cid)
-        # Before everything else: a real copy is refused before the id is
-        # claimed, so a stale request leaves nothing behind.
-        revision.require(cid, expect_revision)
-        if from_scene is not None:
-            # Against the campaign's own enumeration rather than a bare
-            # `exists()`: `list_scenes` drops ids the resolvers would refuse, and
-            # a cut has to mean a scene the campaign will actually show you.
-            #
-            # AFTER the replay, which is the ordering a repeat depends on. The
-            # scene named here belongs to the SOURCE and the source keeps
-            # playing, so a scene a keyed fork was cut at can be deleted from it
-            # afterwards -- and validating first would then answer a retry of
-            # that fork with a 404 while the fork it made, and its record, are
-            # both still sitting there. A key names an operation that already
-            # happened; nothing about the request that repeats it needs to be
-            # true a second time.
-            if from_scene not in {s["id"] for s in scenes_read.list_scenes(cid)}:
-                raise scenes_paths.SceneNotFound(from_scene)
-        # Claim the id with an empty directory FIRST, and outside the block that
-        # cleans up -- this is the one step whose failure must not delete
-        # anything. `uniquify` ran before the lock, so the id can have been taken
-        # in between; `mkdir` is what loses that race, and it loses it against a
-        # directory somebody else's campaign is living in. Letting `copytree`'s
-        # own `FileExistsError` be the guard instead would put that campaign
-        # inside the cleanup below, which would `rmtree` it. Same claim-then-fill
-        # order as `create_campaign`, and for a sharper reason.
-        #
-        # Losing is not the end of the request. Two forks of one campaign
-        # asked for under the same name compute the same id before either
-        # takes a lock, and the loser used to raise `FileExistsError` out of
-        # the route -- a 500 for a request `uniquify` exists to answer with
-        # the next suffix (Codex review). Round again instead: the winner's
-        # directory is on disk now, so `uniquify` sees it and hands back the
-        # id after it.
-        try:
-            campaigns_paths.campaign_root(new_cid).mkdir(parents=True)
-        except FileExistsError:
-            return None
-        try:
-            _copy(cid, new_cid, name, from_scene)
-        except BaseException:
-            # Everything past the claim is ours to undo. `copytree` publishes
-            # `campaign.md` partway through a copy that can still fail after it
-            # -- a full disk, an unreadable file, a symlink with no target --
-            # and that file is what makes a directory a campaign to
-            # `list_campaigns`. Without this, a failed fork leaves a phantom on
-            # the shelf: partial content under the SOURCE's name, with no
-            # `parent` to mark it as a copy and nothing to tell the user it is
-            # one.
-            #
-            # Best-effort, and the original error wins. A cleanup that fails
-            # leaves exactly the debris there would have been anyway, and
-            # replacing a full disk with "could not remove directory" would hide
-            # the reason the fork failed.
-            _discard(new_cid)
-            raise
-        report = _cut_after(new_cid, from_scene) if from_scene else _nothing_cut()
-        out = {"id": new_cid, "from_scene": from_scene or "", **report}
-        if key:
-            _record(cid, new_cid, key, out)
-        # LAST, after the cut and the record: the fork's own write token (#409).
-        # `_copy` removed the one it inherited rather than minting a fresh one
-        # here, because from `copytree` onwards this directory is a campaign to
-        # every reader -- and none of them takes this lock, since a read route
-        # does not. A token minted before the cut would be handed to a reader
-        # mid-cut and still be current once the cut had finished, which is a
-        # stale reading certified as good. Minted here, everything a reader can
-        # see mid-cut reads as `INITIAL` and every expectation built on it is
-        # refused.
-        revision.bump(new_cid)
-        return {**out, "replayed": False}
+    if not campaigns_paths.campaign_meta_path(cid).exists():
+        raise campaigns_paths.CampaignNotFound(cid)
+    revision.require(cid, expect_revision)
+    if from_scene is not None:
+        # Against the campaign's own enumeration rather than a bare `exists()`:
+        # `list_scenes` drops ids the resolvers would refuse, and a cut has to
+        # mean a scene the campaign will actually show you.
+        if from_scene not in {s["id"] for s in scenes_read.list_scenes(cid)}:
+            raise scenes_paths.SceneNotFound(from_scene)
 
 
 def _discard(new_cid: str) -> None:
