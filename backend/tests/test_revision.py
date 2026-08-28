@@ -743,8 +743,8 @@ def _fork(client, cid, name, **body):
 def test_a_repeat_with_the_same_key_makes_one_copy_and_replays_its_report(client):
     cid = _campaign(client)
     client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"})
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
-    second = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    first = _fork(client, cid, "Branch", idempotency_key="k-1")
+    second = _fork(client, cid, "Branch", idempotency_key="k-1")
     assert first["replayed"] is False and second["replayed"] is True
     assert second["id"] == first["id"]
     assert {k: v for k, v in second.items() if k != "replayed"} == \
@@ -757,30 +757,30 @@ def test_a_repeat_under_a_different_name_still_replays_the_first_fork(client):
     # A key names an OPERATION. The second call is the same operation asked
     # again, which is what a client that lost a response is doing.
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    first = _fork(client, cid, "Branch", idempotency_key="k-1")
     second = _fork(client, cid, "Something Else", idempotency_key="k-1")
     assert second["id"] == first["id"]
-    assert store.campaigns.read_campaign(first["id"])["meta"]["name"] == "Checkpoint"
+    assert store.campaigns.read_campaign(first["id"])["meta"]["name"] == "Branch"
 
 
 def test_a_different_key_takes_a_second_copy(client):
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
-    second = _fork(client, cid, "Checkpoint", idempotency_key="k-2")
+    first = _fork(client, cid, "Branch", idempotency_key="k-1")
+    second = _fork(client, cid, "Branch", idempotency_key="k-2")
     assert second["id"] != first["id"] and second["replayed"] is False
 
 
 def test_no_key_is_the_behaviour_every_caller_had(client):
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint")
-    second = _fork(client, cid, "Checkpoint")
+    first = _fork(client, cid, "Branch")
+    second = _fork(client, cid, "Branch")
     assert second["id"] != first["id"] and second["replayed"] is False
 
 
 def test_a_key_is_scoped_to_the_campaign_it_forks(client):
     one, two = _campaign(client), _campaign(client)
-    a = _fork(client, one, "Checkpoint", idempotency_key="k-1")
-    b = _fork(client, two, "Checkpoint", idempotency_key="k-1")
+    a = _fork(client, one, "Branch", idempotency_key="k-1")
+    b = _fork(client, two, "Branch", idempotency_key="k-1")
     assert b["id"] != a["id"] and b["replayed"] is False
 
 
@@ -802,7 +802,7 @@ def test_a_fork_priced_against_a_state_the_campaign_has_left_is_refused(client):
     token = _token(client, cid)
     client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Meanwhile"})
     r = client.post(f"/api/campaigns/{cid}/fork",
-                    json={"name": "Checkpoint", "expect_revision": token})
+                    json={"name": "Branch", "expect_revision": token})
     assert r.status_code == 409 and r.json()["kind"] == "campaign_moved"
     # Refused ahead of the claim, so a stale request leaves nothing behind.
     assert [c["id"] for c in client.get("/api/campaigns").json()] == [cid]
@@ -813,10 +813,10 @@ def test_a_repeat_is_answered_whatever_the_campaign_has_done_since(client):
     # not taking one — the copy it names was made long ago.
     cid = _campaign(client)
     token = _token(client, cid)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1", expect_revision=token)
+    first = _fork(client, cid, "Branch", idempotency_key="k-1", expect_revision=token)
     client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Meanwhile"})
     again = client.post(f"/api/campaigns/{cid}/fork",
-                        json={"name": "Checkpoint", "idempotency_key": "k-1",
+                        json={"name": "Branch", "idempotency_key": "k-1",
                               "expect_revision": token}).json()
     assert again["replayed"] is True and again["id"] == first["id"]
 
@@ -825,16 +825,16 @@ def test_an_idempotency_key_is_used_exactly_as_it_was_sent(client):
     # An opaque value whose only property is equality. Stripping it would make
     # two distinct keys collide, and answer one client's fork with another's.
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="job")
-    spaced = _fork(client, cid, "Checkpoint", idempotency_key=" job ")
+    first = _fork(client, cid, "Branch", idempotency_key="job")
+    spaced = _fork(client, cid, "Branch", idempotency_key=" job ")
     assert spaced["replayed"] is False and spaced["id"] != first["id"]
-    assert _fork(client, cid, "Checkpoint", idempotency_key=" job ")["id"] == spaced["id"]
+    assert _fork(client, cid, "Branch", idempotency_key=" job ")["id"] == spaced["id"]
 
 
 def test_a_key_past_the_cap_is_refused_rather_than_truncated(client):
     cid = _campaign(client)
     r = client.post(f"/api/campaigns/{cid}/fork",
-                    json={"name": "Checkpoint", "idempotency_key": "k" * (fork.KEY_LIMIT + 1)})
+                    json={"name": "Branch", "idempotency_key": "k" * (fork.KEY_LIMIT + 1)})
     assert r.status_code == 400
     assert [c["id"] for c in client.get("/api/campaigns").json()] == [cid]
 
@@ -842,8 +842,8 @@ def test_a_key_past_the_cap_is_refused_rather_than_truncated(client):
 def test_a_key_at_the_cap_is_accepted(client):
     cid = _campaign(client)
     key = "k" * fork.KEY_LIMIT
-    assert _fork(client, cid, "Checkpoint", idempotency_key=key)["replayed"] is False
-    assert _fork(client, cid, "Checkpoint", idempotency_key=key)["replayed"] is True
+    assert _fork(client, cid, "Branch", idempotency_key=key)["replayed"] is False
+    assert _fork(client, cid, "Branch", idempotency_key=key)["replayed"] is True
 
 
 def test_a_forks_own_key_record_does_not_travel_into_a_fork_of_it(client):
@@ -862,12 +862,12 @@ def test_a_marker_that_does_not_describe_the_campaign_it_is_in_is_not_believed(c
     # What a hand-copied campaign directory looks like. Believing it would
     # replay a report naming somebody else's fork.
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    first = _fork(client, cid, "Branch", idempotency_key="k-1")
     planted = _fork(client, cid, "Elsewhere", idempotency_key="k-2")
     (store.campaigns.campaign_root(planted["id"]) / fork.MARKER).write_text(
         json.dumps({"key": "k-3", "parent": cid, "at": "", "report": first}),
         encoding="utf-8")
-    again = _fork(client, cid, "Checkpoint", idempotency_key="k-3")
+    again = _fork(client, cid, "Branch", idempotency_key="k-3")
     assert again["replayed"] is False and again["id"] not in (first["id"], planted["id"])
 
 
@@ -932,11 +932,11 @@ def test_a_half_written_marker_is_not_replayed_as_a_report(client):
     # then fail in the reader's browser, where the documented recoverable path
     # is a second copy on the shelf.
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    first = _fork(client, cid, "Branch", idempotency_key="k-1")
     (store.campaigns.campaign_root(first["id"]) / fork.MARKER).write_text(
         json.dumps({"key": "k-1", "parent": cid, "at": "", "report": {"id": first["id"]}}),
         encoding="utf-8")
-    again = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    again = _fork(client, cid, "Branch", idempotency_key="k-1")
     assert again["replayed"] is False and again["id"] != first["id"]
 
 
@@ -948,20 +948,20 @@ def test_a_marker_whose_rows_are_damaged_is_not_replayed(client):
     cid = _campaign(client)
     root = store.campaigns.campaign_root(cid)
     for damage in ([None], ["a bare string"], [{"label": "x"}], [{"label": 1, "reason": "y"}]):
-        first = _fork(client, cid, "Checkpoint", idempotency_key=f"k-{id(damage)}")
+        first = _fork(client, cid, "Branch", idempotency_key=f"k-{id(damage)}")
         marker = root.parent / first["id"] / fork.MARKER
         marker.write_text(json.dumps({"key": f"k-{id(damage)}", "parent": cid, "at": "",
                                       "report": {**first, "refused": damage}}),
                           encoding="utf-8")
-        again = _fork(client, cid, "Checkpoint", idempotency_key=f"k-{id(damage)}")
+        again = _fork(client, cid, "Branch", idempotency_key=f"k-{id(damage)}")
         assert again["replayed"] is False, damage
         assert again["id"] != first["id"], damage
 
 
 def test_a_replayed_report_carries_every_field_the_client_reads(client):
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
-    again = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    first = _fork(client, cid, "Branch", idempotency_key="k-1")
+    again = _fork(client, cid, "Branch", idempotency_key="k-1")
     assert again["replayed"] is True
     assert set(again) == set(first)
     assert isinstance(again["refused"], list) and isinstance(again["failed"], list)
@@ -990,8 +990,8 @@ def test_a_forks_token_is_not_minted_until_the_cut_has_finished(cid, monkeypatch
 
 def test_an_unreadable_marker_costs_a_second_copy_rather_than_a_wrong_answer(client):
     cid = _campaign(client)
-    first = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    first = _fork(client, cid, "Branch", idempotency_key="k-1")
     (store.campaigns.campaign_root(first["id"]) / fork.MARKER).write_text("{ not json",
                                                                          encoding="utf-8")
-    again = _fork(client, cid, "Checkpoint", idempotency_key="k-1")
+    again = _fork(client, cid, "Branch", idempotency_key="k-1")
     assert again["id"] != first["id"] and again["replayed"] is False

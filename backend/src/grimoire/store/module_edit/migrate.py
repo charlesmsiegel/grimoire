@@ -104,7 +104,9 @@ def _replay_journal(jp: Path, quarantined: set[str]) -> None:
     elif live.exists():
         published = True  # post-swap crash: trash cleanup + migration
     if published and isinstance(j.get("migration"), dict):
-        _run_migration(mid, j["migration"])
+        # `recovering`: the dead pass may have renamed some sheets already, and
+        # an idempotent migration cannot tell which -- see `_run_migration`.
+        _run_migration(mid, j["migration"], recovering=True)
     shutil.rmtree(base, ignore_errors=True)
     jp.unlink(missing_ok=True)
 
@@ -283,7 +285,7 @@ def _impact(mid: str, staged_pack: dict, migration: dict | None, staging_root: P
     return out
 
 
-def _run_migration(mid: str, migration: dict) -> dict:
+def _run_migration(mid: str, migration: dict, *, recovering: bool = False) -> dict:
     """Sheet migration for rename ops: rewrite every stored sheet governed by
     this module that the migration op touches, bumping `gen` on each changed
     file. Idempotent (old key absent ⇒ no-op) so journal replay after a crash
@@ -302,6 +304,17 @@ def _run_migration(mid: str, migration: dict) -> dict:
     Stamped per changed campaign rather than per file, and only for a file that
     actually changed: `_migrate_file` answers False for a sheet the op does not
     touch, and a world's own sheets carry no cid at all.
+
+    `recovering` widens that to every campaign this module governs a sheet for,
+    and journal replay is the one caller that passes it. The migration is
+    idempotent by design -- an already-renamed sheet answers False -- which is
+    what makes replay safe to repeat and also what makes "changed" useless as a
+    stamp condition here: a pass interrupted between rewriting a campaign's
+    sheet and stamping it leaves that sheet renamed, so the replay reads it as
+    untouched and its token would stay current forever (Codex review). Recovery
+    cannot tell what the dead pass finished, so it stamps everything it might
+    have. That is an over-bump on a rare path -- a re-price for whoever was
+    holding one, and the direction this value is deliberately wrong in.
     """
     migrated, skipped, touched = 0, [], []
     for p, cid in _sheet_files(mid):
@@ -310,8 +323,8 @@ def _run_migration(mid: str, migration: dict) -> dict:
             skipped.append(str(p))
         elif got:
             migrated += 1
-            if cid is not None and cid not in touched:
-                touched.append(cid)
+        if cid is not None and (recovering or got) and cid not in touched:
+            touched.append(cid)
     for cid in touched:
         revision.bump(cid)
     return {"migrated": migrated, "skipped": skipped}
