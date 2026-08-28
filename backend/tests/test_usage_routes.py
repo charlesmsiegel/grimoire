@@ -821,6 +821,33 @@ def test_the_answering_post_is_the_last_player_message(home):
     assert streaming._answering_post([None, "x", {"role": "user"}]) == 2
 
 
+def test_a_director_note_is_something_the_player_put_there(home):
+    """The other half of "the last player message", and the easy one to miss.
+
+    A stored note is assistant-role by the transcript format's construction --
+    the role is derived from the label, and `You` is the only label that means
+    user. A plain user-role scan steps over it to whatever the player last
+    actually posted, so a retry or a reroll of a director turn would be charged
+    to a post from ten turns ago.
+    """
+    from grimoire.routes import streaming
+    note = {"role": "assistant", "speaker": store.scenes.DIRECTOR_SPEAKER,
+            "content": "make it rain"}
+
+    # The note wins over an earlier post, which is the whole case.
+    assert streaming._answering_post(
+        [{"role": "user"}, {"role": "assistant"}, note]) == 2
+    # ...and over the reply it produced, so the reroll buckets with the send.
+    assert streaming._answering_post(
+        [{"role": "user"}, note, {"role": "assistant"}]) == 1
+    # A later real post still wins: it is the more recent thing the player put
+    # there, and the turn answering it is answering that.
+    assert streaming._answering_post([note, {"role": "user"}]) == 1
+    # An ordinary assistant reply is not something the player put there.
+    assert streaming._answering_post(
+        [{"role": "assistant", "speaker": "Mara"}]) is None
+
+
 def test_a_continuation_inherits_its_proposals_attribution(client, home):
     """Re-deriving it here gets a DIFFERENT answer for the case the first half
     got right — see `_continuation_post`."""
