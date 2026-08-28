@@ -15,7 +15,9 @@ def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = Non
                  commitment_snapshot: str | None = None,
                  fact_snapshot: str | None = None,
                  steering_snapshot: str | None = None) -> list[dict]:
-    return [{"role": "system", "content": prompts.render("absorb/system.j2")},
+    return [{"role": "system",
+             "content": prompts.render("absorb/system.j2",
+                                       steering=bool(steering_snapshot))},
             {"role": "user", "content": prompts.render(
                 "absorb/user.j2", facts=facts, state_snapshot=state_snapshot,
                 rel_snapshot=rel_snapshot, plot_snapshot=plot_snapshot,

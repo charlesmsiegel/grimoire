@@ -124,16 +124,25 @@ never inside the transcript, and the system prompt instructs:
 
 - Steering notes tell you where the played lore was wrong or missing. Check
   whether an existing record should be sharpened (`lore_edits`), a missing one
-  written (`new_lore`, `new_locations`), or a standing truth recorded
-  (`facts`).
+  written (`new_lore`, `new_locations`), a standing truth recorded
+  (`facts`), or a character's own snapshot corrected
+  (`character_state_edits` — "she already knows X" is a `knows` fix, not
+  lore; Codex review finding).
 - A note may steer tone or length rather than lore ("shorter", "more
   dialogue"); those are not lore signals and get no edit.
-- The citation contract is unchanged: `quote`/`speaker` must come from the
-  transcript. A steering note is not a speaker and may not be quoted. An edit
-  the transcript itself cannot support is left uncited — which routes it to
-  the review's low-confidence/uncited drawers, where the player who typed the
-  steering in the first place adjudicates it. The player's own words never
-  come back as a citation.
+- The citation contract bends in exactly one direction, stated explicitly
+  (the base contract says "leave an unestablished edit out", and an unstated
+  conflict would make the extractor suppress or fabricate — Codex review
+  finding): a steering note is never quoted and never a speaker, and an edit
+  a note points at that the transcript cannot independently establish is
+  reported with **no citation fields at all** rather than invented or
+  dropped — which routes it to the review's uncited drawer, where the player
+  who typed the steering adjudicates it. The player's own words never come
+  back as a citation.
+- The system paragraph renders **only when the scene has steering notes**
+  (`build_prompt` passes `steering=bool(steering_snapshot)`), so a
+  steering-less absorb's prompt — both messages — is byte-identical to the
+  pre-change prompt.
 
 This is what keeps the loop honest: steering raises the *recall* of the lore
 pass, and the existing routing bands keep its *precision* — nothing lands

@@ -365,11 +365,14 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
     # The steering contract rides along: the system paragraph that makes the
     # notes signal-never-evidence must still be asked, or a template edit that
     # drops it goes unnoticed until a live run cites the player's own words.
+    # The needle is a phrase unique to that paragraph — "Player steering
+    # notes" also heads the user-side block, so it would still match with the
+    # contract gone.
     prompt = graders.grade_prompt(
         ctx["messages"],
         {f"asks_{k}": f'"{k}"'
          for k in graders.ABSORB_TEXT + graders.ABSORB_LISTS + absorb_store.CITATION_FIELDS}
-        | {"asks_steering_contract": "Player steering notes"})
+        | {"asks_steering_contract": "Treat them as pointers, not as story"})
 
     out, parsed = graders.grade_absorb(output)
     if not all(c.ok for c in out):

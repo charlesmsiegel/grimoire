@@ -324,7 +324,14 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg in (
          "f1: The warehouse belongs to the Salt Circle. (the third night)",
          "- Seraphine was told about the tail at the Night Dock")):
     exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg)
-    check(f"absorb system ({label})", exp[0]["content"], render("absorb/system.j2"))
+    check(f"absorb system ({label})", exp[0]["content"],
+          render("absorb/system.j2", steering=bool(strg)))
+    if strg:
+        assert "Treat them as pointers, not as story" in exp[0]["content"], \
+            f"absorb system ({label}) missing the steering contract paragraph"
+    else:
+        assert "Player steering notes" not in exp[0]["content"], \
+            f"absorb system ({label}) carries the steering paragraph with no notes"
     check(f"absorb user ({label})", exp[1]["content"],
           render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
                  plot_snapshot=plt, group_snapshot=grp, commitment_snapshot=cmt,
