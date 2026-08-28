@@ -4585,12 +4585,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                     </span>
                     <div className="msg-body">
                       {/* What this post cost to answer, over every reroll of it
-                          (#153). On the player's own posts only: they are the
-                          ones a generation was made FOR, and a chip on the
-                          reply would double-count the same spend under the
-                          text it paid for. Suppressed while the post is being
-                          edited, where the row is a form and not a message. */}
-                      {m.role === "user" && editing?.index !== index
+                          (#153). On what the player PUT there and nothing
+                          else: those are the lines a generation was made FOR,
+                          and a chip on the reply would double-count the same
+                          spend under the text it paid for.
+                          A director note is one of them. It is assistant-role
+                          by the transcript format's construction, so a bare
+                          `role === "user"` test left the one line whose whole
+                          reason for being stored is that it can carry a figure
+                          as the only line that could not. Suppressed while the
+                          post is being edited, where the row is a form and not
+                          a message. */}
+                      {(m.role === "user" || m.speaker === DIRECTOR_SPEAKER)
+                        && editing?.index !== index
                         && postChips?.[index] !== undefined && (
                         <PostCost bucket={postChips[index]} />
                       )}

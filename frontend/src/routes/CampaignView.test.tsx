@@ -7758,3 +7758,27 @@ test("a ledger read that failed costs the figure and nothing else", async () => 
   expect(await screen.findByText("Scene ⋯")).toBeInTheDocument();
   expect(screen.queryByText(/SPEND/)).not.toBeInTheDocument();
 });
+
+
+test("a shown director note carries what its turn cost", async () => {
+  // The whole reason a note is in the transcript at all: it has an index, so
+  // the generation it bought has somewhere to sit. A chip gated on user-role
+  // left the one line that exists to carry a figure as the only line that
+  // could not — a note is assistant-role by the format's construction.
+  sceneWithNote();
+  (api.getSceneUsage as any).mockResolvedValue({
+    ...sceneUsage(), by_post: [{
+      post: 1, calls: 2, rerolls: 1, total_tokens: 900,
+      cost_usd: 0.21, estimated_usd: 0, modelled_usd: 0,
+      priced_calls: 2, unpriced_calls: 0, subscription_calls: 0,
+      modelled_calls: 0, unmetered_calls: 0,
+    }],
+  });
+  renderCampaign();
+  await screen.findByText("Rain begins.");
+  fireEvent.click(screen.getByRole("button", { name: /show director notes/i }));
+
+  const note = (await screen.findByText("make it rain")).closest(".msg-body")!;
+  expect(within(note as HTMLElement).getByText("$0.21")).toBeInTheDocument();
+  expect(within(note as HTMLElement).getByText(/1 reroll/)).toBeInTheDocument();
+});
