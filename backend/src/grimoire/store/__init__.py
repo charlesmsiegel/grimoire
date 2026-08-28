@@ -132,6 +132,7 @@ from . import (
     turnstate,
     undo,
     usage,
+    usage_rollup,
     voice_anchors,
     voice_drift,
     world_bundle,
@@ -337,4 +338,5 @@ __all__ = [
     "voice_anchors",
     "voice_drift",
     "usage",
+    "usage_rollup",
 ]

@@ -1,3 +1,4 @@
+import { money } from "../components/cost";
 import { LIBRARY_SECTIONS, inLibrary, isUnder } from "../librarySections";
 import type { ShellPayload } from "../api/types";
 
@@ -84,6 +85,28 @@ const LIBRARY_SECTION_COUNT = LIBRARY_SECTIONS.length;
 const campaignPath = (ctx: RailCtx, suffix = "") =>
   ctx.cid ? `/campaigns/${ctx.cid}${suffix}` : null;
 
+/** Where one scene's review lives. */
+const wrapPath = (cid: string, sid: string) =>
+  `/campaigns/${cid}/scenes/${sid}/wrap-up`;
+
+/** Whether this pathname is a wrap-up in the open campaign.
+ *
+ *  A suffix test rather than a prefix one, because the scene id sits in the
+ *  middle: `/campaigns/c/scenes/<any sid>/wrap-up`. Shared by two rows that
+ *  must never both be lit -- `scenes` uses it to step aside and `wrap` to step
+ *  forward, so there is one sentence deciding rather than two that can drift. */
+function isWrapUp(p: string, ctx: RailCtx): boolean {
+  if (!ctx.cid) return false;
+  const head = `/campaigns/${ctx.cid}/scenes/`;
+  // The trailing slash is stripped first so `/wrap-up/` answers the same as
+  // `/wrap-up`; the router treats them as one route and the rail must too.
+  const path = p.endsWith("/") && p.length > 1 ? p.slice(0, -1) : p;
+  return path.startsWith(head) && path.endsWith("/wrap-up")
+    // ...and the scene id is a real segment, so `/scenes/wrap-up` -- a scene
+    // somebody managed to name that -- is a scene rather than a review.
+    && path.slice(head.length, -"/wrap-up".length).length > 0;
+}
+
 export const APP_ROWS: RailRow[] = [
   {
     id: "campaigns", label: "Campaigns", icon: "◆",
@@ -132,9 +155,21 @@ export const APP_ROWS: RailRow[] = [
     id: "costs", label: "Costs", icon: "$",
     to: (ctx) => campaignPath(ctx, "/costs"),
     match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/costs`),
-    // No tail. The figure the design puts here is an all-time ledger rollup,
-    // and `store.usage.lifetime_since` reserves that scan for the all-time view
-    // — "nothing on the play path". The rail is the play path.
+    // The all-time figure the design asks for, and it is all-time rather than
+    // a bounded window on purpose: a 30-day number under an unlabelled `$4.82`
+    // would mean something else than the page it links to. `store.usage_rollup`
+    // is what made it affordable here — a byte bookmark into each month file,
+    // so the rail pays for what has been played since the last navigation
+    // instead of for the library's age.
+    //
+    // SPEND ONLY. One tail cannot carry three columns that may never be added,
+    // so it carries the one that is money somebody was actually charged and
+    // leaves the other two to the hub's card, which has room to keep them
+    // apart. A campaign whose calls were all subscription-billed or all
+    // unpriced therefore shows no tail rather than `$0.00` — which is the cost
+    // rule itself, not an omission.
+    tail: (s) => railMoney(s)?.[0],
+    tailLabel: (s) => railMoney(s)?.[1],
   },
   {
     id: "stats", label: "Stats", icon: "▦",
@@ -160,31 +195,33 @@ export const CAMPAIGN_ROWS: RailRow[] = [
   {
     id: "scenes", label: "Scenes", icon: "☰",
     to: (ctx) => campaignPath(ctx, "/scenes"),
-    match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/scenes`),
+    // Everything under `/scenes` EXCEPT a wrap-up, which is its own row now.
+    // Without the exclusion both light at once, which the rail's own test
+    // forbids and which would leave a reader unable to tell from the chrome
+    // whether they are reading a scene or judging one.
+    match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/scenes`)
+                       && !isWrapUp(p, ctx),
     tail: (s) => (s?.campaign ? String(s.campaign.scenes) : undefined),
     tailLabel: (s) => (s?.campaign ? `${s.campaign.scenes} scenes` : undefined),
   },
   {
     id: "wrap", label: "Wrap-up", icon: "✦",
-    // Review still lives inside `CampaignView` — the wrap-up slice is what
-    // gives it a page. Until then the row goes where the hub's own "Open
-    // wrap-up" button goes, which is the scene holding the proposals. That is
-    // a real destination, and pointing at it is what makes the tail below
-    // reach a reader: it was computed on every shell read and then discarded,
-    // because `Row` returns null on a null `to` before any tail is drawn.
+    // The review's own address (`App.tsx`). It used to point at the scene
+    // itself, which was a real destination but not a distinguishable one --
+    // `scenes` owns every path under `/scenes`, so the row could never light.
+    // It has a path of its own now, and `scenes` excludes it above.
     //
     // Null when nothing is pending, so the row is absent rather than offering
     // a wrap-up with nothing to wrap up. `unreviewed` and `pending` come from
     // one `_pending` call, so they cannot disagree about whether to render.
     to: (ctx, s) => {
       const first = s?.campaign?.pending?.[0];
-      return ctx.cid && first ? `/campaigns/${ctx.cid}/scenes/${first.sid}` : null;
+      return ctx.cid && first ? wrapPath(ctx.cid, first.sid) : null;
     },
-    // Never lit, and for the same reason as Images: the destination is a
-    // scene, and `scenes` already owns every path under `/scenes`. Lighting
-    // here too would put two rows of one tier active at once, which the rail's
-    // own test forbids.
-    match: () => false,
+    // Lit on any scene's wrap-up, not only the one the row points at: with two
+    // scenes waiting the row offers the first, and a reader who reached the
+    // second from the hub is still on Wrap-up.
+    match: (p, ctx) => isWrapUp(p, ctx),
     // The one badge that is an alert rather than a count: proposals nobody has
     // decided are holding the world back, and the hub says so in words.
     tail: (s) => num(s?.campaign?.unreviewed),
@@ -248,6 +285,24 @@ function lbl(v: number | null | undefined, noun: string): string | undefined {
   return v === null || v === undefined ? undefined : `${v} ${noun}`;
 }
 
+/** The Costs tail and what a screen reader hears for it, or `undefined`.
+ *
+ *  Four ways to have nothing to say, and each is the cost rule rather than a
+ *  missing case: no campaign open, an aggregate that could not be brought up
+ *  to date (`partial`), a campaign that has run no calls at all, and — the one
+ *  worth reading twice — a campaign whose calls were real but whose spend
+ *  column is zero because every one of them billed to a subscription or came
+ *  back with no price. Rendering `$0.00` there would be the app asserting that
+ *  a played campaign was free.
+ *
+ *  Returned as a pair rather than computed twice, so the tail and its label
+ *  cannot disagree about whether there is one. */
+function railMoney(s: ShellPayload | null): [string, string] | undefined {
+  const m = s?.campaign?.money;
+  if (!m || m.partial || !m.calls || !(m.cost_usd > 0)) return undefined;
+  return [money(m.cost_usd), `${money(m.cost_usd)} spent`];
+}
+
 /** What the ⌘K pill calls the screen you are on.
  *
  *  Matched in order, first match wins, catch-all last — so no route can fall
@@ -273,6 +328,10 @@ export const TITLES: [(p: string) => boolean, string][] = [
   [(p) => isUnder(p, "/stats"), "Stats"],
   [(p) => isUnder(p, "/config"), "Configuration"],
   [(p) => isUnder(p, "/open"), "Opening"],
+  // Last of the campaign-scoped entries, and only reachable when the page
+  // itself publishes nothing: `CampaignView` names the campaign and the scene,
+  // which this table cannot -- the router knows a cid, not a name.
+  [(p) => /\/wrap-up\/?$/.test(p), "Wrap-up"],
   [() => true, "Grimoire"],
 ];
 

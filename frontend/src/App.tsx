@@ -174,6 +174,18 @@ function Shell(
         <Route path="/campaigns/:cid/scenes/:sid" element={
           <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
                         ready={ready} />} />
+        {/* The review's own address. Same element, because a review is a mode
+            of this page and not a second copy of it -- `useSceneReview` adopts
+            whatever the scene is holding whichever of the two URLs you arrive
+            on. What the separate path buys is that the rail's Wrap-up row can
+            light, and that "the thing that is waiting" is something a reader
+            can bookmark or be sent a link to. The `key` is deliberately the
+            campaign and nothing more, exactly as above: moving between the
+            transcript and its wrap-up must not remount the page and discard
+            the review being judged. */}
+        <Route path="/campaigns/:cid/scenes/:sid/wrap-up" element={
+          <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
+                        ready={ready} />} />
         <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
         {/* The ledger is a room, not a drawer over the transcript (4e): it is a
             table read top to bottom, and the supersession chains it exists to

@@ -3742,6 +3742,32 @@ a.column-back { text-decoration: none; }
 }
 .hub-row:last-child { border-bottom: 0; }
 .hub-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* An idea stacks its premise under its title, so the row is two lines rather
+   than a title competing with a sentence for one. */
+.hub-idea { flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 0; }
+.hub-idea .hub-row-title { white-space: normal; overflow: visible; }
+
+/* Faces wrap rather than scroll: the card is capped at CAST_SHOWN, so the row
+   count is bounded and a horizontal scroller would hide half of a short list. */
+.hub-faces { display: flex; flex-wrap: wrap; gap: 10px; }
+.hub-face {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  width: 72px; text-decoration: none; color: var(--ink);
+}
+.hub-face:hover .hub-face-name { color: var(--accent); }
+.hub-face-avatar,
+.hub-face .initials-avatar {
+  width: 42px; height: 42px; border-radius: 3px; object-fit: cover;
+  /* The shared `.initials-avatar` is sized for a 96px card slot; a 42px one
+     needs its own type size or the letters overflow the box. */
+  font-size: 15px; flex: none;
+}
+.hub-face-name {
+  font-size: 11px; line-height: 1.3; text-align: center;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hub-face .chip { font-size: 8px; }
 .scene-home { text-decoration: none; color: var(--accent); }
 
 /* ---- the scenes list ---- */
@@ -3749,27 +3775,43 @@ a.column-back { text-decoration: none; }
 .scenes-tools { display: flex; align-items: center; gap: 12px; margin: 14px 0 6px; }
 .scenes-tools .rail-search { flex: 1; max-width: 320px; }
 .scene-list { list-style: none; margin: 0; padding: 0; }
+/* Six tracks: title, status, when & where, turns, spend, action. A grid rather
+   than a flex row so the figures line up DOWN the list -- which is the whole
+   reason to give them cells at all, and what a row of ragged trailing text
+   cannot do. `auto` at each end lets the chip and the action be as wide as
+   their words; the two mono figures are fixed so the columns do not jitter as
+   the list scrolls. */
 .scene-item {
-  display: flex; align-items: center; gap: 12px;
+  display: grid; align-items: center; gap: 0 12px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 210px) 34px 74px auto;
   border-bottom: 1px solid var(--line); min-height: 52px;
 }
 /* A scene still in play is the one you are most likely to want. */
 .scene-item.open { background: var(--surface); }
 .scene-item-main {
-  flex: 1; min-width: 0; display: grid; gap: 0 12px; padding: 8px 10px;
-  grid-template-columns: 34px 1fr; align-items: baseline;
+  min-width: 0; display: grid; gap: 0 12px; padding: 8px 10px;
+  grid-template-columns: 34px minmax(0, 1fr); align-items: baseline;
   text-decoration: none; color: var(--ink);
 }
 .scene-item-n {
-  grid-row: span 2; font-family: var(--fm, monospace); font-size: 11px;
+  font-family: var(--fm, monospace); font-size: 11px;
   color: var(--muted); text-align: right;
 }
 .scene-item-title { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scene-item-sub {
+/* The three mono cells share one look: they are all secondary facts about the
+   row, and giving each its own size would make the row read as five things
+   rather than a title with detail after it. */
+.scene-item-when, .scene-item-turns, .scene-item-spend {
   font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.08em;
-  text-transform: uppercase; color: var(--muted);
+  text-transform: uppercase; color: var(--muted); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.scene-item-sub:empty { display: none; }
+.scene-item-turns, .scene-item-spend { text-align: right; }
+.scene-item-when:empty, .scene-item-turns:empty, .scene-item-spend:empty {
+  /* Collapsed, not merely blank: an empty cell in a column of prices reads as
+     a zero, which is the one thing a cost surface may not say. */
+  visibility: hidden;
+}
 .scene-item-act {
   flex: none; margin-right: 10px; padding: 0 12px; min-height: 34px;
   display: inline-flex; align-items: center; border-radius: 3px;
@@ -3779,11 +3821,44 @@ a.column-back { text-decoration: none; }
 }
 .scene-item-act.accent { color: var(--accent); border-color: var(--accent); }
 .scene-item-act.alert { color: var(--alert); border-color: var(--alert); }
+
+/* The two columns that are not frontmatter. Fixed widths so the list reads
+   DOWN a column rather than as ragged text at the end of each row -- which is
+   the whole reason they are cells at this width and a folded mono line below
+   the breakpoint. `:empty` collapses rather than reserving space for a figure
+   nobody counted: a blank cell in a column of prices reads as a zero. */
+.scene-item-turns, .scene-item-spend {
+  flex: none; font-family: var(--fm, monospace); font-size: 10px;
+  letter-spacing: 0.06em; color: var(--muted); text-align: right;
+}
+.scene-item-turns { width: 34px; }
+.scene-item-spend { width: 72px; }
+.scene-item-turns:empty, .scene-item-spend:empty { display: none; }
+
+.scenes-head-actions { display: flex; align-items: center; gap: 10px; }
+/* The import pane is a panel in the flow rather than an overlay: it is a
+   read-review-import walk, and a modal over a list you may want to check
+   against is the wrong container for a three-step form. */
+.scenes-import {
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  padding: 16px 18px; margin: 14px 0;
+}
+
 @media (max-width: 1180px) {
-  /* The title and the action never give way; the rest folds into the sub-line
-     rather than being clipped. */
-  .scene-item-act { min-height: 44px; }
-  .scene-item { min-height: 60px; }
+  /* The title and the action never give way; the three mono cells stop being
+     columns and become one line under the title, which is the design's rule
+     for this breakpoint -- secondary chrome folds rather than being clipped.
+     The same nodes, reflowed: nothing is rendered twice and nothing is
+     dropped. */
+  .scene-item {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    row-gap: 2px; padding-bottom: 6px; min-height: 60px;
+  }
+  .scene-item-main { grid-column: 1 / -1; }
+  .scene-item-when { grid-column: 1; padding-left: 56px; }
+  .scene-item-turns, .scene-item-spend { text-align: left; }
+  .scene-item .chip { grid-column: 1; grid-row: 3; margin-left: 56px; }
+  .scene-item-act { grid-column: 3; grid-row: 3; min-height: 44px; }
 }
 
 /* The wrap-up footer: what the button is about to do, before it is pressed. */
@@ -4063,26 +4138,29 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   /* ---- scene lists ---- */
   .scenes-head { flex-wrap: wrap; gap: 10px; }
   .scenes-tools { width: 100%; }
-  .scene-item-sub { font-size: 8.5px; letter-spacing: 0.1em; }
+  .scene-item-when, .scene-item-turns, .scene-item-spend {
+    font-size: 8.5px; letter-spacing: 0.1em;
+  }
   /* The row carries a title, a status and an action, and at 375px the two
      controls between them left the title about ten characters — "A ledger in
      the d…", which is the one thing on the row nobody can do without. So the
-     title takes the width and WRAPS, and the status and the action drop to a
+     title takes the width and WRAPS, and the status and the action sit on a
      line under it. Neither is dropped: the design's rule for this breakpoint
      is that secondary chrome gives way rather than being clipped, and here it
      is the title that was being clipped by chrome that had not given way. */
-  .scene-item { flex-wrap: wrap; gap: 0; padding-bottom: 8px; }
-  .scene-item-main { flex: 1 1 100%; }
+  .scene-item { padding-bottom: 8px; }
   .scene-item-title {
     white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.3;
   }
-  .scene-item .chip,
-  .scene-item-act { margin-left: 10px; }
   /* Aligned under the title rather than under the number. */
-  .scene-item .chip { margin-left: 56px; }
+  .scene-item-when { padding-left: 46px; }
+  .scene-item .chip { margin-left: 46px; }
   /* Compact: on the desktop row this sits at the end of a line it shares, so
      it can afford a label. Here it is a second line of its own. */
   .scenes-head .hub-primary { width: auto; min-height: 38px; padding: 0 13px; }
+  /* Both header actions on one line, wrapping under the title. */
+  .scenes-head-actions { flex: 1 1 100%; gap: 8px; }
+  .scenes-import { padding: 12px 13px; }
 
   /* ---- anything laid out in columns lays out in one ---- */
   .detail-view { flex-direction: column; }

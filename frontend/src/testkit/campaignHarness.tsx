@@ -295,6 +295,9 @@ export function playRoutes(ready = true) {
           lands there says so instead of rendering nothing. */}
       <Route path="/campaigns/:cid/scenes" element={<ScenesStub />} />
       <Route path="/campaigns/:cid/scenes/:sid" element={<CampaignView ready={ready} />} />
+      {/* The review's own address, same element, exactly as `App` mounts it. */}
+      <Route path="/campaigns/:cid/scenes/:sid/wrap-up"
+             element={<CampaignView ready={ready} />} />
     </Routes>
   );
 }

@@ -19,6 +19,13 @@ vi.mock("../api/client", () => ({
     getShell: vi.fn(),
     listScenes: vi.fn(),
     getChronicle: vi.fn(),
+    // The second wave: worth having, not worth waiting for.
+    listCharacters: vi.fn(),
+    listCampaignPCs: vi.fn(),
+    campaignChanges: vi.fn(),
+    getCampaignBudget: vi.fn(),
+    listSceneIdeas: vi.fn(),
+    actorImageUrl: vi.fn(() => "/img"),
   },
 }));
 
@@ -34,9 +41,27 @@ function shell(over: Record<string, unknown> = {}) {
     campaign: {
       id: "run", name: "Run One", world_name: "Saltmarch", scenes: 3,
       open: [], ledger_open: 0, sheets: null, unreviewed: 0, pending: [],
-      images_undescribed: null, ...over,
+      images_undescribed: null,
+      money: {
+        calls: 0, cost_usd: 0, estimated_usd: 0, modelled_usd: 0,
+        unpriced_calls: 0, unmetered_calls: 0, subscription_calls: 0,
+        modelled_calls: 0, priced_calls: 0, total_tokens: 0, partial: false,
+      },
+      ...over,
     },
   };
+}
+
+/** The money block, filled in for a campaign that has actually been played. */
+function withMoney(over: Record<string, unknown>) {
+  return shell({
+    money: {
+      calls: 6, cost_usd: 4.82, estimated_usd: 1.1, modelled_usd: 0.36,
+      unpriced_calls: 0, unmetered_calls: 0, subscription_calls: 2,
+      modelled_calls: 1, priced_calls: 5, total_tokens: 9000,
+      partial: false, ...over,
+    },
+  });
 }
 
 function renderHub() {
@@ -56,6 +81,12 @@ beforeEach(() => {
   (api.getChronicle as any).mockResolvedValue([
     { sid: "s2", one_line: "It ended.", summary: "It ended, and the tide went out." },
   ]);
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listCampaignPCs as any).mockResolvedValue([]);
+  (api.campaignChanges as any).mockResolvedValue([]);
+  (api.getCampaignBudget as any).mockResolvedValue({ level: "off", limit_usd: 0,
+                                                     period: "monthly" });
+  (api.listSceneIdeas as any).mockResolvedValue([]);
 });
 
 test("the layout picker is gone; the hub is one column", async () => {
@@ -295,4 +326,143 @@ test("the campaign's own settings are reachable from its front door", () => {
     fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
     expect(screen.queryByTestId("calendar-panel")).not.toBeInTheDocument();
   });
+});
+
+
+// ---- the money card ----
+
+test("the three money columns are shown and never summed", async () => {
+  // The complaint the redesign opened with. Each column is labelled with what
+  // it actually is, so a campaign whose spend is $0 can still be seen to have
+  // used a subscription's worth of generation.
+  (api.getShell as any).mockResolvedValue(withMoney({}));
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Costs" }))
+    .closest("section")!;
+  expect(within(card).getByText("$4.82")).toBeInTheDocument();
+  expect(within(card).getByText("≈ $1.10")).toBeInTheDocument();
+  expect(within(card).getByText("≈ $0.36")).toBeInTheDocument();
+  // 4.82 + 1.10 + 0.36. The one figure this card may never render.
+  expect(within(card).queryByText(/6\.28/)).not.toBeInTheDocument();
+  expect(within(card).getByText(/never summed/i)).toBeInTheDocument();
+});
+
+test("an unpriced call is flagged rather than counted as zero", async () => {
+  (api.getShell as any).mockResolvedValue(withMoney({ unpriced_calls: 3 }));
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Costs" }))
+    .closest("section")!;
+  expect(within(card).getByText(/3 calls reported no price/i)).toBeInTheDocument();
+});
+
+test("an aggregate that could not be totalled says so instead of showing $0.00", async () => {
+  (api.getShell as any).mockResolvedValue(withMoney({ partial: true }));
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Costs" }))
+    .closest("section")!;
+  expect(within(card).getByText(/could not be totalled/i)).toBeInTheDocument();
+  expect(within(card).queryByText("$0.00")).not.toBeInTheDocument();
+});
+
+test("the budget bar draws only where a budget is set", async () => {
+  (api.getShell as any).mockResolvedValue(withMoney({}));
+  renderHub();
+  await screen.findByRole("heading", { name: "Costs" });
+  // `level: "off"` from the default mock: no cap, so no fraction, so no bar.
+  expect(screen.queryByRole("img", { name: /budget/i })).not.toBeInTheDocument();
+});
+
+test("a budget that is set draws its bar", async () => {
+  (api.getShell as any).mockResolvedValue(withMoney({}));
+  (api.getCampaignBudget as any).mockResolvedValue({
+    level: "warn", limit_usd: 10, spent_usd: 4.82, fraction: 0.482,
+    period: "monthly", unpriced_calls: 0 });
+  renderHub();
+
+  expect(await screen.findByRole("img", { name: /\$4\.82 of \$10\.00 budget/ }))
+    .toBeInTheDocument();
+});
+
+// ---- the cast card ----
+
+test("the cast card names faces and marks the PCs", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara Vance", default_version: "v1", versions: [],
+      has_avatar: false },
+  ]);
+  (api.listCampaignPCs as any).mockResolvedValue([
+    { id: "sera", name: "Seraphine", default_version: "v1", versions: [],
+      tags: [], has_avatar: false },
+  ]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Cast" }))
+    .closest("section")!;
+  expect(within(card).getByText("Seraphine")).toBeInTheDocument();
+  expect(within(card).getByText("Mara Vance")).toBeInTheDocument();
+  // The PC chip is on the PC and only on the PC.
+  expect(within(card).getAllByText("PC")).toHaveLength(1);
+  // A count, derived from the two lists rather than restated.
+  expect(within(card).getByText("2")).toBeInTheDocument();
+});
+
+test("a cast that could not be read is not an empty cast", async () => {
+  // Opposite answers, and they must never render the same way.
+  (api.listCharacters as any).mockRejectedValue(new Error("nope"));
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Cast" }))
+    .closest("section")!;
+  expect(within(card).getByText(/could not be read/i)).toBeInTheDocument();
+  expect(within(card).queryByText(/nobody has been cast/i)).not.toBeInTheDocument();
+});
+
+// ---- world changes ----
+
+test("world changes lists what play moved", async () => {
+  (api.campaignChanges as any).mockResolvedValue([
+    { ref: { kind: "lore", id: "the-salt-pact" }, name: "The Salt Pact",
+      scene: { id: "s2", title: "The second", date: "" },
+      fields: [{ field: "body", from: "a", to: "b" }] },
+  ]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "World changes" }))
+    .closest("section")!;
+  expect(within(card).getByText("The Salt Pact")).toBeInTheDocument();
+  expect(within(card).getByText(/1 field · The second/)).toBeInTheDocument();
+});
+
+test("a world nothing has changed says so", async () => {
+  renderHub();
+  const card = (await screen.findByRole("heading", { name: "World changes" }))
+    .closest("section")!;
+  expect(within(card).getByText(/has not changed the world yet/i)).toBeInTheDocument();
+});
+
+// ---- play next ----
+
+test("play next offers saved ideas and spends nothing to do it", async () => {
+  (api.listSceneIdeas as any).mockResolvedValue([
+    { id: "i1", title: "The lower step", premise: "An owed thread is past due.",
+      status: "active", source: "llm", date: "", cast: [], location: null,
+      pcless: false, created: "", used_scene: "" },
+    { id: "i2", title: "Used already", premise: "", status: "used",
+      source: "llm", date: "", cast: [], location: null, pcless: false,
+      created: "", used_scene: "s1" },
+  ]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Play next" }))
+    .closest("section")!;
+  expect(within(card).getByText("The lower step")).toBeInTheDocument();
+  expect(within(card).getByText("An owed thread is past due.")).toBeInTheDocument();
+  // A used idea is not something to play next.
+  expect(within(card).queryByText("Used already")).not.toBeInTheDocument();
+  // The whole reason this card shows saved ideas rather than generated ones:
+  // opening a campaign must not spend a generation.
+  expect((api as any).sceneSuggestions).toBeUndefined();
 });

@@ -202,7 +202,24 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // only sees params matched down to this element's own route — never carries
   // it. `useMatch` reads it off the full location instead, and does it without
   // a second CampaignView instance for the router to swap between.
-  const sid = useMatch("/campaigns/:cid/scenes/:sid")?.params.sid;
+  // Two shapes, one scene. `/wrap-up` is the review's own address: the rail's
+  // Wrap-up row used to point at the scene itself, which was a real
+  // destination but not a distinguishable one -- the row could never light,
+  // because `scenes` already owns every path under `/scenes`, and a reader
+  // could not link anyone to "the thing that is waiting". Both matches resolve
+  // the same `:sid`; what the second one buys is that the app can tell which
+  // question is being asked about it.
+  const playMatch = useMatch("/campaigns/:cid/scenes/:sid");
+  const wrapMatch = useMatch("/campaigns/:cid/scenes/:sid/wrap-up");
+  const sid = (playMatch ?? wrapMatch)?.params.sid;
+  /** Whether the URL is asking for the review rather than the transcript.
+   *
+   *  It does not *cause* the review -- `useSceneReview` adopts whatever the
+   *  scene is holding either way, and has since reviews became durable. What
+   *  it changes is what this page says when there is nothing to adopt: at
+   *  `/wrap-up` that is an answer ("nothing here is waiting"), and rendering
+   *  the transcript instead would silently answer a different question. */
+  const wrapUp = !!wrapMatch;
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [worldName, setWorldName] = useState("");
@@ -3727,7 +3744,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // During a review it names the scene being absorbed, not the one selected —
   // the scene is off the screen, so the pill is the only thing still saying it.
   usePublishShellContext(
-    name ? { campaign: name, scene: absorb ? `Absorbing ${absorbTitle}` : sceneTitle } : null);
+    name ? { campaign: name,
+             scene: absorb ? `Absorbing ${absorbTitle}`
+                    : wrapUp ? `Wrap-up · ${sceneTitle}` : sceneTitle } : null);
 
   // The model THIS campaign's turns run on, which since #142 is not necessarily
   // the active connection's: a campaign can route its scene turns elsewhere, and
@@ -3837,6 +3856,39 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   // transcript as well as moving the cast, so the scene is
                   // re-read whole rather than the cast alone.
                   onCastChanged={() => { if (activeId) refreshAndAsk(activeId); }} />;
+
+  // The wrap-up address with nothing to wrap up. Reached by a bookmark, a back
+  // button after a save, or a link to a review somebody else already decided --
+  // all ordinary, none of them errors. Rendering the transcript here would
+  // answer "what is waiting?" with a scene, which is a different question; the
+  // scene is one click away and named, so nothing is lost by saying so.
+  //
+  // `review.absorbing` covers the window where an absorb IS running and its
+  // payload has not landed: that is a review arriving, not one that is absent.
+  if (wrapUp && !absorb && !review.absorbing) {
+    return (
+      <PageShell column={null} columnLabel="Wrap-up">
+        <div className="page-wide view-anim">
+          <div className="eyebrow">{name}</div>
+          <h1 className="screen-title">Nothing to wrap up</h1>
+          <p className="empty-state">
+            {sceneTitle
+              ? `${sceneTitle} is not holding a review. Every proposal from it `
+                + "has been decided, or it has not been ended yet."
+              : "This scene is not holding a review."}
+          </p>
+          <div className="form-actions">
+            {activeId && (
+              <Link className="hub-primary" to={sceneUrl(cid, activeId)}>
+                Open the scene →
+              </Link>
+            )}
+            <Link to={`/campaigns/${cid}`}>Back to the campaign</Link>
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell

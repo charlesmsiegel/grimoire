@@ -1951,10 +1951,11 @@ export type LogLevelInfo = { level: LogLevel; levels: LogLevel[] };
  *  versus a tail reading 0. It is the cost rule ("a price nobody reported is
  *  never rendered as zero") one domain over.
  *
- *  There is no money field, deliberately: the spend figure the design puts on
- *  the Costs row is an all-time ledger rollup, and `store.usage.lifetime_since`
- *  reserves that scan for the all-time view rather than the play path — which
- *  is what the rail is, on every navigation.
+ *  `campaign.money` is the all-time rollup the Costs row wanted from the start.
+ *  It waited for `store.usage_rollup` rather than for a cheaper substitute: a
+ *  bounded 30-day window would have put the same unlabelled figure on screen
+ *  meaning something else. Three columns, never summed, and a `partial` flag —
+ *  because a badge that cannot be computed must draw nothing rather than $0.00.
  *
  *  There is no `library` field either: the number of library sections lives in
  *  `librarySections.ts`, and answering it from Python as well would be one
@@ -1990,6 +1991,33 @@ export type ShellCampaign = {
    *  when the world cannot be read; a world that reads cleanly with nothing
    *  outstanding reports the real `0`. */
   images_undescribed: number | null;
+  /** What this campaign has cost over the ledger's whole history.
+   *
+   *  Optional so a fixture frozen before the field existed still type-checks.
+   *  The three columns are separate claims about money and adding any two of
+   *  them produces a number nobody can recover — `components/cost.tsx` is the
+   *  only thing that formats them, and it is where that rule lives. */
+  money?: ShellMoney;
+};
+
+/** Three money columns and how complete they are.
+ *
+ *  `partial` is the field that keeps a badge honest: true means the aggregate
+ *  could not be brought up to date, so every figure beside it is a zero nobody
+ *  measured. A campaign the ledger has simply never mentioned is `partial:
+ *  false` with zeros, which IS a measurement — "nothing was spent here". */
+export type ShellMoney = {
+  calls: number;
+  cost_usd: number;
+  estimated_usd: number;
+  modelled_usd: number;
+  unpriced_calls: number;
+  unmetered_calls: number;
+  subscription_calls: number;
+  modelled_calls: number;
+  priced_calls: number;
+  total_tokens: number;
+  partial: boolean;
 };
 
 export type ShellPayload = {

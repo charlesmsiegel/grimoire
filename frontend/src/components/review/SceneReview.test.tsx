@@ -3415,3 +3415,108 @@ test("a run that landed without publishing does not open the older record", asyn
   // ...and the scene is released, so End scene is the way back.
   expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeEnabled();
 });
+
+
+// ---- the wrap-up's own address ----
+
+test("the wrap-up url opens the review the scene is holding", async () => {
+  // The rail's Wrap-up row and the hub's button both point here now. What the
+  // separate path buys is that the row can light and the link can be shared —
+  // pointing at the scene worked, but was indistinguishable from reading it.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-stored", stale: null });
+  renderCampaign("/campaigns/run/scenes/s1/wrap-up");
+
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+});
+
+test("the wrap-up url with nothing waiting says so rather than showing the scene", async () => {
+  // Reached by a bookmark, or a back button after saving. Rendering the
+  // transcript would answer "what is waiting?" with a scene, which is a
+  // different question — and one the reader can ask by clicking through.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: null, stale: null });
+  renderCampaign("/campaigns/run/scenes/s1/wrap-up");
+
+  expect(await screen.findByText(/nothing to wrap up/i)).toBeInTheDocument();
+  expect(screen.queryByText("hi")).not.toBeInTheDocument();
+  // ...and the scene is one named click away, so nothing is lost by saying it.
+  expect(screen.getByRole("link", { name: /open the scene/i })).toBeInTheDocument();
+});
+
+test("the scene url still opens a waiting review, exactly as before", async () => {
+  // The new path is an address, not a gate. A reader who arrives at the
+  // transcript of a scene holding a review still gets the review — that is
+  // what durable reviews have always done, and the wrap-up route must not
+  // quietly have made it conditional.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-stored", stale: null });
+  renderCampaign("/campaigns/run/scenes/s1");
+
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+});
+
+
+// ---- the counted section rail ----
+
+test("a section counts what nobody has answered, and ticks when it is done", async () => {
+  // The brief's ask, in the rail: a count that does not move as you work is a
+  // count you stop reading. Deliberately NOT the footer's number -- that one
+  // is what the save will accept without a verdict, and a pre-approved row is
+  // already ticked on screen. This is what has not been read.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue({
+    review: {
+      ...STORED_REVIEW,
+      edits: [
+        // Cited and mid-band, so they file under their own store rather than
+        // into the two NEEDS YOU drawers — which is what this test is about.
+        { id: "lore:a", kind: "lore", target: { kind: "lore", id: "a" },
+          label: "A — lore", field: "body", authored: false,
+          before: "", after: "one",
+          review: { certainty: 0.6, quote: "She signed it.", speaker: "Mara",
+                    authority: "other", score: 0.3, band: "medium" } },
+        { id: "lore:b", kind: "lore", target: { kind: "lore", id: "b" },
+          label: "B — lore", field: "body", authored: false,
+          before: "", after: "two",
+          review: { certainty: 0.6, quote: "And broke it.", speaker: "Mara",
+                    authority: "other", score: 0.3, band: "medium" } },
+      ],
+    },
+    generation: "gen-stored", stale: null });
+  renderCampaign("/campaigns/run/scenes/s1/wrap-up");
+
+  const section = await screen.findByRole("button",
+    { name: /World records & cards/ });
+  // Both arrive pre-approved -- and unread, which is what the rail says.
+  expect(within(section).getByLabelText("2 of 2 unanswered")).toBeInTheDocument();
+
+  // Answer one, and the rail moves.
+  fireEvent.click(screen.getByRole("button", { name: "Reject A — lore" }));
+  await waitFor(() => expect(
+    within(screen.getByRole("button", { name: /World records & cards/ }))
+      .getByLabelText("1 of 2 unanswered")).toBeInTheDocument());
+
+  // Answer the last one, and it stops being a number at all. Approve rather
+  // than reject, so this proves the rail counts ANSWERED and not "rejected".
+  fireEvent.click(screen.getByRole("button", { name: "Approve B — lore" }));
+  await waitFor(() => expect(
+    within(screen.getByRole("button", { name: /World records & cards/ }))
+      .getByLabelText("all 2 answered")).toBeInTheDocument());
+});
+
+test("a section with nothing in it is absent, not shown as answered", async () => {
+  // "This absorb proposed no sheet changes" and "every sheet change has been
+  // answered" are different claims, and a ✓ over an empty section makes the
+  // first one look like the second.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-stored", stale: null });
+  renderCampaign("/campaigns/run/scenes/s1/wrap-up");
+
+  await screen.findByDisplayValue("A stored summary.");
+  expect(screen.queryByRole("button", { name: /^Sheets$/ })).not.toBeInTheDocument();
+});

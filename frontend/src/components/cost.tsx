@@ -258,7 +258,18 @@ export function PostCost({ bucket }: { bucket: UsagePostBucket }) {
  *  that is wrong in a direction nobody can recover, and a UI that offers the
  *  sum is a UI that will be quoted.
  */
-export function MoneyColumns({ bucket }: { bucket: UsageBucket }) {
+/** Exactly the fields this component reads, and no more.
+ *
+ *  Widened from `UsageBucket` when the campaign hub started drawing these
+ *  columns from `GET /api/shell`, whose money block carries the three columns
+ *  and their call counts but not the token or duration fields a ledger bucket
+ *  has. Padding the shell payload with zeros to satisfy a type would have put
+ *  six invented measurements on the wire; naming what is actually read costs
+ *  one alias, and a `UsageBucket` still satisfies it structurally. */
+export type MoneySpread = Pick<UsageBucket,
+  "cost_usd" | "estimated_usd" | "modelled_usd"
+  | "priced_calls" | "subscription_calls" | "unpriced_calls">;
+export function MoneyColumns({ bucket }: { bucket: MoneySpread }) {
   const billed = n(bucket.cost_usd);
   const estimated = n(bucket.estimated_usd);
   const modelled = n(bucket.modelled_usd);

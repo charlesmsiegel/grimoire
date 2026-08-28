@@ -50,13 +50,26 @@ export default function ReviewColumn({ review }: { review: SceneReview }) {
         )}
       </ColumnSection>
 
+      {/* The section rail, counting what nobody has ANSWERED rather than what
+          is there. A section the reviewer has been through says so with a ✓,
+          which is the whole difference between a rail you read as you work and
+          one that shows the same six numbers from open to save.
+          Not the footer's count: that one is what the save will accept without
+          a verdict, and a pre-approved row is already ticked on screen so it is
+          not "remaining" to the reader. This is what has not been read. */}
       <ColumnSection label="By store">
         {groupCounts.map((g) => (
           <button key={g.key}
-                  className={"column-row" + (openSection === g.key ? " active" : "")}
+                  className={"column-row" + (openSection === g.key ? " active" : "")
+                             + (g.unjudged ? " alert" : "")}
                   onClick={() => openDrawer(g.key)}>
             <span className="column-row-label">{g.label}</span>
-            <span className="column-row-count">{g.n}</span>
+            <span className="column-row-count"
+                  aria-label={g.unjudged
+                    ? `${g.unjudged} of ${g.n} unanswered`
+                    : `all ${g.n} answered`}>
+              {g.unjudged || "✓"}
+            </span>
           </button>
         ))}
       </ColumnSection>

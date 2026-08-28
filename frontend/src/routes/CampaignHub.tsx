@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type CampaignMeta, type ChronicleEntry, type SceneMeta } from "../api/client";
+import { api, type CampaignBudget, type CampaignMeta, type CharacterSummary,
+         type ChronicleEntry, type PCSummary, type RecordChange,
+         type SceneIdea, type SceneMeta } from "../api/client";
 import type { ShellPayload } from "../api/types";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { PageShell, ColumnSection } from "../components/PageShell";
+import { MoneyColumns, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CampaignCover";
@@ -51,6 +54,79 @@ function count(v: number | null | undefined): string | undefined {
   return v === null || v === undefined ? undefined : String(v);
 }
 
+/** How many cast faces the card shows before it stops and links out.
+ *
+ *  A cap rather than a scroll: this is a summary card on a front door, and a
+ *  campaign can seat a great many characters. The tail says the real number,
+ *  so the cut is visible rather than silent. */
+const CAST_SHOWN = 8;
+
+/** How many absorbed changes the World changes card lists.
+ *
+ *  Small on purpose. The question this card answers is "did the last scene
+ *  move anything", not "what has ever changed" — that is the panel it links
+ *  to, which is built for reading and has the History tab beside it. */
+const CHANGES_SHOWN = 4;
+
+/** How many saved scene ideas the Play next card offers.
+ *
+ *  Three, because this is an offer and not a list: a front door that presents
+ *  nine equally-weighted options has asked a question rather than answered
+ *  one. The picker is where the whole ledger is managed. */
+const IDEAS_SHOWN = 3;
+
+/** What a campaign block that predates `money` reads as.
+ *
+ *  `partial`, not zeros: a payload with no money block is a server that did not
+ *  answer the question, and the card must say so rather than render a played
+ *  campaign as free. Spelled out here because a `?? {}` would typecheck and
+ *  then draw `$0.00`. */
+const ZERO_MONEY = {
+  calls: 0, cost_usd: 0, estimated_usd: 0, modelled_usd: 0,
+  unpriced_calls: 0, unmetered_calls: 0, subscription_calls: 0,
+  modelled_calls: 0, priced_calls: 0, total_tokens: 0, partial: true,
+};
+
+/** The cast as one list of faces, PCs first.
+ *
+ *  PCs lead because they are the records the reader plays; the rest follow in
+ *  whatever order the store listed them, which is the same order the world's
+ *  own pages use.
+ *
+ *  A `PCSummary` has no `avatar_v` and a `CharacterSummary` does, which is not
+ *  an oversight in either: only a character's avatar can be replaced by a
+ *  version promote, so only a character's needs a cache token naming the bytes.
+ *  Flattening them here rather than at the call site is what keeps that
+ *  asymmetry from becoming a conditional inside JSX.
+ */
+type Face = {
+  key: string; id: string; name: string;
+  kind: "pcs" | "characters"; version: string;
+  avatar: boolean;
+  /** `?v=<bytes>` or empty. Never a counter: an immutable URL is never
+   *  revalidated, so a token that reset on mount would pin a replaced image in
+   *  the browser cache for a year. */
+  token: string;
+};
+
+function faces(cast: { chars: CharacterSummary[]; pcs: PCSummary[] }): Face[] {
+  return [
+    ...cast.pcs.map((p): Face => ({
+      key: `pcs:${p.id}`, id: p.id, name: p.name, kind: "pcs",
+      version: p.default_version, avatar: !!p.has_avatar, token: "",
+    })),
+    ...cast.chars.map((c): Face => ({
+      key: `characters:${c.id}`, id: c.id, name: c.name, kind: "characters",
+      version: c.default_version, avatar: !!c.has_avatar,
+      token: c.avatar_v ? `?v=${c.avatar_v}` : "",
+    })),
+  ];
+}
+
+function initials(name: string): string {
+  return name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("");
+}
+
 export default function CampaignHub() {
   const { cid = "" } = useParams();
   const [meta, setMeta] = useState<CampaignMeta | null>(null);
@@ -58,6 +134,22 @@ export default function CampaignHub() {
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [chronicle, setChronicle] = useState<ChronicleEntry[]>([]);
   const [failed, setFailed] = useState(false);
+  /** The three cards that need a read of their own, each `null` until it has
+   *  answered and each allowed to stay `null` for good.
+   *
+   *  Loaded in a SECOND effect, after the four reads the page cannot render
+   *  without. That ordering is the whole point: a hub that waits on the cast,
+   *  the budget and the change journal before it can say what to do next has
+   *  put three summaries in front of its own headline. Each of these fails
+   *  soft to a card that says it could not be read, which is not the same as
+   *  a card saying there is nothing there. */
+  const [cast, setCast] = useState<{ chars: CharacterSummary[]; pcs: PCSummary[] } | null>(null);
+  const [castFailed, setCastFailed] = useState(false);
+  const [budget, setBudget] = useState<CampaignBudget | null>(null);
+  const [changes, setChanges] = useState<RecordChange[] | null>(null);
+  const [changesFailed, setChangesFailed] = useState(false);
+  const [ideas, setIdeas] = useState<SceneIdea[] | null>(null);
+  const [ideasFailed, setIdeasFailed] = useState(false);
   /** Which campaign setting is open, if any.
    *
    *  These used to live only on the scene bar, which meant they were reachable
@@ -90,6 +182,41 @@ export default function CampaignHub() {
     return () => { live = false; };
   }, [cid]);
 
+  // The cards that are worth having but not worth waiting for. Separate from
+  // the effect above so a slow change journal cannot hold up "what to do
+  // next", and each settled independently so one failure costs one card.
+  useEffect(() => {
+    if (!cid) return;
+    let live = true;
+    setCast(null); setCastFailed(false);
+    setChanges(null); setChangesFailed(false);
+    setIdeas(null); setIdeasFailed(false);
+    setBudget(null);
+    const scope = { kind: "campaign", id: cid } as const;
+    Promise.all([api.listCharacters(scope), api.listCampaignPCs(cid)])
+      .then(([chars, pcs]) => { if (live) setCast({ chars, pcs }); })
+      .catch(() => { if (live) setCastFailed(true); });
+    api.campaignChanges(cid)
+      .then((rows) => { if (live) setChanges(rows); })
+      .catch(() => { if (live) setChangesFailed(true); });
+    // A budget is optional and its absence is `level: "off"`, not an error --
+    // so a failed read leaves `null` and the bar simply does not draw. There
+    // is nothing to warn about: the money columns above it are the card's
+    // subject, and the bar is context for them.
+    api.getCampaignBudget(cid)
+      .then((b) => { if (live) setBudget(b); })
+      .catch(() => {});
+    // `greetings=false`: the composed greeting half parses the frontmatter of
+    // every greeting in the campaign, and this card offers written-down ideas
+    // rather than a way into the greeting map -- which the picker already is.
+    api.listSceneIdeas(cid, false)
+      .then((rows) => {
+        if (live) setIdeas(rows.filter((i) => i.status === "active"));
+      })
+      .catch(() => { if (live) setIdeasFailed(true); });
+    return () => { live = false; };
+  }, [cid]);
+
   const camp = shell?.campaign ?? null;
   const open = camp?.open ?? [];
   const waiting = camp?.unreviewed ?? 0;
@@ -99,6 +226,13 @@ export default function CampaignHub() {
   // being told apart three lines further down where only one of them is
   // reachable.
   const todo = shell?.todo ?? null;
+  /** The campaign's all-time money, or `undefined` while the shell read is out.
+   *
+   *  Three states rather than two, and the middle one is why: `undefined` is
+   *  "not yet", `partial: true` is "the ledger could not be totalled", and
+   *  anything else is a figure. Collapsing the first two would put "could not
+   *  count" on screen for the half-second before the payload lands. */
+  const money_ = camp ? (camp.money ?? { ...ZERO_MONEY, partial: true }) : undefined;
   const recap = chronicle.length ? chronicle[chronicle.length - 1] : null;
   /** What each waiting scene is called.
    *
@@ -309,6 +443,99 @@ export default function CampaignHub() {
             {!scenes.length && <p className="field-hint">No scenes yet.</p>}
           </Card>
 
+          {/* The money, kept apart. This is the complaint the whole redesign
+              opened with -- "it's not surfacing costs (or estimated costs for
+              sources that don't report charge amounts)" -- and the answer is
+              three columns that are never added, which is what `MoneyColumns`
+              is and why it is shared with the Costs page rather than redrawn
+              here. The figures are the campaign's whole history: `money` on
+              the shell payload is `store.usage_rollup`'s all-time total, which
+              is affordable on this page for the same reason it is affordable
+              on the rail beside it. */}
+          <Card title="Costs"
+                foot={<Link to={`/campaigns/${cid}/costs`}>The full ledger →</Link>}>
+            {money_ === undefined ? (
+              <p className="field-hint">Loading…</p>
+            ) : money_.partial ? (
+              // The one thing a cost surface may not do is render "could not
+              // count" as $0.00, and this is where that case arrives.
+              <p className="field-hint money-unpriced">
+                The ledger could not be totalled. Nothing here is a zero.
+              </p>
+            ) : (
+              <>
+                <MoneyColumns bucket={money_} />
+                {budget && budget.level !== "off" && (
+                  <>
+                    {/* The design's budget bar. Only where a budget is set:
+                        with none, `level` is "off" and there is no cap for a
+                        bar to be a fraction of -- a full-width empty track
+                        would imply one. */}
+                    <div className="ctx-bar" role="img"
+                         aria-label={`${money(budget.spent_usd ?? 0)} of `
+                                     + `${money(budget.limit_usd)} budget`}>
+                      <div className={"ctx-bar-fill " + budget.level}
+                           style={{ width: `${Math.min(100,
+                             Math.round((budget.fraction ?? 0) * 100))}%` }} />
+                    </div>
+                    <p className="field-hint">
+                      {money(budget.spent_usd ?? 0)} of {money(budget.limit_usd)}
+                      {" · "}{budget.period === "total" ? "all time" : "this month"}
+                    </p>
+                  </>
+                )}
+              </>
+            )}
+          </Card>
+
+          {/* Who is in this campaign. Faces rather than a count, because the
+              count is already on the world's own pages and what a front door
+              can add is recognition. A PC is marked as one: it is the record
+              the reader plays, and telling it apart from the cast at a glance
+              is the whole reason the chip is there. */}
+          <Card title="Cast"
+                tail={cast ? String(cast.chars.length + cast.pcs.length) : undefined}
+                foot={<Link to={`/campaigns/${cid}/world?section=characters`}>
+                        Everyone →
+                      </Link>}>
+            {castFailed ? (
+              // "The cast could not be read" and "no cast" are opposite
+              // answers, and a failed read must never render as an empty one.
+              <p className="field-hint error">The cast could not be read.</p>
+            ) : !cast ? (
+              <p className="field-hint">Loading…</p>
+            ) : !cast.chars.length && !cast.pcs.length ? (
+              <p className="field-hint">Nobody has been cast yet.</p>
+            ) : (
+              <>
+                <div className="hub-faces">
+                  {faces(cast).slice(0, CAST_SHOWN).map((who) => (
+                    <Link key={who.key} className="hub-face"
+                          to={`/campaigns/${cid}/world`
+                              + `?section=${who.kind}&id=${who.id}`}>
+                      {who.avatar
+                        ? <img className="hub-face-avatar" alt=""
+                               src={api.actorImageUrl({ kind: "campaign", id: cid },
+                                                      who.kind, who.id,
+                                                      who.version, "avatar")
+                                    + who.token} />
+                        : <span className="initials-avatar" aria-hidden>
+                            {initials(who.name)}
+                          </span>}
+                      <span className="hub-face-name">{who.name}</span>
+                      {who.kind === "pcs" && <span className="chip on">PC</span>}
+                    </Link>
+                  ))}
+                </div>
+                {cast.chars.length + cast.pcs.length > CAST_SHOWN && (
+                  <p className="field-hint">
+                    {cast.chars.length + cast.pcs.length - CAST_SHOWN} more.
+                  </p>
+                )}
+              </>
+            )}
+          </Card>
+
           <Card title="Open threads"
                 tail={camp ? String(camp.ledger_open) : undefined}
                 foot={<Link to={`/campaigns/${cid}/ledger`}>The ledger →</Link>}>
@@ -317,6 +544,32 @@ export default function CampaignHub() {
                 ? `${camp.ledger_open} still open.`
                 : "Nothing is owed."}
             </p>
+          </Card>
+
+          {/* What play has actually changed. The rolling view -- the latest
+              write-back per record -- which is the one that answers "what does
+              the world say now"; the append-only history behind it is a tab on
+              the panel this links to, and is a different question. */}
+          <Card title="World changes"
+                tail={changes ? String(changes.length) : undefined}
+                foot={<Link to={`/campaigns/${cid}/ledger`}>Every change →</Link>}>
+            {changesFailed ? (
+              <p className="field-hint error">The changes could not be read.</p>
+            ) : !changes ? (
+              <p className="field-hint">Loading…</p>
+            ) : !changes.length ? (
+              <p className="field-hint">Play has not changed the world yet.</p>
+            ) : (
+              changes.slice(0, CHANGES_SHOWN).map((c) => (
+                <div key={`${c.ref.kind}:${c.ref.id}`} className="hub-row">
+                  <span className="hub-row-title">{c.name}</span>
+                  <span className="field-hint">
+                    {c.fields.length} field{c.fields.length === 1 ? "" : "s"}
+                    {c.scene.title ? ` · ${c.scene.title}` : ""}
+                  </span>
+                </div>
+              ))
+            )}
           </Card>
 
           {/* What the app noticed. The hub already reads `shell` for every
@@ -338,6 +591,39 @@ export default function CampaignHub() {
                   ? `${todo} still to answer.`
                   : "Nothing outstanding."}
             </p>
+          </Card>
+
+          {/* What to play next, and where the reason comes from.
+              The design draws generated suggestions here with the reason each
+              was suggested. Generating them is an LLM call, and a call that
+              fires because a page loaded is exactly what `useSceneSuggestions`
+              was rebuilt to stop -- so this card shows the ideas the reader has
+              already SAVED (`#88`'s scene ledger, which survives everything and
+              belongs to them rather than to a cache), and sends anyone who
+              wants fresh ones to the picker, where the button that spends the
+              money is. The premise is the reason: it is what the idea was
+              written down for. */}
+          <Card title="Play next"
+                tail={ideas ? String(ideas.length) : undefined}
+                foot={<Link to={`/campaigns/${cid}/scenes`}>Start a scene →</Link>}>
+            {ideasFailed ? (
+              <p className="field-hint error">The scene ledger could not be read.</p>
+            ) : !ideas ? (
+              <p className="field-hint">Loading…</p>
+            ) : !ideas.length ? (
+              <p className="field-hint">
+                Nothing saved. The new-scene picker can suggest some.
+              </p>
+            ) : (
+              ideas.slice(0, IDEAS_SHOWN).map((idea) => (
+                <div key={idea.id} className="hub-row hub-idea">
+                  <span className="hub-row-title">{idea.title}</span>
+                  {idea.premise && (
+                    <span className="field-hint">{idea.premise}</span>
+                  )}
+                </div>
+              ))
+            )}
           </Card>
 
           {/* Only where a module is bound. "No mechanics" is a legal state, not

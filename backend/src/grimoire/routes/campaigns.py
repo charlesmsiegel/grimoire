@@ -947,6 +947,12 @@ def delete_campaign(cid: str, request: Request):
     # inside the retention window would otherwise inherit this one's drafts --
     # see `RunRegistry.forget_subject`.
     runs.forget_subject(request.app, runs.campaign_subject(cid))
+    # Nothing is done about this campaign's ledger rows, and `usage_rollup` has
+    # no `forget` for the same reason: the ledger is append-only and records
+    # money that was actually spent, so a replacement campaign reusing the slug
+    # inherits those rows on every all-time surface there is. Making one of
+    # them answer differently would put two figures on screen with nothing to
+    # say which was right.
     return {"ok": True}
 
 

@@ -1121,10 +1121,31 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   const rejectedCount = editRows.filter((e) => e.rejected).length;
   const undecidedCount = editRows.length - approvedCount - rejectedCount;
   const uncitedRows = editRows.flatMap((e, i) => (isUncited(e) ? [[e, i] as const] : []));
-  /** How many proposals each store drawer holds, for the column's counts. */
-  const groupCounts = EDIT_GROUPS.map((g) => ({
-    ...g, n: editRows.filter((e) => drawerKey(e) === g.key).length,
-  })).filter((g) => g.n > 0);
+  /** What each store drawer holds, and how much of it a person has answered.
+   *
+   *  Two numbers because the rail asks two questions. `n` is how big the
+   *  section is; `unjudged` is how much of it the reviewer has not personally
+   *  said anything about, which is the one the design puts in `--alert` and
+   *  replaces with a ✓ at zero. A rail that carried only the total would show
+   *  the same six numbers from open to save — and a count that does not move
+   *  as you work is a count you stop reading.
+   *
+   *  **`unjudged` is not the footer's `undecidedCount`, and the difference is
+   *  deliberate.** The footer counts what the save is about to accept without
+   *  a verdict, and a row that arrived pre-approved is already ticked on
+   *  screen, so it is not "remaining" to a reader looking at it. This counts
+   *  what nobody has *read*, which is the question a section rail answers:
+   *  every row starts here, including the pre-approved ones, and the section
+   *  ticks when the reviewer has been through it. Sharing one number between
+   *  the two would make every store section read ✓ the moment a review opened.
+   *
+   *  Sections with nothing in them are dropped rather than shown at zero: an
+   *  absorb that proposed no sheet changes has no Sheets section, which is not
+   *  the same claim as a Sheets section with everything answered. */
+  const groupCounts = EDIT_GROUPS.map((g) => {
+    const rows = editRows.filter((e) => drawerKey(e) === g.key);
+    return { ...g, n: rows.length, unjudged: rows.filter((e) => !e.judged).length };
+  }).filter((g) => g.n > 0);
   // The low-confidence rows, each carrying the index it holds in `editRows`
   // (#110). Kept as pairs rather than filtered into a second array: every
   // handler on a row addresses it positionally, and a row rendered under its

@@ -379,6 +379,20 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "rewrites a row -- which is what makes the unlocked write safe rather "
         "than merely convenient."
     ),
+    "store.usage_rollup": (
+        "A considered exclusion, not a gap. Nothing here is a source: the file "
+        "is a byte bookmark into the ledger, derived from it and deletable at "
+        "any moment, so a lost update costs one reader a rescan and can lose no "
+        "record of anything. Every write is a COMPLETE snapshot through "
+        "`atomic.write_text`, so the loser of a concurrent write is replaced by "
+        "a snapshot that is equally true rather than by half of one. `forget` "
+        "takes a cid but mutates no campaign-scoped state -- it drops a cached "
+        "figure ABOUT a campaign that has just been deleted. And the lock is "
+        "the wrong instrument in the other direction too: this is read from the "
+        "rail on every navigation, so taking it would queue a badge behind a "
+        "minutes-long absorb, which is the cost the whole module exists to "
+        "avoid paying."
+    ),
     "store.campaigns.paths": (
         "`write_manifest` republishes the whole campaign manifest from a dict "
         "its callers read a moment earlier -- `overlay`, `sync`, `migrations` "

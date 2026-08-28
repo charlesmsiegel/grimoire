@@ -2,7 +2,20 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 vi.mock("../api/client", () => ({
-  api: { getCampaign: vi.fn(), listScenes: vi.fn(), getShell: vi.fn() },
+  api: { getCampaign: vi.fn(), listScenes: vi.fn(), getShell: vi.fn(),
+         // The deferred read: spend arrives after the list is on screen.
+         getCampaignSceneCosts: vi.fn() },
+}));
+
+// The importer is a three-step walk with its own suite; here it only has to
+// be reachable from the header and to report back the way it ends.
+vi.mock("../components/SceneImport", () => ({
+  SceneImport: ({ onBack, onImported }: any) => (
+    <div data-testid="scene-import">
+      <button onClick={() => onImported("s8")}>stub-import</button>
+      <button onClick={() => onBack()}>stub-import-close</button>
+    </div>
+  ),
 }));
 
 // The chooser is driven end-to-end by its own suite; here it only has to be
@@ -27,15 +40,34 @@ const scene = (over: Record<string, unknown>) => ({
   place: "", done: false, ...over,
 });
 
-function shell(pending: { sid: string; proposals: number }[] = []) {
+function shell(pending: { sid: string; proposals: number }[] = [],
+               open: { sid: string; title: string; turns: number | null }[] = []) {
   return {
     campaigns: 1, todo: null,
     campaign: {
-      id: "run", name: "Run One", world_name: "Saltmarch", scenes: 3, open: [],
+      id: "run", name: "Run One", world_name: "Saltmarch", scenes: 3, open,
       ledger_open: 0, sheets: null, unreviewed: 0, pending,
       images_undescribed: null,
     },
   };
+}
+
+/** One row of the deferred per-scene cost read. */
+function costRow(scene: string, over: Record<string, unknown> = {}) {
+  return {
+    scene, title: "", created: "", updated: "", first_ts: "", last_ts: "",
+    missing: false, calls: 2, errors: 0, prompt_tokens: 0,
+    completion_tokens: 0, total_tokens: 0, cache_read_tokens: 0,
+    cache_write_tokens: 0, cost_usd: 0.41, estimated_usd: 0, modelled_usd: 0,
+    priced_calls: 2, unpriced_calls: 0, subscription_calls: 0,
+    modelled_calls: 0, unmetered_calls: 0, duration_ms: 0, ...over,
+  };
+}
+
+function costs(scenes: ReturnType<typeof costRow>[]) {
+  return { campaign: "run", since: "", until: "", generated_at: "",
+           order: "recent", totals: costRow(""),
+           scenes, listed: scenes.length, truncated: false };
 }
 
 function renderScenes() {
@@ -52,6 +84,7 @@ function renderScenes() {
 beforeEach(() => {
   (api.getCampaign as any).mockResolvedValue({ meta: META, body: "" });
   (api.getShell as any).mockResolvedValue(shell());
+  (api.getCampaignSceneCosts as any).mockResolvedValue(costs([]));
   (api.listScenes as any).mockResolvedValue([
     scene({ id: "003--third", title: "The third", date: "Day 41", place: "The weir" }),
     scene({ id: "002--second", title: "The second", done: true }),
@@ -185,4 +218,109 @@ test("a failed read is not an empty campaign", async () => {
   renderScenes();
   expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText(/no scenes yet/i)).not.toBeInTheDocument();
+});
+
+
+// ---- the two columns that are not frontmatter ----
+
+test("an open scene with turns says Resume, one with none says Open", async () => {
+  // The same click either way. What the reader gets is knowing which of the
+  // two they are about to do: a conversation to come back to, or a start.
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "002--b", title: "Underway", done: false }),
+    scene({ id: "001--a", title: "Not started", done: false }),
+  ]);
+  (api.getShell as any).mockResolvedValue(shell([], [
+    { sid: "002--b", title: "Underway", turns: 5 },
+    { sid: "001--a", title: "Not started", turns: 0 },
+  ]));
+  renderScenes();
+
+  await screen.findByText("Underway");
+  expect(screen.getByRole("link", { name: "Resume →" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Open →" })).toBeInTheDocument();
+});
+
+test("a turn count nobody could read is not zero turns", async () => {
+  // `turns: null` is "the transcript could not be read". Rendering that as a
+  // scene with no turns would offer Open over a scene mid-conversation.
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--a", title: "Unreadable", done: false }),
+  ]);
+  (api.getShell as any).mockResolvedValue(shell([], [
+    { sid: "001--a", title: "Unreadable", turns: null },
+  ]));
+  renderScenes();
+
+  await screen.findByText("Unreadable");
+  expect(screen.getByRole("link", { name: "Open →" })).toBeInTheDocument();
+  expect(screen.queryByText(/turns$/)).not.toBeInTheDocument();
+});
+
+test("spend lands after the list and never before it", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--a", title: "A scene", done: true }),
+  ]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue(
+    costs([costRow("001--a", { cost_usd: 0.41 })]));
+  renderScenes();
+
+  // The title does not wait on the ledger.
+  await screen.findByText("A scene");
+  expect(await screen.findByText("$0.41")).toBeInTheDocument();
+});
+
+test("a scene the ledger cannot price says so rather than showing $0.00", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--a", title: "A scene", done: true }),
+  ]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue(
+    costs([costRow("001--a", { cost_usd: 0, priced_calls: 0, unpriced_calls: 2 })]));
+  renderScenes();
+
+  expect(await screen.findByText("not reported")).toBeInTheDocument();
+  expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+});
+
+test("a ledger read that failed costs the figures and nothing else", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--a", title: "A scene", done: true }),
+  ]);
+  (api.getCampaignSceneCosts as any).mockRejectedValue(new Error("busy"));
+  renderScenes();
+
+  // The list is the page; the money is a column on it.
+  expect(await screen.findByText("A scene")).toBeInTheDocument();
+  expect(screen.queryByText(/could not/i)).not.toBeInTheDocument();
+});
+
+// ---- importing a transcript ----
+
+test("Import a transcript is a header action, not a click deeper in", async () => {
+  renderScenes();
+  fireEvent.click(await screen.findByRole("button", { name: /import a transcript/i }));
+
+  expect(screen.getByTestId("scene-import")).toBeInTheDocument();
+});
+
+test("an imported transcript opens the scene it made", async () => {
+  renderScenes();
+  fireEvent.click(await screen.findByRole("button", { name: /import a transcript/i }));
+  fireEvent.click(screen.getByText("stub-import"));
+
+  expect(await screen.findByTestId("play")).toBeInTheDocument();
+});
+
+// ---- the wrap-up address ----
+
+test("an unreviewed scene's row goes to the wrap-up, not the transcript", async () => {
+  // The action says "Wrap up →", so it must land on the wrap-up.
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--a", title: "Absorbed", done: true }),
+  ]);
+  (api.getShell as any).mockResolvedValue(shell([{ sid: "001--a", proposals: 8 }]));
+  renderScenes();
+
+  const act = await screen.findByRole("link", { name: "Wrap up →" });
+  expect(act).toHaveAttribute("href", "/campaigns/run/scenes/001--a/wrap-up");
 });

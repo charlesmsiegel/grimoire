@@ -7,9 +7,9 @@ worth holding to the code rather than to a docstring:
   * an unavailable count is ``None`` and never ``0`` -- the rail draws no tail
     for one and draws ``0`` for the other, so collapsing them would make a
     campaign with nothing to do indistinguishable from one nobody measured;
-  * there is no money in the payload, because the figure the design asked for
-    is backed by an all-time ledger scan that ``usage.lifetime_since`` reserves
-    for the all-time view;
+  * the money in the payload is the ALL-TIME rollup and never a bounded window
+    wearing its name, and it arrives as three columns that are never summed --
+    with ``partial`` saying when none of them can be believed;
   * an id that does not resolve is ``campaign: null`` and HTTP 200, because the
     rail asks with an id the browser remembered and a deleted campaign is an
     ordinary state rather than a failed request.
@@ -236,19 +236,84 @@ def test_sheets_is_null_when_no_module_is_bound(client, campaign):
     assert _shell(client, campaign)["campaign"]["sheets"] is None
 
 
-def test_no_money_anywhere_in_the_payload(client, campaign):
-    """The rail carries no spend figure, and this is what keeps it that way.
+def test_money_is_three_columns_and_never_a_total(client, campaign):
+    """The rail's spend figure, and the rule it has to arrive under.
 
-    The figure the design asked for is an all-time ledger rollup, which
-    ``store.usage.lifetime_since`` documents as backing the all-time view "and
-    nothing on the play path". The rail is the play path, on every navigation.
-    A later slice adds a maintained aggregate; until then the row has no tail.
+    Three separate claims about money. A payload carrying their sum -- under
+    any name -- is the one thing this route may not ship, because a number
+    nobody can decompose is a number that gets quoted.
     """
-    body = _shell(client, campaign)
-    flat = repr(body)
-    for word in ("cost_usd", "estimated_usd", "modelled_usd", "spend",
-                 "unpriced"):
-        assert word not in flat, f"{word} leaked into the shell payload"
+    money = _shell(client, campaign)["campaign"]["money"]
+    for column in ("cost_usd", "estimated_usd", "modelled_usd"):
+        assert column in money
+    assert "total_usd" not in money and "spend_usd" not in money
+
+
+def test_a_campaign_that_has_run_nothing_reports_a_real_zero(client, campaign):
+    """`partial` is "nobody could count", and this is not that.
+
+    A fresh campaign has spent nothing, and that is a measurement. The flag is
+    reserved for an aggregate that could not be brought up to date at all --
+    which is the one case the rail must draw as silence rather than `$0.00`.
+    """
+    money = _shell(client, campaign)["campaign"]["money"]
+    assert money["partial"] is False
+    assert money["calls"] == 0
+    assert money["cost_usd"] == 0
+
+
+def test_the_figure_is_all_time_rather_than_a_bounded_window(client, campaign):
+    """The whole reason this waited for `store.usage_rollup`.
+
+    A 30-day window would have been cheap and would have put the same
+    unlabelled figure on the rail meaning something else than the page it links
+    to. A row older than any window this route could have chosen still counts.
+    """
+    store.usage.record(task="chat", campaign=campaign, model="realm/opus",
+                       cost_usd=2.50, ts="2019-01-01T00:00:00Z")
+
+    money = _shell(client, campaign)["campaign"]["money"]
+    assert money["cost_usd"] == 2.50
+    assert money["calls"] == 1
+
+
+def test_a_subscription_billed_campaign_reports_no_spend_but_says_why(
+        client, campaign):
+    """The case the rail's tail has to stay silent for.
+
+    Everything billed to a subscription: real usage, and no money anybody paid.
+    `cost_usd` is a true zero, `estimated_usd` carries the figure, and a tail
+    that rendered the first as `$0.00` would call a played campaign free.
+    """
+    store.usage.record(task="chat", campaign=campaign, model="realm/opus",
+                       cost_usd=1.25, cost_basis="equivalent",
+                       ts="2026-08-01T00:00:00Z")
+
+    money = _shell(client, campaign)["campaign"]["money"]
+    assert money["cost_usd"] == 0
+    assert money["estimated_usd"] == 1.25
+    assert money["subscription_calls"] == 1
+
+
+def test_an_unpriced_call_is_counted_rather_than_costed_as_zero(client, campaign):
+    store.usage.record(task="chat", campaign=campaign, model="realm/opus",
+                       ts="2026-08-01T00:00:00Z")
+
+    money = _shell(client, campaign)["campaign"]["money"]
+    assert money["unpriced_calls"] == 1
+    assert money["cost_usd"] == 0
+
+
+def test_another_campaigns_spend_is_not_this_ones(client, campaign):
+    other = client.post("/api/campaigns",
+                        json={"name": "Elsewhere",
+                              "world": _shell(client, campaign)["campaign"]["world"]}
+                        ).json()["id"]
+    store.usage.record(task="chat", campaign=other, model="realm/opus",
+                       cost_usd=9.99, ts="2026-08-01T00:00:00Z")
+
+    assert _shell(client, campaign)["campaign"]["money"]["cost_usd"] == 0
+    assert _shell(client, other)["campaign"]["money"]["cost_usd"] == 9.99
 
 
 def test_library_is_not_answered_here(client):

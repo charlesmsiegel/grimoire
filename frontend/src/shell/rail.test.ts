@@ -13,7 +13,7 @@ const PATHS = [
   "/connections", "/library", "/search", "/stats", "/config", "/open",
   "/campaigns/c1", "/campaigns/c1/scenes/s1", "/campaigns/c1/ledger",
   "/campaigns/c1/sheets", "/campaigns/c1/costs", "/campaigns/c1/world",
-  "/campaigns/c1/timeline",
+  "/campaigns/c1/timeline", "/campaigns/c1/scenes/s1/wrap-up",
   "/welcome", "/campaigns/new",
   "/modules-of-my-own",
 ];
@@ -92,8 +92,8 @@ describe("Wrap-up goes where the proposals are", () => {
   };
   const wrap = () => CAMPAIGN_ROWS.find((r) => r.id === "wrap")!;
 
-  test("the first scene holding proposals, which is where the hub sends you too", () => {
-    expect(wrap().to(ctx, PENDING)).toBe("/campaigns/c1/scenes/s13");
+  test("the first scene holding proposals, at the review's own address", () => {
+    expect(wrap().to(ctx, PENDING)).toBe("/campaigns/c1/scenes/s13/wrap-up");
   });
 
   test("the tail reaches a reader now, instead of being computed and dropped", () => {
@@ -107,8 +107,37 @@ describe("Wrap-up goes where the proposals are", () => {
     expect(wrap().to(ctx, WITH_MODULE)).toBeNull();
   });
 
-  test("it never lights, because `scenes` owns every path under /scenes", () => {
+  test("the transcript is not the wrap-up", () => {
+    // Reading a scene and judging one are different places to be, and the rail
+    // has to say which.
     expect(wrap().match("/campaigns/c1/scenes/s13", ctx)).toBe(false);
+    expect(wrap().match("/campaigns/c1/scenes/s13/wrap-up", ctx)).toBe(true);
+  });
+
+  test("any scene's wrap-up lights it, not only the one it offers", () => {
+    // With two scenes waiting the row points at the first; a reader who
+    // reached the second from the hub is still on Wrap-up.
+    expect(wrap().match("/campaigns/c1/scenes/s11/wrap-up", ctx)).toBe(true);
+  });
+
+  test("a trailing slash is the same route", () => {
+    expect(wrap().match("/campaigns/c1/scenes/s13/wrap-up/", ctx)).toBe(true);
+  });
+
+  test("another campaign's wrap-up is not this one's", () => {
+    expect(wrap().match("/campaigns/c2/scenes/s13/wrap-up", ctx)).toBe(false);
+  });
+
+  test("Scenes stands aside so the two are never lit at once", () => {
+    const scenes = CAMPAIGN_ROWS.find((r) => r.id === "scenes")!;
+    expect(scenes.match("/campaigns/c1/scenes/s13", ctx)).toBe(true);
+    expect(scenes.match("/campaigns/c1/scenes/s13/wrap-up", ctx)).toBe(false);
+    // ...but a scene that merely ends in something like it is still a scene.
+    expect(scenes.match("/campaigns/c1/scenes/wrap-up", ctx)).toBe(true);
+  });
+
+  test("Wrap-up is what the crumb calls that address", () => {
+    expect(titleFor("/campaigns/c1/scenes/s13/wrap-up")).toBe("Wrap-up");
   });
 });
 
@@ -159,12 +188,70 @@ test("Search advertises no shortcut", () => {
   expect(APP_ROWS.find((r) => r.id === "search")!.tail).toBeUndefined();
 });
 
-test("no row carries a money tail", () => {
-  // The figure the design puts on Costs is an all-time ledger rollup, which
-  // `store.usage.lifetime_since` reserves for the all-time view rather than the
-  // play path — and the rail is the play path, on every navigation.
+describe("the Costs tail", () => {
+  const costs = () => APP_ROWS.find((r) => r.id === "costs")!;
+  const withMoney = (over: Record<string, unknown>) => ({
+    campaigns: 1, todo: null,
+    campaign: {
+      id: "c1", name: "A Run", world_name: "Saltmarch", scenes: 2,
+      open: [], ledger_open: 0, sheets: null, unreviewed: null,
+      pending: [], images_undescribed: null,
+      money: {
+        calls: 4, cost_usd: 4.82, estimated_usd: 0, modelled_usd: 0,
+        unpriced_calls: 0, unmetered_calls: 0, subscription_calls: 0,
+        modelled_calls: 0, priced_calls: 4, total_tokens: 900,
+        partial: false, ...over,
+      },
+    },
+  } as any);
+
+  test("spend is what it carries", () => {
+    expect(costs().tail!(withMoney({}))).toBe("$4.82");
+    expect(costs().tailLabel!(withMoney({}))).toBe("$4.82 spent");
+  });
+
+  test("only spend — the other two columns are never added into it", () => {
+    // Three separate claims about money. A tail summing any two of them is the
+    // one number nobody can recover, so the estimate and the model stay on the
+    // hub's card where they can be labelled.
+    const tail = costs().tail!(withMoney(
+      { cost_usd: 1, estimated_usd: 10, modelled_usd: 100 }));
+    expect(tail).toBe("$1.00");
+  });
+
+  test("a subscription-billed campaign draws nothing rather than $0.00", () => {
+    // Real usage, no money paid. Rendering the spend column as $0.00 here
+    // would say a played campaign was free.
+    expect(costs().tail!(withMoney(
+      { cost_usd: 0, estimated_usd: 1.25, subscription_calls: 4, priced_calls: 4 })))
+      .toBeUndefined();
+  });
+
+  test("an aggregate that could not be counted draws nothing", () => {
+    expect(costs().tail!(withMoney({ partial: true, cost_usd: 4.82 })))
+      .toBeUndefined();
+  });
+
+  test("a campaign that has run nothing draws nothing", () => {
+    expect(costs().tail!(withMoney({ calls: 0, cost_usd: 0 }))).toBeUndefined();
+  });
+
+  test("a payload from before the field existed draws nothing", () => {
+    const old = { campaigns: 1, todo: null,
+                  campaign: { id: "c1", name: "A Run", world_name: "S",
+                              scenes: 0, open: [], ledger_open: 0, sheets: null,
+                              unreviewed: null, pending: [],
+                              images_undescribed: null } } as any;
+    expect(costs().tail!(old)).toBeUndefined();
+  });
+});
+
+test("no OTHER row carries a money tail", () => {
+  // Costs is the one row money belongs on. A count row that grew a dollar sign
+  // would be a second figure with nothing saying which of the three it is.
   const payload = { campaigns: 3, campaign: null, todo: null } as const;
   for (const row of [...APP_ROWS, ...CAMPAIGN_ROWS]) {
+    if (row.id === "costs") continue;
     expect(row.tail?.(payload) ?? "").not.toMatch(/\$/);
   }
 });

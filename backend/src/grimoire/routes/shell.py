@@ -28,14 +28,20 @@ open at once, not by the campaign's whole history: the same number ``open``
 already carries, and the one ``_chore_open_scenes`` treats as worth a note
 only past two.
 
-*There is no money in this payload, deliberately.* The design puts a spend
-figure on the rail's Costs row. The rollup behind that figure is built on
-``usage.lifetime_since``, whose own docstring says it "backs the all-time view
-and nothing on the play path" -- and the rail *is* the play path, on every
-navigation. Substituting a bounded window instead would give the same
-unlabelled figure a different meaning, which is the drift the three-money-
-columns rule exists to prevent. The Costs row ships with no tail until a
-maintained aggregate exists to feed it.
+*The money in this payload is all-time, and it is three figures.* The design
+puts a spend figure on the rail's Costs row, and this route shipped without one
+because the rollup behind it is built on ``usage.lifetime_since`` -- "backs the
+all-time view and nothing on the play path", and the rail *is* the play path.
+Substituting a bounded window instead would have given the same unlabelled
+figure a different meaning, which is the drift the three-money-columns rule
+exists to prevent. So the Costs row waited for the maintained aggregate rather
+than for a cheaper lie, and ``store.usage_rollup`` is it: the same all-time
+figure, read through a byte bookmark into each month file so the cost is what
+has been played since the last navigation rather than the library's age.
+
+The three columns arrive apart and are never summed here or anywhere else, and
+``partial`` says when the aggregate could not be brought up to date -- which is
+the one case a badge must render as silence rather than as ``$0.00``.
 
 Read-only throughout: no campaign lock is taken and none is needed, which is
 also why this module wants no ``store.locks`` classification -- that guard
@@ -189,7 +195,30 @@ def _campaign_block(cid: str) -> dict | None:
         # not `untagged`, which the design keeps as a separate word for
         # greeting art with no subjects recorded.
         "images_undescribed": _images_undescribed(wid),
+        # All-time money, and the three columns arrive apart because there is
+        # no shape in which they arrive together. See `_money`.
+        "money": _money(cid),
     }
+
+
+def _money(cid: str) -> dict:
+    """What this campaign has cost, over the ledger's whole history.
+
+    This is the field the module docstring above spent its third rule saying
+    could not exist. What changed is not the rule but what it costs to obey:
+    ``store.usage_rollup`` keeps a byte bookmark into each month file, so the
+    steady-state read is one ``stat`` per month plus the handful of lines the
+    last turn appended -- bounded by what has been played since the last
+    navigation rather than by the library's age. The figure is still the
+    all-time one ``CostsView`` shows, arrived at without re-reading history.
+
+    Three columns and never a total, exactly as everywhere else, plus
+    ``partial`` -- which is what stops a rail badge rendering "could not
+    count" as ``$0.00``. Never raises: the aggregate fail-softs to a partial
+    answer, and a cost badge must not be able to take the app's navigation
+    with it.
+    """
+    return store.usage_rollup.campaign_totals(cid)
 
 
 @router.get("/shell")

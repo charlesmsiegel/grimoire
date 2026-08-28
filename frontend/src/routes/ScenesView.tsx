@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { NewSceneChooser } from "../components/NewSceneChooser";
-import { api, type CampaignMeta, type SceneMeta } from "../api/client";
+import { SceneImport } from "../components/SceneImport";
+import { api, type CampaignMeta, type CampaignSceneCosts,
+         type SceneMeta } from "../api/client";
 import type { ShellPayload } from "../api/types";
 import { PageShell, ColumnSection } from "../components/PageShell";
+import { bucketPrice, UNPRICED } from "../components/cost";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { sceneNumber } from "./sceneNumber";
 
@@ -16,32 +19,51 @@ import { sceneNumber } from "./sceneNumber";
  *  do next, and offering the same "Open" for all of them makes the reader work
  *  out which is which from the chips.
  *
- *  Everything on a row comes off scene frontmatter, which is what
- *  `list_scenes` already reads. Turn counts and per-scene spend are on the
- *  design's row and are deliberately absent here: neither is in frontmatter,
- *  and reading a transcript or the ledger per row would make opening this page
- *  cost more than playing a turn. They arrive with the slice that gives them a
- *  cheap source, and until then the row says less rather than guessing.
+ *  Most of a row comes off scene frontmatter, which is what `list_scenes`
+ *  already reads. Two columns cannot: **turns** is in the transcript and
+ *  **spend** is in the ledger, and reading either per row on the way into this
+ *  page would make opening it cost more than playing a turn. So neither is
+ *  waited for. Turns arrive for the OPEN scenes only, off `GET /api/shell`,
+ *  which already counts them and bounds that cost by how many are open rather
+ *  than by the campaign's length. Spend arrives in a second effect, after the
+ *  list is on screen, and a row simply has no figure until it does.
+ *
+ *  A column that has not arrived renders as nothing, never as `0` or `$0.00` —
+ *  the cost rule, and the same sentence the rail's tails are built on.
  */
 
 type Filter = "all" | "open" | "absorbed";
 
 /** What to do with this scene, and what to call it.
  *
- *  Three states, three verbs. `unreviewed` is the one worth keeping separate:
- *  an absorbed scene whose proposals nobody decided is not finished, and
- *  calling it "Read" would file it away with the ones that are.
+ *  Four states, four verbs, and each pair that looks alike is the pair worth
+ *  keeping apart. `unreviewed` is not `absorbed`: a scene whose proposals
+ *  nobody decided is not finished, and calling it "Read" would file it away
+ *  with the ones that are. And **Resume is not Open**: a scene with turns in
+ *  it is a conversation you are in the middle of, while one with none has not
+ *  started — the same click, but the reader knows which they are about to do.
+ *
+ *  `turns` is only known for open scenes (see `turns` in the view). An open
+ *  scene nobody could count reads as "Open", which is the safer of the two
+ *  wordings: it never claims there is something to come back to.
  */
-function actionFor(s: SceneMeta, waiting: Map<string, number>) {
+function actionFor(s: SceneMeta, waiting: Map<string, number>,
+                   turns: Map<string, number>) {
   if (waiting.has(s.id)) return { label: "Wrap up →", tone: "alert" };
   if (s.done) return { label: "Read →", tone: "quiet" };
-  return { label: "Open →", tone: "accent" };
+  return { label: (turns.get(s.id) ?? 0) > 0 ? "Resume →" : "Open →",
+           tone: "accent" };
 }
 
 export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const { cid = "" } = useParams();
   const navigate = useNavigate();
   const [choosing, setChoosing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  /** Per-scene spend, or null until it lands. A second effect on purpose: the
+   *  read behind it scans the ledger's whole history, which is the right cost
+   *  for the Costs page and the wrong one to put in front of a list. */
+  const [costs, setCosts] = useState<CampaignSceneCosts | null>(null);
   const [meta, setMeta] = useState<CampaignMeta | null>(null);
   const [scenes, setScenes] = useState<SceneMeta[] | null>(null);
   const [shell, setShell] = useState<ShellPayload | null>(null);
@@ -66,6 +88,20 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
     return () => { live = false; };
   }, [cid]);
 
+  // What each scene cost, fetched after the list rather than with it, and
+  // dropped silently on failure: a row with no figure is the honest rendering
+  // of "not counted", and a banner over a list of scenes because the ledger
+  // was busy would be reporting the wrong thing as broken.
+  useEffect(() => {
+    if (!cid) return;
+    let live = true;
+    setCosts(null);
+    api.getCampaignSceneCosts(cid, "recent")
+      .then((c) => { if (live) setCosts(c); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [cid]);
+
   // Which scenes are holding a review, and how many proposals each is
   // holding — a map rather than a set, so the chip can say "how many" instead
   // of just "some". It comes from the same payload the rail and the hub read
@@ -73,6 +109,23 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const waiting = useMemo(
     () => new Map((shell?.campaign?.pending ?? []).map((p) => [p.sid, p.proposals])),
     [shell]);
+
+  /** How many model replies each OPEN scene holds.
+   *
+   *  Only the open ones, because that is all `/api/shell` counts — and that
+   *  bound is the reason it is affordable to count at all. An absorbed scene
+   *  is finished, so "how far in is it" is not a question its row has to
+   *  answer; `undefined` here means nobody counted, which the row draws as
+   *  nothing rather than as zero turns. */
+  const turns = useMemo(
+    () => new Map((shell?.campaign?.open ?? [])
+      .flatMap((o) => (o.turns === null ? [] : [[o.sid, o.turns] as const]))),
+    [shell]);
+
+  /** What each scene cost, keyed by scene id. */
+  const spend = useMemo(
+    () => new Map((costs?.scenes ?? []).map((r) => [r.scene, r] as const)),
+    [costs]);
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -120,12 +173,32 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
         </div>
         <div className="scenes-head">
           <h1 className="screen-title">Scenes</h1>
-          {/* Creation lives here, not on the transcript. The play view is
-              always inside a scene now, so an empty campaign has no composer
-              to type the first one into -- this is where a campaign starts. */}
-          <button type="button" className="hub-primary"
-                  onClick={() => setChoosing(true)}>+ New scene</button>
+          <div className="scenes-head-actions">
+            {/* Importing a transcript makes a scene, so it belongs beside the
+                other way of making one rather than a click deeper inside the
+                picker -- which is where it was, and which is a strange place
+                to look for it when what you have is a file. */}
+            <button type="button" className="subtle"
+                    onClick={() => setImporting(true)}>Import a transcript</button>
+            {/* Creation lives here, not on the transcript. The play view is
+                always inside a scene now, so an empty campaign has no composer
+                to type the first one into -- this is where a campaign starts. */}
+            <button type="button" className="hub-primary"
+                    onClick={() => setChoosing(true)}>+ New scene</button>
+          </div>
         </div>
+
+        {importing && (
+          <div className="scenes-import">
+            <SceneImport cid={cid}
+                         onBack={() => setImporting(false)}
+                         onCancel={() => setImporting(false)}
+                         onImported={(sid) => {
+                           setImporting(false);
+                           navigate(`/campaigns/${cid}/scenes/${sid}`);
+                         }} />
+          </div>
+        )}
 
         {choosing && (
           <NewSceneChooser
@@ -179,28 +252,56 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
 
         <ol className="scene-list">
           {shown.map((s) => {
-            const act = actionFor(s, waiting);
+            const act = actionFor(s, waiting, turns);
             const n = sceneNumber(s.id);
+            const t = turns.get(s.id);
+            const row = spend.get(s.id);
+            // `bucketPrice` rather than a bare figure, so a scene whose calls
+            // nobody priced reads "not reported" instead of `$0.00` -- and a
+            // scene the ledger has no rows for at all draws nothing, because
+            // "never generated against" is not "cost nothing".
+            const price = row ? bucketPrice(row) : null;
             return (
               <li key={s.id} className={"scene-item" + (s.done ? "" : " open")}>
-                <Link className="scene-item-main" to={`/campaigns/${cid}/scenes/${s.id}`}>
+                {/* Six cells, each fact written ONCE. At full width they are
+                    a grid and the list reads down a column; below the
+                    breakpoint the same nodes reflow into a mono line under the
+                    title. Rendering a fact twice and hiding one copy per width
+                    is the other way to do this, and it puts every figure on
+                    the page twice for a screen reader. */}
+                <Link className="scene-item-main"
+                      to={waiting.has(s.id)
+                        ? `/campaigns/${cid}/scenes/${s.id}/wrap-up`
+                        : `/campaigns/${cid}/scenes/${s.id}`}>
                   <span className="scene-item-n">{n ?? "—"}</span>
                   <span className="scene-item-title">{s.title}</span>
-                  {/* Below the breakpoint the secondary columns fold into this
-                      one mono line rather than being clipped: the title and the
-                      action are what the row is for, and they never give way. */}
-                  <span className="scene-item-sub">
-                    {[s.date, s.place, s.pcless ? "no PC" : null]
-                      .filter(Boolean).join(" · ")}
-                  </span>
                 </Link>
                 <span className={"chip" + (s.done ? "" : " on")}>
                   {waiting.has(s.id)
                     ? `${waiting.get(s.id)} unreviewed`
                     : s.done ? "absorbed" : "open"}
                 </span>
+                <span className="scene-item-when">
+                  {[s.date, s.place, s.pcless ? "no PC" : null]
+                    .filter(Boolean).join(" · ")}
+                </span>
+                {/* Turns and spend: neither is frontmatter, so either can be
+                    absent, and an absent one draws nothing rather than `0` or
+                    `$0.00`. `:empty` collapses the cell, so a column of prices
+                    never has a blank in it that reads as a zero. */}
+                <span className="scene-item-turns"
+                      title={t === undefined ? undefined
+                             : `${t} ${t === 1 ? "turn" : "turns"}`}>
+                  {t === undefined ? "" : `${t}t`}
+                </span>
+                <span className={"scene-item-spend"
+                                 + (price === UNPRICED ? " money-unpriced" : "")}>
+                  {price ?? ""}
+                </span>
                 <Link className={"scene-item-act " + act.tone}
-                      to={`/campaigns/${cid}/scenes/${s.id}`}>{act.label}</Link>
+                      to={waiting.has(s.id)
+                        ? `/campaigns/${cid}/scenes/${s.id}/wrap-up`
+                        : `/campaigns/${cid}/scenes/${s.id}`}>{act.label}</Link>
               </li>
             );
           })}

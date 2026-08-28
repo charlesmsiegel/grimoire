@@ -16,11 +16,18 @@ per-campaign ledger would either drop those or invent a campaign for them.
 Month-per-file because the only query this serves is "the last N days", so a
 30-day window reads at most two files however long the library has been played.
 
-**Rollups are computed on read.** There is no index, no database and no
-maintained aggregate: ``summary`` scans the one or two month files in the window
-and buckets in memory. A heavy day is a few hundred rows; a heavy year is tens
-of thousands, which is milliseconds to parse and keeps the store what the rest
-of grimoire promises — files a human can open and read.
+**Rollups are computed on read.** There is no index and no database: ``summary``
+scans the one or two month files in the window and buckets in memory. A heavy
+day is a few hundred rows; a heavy year is tens of thousands, which is
+milliseconds to parse and keeps the store what the rest of grimoire promises —
+files a human can open and read.
+
+The one exception is ``store.usage_rollup``, and it is an exception to the
+*cost* rather than to the rule: it keeps a byte bookmark into each month file
+so an all-time total can be asked for on every navigation without re-reading
+the library's whole history. It is derived, deletable and never authoritative —
+these files are still the ledger — and it folds rows in through this module's
+own ``_add``, so it cannot come to a different opinion about what a call cost.
 
 Pricing has three sources, and the difference between them is the point:
 
