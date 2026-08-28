@@ -36,7 +36,7 @@ These change the list before any prioritization of it means anything.
 | #71 | **Narrow to freeze + the joining endpoint** | The composition overview and sync UI it asked for exist (`CompositionPanel`, `IncomingReview`, `sync.promote`/`push`). Two residues, and the panel's own comments name both: the per-ref pin, and the joined endpoint — without it a followed record with nothing pending is invisible (no read enumerates the manifest) and an edited character/PC is unreported (`/diverged` covers flat records only; actors carry their base in the appearance record). Small-medium. |
 | #22 | **Narrow to frontend** | The backend primitive shipped: `POST .../first-post` takes arbitrary text with the right guards. Missing is only a "paste your own opener" affordance in `SceneConfirmForm`/`OpenerComposer`. Small. |
 | #82 | **Decide, don't build** | The nominated-speaker layer exists and is gated off by default (`DEFAULT_SPEAKER_TURN_TAKING = "off"`). One playtest decides whether per-NPC calls are still wanted. Cheapest open item, and it gates how #58 should be sequenced. |
-| #437 | **Decide, don't build** | Both halves are recorded in code comments as deliberate decisions (`librarySections.ts:63`, `EntityEditor.tsx:803`). Deciding rail-vs-grid matters more than Images: it is live convention drift (`CharacterEditor` already ships a grid) that every future editor inherits. |
+| #437 | **Half decision, half drift** | The Images half is a real open decision (`librarySections.ts:63`). The rail-vs-grid half is not: CLAUDE.md already mandates the two-pane `.editor-list` rail for every record-list page, so `CharacterEditor`'s grid is convention drift to fix — or #437 becomes an explicit proposal to change that documented rule. Either way it is not a fresh decision to deliberate. |
 
 ## 1. Character coherence
 
@@ -84,8 +84,12 @@ who they are."
 
 **Later**
 
-- **#50 — character variants across worlds.** Real, unchanged, medium; the
-  cross-world search dependency landed but world fork (#41) did not.
+- **#50 — character variants across worlds.** Real and medium — and now
+  fully unblocked: cross-world search landed *and* world fork (#41)
+  shipped too (`POST /worlds/{wid}/fork`, `worlds.fork_world`, the
+  WorldsView flow). Forking duplicates a whole world, so the remaining ask
+  is the per-character grain: copy one character across worlds with
+  lineage, and select the variant per campaign.
 
 ## 2. Plot & continuity coherence
 
@@ -265,7 +269,10 @@ Friction in the editors, wizards, and play surface.
   but it is `sync.library_status` (the actor-aware per-record
   `/campaigns/{cid}/{kind}/{id}/library`), not `/diverged`, which skips
   every kind outside `SYNCED_KINDS` and so never reports the PC being
-  displayed. Capabilities third still waits on #161. Medium.
+  displayed. The capabilities third is no longer blocked either: #161
+  (mechanics Phase 3 sheets) landed and `PCEditor` already mounts
+  `SheetPanel` on the PC detail — so #66 is now pure aggregation of three
+  existing reads. Medium.
 - **#67 — PC revision history.** Edits are still destructive overwrites;
   Option A is ~4 store functions. Small, and it's the undo story for the
   longest hand-written text in the app.
@@ -347,9 +354,10 @@ If the next stretch of work took only the top of each aspect, in order:
 1. **Hygiene**: close #57/#40/#221 outright; close-or-narrow #113 (residue:
    the absorb-vs-manual source distinction, drift trails for
    relationship/bond/plot edits) and #119 (residue: lore→character
-   conversion) per their table rows; run the #82 playtest; write down the
-   #437 rail-vs-grid decision. (Hours, and the list shrinks by up to
-   seven.)
+   conversion) per their table rows; run the #82 playtest; on #437, apply
+   the documented rail convention to `CharacterEditor` (or explicitly
+   propose changing the rule) and decide the Images half. (Hours, and the
+   list shrinks by up to seven.)
 2. **#61+#62** — emergent-NPC voice/capsule pass (character coherence,
    small, fully unblocked).
 3. **#20** — stash ST lorebook fields (portability, small; *standalone
