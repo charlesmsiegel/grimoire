@@ -424,6 +424,33 @@ def test_an_opener_that_captured_a_prompt_stamps_for_that(client):
     assert _token(client, cid) != before
 
 
+def test_a_prompt_capture_is_not_stamped_until_it_has_landed(client, monkeypatch):
+    # Ordering, not merely occurrence. A token minted BEFORE the write it
+    # records is readable while that write is still landing, so a preview taken
+    # in the gap is handed a token that outlives a write it never saw -- and
+    # `/advance` then passes its check against it, which is the one thing the
+    # token exists to refuse (Codex review). The opener is where this is
+    # visible: `@computes_only` means the middleware stamps nothing, so the
+    # capture's own bump is the only one in the path.
+    cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    assert store.prompt_log.capturing(), "capture is on by default; this asserts nothing otherwise"
+    before = _token(client, cid)
+    seen = []
+    landed = store.prompt_log.record
+
+    def watched(*a, **kw):
+        seen.append(revision.current(cid))
+        return landed(*a, **kw)
+
+    monkeypatch.setattr(store.prompt_log, "record", watched)
+    _opener(client, cid, sid)
+    assert seen, "the capture never ran, so this asserts nothing"
+    assert seen[0] == before, "a reader could hold this token before the write landed"
+    assert _token(client, cid) != before
+
+
 # --- POST /advance spends one ---------------------------------------------
 
 
@@ -860,6 +887,32 @@ def test_a_repeat_is_answered_after_the_scene_it_was_cut_at_is_deleted(client):
                               "idempotency_key": "k-1"})
     assert again.status_code == 200
     assert again.json()["id"] == made["id"] and again.json()["replayed"] is True
+
+
+def test_a_repeat_is_answered_after_the_source_campaign_is_deleted(client):
+    # The same rule as the scene above, one level further out. `_replay` reads
+    # the CHILDREN -- their `parent` line and their marker hold the whole answer
+    # -- so a source that has since been deleted does not stop its own fork
+    # being named. Checking the source existed before the replay answered a
+    # retry of a committed fork with a 404 while the fork it made was sitting on
+    # the shelf (Codex review).
+    cid = _campaign(client)
+    made = _fork(client, cid, "Branch", idempotency_key="k-1")
+    assert client.delete(f"/api/campaigns/{cid}").status_code == 200
+    again = client.post(f"/api/campaigns/{cid}/fork",
+                        json={"name": "Branch", "idempotency_key": "k-1"})
+    assert again.status_code == 200
+    assert again.json()["id"] == made["id"] and again.json()["replayed"] is True
+
+
+def test_a_deleted_source_is_still_a_404_for_a_copy(client):
+    # The other half of the reordering, the same shape as the scene check
+    # below: a request that is not a repeat of anything still needs a source.
+    cid = _campaign(client)
+    _fork(client, cid, "Branch", idempotency_key="k-1")
+    client.delete(f"/api/campaigns/{cid}")
+    for body in ({"name": "Branch"}, {"name": "Branch", "idempotency_key": "k-2"}):
+        assert client.post(f"/api/campaigns/{cid}/fork", json=body).status_code == 404
 
 
 def test_an_unknown_scene_is_still_refused_without_a_key(client):

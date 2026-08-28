@@ -920,6 +920,12 @@ def post_campaign_fork(cid: str, body: ForkCampaign):
         raise HTTPException(status_code=404, detail="scene not found")
     except ValueError as e:                     # a key past `fork.KEY_LIMIT`
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except store.fork.ForkContentionError as e:
+        # Every id this fork computed was taken by another writer before it
+        # could claim one. Transient by construction and nothing was created,
+        # so 409 and let the caller ask again -- the same status a lock this
+        # request could not take answers with (`main.store_busy_handler`).
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except store.RevisionMismatchError as e:
         # The same refusal `/advance` gives, in the same shape: this is one
         # operation across two endpoints, and a client that has to branch on two

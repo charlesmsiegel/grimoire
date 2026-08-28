@@ -44,6 +44,27 @@ function campaignMoved(err: unknown): boolean {
     && (err as { kind?: unknown }).kind === "campaign_moved";
 }
 
+/** What a fork the server REPLAYED is actually called (#409).
+ *
+ *  Read off the campaign rather than off the report, because a report is what
+ *  the first call returned and the name is the one thing about that call this
+ *  one cannot reconstruct: the idempotency key is derived from the operation so
+ *  a retry after a reload reaches the server as the same request, and a reload
+ *  is precisely when the reader's typed name is gone.
+ *
+ *  Falls back to the id, which is a true handle on the same campaign and is
+ *  what the shelf's URL uses — a wrong name is worse than a terse one, and this
+ *  runs on a path that has already succeeded, so it may not fail it.
+ */
+async function replayedName(id: string): Promise<string> {
+  try {
+    const { meta } = await api.getCampaign(id);
+    return (meta.name || "").trim() || id;
+  } catch {
+    return id;
+  }
+}
+
 /** The campaign clock (#100): where the story's present is, and the one control
  *  that moves it deliberately — by a duration or to a date, always with a reason.
  *
@@ -436,7 +457,17 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // and the campaign page show it — a checkpoint that quietly came up
         // short is worse than one that says so.
         const notes = forkNotes(report);
-        setSaved(`Checkpoint saved: “${name}” is on the campaigns shelf.`
+        // What to CALL it. A replay is answered with the fork the first call
+        // made, and that fork carries its own name — the deterministic key is
+        // built to survive a reload, and a reload takes the name the reader
+        // typed with it, so the very case the key exists for is the one where
+        // the name submitted here is not the fork's. Naming it anyway sends the
+        // reader to the shelf looking for a campaign nobody created (Codex
+        // review). A copy this call took is named by what it was asked for:
+        // `uniquify` suffixes the id, never the name.
+        const label = report.replayed ? await replayedName(report.id) : name;
+        if (!stillShowing(cid)) return;
+        setSaved(`Checkpoint saved: “${label}” is on the campaigns shelf.`
                  + (current ? "" : " The campaign changed while it was being copied,"
                                  + " so it may not hold the latest turn and the skip"
                                  + " was not taken — preview the skip again to"

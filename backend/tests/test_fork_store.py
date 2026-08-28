@@ -175,19 +175,48 @@ def test_losing_the_id_race_does_not_touch_the_campaign_that_won_it(cid, monkeyp
     cleanup is what makes the lost race cost a request instead of a campaign.
 
     The race is simulated by having the id already taken when the fork reaches
-    the lock, which is exactly the state it leaves behind."""
+    the lock, which is exactly the state it leaves behind. Losing it every time
+    — a stub that answers the same taken id however often it is asked — is what
+    exhausts the retry below and reaches `ForkContentionError`; a real racer only
+    wins once, which is the test after this one."""
     other = campaigns.create_campaign("Branch", _meta(cid)["world"])
     _played(other, "A Scene The Winner Owns")
     # `uniquify` would answer `branch-2` now, so the collision has to be made at
     # the moment of the mkdir — the window the lock cannot close.
     monkeypatch.setattr(fork, "uniquify", lambda base, taken: other)
 
-    with pytest.raises(FileExistsError):
+    with pytest.raises(fork.ForkContentionError):
         fork.fork_campaign(cid, "Branch")
     assert campaigns.campaign_exists(other)
     assert _sids(other) == ["001--a-scene-the-winner-owns"]
     assert _meta(other)["name"] == "Branch"        # not re-stamped by the loser
     assert fork.PARENT_KEY not in _meta(other)
+
+
+def test_a_lost_id_race_is_answered_with_the_next_id(cid, monkeypatch):
+    """`uniquify` has to run before the lock, because the id it picks is one of
+    the two locks to take. So two forks of one campaign asked for under the same
+    name compute the same id, and the loser used to raise `FileExistsError` out
+    of the route — a 500 for a request `uniquify` exists to answer with the next
+    suffix (Codex review). Round again instead: the winner's directory is on
+    disk by then, so the next id is free.
+
+    One rigged answer, then the real function, which is what a real racer looks
+    like — it wins once."""
+    other = campaigns.create_campaign("Branch", _meta(cid)["world"])
+    _played(other, "A Scene The Winner Owns")
+    picks, real = [other], fork.uniquify
+    monkeypatch.setattr(fork, "uniquify",
+                        lambda base, taken: picks.pop(0) if picks else real(base, taken))
+
+    out = fork.fork_campaign(cid, "Branch")
+    assert not picks, "the rigged id was never asked for"
+    assert out["id"] == f"{other}-2"
+    assert _meta(out["id"])[fork.PARENT_KEY] == cid
+    # And the campaign that won the race is untouched, exactly as above.
+    assert _meta(other)["name"] == "Branch"
+    assert fork.PARENT_KEY not in _meta(other)
+    assert _sids(other) == ["001--a-scene-the-winner-owns"]
 
 
 def test_a_name_that_slugifies_onto_an_existing_campaign_takes_the_next_id(cid):

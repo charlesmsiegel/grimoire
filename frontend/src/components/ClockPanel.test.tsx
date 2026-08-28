@@ -15,6 +15,9 @@ vi.mock("../api/client", async () => {
     getCalendarConfig: vi.fn(),
     // The checkpoint the panel offers before a large skip (#107).
     forkCampaign: vi.fn(),
+    // Read only to name a fork the server REPLAYED, which carries its own name
+    // rather than the one this request submitted (#409).
+    getCampaign: vi.fn(),
   } };
 });
 
@@ -72,6 +75,8 @@ beforeEach(() => {
       digest: DIGEST, fired: DIGEST.events });
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
   vi.mocked(api.forkCampaign).mockResolvedValue(FORK_REPORT);
+  vi.mocked(api.getCampaign).mockResolvedValue(
+    { meta: { name: "Before 24 March 2027" }, body: "" } as never);
   vi.mocked(api.getCalendarConfig).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true } as never);
@@ -848,6 +853,45 @@ test("a checkpoint retried after a lost response asks for the same copy", async 
     .toEqual([REV, REV]);
 });
 
+
+test("a replayed checkpoint is named by the fork that exists", async () => {
+  // The key is derived from the operation precisely so a RELOAD between the
+  // copy and the skip still reaches the server as the same request — and a
+  // reload is exactly when the name the reader typed is gone. So the one case
+  // the key exists for is the one where the name submitted here is not the
+  // fork's, and naming it anyway sends the reader to the shelf looking for a
+  // campaign nobody created.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
+  vi.mocked(api.forkCampaign).mockResolvedValue({ ...FORK_REPORT, replayed: true });
+  vi.mocked(api.getCampaign).mockResolvedValue(
+    { meta: { name: "Winifred's last quiet week" }, body: "" } as never);
+
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+
+  expect(api.getCampaign).toHaveBeenCalledWith(FORK_REPORT.id);
+  expect(screen.getByText(/Winifred's last quiet week/)).toBeInTheDocument();
+  expect(screen.queryByText(/Before 24 March 2027/)).not.toBeInTheDocument();
+});
+
+test("a copy this call took is named by what it was asked for", async () => {
+  // The other half, so the lookup above is about a replay rather than a new
+  // rule for every checkpoint: `uniquify` suffixes the fork's ID when a name
+  // slugifies onto an existing campaign, never its NAME, so a copy is called
+  // what the reader called it and there is nothing to go and ask.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  fireEvent.change(screen.getByLabelText("Checkpoint name"),
+                   { target: { value: "The night before" } });
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+
+  expect(screen.getByText(/“The night before” is on the campaigns shelf/)).toBeInTheDocument();
+  expect(api.getCampaign).not.toHaveBeenCalled();
+});
 
 test("a disowned copy costs one more copy, not two", async () => {
   // The reason the pricing is cleared rather than the key merely varied. Left
