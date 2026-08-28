@@ -48,15 +48,22 @@ def test_build_prompt_includes_the_steering_snapshot():
     assert "- Mara already knows about the ledger" in user
     assert "Player steering notes" in msgs[0]["content"]   # the system contract
     # ...never cited: the contract paragraph forbids quoting a note
-    assert "never cite one" in msgs[0]["content"]
+    assert "never cite a note" in msgs[0]["content"]
+    # ...by a phrase unique to the paragraph (the evals' needle), so the
+    # contract and the user-side heading cannot stand in for each other
+    assert "Treat them as pointers, not as story" in msgs[0]["content"]
 
 
 def test_build_prompt_without_steering_is_byte_identical():
-    """Existing cassettes and recorded prompts must not need re-matching."""
+    """Existing cassettes and recorded prompts must not need re-matching —
+    in BOTH messages: the user block and the system paragraph each render
+    only when the scene actually has steering notes."""
     assert absorb.build_prompt("**You:** hi", {}) == \
         absorb.build_prompt("**You:** hi", {}, steering_snapshot=None)
-    assert "Player steering notes" not in \
-        absorb.build_prompt("**You:** hi", {})[1]["content"]
+    msgs = absorb.build_prompt("**You:** hi", {})
+    assert "Player steering notes" not in msgs[1]["content"]
+    assert "Player steering notes" not in msgs[0]["content"]
+    assert "steering" not in msgs[0]["content"]
 
 
 def test_steering_snapshot_reads_the_log(monkeypatch, tmp_path):

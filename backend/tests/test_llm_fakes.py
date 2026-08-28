@@ -201,10 +201,12 @@ async def test_from_entries_refuses_a_request_it_does_not_cover():
 
 # ---- the shipped cassette still matches the shipped prompts ----
 #: Every system prompt a cassette entry can be keyed on, rendered from the real
-#: template. `scene_suggestions/system.j2` and the reply-format section are the
-#: only two needing vars, and both take the shape their builders pass.
+#: template. `scene_suggestions/system.j2`, the reply-format section and
+#: `absorb/system.j2` (whose steering paragraph is conditional; True renders
+#: the superset) are the only ones needing vars, in the shape their builders pass.
 def _rendered_prompts() -> list[str]:
-    return [prompts.render(t) for t in ("absorb/system.j2", "audit/system.j2",
+    return [prompts.render("absorb/system.j2", steering=True)] + \
+           [prompts.render(t) for t in ("audit/system.j2",
                                         "dossier/system.j2", "voice_anchor/system.j2",
                                         "voice_drift/system.j2", "tagline/system.j2")] + [
         prompts.render("scene_suggestions/system.j2", offscreen=False, s={"now": ""},
