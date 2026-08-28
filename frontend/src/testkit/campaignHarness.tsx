@@ -10,7 +10,7 @@
 import type { ReactNode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RunRegistryProvider } from "../runs/RunRegistryProvider";
-import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
+import { Link, MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import type { Mock } from "vitest";
 import CampaignView from "../routes/CampaignView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
@@ -308,9 +308,18 @@ function ScenesStub() {
   return <div data-testid="scenes-list" />;
 }
 
-// Reads back the URL the view has navigated itself to.
+// Reads back the URL the view has navigated itself to, and offers the one
+// navigation the shell makes that this harness has no rail to make: the rail's
+// Wrap-up row, which is a link to the review's own address.
 export function Here() {
-  return <span data-testid="here">{useLocation().pathname}</span>;
+  const { pathname } = useLocation();
+  const wrap = pathname.replace(/\/wrap-up$/, "") + "/wrap-up";
+  return (
+    <>
+      <span data-testid="here">{pathname}</span>
+      <Link data-testid="go-wrap-up" to={wrap}>wrap up</Link>
+    </>
+  );
 }
 export const here = () => screen.getByTestId("here").textContent;
 

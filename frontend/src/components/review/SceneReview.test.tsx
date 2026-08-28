@@ -28,8 +28,8 @@ vi.mock("../../api/client", async () =>
 vi.mock("../../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../../api/client";
 import {
-  absorbs, installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT, playRoutes,
-  renderCampaign, reviewResult, withPalette,
+  absorbs, here, installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT,
+  playRoutes, renderCampaign, reviewResult, withPalette,
 } from "../../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
@@ -3519,4 +3519,48 @@ test("a section with nothing in it is absent, not shown as answered", async () =
 
   await screen.findByDisplayValue("A stored summary.");
   expect(screen.queryByRole("button", { name: /^Sheets$/ })).not.toBeInTheDocument();
+});
+
+
+test("moving to the wrap-up url does not throw away decisions in progress", async () => {
+  // The hazard the shared route exists to close. A review's verdicts live in
+  // component state until they are saved, so if the transcript and the wrap-up
+  // were two ROUTES the router would unmount one element and mount the other —
+  // and every proposal the reviewer had judged would be re-adopted from disk
+  // as though they had not touched it.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue({
+    review: {
+      ...STORED_REVIEW,
+      edits: [
+        { id: "lore:a", kind: "lore", target: { kind: "lore", id: "a" },
+          label: "A — lore", field: "body", authored: false,
+          before: "", after: "one",
+          review: { certainty: 0.6, quote: "She signed it.", speaker: "Mara",
+                    authority: "other", score: 0.3, band: "medium" } },
+      ],
+    },
+    generation: "gen-stored", stale: null });
+  renderCampaign("/campaigns/run/scenes/s1");
+
+  // Judge it, so there is something to lose.
+  fireEvent.click(await screen.findByRole("button", { name: "Reject A — lore" }));
+  await waitFor(() => expect(
+    within(screen.getByRole("button", { name: /World records & cards/ }))
+      .getByLabelText("all 1 answered")).toBeInTheDocument());
+
+  // Now go to the review's own address, the way the rail's Wrap-up row does.
+  expect(here()).toBe("/campaigns/run/scenes/s1");
+  fireEvent.click(screen.getByTestId("go-wrap-up"));
+  // The navigation really happened, so what follows is not vacuous.
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1/wrap-up"));
+
+  // Same element, same state: still answered, and still rejected. React
+  // reconciles the two routes as one component because they render the
+  // identical element under the identical key -- which is what `App.tsx`'s
+  // comment on the pair claims, and what this is here to keep true.
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  expect(within(screen.getByRole("button", { name: /World records & cards/ }))
+    .getByLabelText("all 1 answered")).toBeInTheDocument();
+  expect(screen.getByText(/0 accepted · 1 rejected/)).toBeInTheDocument();
 });
