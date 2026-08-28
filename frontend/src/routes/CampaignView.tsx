@@ -625,6 +625,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  rows and its pending count go on reporting a change that is already
    *  resolved — and one accept can resolve several of those rows. */
   const [resolvedEpoch, setResolvedEpoch] = useState(0);
+  // The other direction of the same pairing: a pin lands in the composition
+  // panel and changes what `/incoming` answers the review panel beside it.
+  const [pinEpoch, setPinEpoch] = useState(0);
   // The post a reader asked to replay FROM (#79) -- the one after the retcon,
   // since the retconned post itself stands. Held here rather than in the panel
   // because the transcript gutter is what sets it.
@@ -4307,7 +4310,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               its instance across a campaign switch, so an unkeyed panel would
               show one campaign's pending list while another is on screen. */}
           {!focus && showIncoming && (
-            <IncomingReview key={cid} cid={cid} focus={reviewRef}
+            <IncomingReview key={cid} cid={cid} focus={reviewRef} refreshKey={pinEpoch}
                             onResolved={() => setResolvedEpoch((n) => n + 1)} />
           )}
           {/* Keyed by cid for `IncomingReview`'s reason: this route keeps its
@@ -4315,6 +4318,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               one campaign's composition while another is on screen. */}
           {!focus && showComposition && (
             <CompositionPanel key={cid} cid={cid} refreshKey={resolvedEpoch}
+                              onPinned={() => setPinEpoch((n) => n + 1)}
                               // Re-boxed rather than passed through: the panel hands back the
                               // same `row.ref` object each time, and `IncomingReview`'s focus
                               // effect keys on identity -- so without this, returning to a row

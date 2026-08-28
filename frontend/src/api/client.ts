@@ -29,6 +29,7 @@ import {
   type EntityScope,
   type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
   type GroupState, type HealthCheckResult,
+  type CompositionRow,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
@@ -1086,6 +1087,14 @@ export const api = {
   rejectIncoming: (cid: string, refs: IncomingRef[]) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/incoming/reject`, { refs })
       .then(notifyCampaigns),
+  // `fresh` for `getIncoming`'s reason: the panel re-reads this right after a
+  // pin toggle or an accept resolved a row.
+  getComposition: (cid: string) =>
+    request<{ rows: CompositionRow[] }>(
+      "GET", `/api/campaigns/${cid}/composition`, undefined, { fresh: true }),
+  setSyncPin: (cid: string, ref: IncomingRef, pinned: boolean) =>
+    request<{ pinned: string[] }>(
+      "PUT", `/api/campaigns/${cid}/composition/pins`, { ref, pinned }),
   // Counted by running `incoming` for every campaign in the world, so it is
   // `fresh` for the same reason: it is read again after a campaign resolved
   // something, and a shared read would still be showing the old count.
