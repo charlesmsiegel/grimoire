@@ -2043,28 +2043,50 @@ test("a model refresh whose run was reaped reads its catalog back off the store"
   try {
     const seen: string[] = [];
     const off = onConfigChanged(() => seen.push("config"));
-    // The sidecar names the attempt that wrote it, so recovery can ask whether
-    // THIS refresh landed rather than whether some catalog exists.
+    // Dispatched by URL, not by call order: this test deliberately has another
+    // read of the same connection in flight, so the order is not fixed.
     let sent = "";
-    const fetchMock = vi.fn()
-      .mockImplementationOnce((_p: string, init: { headers: Record<string, string> }) => {
-        sent = init.headers["X-Grimoire-Attempt"];
-        return Promise.resolve(draftRunResponse("running"));
-      })
-      .mockResolvedValueOnce({ ok: false, status: 404,
-                               json: async () => ({ detail: "no such run",
-                                                    kind: "run_gone" }) })
-      .mockImplementationOnce(() =>
-        Promise.resolve(jsonOk({ id: "openrouter", models: [{ id: "m-1" }],
-                                 fetched_at: "2026-08-27", fetched_by: sent,
-                                 rev: "r1" })));
+    const before = { id: "openrouter", models: [{ id: "old" }],
+                     fetched_at: "2026-08-01", fetched_by: "", rev: "r1" };
+    // The first connection read stays PENDING until the test lets it go. That
+    // is what makes the shared-GET map matter at all: it only holds promises
+    // that have not settled, so a read that resolves promptly could never be
+    // joined by anything.
+    let release = () => {};
+    const held = new Promise((r) => { release = () => r(jsonOk(before)); });
+    let asked = 0;
+    const fetchMock = vi.fn().mockImplementation(
+      (path: string, init?: { headers?: Record<string, string> }) => {
+        if (path.endsWith("/models/refresh")) {
+          sent = init?.headers?.["X-Grimoire-Attempt"] ?? "";
+          return Promise.resolve(draftRunResponse("running"));
+        }
+        if (path.includes("/runs/")) {
+          return Promise.resolve({ ok: false, status: 404,
+                                   json: async () => ({ detail: "no such run",
+                                                        kind: "run_gone" }) });
+        }
+        return asked++ === 0 ? held : Promise.resolve(jsonOk(
+          { id: "openrouter", models: [{ id: "m-1" }], fetched_at: "2026-08-27",
+            fetched_by: sent, rev: "r1" }));
+      });
     globalThis.fetch = fetchMock;
+    // A read of the same connection ALREADY IN FLIGHT, issued before the
+    // refresh wrote. Shared GETs would hand this one back to the verification,
+    // which would then see no `fetched_by` and report a reap for a refresh that
+    // landed -- so that read has to be `fresh`.
+    const stale = api.readConnection("openrouter").catch(() => null);
 
     const pending = api.refreshConnectionModels("openrouter");
+    // The verification read happens inside this window, while `stale` is still
+    // unsettled -- so a recovery that joined it would still be waiting here.
     await vi.advanceTimersByTimeAsync(5000);
+    release();
 
     expect((await pending).rev).toBe("r1");
+    expect((await pending).models).toEqual([{ id: "m-1" }]);
     expect(seen).toEqual(["config"]);
+    await stale;
     off();
   } finally {
     vi.useRealTimers();
