@@ -94,6 +94,7 @@ export async function campaignApiMock() {
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
       getIncoming: vi.fn(), listDiverged: vi.fn(),
+      getComposition: vi.fn(), setSyncPin: vi.fn(),
       acceptIncoming: vi.fn(), rejectIncoming: vi.fn(),
       campaignLedger: vi.fn(),
       campaignProvenance: vi.fn(),

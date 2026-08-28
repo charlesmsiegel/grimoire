@@ -7373,6 +7373,12 @@ test("the scene bar opens the incoming-changes review, and closes it again", asy
 });
 
 test("the scene bar opens the composition overview, and its banner opens the review on that ref", async () => {
+  // Two panels, two reads: the composition reads its own endpoint (#71), the
+  // review it opens still reads `/incoming` for the diff.
+  (api.getComposition as any).mockResolvedValue({ rows: [
+    { ref: { kind: "locations", id: "saltmarch-harbor" }, name: "Saltmarch Harbor",
+      state: "conflict", pinned: false, lock: null },
+  ] });
   (api.getIncoming as any).mockResolvedValue([
     { ref: { kind: "locations", id: "saltmarch-harbor" }, status: "conflict",
       world: { name: "Saltmarch Harbor", body: "The harbour is blockaded." },
@@ -7395,6 +7401,10 @@ test("accepting in the review re-reads the composition open beside it", async ()
   // Both panels are open and both read `/incoming`, so a resolve that only
   // refreshed the review would leave the composition rows and its pending count
   // describing a change that no longer exists.
+  (api.getComposition as any).mockResolvedValue({ rows: [
+    { ref: { kind: "locations", id: "saltmarch-harbor" }, name: "Saltmarch Harbor",
+      state: "update", pinned: false, lock: null },
+  ] });
   (api.getIncoming as any).mockResolvedValue([
     { ref: { kind: "locations", id: "saltmarch-harbor" }, status: "update",
       world: { name: "Saltmarch Harbor", body: "The harbour is blockaded." },
@@ -7408,11 +7418,12 @@ test("accepting in the review re-reads the composition open beside it", async ()
   fireEvent.click(screen.getByRole("button", { name: "Review world updates" }));
   await screen.findByRole("heading", { name: "Incoming world changes" });
 
+  (api.getComposition as any).mockResolvedValue({ rows: [] });
   (api.getIncoming as any).mockResolvedValue([]);
   fireEvent.click(screen.getByRole("button", { name: "Accept" }));
   await waitFor(() =>
     expect(screen.queryByText(/1 update pending/)).not.toBeInTheDocument());
-  expect(await screen.findByText(/Nothing outstanding/)).toBeInTheDocument();
+  expect(await screen.findByText(/A record joins the composition/)).toBeInTheDocument();
 });
 
 // ---- the campaign budget banner (#153) ----
