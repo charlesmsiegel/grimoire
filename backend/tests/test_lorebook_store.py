@@ -227,10 +227,15 @@ def test_normalize_preserves_regex_flag_and_entry_extensions():
     out = lorebook._normalize({"entries": [
         {"keys": ["/salt.*/"], "name": "Rx", "content": "x", "use_regex": True,
          "extensions": {"sticky": 2, "cooldown": 3}},
+        # standalone world-info recursion controls are top-level fields, not
+        # nested extensions -- they ride the allowlist (Codex review on #20)
+        {"keys": ["deep"], "name": "Deep", "content": "z",
+         "preventRecursion": True, "delayUntilRecursion": 2},
         # V3 entries routinely carry an EMPTY extensions object; that alone
         # must not put a stash (and so frontmatter) on a simple import.
         {"keys": ["sea"], "name": "Sea", "content": "y", "extensions": {}},
     ]})
     assert out[0]["extensions"] == {"use_regex": True,
                                     "extensions": {"sticky": 2, "cooldown": 3}}
-    assert "extensions" not in out[1]
+    assert out[1]["extensions"] == {"preventRecursion": True, "delayUntilRecursion": 2}
+    assert "extensions" not in out[2]

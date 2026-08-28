@@ -330,6 +330,32 @@ test("the embedded character_book opens a review table and commits with per-entr
   expect(api.importCharacterBook).not.toHaveBeenCalled();   // the blind route stays unused here
 });
 
+test("a parse still in flight across a version switch cannot repopulate the review", async () => {
+  // Codex review: the switch clears the rows, but a LATE parse response from
+  // the old card must not put them back under the new version's button.
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [
+      { id: "default", name: "default", card: CARD, images: ["avatar"], importable_lore: 1 },
+      { id: "young", name: "young", card: CARD, images: [], importable_lore: 1 },
+    ],
+  });
+  let land: (v: unknown) => void = () => {};
+  (api.lorebookParse as any).mockImplementation(() => new Promise((res) => { land = res; }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.click(screen.getByRole("button", { name: /review .* lore/i }));
+  await waitFor(() => expect(api.lorebookParse).toHaveBeenCalled());
+
+  fireEvent.change(screen.getByLabelText("Version"), { target: { value: "young" } });
+  await screen.findByRole("button", { name: /review .* lore/i });
+  land({ entries: [{ name: "stale", keys: [], body: "x", category: "lore" }] });
+
+  // the button is still the surface -- the stale rows never rendered
+  await screen.findByRole("button", { name: /review .* lore/i });
+  expect(screen.queryByLabelText("category 0")).toBeNull();
+});
+
 test("cancelling the embedded-book review commits nothing", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
