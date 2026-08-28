@@ -486,14 +486,14 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
   for (let tries = 0; tries < STREAM_REATTACH_TRIES; tries++) {
     let run: RunHandle | null;
     try {
-      run = (await api.findRun(cid, at, attempt)).run;
+      run = (await api.findRun(cid, at, attempt, signal)).run;
       // THE SCENE MAY HAVE BEEN RENAMED. An opener holds no exclusion key --
       // deliberately, so it cannot refuse the `first-post` it exists to feed
       // -- so another tab may rename the scene while it runs, and a rename
       // mints a new `sid`. The run is indexed by the scene's IDENTITY, which
       // survives that, so the old id resolves to no run at all and every
       // re-attach would abandon a generation the server is still buffering.
-      if (!run && await moved()) run = (await api.findRun(cid, at, attempt)).run;
+      if (!run && await moved()) run = (await api.findRun(cid, at, attempt, signal)).run;
     } catch (err) {
       if (isAbortError(err)) throw err;
       // NOT `.catch(() => null)`. A lookup that FAILED has not answered "no
@@ -555,7 +555,7 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
     if (!identity) return false;
     let now: string;
     try {
-      now = (await api.sceneByIdentity(cid, identity)).id;
+      now = (await api.sceneByIdentity(cid, identity, signal)).id;
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return false;
       throw err;
@@ -1228,12 +1228,12 @@ export const api = {
   // about a truncated campaign. `encodeSegment` rather than
   // `encodeURIComponent` for the path part -- it is what every other route
   // here uses, so a segment cannot be encoded two different ways.
-  sceneByIdentity: (cid: string, identity: string) =>
+  sceneByIdentity: (cid: string, identity: string, signal?: AbortSignal) =>
     request<{ id: string }>(
       "GET",
       `/api/campaigns/${encodeSegment(cid)}/scene-by-identity`
       + `?identity=${encodeURIComponent(identity)}`,
-      undefined, { fresh: true }),
+      undefined, { fresh: true, signal }),
 
   attemptState: (cid: string, sid: string, attempt: string) =>
     request<{ attempt: string; retained: boolean; run: RunHandle | null }>(
@@ -1247,12 +1247,12 @@ export const api = {
   // newest run, which is the only question a client that has lost its local
   // state can ask -- a full reload, or the Android WebView's renderer being
   // restarted, leaves the provider empty while the backend turn generates on.
-  findRun: (cid: string, sid: string, attempt?: string) =>
+  findRun: (cid: string, sid: string, attempt?: string, signal?: AbortSignal) =>
     request<{ run: RunHandle | null }>(
       "GET",
       `/api/campaigns/${cid}/scenes/${sid}/run`
       + (attempt ? `?attempt=${encodeURIComponent(attempt)}` : ""),
-      undefined, { fresh: true }),
+      undefined, { fresh: true, signal }),
 
   // `attempt`/`onIndex` ride every turn producer, not just `chat`. All five are
   // detached server-side, so a call that omits the attempt lets the server mint
