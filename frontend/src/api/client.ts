@@ -520,7 +520,16 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
       // and then it is the ATTACH that 404s -- so re-resolving only when the
       // lookup came back empty leaves that window open. Same recovery, one
       // step later; the loop bounds how often it can happen.
-      if (err instanceof ApiError && err.kind === "run_gone" && await moved()) continue;
+      if (err instanceof ApiError && err.kind === "run_gone") {
+        try {
+          if (await moved()) continue;
+        } catch (why) {
+          if (isAbortError(why)) throw why;
+          // Could not ASK whether it moved. That settles nothing either way,
+          // so it must not end the recovery -- spend another attempt on it.
+          continue;
+        }
+      }
       if (err instanceof ApiError || isAbortError(err)) throw err;
       lost = err;
     }
@@ -531,15 +540,27 @@ async function streamDraft(cid: string, sid: string, path: string, body: unknown
    *
    *  `scene-by-identity` is the lookup that exists for exactly this -- it is
    *  what the Android notification tap already resolves through, for the same
-   *  reason. A lookup that fails answers false rather than throwing: it has
-   *  not established that the scene moved, and the caller has its own failure
-   *  to report.
+   *  reason.
+   *
+   *  **A 404 is an ANSWER; nothing else is.** No scene carries this identity
+   *  any more, so it did not move -- it is gone, and the caller's own failure
+   *  is the true one. Every other outcome (a 409 while the scan could not read
+   *  every candidate, a dropped fetch) is a failure to ASK, and this rethrows
+   *  so the caller spends another attempt rather than concluding no-move.
+   *  Swallowing those into `false` is the same "a failed discovery is not an
+   *  answer of no run" defect this file warns about ten lines up, and I wrote
+   *  it here while quoting the rule there.
    */
   async function moved(): Promise<boolean> {
     if (!identity) return false;
-    const now = await api.sceneByIdentity(cid, identity).then((r) => r.id,
-                                                             () => null);
-    if (!now || now === at) return false;
+    let now: string;
+    try {
+      now = (await api.sceneByIdentity(cid, identity)).id;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return false;
+      throw err;
+    }
+    if (now === at) return false;
     at = now;
     return true;
   }
