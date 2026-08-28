@@ -317,16 +317,26 @@ def _run_migration(mid: str, migration: dict, *, recovering: bool = False) -> di
     holding one, and the direction this value is deliberately wrong in.
     """
     migrated, skipped, touched = 0, [], []
-    for p, cid in _sheet_files(mid):
-        got = _migrate_file(p, migration)
-        if got is None:
-            skipped.append(str(p))
-        elif got:
-            migrated += 1
-        if cid is not None and (recovering or got) and cid not in touched:
-            touched.append(cid)
-    for cid in touched:
-        revision.bump(cid)
+    # The stamps are in a `finally` for the reason `sync.demote`'s are: the loop
+    # rewrites one campaign's sheet at a time, so a later one raising -- an
+    # ordinary `OSError` out of `atomic.write_text`, not only a process death --
+    # leaves the earlier ones written and unwinds past a post-loop stamp. The
+    # journal survives, but nothing replays it until the next module edit or a
+    # restart, and a fork or an advance priced in that window would pass
+    # (Codex review). `_migrate_file` writes atomically, so the sheet that
+    # raised did not land and is rightly absent from `touched`.
+    try:
+        for p, cid in _sheet_files(mid):
+            got = _migrate_file(p, migration)
+            if got is None:
+                skipped.append(str(p))
+            elif got:
+                migrated += 1
+            if cid is not None and (recovering or got) and cid not in touched:
+                touched.append(cid)
+    finally:
+        for cid in touched:
+            revision.bump(cid)
     return {"migrated": migrated, "skipped": skipped}
 
 

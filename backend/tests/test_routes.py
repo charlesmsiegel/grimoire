@@ -12705,6 +12705,28 @@ def test_a_recovery_answered_with_409_still_moves_the_write_token(client):
     assert client.get(f"/api/campaigns/{cid}/clock").json()["revision"] != before
 
 
+def test_a_projection_that_failed_after_the_roll_landed_still_stamps(client, monkeypatch):
+    """#409: `project` is several writes, not one — the roll is appended, then
+    its metadata, then the transcript line. A failure between them leaves the
+    roll durable and the request non-2xx, so the middleware does not stamp
+    either (Codex review). The stamp is in a `finally` for that reason."""
+    cid, sid, _ = _mech_scene(client)
+    _rec, pid = _resolve_then_supersede(client, cid, sid)
+    before = client.get(f"/api/campaigns/{cid}/clock").json()["revision"]
+
+    def die(*a, **kw):
+        raise OSError(28, "No space left on device")
+
+    # ...after `find_or_append_by_proposal` has landed the roll, which is what
+    # makes the stamp owed even though the call is about to fail.
+    monkeypatch.setattr(store.proposals, "update_resolution", die)
+    with pytest.raises(OSError):
+        store.proposals.project(cid, sid, pid)
+    assert [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+            if e.get("proposal") == pid], "the roll never landed, so this asserts nothing"
+    assert client.get(f"/api/campaigns/{cid}/clock").json()["revision"] != before
+
+
 def test_superseded_while_pending_same_id_post_is_plain_409(client):
     # A record superseded while still pending has no resolution to project:
     # the POST must be a plain 409 — no roll, no line, no projection.

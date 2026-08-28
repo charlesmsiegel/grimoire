@@ -275,36 +275,30 @@ def project(cid: str, sid: str, pid: str) -> dict | None:
                 or not isinstance(rec.get("resolution"), dict)):
             return None
         res = dict(rec["resolution"])
-        entry = rolls.find_or_append_by_proposal(
-            cid, sid, checks.roll_label(res), res["result"], proposal=pid,
-            tier=res.get("tier"))
-        res = {**res, "roll_id": entry["id"]}
-        update_resolution(cid, sid, pid, res)
-        if "line_intent" not in res:
-            res = {**res, "line_intent": len(scenes_read.read_scene(cid, sid)["messages"])}
+        # Everything from here is a durable write, and the stamp below is in a
+        # `finally` because they do not land together: the roll can be appended
+        # and the metadata or the transcript line then fail, which leaves the
+        # campaign changed and answers non-2xx, so the middleware does not
+        # stamp either (Codex review). A raise before the first write costs an
+        # over-bump, which is a re-price for somebody and the direction this
+        # value is deliberately wrong in. The `return None` above is outside
+        # this block on purpose: nothing was projected there.
+        try:
+            entry = rolls.find_or_append_by_proposal(
+                cid, sid, checks.roll_label(res), res["result"], proposal=pid,
+                tier=res.get("tier"))
+            res = {**res, "roll_id": entry["id"]}
             update_resolution(cid, sid, pid, res)
-        line = checks.format_check_roll(res)
-        if not any(m.get("speaker") == scenes_serialize.ROLL_SPEAKER and m["content"] == line
-                   for m in scenes_read.read_scene(cid, sid)["messages"][res["line_intent"]:]):
-            scenes_write.append_message(cid, sid, "assistant", line,
-                                        speaker=scenes_serialize.ROLL_SPEAKER)
-        # The campaign's write token (#409), stamped HERE rather than left to
-        # the response line, because one of this function's callers has no
-        # usable one: the stale-retry heal in `POST .../roll-proposal` projects
-        # a same-id superseded record -- appending the roll, its metadata and
-        # the transcript's line -- and then deliberately answers 409, since no
-        # continuation is ever offered for a superseded record. The middleware
-        # stamps 2xx only, so that recovery moved the transcript and left the
-        # token where it was, which is an under-bump and the one direction that
-        # breaks what the token promises (Codex review).
-        #
-        # Inside the hold that covers the writes, and only on the path that
-        # reached them: the `return None` above is the lost-race case, where
-        # nothing was projected and there is nothing to record. A repeat
-        # projection is idempotent and writes nothing new, so its bump is an
-        # over-bump -- a re-price for somebody, and the direction this value is
-        # deliberately wrong in.
-        revision.bump(cid)
+            if "line_intent" not in res:
+                res = {**res, "line_intent": len(scenes_read.read_scene(cid, sid)["messages"])}
+                update_resolution(cid, sid, pid, res)
+            line = checks.format_check_roll(res)
+            if not any(m.get("speaker") == scenes_serialize.ROLL_SPEAKER and m["content"] == line
+                       for m in scenes_read.read_scene(cid, sid)["messages"][res["line_intent"]:]):
+                scenes_write.append_message(cid, sid, "assistant", line,
+                                            speaker=scenes_serialize.ROLL_SPEAKER)
+        finally:
+            revision.bump(cid)
         return res
 
 

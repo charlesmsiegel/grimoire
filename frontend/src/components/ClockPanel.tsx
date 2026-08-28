@@ -44,6 +44,24 @@ function campaignMoved(err: unknown): boolean {
     && (err as { kind?: unknown }).kind === "campaign_moved";
 }
 
+/** Whether a freshly priced digest still describes the move the reader is
+ *  looking at.
+ *
+ *  Structural equality by serialization, deliberately: the digest is a plain
+ *  JSON tree the server built deterministically from the same request, so its
+ *  keys arrive in the same order and a field-by-field comparison would be a
+ *  list to keep in step with the server's shape. What matters is that a
+ *  difference of any kind reopens the question — a holiday, a birthday, a
+ *  newly scheduled event, a thread that aged into `overdue` — because every
+ *  one of them is something the reader was shown, or was not.
+ *
+ *  A null `gate` means no question is open, which nothing here should reach;
+ *  it compares unequal so the caller re-prices rather than proceeding.
+ */
+function sameDigest(fresh: AdvanceDigest, shown: AdvanceDigest | null): boolean {
+  return shown !== null && JSON.stringify(fresh) === JSON.stringify(shown);
+}
+
 /** What a fork the server REPLAYED is actually called (#409).
  *
  *  Read off the campaign rather than off the report, because a report is what
@@ -417,9 +435,17 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         // the server and the same one a disowned copy gets below. Adopting the
         // fresh token instead would have kept the key honest and quietly
         // changed what the skip does.
-        const { revision } = await api.previewAdvance(cid, request());
+        const { revision, digest } = await api.previewAdvance(cid, request());
         if (!stillShowing(cid)) return;
-        if (revision !== pricedRevision) {
+        // BOTH, and the second is not redundant. The token is the campaign's
+        // answer to "has anything written you", and its documented limit is
+        // that it only sees writes this app made — a sync client landing a
+        // scheduled event, or a hand edit, changes what the skip would do and
+        // moves no token at all (`store/revision.py`, Codex review). The digest
+        // is the server's own account of what this move would cross, so
+        // comparing it catches exactly the class the token cannot: same
+        // revision, different consequences.
+        if (revision !== pricedRevision || !sameDigest(digest, gate)) {
           forgetPricing();
           setError("This campaign changed while the question was open, so nothing"
                    + " was copied and the skip was not taken — preview it again.");

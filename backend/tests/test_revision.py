@@ -446,6 +446,17 @@ def test_a_sweep_that_failed_in_one_campaign_still_stamps_it(client, monkeypatch
     assert _token(client, cid) != before        # ...and cannot claim it wrote nothing
 
 
+def test_a_lost_race_projects_nothing_and_stamps_nothing(client):
+    """`project` returns None when another actor won the scene's record in the
+    window before its lock — nothing was written, so nothing is owed. That
+    return is deliberately outside the `finally` that stamps the write path."""
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    before = _token(client, cid)
+    assert store.proposals.project(cid, sid, "no-such-proposal") is None
+    assert _token(client, cid) == before
+
+
 def _opener(client, cid, sid):
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
                        json={"prompt": "They arrive at the gate."}) as r:
