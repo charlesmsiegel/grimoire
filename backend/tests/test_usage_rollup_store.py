@@ -246,3 +246,59 @@ def test_an_aggregate_from_an_older_version_is_discarded(home):
     usage_rollup.rollup_path().write_text(json.dumps(stored), encoding="utf-8")
 
     assert usage_rollup.campaign_totals("saltmarch")["cost_usd"] == 1.0
+
+
+# ---- what a steady-state read actually costs ----
+def test_an_unchanged_ledger_is_neither_re_read_nor_re_written(home, monkeypatch):
+    """The whole point of the bookmark, held to the code.
+
+    This runs on every navigation. A read that re-parsed the aggregate to
+    decide whether to write it, or rewrote an unchanged one, would be doing a
+    file read and a file write per request -- on the path this module exists to
+    keep cheap.
+    """
+    _call(cost_usd=1.0, ts="2026-08-01T00:00:00Z")
+    usage_rollup.campaign_totals("saltmarch")      # builds and stores it
+
+    reads, writes = [], []
+    real_load, real_write = usage_rollup._load, usage_rollup._write
+    monkeypatch.setattr(usage_rollup, "_load",
+                        lambda: (reads.append(1), real_load())[1])
+    monkeypatch.setattr(usage_rollup, "_write",
+                        lambda d: (writes.append(1), real_write(d))[1])
+
+    assert usage_rollup.campaign_totals("saltmarch")["cost_usd"] == 1.0
+
+    assert len(reads) == 1, "the aggregate was parsed more than once"
+    assert not writes, "an unchanged aggregate was rewritten"
+
+
+def test_a_first_read_stores_the_bookmark_even_over_an_empty_ledger(home):
+    """...and the read after it is the cheap one.
+
+    With no rows to fold in, nothing "changed" -- so a write conditioned only
+    on that would leave no file, and every later read would rebuild from
+    nothing forever.
+    """
+    usage_rollup.library_totals()
+    assert usage_rollup.rollup_path().exists()
+
+
+def test_only_the_bytes_appended_since_are_read(home, monkeypatch):
+    """A second read folds in the tail, not the month."""
+    _call(cost_usd=1.0, ts="2026-08-01T00:00:00Z")
+    usage_rollup.campaign_totals("saltmarch")
+    first = usage_rollup.rollup_path().read_text(encoding="utf-8")
+
+    seen = []
+    real_fold = usage_rollup._fold
+    monkeypatch.setattr(usage_rollup, "_fold",
+                        lambda path, start, data, rates: (
+                            seen.append(start), real_fold(path, start, data, rates))[1])
+
+    _call(cost_usd=2.0, ts="2026-08-02T00:00:00Z")
+    assert usage_rollup.campaign_totals("saltmarch")["cost_usd"] == 3.0
+
+    # Started where the last read stopped, not at zero.
+    assert seen == [json.loads(first)["months"]["2026-08"]]
+    assert seen[0] > 0

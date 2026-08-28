@@ -238,6 +238,12 @@ def _totals() -> dict:
 def _refresh() -> dict:
     data = _load()
     files = _month_files()
+    # Whether there was a usable file to start from, remembered rather than
+    # asked again at the end. This runs on every navigation, and a second
+    # `_load()` down there to answer a question already answered here would be
+    # a whole file read and parse per request -- on the path this module exists
+    # to keep cheap.
+    stored = data is not None
     if data is None:
         data = _fresh()
     else:
@@ -257,6 +263,7 @@ def _refresh() -> dict:
                     break
         if stale:
             data = _fresh()
+            stored = False
 
     rates = usage.Rates.current()
     months = data["months"]
@@ -267,7 +274,10 @@ def _refresh() -> dict:
         if consumed != read:
             months[stem] = consumed
             changed = True
-    if changed or _load() is None:
+    # Written when the bookmark moved, and once more when there was nothing
+    # usable to start from -- so a first read persists the bookmark even over a
+    # ledger with no rows in it yet, and the read after it is the cheap one.
+    if changed or not stored:
         _write(data)
     return _report(data)
 
