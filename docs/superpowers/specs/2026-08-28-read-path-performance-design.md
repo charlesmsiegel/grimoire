@@ -105,6 +105,25 @@ to the derivations navigation actually repeats:
 - **Character listing sub-reads** (`store/characters.list_characters`): the
   tagline, voice-anchor and focus sidecar reads become stat-keyed memos,
   alongside the card summaries that already are.
+- **The other count-backing lists** — the routes `WorldView`'s index counts
+  actually hit: `entities.list_entities` parses every record's frontmatter
+  and body per call (the existing memo there is the sync *hash*, not the
+  listing), `pcs.list_pcs` parses each PC's meta file, and
+  `greetings.list_greetings` reads every greeting body. Each gets a
+  per-file, stat-keyed row memo like the campaign and world listings
+  above. `list_entities` earns it twice over: it is also on the turn
+  loop's path (the world-info sweep), so the memo pays on every turn, not
+  only on navigation. Without these, a bucket rollover's forced recompute
+  is a parse sweep on exactly the world-open path this spec exists to fix,
+  and the success criterion below would be false.
+- **Only successful derivations are memoized.** `_scene_turns` converts a
+  failed read into a fail-soft `None` — and `memo` caches whatever the
+  compute returned once the signature is valid, so a transient read
+  failure (stat succeeds, read races a replace) would pin "unknown" under
+  an unchanged signature with nothing to invalidate it; the epoch TTL
+  re-fetches the same pinned value. The fail-soft handling therefore sits
+  *outside* the memoized computation: a read that raises is answered
+  `None` and cached as nothing, so the next call retries.
 
 Rules carried from the existing cache, made explicit:
 
@@ -200,9 +219,17 @@ their response" argument `store/revision.py` is built on:
   same "the meter is the one place that sees all of them" argument
   CLAUDE.md already makes for error instrumentation.
 - A new, deliberately coarse trigger for everything the funnel does not
-  see: any **mutating method** under `/api/` that answers 2xx and is not
-  `@computes_only` bumps the epoch — worlds, config, modules, connections
-  included. This is a **new, separate ASGI wrapper**, not a widened
+  see: any **mutating method** under `/api/` that is not `@computes_only`
+  bumps the epoch — worlds, config, modules, connections included, and
+  **whatever the status**. Not 2xx-only, on purpose: a partial write
+  answered as a 4xx is real (the PC route can set a default version and
+  then refuse the same request's tags), the wrapper never sees it as an
+  exception (Starlette's `ExceptionMiddleware` converts `HTTPException`
+  into a response inside this wrapper), and world routes have no revision
+  self-bump to fall back on — the same "a write answered non-2xx stamps
+  for itself" argument `revision.py` already makes, applied wholesale
+  instead of enumerated per route. A refused request that wrote nothing
+  over-bumps, which is the allowed direction. This is a **new, separate ASGI wrapper**, not a widened
   condition on `_CampaignActivityStamp`: the existing middleware
   early-returns for everything outside `/api/campaigns/`, exception path
   included, so its shape cannot carry this. The campaign-scoped subset
@@ -306,9 +333,13 @@ joining a pre-mutation promise still sitting in the client's in-flight
 map — and SWR widens that window, since every render now starts a
 background revalidation for such a promise to be. So the rule the fork and
 import paths already follow becomes general: a refetch issued *because a
-mutation just succeeded* passes `fresh` (the world views' rename and
-delete refreshes are the two that don't today), and the fresh answer
-replaces the cache entry as any settling fresh response does. `useShellPayload`
+mutation just succeeded* passes `fresh`, and the fresh answer replaces
+the cache entry as any settling fresh response does. The rule is the
+spec's; the inventory is the plan's, found by grep rather than listed
+here — today it includes the world views' create, rename and delete
+refreshes and the campaigns view's rename, delete and fork refreshes,
+and any post-mutation list refresh added later falls under the same
+sentence. `useShellPayload`
 already implements exactly this posture ("the rail's first job is
 navigation, and navigation must survive a server that stopped answering");
 this generalizes it to the pages.
@@ -407,6 +438,9 @@ instantly and corrects at most the ones that could have moved.
   with no store reads (counting fake again); any write — campaign-scoped,
   world-scoped, config — flips the answer back to `200` with a new tag; a
   usage-ledger append (a detached draft's metered row) flips it too; a
+  mutating request answered **4xx after a partial write** flips it (the
+  status-blind bump); a transiently unreadable scene is retried rather
+  than pinned at "unknown" (failures aren't memoized); a
   clock stepped past `EPOCH_TTL` flips it with **no** write, which is the
   external-writer guarantee stated as a test; a mutating SSE route whose
   generator writes after the response line answers `200` with a new tag to
