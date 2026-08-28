@@ -194,13 +194,13 @@ tuned against real use later, per this repo's rule about constants.
 
 Not persisted, on purpose: a restart mints a new uuid, so no client can
 get a false `304` from a value that survived a restart. Assignment is
-atomic under the GIL; there is nothing to lock. Module scope rather than
-`app.state`, despite the run registry's precedent: a value leaked across
-`TestClient` app instances can only *fail to match* a token no test client
-is holding — over-invalidation, the direction this value is allowed to be
-wrong in — where a leaked run is live state answering for the wrong app.
-The tests that assert a `304` mint their token and replay it against the
-same app, so the leak is unobservable.
+atomic under the GIL; there is nothing to lock. The uuid is minted **per
+app instance** — re-minted in `create_app`/lifespan, the run registry's
+precedent — not once at import: "restart" must mean "the app was rebuilt",
+and the Android entry point rebuilds the app inside a surviving
+interpreter, where a module-scope value would let a WebView's held ETag
+`304` its way past whatever changed while the app was down. Re-minting is
+also what keeps `TestClient` app instances honestly separate.
 
 **What bumps it** — the same "one funnel, plus the writers that outlive
 their response" argument `store/revision.py` is built on:
@@ -461,6 +461,27 @@ instantly and corrects at most the ones that could have moved.
   suites keep passing unchanged, which is the payload-shape guarantee.
 - **Frozen campaign**: the read-only sweep must not change — the memos are
   pure reuse, and `snapshot.json` not moving is the proof.
+
+## Implementation notes carried from review
+
+Five refinements from the final review round, recorded here rather than
+argued as sections because each is the stated mechanism done slightly more
+carefully — the plan implements them where it implements the mechanism:
+
+- The mutating-stream epoch bump keeps its `finally` (disconnects) and
+  *also* bumps before the final body frame is forwarded, so a client that
+  revalidates the instant the stream completes cannot beat the bump.
+- `list_characters`' own `character.md` parse joins the row-memo family —
+  the same treatment its sidecars and the other listings get.
+- The already-migrated fast path of `ensure_campaign_slim` (`slim_pending`)
+  is stat-memoized, so a `304` on `GET /campaigns/{cid}` — which must run
+  the migration check first — parses nothing.
+- The epoch's time bucket derives from a **monotonic** clock; the uuid
+  already covers restarts, and civil time is allowed to step backwards.
+- The epoch's uuid is minted per **app instance** (`create_app`/lifespan),
+  not at import: the Android entry point rebuilds the app in-process, and
+  a module-scope value would let a WebView's held ETag survive into the
+  rebuilt app.
 
 ## Success criteria
 
