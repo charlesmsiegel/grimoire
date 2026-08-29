@@ -1,8 +1,9 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 vi.mock("../api/client", () => ({
   api: { getCampaign: vi.fn(), listScenes: vi.fn(), getShell: vi.fn(),
+         deleteScene: vi.fn(),
          // The deferred read: spend arrives after the list is on screen.
          getCampaignSceneCosts: vi.fn() },
 }));
@@ -23,7 +24,11 @@ vi.mock("../components/SceneImport", () => ({
 vi.mock("../components/NewSceneChooser", () => ({
   NewSceneChooser: ({ onClose, onCreated }: any) => (
     <div data-testid="scene-chooser">
-      <button onClick={() => onCreated("s9")}>stub-pick</button>
+      {/* Two picks, because the premise is the second argument and only some
+          drafts carry one: a greeting hands over nothing, and a blank scene
+          must not arrive somewhere with a premise it never had. */}
+      <button onClick={() => onCreated("s9", "A debt-collector arrives.")}>stub-pick</button>
+      <button onClick={() => onCreated("s9")}>stub-pick-blank</button>
       <button onClick={() => onClose()}>stub-close</button>
     </div>
   ),
@@ -70,18 +75,25 @@ function costs(scenes: ReturnType<typeof costRow>[]) {
            scenes, listed: scenes.length, truncated: false };
 }
 
+/** Renders whatever premise rode the navigation, so a test can see what the
+ *  page the reader lands on will have to seed its opener box from. */
+function Landed() {
+  const seed = (useLocation().state as { seedPrompt?: string } | null)?.seedPrompt;
+  return <div data-testid="play">{seed ? `seed:${seed}` : "seed:none"}</div>;
+}
+
 function renderScenes() {
   return render(
     <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
       <Routes>
         <Route path="/campaigns/:cid/scenes" element={<ScenesView />} />
-        <Route path="/campaigns/:cid/scenes/:sid"
-               element={<div data-testid="play" />} />
+        <Route path="/campaigns/:cid/scenes/:sid" element={<Landed />} />
       </Routes>
     </MemoryRouter>);
 }
 
 beforeEach(() => {
+  (api.deleteScene as any).mockReset().mockResolvedValue({ ok: true });
   (api.getCampaign as any).mockResolvedValue({ meta: META, body: "" });
   (api.getShell as any).mockResolvedValue(shell());
   (api.getCampaignSceneCosts as any).mockResolvedValue(costs([]));
@@ -323,4 +335,82 @@ test("an unreviewed scene's row goes to the wrap-up, not the transcript", async 
 
   const act = await screen.findByRole("link", { name: "Wrap up →" });
   expect(act).toHaveAttribute("href", "/campaigns/run/scenes/001--a/wrap-up");
+});
+
+test("every row carries a delete naming its own scene", async () => {
+  // Named per row rather than a bare "Delete": three ✕ that read the same are
+  // three buttons a screen reader cannot tell apart, and this is the one
+  // control on the page you do not get to press twice.
+  renderScenes();
+  await screen.findByText("The third");
+  const rows = screen.getAllByRole("listitem");
+  expect(within(rows[0]).getByRole("button", { name: "Delete The third" }))
+    .toBeInTheDocument();
+  expect(within(rows[2]).getByRole("button", { name: "Delete The first" }))
+    .toBeInTheDocument();
+});
+
+test("deleting a scene confirms, deletes, and re-reads the list", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderScenes();
+  await screen.findByText("The third");
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "002--second", title: "The second", done: true }),
+    scene({ id: "001--first", title: "The first", done: true }),
+  ]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Delete The third" }));
+
+  await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("run", "003--third"));
+  // Re-read rather than spliced out of local state: the delete cascades into
+  // records this list shows (the absorbed chip, the count in the eyebrow), so
+  // the server's answer is the only one worth drawing.
+  await waitFor(() => expect(screen.queryByText("The third")).toBeNull());
+});
+
+test("a declined confirm deletes nothing", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  renderScenes();
+  await screen.findByText("The third");
+  fireEvent.click(screen.getByRole("button", { name: "Delete The third" }));
+  expect(api.deleteScene).not.toHaveBeenCalled();
+  expect(screen.getByText("The third")).toBeInTheDocument();
+});
+
+test("a scene a turn is holding keeps its row and says why", async () => {
+  // 409 `scene_busy`. This list cannot know a run is live -- the play page
+  // disables its own delete from state this page does not have -- so the
+  // refusal has to arrive as an answer and be shown, not swallowed.
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  (api.deleteScene as any).mockRejectedValue({
+    kind: "scene_busy", run_id: "r1",
+    detail: "a turn or review is running on this scene; stop it first" });
+  renderScenes();
+  await screen.findByText("The third");
+
+  fireEvent.click(screen.getByRole("button", { name: "Delete The third" }));
+
+  expect(await screen.findByText(/a turn or review is running on this scene/i))
+    .toBeInTheDocument();
+  expect(screen.getByText("The third")).toBeInTheDocument();
+});
+
+// The bug behind "picking a suggestion still leaves the opener box empty":
+// this page created the scene and navigated away without the premise, so the
+// page that owns the opener box had nothing to seed it with. The in-campaign
+// chooser had been wired for this since #90; this entry point never was.
+test("a premise picked here rides the navigation to the scene", async () => {
+  renderScenes();
+  fireEvent.click(await screen.findByRole("button", { name: /\+ new scene/i }));
+  fireEvent.click(screen.getByText("stub-pick"));
+  const landed = await screen.findByTestId("play");
+  expect(landed).toHaveTextContent("seed:A debt-collector arrives.");
+});
+
+test("a draft that carries no premise arrives without one", async () => {
+  renderScenes();
+  fireEvent.click(await screen.findByRole("button", { name: /\+ new scene/i }));
+  fireEvent.click(screen.getByText("stub-pick-blank"));
+  const landed = await screen.findByTestId("play");
+  expect(landed).toHaveTextContent("seed:none");
 });

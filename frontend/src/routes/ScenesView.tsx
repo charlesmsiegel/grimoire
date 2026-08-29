@@ -6,6 +6,7 @@ import { api, type CampaignMeta, type CampaignSceneCosts,
          type SceneMeta } from "../api/client";
 import type { ShellPayload } from "../api/types";
 import { PageShell, ColumnSection } from "../components/PageShell";
+import { errorText } from "../api/errors";
 import { bucketPrice, UNPRICED } from "../components/cost";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { sceneNumber } from "./sceneNumber";
@@ -68,6 +69,10 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const [scenes, setScenes] = useState<SceneMeta[] | null>(null);
   const [shell, setShell] = useState<ShellPayload | null>(null);
   const [failed, setFailed] = useState(false);
+  /** Why the last delete did not happen, or null. Separate from `failed`,
+   *  which means the LIST could not be read: one says "look again", the other
+   *  says "that scene is busy" over a list that is perfectly fine. */
+  const [delFailed, setDelFailed] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
 
@@ -143,6 +148,30 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
     absorbed: (scenes ?? []).filter((s) => s.done).length,
   }), [scenes]);
 
+  /** Delete a scene from the list.
+   *
+   *  The play page deletes the scene you are reading and can disable its own
+   *  button while a turn runs, because it knows. This list does not: a run
+   *  holding a scene is state it never reads. So the 409 `scene_busy` is
+   *  shown rather than guarded against, and the row stays where it was.
+   *
+   *  Re-read rather than spliced out of `scenes`: deleting cascades into the
+   *  absorbed count in the eyebrow and the shell's open/pending sets, and a
+   *  local splice would leave both describing a campaign that no longer
+   *  exists. */
+  async function remove(s: SceneMeta) {
+    if (!window.confirm(`Delete '${s.title}'? This cannot be undone.`)) return;
+    setDelFailed(null);
+    try {
+      await api.deleteScene(cid, s.id);
+    } catch (err) {
+      setDelFailed(`'${s.title}' was not deleted: ${errorText(err)}`);
+      return;
+    }
+    const [sc, sh] = await Promise.all([api.listScenes(cid), api.getShell(cid)]);
+    setScenes(sc); setShell(sh);
+  }
+
   const column = (
     <>
       <ColumnSection label="Show">
@@ -211,9 +240,17 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
               // has to learn about it even though the reader backed out.
               if (createdSid) api.listScenes(cid).then(setScenes).catch(() => {});
             }}
-            onCreated={(sid) => {
+            // The premise rides the navigation. Unlike the in-campaign chooser,
+            // this one creates a scene on a page with no opener box to hand it
+            // to -- the box belongs to the route we are about to land on -- so
+            // dropping the second argument here left the reader on a scene
+            // whose box was empty, holding a premise they had just approved two
+            // panes ago. History state, because the handoff has to survive a
+            // route change; `CampaignView` adopts it once and clears it.
+            onCreated={(sid, initialPrompt) => {
               setChoosing(false);
-              navigate(`/campaigns/${cid}/scenes/${sid}`);
+              navigate(`/campaigns/${cid}/scenes/${sid}`,
+                       initialPrompt ? { state: { seedPrompt: initialPrompt } } : undefined);
             }} />
         )}
 
@@ -223,6 +260,13 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
           <div className="banner error-banner">
             The scenes could not be read.{" "}
             <button className="subtle" onClick={() => setFailed(false)}>Try again</button>
+          </div>
+        )}
+
+        {delFailed && (
+          <div className="banner error-banner">
+            {delFailed}{" "}
+            <button className="subtle" onClick={() => setDelFailed(null)}>Dismiss</button>
           </div>
         )}
 
@@ -302,6 +346,14 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
                       to={waiting.has(s.id)
                         ? `/campaigns/${cid}/scenes/${s.id}/wrap-up`
                         : `/campaigns/${cid}/scenes/${s.id}`}>{act.label}</Link>
+                {/* Outside the link, not inside it: a button nested in an
+                    anchor is invalid, and on a touch screen the anchor wins
+                    the tap often enough to open the scene you meant to
+                    delete. Named for its scene -- three ✕ reading "Delete"
+                    are three controls a screen reader cannot tell apart. */}
+                <button className="scene-item-del" aria-label={`Delete ${s.title}`}
+                        title="Delete this scene"
+                        onClick={() => { void remove(s); }}>✕</button>
               </li>
             );
           })}

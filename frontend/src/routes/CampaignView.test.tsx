@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
-import { MemoryRouter, Link, useNavigate } from "react-router-dom";
+import { MemoryRouter, Link, useLocation, useNavigate } from "react-router-dom";
 import { FocusProvider, useFocus } from "../components/focus";
 
 // The mocks and the per-test defaults live in `src/testkit`, which the review
@@ -21,6 +21,13 @@ vi.mock("../api/client", async () => (await import("../testkit/campaignMocks")).
 vi.mock("../components/PostImagePicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
+/** Reads back whatever is left on the history entry, so a test can watch the
+ *  handoff be consumed rather than merely assume it was. */
+function ShowState() {
+  const seed = (useLocation().state as { seedPrompt?: string } | null)?.seedPrompt;
+  return <span data-testid="hist-state">{seed ?? "none"}</span>;
+}
+
 import { api, ApiError } from "../api/client";
 import { onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
@@ -6841,6 +6848,39 @@ test("a premise generated in one campaign is not offered to another's scene", as
 
   // "other" also has an s9, and it must not be handed run's premise
   expect(screen.getByTestId("cast-panel")).not.toHaveTextContent("A premise");
+});
+
+// A scene created from the SCENES LIST reaches this page by navigating, not
+// through `sceneCreated`, so the premise comes in on the history entry. Wiring
+// only the in-campaign chooser was the whole bug: picking a suggestion from the
+// list landed the reader on a scene whose opener box was empty.
+test("a premise that rode the navigation seeds the opener box", async () => {
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/campaigns/run/scenes/s1",
+                                     state: { seedPrompt: "A debt-collector arrives." } }]}>
+      {withPalette(<><Here />{playRoutes()}</>)}
+    </MemoryRouter>,
+  );
+  const panel = await screen.findByTestId("cast-panel");
+  await waitFor(() => expect(panel).toHaveTextContent("A debt-collector arrives."));
+});
+
+// The clear matters as much as the adoption: history entries outlive the visit.
+// Left in place, a premise the reader had since edited or emptied would be
+// reinstated in the box by any Back into this entry, or any reload of it.
+test("the premise is cleared off the history entry once adopted", async () => {
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/campaigns/run/scenes/s1",
+                                     state: { seedPrompt: "A debt-collector arrives." } }]}>
+      {withPalette(<><Here /><ShowState />{playRoutes()}</>)}
+    </MemoryRouter>,
+  );
+  await screen.findByTestId("cast-panel");
+  await waitFor(() => expect(screen.getByTestId("hist-state")).toHaveTextContent("none"));
+  // the premise is still IN the box -- only the history copy is gone
+  expect(screen.getByTestId("cast-panel")).toHaveTextContent("A debt-collector arrives.");
 });
 
 // Follow-up to PR #318: a soft failure inside SceneConfirmForm (a failed

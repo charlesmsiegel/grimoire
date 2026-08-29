@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Link, useMatch, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useMatch, useNavigate, useParams } from "react-router-dom";
 import { sceneNumber as numberOf } from "./sceneNumber";
 import Markdown from "react-markdown";
 import { hideArtHandles } from "../artHandles";
@@ -236,6 +236,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  the transcript instead would silently answer a different question. */
   const wrapUp = !!wrapMatch;
   const navigate = useNavigate();
+  const location = useLocation();
   const [name, setName] = useState("");
   const [worldName, setWorldName] = useState("");
   const [dt, setDt] = useState<SceneDatetime | null>(null);
@@ -681,6 +682,28 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // that happens to wear the same id (codex review).
   const [seedPrompt, setSeedPrompt] =
     useState<{ cid: string; sid: string; prompt: string } | null>(null);
+  // A scene created from the Scenes page arrives here as a NAVIGATION, not
+  // through this page's own `sceneCreated`, so the premise it was created from
+  // rides the history entry (see `ScenesView`'s chooser). `sid` comes off
+  // `useMatch` above, so it is already the scene being landed on -- this does
+  // not have to wait for `activeId` to catch up.
+  //
+  // Adopted once, then cleared off the entry, because history outlives the
+  // visit: left in place, a premise the reader had since edited or emptied
+  // would be reinstated in the opener box by any Back into this entry or any
+  // reload of it, silently discarding what they typed over it. The seed is a
+  // handoff, not a property of the address.
+  const handoff = (location.state as { seedPrompt?: string } | null)?.seedPrompt;
+  useEffect(() => {
+    if (!handoff || !sid) return;
+    setSeedPrompt({ cid, sid, prompt: handoff });
+    // Search and hash carried along: this replace exists to drop the STATE, and
+    // rebuilding the entry from the pathname alone would quietly discard the
+    // rest of the address. Nothing on this route reads a query param today,
+    // which is exactly why a silent drop here would go unnoticed later.
+    navigate(location.pathname + location.search + location.hash,
+             { replace: true, state: null });
+  }, [cid, sid, handoff, location.pathname, location.search, location.hash, navigate]);
   // Response-length chip beside Send: the scene's own preset (its saved
   // setting, from the loaded scene's frontmatter) versus a one-shot pending
   // override the player just picked for the next reply only. `pendingResponse`
