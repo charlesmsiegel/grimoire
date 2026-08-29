@@ -1,10 +1,12 @@
 """Process-wide memo for pure derivations of file content, keyed by stat.
 
 Sync sweeps re-hash every entity and actor card on every request; the bytes
-almost never change between requests. A (path, mtime_ns, size) signature is
-enough to reuse the last result — any write (including one from another
-process syncing the store folder) moves mtime, and a missing file yields no
-signature at all, so callers fall back to their not-found path.
+almost never change between requests. A (path, mtime_ns, size, inode)
+signature is enough to reuse the last result — any write (including one from
+another process syncing the store folder) moves mtime, and the inode detects
+rename-replace operations that preserve mtime. Absent-ok signatures accept
+missing companion files as a cacheable state, while other callers fall back
+when any file is missing.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ def signature(*paths: Path, absent_ok: bool = False) -> tuple | None:
     tuple, so the file's creation invalidates naturally. Callers whose missing
     file means "not found" keep the default.
     """
-    sig = []
+    sig: list[tuple[str, int, int, int] | tuple[str, str]] = []
     for p in paths:
         try:
             st = p.stat()
