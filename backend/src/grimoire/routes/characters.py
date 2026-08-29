@@ -26,6 +26,7 @@ from . import runs
 from .common import (
     THUMB_W,
     _bounded_call,
+    _campaign_root_or_404,
     _card_data,
     _display_name_or_400,
     _require_connection,
@@ -769,6 +770,162 @@ def list_world_gallery(wid: str):
                                    if item["name"] in answered[item["id"]] else None)
             out.append(row)
     return out
+
+
+@router.get("/campaigns/{cid}/gallery")
+def list_campaign_gallery(cid: str):
+    """Every image this CAMPAIGN sees, world-inherited and its own alike.
+
+    The world gallery one route up is world-scoped, and says so: a campaign
+    reaches most of its art through its world. What that leaves out is the art
+    the campaign has of its own -- a diverged avatar, a gallery the campaign
+    added -- which is invisible in a world sweep because it is not in the world
+    root. A reader who came here from a campaign is asking about the pictures
+    that campaign actually renders, so those are the ones this answers with.
+
+    Resolution is `overlay`'s, not a merge written again here. Every row comes
+    from `overlay.list_images` and `overlay.read_descriptions`, which is what
+    the app serves and describes from -- so a tombstoned image is absent, a
+    detached record shows only its own art, a campaign copy shadows the world's
+    under the same name whatever it is stored as, and a description written
+    campaign-side about inherited art is the one reported. A hand-rolled merge
+    here would be a second set of rules to keep in step with those, and the
+    first thing to drift would be exactly the case this route exists for.
+
+    URLs are campaign-scoped for EVERY row, inherited ones included. The
+    campaign serve route resolves through the same overlay, so one URL shape is
+    correct for both origins and no row has to carry where its bytes live.
+
+    Costlier than the world sweep, knowingly: the two roots are both catalogued
+    to find the version directories, and then each is resolved through the
+    overlay, which reads a campaign sidecar and a world sidecar per version.
+    That is the price of an answer that matches what the campaign renders; the
+    world route is still there, unchanged, for the world's own question.
+    """
+    _campaign_root_or_404(cid)
+    croot = store.campaigns.campaign_root(cid)
+    wroot = store.overlay.wroot_of(cid)
+    out = []
+    names: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
+    subjects = _GreetingSubjects(wroot)
+    for base in GALLERY_BASES:
+        # Which (record, version) folders exist on EITHER side. The campaign's
+        # own art is the point of this route, and a version the world never had
+        # is only in the campaign's catalog.
+        pairs: set[tuple[str, str]] = set()
+        for root in (croot, wroot):
+            for item in store.image_descriptions.catalog(root, base):
+                pairs.add((item["id"], item["vid"]))
+        for rid, vid in sorted(pairs):
+            key = (base, rid)
+            if key not in names:
+                names[key] = _overlay_name_and_versions(cid, base, rid)
+            found = names[key]
+            # Same gate as the world sweep: an asset folder whose record -- or
+            # whose version -- is gone serves no bytes, so a tile over it is a
+            # broken image the reader cannot clear.
+            if found is None or (found[1] and vid not in found[1]):
+                continue
+            imgs = store.overlay.list_images(cid, rid, vid, base)
+            if not imgs:
+                continue   # every image here was tombstoned campaign-side
+            desc = store.overlay.read_descriptions(cid, rid, vid, base)
+            for item in imgs:
+                base_url = _actor_image_url(f"/api/campaigns/{quote(cid, safe='')}",
+                                            base, rid, vid, item["name"])
+                v = quote(item["v"], safe="")
+                row = {"kind": base, "id": rid, "vid": vid, "name": item["name"],
+                       "ext": item["ext"], "record_name": found[0],
+                       # Key PRESENCE, the distinction the sidecar turns on: an
+                       # image reviewed and left blank is described.
+                       "described": item["name"] in desc,
+                       "description": desc.get(item["name"], ""),
+                       "url": f"{base_url}?v={v}",
+                       "thumb": f"{base_url}?w={THUMB_W}&v={v}"}
+                if base == "greetings":
+                    row["subjects"] = subjects.lookup(rid, item["name"])
+                out.append(row)
+    return out
+
+
+class _GreetingSubjects:
+    """Who is in each greeting picture, read WORLD-side and cached per greeting.
+
+    World-side because that is where the sidecar is written -- it is what the
+    tagging queue walks -- so a campaign asking who is in a greeting picture is
+    asking the world's answer, not one of its own.
+
+    A small object rather than three dicts threaded through the loop: the
+    caching, the one-time character enumeration and the answered/list split are
+    one concern, and inlining them is what pushed the route over the complexity
+    gate. The split itself is the world sweep's, verbatim: ANSWERED is key
+    presence and the LIST is the filtered read, so a hand-edited sidecar cannot
+    read as untagged here while the queue considers it done. `None` means "not
+    answered"; `[]` means "answered: nobody".
+    """
+
+    def __init__(self, wroot):
+        self._wroot = wroot
+        self._subjects: dict[str, dict[str, list[str]]] = {}
+        self._answered: dict[str, set[str]] = {}
+        self._known: set[str] | None = None
+
+    def lookup(self, gid: str, name: str) -> list[str] | None:
+        if gid not in self._subjects:
+            if self._known is None:
+                # Once for the whole sweep: `read_subjects` otherwise rescans
+                # the character directory per greeting.
+                self._known = set(store.characters.character_refs(self._wroot))
+            self._subjects[gid] = store.image_subjects.read_subjects(
+                self._wroot, gid, known_cids=self._known)
+            self._answered[gid] = store.image_subjects.reviewed_names(self._wroot, gid)
+        if name not in self._answered[gid]:
+            return None
+        return self._subjects[gid].get(name, [])
+
+
+def _overlay_name_and_versions(cid: str, base: str, rid: str) -> tuple[str, set[str]] | None:
+    """`_record_name_and_versions` through the overlay: the campaign's record if
+    it has one, the world's if it inherits, and None when neither can be read.
+
+    Split from the world-rooted one rather than parameterised because the reads
+    differ by more than a root -- `overlay.read_character` applies tombstones
+    and detachment, which a bare root read cannot see.
+    """
+    try:
+        if base == "characters":
+            d = store.overlay.read_character(cid, rid)
+            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
+        if base == store.pcs.ASSET_BASE:
+            d = store.overlay.read_pc(cid, rid)
+            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
+        if base == "greetings":
+            g = store.overlay.read_greeting(cid, rid)
+            return str(g.get("name") or rid), set()
+        e = store.overlay.read_entity(cid, base, rid)
+        return str(e["meta"].get("name") or rid), set()
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
+            store.entities.EntityNotFound, store.greetings.GreetingNotFound,
+            KeyError, OSError, UnicodeDecodeError):
+        # The same set the world-rooted helper catches, and for the same reason:
+        # skip the folder rather than 500 a whole gallery over one record
+        # somebody deleted by hand.
+        return None
+
+
+def _actor_image_url(prefix: str, base: str, rid: str, vid: str, name: str) -> str:
+    """One tile's serving URL under `prefix` (`/api/worlds/x` or
+    `/api/campaigns/y`). An actor's art is per version; an entity's is keyed on
+    a fixed `default`, so its URL has no version segment to carry.
+
+    Quoted segment by segment, like `_undescribed_url`'s: `assets.storable`
+    accepts names URL syntax owns.
+    """
+    if base in ("characters", store.pcs.ASSET_BASE):
+        return (f"{prefix}/{base}/{quote(rid, safe='')}"
+                f"/versions/{quote(vid, safe='')}"
+                f"/images/{quote(name, safe='')}")
+    return f"{prefix}/{base}/{quote(rid, safe='')}/images/{quote(name, safe='')}"
 
 
 def _gallery_urls(wid: str, base: str, item: dict) -> dict:

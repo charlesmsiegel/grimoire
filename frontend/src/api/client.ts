@@ -1683,6 +1683,11 @@ export const api = {
    *  unfinished. Same reasoning, and the same flag, as `campaignChanges`. */
   listWorldImages: (wid: string, fresh = false) =>
     request<GalleryImage[]>("GET", `/api/worlds/${wid}/gallery`, undefined, { fresh }),
+  /** The same listing for what a CAMPAIGN sees: its world's art plus its own,
+   *  resolved through the overlay, so a diverged copy shadows the world's and
+   *  campaign-only art appears at all. Every URL in it is campaign-scoped. */
+  listCampaignGallery: (cid: string, fresh = false) =>
+    request<GalleryImage[]>("GET", `/api/campaigns/${cid}/gallery`, undefined, { fresh }),
   /** Describe one image. `description: ""` is meaningful and is NOT the same as
    *  never having described it: it means "reviewed, nothing to say", which
    *  takes the image out of the describe queue without offering it to the
