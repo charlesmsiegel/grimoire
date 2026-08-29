@@ -283,6 +283,43 @@ def test_slim_keeps_focus_when_campaign_avatar_diverges(monkeypatch, tmp_path):
     assert overlay.read_focus(cid, aid, vid) == 80    # crop preserved, not reset to center
 
 
+def test_slim_keeps_diverged_asset_stored_under_another_extension(monkeypatch, tmp_path):
+    """A campaign whose copy of an image diverged INTO ANOTHER FORMAT still holds
+    that image, so nothing was deleted and nothing may be tombstoned.
+
+    The tombstone is keyed by logical NAME -- assets/<kind>/<id>/<vid>/avatar --
+    and so is every read that consults it, but the existence check behind it
+    used the world file's own path, extension included. A campaign holding
+    avatar.jpg against a world avatar.png therefore read as "the user deleted
+    the avatar", and deleted.json is union-only: the tombstone is permanent, and
+    the moment the campaign copy goes it takes the inherited one with it.
+
+    Found in a real store: a campaign avatar kept in one format over a
+    world avatar kept in another.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    assets.put_image(wroot, aid, vid, "avatar", b"worldavatar", "png")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)   # full copy
+    for q in (croot / "characters" / aid / "assets" / vid).glob("avatar.*"):
+        q.unlink()
+    # the campaign's own avatar: same logical name, different format
+    assets.put_image(croot, aid, vid, "avatar", b"campaignavatar", "jpg")
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"assets/characters/{aid}/{vid}/avatar" not in overlay.deleted(cid)
+    # and the campaign's own copy is what serves, before and after
+    assert overlay.image_root(cid, aid, vid, "avatar") == croot
+    assert "avatar" in {i["name"] for i in overlay.list_images(cid, aid, vid)}
+
+
 def test_slim_tombstones_user_deleted_copied_asset(monkeypatch, tmp_path):
     """A pre-overlay full copy had the world avatar copied in; the user deleted
     that copy. Slim must tombstone it so the overlay doesn't resurface the world

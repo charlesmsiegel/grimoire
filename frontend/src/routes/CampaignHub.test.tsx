@@ -394,7 +394,7 @@ test("the cast card names faces and marks the PCs", async () => {
       has_avatar: false },
   ]);
   (api.listCampaignPCs as any).mockResolvedValue([
-    { id: "sera", name: "Seraphine", default_version: "v1", versions: [],
+    { id: "seraphine", name: "Seraphine", default_version: "v1", versions: [],
       tags: [], has_avatar: false },
   ]);
   renderHub();

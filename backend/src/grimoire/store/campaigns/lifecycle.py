@@ -325,11 +325,28 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
     Nothing on disk separates "the user deleted this world image" from "this
     image was never copied here", and the error is one-way: a false tombstone
     hides inherited art permanently, while a missed one shows a deleted image
-    again, which the user can delete once more. Left as it is because it is
-    pre-overlay asset attribution, not #270's manifest-ref attribution, and
-    narrowing it further is a change to make deliberately rather than in
-    passing (Codex review)."""
+    again, which the user can delete once more.
+
+    The presence test is by logical NAME, across extensions, which is the same
+    question the tombstone is keyed on and the same one `overlay.list_images`
+    and `overlay.image_root` ask when they honour it. It used to compare the
+    world file's own path, extension included, so a campaign that had converted
+    its copy — `avatar.jpg` over the world's `avatar.png` — read as one that had
+    deleted it, and took a permanent tombstone over an image it was still
+    holding. That is not the ambiguous case above: an image the campaign still
+    has was not deleted, whatever format it is stored in. Found in a real store,
+    on avatars, after the migration had already run.
+
+    What is left ambiguous is genuinely ambiguous — a name the campaign does not
+    hold at all — and that is still resolved toward tombstoning, because it is
+    pre-overlay asset attribution and not #270's manifest-ref attribution
+    (Codex review)."""
     gone = overlay.deleted(cid)
+    # Logical names present campaign-side, per version directory. Keyed by
+    # directory because the walk below is sorted, so a record's world images
+    # arrive together and this reads each campaign directory once -- `names_in`
+    # is one `scandir` and no per-file stat, which is why it exists.
+    held: dict[Path, set[str]] = {}
     for kind in ("characters", "pcs", "locations", "lore", "greetings"):
         wbase = wroot / kind
         if not wbase.exists():
@@ -344,9 +361,22 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
             aid, vid, name = parts[1], parts[3], wp.stem
             if f"{kind}/{aid}" not in copied or f"{kind}/{aid}" in gone:
                 continue
-            if not (root / kind / aid / "assets" / vid).is_dir():
+            cdir = root / kind / aid / "assets" / vid
+            if not cdir.is_dir():
                 continue   # the fork never copied this version's assets here
-            if not (root / rel).exists():
+            # By logical NAME, not by the world's filename. The tombstone this
+            # writes is `.../{name}` and every read that honours it -- both
+            # `overlay.list_images` and `overlay.image_root` -- resolves a name
+            # across extensions, so testing `root / rel` asked a question no
+            # reader ever asks: it read a campaign that had converted its copy
+            # (`avatar.jpg` over the world's `avatar.png`) as one that had
+            # DELETED it. That is the false tombstone this function's own
+            # docstring calls the unrecoverable direction, and it is not the
+            # ambiguous case -- an image the campaign still holds was not
+            # deleted, whatever it is stored as.
+            if cdir not in held:
+                held[cdir] = assets.names_in(cdir)[0]
+            if name not in held[cdir]:
                 overlay.add_deleted(cid, f"assets/{kind}/{aid}/{vid}/{name}")
 
 
