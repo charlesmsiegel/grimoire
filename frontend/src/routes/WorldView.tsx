@@ -493,7 +493,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             world switch, so an unkeyed gallery would go on showing the previous
             world's art -- and its tagging queue -- until four reads settle, or
             indefinitely if one stalls. */}
-        {!campaign && section === "images" && <ImagesView key={wid} wid={wid} />}
+        {!campaign && section === "images"
+          && <ImagesView key={wid} wid={wid} forCampaign={params.get("for")} />}
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
                                        focus={pcFocus?.pid ?? null} focusNonce={pcFocus?.n ?? 0}

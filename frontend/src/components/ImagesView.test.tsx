@@ -5,6 +5,7 @@ vi.mock("../api/client", () => ({
   api: {
     listWorldImages: vi.fn(), listCharacters: vi.fn(),
     listGreetings: vi.fn(), listUntaggedImages: vi.fn(), setImageSubjects: vi.fn(),
+    listAppearances: vi.fn(), listCampaignGallery: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -43,6 +44,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.listWorldImages as any).mockResolvedValue([AVATAR, SKETCH, QUAY, TAGGED, UNTAGGED]);
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
+  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listCampaignGallery as any).mockResolvedValue([AVATAR, SKETCH, QUAY, TAGGED, UNTAGGED]);
   (api.listGreetings as any).mockResolvedValue([
     { id: "dusk", name: "Saltmarch dusk", present: ["seraphine"] }]);
   (api.listUntaggedImages as any).mockResolvedValue(QUEUE);
@@ -275,4 +278,82 @@ test("a world with no art says so rather than showing an empty frame", async () 
   (api.listUntaggedImages as any).mockResolvedValue([]);
   await renderView();
   expect(screen.getByText(/no art yet/)).toBeInTheDocument();
+});
+
+// ---- the appeared filter, offered only when a campaign is being read for ----
+
+/** One row of the appearance record: this actor has been on stage. */
+const appeared = (kind: string, id: string) => (
+  { kind, id, version: "default", role: "npc", scenes: ["001--a"] });
+
+test("a gallery read for no campaign offers no appeared filter", async () => {
+  await act(async () => { render(<ImagesView wid="w" />); });
+  expect(screen.queryByRole("button", { name: /appeared/i })).toBeNull();
+  // and asks nothing about a campaign it was not given
+  expect(api.listAppearances).not.toHaveBeenCalled();
+});
+
+test("reading for a campaign filters the gallery to actors that have appeared", async () => {
+  // Seraphine has been on stage; the world's other art has not, and locations
+  // are not cast at all.
+  (api.listAppearances as any).mockResolvedValue([appeared("characters", "seraphine")]);
+  await act(async () => { render(<ImagesView wid="w" forCampaign="run" />); });
+
+  // off by default: the gallery is still the world's, and the filter is a
+  // narrowing the reader asks for
+  expect(screen.getByAltText("In half-plate, at the quay.")).toBeInTheDocument();
+  expect(screen.getByAltText("Saltmarch — gallery_1")).toBeInTheDocument();
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /appeared in this campaign/i }));
+  });
+  expect(screen.getByAltText("In half-plate, at the quay.")).toBeInTheDocument();
+  // the location is not a member of the cast, so it goes
+  expect(screen.queryByAltText("Saltmarch — gallery_1")).toBeNull();
+  // and so does greeting art, which no roster entry names
+  expect(screen.queryByAltText("Two figures on the quay.")).toBeNull();
+});
+
+test("an actor in the world but never on stage is filtered out", async () => {
+  (api.listAppearances as any).mockResolvedValue([appeared("characters", "winifred")]);
+  await act(async () => { render(<ImagesView wid="w" forCampaign="run" />); });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /appeared in this campaign/i }));
+  });
+  expect(screen.queryByAltText("In half-plate, at the quay.")).toBeNull();
+  expect(screen.getByText(/nothing here/i)).toBeInTheDocument();
+});
+
+test("a failed appearance read costs the filter, not the gallery", async () => {
+  // The gallery is this view's subject and the filter is an extra: one read
+  // failing must not blank the other, or take the view down with it.
+  (api.listAppearances as any).mockRejectedValue(new Error("nope"));
+  await act(async () => { render(<ImagesView wid="w" forCampaign="run" />); });
+  expect(screen.getByAltText("In half-plate, at the quay.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /appeared in this campaign/i })).toBeNull();
+});
+
+// ---- which gallery is read ----
+
+test("with no campaign the world's gallery is what is read", async () => {
+  await act(async () => { render(<ImagesView wid="w" />); });
+  expect(api.listWorldImages).toHaveBeenCalledWith("w", false);
+  expect(api.listCampaignGallery).not.toHaveBeenCalled();
+});
+
+test("reading for a campaign reads that campaign's gallery instead", async () => {
+  // The campaign's own art lives in the campaign root: a world sweep cannot
+  // see it, so a campaign reader looking at a world listing is being shown
+  // pictures the campaign may not even use.
+  const OWN = {
+    kind: "characters", id: "seraphine", vid: "default", name: "gallery_9",
+    record_name: "Seraphine", url: "/img/own?v=1", thumb: "/img/own?w=320&v=1",
+    ext: "webp", described: true, description: "Campaign-only art.",
+  };
+  (api.listCampaignGallery as any).mockResolvedValue([AVATAR, OWN]);
+  await act(async () => { render(<ImagesView wid="w" forCampaign="run" />); });
+
+  expect(api.listCampaignGallery).toHaveBeenCalledWith("run", false);
+  expect(api.listWorldImages).not.toHaveBeenCalled();
+  expect(screen.getByAltText("Campaign-only art.")).toBeInTheDocument();
 });

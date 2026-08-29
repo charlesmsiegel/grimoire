@@ -271,7 +271,16 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     // `?section=` names — so the row has somewhere real to go after all. It
     // needs the world's id, not its name, which is why `world` travels beside
     // `world_name` in the payload.
-    to: (_ctx, s) => (s?.campaign?.world ? `/worlds/${s.campaign.world}?section=images` : null),
+    // `for=` carries the campaign this row belongs to, so the world's gallery
+    // can offer to narrow itself to the cast that campaign has actually
+    // seated. In the URL rather than read from the open-campaign hint,
+    // because it is part of the question being asked -- the link is
+    // shareable, survives a reload, and cannot disagree with the row that
+    // produced it.
+    to: (_ctx, s) => (s?.campaign?.world
+      ? `/worlds/${s.campaign.world}?section=images`
+        + (s.campaign.id ? `&for=${encodeURIComponent(s.campaign.id)}` : "")
+      : null),
     // Never lit, deliberately. `match` is given the pathname alone, and the
     // section this row points at lives in the query string — so the honest
     // options are "never active" or "active on every screen of that world,

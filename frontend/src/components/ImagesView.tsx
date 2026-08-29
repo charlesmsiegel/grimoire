@@ -127,7 +127,17 @@ function Detail({ img, charName, onBack }: {
  *  steps through exactly this backlog, and it is reached from the greeting
  *  editor too — the same queue from either door, so finishing it in one empties
  *  it in the other. */
-export function ImagesView({ wid }: { wid: string }) {
+export function ImagesView({ wid, forCampaign = null }:
+                           { wid: string;
+                             /** The campaign this gallery is being read FOR, when
+                              *  one is open. The rail's Images row is a campaign
+                              *  row that points at the world's gallery, so the
+                              *  reader arriving here is usually asking about one
+                              *  game's cast while looking at every record the
+                              *  world has. That is the whole reason the filter
+                              *  below exists; without a campaign there is no
+                              *  question to ask and it is not offered. */
+                             forCampaign?: string | null }) {
   const [tab, setTab] = useState<Tab>("gallery");
   const [images, setImages] = useState<GalleryImage[] | null>(null);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -135,6 +145,12 @@ export function ImagesView({ wid }: { wid: string }) {
   const [untagged, setUntagged] = useState<Appearance[] | null>(null);
   const [kind, setKind] = useState<string | null>(null);
   const [unfinished, setUnfinished] = useState(false);
+  /** `kind/id` for every actor the campaign has seated, or null when there is
+   *  no campaign to ask about and when the read failed. Null both ways on
+   *  purpose: the filter is only offered when it can actually be applied, and
+   *  an empty set would offer a chip that hides the entire gallery. */
+  const [appearedRefs, setAppearedRefs] = useState<Set<string> | null>(null);
+  const [appearedOnly, setAppearedOnly] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -163,13 +179,17 @@ export function ImagesView({ wid }: { wid: string }) {
       // shares an in-flight GET by path. Handed one issued before that write,
       // the tile just tagged comes back still unfinished — and stays that way
       // until the view is remounted.
-      const got = await api.listWorldImages(wid, true);
+      // The same choice `load` makes: refreshing a campaign's gallery from the
+      // world's would drop its own art on every subjects save.
+      const got = forCampaign
+        ? await api.listCampaignGallery(forCampaign, true)
+        : await api.listWorldImages(wid, true);
       if (liveWid.current === wid) setImages(got);
     } catch {
       // Deliberately quiet: the tile this refreshes is a detail beside a save
       // that has already landed, and the next full read reports the failure.
     }
-  }, [wid]);
+  }, [wid, forCampaign]);
 
   /** `fresh` when this read follows writes — closing the queue, or a Retry the
    *  reader asked for. Not on mount, where sharing an in-flight GET with
@@ -180,7 +200,13 @@ export function ImagesView({ wid }: { wid: string }) {
     setErr(null);
     try {
       const [got, cs, gs, ut] = await Promise.all([
-        api.listWorldImages(wid, fresh), api.listCharacters(scope),
+        // The campaign's own gallery when there is one: its art is in the
+        // campaign root, and a world sweep cannot see it. The other three stay
+        // world-scoped -- the tagging queue walks the subjects sidecar, which
+        // is written world-side, and the character list is what names it.
+        forCampaign ? api.listCampaignGallery(forCampaign, fresh)
+                    : api.listWorldImages(wid, fresh),
+        api.listCharacters(scope),
         api.listGreetings(scope), api.listUntaggedImages(wid, fresh),
       ]);
       if (liveWid.current !== wid) return;
@@ -199,18 +225,50 @@ export function ImagesView({ wid }: { wid: string }) {
       setImages([]);
       setUntagged([]);
     }
-  }, [wid, scope]);
+  }, [wid, scope, forCampaign]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Its own read, deliberately outside `load`: the gallery is this view's
+  // subject and the filter is an extra, so one failing must not blank the
+  // other. `load` reports its failure into `err`, which suppresses the whole
+  // gallery -- the right blast radius for "the world's art could not be read"
+  // and much too wide for "the appearance record could not be".
+  useEffect(() => {
+    if (!forCampaign) { setAppearedRefs(null); setAppearedOnly(false); return; }
+    let live = true;
+    setAppearedRefs(null);
+    setAppearedOnly(false);
+    api.listAppearances(forCampaign)
+      .then((roster) => {
+        if (live) setAppearedRefs(new Set(roster.map((r) => `${r.kind}/${r.id}`)));
+      })
+      // Left null, which withdraws the chip rather than offering one that
+      // would filter everything away. A reader who cannot see the control does
+      // not silently get its effect.
+      .catch(() => { if (live) setAppearedRefs(null); });
+    return () => { live = false; };
+  }, [forCampaign]);
 
   const charName = useCallback(
     (cid: string) => chars.find((c) => c.id === cid)?.name ?? cid, [chars]);
 
   const all = images ?? [];
+  /** Art belonging to a record the campaign has actually seated.
+   *
+   *  Membership is by `kind/id`, the appearance record's own spelling, so a
+   *  kind it does not store -- a location, a piece of lore, greeting art --
+   *  matches nothing and drops out while the filter is on. That is the filter
+   *  working, not a gap in it: "who has appeared" is a question about cast. */
+  const hasAppeared = useCallback(
+    (i: GalleryImage) => !!appearedRefs?.has(`${i.kind}/${i.id}`), [appearedRefs]);
+
   const shown = all.filter((i) => (kind === null || i.kind === kind)
-                                  && (!unfinished || needsAttention(i)));
+                                  && (!unfinished || needsAttention(i))
+                                  && (!appearedOnly || hasAppeared(i)));
   const active = shown.find((i) => imgKey(i) === sel) ?? null;
   const attention = all.filter(needsAttention).length;
+  const appearedCount = appearedRefs ? all.filter(hasAppeared).length : 0;
 
   return (
     <div className="images-view">
@@ -280,6 +338,19 @@ export function ImagesView({ wid }: { wid: string }) {
                 Needs a description or subjects · {attention}
               </button>
             </div>
+            {/* Only with a campaign to ask about, and only once its roster has
+                answered. Off by default: the gallery is the world's, and this
+                narrows it to one game's cast because the reader said so. */}
+            {appearedRefs && (
+              <div className="side-section">
+                <h4>This campaign</h4>
+                <button className={"chip" + (appearedOnly ? " on" : "")}
+                        aria-pressed={appearedOnly}
+                        onClick={() => { setAppearedOnly((v) => !v); setSel(null); }}>
+                  Appeared in this campaign · {appearedCount}
+                </button>
+              </div>
+            )}
           </div>
           <div className="editor-body">
             {active ? (

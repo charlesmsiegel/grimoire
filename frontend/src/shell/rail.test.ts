@@ -150,7 +150,24 @@ describe("Images points at the world section that holds it", () => {
   const images = () => CAMPAIGN_ROWS.find((r) => r.id === "images")!;
 
   test("the id, not the name: `world_name` cannot address anything", () => {
-    expect(images().to(ctx, WITH_WORLD)).toBe("/worlds/saltmarch?section=images");
+    expect(images().to(ctx, WITH_WORLD))
+      .toBe(`/worlds/saltmarch?section=images&for=${WITH_WORLD.campaign.id}`);
+  });
+
+  test("the campaign rides along, so the gallery can offer its cast as a filter", () => {
+    // This is a CAMPAIGN row pointing at a world view: the reader arriving is
+    // usually asking about one game's cast while looking at every record the
+    // world has. Carried in the URL rather than inferred, so the link is
+    // shareable and survives a reload.
+    const to = images().to(ctx, WITH_WORLD)!;
+    expect(to).toContain(`for=${WITH_WORLD.campaign.id}`);
+  });
+
+  test("no campaign id is no `for=`, not an empty one", () => {
+    // An empty `for=` would reach the gallery as a campaign to look up, and
+    // the appearance read behind it would 404 rather than simply not happen.
+    const anon = { ...WITH_WORLD, campaign: { ...WITH_WORLD.campaign, id: "" } };
+    expect(images().to(ctx, anon)).toBe("/worlds/saltmarch?section=images");
   });
 
   test("the backlog rides along", () => {
