@@ -10,10 +10,56 @@ half that comes back the other way, into `write.py`).
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from .. import statcache
 from ..appearances import cast
 from ..frontmatter import parse_frontmatter, parse_frontmatter_head
 from ..paths import safe_id
 from . import paths, serialize
+
+#: Sweep-sized memo families live here rather than in the shared FIFO of
+#: 4096: one library listing would otherwise evict every card summary and
+#: sync hash (statcache's own `pool` docstring). Sized above any plausible
+#: library's scene count — a head row is a small dict, so even the full
+#: budget is a few megabytes.
+POOL_ENTRIES = 65536
+_SCENE_POOL: dict = {}
+
+
+def _scene_row(p: Path) -> dict:
+    """One scene's listing row, memoized by the file's stat signature.
+    Frozen by convention: list_scenes copies it into a fresh dict."""
+    def compute() -> dict:
+        meta = parse_frontmatter_head(p)  # never reads the transcript body
+        hist = histories(meta)
+        history = hist["times"]
+        return {
+            "title": meta.get("title", p.stem),
+            "model": meta.get("model", ""),
+            "created": meta.get("created", ""),
+            "updated": meta.get("updated", ""),
+            "date": history[0] if history else "",
+            # Where the scene ended up: the last entry in the same
+            # frontmatter line `date` is read from, so the scenes list can
+            # say "when & where" without a second read per scene. "" for a
+            # scene that never set a location, which is a real state and
+            # not a missing one.
+            "place": hist["locations"][-1] if hist["locations"] else "",
+            "pcless": meta.get("pcless") == "true",
+            # Absorbed and accepted into the chronicle -- `mark_absorbed`
+            # writes it. Read with the same tolerance as
+            # `routes.scenes._already_absorbed`, which is what actually
+            # refuses a second absorb: this file is hand-editable, and a
+            # rail that called a scene unfinished while the absorb guard
+            # called it done would be worse than either answer alone.
+            "done": str(meta.get("done", "")).lower() == "true",
+        }
+    sig = statcache.signature(p)
+    if sig is None:
+        return compute()
+    return statcache.memo("scene_head", sig, compute,
+                          pool=_SCENE_POOL, max_entries=POOL_ENTRIES)
 
 
 def list_scenes(cid: str) -> list[dict]:
@@ -24,31 +70,7 @@ def list_scenes(cid: str) -> list[dict]:
         for p in d.glob("*.md"):
             if not safe_id(p.stem):   # enumeration agrees with the resolvers
                 continue
-            meta = parse_frontmatter_head(p)  # never reads the transcript body
-            hist = histories(meta)
-            history = hist["times"]
-            out.append({
-                "id": p.stem,
-                "title": meta.get("title", p.stem),
-                "model": meta.get("model", ""),
-                "created": meta.get("created", ""),
-                "updated": meta.get("updated", ""),
-                "date": history[0] if history else "",
-                # Where the scene ended up: the last entry in the same
-                # frontmatter line `date` is read from, so the scenes list can
-                # say "when & where" without a second read per scene. "" for a
-                # scene that never set a location, which is a real state and
-                # not a missing one.
-                "place": hist["locations"][-1] if hist["locations"] else "",
-                "pcless": meta.get("pcless") == "true",
-                # Absorbed and accepted into the chronicle -- `mark_absorbed`
-                # writes it. Read with the same tolerance as
-                # `routes.scenes._already_absorbed`, which is what actually
-                # refuses a second absorb: this file is hand-editable, and a
-                # rail that called a scene unfinished while the absorb guard
-                # called it done would be worse than either answer alone.
-                "done": str(meta.get("done", "")).lower() == "true",
-            })
+            out.append({"id": p.stem, **_scene_row(p)})
     out.sort(key=lambda m: m["updated"], reverse=True)
     return out
 

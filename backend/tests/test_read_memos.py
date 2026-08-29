@@ -67,3 +67,29 @@ def test_world_rows_parse_once(store, monkeypatch):
     n = len(calls)
     worlds_read.list_worlds()
     assert calls[n:] == []
+
+
+def _add_scene(store, sid, title="One", body="Long transcript body\n" * 50):
+    d = store / "campaigns" / "saltmarch" / "scenes"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{sid}.md"
+    p.write_text(f'---\ntitle: "{title}"\ncreated: "2026-01-01T00:00:00Z"\n'
+                 f'updated: "2026-01-03T00:00:00Z"\n---\n{body}', encoding="utf-8")
+    _age(p)
+    return p
+
+
+def test_scene_heads_parse_once_and_in_their_own_pool(store, monkeypatch):
+    from grimoire.store.scenes import read as scenes_read
+    _add_scene(store, "scene-1")
+    calls = []
+    real = scenes_read.parse_frontmatter_head
+    monkeypatch.setattr(scenes_read, "parse_frontmatter_head",
+                        lambda p: calls.append(1) or real(p))
+    scenes_read.list_scenes("saltmarch")
+    n = len(calls)
+    scenes_read.list_scenes("saltmarch")
+    assert calls[n:] == []
+    # the entry landed in the scenes pool, not the shared FIFO
+    assert any(k[0] == "scene_head" for k in scenes_read._SCENE_POOL)
+    assert not any(k[0] == "scene_head" for k in statcache._cache)
