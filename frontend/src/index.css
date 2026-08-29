@@ -3787,6 +3787,17 @@ a.column-back { text-decoration: none; }
 }
 .hub-row:last-child { border-bottom: 0; }
 .hub-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The scenes card's title is a link now that the row itself is not one, so it
+   takes the row's own ink rather than the browser's blue-and-underlined. */
+a.hub-row-title { text-decoration: none; color: inherit; }
+/* Same rule as the scene list's ✕: quiet down the card, red only where it is
+   about to matter. */
+.hub-row-del {
+  flex: none; padding: 0 6px; background: transparent; border: none;
+  color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1;
+}
+.hub-row-del:hover, .hub-row-del:focus-visible { color: var(--alert); }
+.hub-row-error { color: var(--alert); }
 
 /* An idea stacks its premise under its title, so the row is two lines rather
    than a title competing with a sentence for one. */
@@ -3795,24 +3806,36 @@ a.column-back { text-decoration: none; }
 
 /* Faces wrap rather than scroll: the card is capped at CAST_SHOWN, so the row
    count is bounded and a horizontal scroller would hide half of a short list. */
-.hub-faces { display: flex; flex-wrap: wrap; gap: 10px; }
+/* A wall of portraits, not a labelled roster: the faces carry the recognition
+   and the name lives in the link's label and tooltip. Sized so a campaign with
+   a large seated cast wraps into a few rows instead of a scroll. */
+.hub-faces { display: flex; flex-wrap: wrap; gap: 8px; }
 .hub-face {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  width: 72px; text-decoration: none; color: var(--ink);
+  display: block; text-decoration: none; color: var(--ink);
+  line-height: 0; /* no caption to leave a descender gap under the portrait */
 }
-.hub-face:hover .hub-face-name { color: var(--accent); }
 .hub-face-avatar,
 .hub-face .initials-avatar {
-  width: 42px; height: 42px; border-radius: 3px; object-fit: cover;
-  /* The shared `.initials-avatar` is sized for a 96px card slot; a 42px one
+  width: 48px; height: 48px; border-radius: 3px; object-fit: cover;
+  object-position: top; /* a portrait crops to the face, not to the middle */
+  /* The shared `.initials-avatar` is sized for a 96px card slot; a 48px one
      needs its own type size or the letters overflow the box. */
-  font-size: 15px; flex: none;
+  font-size: 17px; flex: none;
+  border: 1px solid var(--rule);
+  transition: border-color 120ms ease;
 }
-.hub-face-name {
-  font-size: 11px; line-height: 1.3; text-align: center;
-  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.hub-face:hover .hub-face-avatar,
+.hub-face:hover .initials-avatar,
+.hub-face:focus-visible .hub-face-avatar,
+.hub-face:focus-visible .initials-avatar { border-color: var(--accent); }
+/* The PC, marked without a caption. A ring rather than a corner badge: at 48px
+   a badge covers the face it is labelling, and there is exactly one PC to pick
+   out of the wall. */
+.hub-face.pc .hub-face-avatar,
+.hub-face.pc .initials-avatar {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
 }
-.hub-face .chip { font-size: 8px; }
 .scene-home { text-decoration: none; color: var(--accent); }
 
 /* ---- the scenes list ---- */
@@ -3828,7 +3851,15 @@ a.column-back { text-decoration: none; }
    the list scrolls. */
 .scene-item {
   display: grid; align-items: center; gap: 0 12px;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 210px) 34px 74px auto;
+  /* The title has a FLOOR, and it is the only track that does. Everything to
+     its right is either fixed or content-sized, so `1fr` starting at zero made
+     the title the one thing that gave way -- 75px of "Winifred's Quantizati…"
+     beside a 210px column holding "Day 41 · The weir". `when` is
+     `minmax(0, 210px)` precisely so it can yield first, which is this file's
+     own rule: secondary chrome folds rather than clipping the one fact on the
+     row nobody can do without. */
+  grid-template-columns:
+    minmax(180px, 1fr) auto minmax(0, 210px) 34px 74px auto auto;
   border-bottom: 1px solid var(--line); min-height: 52px;
 }
 /* A scene still in play is the one you are most likely to want. */
@@ -3866,6 +3897,17 @@ a.column-back { text-decoration: none; }
 }
 .scene-item-act.accent { color: var(--accent); border-color: var(--accent); }
 .scene-item-act.alert { color: var(--alert); border-color: var(--alert); }
+/* The row's one destructive control. Quiet until pointed at -- it sits beside
+   the action you actually came to press, and a ✕ drawn in alert red down the
+   whole list would make a page of finished scenes look like a page of
+   problems. It only turns red under the cursor, where it is about to matter. */
+.scene-item-del {
+  flex: none; margin-right: 10px; padding: 0 8px; min-height: 34px;
+  display: inline-flex; align-items: center; background: transparent;
+  border: none; color: var(--muted); cursor: pointer; font-size: 13px;
+  line-height: 1;
+}
+.scene-item-del:hover, .scene-item-del:focus-visible { color: var(--alert); }
 
 /* The two columns that are not frontmatter. Fixed widths so the list reads
    DOWN a column rather than as ragged text at the end of each row -- which is
@@ -3878,7 +3920,14 @@ a.column-back { text-decoration: none; }
 }
 .scene-item-turns { width: 34px; }
 .scene-item-spend { width: 72px; }
-.scene-item-turns:empty, .scene-item-spend:empty { display: none; }
+/* `visibility`, NOT `display: none`. These are grid cells, and a cell removed
+   from the grid is not a cell that collapses -- it is one that stops being
+   placed, so every cell after it slides a track to the left. That put a 72px
+   price in the 34px turns track and ran it through the action button beside
+   it. Hidden keeps the track and still draws nothing, which is all the rule
+   below the breakpoint ever wanted; there, where these fold onto a line of
+   their own, `display: none` is restored because collapsing is the point. */
+.scene-item-turns:empty, .scene-item-spend:empty { visibility: hidden; }
 
 .scenes-head-actions { display: flex; align-items: center; gap: 10px; }
 /* The import pane is a panel in the flow rather than an overlay: it is a
@@ -3896,14 +3945,21 @@ a.column-back { text-decoration: none; }
      The same nodes, reflowed: nothing is rendered twice and nothing is
      dropped. */
   .scene-item {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
     row-gap: 2px; padding-bottom: 6px; min-height: 60px;
   }
   .scene-item-main { grid-column: 1 / -1; }
   .scene-item-when { grid-column: 1; padding-left: 56px; }
   .scene-item-turns, .scene-item-spend { text-align: left; }
+  /* Folded into one mono line under the title, so an empty figure should take
+     no room at all rather than leave a gap in the middle of the sentence. */
+  .scene-item-turns:empty, .scene-item-spend:empty { display: none; }
   .scene-item .chip { grid-column: 1; grid-row: 3; margin-left: 56px; }
   .scene-item-act { grid-column: 3; grid-row: 3; min-height: 44px; }
+  /* Beside the action, on the action's own line. Not next to the title: the
+     one control that cannot be undone does not belong under a thumb reaching
+     for the scene's name. */
+  .scene-item-del { grid-column: 4; grid-row: 3; min-height: 44px; }
 }
 
 /* The wrap-up footer: what the button is about to do, before it is pressed. */
@@ -4330,6 +4386,10 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      and `.chore-ignore` do: a row's attached actions are controls too. */
   .row-label { display: flex; align-items: center; min-height: 44px; }
   .row-actions button { min-height: 44px; }
+  /* The scene list's own ✕ owes the same floor; it is not in a `.row-actions`
+     strip because it is a cell of the row's grid. */
+  .scene-item-del { min-height: 44px; padding: 0 12px; }
+  .hub-row-del { min-height: 44px; padding: 0 10px; }
   /* `.primary` is the one class every editor's Save/Create/Add button
      reaches for, in this file and in every editor that isn't in it. */
   .primary { min-height: 44px; }

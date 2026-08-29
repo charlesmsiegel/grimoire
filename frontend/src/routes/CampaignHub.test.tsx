@@ -18,10 +18,12 @@ vi.mock("../api/client", () => ({
     getCampaign: vi.fn(),
     getShell: vi.fn(),
     listScenes: vi.fn(),
+    deleteScene: vi.fn(),
     getChronicle: vi.fn(),
     // The second wave: worth having, not worth waiting for.
     listCharacters: vi.fn(),
     listCampaignPCs: vi.fn(),
+    listAppearances: vi.fn(),
     campaignChanges: vi.fn(),
     getCampaignBudget: vi.fn(),
     listSceneIdeas: vi.fn(),
@@ -72,6 +74,7 @@ function renderHub() {
 }
 
 beforeEach(() => {
+  (api.deleteScene as any).mockReset().mockResolvedValue({ ok: true });
   (api.getCampaign as any).mockResolvedValue({ meta: META, body: "" });
   (api.getShell as any).mockResolvedValue(shell());
   (api.listScenes as any).mockResolvedValue([
@@ -83,6 +86,7 @@ beforeEach(() => {
   ]);
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
+  (api.listAppearances as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
   (api.getCampaignBudget as any).mockResolvedValue({ level: "off", limit_usd: 0,
                                                      period: "monthly" });
@@ -388,6 +392,12 @@ test("a budget that is set draws its bar", async () => {
 
 // ---- the cast card ----
 
+/** One row of the appearance record: this actor has been on stage. */
+function appeared(kind: string, id: string) {
+  return { kind, id, version: "v1", role: kind === "pcs" ? "player" : "npc",
+           scenes: ["001--a"] };
+}
+
 test("the cast card names faces and marks the PCs", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "mara", name: "Mara Vance", default_version: "v1", versions: [],
@@ -397,14 +407,19 @@ test("the cast card names faces and marks the PCs", async () => {
     { id: "seraphine", name: "Seraphine", default_version: "v1", versions: [],
       tags: [], has_avatar: false },
   ]);
+  (api.listAppearances as any).mockResolvedValue([
+    appeared("characters", "mara"), appeared("pcs", "seraphine"),
+  ]);
   renderHub();
 
   const card = (await screen.findByRole("heading", { name: "Cast" }))
     .closest("section")!;
-  expect(within(card).getByText("Seraphine")).toBeInTheDocument();
-  expect(within(card).getByText("Mara Vance")).toBeInTheDocument();
-  // The PC chip is on the PC and only on the PC.
-  expect(within(card).getAllByText("PC")).toHaveLength(1);
+  // Portraits, not captions: the name is the link's accessible label, which is
+  // what a screen reader announces and what the tooltip shows on hover.
+  expect(within(card).getByRole("link", { name: "Mara Vance" })).toBeInTheDocument();
+  // The PC is marked without a caption to say so.
+  expect(within(card).getByRole("link", { name: "Seraphine (PC)" })).toBeInTheDocument();
+  expect(within(card).queryByText("Mara Vance")).not.toBeInTheDocument();
   // A count, derived from the two lists rather than restated.
   expect(within(card).getByText("2")).toBeInTheDocument();
 });
@@ -465,4 +480,139 @@ test("play next offers saved ideas and spends nothing to do it", async () => {
   // The whole reason this card shows saved ideas rather than generated ones:
   // opening a campaign must not spend a generation.
   expect((api as any).sceneSuggestions).toBeUndefined();
+});
+
+/** The Scenes card, by the heading it renders. */
+const scenesCard = () =>
+  within(screen.getByText("Scenes").closest(".hub-card") as HTMLElement);
+
+test("a scene row on the hub opens the scene and offers to delete it", async () => {
+  // The row used to BE the link. Hanging a button off it means the title is
+  // now a link inside a row rather than the row itself, and both halves have
+  // to keep working: a button nested in an anchor is invalid markup, and on a
+  // phone the anchor takes the tap.
+  renderHub();
+  await screen.findByText("The third");
+  const c = scenesCard();
+  expect(c.getByRole("link", { name: "The third" }))
+    .toHaveAttribute("href", "/campaigns/run/scenes/s3");
+  expect(c.getByRole("button", { name: "Delete The third" })).toBeInTheDocument();
+});
+
+test("deleting a scene from the hub confirms, deletes, and re-reads", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderHub();
+  await screen.findByText("The third");
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s2", title: "The second", done: true, model: "", created: "", updated: "", date: "" },
+  ]);
+
+  fireEvent.click(scenesCard().getByRole("button", { name: "Delete The third" }));
+
+  await vi.waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("run", "s3"));
+  await vi.waitFor(() => expect(screen.queryByText("The third")).toBeNull());
+});
+
+test("a declined confirm on the hub deletes nothing", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  renderHub();
+  await screen.findByText("The third");
+  fireEvent.click(scenesCard().getByRole("button", { name: "Delete The third" }));
+  expect(api.deleteScene).not.toHaveBeenCalled();
+});
+
+test("a scene a turn is holding keeps its hub row and says why", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  (api.deleteScene as any).mockRejectedValue({
+    kind: "scene_busy", run_id: "r1",
+    detail: "a turn or review is running on this scene; stop it first" });
+  renderHub();
+  await screen.findByText("The third");
+
+  fireEvent.click(scenesCard().getByRole("button", { name: "Delete The third" }));
+
+  expect(await screen.findByText(/a turn or review is running on this scene/i))
+    .toBeInTheDocument();
+  expect(screen.getByText("The third")).toBeInTheDocument();
+});
+
+// The bug: the card was built from the campaign's character and PC LISTS, and
+// both are overlay unions -- the campaign's own records plus everything it
+// inherits from the world. So a front door for one campaign showed the whole
+// world's population, including PCs belonging to a different game entirely.
+// Who is in a campaign is a question only the appearance record answers.
+test("the cast card shows only actors who have appeared", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara Vance", default_version: "v1", versions: [], has_avatar: false },
+    { id: "winifred", name: "Winifred", default_version: "v1", versions: [], has_avatar: false },
+  ]);
+  (api.listCampaignPCs as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "v1", versions: [], tags: [],
+      has_avatar: false },
+    { id: "other", name: "Someone Elses PC", default_version: "v1", versions: [], tags: [],
+      has_avatar: false },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    appeared("characters", "mara"), appeared("pcs", "seraphine"),
+  ]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Cast" })).closest("section")!;
+  await within(card).findByRole("link", { name: "Mara Vance" });
+  expect(within(card).getByRole("link", { name: "Seraphine (PC)" })).toBeInTheDocument();
+  // inherited from the world, never on stage here
+  expect(within(card).queryByRole("link", { name: "Winifred" })).not.toBeInTheDocument();
+  // and the one the reader called out: a PC belonging to another campaign
+  expect(within(card).queryByRole("link", { name: /Someone Elses PC/ }))
+    .not.toBeInTheDocument();
+  // the tail counts who is actually here, not who could be
+  expect(within(card).getByText("2")).toBeInTheDocument();
+});
+
+test("a campaign whose cast has never been on stage reads as empty, not as the world", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "winifred", name: "Winifred", default_version: "v1", versions: [], has_avatar: false },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Cast" })).closest("section")!;
+  await within(card).findByText(/nobody has been cast/i);
+  expect(within(card).queryByRole("link", { name: "Winifred" })).not.toBeInTheDocument();
+});
+
+// The appearance read is the one that decides membership, so losing it must
+// read as "could not be read" -- never as a silent fallback to the world list.
+test("a failed appearance read is not an empty cast", async () => {
+  (api.listAppearances as any).mockRejectedValue(new Error("nope"));
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "winifred", name: "Winifred", default_version: "v1", versions: [], has_avatar: false },
+  ]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Cast" })).closest("section")!;
+  await within(card).findByText(/could not be read/i);
+  expect(within(card).queryByRole("link", { name: "Winifred" })).not.toBeInTheDocument();
+  expect(within(card).queryByText(/nobody has been cast/i)).not.toBeInTheDocument();
+});
+
+// The cap is gone: a summary card that stopped at eight was hiding most of a
+// long-running campaign's cast, and portraits cost a row of wrapping rather
+// than a line of text each.
+test("every appeared face is shown, however many there are", async () => {
+  const many = Array.from({ length: 14 }, (_, i) => ({
+    id: `c${i}`, name: `Character ${i}`, default_version: "v1", versions: [],
+    has_avatar: false,
+  }));
+  (api.listCharacters as any).mockResolvedValue(many);
+  (api.listAppearances as any).mockResolvedValue(
+    many.map((c) => appeared("characters", c.id)));
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Cast" })).closest("section")!;
+  await within(card).findByRole("link", { name: "Character 0" });
+  expect(within(card).getByRole("link", { name: "Character 13" })).toBeInTheDocument();
+  // 14 faces plus the card's own "Everyone →" foot link
+  expect(within(card).getAllByRole("link")).toHaveLength(15);
+  expect(within(card).queryByText(/more\./)).not.toBeInTheDocument();
 });

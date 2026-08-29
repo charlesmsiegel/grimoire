@@ -6,6 +6,7 @@ import { api, type CampaignBudget, type CampaignMeta, type CharacterSummary,
 import type { ShellPayload } from "../api/types";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { PageShell, ColumnSection } from "../components/PageShell";
+import { errorText } from "../api/errors";
 import { MoneyColumns, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
@@ -53,13 +54,6 @@ function Card({ title, tail, children, foot }: {
 function count(v: number | null | undefined): string | undefined {
   return v === null || v === undefined ? undefined : String(v);
 }
-
-/** How many cast faces the card shows before it stops and links out.
- *
- *  A cap rather than a scroll: this is a summary card on a front door, and a
- *  campaign can seat a great many characters. The tail says the real number,
- *  so the cut is visible rather than silent. */
-const CAST_SHOWN = 8;
 
 /** How many absorbed changes the World changes card lists.
  *
@@ -134,6 +128,8 @@ export default function CampaignHub() {
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [chronicle, setChronicle] = useState<ChronicleEntry[]>([]);
   const [failed, setFailed] = useState(false);
+  /** Why the last scene delete did not happen, or null. */
+  const [delFailed, setDelFailed] = useState<string | null>(null);
   /** The three cards that need a read of their own, each `null` until it has
    *  answered and each allowed to stay `null` for good.
    *
@@ -193,8 +189,27 @@ export default function CampaignHub() {
     setIdeas(null); setIdeasFailed(false);
     setBudget(null);
     const scope = { kind: "campaign", id: cid } as const;
-    Promise.all([api.listCharacters(scope), api.listCampaignPCs(cid)])
-      .then(([chars, pcs]) => { if (live) setCast({ chars, pcs }); })
+    // THREE reads, and the third is the one that answers the question. Both
+    // lists are overlay unions -- the campaign's own records plus everything it
+    // inherits from its world -- so on their own they describe the world's
+    // population, not this campaign's. Membership is what the appearance record
+    // holds: who has actually been on stage here. The lists still supply the
+    // names and the avatars; the record decides who is in the card at all.
+    //
+    // Filtered here rather than served pre-joined, because `roster` is
+    // deliberately not name-resolving (a name costs a card read per actor at
+    // its locked version) and these two lists are already being read for the
+    // faces. Intersecting them costs nothing beyond the third request.
+    Promise.all([api.listCharacters(scope), api.listCampaignPCs(cid),
+                 api.listAppearances(cid)])
+      .then(([chars, pcs, roster]) => {
+        if (!live) return;
+        // Same `kind:id` spelling `faces` keys on, and the same two kinds the
+        // record stores its refs under.
+        const appeared = new Set(roster.map((r) => `${r.kind}:${r.id}`));
+        setCast({ chars: chars.filter((c) => appeared.has(`characters:${c.id}`)),
+                  pcs: pcs.filter((p) => appeared.has(`pcs:${p.id}`)) });
+      })
       .catch(() => { if (live) setCastFailed(true); });
     api.campaignChanges(cid)
       .then((rows) => { if (live) setChanges(rows); })
@@ -246,6 +261,24 @@ export default function CampaignHub() {
    *  wrap-up route can still answer; it falls back to the unnamed wording
    *  rather than inventing a name for a scene nobody can read. */
   const sceneTitle = new Map(scenes.map((s) => [s.id, s.title]));
+
+  /** Delete a scene from the hub's preview.
+   *
+   *  The same call and the same refusal as the scenes list -- see `remove`
+   *  there. Both reads are redone because the hub draws the campaign's counts
+   *  beside the rows, and a spliced-out row would leave "3 scenes" over two. */
+  async function removeScene(s: SceneMeta) {
+    if (!window.confirm(`Delete '${s.title}'? This cannot be undone.`)) return;
+    setDelFailed(null);
+    try {
+      await api.deleteScene(cid, s.id);
+    } catch (err) {
+      setDelFailed(`'${s.title}' was not deleted: ${errorText(err)}`);
+      return;
+    }
+    const [sc, sh] = await Promise.all([api.listScenes(cid), api.getShell(cid)]);
+    setScenes(sc); setShell(sh);
+  }
 
   const column = (
     <>
@@ -432,14 +465,24 @@ export default function CampaignHub() {
 
           <Card title="Scenes" tail={camp ? String(camp.scenes) : undefined}
                 foot={<Link to={`/campaigns/${cid}/scenes`}>All scenes →</Link>}>
+            {/* The row is a container now, not the link. It has to be: the ✕
+                is a button, and a button inside an anchor is invalid markup
+                that on a touch screen opens the scene you meant to delete. So
+                the title carries the link and the row carries the rest. */}
             {scenes.slice(0, 5).map((s) => (
-              <Link key={s.id} className="hub-row" to={`/campaigns/${cid}/scenes/${s.id}`}>
-                <span className="hub-row-title">{s.title}</span>
+              <div key={s.id} className="hub-row">
+                <Link className="hub-row-title" to={`/campaigns/${cid}/scenes/${s.id}`}>
+                  {s.title}
+                </Link>
                 <span className={"chip" + (s.done ? "" : " on")}>
                   {s.done ? "absorbed" : "open"}
                 </span>
-              </Link>
+                <button className="hub-row-del" aria-label={`Delete ${s.title}`}
+                        title="Delete this scene"
+                        onClick={() => { void removeScene(s); }}>✕</button>
+              </div>
             ))}
+            {delFailed && <p className="field-hint hub-row-error">{delFailed}</p>}
             {!scenes.length && <p className="field-hint">No scenes yet.</p>}
           </Card>
 
@@ -488,11 +531,15 @@ export default function CampaignHub() {
             )}
           </Card>
 
-          {/* Who is in this campaign. Faces rather than a count, because the
-              count is already on the world's own pages and what a front door
-              can add is recognition. A PC is marked as one: it is the record
-              the reader plays, and telling it apart from the cast at a glance
-              is the whole reason the chip is there. */}
+          {/* Who has appeared in this campaign -- not who could. Portraits and
+              nothing else, because the count is already on the world's own
+              pages and what a front door can add is recognition: a reader who
+              knows the game reads a wall of faces faster than a list of names,
+              and one who does not has the tooltip and the link. The PC keeps a
+              mark of its own -- it is the record the reader plays, and telling
+              it apart at a glance survives losing the caption that used to say
+              so. "Everyone" below is the escape hatch to the full world list,
+              which is a different question and says so. */}
           <Card title="Cast"
                 tail={cast ? String(cast.chars.length + cast.pcs.length) : undefined}
                 foot={<Link to={`/campaigns/${cid}/world?section=characters`}>
@@ -507,32 +554,34 @@ export default function CampaignHub() {
             ) : !cast.chars.length && !cast.pcs.length ? (
               <p className="field-hint">Nobody has been cast yet.</p>
             ) : (
-              <>
-                <div className="hub-faces">
-                  {faces(cast).slice(0, CAST_SHOWN).map((who) => (
-                    <Link key={who.key} className="hub-face"
-                          to={`/campaigns/${cid}/world`
-                              + `?section=${who.kind}&id=${who.id}`}>
-                      {who.avatar
-                        ? <img className="hub-face-avatar" alt=""
-                               src={api.actorImageUrl({ kind: "campaign", id: cid },
-                                                      who.kind, who.id,
-                                                      who.version, "avatar")
-                                    + who.token} />
-                        : <span className="initials-avatar" aria-hidden>
-                            {initials(who.name)}
-                          </span>}
-                      <span className="hub-face-name">{who.name}</span>
-                      {who.kind === "pcs" && <span className="chip on">PC</span>}
-                    </Link>
-                  ))}
-                </div>
-                {cast.chars.length + cast.pcs.length > CAST_SHOWN && (
-                  <p className="field-hint">
-                    {cast.chars.length + cast.pcs.length - CAST_SHOWN} more.
-                  </p>
-                )}
-              </>
+              // Every face, uncapped. A cap made sense while each face cost a
+              // name-width slot and the list was the whole world's; a campaign
+              // has as many faces as it has actually seated, and at portrait
+              // size they wrap into a few rows rather than a column of text.
+              <div className="hub-faces">
+                {faces(cast).map((who) => (
+                  // The name is the LABEL, not a caption: with no text under
+                  // the portrait the link would otherwise announce as its href,
+                  // and hovering is how a reader puts a name to a face they do
+                  // not recognise. `alt=""` because the label already names it
+                  // -- alt text as well would say it twice.
+                  <Link key={who.key} title={who.name}
+                        aria-label={who.kind === "pcs" ? `${who.name} (PC)` : who.name}
+                        className={"hub-face" + (who.kind === "pcs" ? " pc" : "")}
+                        to={`/campaigns/${cid}/world`
+                            + `?section=${who.kind}&id=${who.id}`}>
+                    {who.avatar
+                      ? <img className="hub-face-avatar" alt=""
+                             src={api.actorImageUrl({ kind: "campaign", id: cid },
+                                                    who.kind, who.id,
+                                                    who.version, "avatar")
+                                  + who.token} />
+                      : <span className="initials-avatar" aria-hidden>
+                          {initials(who.name)}
+                        </span>}
+                  </Link>
+                ))}
+              </div>
             )}
           </Card>
 
