@@ -3,18 +3,22 @@ import { api, type SceneSuggestion } from "../api/client";
 
 /** The generated half of the picker, and the one thing in it that costs money.
  *
- *  **Nothing here fires on its own.** Picking a scene mode used to spend a
- *  generation before the reader had asked for anything: the ranking is an LLM
- *  call, and it ran on the way to the picker whether or not the ideas were
- *  wanted, on the path taken to start every scene. The call is the same one it
- *  always was; what changed is that `suggest` is now the only thing that
- *  starts it, and a button is the only thing that calls `suggest`.
+ *  **One call fires on open, and it is the only unprompted one.** #319 put it
+ *  behind a button, on the argument that a generation should not run on the
+ *  path taken to start every scene; what that cost was the picker itself. Its
+ *  four slots are 2 greetings + 2 ideas, and this call produces both — the
+ *  ideas are its output, the greeting ranking rides along — so a picker that
+ *  has not made it has no ideas to show and no ordering to show greetings in,
+ *  and falls back to the first four the store listed, alphabetically. That is
+ *  not a cheaper picker, it is a wrong one. The spend is real and unchanged;
+ *  what it buys is now the default view rather than a second press.
  *
- *  So there are three states, not two, and the picker draws each differently:
- *  `asked` false is "nobody has asked" (no cards, no spinner, a button);
- *  `suggestions === null` is "generating"; and `[]` is "asked, nothing to
- *  offer" — a reply with no ideas, or one that failed. `picks` follows the
- *  same three states, because the greeting ranking rides on the same call.
+ *  There are still three states, and the picker draws each differently:
+ *  `asked` false is "nobody has asked" — reachable only without an LLM
+ *  connection now, since the open-call sets it; `suggestions === null` is
+ *  "generating"; and `[]` is "asked, nothing to offer" — a reply with no
+ *  ideas, or one that failed. `picks` follows the same three states, because
+ *  the greeting ranking rides on the same call.
  *
  *  A ranking is remembered for as long as the picker is open on the same
  *  reference scene, and re-earned otherwise: **Back** keeps it (that is why
@@ -78,12 +82,12 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
       .finally(() => { if (mine === seq.current) setBusy(false); });
   }, [cid, afterSid, ready, offscreen]);
 
-  // Back to idle whenever the question changes. While the call fired on mount,
-  // a new `cid` re-ran the mount effect and the answer replaced itself; with
-  // nothing firing on its own, campaign A's cards would simply sit there in
-  // campaign B until someone pressed. Bumping `seq` here is what stops a reply
-  // to the OLD question from landing on the new one -- and, since a discarded
-  // reply's `finally` no longer clears `busy`, this clears it.
+  // Back to idle whenever the question changes, and the effect below then asks
+  // the new one. Ordered that way on purpose: effects run in declaration order,
+  // so the clear lands before the ask and cannot wipe the pending state it
+  // sets. Bumping `seq` here is what stops a reply to the OLD question from
+  // landing on the new one -- and, since a discarded reply's `finally` no
+  // longer clears `busy`, this clears it.
   useEffect(() => {
     seq.current++;
     setAsked(false);
@@ -94,6 +98,41 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     setError(null);
     setBusy(false);
   }, [cid, afterSid, offscreen]);
+
+  // The picker opens on an answer. Its four slots are 2 greetings + 2 ideas,
+  // and BOTH halves come out of this one call -- the ideas are its output and
+  // the greeting ranking rides along -- so a picker that has not made it shows
+  // neither: no ideas, and greetings in whatever order the store listed them,
+  // which is the first four alphabetically. That was the reader's report, and
+  // it is what #319 traded away when it put this behind a button.
+  //
+  // So the call is back on open, and the cost that motivated #319 is real and
+  // unchanged: opening this chooser is one model call, on the path taken to
+  // start every scene. What is still deliberate is that this is the ONLY
+  // unprompted one -- `suggest` (the Regenerate button) is the reader's, and
+  // the opener in `CastPanel` generates nothing until asked.
+  //
+  // Keyed to the QUESTION, not to a boolean: it re-asks when the campaign, the
+  // reference scene or the mode changes, because each is a different question
+  // and the reset effect above has just cleared the last one's answer. A ref
+  // rather than `asked`, because StrictMode double-invokes effects in dev and
+  // no re-render separates the two -- the flag would still read false on the
+  // second pass and buy the same answer twice.
+  const autoAsked = useRef("");
+  useEffect(() => {
+    if (!ready) return;
+    const question = `${cid}/${afterSid ?? ""}/${offscreen}`;
+    if (autoAsked.current === question) return;
+    autoAsked.current = question;
+    // The pending pair, exactly as `suggest`'s first press sets them: the
+    // picker draws "Generating…" and "Choosing…" rather than two empty groups
+    // it is about to fill, and `rankPending` holds the greeting cards back so
+    // they cannot shuffle under the reader once the ranking lands.
+    setAsked(true);
+    setSuggestions(null);
+    setPicks(null);
+    run("", true);
+  }, [cid, afterSid, offscreen, ready, run]);
 
   /** The button — every press of it, the first and the fifth.
    *

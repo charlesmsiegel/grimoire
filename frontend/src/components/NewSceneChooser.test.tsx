@@ -50,23 +50,33 @@ beforeEach(() => {
   (api.dismissNotices as any).mockResolvedValue({ ok: true, marked: [] });
 });
 
-test("picking a mode spends no generation on ideas", async () => {
-  // The path taken to start every scene. It used to rank ideas here — an LLM
-  // call made before the reader asked for anything and without telling them —
-  // and the answer to that is a button, not a faster call (#428).
+test("picking a mode asks the ranked question, which is what fills the picker", async () => {
+  // The picker's four slots are 2 greetings + 2 ideas, and both halves come
+  // out of this one call. #428 put it behind a button; what that cost was the
+  // picker itself -- no ideas, and greetings in whatever order the store
+  // listed them.
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
 
-  // The picker arrives whole: greetings, the saved ledger, a blank scene, and
-  // the button that would spend the generation if it were pressed.
   await screen.findByText(/blank scene/i);
-  expect(await screen.findByRole("button", { name: /suggest ideas/i })).toBeEnabled();
-  expect(api.sceneSuggestions).not.toHaveBeenCalled();
-  // ...and it does not sit on "Generating…" waiting for a call nobody started.
-  expect(screen.queryByText(/generating/i)).not.toBeInTheDocument();
+  await waitFor(() => expect(api.sceneSuggestions)
+    .toHaveBeenCalledWith("c", "s1", false, "", true));
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+  // and the control is the one that REPLACES what the open call produced
+  expect(await screen.findByRole("button", { name: /regenerate/i })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /suggest ideas/i })).toBeNull();
 });
 
-test("pressing Suggest ideas is what makes the call, once, with the typed direction", async () => {
+test("the mode cards themselves spend nothing", async () => {
+  // The gate is `ready && playable`: the question is not asked until there is
+  // a mode to ask it in, so a reader who came here to import a transcript --
+  // or who closes the chooser at the mode step -- pays for nothing.
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  await screen.findByText("With your PC");
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+});
+
+test("Regenerate makes a second, unranked call carrying the typed direction", async () => {
   (api.sceneSuggestions as any).mockResolvedValue(
     { suggestions: [{ title: "At sea", premise: "", cast: [], location: null }],
       greeting_picks: [], next_date: "2026-01-01" });
@@ -75,15 +85,14 @@ test("pressing Suggest ideas is what makes the call, once, with the typed direct
 
   fireEvent.change(await screen.findByLabelText("Direction"),
                    { target: { value: "something at sea" } });
-  fireEvent.click(screen.getByRole("button", { name: /suggest ideas/i }));
+  fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
 
   expect(await screen.findByText("At sea")).toBeInTheDocument();
-  // Ranked (the last argument), because this press orders the greeting cards
-  // as well as generating the ideas.
-  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
-  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", false, "something at sea", true);
-  // and the control is now the one that replaces what it produced
-  expect(screen.getByRole("button", { name: /regenerate/i })).toBeInTheDocument();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(2);
+  // rank=false: the open call already ordered the greeting cards, and
+  // re-ranking would reshuffle them under the reader's cursor.
+  expect(api.sceneSuggestions)
+    .toHaveBeenLastCalledWith("c", "s1", false, "something at sea", false);
 });
 
 test("an offscreen chooser asks for offscreen ideas", async () => {
@@ -93,8 +102,8 @@ test("an offscreen chooser asks for offscreen ideas", async () => {
     { suggestions: [], greeting_picks: [], next_date: "" });
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
-  fireEvent.click(await screen.findByRole("button", { name: /suggest ideas/i }));
-  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", true, "", true);
+  await waitFor(() => expect(api.sceneSuggestions)
+    .toHaveBeenCalledWith("c", "s1", true, "", true));
 });
 
 test("a campaign switch drops the ideas the last one earned", async () => {
@@ -104,17 +113,18 @@ test("a campaign switch drops the ideas the last one earned", async () => {
   const { rerender } = render(
     <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
-  fireEvent.click(await screen.findByRole("button", { name: /suggest ideas/i }));
   await screen.findByText("Campaign A's idea");
 
-  // Nothing re-fetches on its own any more, so a ranking that outlived its
-  // campaign would sit in the next one's picker until somebody pressed --
-  // ideas cast from a world the reader has left.
+  // A ranking that outlived its campaign would be ideas cast from a world the
+  // reader has left, so the old answer is dropped and the new one asked for.
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [{ title: "Campaign B's idea", premise: "", cast: [], location: null }],
+      greeting_picks: [], next_date: "" });
   rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
-  expect(await screen.findByRole("button", { name: /suggest ideas/i })).toBeInTheDocument();
+  await screen.findByText("Campaign B's idea");
   expect(screen.queryByText("Campaign A's idea")).toBeNull();
-  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("b", "s1", false, "", true);
 });
 
 test("the import mode opens the import pane and asks for no suggestions", async () => {
@@ -276,7 +286,6 @@ test("Back preserves the typed direction and the regenerated cards, and issues n
       greeting_picks: [], next_date: "2026-01-01" });
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
-  fireEvent.click(await screen.findByRole("button", { name: /suggest ideas/i }));
   await screen.findByText("Undirected");
   expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
 
@@ -393,10 +402,10 @@ test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
   fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
   fireEvent.click(await screen.findByText("Cabal"));
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
-  // No date: the in-world date estimate rides on the suggestions call, and
-  // nobody pressed for one. The confirm form's "Last scene's date" button
-  // fills it from the campaign clock, which costs nothing (#428).
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "Cabal", undefined, true));
+  // With a date: the in-world estimate rides on the suggestions call, which
+  // the mode pick now makes, so the confirm form opens already carrying it.
+  await waitFor(() => expect(api.createScene)
+    .toHaveBeenCalledWith("c", "Cabal", "2026-01-01", true));
 });
 
 test("Cancel from the picker writes nothing", async () => {
@@ -458,7 +467,8 @@ test("changing cid discards the draft and returns to the mode step", async () =>
   fireEvent.click(await screen.findByText("Vow of silence"));
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   // the create call carries campaign b's own draft, not a's
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("b", "Vow of silence", undefined, false));
+  await waitFor(() => expect(api.createScene)
+    .toHaveBeenCalledWith("b", "Vow of silence", "2026-01-01", false));
   expect(api.createScene).not.toHaveBeenCalledWith("b", "Reckoning", expect.anything(), expect.anything());
 });
 

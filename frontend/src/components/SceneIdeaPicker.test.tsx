@@ -99,18 +99,54 @@ test("picking a generated card emits its resolved metadata", async () => {
     premise: "A debt-collector arrives." }));
 });
 
-// ---- ideas are asked for, not spent on arrival (issue #428) ----
+// ---- the four slots ----
 
-test("an unasked picker offers a button and nothing generated", async () => {
+test("a picker with a ranking shows two greetings and two ideas", async () => {
+  // The default view, and the whole point of asking on open: at most two
+  // greetings, the two the ranking chose, beside two generated ideas.
+  (api.availableGreetings as any).mockResolvedValue(
+    [1, 2, 3, 4, 5].map((n) => (
+      { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
+  renderPicker({
+    picks: ["g4", "g2"],
+    suggestions: [1, 2, 3, 4].map((n) => ({ ...SUGGESTION, title: `Idea ${n}` })),
+  });
+
+  // the ranked two, in the ranking's order -- not the first two alphabetically
+  expect(await screen.findByText("Greeting 4")).toBeInTheDocument();
+  expect(screen.getByText("Greeting 2")).toBeInTheDocument();
+  expect(screen.queryByText("Greeting 1")).toBeNull();
+  expect(screen.queryByText("Greeting 3")).toBeNull();
+  // and two ideas, not four
+  expect(screen.getByText("Idea 1")).toBeInTheDocument();
+  expect(screen.getByText("Idea 2")).toBeInTheDocument();
+  expect(screen.queryByText("Idea 3")).toBeNull();
+});
+
+test("fewer than two greetings gives the slots to the ideas", async () => {
+  (api.availableGreetings as any).mockResolvedValue(
+    [{ id: "g1", name: "Greeting 1", available: true, reasons: [], unlocked: false }]);
+  renderPicker({
+    picks: [],
+    suggestions: [1, 2, 3, 4].map((n) => ({ ...SUGGESTION, title: `Idea ${n}` })),
+  });
+
+  expect(await screen.findByText("Greeting 1")).toBeInTheDocument();
+  // three ideas, because only one greeting claimed a slot
+  expect(screen.getByText("Idea 3")).toBeInTheDocument();
+  expect(screen.queryByText("Idea 4")).toBeNull();
+});
+
+// ---- the states that survive the open call ----
+
+test("a picker that never asked offers the button and nothing generated", async () => {
+  // Reachable without an LLM connection, which is the only way the open call
+  // does not happen. The component still has to draw the state.
   renderPicker({ asked: false, suggestions: [] });
   await screen.findByText("Reckoning");
-  // The one control, before it has been pressed. No cards, no "Generating…",
-  // and nothing that suggests a call already went out.
   expect(screen.getByRole("button", { name: /suggest ideas/i })).toBeEnabled();
   expect(screen.queryByRole("button", { name: /regenerate/i })).toBeNull();
   expect(screen.queryByText(/generating/i)).toBeNull();
-  // ...and it says what pressing costs, before the press rather than after it.
-  expect(screen.getByText(/one model call/i)).toBeInTheDocument();
 });
 
 test("Suggest ideas is what starts the ranking, carrying the typed direction", async () => {
@@ -131,11 +167,10 @@ test("the button becomes Regenerate once ideas have been asked for", async () =>
   expect(screen.queryByRole("button", { name: /suggest ideas/i })).toBeNull();
 });
 
-test("the greeting group gets all four slots until ideas are asked for", async () => {
+test("the greeting group gets all four slots when nothing will generate", async () => {
   // The 4-slot budget is 2 greetings + 2 generated only when something will
-  // generate. Nothing will, until someone presses -- so the greetings should
-  // not be squeezed into half a modal to reserve room for cards that are not
-  // coming.
+  // generate. With no connection nothing will, so the greetings should not be
+  // squeezed into half a modal to reserve room for cards that are not coming.
   (api.availableGreetings as any).mockResolvedValue(
     [1, 2, 3, 4, 5].map((n) => (
       { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
@@ -145,9 +180,9 @@ test("the greeting group gets all four slots until ideas are asked for", async (
 });
 
 test("an unasked picker does not sit on Choosing… over the greeting cards", async () => {
-  // `picks` is `[]` (nobody asked), not `null` (a ranking is running), so the
+  // `picks` is `[]` (no ranking to come), not `null` (one is running), so the
   // greetings render in the order they arrived rather than waiting on a call
-  // that nobody started.
+  // that nobody is making.
   (api.availableGreetings as any).mockResolvedValue(
     [1, 2, 3].map((n) => (
       { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));

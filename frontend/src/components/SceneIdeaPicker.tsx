@@ -135,7 +135,9 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   }
 
   // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will
-  // generate -- which, until the reader presses for ideas, is every picker.
+  // generate -- no LLM connection, or a reply that came back empty. With one
+  // configured the ideas are fetched on open, so the ordinary picker is the
+  // 2 + 2 split and the greetings in it are the two the ranking chose.
   const wantGenerated = ready && asked && (suggestions === null || suggestions.length > 0);
   // with >2 available the LLM chooses; until it answers, show nothing rather than
   // cards that would shuffle. Empty/failed picks fall back to today's order.
@@ -282,14 +284,6 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
         </button>
       </div>
       {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
-      {/* Said before the press, not after it: this is the one place in the
-          picker where a click costs a model call, and the reader deciding
-          whether to make it is the one who needs to know. */}
-      {ready && !asked && (
-        <div className="field-hint">
-          Ideas are generated on request — pressing Suggest ideas is one model call.
-        </div>
-      )}
       {ready && asked && suggestions === null && <div className="field-hint">Generating…</div>}
       {ready && asked && suggestions !== null && suggestions.length === 0 && !busy && genError == null && (
         <div className="field-hint">No ideas came back — Regenerate, or steer it and try again.</div>
