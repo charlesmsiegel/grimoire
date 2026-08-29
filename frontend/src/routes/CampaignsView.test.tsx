@@ -85,11 +85,12 @@ test("a campaign nothing has been absorbed from counts zero rather than nothing"
   expect(c.getByRole("link", { name: /open/i })).toBeInTheDocument();
 });
 
-test("the most recently played campaign carries rename and delete, wherever it sits", async () => {
-  // A delete control on every card is one you can hit by accident on the wrong
-  // campaign, so exactly one card gets it -- and which one is decided by the
-  // stamps, not by the shelf's current order. Tidewrack is second under the
-  // default A-Z sort and still the campaign you were playing.
+test("every campaign card carries rename and delete, not just the one you played last", async () => {
+  // These used to live on the most-recently-played card alone, which made
+  // "delete that campaign" mean "play it first". The accident guard is the
+  // confirm naming the campaign, not the scarcity of the button. The glow
+  // still marks one card -- that is which campaign you meant, not which one
+  // you may act on.
   (api.listCampaigns as any).mockResolvedValue([
     { id: "old", name: "Saltmarch", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
     { id: "new", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
@@ -97,8 +98,25 @@ test("the most recently played campaign carries rename and delete, wherever it s
   renderView();
   await screen.findByText("Tidewrack");
   expect(card("Tidewrack")).toHaveClass("active");
-  expect(within(card("Tidewrack")).getByRole("button", { name: /delete/i })).toBeInTheDocument();
-  expect(within(card("Saltmarch")).queryByRole("button", { name: /delete/i })).toBeNull();
+  for (const name of ["Tidewrack", "Saltmarch"]) {
+    const c = within(card(name));
+    expect(c.getByRole("button", { name: `Delete ${name}` })).toBeInTheDocument();
+    expect(c.getByRole("button", { name: `Rename ${name}` })).toBeInTheDocument();
+  }
+});
+
+test("deletes a campaign that is not the most recently played one", async () => {
+  // The whole point of lifting the gate: the id that reaches the API is the
+  // card you clicked, not the glowing one.
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "old", name: "Saltmarch", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
+    { id: "new", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
+  ]);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderView();
+  await screen.findByText("Saltmarch");
+  fireEvent.click(screen.getByRole("button", { name: "Delete Saltmarch" }));
+  await waitFor(() => expect(api.deleteCampaign).toHaveBeenCalledWith("old"));
 });
 
 test("the shelf defaults to A-Z", async () => {

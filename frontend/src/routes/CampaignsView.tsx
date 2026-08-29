@@ -114,9 +114,14 @@ export default function CampaignsView() {
   // render while looking like it did not.
   const shown = useMemo(
     () => (world ? ranked.filter((c) => c.world === world) : ranked), [ranked, world]);
-  // The one you are most likely to have meant. It gets the border, the glow
-  // and the only rename/delete controls on the page: those are rare, and a ✕
-  // on every card is a ✕ you can hit by accident on the wrong campaign.
+  // The one you are most likely to have meant. It gets the border and the
+  // glow -- and only those. The rename/fork/delete strip used to hang off this
+  // id as well, on the reasoning that a ✕ on every card is a ✕ you can hit by
+  // accident on the wrong campaign. What that actually bought was a shelf
+  // where deleting a campaign meant playing it first, since the controls
+  // followed the stamps and nothing else. The accident guard is the confirm in
+  // `remove`, which names the campaign; this marks which one you meant, not
+  // which one you may act on.
   //
   // Computed from the stamps rather than read off row zero, which is what it
   // used to be. Row zero only meant "most recently played" while the shelf was
@@ -341,22 +346,17 @@ export default function CampaignsView() {
                   {c.last_scene ? "Continue" : "Open"} <span aria-hidden>→</span>
                 </Link>
                 {c.last_scene && <div className="campaign-last">{c.last_scene}</div>}
-                {c.id === activeId && (
-                  <div className="row-actions">
-                    <button aria-label={`Rename ${c.name}`}
-                            onClick={() => setRenaming({ id: c.id, name: c.name })}>✎</button>
-                    {/* Fork sits with the other two for placement, not for
-                        their reason: it destroys nothing, and the ✕'s
-                        one-card-only rule is about accidental deletion. It is
-                        here because this is the card you are most likely to
-                        have meant — and forking any other campaign is a click
-                        away on its own page, where you also get to choose the
-                        turn to branch at. */}
-                    <button aria-label={`Fork ${c.name}`} title="Fork this campaign"
-                            onClick={() => forkFromNow(c)}>⑂</button>
-                    <button aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>✕</button>
-                  </div>
-                )}
+                <div className="row-actions">
+                  <button aria-label={`Rename ${c.name}`}
+                          onClick={() => setRenaming({ id: c.id, name: c.name })}>✎</button>
+                  {/* Fork sits with the other two because it is the third thing
+                      you do to a campaign from outside it. Forking from here
+                      branches at the campaign as it stands; forking at a chosen
+                      turn is on the campaign's own page. */}
+                  <button aria-label={`Fork ${c.name}`} title="Fork this campaign"
+                          onClick={() => forkFromNow(c)}>⑂</button>
+                  <button aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>✕</button>
+                </div>
               </div>
             </article>
           ))}
