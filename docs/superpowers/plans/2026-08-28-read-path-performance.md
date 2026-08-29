@@ -514,7 +514,14 @@ def record_path(cid: str) -> Path:
 and make `record` itself memoized, so the shell's per-open-scene
 `player_names` calls parse the JSON once per change rather than once per
 call (the spec's "read the record once per request", solved for every
-caller at the source):
+caller at the source). **The memoized value is never handed out directly:**
+the appearance mutators mutate `record()`'s result in place before calling
+`_write` (`transitions.py` appends/removes scene ids, `versions.py` edits
+nested fields), so a shared cached object would let concurrent readers see
+an uncommitted change — and a failed `_write` would leave the mutated value
+served under the unchanged on-disk signature. Every call returns a deep
+copy of the cached parse; the copy is still well under the cost of the read
++ parse it replaces:
 
 ```python
 def record(cid: str) -> dict:
@@ -526,11 +533,14 @@ def record(cid: str) -> dict:
         return json.loads(p.read_text(encoding="utf-8"))
     if sig is None:  # pragma: no cover — absent_ok never yields None
         return compute()
-    # Frozen by convention: no caller mutates the record it is handed —
-    # writers go through _write. Verify with a grep for `record(` callers
-    # before landing; any mutator found copies first.
-    return statcache.memo("appearances_record", sig, compute)
+    # Deep-copied on the way out — the mutators edit what record() returns
+    # before persisting it, so the cached object itself must never escape.
+    return copy.deepcopy(statcache.memo("appearances_record", sig, compute))
 ```
+
+(add `import copy` at module scope). Add a test in `test_shell_memos.py`:
+mutate the dict `record(cid)` returns, call `record(cid)` again, and assert
+the mutation is not visible.
 
 - [ ] **Step 2: Write the failing tests** (create `backend/tests/test_shell_memos.py`)
 
@@ -729,8 +739,12 @@ def test_entity_rows_parsed_once(store, monkeypatch):
     from grimoire.store import entities
     root = store / "worlds" / "realm"
     (root / "locations").mkdir()
-    (root / "locations" / "harbor.md").write_text(
-        '---\nname: "Harbor"\n---\nA place.\n', encoding="utf-8")
+    # Fixture naming is a privacy rule (CLAUDE.md): never invent a new name —
+    # reuse a location name the test suite already uses. Find one with
+    # `grep -rn "locations" backend/tests/test_entities*.py | grep name` and
+    # substitute it for the id and name below.
+    (root / "locations" / "<existing-fixture-location-id>.md").write_text(
+        '---\nname: "<existing fixture location name>"\n---\nA place.\n', encoding="utf-8")
     _age_tree(root)
     calls = []
     real = entities.parse_frontmatter
@@ -873,11 +887,21 @@ def slim_pending(cid: str) -> bool:
 ```
 
 then in `campaigns/lifecycle.ensure_campaign_slim` (`lifecycle.py:159-164`),
-guard the entry: read the module's current first lines; if it parses
-`campaign.md` before deciding, put `if not read.slim_pending(cid): return`
-in front (it raises `CampaignNotFound` for a missing file today — preserve
-that: `slim_pending` returns `False` for a missing file, so keep the
-existing `mp.exists()` raise before the guard).
+make the already-migrated fast path cheap **without changing which states
+early-return**. Read the function's existing early-return condition first:
+`world_copy: overlay` alone is NOT it — an interrupted migration leaves
+`world_copy: overlay` together with a `slim_pruning` marker, and the
+function deliberately resumes `_finish` in that state. The memoized fast
+path must mirror the exact existing condition (overlay AND no pruning
+marker — read the code, don't trust this sentence's spelling of it), e.g.
+a `_slim_done(cid) -> bool` in `campaigns/read.py` memoized on
+`campaign.md`'s signature that returns precisely what the function's
+current early return decides, with the pruning-marker check included in the
+compute. `slim_pending` itself keeps its current meaning (it answers a
+different, writer-facing question — see its docstring) and simply gains the
+same memo around its parse. Add a test: a campaign carrying
+`world_copy: overlay` plus the pruning marker still runs the resume path
+(assert by monkeypatching `_finish` and seeing it called).
 
 - [ ] **Step 4: Run**
 
@@ -1037,19 +1061,33 @@ class Epoch:
 
 
 _live: weakref.WeakSet[Epoch] = weakref.WeakSet()
+#: Guards registration against the snapshot in bump_all: `list(_live)` while
+#: another thread registers can raise "Set changed size during iteration",
+#: and bump_all runs inside never-raises writers (revision.bump,
+#: usage.record) where an exception would report a committed mutation as
+#: failed. Held only long enough to add or copy — never across a bump.
+_LIVE_GUARD = threading.Lock()
 
 
 def register(e: Epoch) -> Epoch:
-    _live.add(e)
+    with _LIVE_GUARD:
+        _live.add(e)
     return e
 
 
 def bump_all() -> None:
     """Invalidate every live app's cached reads. Called by store-side writers
-    that hold no app handle; never raises (iteration over a WeakSet copy)."""
-    for e in list(_live):
+    that hold no app handle. NEVER raises: the snapshot is taken under the
+    guard, and bump() is a plain assignment."""
+    with _LIVE_GUARD:
+        live = list(_live)
+    for e in live:
         e.bump()
 ```
+
+(add `import threading` to the module imports). Add a test: register from
+one thread in a tight loop while calling `bump_all()` from another for a
+few thousand iterations; no exception is the assertion.
 
 Wiring:
 - `main.py` `create_app`, next to `runs.install_registry(app)`:
@@ -1582,7 +1620,14 @@ export function useCachedGet<T>(path: string | null, fetcher: () => Promise<T>):
     const gen = rc.generation(path);
     fetcherRef.current().then((fresh) => {
       rc.settle(path, gen, fresh);
-      if (live) setState({ data: fresh, stale: false, error: null });
+      // The generation fences the COMPONENT too, not only the module cache:
+      // a response that started before an invalidation must not replace the
+      // rendered state either — the invalidating mutation's own fresh
+      // refetch may already have painted, and this older settle would roll
+      // the screen back to pre-mutation data.
+      if (live && gen === rc.generation(path)) {
+        setState({ data: fresh, stale: false, error: null });
+      }
     }).catch((err) => {
       if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
         rc.evict(path);
@@ -1740,10 +1785,20 @@ Expected: FAIL (today every switch refires all rows).
 - Split the counts effect: effect A (full sweep) depends on
   `[campaign, cid, wid, groups, populated]` — **`section` removed** — and
   seeds from `countsMemory.get(scopeKey)` synchronously before fetching;
-  every settled count writes through to `countsMemory`.
-- Add a `prevSection` ref; a `select(key)` that changes section refreshes
-  only `prevSection.current`'s count (one `countOf` call) before updating
-  the ref.
+  every settled count writes through to `countsMemory`. The map does NOT
+  live in `WorldView.tsx`: it lives in `api/readCache.ts` (exported as
+  `countsMemory`) and is emptied by `clearAll()`, so a store-root move —
+  same-tab or broadcast from another tab — clears it with everything else;
+  a `scopeKey` carries no store identity, and a slug reused across
+  libraries must not paint the previous library's counts.
+- Add a `prevSection` ref that is synchronized by **every** section change,
+  not only `select`: the cross-navigation callbacks (`openCharacter`,
+  `openGreeting`, `openLore`, `openOwner`, `openEntity`, and any
+  query-param path) all call `setSection` directly, so route them through
+  one `changeSection(key, alsoRefresh?: IndexKey[])` helper that (1)
+  refreshes `prevSection.current`'s count plus any `alsoRefresh` kinds,
+  (2) updates the ref, (3) sets the section. `select` and every `open*`
+  callback call it; a raw `setSection` call outside the helper is a defect.
 - `openEntity(kind, id)` (the reclassify landing): refresh **both** the
   section being left and `kind` — two `countOf` calls — then set section.
   (Spec + open Codex thread: a reclassify decrements the source and
