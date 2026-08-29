@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from .. import characters, entities, greetings, pcs
+from pathlib import Path
+
+from .. import characters, entities, greetings, pcs, statcache
 from ..frontmatter import parse_frontmatter
 from ..paths import any_child_record, ensure_home, safe_id
 from . import paths
@@ -19,6 +21,25 @@ def has_worlds() -> bool:
     return any_child_record(paths._worlds_dir(), "world.md")
 
 
+def _world_row(d: Path, mp: Path) -> dict:
+    """The listing row derived from one world.md, memoized by stat.
+
+    Memoized as the row minus `id` and `counts`. The `id` is the directory
+    name, not file content. The `counts` are live reads (correctness-critical).
+    Treated as frozen by every caller — `list_worlds` copies it into a fresh
+    dict per call, so nothing downstream can mutate the cached value.
+    """
+    def compute() -> dict:
+        meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        return {"name": meta.get("name", d.name),
+                "created": meta.get("created", ""),
+                "updated": meta.get("updated", "")}
+    sig = statcache.signature(mp)
+    if sig is None:
+        return compute()
+    return statcache.memo("world_row", sig, compute)
+
+
 def list_worlds() -> list[dict]:
     ensure_home()
     out: list[dict] = []
@@ -30,12 +51,9 @@ def list_worlds() -> list[dict]:
             # on the caller's next call (#259 review)
             if not d.is_dir() or not mp.exists() or not safe_id(d.name):
                 continue
-            meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
             out.append({
                 "id": d.name,
-                "name": meta.get("name", d.name),
-                "created": meta.get("created", ""),
-                "updated": meta.get("updated", ""),
+                **_world_row(d, mp),
                 "counts": {**entities.entity_counts(d), "characters": characters.character_count(d),
                            "pcs": pcs.pc_count(d), "greetings": greetings.greeting_count(d)},
             })

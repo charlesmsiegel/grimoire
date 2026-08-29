@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .. import atomic
+from .. import atomic, statcache
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import any_child_record, ensure_home, now_iso, safe_id
 from ..worlds import paths as worlds_paths
@@ -107,6 +107,46 @@ def _first_paragraph(body: str) -> str:
     return ""
 
 
+def _campaign_row(d: Path, mp: Path) -> dict:
+    """The listing row derived from one campaign.md, memoized by stat.
+
+    Memoized as a WHOLE ROW minus `id` (which is the directory name, not file
+    content). Treated as frozen by every caller — `list_campaigns` copies it
+    into a fresh dict per call, so nothing downstream can mutate the cached
+    value.
+    """
+    def compute() -> dict:
+        meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        return {
+            "name": meta.get("name", d.name),
+            "world": meta.get("world", ""),
+            "created": meta.get("created", ""),
+            "updated": meta.get("updated", ""),
+            # Lineage (#72). Read here rather than derived, so the shelf can
+            # draw the fork tree from this one call. "" for a campaign that
+            # was created rather than forked -- and for one whose parent has
+            # since been deleted, which the reader decides for itself: this
+            # reports what campaign.md says, and a `parent` naming nothing
+            # simply finds no row to hang under.
+            "parent": meta.get(PARENT_KEY, ""),
+            # The scene a retrospective fork was cut at, "" for a fork from
+            # where the campaign stood. It is what makes the two kinds of
+            # fork distinguishable to a reader, which matters because only
+            # one of them is an approximation of a past state.
+            "forked_from_scene": meta.get(FORKED_AT_KEY, ""),
+            # The pitch the campaign was started from. The list has always
+            # parsed the body and thrown it away; the campaigns page shows
+            # it as each card's blurb, so a shelf of campaigns reads as a
+            # shelf of books rather than a list of slugs. First paragraph
+            # only -- this is a card, not the record.
+            "blurb": _first_paragraph(body),
+        }
+    sig = statcache.signature(mp)
+    if sig is None:            # vanished between the exists() check and here
+        return compute()
+    return statcache.memo("campaign_row", sig, compute)
+
+
 def list_campaigns() -> list[dict]:
     ensure_home()
     out: list[dict] = []
@@ -118,32 +158,7 @@ def list_campaigns() -> list[dict]:
             # stray directory can't abort a listing -- or the startup migration
             if not d.is_dir() or not mp.exists() or not safe_id(d.name):
                 continue
-            meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-            out.append({
-                "id": d.name,
-                "name": meta.get("name", d.name),
-                "world": meta.get("world", ""),
-                "created": meta.get("created", ""),
-                "updated": meta.get("updated", ""),
-                # Lineage (#72). Read here rather than derived, so the shelf can
-                # draw the fork tree from this one call. "" for a campaign that
-                # was created rather than forked -- and for one whose parent has
-                # since been deleted, which the reader decides for itself: this
-                # reports what campaign.md says, and a `parent` naming nothing
-                # simply finds no row to hang under.
-                "parent": meta.get(PARENT_KEY, ""),
-                # The scene a retrospective fork was cut at, "" for a fork from
-                # where the campaign stood. It is what makes the two kinds of
-                # fork distinguishable to a reader, which matters because only
-                # one of them is an approximation of a past state.
-                "forked_from_scene": meta.get(FORKED_AT_KEY, ""),
-                # The pitch the campaign was started from. The list has always
-                # parsed the body and thrown it away; the campaigns page shows
-                # it as each card's blurb, so a shelf of campaigns reads as a
-                # shelf of books rather than a list of slugs. First paragraph
-                # only -- this is a card, not the record.
-                "blurb": _first_paragraph(body),
-            })
+            out.append({"id": d.name, **_campaign_row(d, mp)})
     out.sort(key=lambda m: m["updated"], reverse=True)
     return out
 
