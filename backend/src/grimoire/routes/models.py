@@ -924,3 +924,87 @@ class PinRule(BaseModel):
     scope: Literal["scene", "campaign"] = "scene"
     sid: str = ""
     ttl_posts: int = 0
+
+
+# ---- hand edits to the continuity ledger (routes/ledger.py) ------------------
+#
+# Every optional field here is `| None = None` rather than `= ""`, and the
+# distinction is load-bearing rather than stylistic: the store mutators these
+# reach read a blank as "keep what is stored" (a title, a status) or as "clear
+# it" (a commitment's due date), so a model that defaulted to `""` would send
+# an instruction the caller never gave. None means the payload said nothing.
+
+
+class ThreadSave(BaseModel):
+    """A plot thread. Blank `title` or an unrecognized `status` keeps the stored
+    value, per `plot.set_movement`; `beat` is APPENDED when present, since a
+    beat is a thing that happened and there is no editing the list in place."""
+    title: str = ""
+    status: str = ""
+    beat: str = ""
+    #: The scene the thread was last moved in. None leaves it where it is —
+    #: which is what closing a thread from the ledger should do.
+    scene: str | None = None
+
+
+class CommitmentSave(BaseModel):
+    """A commitment. `due` is three-valued all the way down to the store: None
+    keeps the stored deadline, `""` clears it, text sets it."""
+    title: str = ""
+    kind: str = ""
+    status: str = ""
+    due: str | None = None
+    beat: str = ""
+    scene: str | None = None
+
+
+class FactSave(BaseModel):
+    """A correction to a stored fact — the user's edit, never the pass's. Each
+    field is None to leave it alone, so one can be fixed without restating the
+    others. Says nothing about the lifecycle: retiring has its own route."""
+    text: str | None = None
+    date: str | None = None
+    scene: str | None = None
+
+
+class FactRecord(BaseModel):
+    """A fact recorded by hand. `supersedes` retires the named fact and points
+    the two at each other in one write, exactly as an extracted one does."""
+    text: str = ""
+    date: str = ""
+    scene: str = ""
+    supersedes: str = ""
+
+
+class FactRetire(BaseModel):
+    """The scene that ended a fact. Blank for a retirement that belongs to no
+    scene, which a hand edit legitimately does not."""
+    scene: str = ""
+
+
+class RelationshipSave(BaseModel):
+    """Where two people stand. `bond` present addresses the undirected record
+    and the meters are ignored; absent, this is the directional feeling `a`
+    holds toward `b`.
+
+    Every editable field is None-by-default for the reason the rest of this
+    block is: `set_feeling` writes whole records, so a payload that only moves
+    the note and defaulted the meters to 0 would silently reset a standing of
+    4/2/1 to nothing. The route merges what is omitted with what is stored.
+    """
+    a: str = ""
+    b: str = ""
+    trust: int | None = None
+    affection: int | None = None
+    tension: int | None = None
+    note: str | None = None
+    bond: str | None = None
+    scene: str = ""
+
+
+class ChronicleLineSave(BaseModel):
+    """A scene's one-line recap and its in-fiction date. The long `summary` and
+    the absorb metadata are not editable here — re-absorbing is how a reading
+    of the transcript changes."""
+    one_line: str | None = None
+    date: str | None = None

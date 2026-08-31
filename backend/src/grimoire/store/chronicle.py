@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 from .. import prompts
-from . import atomic, entities, overlay
+from . import atomic, entities, locks, overlay
 from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
@@ -48,6 +48,62 @@ def absorb(cid: str, record: dict) -> dict:
     data[record["id"]] = stored
     atomic.write_text(_chronicle_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
     return stored
+
+
+def get_record(cid: str, sid: str) -> dict | None:
+    """One scene's chronicle record, or None. The snapshot `store/undo.py`
+    takes before a hand edit, and the shape `restore` puts back."""
+    data = read_chronicle(cid)
+    if not isinstance(data, dict):
+        return None
+    rec = data.get(sid)
+    return rec if isinstance(rec, dict) else None
+
+
+def set_line(cid: str, sid: str, one_line: str | None = None,
+             date: str | None = None) -> bool:
+    """Correct a scene's one-line recap or its in-fiction date. False when the
+    scene has no chronicle record -- nothing has absorbed it yet.
+
+    Only the two fields a reader sees on the ledger's Timeline. `summary`, the
+    long form, and the absorb metadata around it are left alone: this is a
+    typo fix on the line that shows, not a way to rewrite what a scene was
+    absorbed as. Re-absorbing the scene is that, and it replaces the record.
+
+    `absorbed` is deliberately NOT restamped. It records when the pass read the
+    transcript, which a hand edit does not change, and moving it would make a
+    corrected line look like a fresh extraction to anything reading the stamp.
+    """
+    with locks.campaign_lock(cid):
+        data = read_chronicle(cid)
+        if not isinstance(data, dict):
+            return False
+        rec = data.get(sid)
+        if not isinstance(rec, dict):
+            return False
+        if one_line is not None:
+            rec["one_line"] = one_line.strip()
+        if date is not None:
+            rec["date"] = date.strip()
+        atomic.write_text(_chronicle_path(cid),
+                          json.dumps(data, indent=2, sort_keys=True) + "\n")
+        return True
+
+
+def restore(cid: str, sid: str, record: dict | None) -> None:
+    """Put one scene's record back, or drop it when there was none —
+    `store/undo.py`'s reversal shape, matching `plot.restore`."""
+    with locks.campaign_lock(cid):
+        data = read_chronicle(cid)
+        if not isinstance(data, dict):
+            data = {}
+        if record is None:
+            if data.pop(sid, None) is None:
+                return
+        else:
+            data[sid] = record
+        atomic.write_text(_chronicle_path(cid),
+                          json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def forget(cid: str, sid: str) -> bool:

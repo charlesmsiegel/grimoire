@@ -83,8 +83,10 @@ from contextlib import contextmanager
 from . import (
     changes,
     characters,
+    chronicle,
     commitments,
     dossiers,
+    facts,
     groupstate,
     journal,
     locks,
@@ -202,6 +204,10 @@ def probe(cid: str, edit: dict) -> dict | None:
         return {"w": "plot", "id": tid}
     if kind == "commitment" and tid:
         return {"w": "commitment", "id": tid}
+    if kind == "fact" and tid:
+        return {"w": "fact", "id": tid}
+    if kind == "chronicle" and tid:
+        return {"w": "chronicle", "id": tid}
     return None
 
 
@@ -294,6 +300,14 @@ def read_value(cid: str, target: dict):
         return plot.get(cid, target["id"])
     if w == "commitment":
         return commitments.get(cid, target["id"])
+    if w == "fact":
+        # The WHOLE record, not its text: a correction can move text, date and
+        # scene in one write, and a hand delete takes the lifecycle fields with
+        # it. `None` for a fact that is not there is a real reading -- it is
+        # what a reversal of a create has to put back.
+        return facts.get(cid, target["id"])
+    if w == "chronicle":
+        return chronicle.get_record(cid, target["id"])
     raise UndoError(f"no reversal is defined for {w!r}")
 
 
@@ -334,6 +348,10 @@ def write_value(cid: str, target: dict, value) -> None:
         plot.restore(cid, target["id"], value)
     elif w == "commitment":
         commitments.restore(cid, target["id"], value)
+    elif w == "fact":
+        facts.restore(cid, target["id"], value)
+    elif w == "chronicle":
+        chronicle.restore(cid, target["id"], value)
     else:
         raise UndoError(f"no reversal is defined for {w!r}")
 

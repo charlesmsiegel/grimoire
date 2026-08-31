@@ -493,6 +493,26 @@ would answer neither question.
   / `# paths-ok: <reason>` / `# lock-order-ok: <reason>` /
   `# lock-domain-ok: <reason>` — a marker with no
   reason fails, deliberately, and each guard caps how many exist.
+- **Grimoire never edits a fact; the user may.** `store/facts.py` is an
+  append-with-lifecycle ledger, and the absorb pass's whole vocabulary for a
+  fact that stopped being true is `record`, `retire` and supersession — a pass
+  that rewrote a row in place would turn the ledger into `state.md` with extra
+  keys and lose the supersession history it exists to keep. That was written
+  as "facts are not edited", which was always a rule about the WRITER: a
+  mistyped fact is not a fact that stopped being true, and retiring it would
+  put a correction into the history as though the fiction had changed. So
+  `facts.set_text` and `facts.forget` are the user's, reached only from
+  `routes/ledger.py`, and `test_absorb_writer_guard.py` fails if anything
+  under `store/absorb/` calls either. That guard resolves import bindings
+  rather than comparing spellings — an alias walked past three earlier
+  versions of it.
+- **Hand edits to the ledger go through `routes/ledger.py`**, which takes the
+  campaign lock the absorb save already holds across its whole sequence and
+  wraps every write in `store.undo.journalled` so it lands in the journal as
+  `manual` and can be reversed from the play view's Changes panel. Two of the
+  ledger's seven sections are deliberately not editable: the relationship
+  history and the change log record what happened, and editing a log falsifies
+  history rather than correcting state.
 - **The voice anchor is a PROMPT input now, not only a judge input.** It
   renders per present character in `voice_anchors.j2` and is also what
   `voice_drift` judges a played scene against — both through

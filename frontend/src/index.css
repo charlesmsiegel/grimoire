@@ -3288,6 +3288,77 @@ a.column-back { text-decoration: none; }
    disagree about. */
 .ledger-table tr.retired td { opacity: 0.55; }
 .ledger-table tr.retired .ledger-what { text-decoration: line-through; }
+
+/* ---- editing a row by hand ---- */
+/* Until these controls the only writer of any of this was the absorb pass, so
+   a thread the model never noticed had closed stayed open forever. The rules
+   the design settled on and this stylesheet has to keep:
+
+   - The actions column exists only where a row IS a record. The relationship
+     history and the change log record what happened, and a column of blanks
+     beside them would read as a feature that failed to load.
+   - The buttons stay quiet until the row is hovered or one of them is focused,
+     the same discipline the character page's per-field Edit uses: a table of
+     rows each shouting two controls is unreadable, and the reader is here to
+     read the ledger first.
+   - The editor opens UNDER the row rather than over it, because the record
+     being corrected is usually legible only in context — a fact reads
+     differently beside the fact that superseded it. */
+.ledger-col-do { width: 116px; }
+.ledger-do { text-align: right; white-space: nowrap; }
+.row-do {
+  background: none; border: 0; cursor: pointer; padding: 2px 6px;
+  color: transparent; transition: color 140ms ease-out;
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+}
+.ledger-table tr:hover .row-do, .row-do:focus-visible { color: var(--muted); }
+.row-do:hover:not(:disabled) { color: var(--accent); }
+.ledger-table tr.editing .row-do { color: var(--accent); }
+/* The row being edited keeps its bottom border off, so the row and its editor
+   read as one block rather than two. */
+.ledger-table tr.editing td { border-bottom: 0; }
+.ledger-editor-row td { padding: 0 12px 18px 0; }
+
+.ledger-editor {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 20px; align-items: start;
+  padding: 16px; border: 1px solid var(--line); border-radius: 3px;
+  background: var(--surface);
+}
+.ledger-field { display: flex; flex-direction: column; gap: 4px; }
+.ledger-field input, .ledger-field select, .ledger-field textarea {
+  width: 100%; font-size: 14px;
+}
+.ledger-field textarea { resize: vertical; }
+/* A prose field takes the whole width of the grid; the short ones share a row.
+   `1 / -1` rather than a column count, so this holds however many columns the
+   viewport gave the grid. */
+.ledger-field:has(textarea) { grid-column: 1 / -1; }
+.ledger-editor-actions {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding-top: 4px; border-top: 1px solid var(--line);
+}
+/* Pushed away from Save and Cancel: it is the one control here that cannot be
+   taken back by pressing the other one. */
+.ledger-editor-actions .danger { margin-left: auto; color: var(--alert); }
+.ledger-editor-actions .danger:hover:not(:disabled) { border-color: var(--alert); }
+.ledger-editor-actions .field-hint { flex: 1 1 100%; }
+.ledger-editor-error {
+  grid-column: 1 / -1; margin: 0;
+  font-family: var(--fb); font-size: 13px; line-height: 1.5; color: var(--alert);
+}
+
+/* A create opens above the table, where the reader is looking after clicking
+   the button that made it. */
+.ledger-create { margin-bottom: 22px; }
+.ledger-create .eyebrow { margin-bottom: 8px; }
+
+@media (max-width: 720px) {
+  /* Nothing to hover with, so the row controls are simply always visible. */
+  .row-do { color: var(--muted); }
+  .ledger-col-do { width: 92px; }
+}
 /* Why it is dimmed and not gone — the annotation naming the scene that ended
    it and the fact that replaced it. `--alert` is the token for "this changed",
    which is exactly what a retirement is. */

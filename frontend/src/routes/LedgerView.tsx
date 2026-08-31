@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { agingLabel } from "../aging";
+import { errorText } from "../api/errors";
 import {
   api, type Ledger, type RecordChange, type RelationshipChange, type RetiredFact,
   type StandingFact,
 } from "../api/client";
+import { LedgerRowEditor, type Draft } from "../components/ledger/LedgerRowEditor";
+import {
+  blankSpec, chronicleSpec, commitmentSpec, factSpec, relationshipSpec, threadSpec,
+  type EditSpec,
+} from "../components/ledger/specs";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
@@ -35,11 +41,21 @@ type Row = {
   /** The alert colour — a threat is the one thing here that is owed AGAINST
    *  you, which the design gives its own weight for that reason. */
   alert?: boolean;
+  /** What this row is, when it is a record that can be changed by hand.
+   *
+   *  Absent on the two sections that are LOGS — the relationship history and
+   *  the change list record what happened, and editing a log falsifies history
+   *  rather than correcting state. Undo is how something in them is reversed,
+   *  and it already exists. */
+  edit?: EditSpec;
 };
 
 const SECTIONS: { key: SectionKey; label: string; eyebrow: string;
                   columns: [string, string, string, string] }[] = [
-  { key: "facts", label: "Standing facts", eyebrow: "DATED TRUTHS · RETIRED, NEVER EDITED",
+  // "NEVER EDITED" was the rule until the ledger became hand-editable, and it
+  // was always a rule about the WRITER rather than the record: the absorb pass
+  // retires and supersedes, and the person whose campaign it is may correct.
+  { key: "facts", label: "Standing facts", eyebrow: "DATED TRUTHS · RETIRED BY PLAY, CORRECTED BY YOU",
     columns: ["ID", "FACT", "AS OF", "SCENE"] },
   { key: "threads", label: "Threads", eyebrow: "OPEN AND ADVANCED · PLOT.JSON",
     columns: ["", "THREAD", "STATUS", "SCENE"] },
@@ -119,7 +135,7 @@ function factRows(ledger: Ledger, showRetired: boolean): Row[] {
     seen.add(f.id);
     const ended = "superseded_by" in f ? f : null;
     out.push({
-      key: f.id, mark: f.id, retired, what: f.text,
+      key: f.id, mark: f.id, retired, what: f.text, edit: factSpec(f, retired),
       note: ended
         ? `RETIRED IN ${ended.retired_scene.title || "AN UNKNOWN SCENE"}`
           + (ended.superseded_by ? ` · REPLACED BY ${ended.superseded_by}` : "")
@@ -165,7 +181,7 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
   // same thing this table showed before aging existed.
   if (section === "threads")
     return ledger.plot.map((t) => ({
-      key: t.id, mark: "▸", what: t.title,
+      key: t.id, mark: "▸", what: t.title, edit: threadSpec(t),
       note: joinNote(agingLabel(t.aging), t.latest_beat),
       // No `alert` here: a thread has no deadline, so it can only ever be
       // stale, and colouring a row for a state it cannot reach would imply the
@@ -176,7 +192,7 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
     return ledger.commitments.map((c) => ({
       key: c.id, mark: c.kind === "threat" ? "◆" : "◇",
       alert: c.kind === "threat" || c.aging?.state === "overdue",
-      what: c.title,
+      what: c.title, edit: commitmentSpec(c),
       note: joinNote(agingLabel(c.aging), c.kind.toUpperCase(), c.latest_beat),
       asOf: c.due || "NO DEADLINE", scene: c.scene.title,
     }));
@@ -188,6 +204,7 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       // B feels back.
       mark: r.kind === "bond" ? "↔" : "→",
       what: `${r.a_name} ${r.kind === "bond" ? "↔" : "→"} ${r.b_name}`,
+      edit: relationshipSpec(r),
       note: r.kind === "bond"
         ? (r.type ? r.type.toUpperCase() : "BOND")
         : `TRUST ${r.trust} · AFFECTION ${r.affection} · TENSION ${r.tension}`
@@ -223,8 +240,19 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
     }));
   return ledger.chronicle.map((e) => ({
     key: e.id, mark: "·", what: e.one_line, asOf: e.date, scene: e.title,
+    edit: chronicleSpec(e.id, e.one_line, e.date),
   }));
 }
+
+/** Which sections can have a record written into them by hand, and what to
+ *  call the thing being written. The timeline is absent because its rows belong
+ *  to scenes; the two logs are absent because they record what happened. */
+const NEW_IN: Partial<Record<SectionKey, "thread" | "commitment" | "fact" | "relationship">> = {
+  facts: "fact", threads: "thread", commitments: "commitment", relationships: "relationship",
+};
+const NEW_LABEL: Partial<Record<SectionKey, string>> = {
+  facts: "fact", threads: "thread", commitments: "commitment", relationships: "standing",
+};
 
 /** What the ledger looks like with nothing in it yet. Named per section rather
  *  than one "nothing here": an empty room should still say where you are and
@@ -263,6 +291,24 @@ export default function LedgerView() {
    *  than the token pair so the `<select>` has a value it can round-trip; the
    *  tokens come back off the row when the read is made. */
   const [pairId, setPairId] = useState("");
+  /** The row whose editor is open, by `<kind>:<id>`. One at a time, and the
+   *  same reason the character page holds one field open: these writes are
+   *  whole-record, so two editors is one of them losing. */
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  /** A `+ New …` in progress, or null. Kept apart from `openRow` so opening a
+   *  create does not look like editing whichever row shares its id ("" for a
+   *  record that has none yet). */
+  const [creating, setCreating] = useState<EditSpec | null>(null);
+  const [busy, setBusy] = useState(false);
+  /** A refusal from the server, shown inside the editor it belongs to — a 409
+   *  on a fact somebody else already retired is about that row, and at the top
+   *  of the page it would be about nothing in particular. */
+  const [writeError, setWriteError] = useState<string | null>(null);
+  /** Bumped after every hand edit so the ledger, the change log and the
+   *  relationship timeline are all re-read: one edit can move rows in three of
+   *  them at once (a retired fact leaves `facts` and joins `retired`, and every
+   *  edit adds a row to Recent changes). */
+  const [epoch, setEpoch] = useState(0);
 
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
 
@@ -285,7 +331,7 @@ export default function LedgerView() {
       .then((c) => { if (live) setChanges({ cid, data: c }); })
       .catch(() => { if (live) setChanges({ cid, data: [] }); });
     return () => { live = false; };
-  }, [cid]);
+  }, [cid, epoch]);
 
   const ledger = loaded && loaded.cid === cid ? loaded.data : null;
   const changeRows = changes && changes.cid === cid ? changes.data : null;
@@ -300,6 +346,13 @@ export default function LedgerView() {
   }, [ledger, pairId]);
 
   useEffect(() => { setPairId(""); }, [cid]);
+  // An editor belongs to one row of one section: carried across either it
+  // would be aimed at whatever happens to share its id.
+  useEffect(() => {
+    setOpenRow(null);
+    setCreating(null);
+    setWriteError(null);
+  }, [cid, section]);
 
   // Its own read, its own failure, and — unlike the other two — its own
   // dependency, because the SERVER does the narrowing. It has to: the route
@@ -317,7 +370,130 @@ export default function LedgerView() {
     // and the selected id, so its identity moves only when one of those does —
     // and null when nothing is selected, which is the same null across the
     // ledger's own load, so no read is repeated for it.
-  }, [cid, pair]);
+  }, [cid, pair, epoch]);
+
+  /** Run one hand edit, then re-read everything it could have moved.
+   *
+   *  Every write here is journalled server-side as a MANUAL edit and is
+   *  reversible through the ordinary undo route, which is why nothing in this
+   *  component keeps an undo of its own — the reversal lives in the play
+   *  view's Changes panel, under History, where every journalled change
+   *  already does.
+   *
+   *  Note that this is NOT the ledger's own Recent-changes section: that one
+   *  reads `store/changes.py`, the rolling per-record view of what the last
+   *  absorb wrote. A hand edit does not belong in it, because that log is
+   *  about what the pass extracted.
+   */
+  async function run(write: () => Promise<unknown>, thenClose = true) {
+    // Single-flight: `busy` disables every control, but a keyboard submit that
+    // beat the re-render would otherwise start a second write.
+    if (busy) return;
+    setBusy(true);
+    setWriteError(null);
+    try {
+      await write();
+      if (thenClose) { setOpenRow(null); setCreating(null); }
+      setEpoch((n) => n + 1);
+    } catch (err: unknown) {
+      setWriteError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const num = (d: Draft, k: string) => {
+    // A meter is typed, so it can hold anything; the store clamps, and NaN
+    // must not reach it as `null`.
+    const n = Number(d[k]);
+    return Number.isFinite(n) ? Math.max(0, Math.min(5, Math.round(n))) : 0;
+  };
+
+  /** Save one record, whichever kind it is. `spec.id` empty means a create.
+   *
+   *  `d` carries ONLY the fields the reader changed (`LedgerRowEditor` filters
+   *  it), and that is what makes a save safe against an absorb landing while
+   *  the editor was open: every store mutator behind these reads an absent
+   *  field as "keep what is stored", so a title fix cannot revert a status the
+   *  pass advanced in the meantime. A field the reader emptied is present and
+   *  blank, which is how a deadline is cleared.
+   *
+   *  A create is the exception and passes everything, because there is nothing
+   *  stored to keep.
+   */
+  function save(spec: EditSpec, d: Draft) {
+    const isNew = !spec.id;
+    const full = isNew ? { ...spec.initial, ...d } : d;
+    void run(() => {
+      if (spec.kind === "thread") {
+        return isNew
+          ? api.ledgerCreateThread(cid, {
+            title: full.title ?? "", status: full.status ?? "",
+            beat: full.beat ?? "", scene: full.scene ?? "" })
+          : api.ledgerSaveThread(cid, spec.id, d);
+      }
+      if (spec.kind === "commitment") {
+        return isNew
+          ? api.ledgerCreateCommitment(cid, {
+            title: full.title ?? "", kind: full.kind ?? "", status: full.status ?? "",
+            due: full.due ?? "", beat: full.beat ?? "", scene: full.scene ?? "" })
+          : api.ledgerSaveCommitment(cid, spec.id, d);
+      }
+      if (spec.kind === "fact") {
+        return isNew
+          ? api.ledgerRecordFact(cid, { text: full.text ?? "", date: full.date ?? "",
+                                        scene: full.scene ?? "" })
+          // Only what moved. The lifecycle is not here either way: retiring is
+          // its own action, and says something different.
+          : api.ledgerSaveFact(cid, spec.id, d);
+      }
+      if (spec.kind === "chronicle") {
+        return api.ledgerSaveChronicleLine(cid, spec.id, d);
+      }
+      // A relationship, either shape. On a create the two actors come out of
+      // the form; on an edit they are the row's own, since the pair is the
+      // record's identity and is not editable into somebody else. The meters
+      // are sent only when they moved — the route merges the rest from the
+      // stored record rather than defaulting them to zero.
+      const a = isNew ? (full.a ?? "") : (spec.pair?.a ?? "");
+      const b = isNew ? (full.b ?? "") : (spec.pair?.b ?? "");
+      const bond = (full.bond ?? "").trim();
+      if (bond || spec.kind === "bond") {
+        return api.ledgerSaveRelationship(cid, { a, b, bond, scene: full.scene ?? "" });
+      }
+      const meters: Record<string, number> = {};
+      for (const k of ["trust", "affection", "tension"]) {
+        if (isNew || k in d) meters[k] = num(full, k);
+      }
+      return api.ledgerSaveRelationship(cid, {
+        a, b, ...meters, ...(isNew || "note" in d ? { note: full.note ?? "" } : {}),
+      });
+    });
+  }
+
+  function remove(spec: EditSpec) {
+    void run(() => {
+      if (spec.kind === "thread") return api.ledgerDeleteThread(cid, spec.id);
+      if (spec.kind === "commitment") return api.ledgerDeleteCommitment(cid, spec.id);
+      if (spec.kind === "fact") return api.ledgerDeleteFact(cid, spec.id);
+      return api.ledgerDeleteRelationship(cid, spec.pair?.a ?? "", spec.pair?.b ?? "",
+                                          spec.kind === "bond");
+    });
+  }
+
+  /** The one-click ending for a kind of record: close a thread, mark a
+   *  commitment done, retire a fact. On the row rather than inside the editor
+   *  because it is the common case and it is the thing the reader is looking
+   *  at — opening a form to change one word is a form too many. */
+  function quick(spec: EditSpec) {
+    void run(() => {
+      if (spec.kind === "thread") return api.ledgerSaveThread(cid, spec.id, { status: "closed" });
+      if (spec.kind === "commitment") {
+        return api.ledgerSaveCommitment(cid, spec.id, { status: "fulfilled" });
+      }
+      return api.ledgerRetireFact(cid, spec.id);
+    }, false);
+  }
 
   /** How many rows each section stands for, counted the way the section will
    *  actually render — so the facts count follows SHOW RETIRED rather than
@@ -343,6 +519,9 @@ export default function LedgerView() {
   usePaletteSource(paletteSource);
 
   const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
+  // The two logs get no actions column at all rather than an empty one: a
+  // column of blanks reads as a feature that failed to load.
+  const editable = section !== "standings" && section !== "changes";
   const rows = ledger
     ? rowsFor(section, ledger, changeRows ?? [], standingRows ?? [], showRetired) : [];
 
@@ -401,7 +580,30 @@ export default function LedgerView() {
             <div className="eyebrow">{current.eyebrow}</div>
             <h1 className="screen-title">{current.label}</h1>
           </div>
+          {/* Only the four sections that hold records somebody can write. The
+              timeline's rows belong to scenes, and the two logs record what
+              happened — there is nothing to add to either by hand. */}
+          {NEW_IN[section] && (
+            <button className="subtle" type="button" disabled={busy || !!creating}
+                    onClick={() => {
+                      setOpenRow(null);
+                      setWriteError(null);
+                      setCreating(blankSpec(NEW_IN[section]!));
+                    }}>
+              + New {NEW_LABEL[section]}
+            </button>
+          )}
         </div>
+
+        {creating && (
+          <div className="ledger-create">
+            <div className="eyebrow">New {NEW_LABEL[section]}</div>
+            <LedgerRowEditor fields={creating.fields} initial={creating.initial}
+                             busy={busy} error={writeError}
+                             onSave={(d) => save(creating, d)}
+                             onCancel={() => { setCreating(null); setWriteError(null); }} />
+          </div>
+        )}
 
         {ledger === null && <p className="column-empty">Reading the ledger…</p>}
 
@@ -429,6 +631,7 @@ export default function LedgerView() {
                 <col />
                 <col className="ledger-col-asof" />
                 <col className="ledger-col-scene" />
+                {editable && <col className="ledger-col-do" />}
               </colgroup>
               <thead>
                 <tr>
@@ -438,23 +641,72 @@ export default function LedgerView() {
                     // a screen reader rather than one it can skip.
                     <th key={i} scope="col">{c || <span className="sr-only">Row</span>}</th>
                   ))}
+                  {editable && <th scope="col"><span className="sr-only">Actions</span></th>}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.key} className={r.retired ? "retired" : undefined}>
-                    <td className={"ledger-mark" + (r.alert ? " alert" : "")}>{r.mark}</td>
-                    <td>
-                      <div className="ledger-what">{r.what}</div>
-                      {r.note && <div className="ledger-note">{r.note}</div>}
-                    </td>
-                    <td className="ledger-asof">{r.asOf}</td>
-                    {/* A scene id is a filename; the title is what the reader
-                        named it. Long ones are clipped rather than wrapped, so
-                        the column stays a column — the full text is on hover. */}
-                    <td className="ledger-scene" title={r.scene}>{r.scene}</td>
-                  </tr>
-                ))}
+                {rows.map((r) => {
+                  const key = r.edit ? `${r.edit.kind}:${r.edit.id}` : "";
+                  const open = !!r.edit && openRow === key;
+                  return (
+                    <Fragment key={r.key}>
+                      <tr className={(r.retired ? "retired" : "") + (open ? " editing" : "")}>
+                        <td className={"ledger-mark" + (r.alert ? " alert" : "")}>{r.mark}</td>
+                        <td>
+                          <div className="ledger-what">{r.what}</div>
+                          {r.note && <div className="ledger-note">{r.note}</div>}
+                        </td>
+                        <td className="ledger-asof">{r.asOf}</td>
+                        {/* A scene id is a filename; the title is what the reader
+                            named it. Long ones are clipped rather than wrapped, so
+                            the column stays a column — the full text is on hover. */}
+                        <td className="ledger-scene" title={r.scene}>{r.scene}</td>
+                        {editable && (
+                          <td className="ledger-do">
+                            {r.edit?.quick && (
+                              <button className="row-do" type="button" disabled={busy}
+                                      title={r.edit.quick.title}
+                                      onClick={() => quick(r.edit!)}>
+                                {r.edit.quick.label}
+                              </button>
+                            )}
+                            {r.edit && (
+                              /* The label names the row, because a table of
+                                 identical "Edit" buttons is a list of identical
+                                 buttons to a screen reader. The visible word
+                                 does NOT change when the editor is open —
+                                 "Close" would collide with a thread's own Close
+                                 action two buttons away, and `aria-expanded`
+                                 already says which state it is in. */
+                              <button className="row-do" type="button" disabled={busy}
+                                      aria-expanded={open}
+                                      aria-label={`Edit ${typeof r.what === "string" ? r.what : r.key}`}
+                                      onClick={() => {
+                                        setCreating(null);
+                                        setWriteError(null);
+                                        setOpenRow(open ? null : key);
+                                      }}>
+                                Edit
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                      {open && r.edit && (
+                        <tr className="ledger-editor-row">
+                          <td colSpan={5}>
+                            <LedgerRowEditor
+                              fields={r.edit.fields} initial={r.edit.initial}
+                              busy={busy} error={writeError}
+                              onSave={(d) => save(r.edit!, d)}
+                              onCancel={() => { setOpenRow(null); setWriteError(null); }}
+                              onDelete={r.edit.deletable ? () => remove(r.edit!) : undefined} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

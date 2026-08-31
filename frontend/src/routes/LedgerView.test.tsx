@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import LedgerView from "./LedgerView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
@@ -10,6 +10,13 @@ vi.mock("../api/client", () => ({
     campaignLedger: vi.fn(),
     campaignChanges: vi.fn(),
     campaignRelationshipHistory: vi.fn(),
+    ledgerCreateThread: vi.fn(), ledgerSaveThread: vi.fn(), ledgerDeleteThread: vi.fn(),
+    ledgerCreateCommitment: vi.fn(), ledgerSaveCommitment: vi.fn(),
+    ledgerDeleteCommitment: vi.fn(),
+    ledgerRecordFact: vi.fn(), ledgerSaveFact: vi.fn(), ledgerRetireFact: vi.fn(),
+    ledgerDeleteFact: vi.fn(),
+    ledgerSaveRelationship: vi.fn(), ledgerDeleteRelationship: vi.fn(),
+    ledgerSaveChronicleLine: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -55,6 +62,13 @@ beforeEach(() => {
   (api.campaignLedger as any).mockResolvedValue(EMPTY);
   (api.campaignChanges as any).mockResolvedValue([]);
   (api.campaignRelationshipHistory as any).mockResolvedValue([]);
+  for (const k of ["ledgerCreateThread", "ledgerSaveThread", "ledgerDeleteThread",
+                   "ledgerCreateCommitment", "ledgerSaveCommitment", "ledgerDeleteCommitment",
+                   "ledgerRecordFact", "ledgerSaveFact", "ledgerRetireFact", "ledgerDeleteFact",
+                   "ledgerSaveRelationship", "ledgerDeleteRelationship",
+                   "ledgerSaveChronicleLine"]) {
+    (api as any)[k].mockResolvedValue({ ok: true, id: "new" });
+  }
 });
 
 /** The relationship timeline (#63) as the route returns it: newest first, with
@@ -156,8 +170,12 @@ test("standing facts render as a real table: id, fact, as of, scene", async () =
   await screen.findByRole("table");
 
   const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
-  expect(heads).toEqual(["ID", "FACT", "AS OF", "SCENE"]);
-  expect(cells(rowFor(/sea wall/))).toEqual(
+  // Five, not four: a section whose rows are records carries the actions
+  // column, and its heading is named for a screen reader rather than left
+  // blank. The two LOG sections still have four, which the editing suite
+  // below checks.
+  expect(heads).toEqual(["ID", "FACT", "AS OF", "SCENE", "Actions"]);
+  expect(cells(rowFor(/sea wall/)).slice(0, 4)).toEqual(
     ["f4", "Mara's priory owes the Reeve for the sea wall.", "1 Reaping", "The Priory Door"]);
 });
 
@@ -263,7 +281,7 @@ test("choosing a section swaps the table and its column labels", async () => {
   expect(await screen.findByRole("heading", { level: 1, name: "Commitments" }))
     .toBeInTheDocument();
   expect(screen.getAllByRole("columnheader").map((h) => h.textContent))
-    .toEqual(["Row", "COMMITMENT", "DUE", "SCENE"]);
+    .toEqual(["Row", "COMMITMENT", "DUE", "SCENE", "Actions"]);
   const owed = rowFor(/Reeve's deadline/);
   expect(owed).toHaveTextContent(/THREAT · Sworn at the pier./);
   expect(cells(owed)[2]).toBe("midnight");
@@ -504,4 +522,287 @@ test("a record inside the campaign's patience carries no badge", async () => {
   fireEvent.click(await column().findByText("Threads"));
   expect(await screen.findByText("Mara found it.")).toBeInTheDocument();
   expect(screen.queryByText(/STALE/)).not.toBeInTheDocument();
+});
+
+// ------------------------------------------------ editing the ledger by hand
+//
+// Until these controls the only writer of any of this was the absorb pass, so
+// a thread the model never noticed had closed stayed open forever. What is
+// checked here is that the right call goes out, that the two LOG sections
+// offer nothing, and that the one rule the ledger keeps about facts survives:
+// grimoire never edits one, the user may.
+
+const THREADS = {
+  ...EMPTY,
+  plot: [
+    { id: "warehouse", title: "Who fired the warehouse", status: "open",
+      last_scene: "004", latest_beat: "The Reeve asked again", aging: ok,
+      scene: scene("004", "The Priory Door") },
+    { id: "settled", title: "The debt, settled", status: "closed",
+      last_scene: "009", latest_beat: "", aging: ok,
+      scene: scene("009", "The Long Tide") },
+  ],
+};
+
+const OWED = {
+  ...EMPTY,
+  commitments: [
+    { id: "pay", title: "Pay the Reeve", status: "open", kind: "promise",
+      due: "midnight", last_scene: "004", latest_beat: "", aging: ok,
+      scene: scene("004", "The Priory Door") },
+  ],
+};
+
+const BONDS = {
+  ...EMPTY,
+  relationships: [
+    { id: "mara->reeve", kind: "feeling", a: "characters:mara", b: "characters:reeve",
+      a_name: "Sister Mara", b_name: "The Reeve", trust: 3, affection: 2, tension: 1,
+      note: "owes him", type: "", since_scene: "", scene: scene("", "") },
+    { id: "mara|reeve", kind: "bond", a: "characters:mara", b: "characters:reeve",
+      a_name: "Sister Mara", b_name: "The Reeve", trust: 0, affection: 0, tension: 0,
+      note: "", type: "wary allies", since_scene: "004",
+      scene: scene("004", "The Priory Door") },
+  ],
+};
+
+/** Render, choose a section, and wait for that section's table.
+ *
+ *  In that order: the ledger opens on Standing facts, so a fixture whose facts
+ *  are empty has no table to wait for until the section has moved. */
+async function at(section: RegExp, data: unknown) {
+  (api.campaignLedger as any).mockResolvedValue(data);
+  renderLedger();
+  await screen.findByRole("complementary");
+  fireEvent.click(column().getByRole("button", { name: section }));
+  await screen.findByRole("table");
+}
+
+/** Open one row's editor. The control is quiet until hover, but it is always
+ *  in the tree and in the tab order — which is the same thing a keyboard user
+ *  gets, so it is the right thing to drive. */
+async function openEditor(row: HTMLElement) {
+  fireEvent.click(within(row).getByRole("button", { name: /^Edit / }));
+  return await screen.findByRole("button", { name: "Save" });
+}
+
+/** A fact row by its id.
+ *
+ *  By id rather than by text, and it matters: a row that REPLACED something
+ *  quotes the superseded sentence in its own note, so matching a retired
+ *  fact's text finds the row above it first. */
+const factRow = (id: string) => rowById(id);
+
+test("a thread closes from its own row, without opening anything", async () => {
+  await at(/Threads/, THREADS);
+  const row = rowFor(/Who fired the warehouse/);
+  fireEvent.click(within(row).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(api.ledgerSaveThread).toHaveBeenCalledWith(
+    "run", "warehouse", { status: "closed" }));
+});
+
+test("a thread that is already closed offers no Close", async () => {
+  await at(/Threads/, THREADS);
+  const row = rowFor(/The debt, settled/);
+  expect(within(row).queryByRole("button", { name: "Close" })).toBeNull();
+  expect(within(row).getByRole("button", { name: /^Edit / })).toBeTruthy();
+});
+
+test("editing a thread sends ONLY what changed", async () => {
+  // The campaign lock serializes the writes but not the browser's earlier
+  // read, so a form that posted every field made each save a last-writer-wins
+  // overwrite of the record as it looked when the editor opened: an absorb
+  // advancing the status in between was reverted by a save that meant to fix
+  // the title. An omitted field is what makes the store keep what it holds.
+  await at(/Threads/, THREADS);
+  await openEditor(rowFor(/Who fired the warehouse/));
+  fireEvent.change(screen.getByLabelText("Thread"), { target: { value: "Who fired the tide-house" } });
+  fireEvent.change(screen.getByLabelText("Add a beat"), { target: { value: "A witness came forward" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.ledgerSaveThread).toHaveBeenCalledWith("run", "warehouse", {
+    title: "Who fired the tide-house", beat: "A witness came forward",
+  }));
+});
+
+test("a field the reader never touched is not in the payload at all", async () => {
+  await at(/Threads/, THREADS);
+  await openEditor(rowFor(/Who fired the warehouse/));
+  fireEvent.change(screen.getByLabelText("Thread"), { target: { value: "Renamed" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.ledgerSaveThread).toHaveBeenCalled());
+  const body = (api.ledgerSaveThread as any).mock.calls[0][2];
+  expect(Object.keys(body)).toEqual(["title"]);
+});
+
+test("a field the reader EMPTIED is sent blank, because blank is an instruction", async () => {
+  // Omitted keeps a commitment's deadline; `""` clears it. The two cannot
+  // collapse into one or a deadline could never be lifted.
+  await at(/Commitments/, OWED);
+  await openEditor(rowFor(/Pay the Reeve/));
+  fireEvent.change(screen.getByLabelText("Due"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.ledgerSaveCommitment)
+    .toHaveBeenCalledWith("run", "pay", { due: "" }));
+});
+
+test("a commitment is marked done from its row", async () => {
+  await at(/Commitments/, OWED);
+  fireEvent.click(within(rowFor(/Pay the Reeve/)).getByRole("button", { name: "Done" }));
+  await waitFor(() => expect(api.ledgerSaveCommitment).toHaveBeenCalledWith(
+    "run", "pay", { status: "fulfilled" }));
+});
+
+test("a fact is retired from its row, and a retired one cannot be retired again", async () => {
+  await at(/Standing facts/, CHAIN);
+  fireEvent.click(within(factRow("f4")).getByRole("button", { name: "Retire" }));
+  await waitFor(() => expect(api.ledgerRetireFact).toHaveBeenCalledWith("run", "f4"));
+  // The superseded row is on the page whatever the toggle says, and retiring
+  // something already retired is not an action this offers.
+  expect(within(factRow("f2")).queryByRole("button", { name: "Retire" })).toBeNull();
+});
+
+test("the user may correct a fact wording in place", async () => {
+  // The rule the module argues and the guard enforces: grimoire never edits a
+  // fact, the person whose campaign it is may — a typo is not a fact that
+  // stopped being true.
+  await at(/Standing facts/, CHAIN);
+  await openEditor(factRow("f4"));
+  fireEvent.change(screen.getByLabelText("Fact"),
+    { target: { value: "The priory owes the Reeve for the sea gate." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.ledgerSaveFact).toHaveBeenCalledWith("run", "f4", {
+    text: "The priory owes the Reeve for the sea gate.",
+  }));
+});
+
+test("a retired fact is still correctable — retirement is about truth, not wording", async () => {
+  await at(/Standing facts/, CHAIN);
+  await openEditor(factRow("f2"));
+  expect(screen.getByLabelText("Fact")).toBeTruthy();
+});
+
+test("deleting takes two clicks and says how it differs from retiring", async () => {
+  await at(/Standing facts/, CHAIN);
+  await openEditor(factRow("f4"));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await screen.findByText(/should never have existed/i);
+  expect(api.ledgerDeleteFact).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(api.ledgerDeleteFact).toHaveBeenCalledWith("run", "f4"));
+});
+
+test("a refusal is shown in the editor it belongs to", async () => {
+  (api.ledgerSaveFact as any).mockRejectedValue(new Error("a fact needs text"));
+  await at(/Standing facts/, CHAIN);
+  await openEditor(factRow("f4"));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await screen.findByText(/a fact needs text/);
+  // ...and the editor stays open, holding what was typed.
+  expect(screen.getByLabelText("Fact")).toBeTruthy();
+});
+
+test("a feeling and a bond take different fields, because they are different records", async () => {
+  await at(/^Relationships/, BONDS);
+  await openEditor(rowFor(/Sister Mara → The Reeve/));
+  expect(screen.getByLabelText("Trust")).toBeTruthy();
+  expect(screen.queryByLabelText("Bond")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  await openEditor(rowFor(/Sister Mara ↔ The Reeve/));
+  expect(screen.getByLabelText("Bond")).toBeTruthy();
+  expect(screen.queryByLabelText("Trust")).toBeNull();
+});
+
+test("editing a feeling keeps the pair — it is the record identity", async () => {
+  await at(/^Relationships/, BONDS);
+  await openEditor(rowFor(/Sister Mara → The Reeve/));
+  fireEvent.change(screen.getByLabelText("Trust"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // The meters that did not move are absent, and the route merges them from
+  // the stored record — sending them as 0 reset a 4/2/1 standing to nothing.
+  await waitFor(() => expect(api.ledgerSaveRelationship).toHaveBeenCalledWith("run", {
+    a: "characters:mara", b: "characters:reeve", trust: 5,
+  }));
+});
+
+test("a meter that is typed nonsense does not reach the store as one", async () => {
+  await at(/^Relationships/, BONDS);
+  await openEditor(rowFor(/Sister Mara → The Reeve/));
+  // Emptied rather than left alone, so it IS dirty and does go out — as a
+  // number the store can hold rather than as NaN.
+  fireEvent.change(screen.getByLabelText("Trust"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.ledgerSaveRelationship).toHaveBeenCalled());
+  expect((api.ledgerSaveRelationship as any).mock.calls[0][1].trust).toBe(0);
+});
+
+test("Enter cannot submit a second time while the first save is in flight", async () => {
+  // Only the buttons were disabled, so Enter twice during a slow save sent the
+  // write twice — two threads, or the same beat appended twice.
+  let release: (v: unknown) => void = () => {};
+  (api.ledgerSaveThread as any).mockReturnValue(new Promise((r) => { release = r; }));
+  await at(/Threads/, THREADS);
+  await openEditor(rowFor(/Who fired the warehouse/));
+  const title = screen.getByLabelText("Thread");
+  fireEvent.change(title, { target: { value: "Renamed" } });
+  fireEvent.keyDown(title, { key: "Enter" });
+  fireEvent.keyDown(title, { key: "Enter" });
+  await waitFor(() => expect(api.ledgerSaveThread).toHaveBeenCalledTimes(1));
+  await act(async () => { release({ ok: true }); });
+});
+
+test("+ New opens a blank of the same form the edit uses", async () => {
+  await at(/Threads/, THREADS);
+  fireEvent.click(screen.getByRole("button", { name: /\+ New thread/ }));
+  fireEvent.change(await screen.findByLabelText("Thread"),
+    { target: { value: "Who is copying the ledger" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // A create sends the whole form, unlike an edit: there is no stored record
+  // whose untouched fields could be preserved by omitting them.
+  await waitFor(() => expect(api.ledgerCreateThread).toHaveBeenCalledWith("run", {
+    title: "Who is copying the ledger", status: "open", beat: "", scene: "",
+  }));
+});
+
+test("the timeline line is editable and its row cannot be deleted", async () => {
+  // The record belongs to a scene: dropping it is what un-absorbing that scene
+  // means, not a ledger edit.
+  await at(/Timeline/, {
+    ...EMPTY,
+    chronicle: [{ id: "004", title: "The Priory Door", date: "1 Reaping",
+                  one_line: "They meet at the door" }],
+  });
+  await openEditor(rowFor(/They meet at the door/));
+  expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("What happened"),
+    { target: { value: "They meet at the tide gate" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.ledgerSaveChronicleLine).toHaveBeenCalledWith("run", "004", {
+    one_line: "They meet at the tide gate",
+  }));
+});
+
+test("the two log sections offer nothing to edit", async () => {
+  // They record what happened. Editing a log falsifies history rather than
+  // correcting state, and Undo is how something in them is reversed.
+  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
+  (api.campaignChanges as any).mockResolvedValue([
+    { ref: { kind: "lore", id: "pact" }, name: "The Pact",
+      fields: [{ key: "body", label: "body" }], scene: scene("004", "The Priory Door") },
+  ]);
+  renderLedger();
+  for (const label of [/Relationship history/, /Recent changes/]) {
+    fireEvent.click(column().getByRole("button", { name: label }));
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: /^Edit$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\+ New/ })).toBeNull();
+  }
+});
+
+test("only one row editor is open at a time", async () => {
+  // These writes are whole-record, so two editors is one of them losing.
+  await at(/Standing facts/, CHAIN);
+  await openEditor(factRow("f4"));
+  await openEditor(factRow("f9"));
+  expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(1);
 });

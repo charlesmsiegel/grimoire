@@ -451,3 +451,119 @@ def test_find_is_the_one_definition_of_a_scenes_fact(monkeypatch, tmp_path):
     assert facts.find(data, "001--a", "  the BRIDGE stands.  ") == fid
     assert facts.find(data, "002--b", "The bridge stands.") == ""
     assert facts.find(data, "001--a", "Something else.") == ""
+
+
+# --------------------------------------------------------- the user's own edit
+#
+# Grimoire never edits a fact -- the absorb pass records, retires and
+# supersedes, and `test_absorb_writer_guard.py` holds it to that. The person
+# whose campaign it is may edit one, because a mistyped fact is not a fact that
+# stopped being true and retiring it would put a correction in the history where
+# a correction did not happen.
+
+
+def test_set_text_rewrites_a_fact_in_place(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The ambassdor trusts the party", "the third night", "s1")
+    assert facts.set_text(cid, fid, "The ambassador trusts the party")
+    rec = facts.get(cid, fid)
+    assert rec["text"] == "The ambassador trusts the party"
+    # Nothing else moved: this is a correction, not a supersession.
+    assert rec["status"] == facts.ACTIVE
+    assert rec["superseded_by"] == ""
+    assert rec["scene"] == "s1"
+    assert rec["date"] == "the third night"
+
+
+def test_set_text_can_correct_the_date_and_the_scene(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The bar drowns a cart at noon", "the third night", "s1")
+    facts.set_text(cid, fid, date="the fourth night", scene="s2")
+    rec = facts.get(cid, fid)
+    assert (rec["date"], rec["scene"]) == ("the fourth night", "s2")
+    assert rec["text"] == "The bar drowns a cart at noon"   # untouched
+
+
+def test_set_text_refuses_to_blank_a_fact(monkeypatch, tmp_path):
+    # A fact with no text is not a correction, it is a deletion wearing one --
+    # and `forget` is what deletion is called.
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The tide runs high", "spring", "s1")
+    with pytest.raises(ValueError):
+        facts.set_text(cid, fid, "   ")
+    assert facts.get(cid, fid)["text"] == "The tide runs high"
+
+
+def test_set_text_on_a_missing_fact_is_false(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    assert facts.set_text(cid, "f99", "nothing here") is False
+
+
+def test_a_retired_fact_can_still_be_corrected(monkeypatch, tmp_path):
+    # Retirement is about truth, correction is about wording; a typo in a fact
+    # that has since been superseded is still a typo, and the row is still on
+    # the ledger where it can be read.
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The ambassdor trusts the party", "", "s1")
+    facts.record(cid, "The ambassador believes he was sold out", "", "s2", supersedes=old)
+    assert facts.set_text(cid, old, "The ambassador trusts the party")
+    rec = facts.get(cid, old)
+    assert rec["text"] == "The ambassador trusts the party"
+    assert rec["status"] == facts.RETIRED          # its lifecycle is untouched
+
+
+def test_forget_removes_a_fact_outright(monkeypatch, tmp_path):
+    # For a row that should never have existed. Distinct from retiring, which
+    # keeps it on the ledger as history.
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "A fact the model invented", "", "s1")
+    assert facts.forget(cid, fid) is True
+    assert facts.get(cid, fid) is None
+    assert facts.forget(cid, fid) is False
+
+
+def test_a_forgotten_id_is_never_handed_out_again(monkeypatch, tmp_path):
+    # `_next_id` reserves ids referenced by a `superseded_by` for exactly this
+    # reason: a freed key whose supersession pointer survives would silently
+    # re-aim at whatever took the id next.
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The first truth", "", "s1")
+    new = facts.record(cid, "The second truth", "", "s2", supersedes=old)
+    facts.forget(cid, new)
+    again = facts.record(cid, "Something else entirely", "", "s3")
+    assert again != new
+    assert facts.get(cid, old)["superseded_by"] == new    # still points at nothing real
+
+
+def test_restore_puts_a_fact_back_and_removes_one_that_was_not_there(monkeypatch, tmp_path):
+    # The shape `store/undo.py` reverses through, matching `plot.restore`.
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The tide runs high", "spring", "s1")
+    before = facts.get(cid, fid)
+    facts.set_text(cid, fid, "The tide runs low")
+    facts.restore(cid, fid, before)
+    assert facts.get(cid, fid) == before
+    facts.restore(cid, fid, None)
+    assert facts.get(cid, fid) is None
+
+
+def test_a_correction_cannot_move_a_fact_past_its_own_retirement(monkeypatch, tmp_path):
+    # `retire` refuses to end a truth that did not exist yet; correcting the
+    # other end of the same comparison has to refuse too, or a correction can
+    # produce a row saying it was retired before it was recorded.
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The gate is watched", "", "003")
+    facts.retire(cid, fid, "004")
+    with pytest.raises(ValueError):
+        facts.set_text(cid, fid, scene="005")
+    assert facts.get(cid, fid)["scene"] == "003"
+
+
+def test_a_retired_fact_can_still_be_moved_to_an_earlier_scene(monkeypatch, tmp_path):
+    # The guard is about the order, not about retirement: filing a fact under
+    # an earlier scene than the one that ended it is coherent.
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The gate is watched", "", "003")
+    facts.retire(cid, fid, "004")
+    assert facts.set_text(cid, fid, scene="002")
+    assert facts.get(cid, fid)["scene"] == "002"

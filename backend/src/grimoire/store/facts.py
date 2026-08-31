@@ -24,13 +24,23 @@ fiction's own dating and cannot know a real calendar. `scene` is the scene that
 recorded the fact, `retired_scene` the one that ended it, and those two dates
 are what make the ledger answer "as of when".
 
-**Facts are not edited.** A fact's text never changes once recorded; a fact
-that stops being true is retired, and a fact that replaced it points back at it
-through `superseded_by`. That immutability is the whole difference from a
-snapshot -- an edit-in-place ledger is just `state.md` with extra keys, and
-loses exactly the history this exists to keep. It also means the only fields
-that can ever move on a stored record are `status`, `superseded_by` and
-`retired_scene`, which is what `absorb.conflicts.fact_line` fingerprints.
+**Grimoire never edits a fact. The user may.** The immutability here is a rule
+about the WRITER rather than about the record, and getting that distinction
+wrong in either direction costs something:
+
+- *The absorb pass* never rewrites a fact. A fact that stops being true is
+  retired, and a fact that replaced it points back at it through
+  `superseded_by`. That is the whole difference from a snapshot -- an
+  edit-in-place ledger is just `state.md` with extra keys, and loses exactly
+  the history this exists to keep. So the only fields the pass can ever move on
+  a stored record are `status`, `superseded_by` and `retired_scene`, which is
+  what `absorb.conflicts.fact_line` fingerprints. `test_absorb_writer_guard.py`
+  fails if anything under `store/absorb/` calls `set_text` or `forget`.
+- *The person whose campaign it is* may correct one, through `set_text`. A
+  mistyped fact is not a fact that stopped being true: retiring it would put a
+  correction into the history as though the fiction had changed, and inventing
+  a replacement sentence to supersede it with would be worse. Corrections are
+  journalled as manual edits and are reversible like any other hand edit.
 
 Retirement comes in two shapes because the fiction has two:
 
@@ -296,6 +306,104 @@ def retire(cid: str, fid: str, scene: str) -> bool:
         rec["retired_scene"] = scene
         _write(cid, data)
         return True
+
+
+def set_text(cid: str, fid: str, text: str | None = None,
+             date: str | None = None, scene: str | None = None) -> bool:
+    """Correct a stored fact's wording, date or scene. False when no such fact.
+
+    **The user's edit, and only the user's.** Everything above this line is the
+    absorb pass's vocabulary -- record, supersede, retire -- and the module
+    docstring says why that pass must never rewrite a fact: an edit-in-place
+    ledger is `state.md` with extra keys, and the supersession chain is the
+    whole point of this file. None of that argues against the person whose
+    campaign it is fixing a typo. A mistyped fact is not a fact that stopped
+    being true, and retiring it would put a correction into the history as
+    though the fiction had changed.
+
+    So the immutability is a rule about the WRITER rather than about the
+    record, and `test_absorb_writer_guard.py` is what makes it hold: it fails
+    if anything under `store/absorb/` calls this.
+
+    Each argument is None to leave the field alone, which is how one field is
+    corrected without restating the other two. Blank TEXT is refused rather
+    than accepted: a fact with no text is a deletion wearing a correction's
+    clothes, and deletion is `forget`. A blank date or scene is allowed --
+    both are legitimately empty on a fact nobody dated.
+
+    Deliberately says nothing about `status`, `superseded_by` or
+    `retired_scene`: those are the lifecycle, they are the absorb pass's to
+    move, and a retired fact can still be corrected -- its wording is wrong
+    either way, and the row is still on the ledger being read.
+
+    What it will not do is move a RETIRED fact's recording scene past the scene
+    that ended it. `retire` refuses to end a truth that did not exist yet, for
+    the reason `recorded_after` gives; correcting the other end of the same
+    comparison has to refuse too, or a correction can quietly produce a record
+    that says it was retired before it was recorded -- which no absorb could
+    have written and nothing downstream expects to read.
+    """
+    if text is not None and not text.strip():
+        raise ValueError("a fact needs text")
+    with locks.campaign_lock(cid):
+        data = _read_ledger(cid)
+        rec = data.get(fid)
+        if not isinstance(rec, dict):
+            return False
+        if scene is not None:
+            ended = _field(rec.get("retired_scene"))
+            if ended and scene.strip() > ended:
+                raise ValueError(
+                    "a fact cannot be recorded after the scene that retired it")
+        if text is not None:
+            rec["text"] = text.strip()
+        if date is not None:
+            rec["date"] = date.strip()
+        if scene is not None:
+            rec["scene"] = scene.strip()
+        _write(cid, data)
+        return True
+
+
+def forget(cid: str, fid: str) -> bool:
+    """Remove a fact outright. False when there was none.
+
+    For a row that should never have existed -- something the extraction
+    invented -- which is a different act from retiring, and needs to be: a
+    retired fact stays on the ledger saying it was true once, and that is
+    exactly the wrong thing to say about a fact nobody ever established.
+
+    The id does not come back into circulation. `_next_id` reserves every id a
+    `superseded_by` points at as well as every key, so a supersession pointing
+    at the forgotten record cannot be silently re-aimed at whatever is filed
+    next -- which is the same hazard that function already guards hand-editing
+    against.
+    """
+    with locks.campaign_lock(cid):
+        data = _read_ledger(cid)
+        if data.pop(fid, None) is None:
+            return False
+        _write(cid, data)
+        return True
+
+
+def restore(cid: str, fid: str, record: dict | None) -> None:
+    """Put one fact back to a recorded state, or remove it when there was none.
+
+    `store/undo.py`'s reversal shape, matching `plot.restore` and
+    `commitments.restore` -- and needed for the same reason they are: a
+    correction can move three fields at once, so there is no argument list that
+    undoes it. Scoped to the one id rather than restoring a whole-file
+    snapshot, so facts the reversal has no business touching keep their state.
+    """
+    with locks.campaign_lock(cid):
+        data = _read_ledger(cid)
+        if record is None:
+            if data.pop(fid, None) is None:
+                return
+        else:
+            data[fid] = record
+        _write(cid, data)
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:

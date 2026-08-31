@@ -350,7 +350,10 @@ _FILL = {"sid": "s1", "rid": "r1", "gid": "g1", "eid": "e1", "kind": "locations"
          "preset_id": "p1", "style_id": "s1", "key": "k1", "kid": "k1",
          "slot": "avatar", "tag": "t1", "provider": "gregorian", "who": "a1",
          "storage_key": "k1", "span_id": "sp1", "index": "0", "jid": "j1",
-         "lid": "l1", "run_id": "r1", "identity": "0"*32}
+         "lid": "l1", "run_id": "r1", "identity": "0"*32,
+         # A fact id is `f<N>` (`facts._next_id`), not a slug — the ledger's
+         # hand-edit routes take one.
+         "fid": "f1"}
 
 
 # Enumerated from the OpenAPI schema, not from `router.routes`: the router is

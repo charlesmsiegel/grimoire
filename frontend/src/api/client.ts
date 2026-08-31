@@ -22,18 +22,19 @@ import {
   type CampaignSceneCosts,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkGuards, type ForkReport,
-  type CatalogDraft, type CharacterDetail,
+  type CatalogDraft, type CharacterDetail, type ChronicleLineSave,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
   type EntityScope,
   type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
   type GroupState, type HealthCheckResult,
-  type CompositionRow,
+  type CommitmentSave, type CompositionRow,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
   type LogLevel, type LogLevelInfo, type LogPage, type LogTailEvent,
+  type FactRecord, type FactSave,
   type LoreEntryDraft, type Mechanics, type Message, type Model,
   type ModelsRefreshResult,
   type ModuleContentEntry,
@@ -42,9 +43,10 @@ import {
   type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
   type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
-  type RecordChange, type RegenerateOverrides, type RelationshipChange, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
+  type RecordChange, type RegenerateOverrides, type RelationshipChange,
+  type RelationshipSave, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
-  type ResponsePresetUsage, type RollEntry, type RollingSummary, type RollingSummaryRefresh,
+  type ResponsePresetUsage, type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type RoutingBundle, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneImportDraft, type SceneIntentResult,
@@ -1052,6 +1054,59 @@ export const api = {
     request<Provenance>("GET", `/api/campaigns/${cid}/provenance`),
   campaignLedger: (cid: string) =>
     request<Ledger>("GET", `/api/campaigns/${cid}/ledger`, undefined, { fresh: true }),
+
+  /** Hand edits to the ledger (`routes/ledger.py`).
+   *
+   *  Every one of these is journalled as a MANUAL edit and is reversible
+   *  through the ordinary undo route (`campaignUndo`), which is why nothing
+   *  here needs an undo of its own: the row appears in the play view's Changes
+   *  panel under History, labelled "edited by hand".
+   *
+   *  Only records, never logs. There is deliberately nothing here that writes
+   *  the relationship history or the change log: those record what happened,
+   *  and editing them would falsify history rather than correct state.
+   */
+  ledgerCreateThread: (cid: string, body: ThreadSave) =>
+    request<{ id: string }>("POST", `/api/campaigns/${cid}/ledger/threads`, body),
+  ledgerSaveThread: (cid: string, pid: string, body: ThreadSave) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/threads/${pid}`, body),
+  ledgerDeleteThread: (cid: string, pid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/ledger/threads/${pid}`),
+
+  ledgerCreateCommitment: (cid: string, body: CommitmentSave) =>
+    request<{ id: string }>("POST", `/api/campaigns/${cid}/ledger/commitments`, body),
+  ledgerSaveCommitment: (cid: string, mid: string, body: CommitmentSave) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/commitments/${mid}`, body),
+  ledgerDeleteCommitment: (cid: string, mid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/ledger/commitments/${mid}`),
+
+  ledgerRecordFact: (cid: string, body: FactRecord) =>
+    request<{ id: string }>("POST", `/api/campaigns/${cid}/ledger/facts`, body),
+  /** The user's correction, and the only caller of `facts.set_text` in the app:
+   *  grimoire never edits a fact, the person whose campaign it is may. Each
+   *  field is omitted to leave it alone. */
+  ledgerSaveFact: (cid: string, fid: string, body: FactSave) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/facts/${fid}`, body),
+  /** Ends a fact with nothing replacing it. 409 when it is already retired,
+   *  which the caller shows rather than swallowing. */
+  ledgerRetireFact: (cid: string, fid: string, scene = "") =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/ledger/facts/${fid}/retire`,
+                             { scene }),
+  ledgerDeleteFact: (cid: string, fid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/ledger/facts/${fid}`),
+
+  ledgerSaveRelationship: (cid: string, body: RelationshipSave) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/relationships`, body),
+  /** `bond` addresses the undirected record; without it this removes the
+   *  feeling `a` holds toward `b` and leaves the other direction alone. */
+  ledgerDeleteRelationship: (cid: string, a: string, b: string, bond = false) =>
+    request<{ ok: boolean }>(
+      "DELETE",
+      `/api/campaigns/${cid}/ledger/relationships`
+      + `?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&bond=${bond}`),
+
+  ledgerSaveChronicleLine: (cid: string, sid: string, body: ChronicleLineSave) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/chronicle/${sid}`, body),
   /** The relationship timeline (#63), optionally narrowed to one pair — both
    *  actor tokens or neither, since half a pair names no pair. `fresh` for the
    *  ledger's reason: this is re-read precisely when an absorb or an undo has

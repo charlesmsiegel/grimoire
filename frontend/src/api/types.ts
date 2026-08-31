@@ -1572,6 +1572,38 @@ export type RelationshipChange = {
   scene: LedgerScene;
 };
 export type LedgerFact = { id: string; one_line: string; date: string; title: string };
+/** Payloads for the ledger's hand edits (`routes/ledger.py`).
+ *
+ *  Optional rather than defaulted-to-empty throughout, and the distinction is
+ *  load-bearing: the store mutators behind these read a blank as "keep what is
+ *  stored" (a title, a status) or as "clear it" (a commitment's deadline), so
+ *  sending `""` where the user changed nothing is an instruction they never
+ *  gave. Omitted means the payload said nothing about that field.
+ */
+export type ThreadSave = {
+  title?: string;
+  status?: string;
+  /** APPENDED, not replaced — a beat is a thing that happened. */
+  beat?: string;
+  scene?: string;
+};
+export type CommitmentSave = ThreadSave & {
+  kind?: string;
+  /** Three-valued: absent keeps the stored deadline, `""` clears it, text sets it. */
+  due?: string;
+};
+export type FactSave = { text?: string; date?: string; scene?: string };
+export type FactRecord = { text: string; date?: string; scene?: string; supersedes?: string };
+export type RelationshipSave = {
+  a: string; b: string;
+  trust?: number; affection?: number; tension?: number; note?: string;
+  /** Present addresses the undirected bond and the meters are ignored; absent,
+   *  this is the directional feeling `a` holds toward `b`. */
+  bond?: string;
+  scene?: string;
+};
+export type ChronicleLineSave = { one_line?: string; date?: string };
+
 export type Ledger = {
   plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];
   retired: RetiredFact[]; relationships: LedgerRelationship[];
