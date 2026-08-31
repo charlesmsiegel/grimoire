@@ -1490,11 +1490,16 @@ export const api = {
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}/versions/${vid}`, { card }),
   deleteVersion: (scope: EntityScope, cid: string, vid: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/characters/${cid}/versions/${vid}`),
-  importCharacter: (wid: string, file: File, format: string, into?: string) => {
+  /** `into` adds the card as a version of an existing character rather than
+   *  making a new one; `versionName` says what that version is called. Without
+   *  it the name is derived from the card, which gives every version of a
+   *  character the same one. */
+  importCharacter: (wid: string, file: File, format: string, into?: string, versionName?: string) => {
     const form = new FormData();
     form.append("file", file);
     form.append("format", format);
     if (into) form.append("into", into);
+    if (versionName) form.append("version_name", versionName);
     return requestForm<{ character: string; version: string }>(`/api/worlds/${wid}/characters/import`, form);
   },
   localizeImages: (wid: string, cid: string, vid: string, onEvent: (e: LocalizeEvent) => void) =>

@@ -33,6 +33,7 @@ import LibraryView from "./routes/LibraryView";
 import SearchView from "./routes/SearchView";
 import WorldsView from "./routes/WorldsView";
 import WorldView from "./routes/WorldView";
+import CharacterPage from "./routes/CharacterPage";
 import ModulesView from "./routes/ModulesView";
 import StyleGuidesView from "./routes/StyleGuidesView";
 import ResponsePresetsView from "./routes/ResponsePresetsView";
@@ -233,6 +234,7 @@ function Shell(
           <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
                         ready={ready} />} />
         <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
+        <Route path="/campaigns/:cid/characters/:eid" element={<CharacterPage campaign />} />
         {/* The ledger is a room, not a drawer over the transcript (4e): it is a
             table read top to bottom, and the supersession chains it exists to
             show do not fit in a panel wedged above the scene. */}
@@ -256,6 +258,10 @@ function Shell(
         <Route path="/search" element={<SearchView />} />
         <Route path="/worlds" element={<WorldsView />} />
         <Route path="/worlds/:wid" element={<WorldView />} />
+        {/* A character owns a screen rather than a third of one — see
+            `CharacterPage`. Both scopes, because a campaign's copy of a
+            character is a different record from the world's. */}
+        <Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} />
         <Route path="/modules" element={<ModulesView />} />
         <Route path="/styles" element={<StyleGuidesView />} />
         <Route path="/response-presets" element={<ResponsePresetsView />} />

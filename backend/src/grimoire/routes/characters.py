@@ -535,11 +535,16 @@ _EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "appli
 @router.post("/worlds/{wid}/characters/import")
 async def post_character_import(wid: str, file: UploadFile = File(...),
                                 format: str = Form(...), into: str | None = Form(None),
-                                name: str | None = Form(None)):
+                                name: str | None = Form(None),
+                                version_name: str | None = Form(None)):
+    """Import a card. `into` adds it as a version of an existing character;
+    `name` names a new character and `version_name` names the version, which is
+    otherwise derived from the card and so is the same for every version."""
     root = _world_root_or_404(wid)
     data = await file.read()
     try:
-        cid, vid = store.characters.import_card(root, data, format, into_cid=into, name=name)
+        cid, vid = store.characters.import_card(root, data, format, into_cid=into, name=name,
+                                                version_name=version_name)
     except store.cards.CardParseError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
     except store.characters.CharacterNotFound:

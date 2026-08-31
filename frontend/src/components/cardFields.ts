@@ -1,7 +1,7 @@
 /** The V3 card's prose fields, in the order a reader reads a card.
  *
  *  Label-only, and deliberately a second list rather than an import from
- *  `CharacterEditor`: that one is the *editing* order and carries an `area`
+ *  `character/shared`: that one is the *editing* order and carries an `area`
  *  flag that picks the form control, which a read-only view has no use for.
  *  Keyed the same otherwise, so a prose field added to the card belongs in both.
  *
@@ -12,7 +12,7 @@
  *  change at all.
  */
 export const CARD_TEXT_FIELDS: { key: string; label: string }[] = [
-  // The name leads, and is the one entry `CharacterEditor`'s list does not have:
+  // The name leads, and is the one entry `character/shared`'s list does not have:
   // there it has its own control above the prose fields, but a world-side
   // rename is a change a reader has to be able to see before taking it.
   { key: "name", label: "Name" },

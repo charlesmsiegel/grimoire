@@ -801,7 +801,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   return (
     <div className="editor">
       {/* A rail, where the design has a full-width grid of image cards with
-          browse and record as separate states -- the shape `CharacterEditor`
+          browse and record as separate states -- the shape `CharacterGrid`
           already uses, for the reason the design gives: a world can hold
           hundreds of records.
           Left as a rail on purpose, and filed rather than decided (#437).
@@ -810,7 +810,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
           are above it, so what differs is the shape -- and the shape is where
           the design and `CLAUDE.md`'s list/detail rule disagree. That rule
           names this file as canonical and says an editor inside another page
-          brings its own `.editor-list` rail; `CharacterEditor`'s grid is
+          brings its own `.editor-list` rail; `CharacterGrid`'s grid is
           already the unacknowledged exception. Which of the two the convention
           should describe is a decision with an owner, not an implementation
           detail to settle here. */}

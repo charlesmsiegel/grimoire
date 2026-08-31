@@ -50,15 +50,6 @@
     "@typescript-eslint/no-misused-promises": 1,
     "react/no-array-index-key": 2
   },
-  "frontend/src/components/CharacterEditor.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 10
-  },
-  "frontend/src/components/CharacterEditor.tsx": {
-    "@typescript-eslint/no-floating-promises": 8,
-    "@typescript-eslint/no-misused-promises": 36,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
-    "react/no-array-index-key": 2
-  },
   "frontend/src/components/ClimateEditor.tsx": {
     "@typescript-eslint/no-explicit-any": 1,
     "@typescript-eslint/no-floating-promises": 1,

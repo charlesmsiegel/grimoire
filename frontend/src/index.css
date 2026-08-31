@@ -2574,33 +2574,30 @@ button.column-link {
    anchor arrives carrying the UA's underline. */
 a.column-back { text-decoration: none; }
 
-/* ---- character editor (4f) ---- */
-/* Three panes: identity · the card · what one campaign made of her.
-   The middle and right halves carry the whole argument of this screen, so they
-   are built to look like they belong to different owners rather than merely to
-   sit in different columns. The middle is framed — bordered blocks on
-   `--surface`, the look of a document someone authored and every campaign then
-   shares. The right has no frames at all: hairline-separated rows on `--panel`,
-   the look of a record that accumulated. Nothing on the right is editable here,
-   and it should not look like it is. */
-.char-detail {
-  display: grid; grid-template-columns: 274px minmax(0, 1fr) 300px;
-  align-items: start; gap: 0;
-}
+/* ---- the character page (4f) ---- */
+/* One character, on `PageShell`: a 274px column that indexes THIS character,
+   and main holding the card.
 
-/* ---- left: identity ---- */
-.char-identity {
-  /* Its own scroll port, like every other context column in the app: a long
-     version list must not drag the card pane, and the reach warning below is
-     pinned outside it so it cannot be scrolled away from. */
-  display: flex; flex-direction: column;
-  position: sticky; top: 12px; max-height: calc(100vh - 24px - 52px);
-  border-right: 1px solid var(--line); padding-right: 16px;
-}
-.char-identity-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.char-identity .column-back { padding-left: 0; padding-right: 0; }
+   It was three panes nested inside the world page, and the arithmetic is why it
+   is not any more. At 1600px the app rail and the world index took 510px before
+   this screen began; then `274px | minmax(0, 1fr) | 300px` spent another 574px
+   on its own two side columns, leaving the card 433px and its prose a 47-
+   character measure. At 1280px the same grid collapsed the middle to 113px and
+   the description to one word per line — because `minmax(0, 1fr)` will go to
+   zero, and because the media query that was supposed to rescue it measured the
+   VIEWPORT while the grid lived in a container 510px narrower. Two fixed
+   columns inside a container whose width you are not measuring is the whole
+   bug; there is one fixed column now, and `PageShell` owns it.
+
+   What survives is the argument the old layout was making, which was right: the
+   card is a document someone authored and every campaign then shares, so it is
+   framed — bordered blocks on `--surface`. What one campaign made of them is a
+   record that accumulated, so it has no frames at all: hairline-separated rows,
+   in the column, unframed and uneditable. */
+
+/* ---- the column: identity, versions, campaign state ---- */
 .identity-art {
-  display: block; width: 190px; height: 190px; padding: 0;
+  display: block; width: 100%; max-width: 240px; aspect-ratio: 1; padding: 0;
   border: 1px solid var(--line); background: var(--surface); cursor: pointer;
   transition: border-color 140ms ease-out;
 }
@@ -2618,21 +2615,36 @@ a.column-back { text-decoration: none; }
   font-family: var(--fd); font-weight: 600; font-size: 21px; line-height: 1.15;
   letter-spacing: 0.04em; margin: 14px 0 2px; color: var(--ink);
 }
-.identity-tagline { margin: 10px 0 0; }
+/* The identity block ends here whether or not there is a tagline — campaign
+   scope has no tagline section at all, and without this the byline butts
+   straight into the Versions heading. */
+.context-column .detail-byline { margin-bottom: 18px; }
+.identity-tagline { margin: 10px 0 18px; }
 .identity-tagline p {
   margin: 0; font-family: var(--fb); font-weight: 300; font-size: 13px;
   line-height: 1.55; color: var(--subtle);
 }
 .identity-tagline .dossier-source { padding-left: 0; }
 
-.char-identity .column-section { margin-top: 22px; }
+/* Every editable thing in the column shares one shape: prose, then the controls
+   that change it, then the draft box when it is open. */
+.column-prose {
+  margin: 0; font-family: var(--fb); font-weight: 300; font-size: 13px;
+  line-height: 1.6; color: var(--ink); white-space: pre-wrap;
+}
+.column-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.column-draft {
+  width: 100%; margin-top: 6px; font-size: 13px; line-height: 1.5;
+  resize: vertical;
+}
+
 .version-list { display: flex; flex-direction: column; }
 .version-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  display: flex; align-items: center; gap: 4px;
   border-left: 2px solid transparent; padding-left: 8px;
 }
-/* The viewed version, marked on the rail rather than by a button state: this
-   is a list you read down, not a control you toggle. */
+/* The viewed version, marked on the list rather than by a button state: this is
+   something you read down, not a control you toggle. */
 .version-row.active { border-left-color: var(--accent); background: var(--surface); }
 .version-pick {
   flex: 1; min-width: 0; text-align: left; background: none; border: 0;
@@ -2642,6 +2654,17 @@ a.column-back { text-decoration: none; }
 }
 .version-pick:hover { color: var(--accent); }
 .version-row.active .version-pick { color: var(--ink); }
+/* Kept quiet until the row is hovered or the control is focused: a rename is
+   rare next to picking a version, and a pencil on every row reads as clutter.
+   Focus is in there because keyboard users cannot hover. */
+.version-rename {
+  flex: none; background: none; border: 0; cursor: pointer; padding: 4px 6px;
+  color: transparent; font-size: 12px; transition: color 140ms ease-out;
+}
+.version-row:hover .version-rename, .version-rename:focus-visible { color: var(--muted); }
+.version-rename:hover { color: var(--accent); }
+.version-row.renaming { padding: 4px 0 4px 8px; gap: 6px; }
+.version-row .row-rename { flex: 1; min-width: 0; font-size: 13px; }
 .version-flag {
   flex: none; font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em;
   line-height: 1.45; text-transform: uppercase; color: var(--muted);
@@ -2654,64 +2677,8 @@ a.column-back { text-decoration: none; }
 }
 .version-lock-controls select { max-width: 100%; }
 
-/* Pinned to the foot of the identity column, outside its scroll port. The
-   scope decides which way it points, and the two directions are opposites —
-   see the component. `--alert` is the token for "destructive"; reaching every
-   campaign at once is the destructive one. */
-.reach-warning {
-  flex: none; margin: 12px 0 0; padding-top: 12px;
-  border-top: 1px solid var(--line);
-  font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em;
-  line-height: 1.6; text-transform: uppercase; color: var(--muted);
-}
-.reach-warning.shared { color: var(--alert); }
-
-/* ---- middle: the card (framed, authored, shared) ---- */
-.card-pane { min-width: 0; padding: 0 26px; }
-.campaign-pane .pane-stamp, .card-pane .pane-stamp {
-  display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline;
-  padding-bottom: 10px;
-}
-.pane-stamp .eyebrow.accent { color: var(--accent); }
-.card-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); }
-.card-tabs .tab { padding: 10px 14px; margin-bottom: -1px; }
-.card-pane-body { padding: 20px 0 0; }
-
-/* A card field is framed even in the read-only view, on purpose: the frame is
-   what says "this is an authored artifact with edges", which is the half of the
-   screen's argument the middle pane carries. It is deliberately a hairline on
-   `--surface` rather than the `--line-strong` an input wears, so it reads as a
-   record card and not as a form you can type into. */
-.card-field { margin-bottom: 20px; }
-.card-field-body {
-  margin-top: 6px; padding: 12px 14px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 3px;
-}
-.card-field-body .detail-text { font-size: 15px; line-height: 1.6; }
-.card-field-body .greeting-quote:last-child { margin-bottom: 0; }
-.card-field .greeting-quote { margin-top: 8px; }
-/* The description's cost, beside its label rather than under the box: the
-   number is about the field, and by the time you have read the field you have
-   already decided how you feel about its length. */
-.card-field-cost {
-  float: right; font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em;
-  line-height: 1.45; text-transform: uppercase; color: var(--muted);
-}
-.card-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.card-field-pair .card-field { margin-bottom: 20px; }
-.card-pane-actions {
-  display: flex; gap: 8px; align-items: center;
-  margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
-}
-.card-pane-actions .primary { min-height: 44px; }
-
-/* ---- right: campaign-local state (unframed, recorded, one campaign's) ---- */
-.campaign-pane {
-  position: sticky; top: 12px; max-height: calc(100vh - 24px - 52px);
-  overflow-y: auto; border-left: 1px solid var(--line); padding-left: 20px;
-}
-/* Nothing here is a card and nothing here is a control: rows separated by a
-   hairline, on the recessed ground, in the dense side-prose size. */
+/* Nothing in the campaign section is a card and nothing in it is a control:
+   rows separated by a hairline, in the dense side-prose size. */
 .local-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .local-row:last-child { border-bottom: 0; }
 .local-value {
@@ -2724,34 +2691,101 @@ a.column-back { text-decoration: none; }
   margin: 12px 0 0; font-family: var(--fb); font-weight: 300; font-size: 13px;
   line-height: 1.6; color: var(--muted);
 }
-/* The world route has no campaign, and an empty frame there would read as a
-   campaign that knows nothing about her. It says which it is instead. */
-.campaign-pane.no-campaign { border-left-style: dashed; }
 
-/* ---- narrow: three panes cannot sit side by side ---- */
-@media (max-width: 1100px) {
-  /* The card keeps the width; the campaign readout goes under it, still to the
-     right of the identity column, so the two owners stay visibly apart. */
-  .char-detail { grid-template-columns: 274px minmax(0, 1fr); }
-  .campaign-pane {
-    grid-column: 2; position: static; max-height: none;
-    border-left: 0; border-top: 1px solid var(--line);
-    padding-left: 0; margin: 26px 26px 0;
-  }
+/* Pinned to the foot of the column, outside its scroll port. The scope decides
+   which way it points, and the two directions are opposites — see the
+   component. `--alert` is the token for "destructive"; reaching every campaign
+   at once is the destructive one. */
+.reach-warning {
+  flex: none; margin: 0;
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em;
+  line-height: 1.6; text-transform: uppercase; color: var(--muted);
 }
+.reach-warning.shared { color: var(--alert); }
+
+/* ---- main: the card ---- */
+.card-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); }
+.card-tabs .tab { padding: 10px 14px; margin-bottom: -1px; }
+.card-pane-body { padding: 20px 0 0; }
+.screen-head-actions { display: flex; gap: 8px; align-items: center; }
+
+/* A card field is framed even when it is only being read, on purpose: the frame
+   says "this is an authored artifact with edges", which is the argument main
+   carries. A hairline on `--surface` rather than the `--line-strong` an input
+   wears, so it reads as a record and not as a form you can type into. */
+.card-field { margin-bottom: 20px; }
+.card-field-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+}
+/* The edit control sits with the label of the field it changes, and stays out
+   of the way until wanted — same discipline as the version rename. */
+.field-edit {
+  margin-left: auto; background: none; border: 0; cursor: pointer;
+  padding: 2px 4px; color: transparent;
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em;
+  text-transform: uppercase; transition: color 140ms ease-out;
+}
+.card-field:hover .field-edit, .field-edit:focus-visible { color: var(--muted); }
+.field-edit:hover:not(:disabled) { color: var(--accent); }
+/* The measure, and the reason this page exists. The FRAME is capped, not the
+   text inside it: 1030px of body text is as hard to read as 351px was, and a
+   full-width box with a 72ch column of prose in its left half just moves the
+   emptiness inside the border. The cap is on the block, so a paired field
+   inherits its column's width and only a solo one is held back. */
+.card-field-body {
+  margin-top: 6px; padding: 12px 14px; max-width: 72ch;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 3px;
+}
+.card-field-pair .card-field-body { max-width: none; }
+.card-field-body .detail-text {
+  font-size: 15px; line-height: 1.6; white-space: pre-wrap;
+}
+.card-field-body .greeting-quote:last-child { margin-bottom: 0; }
+.card-field .greeting-quote { margin-top: 8px; }
+.card-field .field-empty { margin: 6px 0 0; }
+/* The description's cost, beside its label rather than under the box: the
+   number is about the field, and by the time you have read the field you have
+   already decided how you feel about its length. */
+.card-field-cost {
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em;
+  line-height: 1.45; text-transform: uppercase; color: var(--muted);
+}
+/* Auto-fit rather than two fixed columns: the pair drops to one column on its
+   own when there is no room for two, so nothing here has to know the viewport
+   — which is exactly the mistake the old three-pane grid made. */
+.card-field-pair {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0 24px;
+}
+
+/* ---- editing, in place ---- */
+.card-field.editing .card-field-head { margin-bottom: 6px; }
+/* Grown to fit its content by `EditableField`, so `rows` is a floor and never a
+   peephole. `field-sizing` does the same thing natively where it is supported
+   and costs nothing where it is not. */
+.field-draft {
+  width: 100%; max-width: 72ch; min-height: 44px; resize: vertical;
+  font-size: 15px; line-height: 1.6; field-sizing: content;
+}
+.field-draft.one-line { min-height: 0; }
+.field-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+
+/* ---- the import dialog ---- */
+.import-dialog .import-target { margin: 10px 0; }
+.import-dialog .import-target input[type="search"] { width: 100%; }
+.import-dialog .import-target .chips { margin-top: 8px; }
+.import-dialog .field { display: block; margin: 12px 0; }
+.import-dialog .field input { width: 100%; }
+
+/* ---- narrow ---- */
 @media (max-width: 720px) {
-  .char-detail { grid-template-columns: 1fr; }
-  .char-identity {
-    position: static; max-height: none; border-right: 0;
-    border-bottom: 1px solid var(--line); padding: 0 0 16px;
-  }
-  .campaign-pane { grid-column: 1; margin: 26px 0 0; }
-  .card-pane { padding: 20px 0 0; }
-  .card-field-pair { grid-template-columns: 1fr; }
+  .identity-art { max-width: 160px; }
   /* Four tabs do not fit; scroll them rather than wrapping into two rows that
      push the fields down the page. */
   .card-tabs { overflow-x: auto; }
   .card-tabs .tab { white-space: nowrap; }
+  /* Nothing to hover with, so the quiet controls are simply always visible. */
+  .field-edit, .version-rename { color: var(--muted); }
 }
 
 /* ---- config (4b) ---- */

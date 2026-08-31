@@ -317,9 +317,14 @@ def test_find_unlinked_versions_lists_only_versions_with_no_chub_source(tmp_path
     unlinked_cid, unlinked_vid = ch.create_character(tmp_path, "Loose End")
 
     result = ch.find_unlinked_versions(tmp_path)
+    # The version names here are ids rather than card names since the label
+    # chain dropped its card-name fallback. That is the point of the change and
+    # not a loss: the chip these rows feed reads `character_name
+    # (version_name)`, so this pair used to render "Kalinci (Kalinci (futa))"
+    # and "Loose End (Loose End)".
     assert result == [
-        {"character": partial_cid, "character_name": "Kalinci", "version": futa_vid, "version_name": "Kalinci (futa)"},
-        {"character": unlinked_cid, "character_name": "Loose End", "version": unlinked_vid, "version_name": "Loose End"},
+        {"character": partial_cid, "character_name": "Kalinci", "version": futa_vid, "version_name": "futa"},
+        {"character": unlinked_cid, "character_name": "Loose End", "version": unlinked_vid, "version_name": "default"},
     ]
 
 
@@ -1548,3 +1553,111 @@ def test_a_world_level_tombstone_reads_as_no_anchor(tmp_path):
     voice_anchors.disable(tmp_path, cid)
     row = next(c for c in ch.list_characters(tmp_path) if c["id"] == cid)
     assert row["has_voice_anchor"] is False
+
+
+# ---------------------------------------------------------------- version labels
+#
+# A version's label used to fall back to the CARD'S NAME, which is the same
+# string for every version of a character by construction -- so a character
+# with three versions listed the same name three times and the only thing
+# telling them apart, the slug, was never shown. The chain is
+# `grimoire_label` -> the spec's own `character_version` -> the id.
+
+
+def test_create_version_stores_its_name_as_the_label(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    vid = ch.create_version(tmp_path, cid, "after the flood", ch.blank_card("Winifred Ashcroft"))
+    assert vid == "after-the-flood"
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "after the flood"
+
+
+def test_version_label_never_falls_back_to_the_card_name(tmp_path):
+    # The bug this chain replaces: three versions, one name, nothing to pick by.
+    cid, first = ch.create_character(tmp_path, "Winifred Ashcroft")
+    ch.create_version(tmp_path, cid, "young", ch.blank_card("Winifred Ashcroft"))
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels == {first: "default", "young": "young"}
+
+
+def test_version_label_falls_back_to_character_version_then_id(tmp_path):
+    # `character_version` is the card spec's own field for exactly this, so a
+    # third-party card that fills it in is labelled by it without any grimoire
+    # metadata being written.
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    card = ch.blank_card("Winifred Ashcroft")
+    card["data"]["character_version"] = "v2 · rewritten"
+    vid = ch.create_version(tmp_path, cid, "second", card)
+    # An explicit label still wins over `character_version`.
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "second"
+    # ...and with no label at all, `character_version` carries it.
+    stored = ch.read_card(tmp_path, cid, vid)
+    del stored["data"]["extensions"]["grimoire_label"]
+    ch.update_version(tmp_path, cid, vid, stored)
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "v2 · rewritten"
+    # ...and with neither, the id, which at least differs per version.
+    stored = ch.read_card(tmp_path, cid, vid)
+    del stored["data"]["character_version"]
+    ch.update_version(tmp_path, cid, vid, stored)
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "second"
+
+
+def test_a_label_survives_a_card_update(tmp_path):
+    # The silent-loss case. The client PUTs WHOLE CARDS, so a label stored in
+    # extensions is only as durable as the client's round trip -- and renaming
+    # a version is itself a card update, which would be self-defeating if the
+    # write path dropped what it was setting.
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    vid = ch.create_version(tmp_path, cid, "young", ch.blank_card("Winifred Ashcroft"))
+    card = ch.read_card(tmp_path, cid, vid)
+    card["data"]["description"] = "Twenty-six, and talks more than she will."
+    ch.update_version(tmp_path, cid, vid, card)
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "young"
+
+
+def test_create_version_overwrites_a_label_copied_from_its_source(tmp_path):
+    # `+ Version` copies the open version's card, labels and all, so a new
+    # version made from a labelled one must take its OWN name rather than
+    # inheriting the label it was cloned from.
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    first = ch.create_version(tmp_path, cid, "young", ch.blank_card("Winifred Ashcroft"))
+    second = ch.create_version(tmp_path, cid, "older", ch.read_card(tmp_path, cid, first))
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[second] == "older"
+    assert labels[first] == "young"
+
+
+def test_blank_label_falls_back_rather_than_showing_an_empty_row(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    vid = ch.create_version(tmp_path, cid, "young", ch.blank_card("Winifred Ashcroft"))
+    card = ch.read_card(tmp_path, cid, vid)
+    card["data"]["extensions"]["grimoire_label"] = "   "
+    ch.update_version(tmp_path, cid, vid, card)
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "young"      # the id, not ""
+
+
+def test_import_card_names_the_version_it_creates(tmp_path):
+    import json as _json
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    card = ch.blank_card("Winifred Ashcroft")
+    data = _json.dumps(card).encode()
+    _, vid = ch.import_card(tmp_path, data, "json", into_cid=cid, version_name="after the flood")
+    assert vid == "after-the-flood"
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "after the flood"
+
+
+def test_import_without_a_version_name_keeps_the_character_version_fallback(tmp_path):
+    import json as _json
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    card = ch.blank_card("Winifred Ashcroft")
+    card["data"]["character_version"] = "chub-v3"
+    _, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json", into_cid=cid)
+    assert vid == "chub-v3"
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "chub-v3"

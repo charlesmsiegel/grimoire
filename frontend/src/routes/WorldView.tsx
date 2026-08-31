@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, ENTITY_KINDS, type EntityKind, type EntityScope, type ModuleDetail } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
-import { CharacterEditor } from "../components/CharacterEditor";
+import { CharacterGrid } from "../components/CharacterGrid";
+import { characterHref } from "../components/character/shared";
 import { PCEditor } from "../components/PCEditor";
 import { TagEditor } from "../components/TagEditor";
 import { EntityEditor } from "../components/EntityEditor";
@@ -75,6 +76,7 @@ function countOf(key: IndexKey, scope: EntityScope, wid: string): Promise<number
 export default function WorldView({ campaign = false }: { campaign?: boolean }) {
   const { wid: widParam = "", cid = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [name, setName] = useState("");
@@ -89,7 +91,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [populated, setPopulated] = useState(0);
   const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
-  const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
   /** The greeting a cross-navigation asked for, with a nonce: opening the same
    *  node twice has to reach the editor twice. */
   const [focusGreeting, setFocusGreeting] = useState<{ gid: string; n: number } | null>(null);
@@ -180,6 +181,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   }, [campaign, worldMid]);
 
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
+  /** A character whose page sent the reader back here. A campaign grid opens on
+   *  its own cast, so a character reached by a link and never played would
+   *  vanish on the way back and read as deleted — the page hands their id over
+   *  in `location.state` and the grid widens the filter for them. */
+  const reveal = (location.state as { reveal?: string } | null)?.reveal ?? null;
   const scopeKey = `${scope.kind}:${scope.id}`;
   // A focused PC id belongs to the scope it was read in, so it is offered only
   // back in that scope. See `focusPC` on why this is derived, not cleared.
@@ -239,7 +245,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  to be open in it last. */
   function select(key: SectionKey) {
     setSection(key);
-    if (key === "characters") { setCharReset((n) => n + 1); setFocusChar(null); }
+    if (key === "characters") setCharReset((n) => n + 1);
     if (key === "greetings") setFocusGreeting(null);
     if (key === "pcs") setFocusPC(null);
     // ...and any entity nav, for the same reason the two above are cleared:
@@ -250,10 +256,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     setEntityNav(null);
   }
 
-  // a present-character link from the greeting view jumps to that character
+  // A present-character link from the greeting view, an owner chip, or a search
+  // hit. A character has a page of its own now, so this LEAVES this route
+  // rather than opening a pane inside it -- `characterHref` is the one place
+  // that knows where that page lives in each scope.
   function openCharacter(cid: string, vid: string) {
-    setFocusChar({ cid, vid });
-    setSection("characters");
+    navigate(characterHref(scope, cid, vid || undefined), { replace: true });
   }
 
   // a world-greeting link from a character page jumps to that greeting -- as
@@ -284,7 +292,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     const i = ref.indexOf(":");
     const kind = ref.slice(0, i);
     const id = ref.slice(i + 1);
-    if (kind === "characters") openCharacter(id, ""); // "" -> CharacterEditor falls back to default version
+    if (kind === "characters") openCharacter(id, ""); // "" -> the page opens the default version
     else if (kind === "pcs") {
       setFocusPC((p) => ({ pid: id, n: (p?.n ?? 0) + 1, scope: scopeKey }));
       setSection("pcs");
@@ -312,7 +320,15 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     const section = params.get("section") ?? "";
     const id = params.get("id") ?? "";
     if (!section) return;
-    if (section === "characters") { openCharacter(id, params.get("v") ?? ""); return; }
+    // `?section=characters` alone is a request for the GRID — the rail's own
+    // row, and the link the hub's cast card carries. Only an `id` is a request
+    // for one character, and only that redirects to their page; without this
+    // guard the bare section navigated to an empty character id.
+    if (section === "characters") {
+      if (id) openCharacter(id, params.get("v") ?? "");
+      else setSection("characters");
+      return;
+    }
     if (section === "greetings") { openGreeting(id); return; }
     // Images is a section like any other to the column, but it is not in
     // `INDEX` -- that list is the world's record kinds, and images are a view
@@ -327,7 +343,10 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       else openEntity(section as IndexKey, id);
     }
     // The openers are redeclared every render and close over nothing that
-    // outlives one -- `params` is the only real dependency.
+    // outlives one -- `params` is the only real dependency. Listing them would
+    // re-run this on every render, which for `openCharacter` means navigating
+    // to the character named in the URL again after the reader has left them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
   /** What this page contributes to ⌘K: its own index, so a section can be
@@ -495,7 +514,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             indefinitely if one stalls. */}
         {!campaign && section === "images"
           && <ImagesView key={wid} wid={wid} forCampaign={params.get("for")} />}
-        {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
+        {section === "characters" && <CharacterGrid scope={scope} wid={wid} resetSignal={charReset} reveal={reveal} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
                                        focus={pcFocus?.pid ?? null} focusNonce={pcFocus?.n ?? 0}
                                        module={moduleCtx} />}

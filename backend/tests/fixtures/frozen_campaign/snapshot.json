@@ -90,7 +90,7 @@
       "versions": [
         {
           "id": "default",
-          "name": "Mara"
+          "name": "default"
         }
       ]
     },
@@ -109,11 +109,11 @@
       "versions": [
         {
           "id": "default",
-          "name": "Seraphine"
+          "name": "default"
         },
         {
           "id": "veiled",
-          "name": "Seraphine"
+          "name": "veiled"
         }
       ]
     }
@@ -780,7 +780,7 @@
       "versions": [
         {
           "id": "default",
-          "name": "Mara"
+          "name": "default"
         }
       ]
     },
@@ -799,7 +799,7 @@
       "versions": [
         {
           "id": "default",
-          "name": "Seraphine"
+          "name": "default"
         }
       ]
     }

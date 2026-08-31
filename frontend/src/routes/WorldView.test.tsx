@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route, useNavigate } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import WorldView from "./WorldView";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 import { PaletteProvider, usePalette, type PaletteItem } from "../components/palette";
@@ -144,11 +144,25 @@ beforeEach(() => {
   ]);
 });
 
+/** Where the router ended up. A character is a page of its own now, so several
+ *  of this page's records LEAVE it, and "did the click go to the right place"
+ *  is the assertion those tests can still make here — what happens on arrival
+ *  belongs to `CharacterPage.test.tsx`. */
+let lastPath = "";
+function PathSpy() {
+  const loc = useLocation();
+  lastPath = loc.pathname + loc.search;
+  return null;
+}
+
 function renderAt() {
+  lastPath = "";
   render(
     <MemoryRouter initialEntries={["/worlds/w"]}>
+      <PathSpy />
       <Routes>
         <Route path="/worlds/:wid" element={<WorldView />} />
+        <Route path="*" element={<div>away</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -163,19 +177,25 @@ function GoTo({ to }: { to: string }) {
 }
 
 function renderAtUrl(url: string) {
+  lastPath = "";
   render(
     <MemoryRouter initialEntries={[url]}>
+      <PathSpy />
       <Routes>
         <Route path="/worlds/:wid" element={<WorldView />} />
+        <Route path="*" element={<div>away</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
 function renderCampaign() {
+  lastPath = "";
   render(
     <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
-      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} /></Routes>
+      <PathSpy />
+      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
+        <Route path="*" element={<div>away</div>} /></Routes>
     </MemoryRouter>,
   );
 }
@@ -250,18 +270,26 @@ test("picking PCs renders the PC editor", async () => {
 });
 
 test("opening a record swaps only main — the column keeps its selection", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "the-pact", name: "The Pact" }]);
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Lore"));
+  fireEvent.click(await screen.findByText("The Pact"));           // list -> detail
+
+  expect(indexRow("Lore")).toHaveClass("active");
+  expect(screen.getByRole("heading", { name: "Lore" })).toBeInTheDocument();
+  expect(indexRow("Characters")).toBeInTheDocument();
+});
+
+test("a character leaves this page — they own a screen, not a third of one", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
   ]);
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Characters"));
-  fireEvent.click(await screen.findByText("Mira"));               // grid -> detail
-  await waitFor(() => expect(api.readCharacter).toHaveBeenCalled());
-
-  expect(indexRow("Characters")).toHaveClass("active");
-  expect(screen.getByRole("heading", { name: "Characters" })).toBeInTheDocument();
-  expect(indexRow("Lore")).toBeInTheDocument();
+  fireEvent.click(await screen.findByText("Mira"));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/characters/mira"));
 });
 
 test("world-copy mode shows the fork banner, campaign back link, and campaign entity scope", async () => {
@@ -295,19 +323,14 @@ test("the Overview hosts the scenario importer, and the pinned row opens it", as
   expect(screen.getByRole("button", { name: /read card/i })).toBeInTheDocument();
 });
 
-test("openGreeting switches to Greetings and focuses the greeting", async () => {
-  (api.listCharacters as any).mockResolvedValue([
-    { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
-  ]);
+test("arriving at a greeting by URL opens it, not merely its section", async () => {
+  // The World-greetings chip that used to drive this from a character's detail
+  // pane is on the character's own page now, and it navigates here by URL --
+  // so this is the half WorldView still owns.
   (api.listGreetings as any).mockResolvedValue([
     { id: "sol-2", name: "SoL 2", character: "other", version: "main", present: ["mira"], requires_tags: [], predecessor_join: "all" },
   ]);
-  renderAt();
-  await screen.findByText("Drowned Realm");
-  fireEvent.click(indexRow("Characters"));
-  fireEvent.click(await screen.findByText("Mira"));               // grid -> detail
-  const wg = await screen.findByText("World greetings");
-  fireEvent.click(within(wg.parentElement as HTMLElement).getByText("SoL 2"));
+  renderAtUrl("/worlds/w?section=greetings&id=sol-2");
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "sol-2"));
   expect(indexRow("Greetings")).toHaveClass("active");
 });
@@ -326,7 +349,7 @@ test("campaign mode passes campaign scope and hides Tags and the Overview", asyn
   expect(screen.getByRole("link", { name: /source world/i })).toHaveAttribute("href", "/worlds/w");
 });
 
-test("campaign path resolves module context and threads it into the character editor's Sheet section", async () => {
+test("campaign path resolves module context for the sections that take one", async () => {
   (api.getCampaignModule as any).mockResolvedValue({ setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
   (api.readModule as any).mockResolvedValue(POOL_BASIC);
   (api.listCharacters as any).mockResolvedValue([
@@ -339,8 +362,10 @@ test("campaign path resolves module context and threads it into the character ed
   await screen.findByText(/World Copy/);
   await waitFor(() => expect(api.getCampaignModule).toHaveBeenCalledWith("c1"));
   await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
-  fireEvent.click(await screen.findByText("Mira"));
-  await screen.findByText("Sheet");
+  // The character's own Sheet panel is on the character's page, which resolves
+  // the same chain for itself; what the grid spends the module on is the
+  // sheet-aware create.
+  await screen.findByText("Mira");
 });
 
 test("editing a campaign's world keeps the campaign in the status bar", async () => {
@@ -423,12 +448,20 @@ test("reclassifying a record opens it in the section it moved to", async () => {
 });
 
 
-test("?section=characters&v= opens that character's version", async () => {
+test("?section=characters&id= redirects to that character's page, version and all", async () => {
+  // Kept working rather than chased down: SearchView builds these links
+  // generically, and the hub and the palette carry them too.
   (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);
   renderAtUrl("/worlds/w?section=characters&id=mira&v=main");
-  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith(
-    expect.objectContaining({ id: "w" }), "mira"));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/characters/mira?v=main"));
+});
+
+test("?section=characters with no id is a request for the grid, not for nobody", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);
+  renderAtUrl("/worlds/w?section=characters");
+  await screen.findByText("Mira");
   expect(indexRow("Characters")).toHaveClass("active");
+  expect(lastPath).toBe("/worlds/w?section=characters");
 });
 
 test("the index offers Push to campaigns, which lists what each campaign owes", async () => {

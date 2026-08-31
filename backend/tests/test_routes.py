@@ -2433,8 +2433,11 @@ def test_chub_unlinked_route(client):
 
     r = client.get(f"/api/worlds/{wid}/characters/chub-unlinked")
     assert r.status_code == 200
+    # `version_name` is the version's own label, which is its id here: the label
+    # chain no longer falls back to the card's name, since that is the same
+    # string for every version and made this chip read "Loose End (Loose End)".
     assert r.json() == {"versions": [
-        {"character": unlinked, "character_name": "Loose End", "version": "default", "version_name": "Loose End"},
+        {"character": unlinked, "character_name": "Loose End", "version": "default", "version_name": "default"},
     ]}
 
 

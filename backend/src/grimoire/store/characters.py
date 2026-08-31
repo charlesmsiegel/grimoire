@@ -99,6 +99,7 @@ def create_character(root: Path, name: str, version_name: str = "default", card:
     _char_dir(root, cid).mkdir(parents=True)
     vid = slugify(version_name)
     card = card or blank_card(name)
+    _apply_label(card, version_name, vid)
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
     atomic.write_text(_card_path(root, cid, vid), _dumps(card))
     atomic.write_text(_meta_path(root, cid), dump_frontmatter({"name": name, "default_version": vid}, ""))
@@ -108,6 +109,7 @@ def create_character(root: Path, name: str, version_name: str = "default", card:
 def create_version(root: Path, cid: str, version_name: str, card: dict) -> str:
     _require_char(root, cid)
     vid = uniquify(slugify(version_name), lambda v: _card_path(root, cid, v).exists())
+    _apply_label(card, version_name, vid)
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
     atomic.write_text(_card_path(root, cid, vid), _dumps(card))
     return vid
@@ -193,10 +195,54 @@ def read_card(root: Path, cid: str, vid: str) -> dict:
 
 
 def _version_label(card: dict, vid: str) -> str:
-    """Display label for a version: an explicit grimoire_label override (kept in
-    extensions so it never leaks into {{char}}), else the card's own name."""
+    """Display label for a version, worst case the id.
+
+    Three sources, in order: an explicit `grimoire_label` (kept in extensions so
+    it never leaks into `{{char}}`), the card spec's own `character_version`,
+    then the version id.
+
+    The card's NAME is deliberately not in that chain any more, though it used
+    to be the fallback. It is the same string for every version of a character
+    by construction -- so a character with three versions listed one name three
+    times, and the only thing that told them apart, the slug, was the one thing
+    never shown. An id at least differs per version.
+    """
     data = cards.card_data(card)
-    return (data.get("extensions") or {}).get("grimoire_label") or data.get("name", vid)
+    label = (data.get("extensions") or {}).get("grimoire_label")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    spec_version = data.get("character_version")
+    if isinstance(spec_version, str) and spec_version.strip():
+        return spec_version.strip()
+    return vid
+
+
+def _apply_label(card: dict, version_name: str, vid: str) -> None:
+    """Record what this version is called, unless the card already says it.
+
+    Cleared first, then written only if it adds something: a version created
+    FROM another's card inherits that card's label, so a clone of `young` named
+    `older` has to lose the inherited one whether or not it gains a new one.
+
+    What counts as adding something is asked of `_version_label` rather than
+    guessed at, so the two cannot drift: `"after the flood"` keeps its spacing
+    and case where the id would flatten it, and a card whose own
+    `character_version` reads `v2` is labelled `second` if that is what the
+    importer called it. What is NOT stored is a name the fallback chain already
+    produces -- `"default"` is its own id, and writing it into every card file
+    in the store would be pure noise.
+    """
+    data = cards.card_data(card)
+    extensions = data.get("extensions")
+    if not isinstance(extensions, dict):
+        if not isinstance(data, dict):   # a card too broken to carry metadata
+            return
+        extensions = {}
+        data["extensions"] = extensions
+    extensions.pop("grimoire_label", None)
+    label = (version_name or "").strip()
+    if label and label != _version_label(card, vid):
+        extensions["grimoire_label"] = label
 
 
 def _version_chub_source(card: dict) -> str:
@@ -605,7 +651,8 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
 
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
-                name: str | None = None, update_vid: str | None = None) -> tuple[str, str]:
+                name: str | None = None, update_vid: str | None = None,
+                version_name: str | None = None) -> tuple[str, str]:
     card = cards.loads(data, fmt)  # raises cards.CardParseError on bad input
     cards.bake_char_name(card)
     # Resolve (and unhook) a carried avatar BEFORE the card is written: the
@@ -626,11 +673,17 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     else:
         cname = name or card["data"].get("name", "Imported")
         if into_cid is None:
-            cid, vid = create_character(root, cname, "default", card)
+            cid, vid = create_character(root, cname, version_name or "default", card)
         else:
             cid = into_cid
+            # What the importer asked this version be called, else the card
+            # spec's own answer, else the character's name -- which is a poor
+            # label but has always been the last resort for the SLUG, and
+            # `_version_label` no longer repeats it on screen.
             vid = create_version(root, into_cid,
-                                 cards.card_data(card).get("character_version") or cname, card)
+                                 version_name
+                                 or cards.card_data(card).get("character_version")
+                                 or cname, card)
     if avatar is None and fmt == "png":
         avatar = (data, "png", "")  # the PNG file itself is the avatar
     if avatar:
