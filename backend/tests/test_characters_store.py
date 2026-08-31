@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from grimoire.store import characters as ch
@@ -1661,3 +1663,47 @@ def test_import_without_a_version_name_keeps_the_character_version_fallback(tmp_
     assert vid == "chub-v3"
     labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
     assert labels[vid] == "chub-v3"
+
+
+def test_a_label_the_caller_did_not_choose_never_masks_the_card_version(tmp_path):
+    # Importing a card that names its own version as a NEW character used to
+    # store "default" as the label -- the placeholder `create_character` uses
+    # for a version nobody named -- which then beat the card's own
+    # `character_version` in the fallback chain and hid it.
+    import json as _json
+    card = ch.blank_card("Winifred Ashcroft")
+    card["data"]["character_version"] = "young"
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    assert vid == "default"      # the id is unchanged: nothing re-slugs
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "young"
+
+
+def test_an_in_place_re_import_keeps_the_name_the_version_was_given(tmp_path):
+    # A chub re-download REPLACES the stored card, and the downloaded one knows
+    # nothing about a label somebody typed here.
+    import json as _json
+    cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
+    vid = ch.create_version(tmp_path, cid, "after the flood", ch.blank_card("Winifred Ashcroft"))
+    fresh = ch.blank_card("Winifred Ashcroft")
+    fresh["data"]["description"] = "redownloaded"
+    ch.import_card(tmp_path, _json.dumps(fresh).encode(), "json", into_cid=cid, update_vid=vid)
+    stored = ch.read_card(tmp_path, cid, vid)
+    assert stored["data"]["description"] == "redownloaded"
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "after the flood"
+
+
+def test_a_card_whose_extensions_are_not_an_object_still_reads(tmp_path):
+    # The store promises no schema, so `extensions` is whatever a text editor
+    # left there. A string used to raise on `.get` and take the whole roster
+    # read down rather than falling through to the next source.
+    cid, vid = ch.create_character(tmp_path, "Winifred Ashcroft")
+    p = tmp_path / "characters" / cid / f"{vid}.json"
+    card = json.loads(p.read_text(encoding="utf-8"))
+    card["data"]["extensions"] = "legacy"
+    card["data"]["character_version"] = "salvaged"
+    p.write_text(json.dumps(card), encoding="utf-8")
+    labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert labels[vid] == "salvaged"
+    assert [c["id"] for c in ch.list_characters(tmp_path)] == [cid]

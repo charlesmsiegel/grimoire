@@ -155,13 +155,15 @@ def set_chub_source(root: Path, cid: str, vid: str, full_path: str) -> None:
     (extensions, same spot as grimoire_label) so each variant of a character
     carries its own link rather than sharing one character-wide value."""
     card = read_card(root, cid, vid)
-    card.setdefault("data", {}).setdefault("extensions", {})["chub_source"] = full_path
+    # Through the same guarded writer as the label: `setdefault` does not
+    # replace a non-dict, so a hand-edited `extensions` string raised here.
+    _writable_extensions(card)["chub_source"] = full_path
     update_version(root, cid, vid, card)
 
 
 def clear_chub_source(root: Path, cid: str, vid: str) -> None:
     card = read_card(root, cid, vid)
-    ext = cards.card_data(card).get("extensions") or {}
+    ext = _extensions(card)
     if "chub_source" in ext:
         del ext["chub_source"]
         update_version(root, cid, vid, card)
@@ -194,6 +196,19 @@ def read_card(root: Path, cid: str, vid: str) -> dict:
     return json.loads(require_version(root, cid, vid).read_text(encoding="utf-8"))
 
 
+def _extensions(card: dict) -> dict:
+    """A card's `extensions` object, or `{}` when it does not have a usable one.
+
+    `cards.card_data`'s rule one level down: the store is user-editable JSON and
+    promises no schema, so `extensions` is whatever a text editor left there. A
+    string is truthy and has no `.get`, so `(data.get("extensions") or {})`
+    hands back something that raises one attribute access later -- which took
+    out the whole roster read, not just the odd card.
+    """
+    ext = cards.card_data(card).get("extensions")
+    return ext if isinstance(ext, dict) else {}
+
+
 def _version_label(card: dict, vid: str) -> str:
     """Display label for a version, worst case the id.
 
@@ -207,14 +222,34 @@ def _version_label(card: dict, vid: str) -> str:
     times, and the only thing that told them apart, the slug, was the one thing
     never shown. An id at least differs per version.
     """
-    data = cards.card_data(card)
-    label = (data.get("extensions") or {}).get("grimoire_label")
+    label = _extensions(card).get("grimoire_label")
     if isinstance(label, str) and label.strip():
         return label.strip()
-    spec_version = data.get("character_version")
+    spec_version = cards.card_data(card).get("character_version")
     if isinstance(spec_version, str) and spec_version.strip():
         return spec_version.strip()
     return vid
+
+
+def _writable_extensions(card: dict) -> dict:
+    """`_extensions`, but attached to the card so writes to it persist.
+
+    A card whose `data` is unusable gets a throwaway: nothing can be stored on
+    it, and the caller's write is dropped rather than raising.
+    """
+    data = cards.card_data(card)
+    ext = data.get("extensions")
+    if isinstance(ext, dict):
+        return ext
+    ext = {}
+    data["extensions"] = ext          # a no-op on `card_data`'s throwaway `{}`
+    return ext
+
+
+#: What `create_character` calls a first version nobody named. Treated as "no
+#: name given" rather than as a name, so importing a card that carries its own
+#: `character_version` is labelled by it instead of by this placeholder.
+DEFAULT_VERSION_NAME = "default"
 
 
 def _apply_label(card: dict, version_name: str, vid: str) -> None:
@@ -229,24 +264,20 @@ def _apply_label(card: dict, version_name: str, vid: str) -> None:
     and case where the id would flatten it, and a card whose own
     `character_version` reads `v2` is labelled `second` if that is what the
     importer called it. What is NOT stored is a name the fallback chain already
-    produces -- `"default"` is its own id, and writing it into every card file
-    in the store would be pure noise.
+    produces, nor `DEFAULT_VERSION_NAME`: that one is not a name a caller chose
+    but the one `create_character` uses for a first version nobody named, so
+    storing it would both be noise in every card file and mask the
+    `character_version` an imported card brought with it.
     """
-    data = cards.card_data(card)
-    extensions = data.get("extensions")
-    if not isinstance(extensions, dict):
-        if not isinstance(data, dict):   # a card too broken to carry metadata
-            return
-        extensions = {}
-        data["extensions"] = extensions
+    extensions = _writable_extensions(card)
     extensions.pop("grimoire_label", None)
     label = (version_name or "").strip()
-    if label and label != _version_label(card, vid):
+    if label and label != DEFAULT_VERSION_NAME and label != _version_label(card, vid):
         extensions["grimoire_label"] = label
 
 
 def _version_chub_source(card: dict) -> str:
-    return (cards.card_data(card).get("extensions") or {}).get("chub_source", "")
+    return _extensions(card).get("chub_source", "")
 
 
 def _importable_lore(card: dict) -> int:
@@ -669,6 +700,12 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
         _drop_avatar_uri(card, avatar[2])
     if update_vid is not None:
         cid, vid = into_cid, update_vid
+        # The incoming card REPLACES the stored one, so anything grimoire owns
+        # rather than the source does has to be carried across or a re-download
+        # silently un-names a version somebody named. `chub_source` is already
+        # re-applied by the caller for the same reason; the label is not
+        # re-derivable from anywhere, so it is carried here.
+        _carry_label(read_card(root, cid, vid), card)
         update_version(root, cid, vid, card)
     else:
         cname = name or card["data"].get("name", "Imported")
@@ -689,6 +726,14 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     if avatar:
         assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1])
     return cid, vid
+
+
+def _carry_label(stored: dict, incoming: dict) -> None:
+    """Move a version's stored label onto a card that is about to replace it."""
+    label = _extensions(stored).get("grimoire_label")
+    if not (isinstance(label, str) and label.strip()):
+        return
+    _writable_extensions(incoming)["grimoire_label"] = label
 
 
 def _sniff_card_format(data: bytes) -> str | None:

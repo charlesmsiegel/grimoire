@@ -82,8 +82,11 @@ export function VoiceAnchorSection(
   async function generate() {
     // `saving` too: a generation landing around an open PUT swaps the textarea
     // for a fresh draft while Save returns to its idle label, so the control
-    // says "saved" over a value that never was.
-    if (busy || saving) return;
+    // says "saved" over a value that never was. And `state` too: a draft that
+    // lands before the initial GET is overwritten by it, while a GET that then
+    // FAILS leaves the draft on screen and unsavable, because saving requires
+    // a read that succeeded.
+    if (busy || saving || state === "loading") return;
     setBusy(true);
     try {
       const r = await api.generateCharacterVoiceAnchor(scope, cid);
@@ -122,7 +125,9 @@ export function VoiceAnchorSection(
         <div className="column-actions">
           <button className="subtle" type="button" disabled={state !== "ready"}
                   onClick={() => setEditing(true)}>{text.trim() ? "Edit" : "Write one"}</button>
-          <button className="subtle" type="button" disabled={busy || saving} onClick={() => void generate()}>
+          <button className="subtle" type="button"
+                  disabled={busy || saving || state === "loading"}
+                  onClick={() => void generate()}>
             {busy ? "Generating…" : "Generate"}
           </button>
         </div>

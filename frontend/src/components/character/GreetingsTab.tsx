@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { GreetingMarkdown } from "../GreetingMarkdown";
 import { EditableField } from "./EditableField";
 
@@ -8,17 +9,26 @@ import { EditableField } from "./EditableField";
  *  so they are not counted by this tab either.
  */
 export function GreetingsTab(
-  { name, firstMes, greetings, editing, onEditingChange, onSaveFirstMes, onSaveGreetings }: {
+  { name, firstMes, greetings, editing, onEditingChange, busy, onSaveFirstMes, onSaveGreetings }: {
     name: string;
     firstMes: string;
     greetings: string[];
     editing: string | null;
     onEditingChange: (key: string | null) => void;
+    busy: boolean;
     onSaveFirstMes: (next: string) => Promise<boolean>;
     onSaveGreetings: (next: string[]) => Promise<boolean>;
   },
 ) {
-  const empty = !firstMes.trim() && greetings.length === 0;
+  /** A greeting being written that the card does not have yet.
+   *
+   *  It cannot be added by saving a placeholder first: `buildCard` drops blank
+   *  greetings on the way out — deliberately, so an emptied one is removed —
+   *  so a blank saved now would not survive the round trip that created it,
+   *  and the row would vanish under whatever had been typed into it. The row
+   *  lives here until it has content worth storing. */
+  const [adding, setAdding] = useState(false);
+  const empty = !firstMes.trim() && greetings.length === 0 && !adding;
 
   return <>
     <EditableField
@@ -28,6 +38,7 @@ export function GreetingsTab(
       rendered={<GreetingMarkdown>{firstMes}</GreetingMarkdown>}
       editing={editing === "greetings:first"}
       onEditingChange={(open) => onEditingChange(open ? "greetings:first" : null)}
+      disabled={busy}
       onSave={onSaveFirstMes}
     />
 
@@ -44,24 +55,38 @@ export function GreetingsTab(
         rendered={<blockquote className="greeting-quote"><GreetingMarkdown>{g}</GreetingMarkdown></blockquote>}
         editing={editing === `greetings:${i}`}
         onEditingChange={(open) => onEditingChange(open ? `greetings:${i}` : null)}
+        disabled={busy}
         onSave={(next) => onSaveGreetings(greetings.map((x, j) => (j === i ? next : x)))}
       />
     ))}
 
+    {adding && (
+      <EditableField
+        label={`Alternate greeting ${greetings.length + 1}`}
+        value=""
+        placeholder="Nothing written yet."
+        editing={editing === "greetings:new"}
+        onEditingChange={(open) => {
+          onEditingChange(open ? "greetings:new" : null);
+          if (!open) setAdding(false);      // cancelling drops the row entirely
+        }}
+        disabled={busy}
+        onSave={async (next) => {
+          if (!next.trim()) { setAdding(false); return true; }
+          const ok = await onSaveGreetings([...greetings, next]);
+          if (ok) setAdding(false);
+          return ok;
+        }}
+      />
+    )}
+
     <div className="form-actions">
-      <button className="subtle" type="button"
-              onClick={() => {
-                // Appended empty and opened for editing straight away, rather
-                // than saved blank: `buildCard` drops empty greetings on the
-                // way out, so a blank one saved now would not survive the round
-                // trip it was created by.
-                onEditingChange(`greetings:${greetings.length}`);
-                void onSaveGreetings([...greetings, " "]);
-              }}>
+      <button className="subtle" type="button" disabled={busy || adding}
+              onClick={() => { setAdding(true); onEditingChange("greetings:new"); }}>
         + Add greeting
       </button>
       {greetings.length > 0 && (
-        <button className="subtle" type="button"
+        <button className="subtle" type="button" disabled={busy}
                 onClick={() => {
                   if (!window.confirm(`Remove alternate greeting ${greetings.length}?`)) return;
                   void onSaveGreetings(greetings.slice(0, -1));

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import CharacterPage from "./CharacterPage";
 
@@ -661,4 +661,138 @@ test("back returns to the roster, in this scope", async () => {
 test("the birthdate picker is world-only and persists a complete date", async () => {
   await renderCampaign();
   expect(screen.queryByLabelText(/Birthdate/)).toBeNull();
+});
+
+// ------------------------------------------- what the review found (round 2)
+
+test("walking to another character remounts rather than reusing the page", async () => {
+  // React Router reuses an element when only a param changes, and every piece
+  // of this page's state is about ONE character: a stale card under the new
+  // name, an editor belonging to whoever you left, a tagline read on mount and
+  // saved against the current id.
+  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "Counts the tide." });
+  render(
+    <MemoryRouter initialEntries={["/worlds/realm/characters/seraphine"]}>
+      <Spy />
+      <Routes>
+        <Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByRole("heading", { name: "Seraphine", level: 1 });
+  await editField("Personality");            // an editor belonging to Seraphine
+
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL,
+    meta: { ...DETAIL.meta, id: "mara", name: "Mara" },
+    versions: [{ ...DETAIL.versions[0], card: card({ name: "Mara" }) }],
+  });
+  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "Keeps the ledger." });
+  fireEvent.click(screen.getByRole("link", { name: /All characters/ }));  // any nav
+  // Re-enter at the other character.
+  await waitFor(() => expect(lastLocation).toContain("section=characters"));
+});
+
+test("a save in flight holds every other field's control", async () => {
+  let release: (v: unknown) => void = () => {};
+  (api.updateVersion as any).mockReturnValue(new Promise((r) => { release = r; }));
+  await renderWorld();
+  const box = await editField("Personality");
+  fireEvent.change(box, { target: { value: "slower" } });
+  fireEvent.click(within(fieldBlock("Personality")).getByRole("button", { name: "Save" }));
+  // Opening a second field while the first is saving is how a whole-card PUT
+  // built from the pre-save card silently drops the write that is in flight.
+  await waitFor(() =>
+    expect(within(fieldBlock("Scenario")).getByRole("button", { name: "Edit" })).toBeDisabled());
+  await act(async () => { release({ ok: true }); });
+});
+
+test("a lore parse that lands after a version switch is dropped", async () => {
+  let release: (v: unknown) => void = () => {};
+  (api.lorebookParse as any).mockReturnValue(new Promise((r) => { release = r; }));
+  await renderWorld();
+  fireEvent.click(await screen.findByRole("button", { name: /Review 1 embedded lore entry/i }));
+  fireEvent.click(screen.getByRole("button", { name: "veiled" }));
+  await waitFor(() => expect(lastLocation).toContain("v=veiled"));
+  await act(async () => {
+    release({ entries: [{ name: "pact", keys: ["pact"], body: "x", category: "lore" }] });
+  });
+  // The previous version's entries must not appear under this one, where a
+  // commit would file them against the wrong card.
+  expect(screen.queryByText(/Review and route each entry/i)).toBeNull();
+});
+
+test("Generate is held until the anchor has actually been read", async () => {
+  let release: (v: unknown) => void = () => {};
+  (api.getCharacterVoiceAnchor as any).mockReturnValue(new Promise((r) => { release = r; }));
+  await renderWorld();
+  const anchor = (await screen.findByText("Reading…")).closest(".column-section") as HTMLElement;
+  // A draft that lands first is overwritten by the read; a read that then FAILS
+  // leaves the draft on screen and unsavable.
+  expect(within(anchor).getByRole("button", { name: "Generate" })).toBeDisabled();
+  await act(async () => { release({ voice_anchor: "" }); });
+});
+
+test("+ Add greeting writes only once there is something to write", async () => {
+  await renderWorld();
+  fireEvent.click(screen.getByRole("tab", { name: /Greetings/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "+ Add greeting" }));
+  const box = await screen.findByRole("textbox", { name: "Alternate greeting 2" });
+  // A blank placeholder saved to make the row exist would not survive the round
+  // trip: `buildCard` drops empty greetings on the way out.
+  expect(api.updateVersion).not.toHaveBeenCalled();
+  fireEvent.change(box, { target: { value: "The council chamber." } });
+  fireEvent.click(within(fieldBlock("Alternate greeting 2"))
+    .getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  expect((api.updateVersion as any).mock.calls[0][3].data.alternate_greetings)
+    .toEqual(["Rain on the shutters.", "The council chamber."]);
+});
+
+test("cancelling a new greeting leaves the card alone", async () => {
+  await renderWorld();
+  fireEvent.click(screen.getByRole("tab", { name: /Greetings/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "+ Add greeting" }));
+  await screen.findByRole("textbox", { name: "Alternate greeting 2" });
+  fireEvent.click(within(fieldBlock("Alternate greeting 2"))
+    .getByRole("button", { name: "Cancel" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("textbox", { name: "Alternate greeting 2" })).toBeNull());
+  expect(api.updateVersion).not.toHaveBeenCalled();
+});
+
+test("the creator is editable again, not just a byline", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ ...DETAIL.versions[0], card: card({ creator: "Saltmarch archive" }) }],
+  });
+  await renderWorld();
+  const box = await editField("Creator");
+  fireEvent.change(box, { target: { value: "The harbour board" } });
+  fireEvent.click(within(fieldBlock("Creator")).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  expect((api.updateVersion as any).mock.calls[0][3].data.creator).toBe("The harbour board");
+});
+
+test("picking a version re-reads the lock, so the page stops offering what is gone", async () => {
+  // Seated but NOT locked to a version: that is the state that offers Pick.
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", scenes: ["001--x"] },
+  ]);
+  (api.pickVersion as any).mockResolvedValue({ ok: true });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await renderCampaign();
+  await screen.findByRole("button", { name: "Pick this version" });
+  fireEvent.click(screen.getByRole("button", { name: "Pick this version" }));
+  // The lock lives in the appearance record, which `refresh()` does not read —
+  // without a re-read the page kept offering "+ New version" and the backend
+  // answered the button it should not have drawn with a 409.
+  await waitFor(() => expect((api.listAppearances as any).mock.calls.length).toBeGreaterThan(1));
+});
+
+test("going back hands the grid the character, so its filter cannot swallow them", async () => {
+  await renderCampaign();
+  const back = screen.getByRole("link", { name: /All characters/ });
+  fireEvent.click(back);
+  await waitFor(() => expect(lastLocation).toBe("/campaigns/run/world?section=characters"));
 });

@@ -47,7 +47,27 @@ type CardTabKey = "card" | "lore" | "greetings" | "art";
  *  `EditableField`. One field is open at a time, which is `editing` below: a
  *  save PUTs the whole card, so two open fields is how one clobbers the other.
  */
+/** The route element: one mount per character.
+ *
+ *  React Router reuses an element when only a param changes, so walking from
+ *  one character to another — a search hit, an owner chip, the palette — kept
+ *  every piece of this page's state alive across the change: the previous
+ *  card on screen under the new name until the read landed, an open editor
+ *  belonging to the character you left, and a `TaglineSection` that reads on
+ *  mount and would then have saved the old text against the new id.
+ *
+ *  Keying on the record makes the change a remount, which retires all of it at
+ *  once — including every in-flight read, whose `live` flag then correctly
+ *  reads false. That is the same reason this page could drop the request-token
+ *  discipline the old editor needed: it is per-record now, so long as this key
+ *  says so.
+ */
 export default function CharacterPage({ campaign = false }: { campaign?: boolean }) {
+  const { wid = "", cid = "", eid = "" } = useParams();
+  return <CharacterRecord key={`${campaign ? cid : wid}/${eid}`} campaign={campaign} />;
+}
+
+function CharacterRecord({ campaign }: { campaign: boolean }) {
   const { wid: widParam = "", cid: cidParam = "", eid = "" } = useParams();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -71,6 +91,15 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
   const [tab, setTab] = useState<CardTabKey>("card");
   /** Which field is open for editing, `"<section>:<key>"`. One at a time. */
   const [editing, setEditing] = useState<string | null>(null);
+  /** True while a whole-card write is in flight.
+   *
+   *  Every field save PUTs the ENTIRE card built from the `card` in state, so
+   *  two of them in flight at once is a lost update: the second was built
+   *  before the first landed, and overwrites it. One field being open is not
+   *  enough to prevent that — opening a second field closes the first, which
+   *  can happen while the first is still saving. So the page holds the lock,
+   *  and every edit affordance is disabled until the write has been re-read. */
+  const [saving, setSaving] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
   const [voiceAnchorCap, setVoiceAnchorCap] = useState<number | null>(null);
   const [module, setModule] = useState<ModuleDetail | null>(null);
@@ -190,6 +219,13 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
 
   // Campaign scope: which version this campaign is locked to, the world's
   // versions for the import picker, and the campaign's record of the character.
+  /** Bumped by anything that changes what this campaign has locked, so the
+   *  effect below re-runs. `refresh()` re-reads the CHARACTER; the lock lives
+   *  in the appearance record, which is a different read — without this, Pick
+   *  left the page still offering "+ New version" and the backend answered the
+   *  button it should not have drawn with a 409. */
+  const [lockEpoch, setLockEpoch] = useState(0);
+
   useEffect(() => {
     if (worldScope || !eid) { setCampaignState(null); setLocked(null); return; }
     let alive = true;
@@ -218,7 +254,7 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
       }
     })();
     return () => { alive = false; };
-  }, [worldScope, scope.id, eid]);
+  }, [worldScope, scope.id, eid, lockEpoch]);
 
   useEffect(() => {
     if (worldScope || !wid || !eid) { setWorldVersions([]); return; }
@@ -256,8 +292,12 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
   }, [scope.kind, scope.id, wid, eid]);
 
   // A review describes one version's stored book; rows left up across a version
-  // switch would commit the previous card's entries.
-  useEffect(() => { setBookReview(null); setBookMsg(null); }, [vid]);
+  // switch would commit the previous card's entries. The counter invalidates a
+  // PARSE STILL IN FLIGHT across that switch too — clearing the rows alone
+  // would let its late response repopulate them with the old version's
+  // entries, under a version whose own button is showing.
+  const bookReq = useRef(0);
+  useEffect(() => { bookReq.current++; setBookReview(null); setBookMsg(null); }, [vid]);
   useEffect(() => { setEditing(null); }, [vid]);
 
   // ---- writes ------------------------------------------------------------
@@ -267,8 +307,9 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
    *  that exactly one field is ever open, and that the result is re-read rather
    *  than assumed. */
   async function saveField(patch: Record<string, unknown>): Promise<boolean> {
-    if (!detail || !card) return false;
+    if (!detail || !card || saving) return false;
     setError(null);
+    setSaving(true);
     const next = { ...card, data: { ...card.data, ...patch } };
     try {
       await api.updateVersion(scope, detail.meta.id, vid, buildCard(next, greetings));
@@ -291,14 +332,17 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
     } catch (err: unknown) {
       setError(err);
       return false;
+    } finally {
+      if (live.current) setSaving(false);
     }
   }
 
   /** The greeting list is the one card field that is not a string, so it saves
    *  through its own path rather than `saveField`'s patch. */
   async function saveGreetings(next: string[]): Promise<boolean> {
-    if (!detail || !card) return false;
+    if (!detail || !card || saving) return false;
     setError(null);
+    setSaving(true);
     try {
       await api.updateVersion(scope, detail.meta.id, vid, buildCard(card, next));
       setGreetings(next);
@@ -308,6 +352,8 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
     } catch (err: unknown) {
       setError(err);
       return false;
+    } finally {
+      if (live.current) setSaving(false);
     }
   }
 
@@ -383,6 +429,7 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
     if (!window.confirm(`Lock '${detail.meta.name}' to this version? Other versions are removed from the campaign.`)) return;
     try {
       await api.pickVersion(scope.id, "characters", eid, vid);
+      setLockEpoch((n) => n + 1);
       await refresh();
     } catch (err: unknown) { setError(err); }
   }
@@ -391,6 +438,7 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
     if (!window.confirm("Replace the locked version with the world's copy?")) return;
     try {
       await api.importVersion(scope.id, "characters", eid, fromVid);
+      setLockEpoch((n) => n + 1);
       await refresh();
     } catch (err: unknown) { setError(err); }
   }
@@ -412,9 +460,10 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
     if (!stored) return;
     setBookMsg(null);
     try {
+      const mine = ++bookReq.current;
       const file = new File([JSON.stringify(stored)], "card.json", { type: "application/json" });
       const { entries } = await api.lorebookParse(wid, file, "json");
-      if (live.current) setBookReview(entries);
+      if (live.current && mine === bookReq.current) setBookReview(entries);
     } catch (err: unknown) { setError(err); }
   }
 
@@ -468,7 +517,11 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
   const campaignLabel = campaignName || scope.id;
 
   const column = <>
-    <Link className="column-back" to={charactersHref(scope)}>‹ All characters</Link>
+    {/* `reveal` is what stops the campaign grid's appeared filter swallowing a
+        character reached by a link and never played — landing on a grid that
+        hides them reads as the record having been deleted. */}
+    <Link className="column-back" to={charactersHref(scope)}
+          state={{ reveal: eid }}>‹ All characters</Link>
 
     {hasAvatar
       ? <button className="identity-art avatar-crop-btn" type="button"
@@ -490,6 +543,7 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
                  onImportFromWorld={(v) => void importFromWorld(v)}
                  onOpenVersion={openVersion}
                  onImportFile={() => versionFileRef.current?.click()}
+                 busy={saving}
                  onChanged={refresh} onError={setError} />
     <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
            aria-label="Import version" onChange={onImportVersionFile} />
@@ -588,7 +642,7 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
         {tab === "card" && (
           <CardTab scope={scope} wid={wid} cid={eid} vid={vid} card={card} detail={detail}
                    worldGreetings={worldGreetings} module={module}
-                   editing={editing} onEditingChange={setEditing}
+                   editing={editing} onEditingChange={setEditing} busy={saving}
                    onSaveField={saveField} onRefresh={refresh} onError={setError}
                    galleryProg={galleryProg} setGalleryProg={setGalleryProg}
                    setImportMsg={setImportMsg}
@@ -619,7 +673,7 @@ export default function CharacterPage({ campaign = false }: { campaign?: boolean
 
         {tab === "greetings" && (
           <GreetingsTab name={name} firstMes={firstMes} greetings={greetings}
-                        editing={editing} onEditingChange={setEditing}
+                        editing={editing} onEditingChange={setEditing} busy={saving}
                         onSaveFirstMes={(v) => saveField({ first_mes: v })}
                         onSaveGreetings={saveGreetings} />
         )}

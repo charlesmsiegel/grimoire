@@ -27,7 +27,7 @@ function withLabel(card: Card, label: string): Card {
  */
 export function VersionList(
   { scope, detail, vid, locked, campaignLabel, worldVersions, onPick, onImportFromWorld,
-    onOpenVersion, onImportFile, onChanged, onError }: {
+    onOpenVersion, onImportFile, busy, onChanged, onError }: {
     scope: EntityScope;
     detail: CharacterDetail;
     vid: string;
@@ -41,6 +41,9 @@ export function VersionList(
     onOpenVersion: (id: string) => void;
     /** world scope: import a card file as a new, named version. */
     onImportFile: () => void;
+    /** A whole-card write is in flight elsewhere on the page. A rename is one
+     *  too, so it waits rather than racing it. */
+    busy: boolean;
     onChanged: () => Promise<void> | void;
     onError: (err: unknown) => void;
   },
@@ -49,12 +52,13 @@ export function VersionList(
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [importVid, setImportVid] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [writing, setWriting] = useState(false);
+  const held = busy || writing;
 
   async function rename(id: string) {
     const card = detail.versions.find((v) => v.id === id)?.card;
     if (!card) return;
-    setBusy(true);
+    setWriting(true);
     try {
       await api.updateVersion(scope, detail.meta.id, id, withLabel(card, draft));
       setRenaming(null);
@@ -62,14 +66,14 @@ export function VersionList(
     } catch (err: unknown) {
       onError(err);
     } finally {
-      setBusy(false);
+      setWriting(false);
     }
   }
 
   async function addVersion() {
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
-    setBusy(true);
+    setWriting(true);
     try {
       const current = detail.versions.find((v) => v.id === vid)?.card;
       if (!current) return;
@@ -82,7 +86,7 @@ export function VersionList(
     } catch (err: unknown) {
       onError(err);
     } finally {
-      setBusy(false);
+      setWriting(false);
     }
   }
 
@@ -111,7 +115,7 @@ export function VersionList(
                        if (e.key === "Enter") void rename(v.id);
                        else if (e.key === "Escape") setRenaming(null);
                      }} />
-              <button className="version-flag" type="button" disabled={busy}
+              <button className="version-flag" type="button" disabled={held}
                       onClick={() => void rename(v.id)}>Save</button>
             </div>
           ) : (
@@ -124,7 +128,7 @@ export function VersionList(
                 {v.name}
               </button>
               <button className="version-rename" type="button" title="Rename this version"
-                      aria-label={`Rename ${v.name}`}
+                      aria-label={`Rename ${v.name}`} disabled={held}
                       onClick={() => { setDraft(v.name); setRenaming(v.id); }}>✎</button>
               {v.id === locked
                 ? <span className="version-flag locked">Locked in {campaignLabel}</span>
@@ -138,7 +142,7 @@ export function VersionList(
 
       <div className="column-actions">
         {(worldScope || !locked) && (
-          <button className="subtle" type="button" disabled={busy} onClick={() => void addVersion()}>
+          <button className="subtle" type="button" disabled={held} onClick={() => void addVersion()}>
             + New version
           </button>
         )}

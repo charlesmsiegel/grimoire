@@ -24,13 +24,13 @@ const SOLO = ["mes_example", "creator_notes"];
 /** `TEXT_FIELDS` is the card's PROSE fields; the name is not one of them — it
  *  had its own control above the form, and now it is a field like any other and
  *  needs a label of its own or it renders as its key. */
-const EXTRA_LABELS: Record<string, string> = { name: "Name" };
+const EXTRA_LABELS: Record<string, string> = { name: "Name", creator: "Creator" };
 
 const labelOf = (key: string) =>
   TEXT_FIELDS.find((f) => f.key === key)?.label ?? EXTRA_LABELS[key] ?? key;
 
 export function CardTab(
-  { scope, wid, cid, vid, card, detail, worldGreetings, module, editing, onEditingChange,
+  { scope, wid, cid, vid, card, detail, worldGreetings, module, editing, onEditingChange, busy,
     onSaveField, onRefresh, onError, galleryProg, setGalleryProg, setImportMsg, onOpenGreeting,
     bookCount, bookReview, bookKinds, bookMsg, onReviewBook, onCommitBook, onPatchBook,
     onCancelBook }: {
@@ -44,6 +44,10 @@ export function CardTab(
     module: ModuleDetail | null;
     editing: string | null;
     onEditingChange: (key: string | null) => void;
+    /** A whole-card write is in flight — every other field's control is held
+     *  off until it has landed, or the second write is built from a card that
+     *  predates the first and silently drops it. */
+    busy: boolean;
     onSaveField: (patch: Record<string, unknown>) => Promise<boolean>;
     onRefresh: () => Promise<void>;
     onError: (err: unknown) => void;
@@ -78,6 +82,7 @@ export function CardTab(
       editing={editing === `card:${key}`}
       onEditingChange={(open) => onEditingChange(open ? `card:${key}` : null)}
       onSave={(next) => onSaveField({ [key]: next })}
+      disabled={busy}
       {...extra}
     />
   );
@@ -150,7 +155,10 @@ export function CardTab(
   const featuring = worldGreetings.filter((g) => (g.present ?? []).includes(cid));
 
   return <>
-    {field("name", { multiline: false })}
+    <div className="card-field-pair">
+      {field("name", { multiline: false })}
+      {field("creator", { multiline: false, placeholder: "Nobody credited." })}
+    </div>
 
     {field("description", {
       // The cost of this one field, where it is being read. It is the largest
@@ -181,6 +189,7 @@ export function CardTab(
       </div>}
       editing={editing === "card:tags"}
       onEditingChange={(open) => onEditingChange(open ? "card:tags" : null)}
+      disabled={busy}
       onSave={(next) => onSaveField({
         tags: next.split(",").map((t) => t.trim()).filter(Boolean),
       })}
