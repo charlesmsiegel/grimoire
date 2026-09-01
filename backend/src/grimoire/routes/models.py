@@ -495,6 +495,7 @@ class ChubImportBody(BaseModel):
     url: str
     into: str | None = None
     into_version: str | None = None
+    version_name: str | None = None
 
 
 class ChubSourceBody(BaseModel):

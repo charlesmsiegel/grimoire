@@ -361,6 +361,34 @@ test("importing a version asks what to call it and sends that name", async () =>
     "realm", file, "json", "seraphine", "elder"));
 });
 
+test("importing a version from a URL sends the URL and the name", async () => {
+  (api.importCharacterFromChub as any).mockResolvedValue({
+    character: "seraphine", version: "after-the-flood", updated: false,
+    gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] },
+  });
+  await renderWorld();
+  fireEvent.click(screen.getByRole("button", { name: "+ From URL…" }));
+  const url = await screen.findByRole("textbox", { name: "Card URL" });
+  fireEvent.change(url, { target: { value: "creator/seraphine" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Version name" }),
+                  { target: { value: "after the flood" } });
+  fireEvent.click(screen.getByRole("button", { name: "Import" }));
+  // No `into_version`: a URL import forks a version rather than overwriting
+  // whichever one happens to be open.
+  await waitFor(() => expect(api.importCharacterFromChub).toHaveBeenCalledWith(
+    "realm", "creator/seraphine", "seraphine", undefined, "after the flood"));
+});
+
+test("a URL import cannot be submitted until a URL is typed", async () => {
+  await renderWorld();
+  fireEvent.click(screen.getByRole("button", { name: "+ From URL…" }));
+  const submit = await screen.findByRole("button", { name: "Import" });
+  expect(submit).toBeDisabled();
+  fireEvent.change(screen.getByRole("textbox", { name: "Card URL" }),
+                  { target: { value: "creator/seraphine" } });
+  expect(submit).not.toBeDisabled();
+});
+
 // ------------------------------------------------------------- the two scopes
 
 test("world scope renders no campaign section at all", async () => {

@@ -125,6 +125,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   const [bookMsg, setBookMsg] = useState<string | null>(null);
   const bookKinds = useEntityKinds((bookReview?.length ?? 0) > 0);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importUrlOpen, setImportUrlOpen] = useState(false);
   const versionFileRef = useRef<HTMLInputElement>(null);
 
   const live = useRef(true);
@@ -424,6 +425,25 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     } catch (err: unknown) { setError(err); }
   }
 
+  /** The URL twin of `confirmImportVersion`. `into_version` is deliberately
+   *  left undefined: the backend overwrites a version in place when the link
+   *  it is given matches that version's stored one, and this button promises
+   *  to ADD a version. Re-downloading over the open one is the card tab's job,
+   *  where the stored link is what the user is acting on. */
+  async function confirmImportUrl(choice: ImportChoice) {
+    setImportUrlOpen(false);
+    if (!choice.url) return;
+    setError(null);
+    try {
+      const { version } = await api.importCharacterFromChub(
+        wid, choice.url, eid, undefined, choice.versionName || undefined);
+      const d = await reload();
+      if (d) loadVersion(d, version);
+      openVersion(version);
+      await runLocalize(version);
+    } catch (err: unknown) { setError(err); }
+  }
+
   async function runPick() {
     if (!detail) return;
     if (!window.confirm(`Lock '${detail.meta.name}' to this version? Other versions are removed from the campaign.`)) return;
@@ -543,6 +563,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                  onImportFromWorld={(v) => void importFromWorld(v)}
                  onOpenVersion={openVersion}
                  onImportFile={() => versionFileRef.current?.click()}
+                 onImportUrl={() => setImportUrlOpen(true)}
                  busy={saving}
                  onChanged={refresh} onError={setError} />
     <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
@@ -606,6 +627,12 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                              fixedTo={{ id: eid, name: detail.meta.name }}
                              onCancel={() => setImportFile(null)}
                              onConfirm={(c) => void confirmImportVersion(c)} />
+      )}
+      {importUrlOpen && (
+        <ImportVersionDialog urlMode characters={roster}
+                             fixedTo={{ id: eid, name: detail.meta.name }}
+                             onCancel={() => setImportUrlOpen(false)}
+                             onConfirm={(c) => void confirmImportUrl(c)} />
       )}
 
       <div className="screen-head">

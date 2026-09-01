@@ -459,6 +459,28 @@ def test_import_from_chub_into_existing_character_adds_a_version(tmp_path, monke
     assert {v["id"] for v in ch.read_character(tmp_path, cid)["versions"]} == {"default", result["version"]}
 
 
+def test_import_from_chub_into_existing_character_names_the_new_version(tmp_path, monkeypatch):
+    from grimoire.store import cards, chub
+
+    cid, _ = ch.create_character(tmp_path, "Seraphine")
+    png = cards.dumps(ch.blank_card("Variant"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/variant/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/variant", into_cid=cid,
+                                 version_name="after the flood")
+
+    # The importer's name decides both the slug and what the list shows --
+    # without it the version is called after the card, so every card pulled
+    # from one creator's page lands indistinguishable from the last.
+    assert result["version"] == "after-the-flood"
+    versions = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert versions["after-the-flood"] == "after the flood"
+
+
 def test_import_from_chub_into_matching_chub_source_updates_in_place(tmp_path, monkeypatch):
     from grimoire.store import assets, cards, chub
 

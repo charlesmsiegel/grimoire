@@ -1635,10 +1635,13 @@ export const api = {
   importCharacterBook: (wid: string, cid: string, vid: string) =>
     request<{ created: { kind: string; id: string }[] }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/lorebook/import`),
-  importCharacterFromChub: (wid: string, url: string, into?: string, intoVersion?: string) =>
+  importCharacterFromChub: (wid: string, url: string, into?: string, intoVersion?: string,
+                            versionName?: string) =>
     request<ChubImportResult>(
       "POST", `/api/worlds/${wid}/characters/import/chub`,
-      into ? { url, into, into_version: intoVersion } : { url }),
+      { url,
+        ...(into ? { into, into_version: intoVersion } : {}),
+        ...(versionName ? { version_name: versionName } : {}) }),
   setCharacterChubSource: (wid: string, cid: string, vid: string, url: string) =>
     request<{ chub_source: string }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-source`, { url }),

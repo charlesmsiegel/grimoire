@@ -557,7 +557,8 @@ def post_character_import_chub(wid: str, body: ChubImportBody):
     root = _world_root_or_404(wid)
     try:
         return store.characters.import_from_chub(root, body.url, into_cid=body.into,
-                                                 into_vid=body.into_version)
+                                                 into_vid=body.into_version,
+                                                 version_name=body.version_name)
     except store.chub.ChubParseError:
         raise HTTPException(status_code=400, detail="not a valid URL")
     except store.chub.ChubFetchError:

@@ -2229,6 +2229,29 @@ def test_chub_import_route(client, monkeypatch):
     assert body["lore"] == {"lorebooks_found": 0, "created": []}
 
 
+def test_chub_import_route_names_the_version_it_creates(client, monkeypatch):
+    from grimoire.store import cards, chub
+
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"}).json()["character"]
+    png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
+                        "data": {"name": "Winifred", "extensions": {}}}, "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/winifred/chara_card_v2.png",
+    })
+    monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    r = client.post(f"/api/worlds/{wid}/characters/import/chub",
+                     json={"url": "creator/winifred", "into": cid,
+                           "version_name": "after the flood"})
+    assert r.status_code == 200
+    assert r.json()["version"] == "after-the-flood"
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    named = {v["id"]: v["name"] for v in detail["versions"]}
+    assert named["after-the-flood"] == "after the flood"
+
+
 def test_chub_import_route_updates_in_place_when_already_linked(client, monkeypatch):
     from grimoire.store import cards, chub
 

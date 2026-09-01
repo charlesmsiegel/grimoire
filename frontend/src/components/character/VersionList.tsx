@@ -27,7 +27,7 @@ function withLabel(card: Card, label: string): Card {
  */
 export function VersionList(
   { scope, detail, vid, locked, campaignLabel, worldVersions, onPick, onImportFromWorld,
-    onOpenVersion, onImportFile, busy, onChanged, onError }: {
+    onOpenVersion, onImportFile, onImportUrl, busy, onChanged, onError }: {
     scope: EntityScope;
     detail: CharacterDetail;
     vid: string;
@@ -41,6 +41,10 @@ export function VersionList(
     onOpenVersion: (id: string) => void;
     /** world scope: import a card file as a new, named version. */
     onImportFile: () => void;
+    /** The same, for a card fetched from a URL rather than one already on
+     *  disk. Always ADDS a version -- re-downloading over the open one is
+     *  the card tab's job, where the stored link is what identifies it. */
+    onImportUrl: () => void;
     /** A whole-card write is in flight elsewhere on the page. A rename is one
      *  too, so it waits rather than racing it. */
     busy: boolean;
@@ -146,9 +150,10 @@ export function VersionList(
             + New version
           </button>
         )}
-        {worldScope && (
+        {worldScope && <>
           <button className="subtle" type="button" onClick={onImportFile}>+ Import version…</button>
-        )}
+          <button className="subtle" type="button" onClick={onImportUrl}>+ From URL…</button>
+        </>}
         {vid !== detail.meta.default_version && (
           <button className="subtle" type="button" onClick={() => void setDefault()}>Set default</button>
         )}

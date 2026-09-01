@@ -9,6 +9,8 @@ export type ImportChoice = {
    *  `character_version`, then to the id — never to the character's name, which
    *  is the same for every version. */
   versionName: string;
+  /** Where to fetch the card from, in URL mode. Empty for a file import. */
+  url: string;
 };
 
 /** Where a card lands, asked before it is imported rather than derived.
@@ -24,8 +26,13 @@ export type ImportChoice = {
  *  characters, and a dialog per file would be worse than no dialog at all.
  */
 export function ImportVersionDialog(
-  { fileName, characters, fixedTo, onCancel, onConfirm }: {
-    fileName: string;
+  { fileName, urlMode, characters, fixedTo, onCancel, onConfirm }: {
+    /** The chosen file's name. Absent in URL mode, where nothing is chosen yet. */
+    fileName?: string;
+    /** Ask for a URL to fetch the card from instead of taking a chosen file.
+     *  A chub.ai link brings the avatar, gallery and linked lorebooks with it;
+     *  any other URL is fetched and parsed as a bare PNG or JSON card. */
+    urlMode?: boolean;
     characters: CharacterSummary[];
     /** Pre-targeted at one character (the page's own `+ Import version…`), so
      *  the picker is not offered and only the name is asked for. */
@@ -38,6 +45,7 @@ export function ImportVersionDialog(
   const [into, setInto] = useState(fixedTo?.id ?? "");
   const [query, setQuery] = useState("");
   const [versionName, setVersionName] = useState("");
+  const [url, setUrl] = useState("");
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -46,7 +54,7 @@ export function ImportVersionDialog(
   }, [characters, query]);
 
   const chosen = fixedTo ?? characters.find((c) => c.id === into);
-  const ready = !asVersion || !!chosen;
+  const ready = (!asVersion || !!chosen) && (!urlMode || !!url.trim());
 
   useHotkeys(
     [{ keys: "escape", label: "Cancel", group: "THIS PANEL",
@@ -57,7 +65,16 @@ export function ImportVersionDialog(
   return (
     <div className="tagline-modal-backdrop" role="dialog" aria-label="Import card">
       <div className="tagline-modal import-dialog">
-        <h3>Import {fileName}</h3>
+        <h3>{urlMode ? "Import from URL" : `Import ${fileName}`}</h3>
+
+        {urlMode && (
+          <label className="field">
+            <span className="data-label">Card URL</span>
+            <input type="url" aria-label="Card URL" value={url}
+                   placeholder="chub.ai/characters/… · creator/slug · or a direct card URL"
+                   onChange={(e) => setUrl(e.target.value)} />
+          </label>
+        )}
 
         {!fixedTo && (
           <div className="chips" role="group" aria-label="Import as">
@@ -108,6 +125,7 @@ export function ImportVersionDialog(
                   onClick={() => onConfirm({
                     into: asVersion ? (chosen?.id ?? null) : null,
                     versionName: asVersion ? versionName.trim() : "",
+                    url: urlMode ? url.trim() : "",
                   })}>
             Import
           </button>

@@ -828,12 +828,15 @@ def download_card(url_or_path: str) -> tuple[bytes, str, str, dict | None]:
 
 
 def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
-                      into_vid: str | None = None) -> dict:
+                      into_vid: str | None = None,
+                      version_name: str | None = None) -> dict:
     """Download a character card from a URL and import/update it. A chub.ai
     URL or "creator/slug" shorthand gets the full chub.ai treatment (avatar,
     gallery, linked lorebooks); any other URL is fetched directly and parsed
     as a PNG or JSON card -- gallery/lorebooks stay empty there, since that
-    metadata only exists on chub.ai."""
+    metadata only exists on chub.ai. `version_name` names the version the
+    card lands in; it applies only when one is created, since an overwrite
+    keeps the name the existing version already carries."""
     data, fmt, stored_url, node = download_card(url_or_path)
 
     # Re-downloading into a version already linked to this same URL overwrites
@@ -858,7 +861,7 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
         if updated:
             cid, vid = import_card(root, data, fmt, into_cid, update_vid=into_vid)
         else:
-            cid, vid = import_card(root, data, fmt, into_cid)
+            cid, vid = import_card(root, data, fmt, into_cid, version_name=version_name)
     except cards.CardParseError as exc:
         raise chub.ChubFetchError(str(exc)) from exc
     if not updated:
