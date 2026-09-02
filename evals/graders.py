@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 from grimoire.store import absorb, fence, length_drift, scenes
 
+from . import slop
+
 # Eval-owned, unlike TRIM: the app has no opinion about a reply being too SHORT
 # (drift correction only ever trims), so there is no production constant to
 # borrow. Deliberately far below the budget — this is collapse detection, for
@@ -362,3 +364,47 @@ def grade_containment(text: str, secret: str) -> list[Check]:
     """
     return [Check("containment.output", secret.lower() not in text.lower(),
                   f"reply leaked the owned lore marker {secret!r}")]
+
+
+# ------------------------------------------------------------------ slop
+
+def grade_slop(text: str, players: frozenset[str], established: frozenset[str],
+               rendered_block: str) -> list[Check]:
+    """Score a reply against the graded subset of the natural-prose block.
+
+    A strict subset, deliberately: the template's semantic instructions -- the
+    rule of three, redundant adjective pairs, explaining an emotion just shown,
+    decorative metaphor -- are not gradable by regex, and the spec's ungraded
+    inventory names every one. A green result means the graded subset held, not
+    that the block was obeyed. slop.not_x_but_y in particular is a floor on its
+    family rather than a decision procedure for it.
+
+    `rendered_block` is the CURRENT render of natural_prose.j2, so the drift
+    guard fails when an instruction this grader scores against has left the
+    template.
+    """
+    prose, names = slop.normalize(text, players)
+    gone = slop.missing_sources(rendered_block)
+    measurable, m_detail = slop.is_measurable(prose)
+    phrases = slop.found_phrases(prose)
+    stock = slop.found_stock_names(prose, names, established)
+    beats = slop.overused_beats(prose)
+    constructions = slop.found_constructions(prose)
+    s_ok, s_detail = slop.sentence_variance(prose)
+    p_ok, p_detail = slop.paragraph_variance(prose)
+    return [
+        Check("slop.list_current", not gone,
+              f"no longer in natural_prose.j2: {gone}"),
+        Check("slop.measurable", measurable, m_detail),
+        Check("slop.phrases", not phrases, f"banned phrases present: {phrases}"),
+        Check("slop.stock_names", not stock,
+              f"unestablished stock names present: {stock}"),
+        Check("slop.beat_words", not beats,
+              f"beat words past {slop.BEAT_REPEAT_MAX}: {beats}"),
+        Check("slop.not_x_but_y", not constructions,
+              f"banned constructions present: {constructions}"),
+        Check("slop.sentence_variance", s_ok, s_detail),
+        Check("slop.paragraph_uniformity", p_ok, p_detail),
+        Check("slop.em_dash_spacing", not slop.em_dash_adjacent(prose),
+              "consecutive paragraphs both use an em dash"),
+    ]

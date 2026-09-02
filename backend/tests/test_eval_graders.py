@@ -856,3 +856,32 @@ def test_negative_corpus_trips_nothing(label):
     assert not slop.em_dash_adjacent(text)
     assert slop.sentence_variance(text)[0]
     assert slop.paragraph_variance(text)[0]
+
+
+def _grade(text, established=frozenset()):
+    return {c.name: c for c in graders.grade_slop(
+        text, frozenset({"Winifred"}), established, _rendered_block())}
+
+
+def test_grade_slop_names_all_nine_checks():
+    checks = _grade(_VARIED)
+    assert set(checks) == {
+        "slop.list_current", "slop.measurable", "slop.phrases",
+        "slop.stock_names", "slop.beat_words", "slop.not_x_but_y",
+        "slop.sentence_variance", "slop.paragraph_uniformity",
+        "slop.em_dash_spacing"}
+
+
+def test_grade_slop_passes_clean_varied_prose():
+    assert all(c.ok for c in _grade(_VARIED).values())
+
+
+def test_grade_slop_fails_only_measurable_on_a_collapsed_reply():
+    """The set-equality property the `terse` recording depends on."""
+    failed = {n for n, c in _grade("She nodded.").items() if not c.ok}
+    assert failed == {"slop.measurable"}
+
+
+def test_grade_slop_catches_a_stock_name_in_a_speaker_label():
+    text = _VARIED + "\n\n**Elara:** Evening."
+    assert not _grade(text)["slop.stock_names"].ok
