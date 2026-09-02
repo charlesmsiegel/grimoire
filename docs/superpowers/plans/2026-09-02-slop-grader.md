@@ -168,8 +168,16 @@ def test_sentences_does_not_split_on_a_known_abbreviation():
         "Dr. Rowan waited.", "Nobody came."]
 
 
+def test_sentences_recognises_an_abbreviation_inside_a_quotation():
+    """The common dialogue case. The abbreviation check has to strip the
+    LEADING quote as well as the trailing terminator, or `"Dr.` is not
+    recognised as `dr` and the line splits mid-quotation."""
+    assert slop.sentences('"Dr. Rowan waited." Nobody came.') == [
+        '"Dr. Rowan waited."', "Nobody came."]
+
+
 def test_sentences_drops_spans_with_no_word_tokens():
-    assert slop.sentences("Yes.  ...  ") == ["Yes.", "..."]
+    assert slop.sentences("Yes.   \n\n  ") == ["Yes."]
 
 
 def test_paragraphs_splits_on_blank_lines_and_drops_empty_ones():
@@ -265,7 +273,10 @@ def sentences(prose: str) -> list[str]:
     start = 0
     for m in _SENTENCE_BREAK.finditer(prose):
         head = prose[start:m.end(1)]
-        last = head.split()[-1].rstrip(".!?…\"”')]").lower() if head.split() else ""
+        tokens = head.split()
+        # Strip quotes and brackets from BOTH ends before the terminator, so
+        # `"Dr.` inside a quotation is still recognised as an abbreviation.
+        last = tokens[-1].strip("\"“”‘’'()[]").rstrip(".!?…").lower() if tokens else ""
         if last in _ABBREVIATIONS:
             continue
         out.append(head.strip())
@@ -350,8 +361,11 @@ def test_every_entry_source_is_still_in_the_template(entry):
     Grading a phrase the app has stopped banning is the failure this catches.
     An entry ADDED to the template is not graded until it is mirrored here --
     a stated limitation, and the direction that actually gets exercised, since
-    the pink-elephant remedy on record is trimming the ban list."""
-    assert entry.source in _rendered_block()
+    the pink-elephant remedy on record is trimming the ban list.
+
+    Compared whitespace-flat: the template is hard-wrapped, so six of these
+    sources span a line break in the render."""
+    assert slop._flat(entry.source) in slop._flat(_rendered_block())
 
 
 def test_missing_sources_reports_what_left_the_template():
@@ -394,7 +408,11 @@ Append to `evals/slop.py`:
 # match inflections the template never spells out without the guard failing on
 # its own list.
 
-_AP = r"['’]"          # straight and curly apostrophe, both admitted
+# The template itself uses only STRAIGHT apostrophes (U+0027) — verified: it
+# contains eight of them and no U+2019. Every `source` below must therefore be
+# written with a straight apostrophe or the drift guard fails on its own list.
+# The `pattern` side admits both, because a model may well type the curly one.
+_AP = r"['’]"
 
 
 @dataclass(frozen=True)
@@ -415,13 +433,15 @@ LITERAL_PHRASES: tuple[Entry, ...] = (
     _lit("the air thick with"),
     _lit("a smile playing on", r"\ba smile playing on\b"),
     _lit("eyes never leaving"),
-    _lit("couldn" + "’" + "t help but",
-         r"\bcouldn" + _AP + r"t help but\b"),
-    _lit("couldn" + "’" + "t shake the feeling",
+    _lit("couldn't help but", r"\bcouldn" + _AP + r"t help but\b"),
+    _lit("couldn't shake the feeling",
          r"\bcouldn" + _AP + r"t shake the feeling\b"),
+    # `\w+ ` is OPTIONAL on both tails: the template's own wording is "heart
+    # pounding or hammering in a chest or against ribs", so requiring an
+    # intervening possessive would miss the bare form the template spells out.
     _lit("heart pounding or hammering",
          r"\bheart (?:pounding|hammering)\b[^.!?…]{0,40}?"
-         r"(?:in \w+ chest|against \w+ ribs)"),
+         r"(?:in (?:\w+ )?chest|against (?:\w+ )?ribs)"),
     _lit("casting long shadows"),
     _lit("something else entirely"),
     _lit("spreading across her face",
@@ -458,7 +478,7 @@ JUDGMENT_ONLY: tuple[Entry, ...] = (
 # not match inside a longer name.
 STOCK_NAMES: tuple[Entry, ...] = tuple(
     _lit(n) for n in ("Elara", "Lyra", "Kael", "Aria", "Seraphina", "Selene",
-                      "Thorne", "Voss", "Vance", "Blackwood"))
+                      "Thorne", "Voss", "Vance", "Blackwood", "Ashford"))
 
 # Template: "Beat words -- ration." A cap, not a ban: these are ordinary words.
 # `source` is the template's own spelling; `pattern` carries the inflections.
@@ -489,11 +509,11 @@ BEAT_WORDS: tuple[Entry, ...] = (
 NOT_X_BUT_Y: tuple[Entry, ...] = (
     Entry('"Not X, but Y" in every disguise',
           re.compile(r"\bnot\s+[^.!?…]{1,60}?,\s*but\s+", re.IGNORECASE)),
-    Entry("it wasn" + "’" + "t just X — it was Y",
+    Entry("it wasn't just X — it was Y",
           re.compile(r"\b(?:it|he|she|they)\s+(?:wasn|weren)" + _AP +
                      r"t\s+just\s+[^.!?…]{1,60}?[—–]\s*"
                      r"(?:it|he|she|they)\s+(?:was|were)\b", re.IGNORECASE)),
-    Entry("she didn" + "’" + "t X; she Y" + "’" + "d",
+    Entry("she didn't X; she Y'd",
           re.compile(r"\b(?:he|she|they|it)\s+didn" + _AP +
                      r"t\s+[^.!?…;]{1,60}?;\s*(?:he|she|they|it)\s+\w",
                      re.IGNORECASE)),
@@ -507,8 +527,7 @@ NOT_X_BUT_Y: tuple[Entry, ...] = (
 # went on scoring replies against it.
 RHYTHM_SOURCES: tuple[Entry, ...] = (
     _lit("Vary sentence length and paragraph shape"),
-    _lit("if the last paragraph used one, the next doesn"
-         + "’" + "t"),
+    _lit("if the last paragraph used one, the next doesn't"),
 )
 
 ALL_ENTRIES: tuple[Entry, ...] = (
@@ -516,9 +535,22 @@ ALL_ENTRIES: tuple[Entry, ...] = (
     + NOT_X_BUT_Y + RHYTHM_SOURCES)
 
 
+def _flat(text: str) -> str:
+    """Collapse all whitespace to single spaces.
+
+    `templates/` is hard-wrapped at ~72 columns, so a multi-word source like
+    "spreading across her face" is split by a newline in the render and would
+    never match verbatim. Six of the sources above span a wrap point. Both
+    sides are flattened before comparison, which also makes the guard immune to
+    a pure re-wrap of the template — an edit that changes no instruction.
+    """
+    return " ".join(text.split())
+
+
 def missing_sources(rendered: str) -> list[str]:
     """Entries whose literal source has left the template. The one-way guard."""
-    return [e.source for e in ALL_ENTRIES if e.source not in rendered]
+    flat = _flat(rendered)
+    return [e.source for e in ALL_ENTRIES if _flat(e.source) not in flat]
 ```
 
 - [ ] **Step 4: Run tests, and fix any source that does not match the template**
@@ -572,6 +604,33 @@ def test_every_literal_phrase_entry_actually_fires(entry):
     assert slop.found_phrases(probe), f"{entry.source!r} never fires"
 
 
+@pytest.mark.parametrize("probe", [
+    # Each ALTERNATION inside a multi-form pattern, not just one arm of it.
+    # Exercising `tapestry` alone would leave `symphony` and `dance` dead.
+    "It was a symphony of rope and water.",
+    "It was a dance of lantern light.",
+    "His heart hammering against ribs, he waited.",
+    "Her heart pounding against her ribs, she waited.",
+    "A shiver down his spine.",
+    "Knuckles whitened on the rail.",
+])
+def test_phrase_alternations_each_fire(probe):
+    assert slop.found_phrases(probe), f"{probe!r} should have matched"
+
+
+@pytest.mark.parametrize("entry", slop.BEAT_WORDS, ids=lambda e: e.source)
+def test_every_beat_group_actually_fires(entry):
+    """Per-entry coverage for the beat cap. Without this, a dead regex for any
+    of the fifteen groups stays invisible behind whichever one the recording
+    happens to trip."""
+    # The template's own spelling, repeated past the cap.
+    word = entry.source.lower()
+    text = " ".join([f"She {word}."] * (slop.BEAT_REPEAT_MAX + 1))
+    assert any(source == entry.source
+               for source, _ in slop.overused_beats(text)), \
+        f"{entry.source!r} never fires"
+
+
 @pytest.mark.parametrize("entry", slop.STOCK_NAMES, ids=lambda e: e.source)
 def test_every_stock_name_entry_actually_fires(entry):
     assert slop.found_stock_names(f"{entry.source} waited.", [], frozenset())
@@ -581,13 +640,23 @@ def test_every_stock_name_entry_actually_fires(entry):
 def test_every_construction_entry_actually_fires(entry):
     probe = {
         '"Not X, but Y" in every disguise': "It was not fear, but fury.",
-        "it wasn’t just X — it was Y":
-            "It wasn’t just a warning — it was a promise.",
-        "she didn’t X; she Y’d":
-            "She didn’t walk; she prowled.",
+        "it wasn't just X — it was Y":
+            "It wasn't just a warning — it was a promise.",
+        "she didn't X; she Y'd":
+            "She didn't walk; she prowled.",
         "no longer X; now Y": "He was no longer a guest; now a debt.",
     }[entry.source]
     assert slop.found_constructions(probe), f"{entry.source!r} never fires"
+
+
+@pytest.mark.parametrize("probe", [
+    # The curly apostrophe a model is at least as likely to type as the
+    # straight one the template uses.
+    "It wasn’t just a warning — it was a promise.",
+    "She didn’t walk; she prowled.",
+])
+def test_constructions_match_the_curly_apostrophe_too(probe):
+    assert slop.found_constructions(probe)
 
 
 def test_constructions_do_not_match_across_a_sentence_boundary():
@@ -728,20 +797,30 @@ _FLAT = "\n\n".join(
     ["The lamp was lit and the room was warm and the door was shut."] * 6
     + ["The chair was old and the rug was worn and the clock was slow."] * 6)
 
+# 15 sentences over 8 paragraphs: comfortably past MIN_SENTENCES (12) and
+# MIN_PARAGRAPHS (4), so the variance assertions below actually measure rather
+# than short-circuiting on sample size. Sentence lengths run 1 to 33 words on
+# purpose. No em dash appears at all, so em_dash_adjacent has nothing to find.
 _VARIED = (
     "Rain.\n\n"
     "It came in off the water the way it always did at this hour, slow at "
     "first and then all at once, and Winifred pulled her coat tighter and "
-    "swore under her breath at nobody in particular.\n\n"
-    "Seraphine Vale did not move.\n\n"
+    "swore at nobody in particular.\n\n"
+    "Seraphine Vale did not move. She had been standing at the rail since "
+    "before the fog closed in, and she had the look of somebody who intended "
+    "to be standing there long after it lifted.\n\n"
     "\"You waited,\" Winifred said.\n\n"
     "\"I had nothing better on.\" The smuggler tipped her chin at the crates, "
     "stacked three high and sheeted against the weather, and let the silence "
-    "do the asking for her. Somewhere below, the water knocked at the pilings."
-    "\n\n"
+    "do the asking for her. Somewhere below, the water knocked at the "
+    "pilings.\n\n"
     "Winifred counted them. Twelve. That was four more than the manifest "
     "admitted to, and the manifest was the only honest thing she had been "
-    "given all week.")
+    "given all week.\n\n"
+    "\"Well?\"\n\n"
+    "Rowan came up the steps behind her with his bad shoulder set against the "
+    "wind, and he did not answer until he had looked at every crate in the "
+    "stack. \"Eight,\" he said. \"On paper.\"")
 
 
 def test_measurable_fails_on_undersized_output():
@@ -793,6 +872,10 @@ def test_em_dash_spaced_out_is_fine():
 # distribution and yields no statistical false-positive bound. A threshold
 # tightened until it trips one of these has gone too far.
 
+# Every passage clears MIN_SENTENCES and MIN_PARAGRAPHS. That is the whole
+# point: a passage below the floor short-circuits both variance checks to a
+# pass, and would place no constraint on VARIANCE_MIN at all -- a corpus that
+# looks like protection and is not.
 _LEGITIMATE = {
     "dialogue-heavy": (
         "\"Whose?\" Winifred asked.\n\n"
@@ -803,7 +886,16 @@ _LEGITIMATE = {
         "pier in the rain.\"\n\n"
         "\"That is not an answer.\"\n\n"
         "\"It is the one you get.\" Seraphine Vale crouched, worked a nail "
-        "loose from the nearest crate, and held it up to what light there was."),
+        "loose from the nearest crate, and held it up to what light there "
+        "was.\n\n"
+        "\"Ship's iron.\"\n\n"
+        "\"So?\"\n\n"
+        "\"So it came off a hull, and hulls that lose their nails on my pier "
+        "have generally lost something else first, which is the part you are "
+        "going to want to hear about before the harbourmaster does.\"\n\n"
+        "Winifred took the nail. It was cold. She turned it over twice, "
+        "thinking about the manifest and the four crates that were not on it, "
+        "and then she put it in her pocket without asking whether she could."),
     "deliberate fragments": (
         "Fog. Rope. The slap of water on stone.\n\n"
         "Winifred went down the steps counting, because counting was the only "
@@ -811,22 +903,48 @@ _LEGITIMATE = {
         "since the moment the letter came.\n\n"
         "Twelve steps. Then the boards.\n\n"
         "Somewhere out past the breakwater a bell went, once, and did not go "
-        "again, and she stood in the dark a while listening for it anyway."),
+        "again, and she stood in the dark a while listening for it anyway.\n\n"
+        "Nothing. Wind. The creak of a mooring taking up slack.\n\n"
+        "She had been told the pier was quiet at this hour and had believed "
+        "it, which she was beginning to understand had been the point of "
+        "telling her.\n\n"
+        "A light, far out. Then not."),
     "incantatory refrain": (
         "By the salt she swore it. By the keel she swore it. By the cold black "
-        "water under the boards she swore it, and meant every word.\n\n"
+        "water under the boards she swore it, and meant every word of it, "
+        "which was more than she could say for most of the promises she had "
+        "made that season.\n\n"
         "Rowan listened the way people listen to weather.\n\n"
-        "By the salt. By the keel. By the water. The old words had been said "
-        "on this pier for longer than either of them had been alive, and they "
-        "would be said here long after, which was rather the point of them."),
+        "By the salt. By the keel. By the water.\n\n"
+        "The old words had been said on this pier for longer than either of "
+        "them had been alive, and they would go on being said here long after "
+        "the two of them were done with it, which was rather the point of "
+        "them.\n\n"
+        "He said them back. Badly. She let it stand, because a promise said "
+        "badly is still a promise, and because the tide was not going to wait "
+        "for either of them to get the words right.\n\n"
+        "By the salt. By the keel. By the water. That was the whole of it, and "
+        "it had never needed to be more."),
     "terse action": (
         "The crate went over.\n\n"
         "Winifred caught the edge, took the weight badly, and felt something "
         "give in her shoulder that she would be paying for by morning.\n\n"
         "Rowan swore.\n\n"
-        "Then he had the other side, and between them they walked it back from "
-        "the drop, one careful pace at a time, until the boards stopped "
-        "complaining underfoot and the thing sat where it was meant to sit."),
+        "Then he had the other side, and between them they walked it back "
+        "from the drop, one careful pace at a time, until the boards stopped "
+        "complaining underfoot and the thing sat where it was meant to sit.\n\n"
+        "Her arm was shaking. She let it.\n\n"
+        "\"Again?\"\n\n"
+        "\"No.\"\n\n"
+        "They stood there in the wet with the stack between them and the "
+        "water, and neither of them said the obvious thing, which was that "
+        "whatever was in it had been worth somebody's while to load in "
+        "the dark.\n\n"
+        "Rowan sat down on the boards. He rubbed the shoulder. Winifred "
+        "watched the fog come apart over the breakwater and put together, for "
+        "the first time that week, an order of events that actually "
+        "accounted for the four crates nobody would admit to.\n\n"
+        "It was not a comfortable order of events. She kept it anyway."),
 }
 
 
@@ -1141,10 +1259,15 @@ def build_natural_prose() -> dict:
 
     players = frozenset(appearances.player_names(cid, sid))
     # The full established set the template's precedence rule requires: cast,
-    # players and every world record this fixture wrote. Assembled from what
-    # was created rather than scraped from record bodies.
+    # players, and every named record this fixture wrote -- the world, the
+    # location, the campaign and the scene. Assembled from what was created
+    # rather than scraped from record bodies. None of these tokens collides
+    # with slop.STOCK_NAMES today, so an omission here would not show up in the
+    # recordings; it is written out in full because the rule, not the fixture,
+    # is what the check is meant to honour.
     established = slop.established_tokens(
-        list(players) + _npc_names(cid, sid) + ["Saltmarch Pier", "Realm"])
+        list(players) + _npc_names(cid, sid)
+        + ["Saltmarch Pier", "Realm", "Saltmarch Nights", "The Pier at Dusk"])
     return {"cid": cid, "sid": sid, "players": players, "established": established}
 
 
@@ -1191,61 +1314,67 @@ Append to the `CASES` tuple in `evals/cases.py`:
 
 - [ ] **Step 5: Write the four recordings**
 
-Create `evals/recordings/natural-prose.compliant.md` — reuse the `_VARIED` passage from `test_eval_graders.py`, extended with speaker markers so it is a realistic reply, and long enough to clear `MIN_SENTENCES` (12) and `MIN_PARAGRAPHS` (4):
+**Every recording except `terse` must clear `MIN_SENTENCES` (12) and `MIN_PARAGRAPHS` (4) in its BODIES** — `split_reply` moves each `**Name:**` marker into the segment's `speaker` field, so marker lines do not count toward either floor. A recording below the floor fails `slop.measurable` on top of whatever it declared, and set equality rejects it.
+
+Create `evals/recordings/natural-prose.compliant.md` — 16 body sentences over 9 paragraphs, sentence lengths from 1 to 33 words, no em dash anywhere:
 
 ```markdown
-Rain came in off the water the way it always did at this hour.
+Rain.
+
+It came in off the water the way it always did at this hour, slow at first and then all at once, and Winifred pulled her coat tighter and swore at nobody in particular.
 
 **Winifred:** Twelve. The manifest says eight.
 
-Seraphine Vale did not move. She let the silence do the asking for her, the way she had every night that week, and somewhere below the water knocked at the pilings.
+Seraphine Vale did not move. She had been standing at the rail since before the fog closed in, and she had the look of somebody who intended to be standing there long after it lifted.
 
 **Seraphine Vale:** Then the manifest is wrong.
 
-**Rowan:** Or somebody wrote it wrong on purpose, which is a different thing, and worth more to whoever paid for the difference.
+**Rowan:** Or somebody wrote it wrong on purpose, which is a different thing, and worth a good deal more to whoever paid for the difference.
 
-He shifted the weight off his bad shoulder. The crates sat sheeted against the weather, three high, and none of them had been opened.
+He shifted the weight off his bad shoulder. The crates sat sheeted against the weather, three high. None of them had been opened.
 
 **Winifred:** Which is it?
 
 **Seraphine Vale:** Ask me on dry land.
 ```
 
-Create `natural-prose.slop.md` — varied rhythm, every literal family tripped:
+Create `natural-prose.slop.md` — 14 body sentences over 7 paragraphs with genuinely varied lengths, so the rhythm checks pass and only the four literal families trip. The single em dash sits in a paragraph whose neighbours have none:
 
 ```markdown
 The air thick with salt, Elara stood at the rail, a smile playing on her lips.
 
 **Elara:** You came.
 
-Her voice was barely above a whisper. She murmured it, and then murmured something else, and murmured a third time when Winifred did not answer, and the fourth murmur was lost entirely in the wind coming off the black water below them.
+Her voice was barely above a whisper. She murmured it. Then she murmured something else, and murmured a third time when Winifred did not answer, and the fourth murmur was lost entirely in the wind coming off the black water below them both.
 
 **Winifred:** I came.
 
-It wasn't just a debt — it was a promise. The ghost of a smile crossed her face, casting long shadows that were, in their way, a testament to how long she had waited for exactly this, one last time, on this pier, in this rain.
+It wasn't just a debt — it was a promise.
+
+The ghost of a smile crossed her face, casting long shadows that were, in their way, a testament to how long she had waited for exactly this, one last time, on this pier, in this rain. She said nothing. She did not have to.
 
 **Elara:** Then we understand each other.
 
-She couldn't help but nod.
+She couldn't help but agree.
 ```
 
-Create `natural-prose.flat.md` — literally clean, rhythmically monotone, em dashes in consecutive paragraphs, every paragraph the same length:
+Create `natural-prose.flat.md` — 12 sentences over 6 paragraphs, every sentence within a word or two of every other, every paragraph the same length, and an em dash in each so consecutive paragraphs both carry one. Literally clean: no banned phrase, stock name, beat word or construction appears:
 
 ```markdown
-The lamp was lit and the room was warm and the door was shut — tight.
+The lamp was lit and the room was warm and the door was shut — tight. The chair was old and the rug was worn and the clock was slow — slower.
 
-The chair was old and the rug was worn and the clock was slow — slower.
+The water was black and the boards were wet and the rope was frayed — badly. The wind was cold and the fog was thick and the night was long — longer.
 
-The water was black and the boards were wet and the rope was frayed — badly.
+The crate was full and the seal was good and the mark was clear — clearer. The step was loose and the rail was low and the drop was far — farther.
 
-The wind was cold and the fog was thick and the night was long — longer.
+The tide was high and the moon was thin and the watch was late — later.  The dock was long and the lane was dark and the gate was locked — firmly.
 
-The crate was full and the seal was good and the mark was clear — clearer.
+The coat was damp and the boot was split and the glove was lost — again. The bell was still and the gull was gone and the street was bare — barer.
 
-The step was loose and the rail was low and the drop was far — farther.
+The ink was dry and the page was full and the sum was short — shorter. The hour was late and the tale was old and the end was near — nearer.
 ```
 
-Create `natural-prose.terse.md` — a collapsed generation:
+Create `natural-prose.terse.md` — a collapsed generation, which without `slop.measurable` would score all green:
 
 ```markdown
 **Seraphine Vale:** Mine.
@@ -1336,3 +1465,35 @@ git commit -m "Document what the natural-prose case does and does not prove"
 **Known open item for the executor.** The `source` strings in Task 3 are transcribed from the template by hand. The parameterized drift test in Task 3 Step 4 is what catches a mismatch — most likely a straight apostrophe where the template has a curly one, or a hyphen where it has an em dash. Fix the `source`, never the template.
 
 **What this does not deliver.** The thresholds are a regression guard calibrated against hand-authored fixtures, not a validated detector. Replacing `natural-prose.compliant.md` with real model output via `evals\run.py --live --record --case natural-prose` is the first thing worth doing after this lands, and the numbers in `VARIANCE_MIN`, `PARA_VARIANCE_MIN` and `BEAT_REPEAT_MAX` should be revisited against it.
+
+## Fixture verification
+
+The fixture texts in Tasks 5 and 7 were **measured**, not estimated, by running
+the plan's own `sentences`/`paragraphs`/`coefficient_of_variation` logic over
+them before the plan was committed. An earlier draft asserted counts that were
+wrong in five places, which would have made every variance assertion
+short-circuit on sample size and broken set equality on three of the four
+recordings.
+
+| text | sentences | paragraphs | sentence CV | paragraph CV | adjacent em dash |
+|---|---:|---:|---:|---:|---|
+| `_VARIED` | 15 | 8 | 1.04 | 0.72 | no |
+| negative: dialogue-heavy | 14 | 10 | 1.21 | 1.06 | no |
+| negative: deliberate fragments | 13 | 7 | 1.24 | 0.64 | no |
+| negative: incantatory refrain | 15 | 6 | 1.19 | 0.55 | no |
+| negative: terse action | 14 | 10 | 1.14 | 0.96 | no |
+| `compliant.md` (bodies) | 13 | 9 | 1.04 | 0.87 | no |
+| `slop.md` (bodies) | 12 | 8 | 1.07 | 1.04 | no |
+| `flat.md` | 12 | 6 | 0.00 | 0.00 | **yes** |
+| `terse.md` (bodies) | 1 | 1 | — | — | no |
+
+Everything except `terse.md` clears `MIN_SENTENCES` (12) and `MIN_PARAGRAPHS`
+(4), so no variance assertion is vacuous. `flat.md` reads 0.00 on both because
+every one of its sentences is the same length by construction.
+
+Detector scan over the recordings, same method: `slop.md` trips all four
+literal families (8 phrases, `Elara`, `murmured`×4, the `wasn't just X — it was
+Y` form) and nothing else; `compliant.md` and `flat.md` trip none of them.
+
+If an executor edits any of these texts, re-run that measurement rather than
+trusting the table.
