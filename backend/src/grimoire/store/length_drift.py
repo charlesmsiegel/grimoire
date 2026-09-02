@@ -59,29 +59,26 @@ def segment(messages: list[dict], turn_sizes: list[int]) -> list[list[dict]]:
     return turns
 
 
-def _prose(content: str) -> str:
-    """`content` with everything that is not prose the model WROTE taken out.
+def prose(content: str) -> str:
+    """Content with the roll fence and expanded images removed.
 
-    Two exclusions, one reason. A roll fence is machine-readable output the
-    protocol asked for; an image is a picture the reply included, and on the
-    narrator's side of #376 it was requested with a ten-character handle that
-    `context.art.resolve_handles` expanded into markdown afterwards.
+    Public because evals/slop.py measures the same text this measures: two
+    normalizers that can disagree is the bug fence.py centralises against.
 
-    Counting either as prose punishes the model for complying, and the image is
-    the sharper case: one added ~7 phantom words and a whole phantom paragraph
-    to a fifteen-word reply, which under a `terse` budget is enough on its own
-    to trip the drift correction and tell the model to write LESS -- for having
-    done exactly what the available-art section asked of it.
+    A fence is the mechanical block the roll protocol asked for; an image is a
+    picture the reply included, and on the wire it is a URL. Counting either as
+    prose punishes the model for complying, and the image is not words the
+    model wrote.
     """
     return export.remove_images(_ROLL_FENCE.sub(" ", content))
 
 
 def _words(content: str) -> int:
-    return len(_prose(content).split())
+    return len(prose(content).split())
 
 
 def _paragraphs(content: str) -> int:
-    return max(len([p for p in _prose(content).split("\n\n") if p.strip()]), 1)
+    return max(len([p for p in prose(content).split("\n\n") if p.strip()]), 1)
 
 
 def _identity(speaker: str, cast_names) -> str:

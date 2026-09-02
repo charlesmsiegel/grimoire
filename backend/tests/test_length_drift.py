@@ -148,3 +148,18 @@ def test_cast_names_may_be_a_thunk_and_is_not_called_when_unmeasured():
     assert calls == []
     got = length_drift.measure([_msg("Winifred", 40)], [1], roster, BUDGET)
     assert calls == [1] and got["totals"] == [40]
+
+
+def test_prose_is_public_and_strips_fences_and_images():
+    """The eval slop grader imports this by name. It must stay public, and it
+    must keep doing both jobs -- a fence-only version would let expanded image
+    markdown into every sentence and paragraph statistic."""
+    text = ("She set the crate down.\n\n"
+            "```roll\ncheck: nerve\nactor: Seraphine Vale\n```\n\n"
+            "![a lantern](/api/worlds/realm/art/lantern.png)\n\n"
+            "The water took the light.")
+    out = length_drift.prose(text)
+    assert "check: nerve" not in out
+    assert "lantern.png" not in out
+    assert "She set the crate down." in out
+    assert "The water took the light." in out
