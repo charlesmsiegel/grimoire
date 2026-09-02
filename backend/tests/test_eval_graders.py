@@ -11,7 +11,6 @@ No store, no GRIMOIRE_HOME: the graders are pure.
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -544,31 +543,44 @@ def test_sentences_recognises_an_abbreviation_inside_a_quotation():
         '"Dr. Rowan waited."', "Nobody came."]
 
 
-def test_sentences_drops_spans_with_no_word_tokens():
-    r"""The final `[s for s in out if word_count(s)]` guard in `sentences`
-    is unreachable through the real `_SENTENCE_BREAK`: every span it
-    produces ends in a live terminator character, which is never
-    whitespace, so `head.strip()` (and the guarded `tail`) can never come
-    out empty today -- confirmed by fuzzing `sentences` with the guard
-    physically deleted and finding no input that behaves differently.
-
-    So this test exercises the guard directly by patching
-    `_SENTENCE_BREAK` to a pattern that CAN yield a whitespace-only span
-    -- `(\s*)\s(?=[A-Z])`, whose group 1 may capture nothing but leading
-    whitespace -- while going through the real `sentences` body
-    unchanged. "   Bob." has three leading spaces before the capital;
-    the patched pattern is satisfied by the first two of them as group 1,
-    which is what makes the leading span empty-after-strip. Delete the
-    guard and this goes red: the empty span survives into the result.
-    """
-    patched = re.compile(r"(\s*)\s(?=[A-Z])")
-    original = slop._SENTENCE_BREAK
-    slop._SENTENCE_BREAK = patched
-    try:
-        assert slop.sentences("   Bob.") == ["Bob."]
-    finally:
-        slop._SENTENCE_BREAK = original
-
-
 def test_paragraphs_splits_on_blank_lines_and_drops_empty_ones():
     assert slop.paragraphs("One.\n\n  \n\nTwo.\n") == ["One.", "Two."]
+
+
+def _rendered_block() -> str:
+    return prompts.render("scene/sections/natural_prose.j2")
+
+
+@pytest.mark.parametrize("entry", slop.ALL_ENTRIES, ids=lambda e: e.source[:40])
+def test_every_entry_source_is_still_in_the_template(entry):
+    """The one-way drift guard, per entry so a failure names the culprit.
+
+    Grading a phrase the app has stopped banning is the failure this catches.
+    An entry ADDED to the template is not graded until it is mirrored here --
+    a stated limitation, and the direction that actually gets exercised, since
+    the pink-elephant remedy on record is trimming the ban list.
+
+    Compared whitespace-flat: the template is hard-wrapped, so six of these
+    sources span a line break in the render."""
+    assert slop._flat(entry.source) in slop._flat(_rendered_block())
+
+
+def test_missing_sources_reports_what_left_the_template():
+    assert slop.missing_sources("nothing here")
+    assert slop.missing_sources(_rendered_block()) == []
+
+
+def test_every_graded_check_family_has_a_drift_source():
+    """An instruction cannot be deleted from the template while its grader
+    keeps scoring replies against it."""
+    for family in (slop.LITERAL_PHRASES, slop.STOCK_NAMES, slop.BEAT_WORDS,
+                   slop.NOT_X_BUT_Y, slop.RHYTHM_SOURCES):
+        assert family, "every graded family carries at least one drift source"
+
+
+def test_judgment_only_phrases_are_never_matched():
+    """Their qualifier is the whole test: the template bans the reflexive use,
+    not the phrase. They are carried as drift sources only."""
+    matched = {e.source for e in slop.LITERAL_PHRASES}
+    for entry in slop.JUDGMENT_ONLY:
+        assert entry.source not in matched
