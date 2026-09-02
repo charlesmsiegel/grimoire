@@ -849,6 +849,9 @@ _LEGITIMATE = {
 @pytest.mark.parametrize("label", sorted(_LEGITIMATE))
 def test_negative_corpus_trips_nothing(label):
     text = _LEGITIMATE[label]
+    assert slop.is_measurable(text)[0], (
+        "a corpus passage below the sample floor makes the two variance "
+        "assertions below vacuous -- they short-circuit to a pass")
     assert slop.found_phrases(text) == []
     assert slop.found_stock_names(text, [], frozenset()) == []
     assert slop.overused_beats(text) == []

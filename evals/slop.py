@@ -35,6 +35,10 @@ from grimoire.store import length_drift, scenes
 # of variation to mean anything, low enough not to gate a compact reply. Tune
 # against real prompts later.
 MIN_SENTENCES = 12
+# `slop` and `flat` sit at exactly 12 sentences and `compliant` only one above
+# at 13, so raising this past 12 breaks all three of the natural-prose
+# recordings together, not just the one nearest the line -- tuning it upward
+# later costs a re-recording, not just a number change.
 # `cinematic` permits at most 7 blocks, and block boundaries are paragraph
 # boundaries, so 4 sits comfortably under the ceiling. Tune later.
 MIN_PARAGRAPHS = 4
@@ -130,8 +134,10 @@ def paragraphs(prose: str) -> list[str]:
 
 
 def coefficient_of_variation(counts: list[int]) -> float:
-    """Population standard deviation over the mean. 0.0 for a degenerate list,
-    which is the flattest possible answer and the right one."""
+    """Population standard deviation over the mean. 0.0 when the values are
+    identical, which is the flattest possible answer and the right one. An
+    EMPTY list is not degenerate in that sense -- it raises ZeroDivisionError
+    on the mean, so callers must gate on the sample floor first; both do."""
     mean = sum(counts) / len(counts)
     if not mean:
         return 0.0

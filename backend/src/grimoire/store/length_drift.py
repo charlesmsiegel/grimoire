@@ -68,7 +68,9 @@ def prose(content: str) -> str:
     A fence is the mechanical block the roll protocol asked for; an image is a
     picture the reply included, and on the wire it is a URL. Counting either as
     prose punishes the model for complying, and the image is not words the
-    model wrote.
+    model wrote. An expanded image tag adds roughly seven phantom words and a
+    phantom paragraph to what may be a fifteen-word reply, which is enough on
+    its own to trip the drift correction under a `terse` budget.
     """
     return export.remove_images(_ROLL_FENCE.sub(" ", content))
 
