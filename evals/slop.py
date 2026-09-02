@@ -47,7 +47,7 @@ _ABBREVIATIONS = frozenset({
 # opening quote or a capital. The lookahead is what keeps `"Go." Mara left.`
 # from splitting inside the quotation.
 _SENTENCE_BREAK = re.compile(
-    r"([.!?…]+[\"\')\]]*)\s+(?=[\"\'(\[]*[A-Z])")
+    r"([.!?…]+[""'')\]]*)\s+(?=[""''(\[]*[A-Z])")
 
 
 def normalize(text: str, players: frozenset[str]) -> tuple[str, list[str]]:
@@ -79,7 +79,7 @@ def sentences(prose: str) -> list[str]:
         tokens = head.split()
         # Strip quotes and brackets from BOTH ends before the terminator, so
         # `"Dr.` inside a quotation is still recognised as an abbreviation.
-        last = tokens[-1].strip("\"""'''()[]").rstrip(".!?…").lower() if tokens else ""
+        last = tokens[-1].strip("\"”’'“‘()[]").rstrip(".!?…").lower() if tokens else ""
         if last in _ABBREVIATIONS:
             continue
         out.append(head.strip())
