@@ -47,7 +47,7 @@ _ABBREVIATIONS = frozenset({
 # opening quote or a capital. The lookahead is what keeps `"Go." Mara left.`
 # from splitting inside the quotation.
 _SENTENCE_BREAK = re.compile(
-    r"([.!?…]+[""'')\]]*)\s+(?=[""''(\[]*[A-Z])")
+    r"([.!?…]+[\"\"'')\]]*)\s+(?=[\"\"''(\[]*[A-Z])")
 
 
 def normalize(text: str, players: frozenset[str]) -> tuple[str, list[str]]:
