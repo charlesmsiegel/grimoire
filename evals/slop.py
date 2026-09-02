@@ -281,7 +281,7 @@ def _flat(text: str) -> str:
 
     `templates/` is hard-wrapped at ~72 columns, so a multi-word source like
     "spreading across her face" is split by a newline in the render and would
-    never match verbatim. Six of the sources above span a wrap point. Both
+    never match verbatim. Seven of the sources above span a wrap point. Both
     sides are flattened before comparison, which also makes the guard immune to
     a pure re-wrap of the template — an edit that changes no instruction.
     """
@@ -292,3 +292,56 @@ def missing_sources(rendered: str) -> list[str]:
     """Entries whose literal source has left the template. The one-way guard."""
     flat = _flat(rendered)
     return [e.source for e in ALL_ENTRIES if _flat(e.source) not in flat]
+
+
+# ---------------------------------------------------------------- the detectors
+
+# The count is global, not per block, so the block ceiling cannot justify this
+# directly. The instruction is that "not every line of dialogue needs a lean,
+# nod, or murmur": with `cinematic` permitting at most 7 blocks and 5 speakers,
+# a single beat word used a fourth time is reaching for the same reflex more
+# often than there are speakers to attribute it to. A structural argument for
+# the order of magnitude, not a measured optimum. Tune against real prompts.
+BEAT_REPEAT_MAX = 3
+
+
+def found_phrases(prose: str) -> list[str]:
+    """Banned phrases present. JUDGMENT_ONLY is deliberately not consulted."""
+    return [e.source for e in LITERAL_PHRASES if e.pattern.search(prose)]
+
+
+def established_tokens(names) -> frozenset[str]:
+    """Every established name flattened to its individual casefolded tokens.
+
+    Exemption is per token because the template's rule is that names already in
+    the scene, cast or world "are fixed; reproduce them exactly, even if they
+    appear below". A cast holding `Elara Vale` therefore exempts `Elara` alone
+    too. Over-permissive by construction, and that is the right direction: a
+    false negative reproduces an existing name, a false positive fails a reply
+    for obeying the prompt.
+    """
+    return frozenset(t.casefold() for n in names for t in n.split())
+
+
+def found_stock_names(prose: str, names: list[str],
+                      established: frozenset[str]) -> list[str]:
+    """Stock names in the prose OR in a speaker label, minus what is established.
+
+    Both halves are searched because split_reply routes a marker into the
+    segment's `speaker` field and out of its `content`: a reply that invents an
+    NPC called Elara and gives her a labelled block must fail.
+    """
+    haystack = prose + "\n" + "\n".join(names)
+    return [e.source for e in STOCK_NAMES
+            if e.pattern.search(haystack)
+            and e.source.casefold() not in established]
+
+
+def overused_beats(prose: str) -> list[tuple[str, int]]:
+    """Beat groups past the cap, as (source, count). Inflections count together."""
+    hits = [(e.source, len(e.pattern.findall(prose))) for e in BEAT_WORDS]
+    return [(source, n) for source, n in hits if n > BEAT_REPEAT_MAX]
+
+
+def found_constructions(prose: str) -> list[str]:
+    return [e.source for e in NOT_X_BUT_Y if e.pattern.search(prose)]

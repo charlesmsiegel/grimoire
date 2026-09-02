@@ -23,8 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from evals import graders  # noqa: E402
-from evals import slop  # noqa: E402
+from evals import graders, slop  # noqa: E402
 
 TERSE = {"reply_words": 150, "blocks": 3, "paragraphs": 1,
          "speakers": 2, "blocks_per_speaker": 1}
@@ -560,7 +559,7 @@ def test_every_entry_source_is_still_in_the_template(entry):
     a stated limitation, and the direction that actually gets exercised, since
     the pink-elephant remedy on record is trimming the ban list.
 
-    Compared whitespace-flat: the template is hard-wrapped, so six of these
+    Compared whitespace-flat: the template is hard-wrapped, so seven of these
     sources span a line break in the render."""
     assert slop._flat(entry.source) in slop._flat(_rendered_block())
 
@@ -584,3 +583,109 @@ def test_judgment_only_phrases_are_never_matched():
     matched = {e.source for e in slop.LITERAL_PHRASES}
     for entry in slop.JUDGMENT_ONLY:
         assert entry.source not in matched
+
+
+@pytest.mark.parametrize("entry", slop.LITERAL_PHRASES, ids=lambda e: e.source[:40])
+def test_every_literal_phrase_entry_actually_fires(entry):
+    """Per-entry coverage: a dead entry cannot hide behind a named check some
+    other entry already makes fail."""
+    probe = {
+        "heart pounding or hammering": "Her heart pounding in her chest, she ran.",
+        "a tapestry, symphony, or dance of anything": "It was a tapestry of light.",
+        "spreading across her face": "A grin spreading across her face.",
+        "shivers down the spine": "Shivers down her spine.",
+        "knuckles whitening": "Knuckles whitening on the rail.",
+        "a smile playing on": "A smile playing on her lips.",
+    }.get(entry.source, entry.source)
+    assert slop.found_phrases(probe), f"{entry.source!r} never fires"
+
+
+@pytest.mark.parametrize("probe", [
+    # Each ALTERNATION inside a multi-form pattern, not just one arm of it.
+    # Exercising `tapestry` alone would leave `symphony` and `dance` dead.
+    "It was a symphony of rope and water.",
+    "It was a dance of lantern light.",
+    "His heart hammering against ribs, he waited.",
+    "Her heart pounding against her ribs, she waited.",
+    "A shiver down his spine.",
+    "Knuckles whitened on the rail.",
+])
+def test_phrase_alternations_each_fire(probe):
+    assert slop.found_phrases(probe), f"{probe!r} should have matched"
+
+
+@pytest.mark.parametrize("entry", slop.BEAT_WORDS, ids=lambda e: e.source)
+def test_every_beat_group_actually_fires(entry):
+    """Per-entry coverage for the beat cap. Without this, a dead regex for any
+    of the fifteen groups stays invisible behind whichever one the recording
+    happens to trip."""
+    # The template's own spelling, repeated past the cap.
+    word = entry.source.lower()
+    text = " ".join([f"She {word}."] * (slop.BEAT_REPEAT_MAX + 1))
+    assert any(source == entry.source
+               for source, _ in slop.overused_beats(text)), \
+        f"{entry.source!r} never fires"
+
+
+@pytest.mark.parametrize("entry", slop.STOCK_NAMES, ids=lambda e: e.source)
+def test_every_stock_name_entry_actually_fires(entry):
+    assert slop.found_stock_names(f"{entry.source} waited.", [], frozenset())
+
+
+@pytest.mark.parametrize("entry", slop.NOT_X_BUT_Y, ids=lambda e: e.source[:30])
+def test_every_construction_entry_actually_fires(entry):
+    probe = {
+        '"Not X, but Y" in every disguise': "It was not fear, but fury.",
+        "it wasn't just X — it was Y":
+            "It wasn't just a warning — it was a promise.",
+        "she didn't X; she Y'd":
+            "She didn't walk; she prowled.",
+        "no longer X; now Y": "He was no longer a guest; now a debt.",
+    }[entry.source]
+    assert slop.found_constructions(probe), f"{entry.source!r} never fires"
+
+
+@pytest.mark.parametrize("probe", [
+    # The curly apostrophe a model is at least as likely to type as the
+    # straight one the template uses. Built via chr() rather than a typed
+    # curly character -- see evals/slop.py's module docstring for why.
+    "It wasn" + chr(0x2019) + "t just a warning — it was a promise.",
+    "She didn" + chr(0x2019) + "t walk; she prowled.",
+])
+def test_constructions_match_the_curly_apostrophe_too(probe):
+    assert slop.found_constructions(probe)
+
+
+def test_constructions_do_not_match_across_a_sentence_boundary():
+    """A length bound alone would let this match. The span class excludes
+    sentence terminators for exactly this reason."""
+    assert not slop.found_constructions("She was not there. But Rowan was.")
+
+
+def test_stock_name_is_exempt_when_established_as_a_single_token():
+    assert not slop.found_stock_names("Selene shrugged.", [],
+                                      slop.established_tokens(["Selene"]))
+
+
+def test_stock_name_is_exempt_when_established_inside_a_multiword_name():
+    """Exemption is per token: a cast that includes `Elara Vale` exempts the
+    token `Elara` everywhere, including alone. Requiring the full name at the
+    match site would flag a reply for obeying the template's own rule that
+    established names are reproduced exactly."""
+    established = slop.established_tokens(["Elara Vale"])
+    assert not slop.found_stock_names("Elara shrugged.", [], established)
+
+
+def test_stock_name_in_a_speaker_label_is_caught():
+    """The blind spot split_reply creates: the label never reaches the body."""
+    assert slop.found_stock_names("", ["Elara"], frozenset())
+
+
+def test_beat_words_cap_counts_inflections_together():
+    text = ("She murmured. He was murmuring. They murmur. "
+            "The wind murmurs.")
+    assert ("murmured", 4) in slop.overused_beats(text)
+
+
+def test_beat_words_below_the_cap_do_not_fire():
+    assert slop.overused_beats("She nodded. He nodded.") == []
