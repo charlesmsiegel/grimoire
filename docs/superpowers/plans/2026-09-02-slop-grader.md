@@ -1181,7 +1181,46 @@ git commit -m "grade_slop assembles the nine checks"
 - Consumes: `graders.grade_slop`.
 - Produces: `build_natural_prose() -> dict` with keys `cid`, `sid`, `players`, `established`; `grade_natural_prose(ctx, output) -> list[Check]`; a `Case` appended to `CASES`.
 
-- [ ] **Step 1: Write the failing test for the prompt-contract check**
+- [ ] **Step 1: Write the failing test for the case wiring**
+
+This is the red-first test for the task. Append to `backend/tests/test_eval_graders.py`:
+
+```python
+from evals import cases
+
+
+def test_natural_prose_case_is_registered():
+    """Red before Step 3. Without it, forgetting the builder, the grader or the
+    CASES entry leaves the whole suite green -- the case simply would not run,
+    and nothing else in this file would notice."""
+    case = cases.BY_ID["natural-prose"]
+    assert case.grade is cases.grade_natural_prose
+    assert case.build is cases.build_natural_prose
+    assert {r.variant for r in case.recordings} == {
+        "compliant", "slop", "flat", "terse"}
+
+
+def test_natural_prose_case_declares_the_right_failure_sets():
+    """The set-equality property the whole case rests on, asserted here as well
+    as by replay so a silently widened declaration is caught in one place."""
+    by_variant = {r.variant: set(r.expect_fail)
+                  for r in cases.BY_ID["natural-prose"].recordings}
+    assert by_variant["compliant"] == set()
+    assert by_variant["slop"] == {"slop.phrases", "slop.stock_names",
+                                  "slop.beat_words", "slop.not_x_but_y"}
+    assert by_variant["flat"] == {"slop.sentence_variance",
+                                  "slop.paragraph_uniformity",
+                                  "slop.em_dash_spacing"}
+    assert by_variant["terse"] == {"slop.measurable"}
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd backend; $env:PYTHONPATH="src;.."; .venv\Scripts\python.exe -m pytest tests/test_eval_graders.py -k "natural_prose_case" -v`
+
+Expected: FAIL with `KeyError: 'natural-prose'`
+
+- [ ] **Step 2b: Pin the prompt-contract behaviour the case depends on**
 
 No recording can fail `prompt.natural_prose`, because every recording for a case is graded against the same assembled prompt. It needs its own test. Append to `backend/tests/test_eval_graders.py`:
 
@@ -1198,11 +1237,9 @@ def test_prompt_natural_prose_fails_when_the_section_is_absent():
     assert checks[0].name == "prompt.natural_prose"
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
-
 Run: `cd backend; $env:PYTHONPATH="src;.."; .venv\Scripts\python.exe -m pytest tests/test_eval_graders.py -k "prompt_natural_prose" -v`
 
-Expected: PASS immediately — `grade_prompt_section` already exists and this asserts existing behaviour. This step is a characterization test that pins the behaviour the case depends on; if it fails, `grade_prompt_section` has changed and the case's premise is gone.
+Expected: PASS immediately. This one is a characterization test, not a red-first one — `grade_prompt_section` already exists and this asserts its existing behaviour. It earns its place by pinning the premise the case rests on: if it ever fails, the empty-render guard has changed and `prompt.natural_prose` no longer closes the content hole.
 
 - [ ] **Step 3: Add the case builder and grader**
 
