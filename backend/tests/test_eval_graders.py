@@ -24,6 +24,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from evals import graders  # noqa: E402
+from evals import slop  # noqa: E402
 
 TERSE = {"reply_words": 150, "blocks": 3, "paragraphs": 1,
          "speakers": 2, "blocks_per_speaker": 1}
@@ -481,3 +482,58 @@ def test_containment_is_case_insensitive():
     """A leak that only differs in capitalisation is still a leak."""
     checks = graders.grade_containment("She was THE EXILE of the Guild.", "the exile")
     assert failed(checks) == {"containment.output"}
+
+
+def test_normalize_returns_bodies_and_speaker_labels_separately():
+    """split_reply moves the marker into `speaker` and out of `content`, so a
+    stock name used as a speaker label is invisible to any body-only detector.
+    normalize hands both back."""
+    text = "**Elara:** Evening.\n\n**Seraphine Vale:** You're late."
+    prose_text, names = slop.normalize(text, frozenset({"Winifred"}))
+    assert "Elara" not in prose_text
+    assert "Elara" in names
+    assert "Evening." in prose_text
+
+
+def test_normalize_routes_player_blocks_to_the_narrator():
+    """A player-named block is narrator content, per split_reply. Its label is
+    not a speaker name and must not be offered as one."""
+    _, names = slop.normalize("**Winifred:** I step out of the fog.",
+                              frozenset({"Winifred"}))
+    assert names == []
+
+
+def test_normalize_strips_fences_and_images_via_production_parser():
+    text = ("**Seraphine Vale:** Mine.\n\n"
+            "```roll\ncheck: nerve\nactor: Seraphine Vale\n```\n\n"
+            "![crates](/api/worlds/realm/art/crates.png)")
+    prose_text, _ = slop.normalize(text, frozenset())
+    assert "check: nerve" not in prose_text
+    assert "crates.png" not in prose_text
+
+
+def test_sentences_splits_on_terminators_and_respects_closing_quotes():
+    """`"Go." Mara left.` is two sentences: the terminator precedes the closing
+    quote. Getting this wrong miscounts every line of dialogue."""
+    assert slop.sentences('"Go." Mara left.') == ['"Go."', 'Mara left.']
+
+
+def test_sentences_does_not_split_on_a_known_abbreviation():
+    assert slop.sentences("Dr. Rowan waited. Nobody came.") == [
+        "Dr. Rowan waited.", "Nobody came."]
+
+
+def test_sentences_recognises_an_abbreviation_inside_a_quotation():
+    """The common dialogue case. The abbreviation check has to strip the
+    LEADING quote as well as the trailing terminator, or `"Dr.` is not
+    recognised as `dr` and the line splits mid-quotation."""
+    assert slop.sentences('"Dr. Rowan waited." Nobody came.') == [
+        '"Dr. Rowan waited."', "Nobody came."]
+
+
+def test_sentences_drops_spans_with_no_word_tokens():
+    assert slop.sentences("Yes.   \n\n  ") == ["Yes."]
+
+
+def test_paragraphs_splits_on_blank_lines_and_drops_empty_ones():
+    assert slop.paragraphs("One.\n\n  \n\nTwo.\n") == ["One.", "Two."]
