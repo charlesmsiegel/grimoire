@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is five pass/fail
+This suite closes that. It is not an eval framework; it is six pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -19,6 +19,7 @@ stake in:
 | `absorb` | absorb returns JSON with every required section, and it materializes into applicable edits |
 | `owned-lore` | lore owned by an absent character stays out of both the prompt and the reply |
 | `turn-taking` | with four NPCs cast and `speaker_turn_taking` on, the reply is carried by the nominated speaker rather than by whoever has been monologuing |
+| `natural-prose` | a reply contains none of the stock names or literal banned phrases the natural-prose block lists, does not repeat a single beat word past the cap or use the enumerated not-X-but-Y forms, and does not flatten into uniform sentence and paragraph length |
 
 ## Running it
 
@@ -70,6 +71,22 @@ behaviour question and only `--live` answers it. Requiring the section's own
 render, rather than pinning prose, is deliberate — a reword moves both sides
 together and stays green, because `templates/` is meant to be edited freely.
 What must not change silently is whether the instruction is there at all.
+
+The `natural-prose` case is the sharpest example of the limit above, and is
+worth stating plainly. Its output-side `slop.*` checks score a fixed recording,
+so **nothing they report says whether the natural-prose block works** — that is
+a live-behaviour question, and as with `turn-taking`, one live run is an
+anecdote. What they hold offline is that the graders still work, that the
+instructions they grade against are still in the template (`slop.list_current`,
+a one-way guard: a phrase removed from the template fails loudly, a phrase
+added is ungraded until mirrored in `evals/slop.py`), and that a collapsed
+generation cannot score green (`slop.measurable`).
+
+The graded set is also a strict subset of what the block asks for. The
+template's semantic instructions — the rule of three, redundant adjective
+pairs, explaining an emotion just shown, decorative metaphor, and the three
+qualifier-dependent phrases — are not gradable by regex and are listed as
+ungraded in the design spec. A green case means the graded subset held.
 
 `--live` reads credentials from your **real** store (the connection you picked
 on the Configuration page) while every case still builds its campaign in a
@@ -131,7 +148,7 @@ section added to absorb is graded from the day it lands.
 - Every other variant is a permanent hand-authored counterexample
   (`bloated`, `collapsed`, `no-fence`, `unknown-check`, `unclosed`,
   `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
-  `chorus`) and is never touched by a live run.
+  `chorus`, `slop`, `flat`, `terse`) and is never touched by a live run.
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —
 renaming a case without deleting its old files would otherwise leave dead
