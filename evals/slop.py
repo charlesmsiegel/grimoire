@@ -92,7 +92,14 @@ def sentences(prose: str) -> list[str]:
         tokens = head.split()
         # Strip quotes and brackets from BOTH ends before the terminator, so
         # `"Dr.` inside a quotation is still recognised as an abbreviation.
-        last = tokens[-1].strip("\"”’'“‘()[]").rstrip(".!?…").lower() if tokens else ""
+        # Reuses _CLOSERS/_OPENERS (codepoint-built, not typed characters) --
+        # together they cover every quote/bracket this needs to strip, with
+        # the straight quote and apostrophe harmlessly duplicated between the
+        # two sets.
+        last = (
+            tokens[-1].strip(_CLOSERS + _OPENERS).rstrip(".!?" + chr(0x2026)).lower()
+            if tokens else ""
+        )
         if last in _ABBREVIATIONS:
             continue
         out.append(head.strip())

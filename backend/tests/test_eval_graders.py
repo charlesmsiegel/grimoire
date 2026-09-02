@@ -11,6 +11,7 @@ No store, no GRIMOIRE_HOME: the graders are pure.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -544,7 +545,29 @@ def test_sentences_recognises_an_abbreviation_inside_a_quotation():
 
 
 def test_sentences_drops_spans_with_no_word_tokens():
-    assert slop.sentences("Yes.   \n\n  ") == ["Yes."]
+    r"""The final `[s for s in out if word_count(s)]` guard in `sentences`
+    is unreachable through the real `_SENTENCE_BREAK`: every span it
+    produces ends in a live terminator character, which is never
+    whitespace, so `head.strip()` (and the guarded `tail`) can never come
+    out empty today -- confirmed by fuzzing `sentences` with the guard
+    physically deleted and finding no input that behaves differently.
+
+    So this test exercises the guard directly by patching
+    `_SENTENCE_BREAK` to a pattern that CAN yield a whitespace-only span
+    -- `(\s*)\s(?=[A-Z])`, whose group 1 may capture nothing but leading
+    whitespace -- while going through the real `sentences` body
+    unchanged. "   Bob." has three leading spaces before the capital;
+    the patched pattern is satisfied by the first two of them as group 1,
+    which is what makes the leading span empty-after-strip. Delete the
+    guard and this goes red: the empty span survives into the result.
+    """
+    patched = re.compile(r"(\s*)\s(?=[A-Z])")
+    original = slop._SENTENCE_BREAK
+    slop._SENTENCE_BREAK = patched
+    try:
+        assert slop.sentences("   Bob.") == ["Bob."]
+    finally:
+        slop._SENTENCE_BREAK = original
 
 
 def test_paragraphs_splits_on_blank_lines_and_drops_empty_ones():
