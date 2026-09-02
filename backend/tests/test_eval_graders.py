@@ -689,3 +689,170 @@ def test_beat_words_cap_counts_inflections_together():
 
 def test_beat_words_below_the_cap_do_not_fire():
     assert slop.overused_beats("She nodded. He nodded.") == []
+
+
+_FLAT = "\n\n".join(
+    ["The lamp was lit and the room was warm and the door was shut."] * 6
+    + ["The chair was old and the rug was worn and the clock was slow."] * 6)
+
+# 15 sentences over 8 paragraphs: comfortably past MIN_SENTENCES (12) and
+# MIN_PARAGRAPHS (4), so the variance assertions below actually measure rather
+# than short-circuiting on sample size. Sentence lengths run 1 to 33 words on
+# purpose. No em dash appears at all, so em_dash_adjacent has nothing to find.
+_VARIED = (
+    "Rain.\n\n"
+    "It came in off the water the way it always did at this hour, slow at "
+    "first and then all at once, and Winifred pulled her coat tighter and "
+    "swore at nobody in particular.\n\n"
+    "Seraphine Vale did not move. She had been standing at the rail since "
+    "before the fog closed in, and she had the look of somebody who intended "
+    "to be standing there long after it lifted.\n\n"
+    "\"You waited,\" Winifred said.\n\n"
+    "\"I had nothing better on.\" The smuggler tipped her chin at the crates, "
+    "stacked three high and sheeted against the weather, and let the silence "
+    "do the asking for her. Somewhere below, the water knocked at the "
+    "pilings.\n\n"
+    "Winifred counted them. Twelve. That was four more than the manifest "
+    "admitted to, and the manifest was the only honest thing she had been "
+    "given all week.\n\n"
+    "\"Well?\"\n\n"
+    "Rowan came up the steps behind her with his bad shoulder set against the "
+    "wind, and he did not answer until he had looked at every crate in the "
+    "stack. \"Eight,\" he said. \"On paper.\"")
+
+
+def test_measurable_fails_on_undersized_output():
+    """Without this gate the whole case passes on an empty reply: no banned
+    phrase occurs in nothing, and both variance checks have no sample."""
+    ok, _ = slop.is_measurable("")
+    assert not ok
+
+
+def test_measurable_passes_on_a_full_reply():
+    ok, _ = slop.is_measurable(_VARIED)
+    assert ok
+
+
+def test_variance_checks_pass_when_the_sample_is_too_small():
+    """MANDATORY, not permitted. A one-paragraph reply has a paragraph
+    coefficient of variation of exactly 0, which is below the threshold -- so a
+    check that measured anyway would fail here too, and the `terse` recording
+    could not declare slop.measurable alone."""
+    ok, detail = slop.paragraph_variance("One short line.")
+    assert ok
+    assert "sample" in detail.lower()
+    assert slop.sentence_variance("One short line.")[0]
+
+
+def test_flat_prose_trips_both_variance_checks():
+    assert not slop.sentence_variance(_FLAT)[0]
+    assert not slop.paragraph_variance(_FLAT)[0]
+
+
+def test_varied_prose_trips_neither_variance_check():
+    assert slop.sentence_variance(_VARIED)[0]
+    assert slop.paragraph_variance(_VARIED)[0]
+
+
+def test_em_dash_in_consecutive_paragraphs_is_caught():
+    assert slop.em_dash_adjacent("She \u2014 wait.\n\nHe \u2014 no.")
+
+
+def test_em_dash_spaced_out_is_fine():
+    assert not slop.em_dash_adjacent(
+        "She \u2014 wait.\n\nNothing here.\n\nHe \u2014 no.")
+
+
+# ------------------------------------------------------- the negative corpus
+#
+# Legitimate prose every detector must leave alone. It prevents regression on
+# these exact fixtures and nothing more -- it is not an independent
+# distribution and yields no statistical false-positive bound. A threshold
+# tightened until it trips one of these has gone too far.
+
+# Every passage clears MIN_SENTENCES and MIN_PARAGRAPHS. That is the whole
+# point: a passage below the floor short-circuits both variance checks to a
+# pass, and would place no constraint on VARIANCE_MIN at all -- a corpus that
+# looks like protection and is not.
+_LEGITIMATE = {
+    "dialogue-heavy": (
+        "\"Whose?\" Winifred asked.\n\n"
+        "\"Mine.\"\n\n"
+        "\"Since when?\"\n\n"
+        "\"Since the tide turned and the harbourmaster stopped counting, which "
+        "was a good while before you started asking me questions on my own "
+        "pier in the rain.\"\n\n"
+        "\"That is not an answer.\"\n\n"
+        "\"It is the one you get.\" Seraphine Vale crouched, worked a nail "
+        "loose from the nearest crate, and held it up to what light there "
+        "was.\n\n"
+        "\"Ship's iron.\"\n\n"
+        "\"So?\"\n\n"
+        "\"So it came off a hull, and hulls that lose their nails on my pier "
+        "have generally lost something else first, which is the part you are "
+        "going to want to hear about before the harbourmaster does.\"\n\n"
+        "Winifred took the nail. It was cold. She turned it over twice, "
+        "thinking about the manifest and the four crates that were not on it, "
+        "and then she put it in her pocket without asking whether she could."),
+    "deliberate fragments": (
+        "Fog. Rope. The slap of water on stone.\n\n"
+        "Winifred went down the steps counting, because counting was the only "
+        "thing that had ever kept her steady, and she had needed steadying "
+        "since the moment the letter came.\n\n"
+        "Twelve steps. Then the boards.\n\n"
+        "Somewhere out past the breakwater a bell went, once, and did not go "
+        "again, and she stood in the dark a while listening for it anyway.\n\n"
+        "Nothing. Wind. The creak of a mooring taking up slack.\n\n"
+        "She had been told the pier was quiet at this hour and had believed "
+        "it, which she was beginning to understand had been the point of "
+        "telling her.\n\n"
+        "A light, far out. Then not."),
+    "incantatory refrain": (
+        "By the salt she swore it. By the keel she swore it. By the cold black "
+        "water under the boards she swore it, and meant every word of it, "
+        "which was more than she could say for most of the promises she had "
+        "made that season.\n\n"
+        "Rowan listened the way people listen to weather.\n\n"
+        "By the salt. By the keel. By the water.\n\n"
+        "The old words had been said on this pier for longer than either of "
+        "them had been alive, and they would go on being said here long after "
+        "the two of them were done with it, which was rather the point of "
+        "them.\n\n"
+        "He said them back. Badly. She let it stand, because a promise said "
+        "badly is still a promise, and because the tide was not going to wait "
+        "for either of them to get the words right.\n\n"
+        "By the salt. By the keel. By the water. That was the whole of it, and "
+        "it had never needed to be more."),
+    "terse action": (
+        "The crate went over.\n\n"
+        "Winifred caught the edge, took the weight badly, and felt something "
+        "give in her shoulder that she would be paying for by morning.\n\n"
+        "Rowan swore.\n\n"
+        "Then he had the other side, and between them they walked it back "
+        "from the drop, one careful pace at a time, until the boards stopped "
+        "complaining underfoot and the thing sat where it was meant to sit.\n\n"
+        "Her arm was shaking. She let it.\n\n"
+        "\"Again?\"\n\n"
+        "\"No.\"\n\n"
+        "They stood there in the wet with the stack between them and the "
+        "water, and neither of them said the obvious thing, which was that "
+        "whatever was in it had been worth somebody's while to load in "
+        "the dark.\n\n"
+        "Rowan sat down on the boards. He rubbed the shoulder. Winifred "
+        "watched the fog come apart over the breakwater and put together, for "
+        "the first time that week, an order of events that actually "
+        "accounted for the four crates nobody would admit to.\n\n"
+        "It was not a comfortable order of events. She kept it anyway."),
+}
+
+
+@pytest.mark.parametrize("label", sorted(_LEGITIMATE))
+def test_negative_corpus_trips_nothing(label):
+    text = _LEGITIMATE[label]
+    assert slop.found_phrases(text) == []
+    assert slop.found_stock_names(text, [], frozenset()) == []
+    assert slop.overused_beats(text) == []
+    assert slop.found_constructions(text) == []
+    assert not slop.em_dash_adjacent(text)
+    assert slop.sentence_variance(text)[0]
+    assert slop.paragraph_variance(text)[0]

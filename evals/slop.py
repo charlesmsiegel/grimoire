@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 import statistics
 from dataclasses import dataclass
+from itertools import pairwise
 
 from grimoire.store import length_drift, scenes
 
@@ -345,3 +346,75 @@ def overused_beats(prose: str) -> list[tuple[str, int]]:
 
 def found_constructions(prose: str) -> list[str]:
     return [e.source for e in NOT_X_BUT_Y if e.pattern.search(prose)]
+
+
+# ------------------------------------------------------------------- rhythm
+
+# Built via chr() rather than a typed em dash -- see module docstring and
+# _CLOSERS/_OPENERS above for why: a literal paste is how an ambiguous
+# unicode character silently stands in for a look-alike with no visible diff,
+# and ruff's RUF001/RUF002 flag a literal em dash in source for the same
+# reason.
+EM_DASH = chr(0x2014)
+
+# Prose alternating only between short and long clauses still clears this;
+# prose whose sentences cluster within a few words of one mean does not. Tune
+# against real prompts later.
+VARIANCE_MIN = 0.35
+# Lower than the sentence figure because dialogue blocks are legitimately short
+# and similar. This catches the uniform 3-to-5-sentence paragraph, not ordinary
+# exchange. Tune later.
+PARA_VARIANCE_MIN = 0.25
+
+
+def is_measurable(prose: str) -> tuple[bool, str]:
+    """The gate that stops the whole case passing on an empty reply.
+
+    The precedent is graders.length_measurable, which is a FAILURE check: a
+    reply with nothing to measure fails rather than being scored as a compliant
+    zero. Without this, no banned phrase occurs in nothing, both variance
+    checks have no sample, and em-dash spacing needs two paragraphs -- a green
+    case on empty output, which is the "very slow way of asserting True" that
+    evals/cases.py warns about.
+    """
+    n_s, n_p = len(sentences(prose)), len(paragraphs(prose))
+    ok = n_s >= MIN_SENTENCES and n_p >= MIN_PARAGRAPHS
+    return ok, (f"{n_s} sentences, {n_p} paragraphs "
+                f"(need {MIN_SENTENCES}/{MIN_PARAGRAPHS})")
+
+
+def sentence_variance(prose: str) -> tuple[bool, str]:
+    """Coefficient of variation of sentence word counts, against VARIANCE_MIN.
+
+    The sample minimum is evaluated BEFORE the statistic and short-circuits to
+    a pass. That is mandatory rather than permitted: a degenerate sample has a
+    coefficient of variation of 0, so measuring anyway would fail here as well
+    as at is_measurable, and the `terse` counterexample could not declare
+    slop.measurable alone.
+    """
+    counts = [word_count(s) for s in sentences(prose)]
+    if len(counts) < MIN_SENTENCES:
+        return True, f"sample too small to measure ({len(counts)} sentences)"
+    cv = coefficient_of_variation(counts)
+    return cv >= VARIANCE_MIN, f"sentence length CV {cv:.2f} (need {VARIANCE_MIN})"
+
+
+def paragraph_variance(prose: str) -> tuple[bool, str]:
+    """As sentence_variance, over paragraph word counts."""
+    counts = [word_count(p) for p in paragraphs(prose)]
+    if len(counts) < MIN_PARAGRAPHS:
+        return True, f"sample too small to measure ({len(counts)} paragraphs)"
+    cv = coefficient_of_variation(counts)
+    return cv >= PARA_VARIANCE_MIN, (f"paragraph length CV {cv:.2f} "
+                                     f"(need {PARA_VARIANCE_MIN})")
+
+
+def em_dash_adjacent(prose: str) -> bool:
+    """Two consecutive paragraphs both carrying an em dash.
+
+    Derived from the template's own sentence -- "if the last paragraph used
+    one, the next doesn't" -- rather than from a density threshold of our
+    invention. It enforces one clause of the rhythm rule, not all of it.
+    """
+    flags = [EM_DASH in p for p in paragraphs(prose)]
+    return any(a and b for a, b in pairwise(flags))
