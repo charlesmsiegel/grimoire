@@ -46,8 +46,21 @@ _ABBREVIATIONS = frozenset({
 # A terminator, any closing quotes/brackets that follow it, whitespace, then an
 # opening quote or a capital. The lookahead is what keeps `"Go." Mara left.`
 # from splitting inside the quotation.
+#
+# Built from chr() calls by codepoint rather than typed characters: straight
+# and curly quotes look identical or near-identical in most editors/fonts, so
+# a literal paste is how a straight quote silently ends up standing in for a
+# curly one (and vice versa) with no visible diff. Each class must contain all
+# SIX distinct quote/apostrophe codepoints -- straight and curly, double and
+# single -- or LLM prose (which routinely uses curly quotes) merges sentences
+# silently. `]` is listed first in _CLOSERS because that is the one character
+# in either class that regex treats specially inside a `[...]` class; every
+# other character here (including `(` and `[`) is already a literal there.
+_CLOSERS = "]" + chr(0x22) + chr(0x201D) + chr(0x2019) + chr(0x27) + ")"
+_OPENERS = chr(0x22) + chr(0x201C) + chr(0x2018) + chr(0x27) + "(" + "["
 _SENTENCE_BREAK = re.compile(
-    r"([.!?…]+[\"\"'')\]]*)\s+(?=[\"\"''(\[]*[A-Z])")
+    "([.!?" + chr(0x2026) + "]+[" + _CLOSERS + "]*)" + r"\s+(?=[" + _OPENERS + r"]*[A-Z])"
+)
 
 
 def normalize(text: str, players: frozenset[str]) -> tuple[str, list[str]]:

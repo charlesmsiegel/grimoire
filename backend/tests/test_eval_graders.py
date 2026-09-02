@@ -518,6 +518,18 @@ def test_sentences_splits_on_terminators_and_respects_closing_quotes():
     assert slop.sentences('"Go." Mara left.') == ['"Go."', 'Mara left.']
 
 
+def test_sentences_splits_on_curly_quotes():
+    r"""LLM prose routinely uses typographic (curly) quotes rather than
+    straight ones. Written with explicit \uXXXX escapes -- not typed curly
+    characters -- so a future edit cannot silently straighten this test's
+    input back to straight quotes and have it keep passing for the wrong
+    reason: if _SENTENCE_BREAK's character classes ever drop the curly
+    codepoints again, the curly-quoted "Go." and "Mara left." below would
+    silently merge into one sentence and this fails."""
+    text = "\u201cGo.\u201d Mara left."
+    assert slop.sentences(text) == ["\u201cGo.\u201d", "Mara left."]
+
+
 def test_sentences_does_not_split_on_a_known_abbreviation():
     assert slop.sentences("Dr. Rowan waited. Nobody came.") == [
         "Dr. Rowan waited.", "Nobody came."]
