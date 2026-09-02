@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from evals import graders, slop  # noqa: E402
+from evals import cases, graders, slop  # noqa: E402
 
 TERSE = {"reply_words": 150, "blocks": 3, "paragraphs": 1,
          "speakers": 2, "blocks_per_speaker": 1}
@@ -885,3 +885,42 @@ def test_grade_slop_fails_only_measurable_on_a_collapsed_reply():
 def test_grade_slop_catches_a_stock_name_in_a_speaker_label():
     text = _VARIED + "\n\n**Elara:** Evening."
     assert not _grade(text)["slop.stock_names"].ok
+
+
+# ------------------------------------------------------- natural-prose case
+
+def test_natural_prose_case_is_registered():
+    """Red before Step 3. Without it, forgetting the builder, the grader or the
+    CASES entry leaves the whole suite green -- the case simply would not run,
+    and nothing else in this file would notice."""
+    case = cases.BY_ID["natural-prose"]
+    assert case.grade is cases.grade_natural_prose
+    assert case.build is cases.build_natural_prose
+    assert {r.variant for r in case.recordings} == {
+        "compliant", "slop", "flat", "terse"}
+
+
+def test_natural_prose_case_declares_the_right_failure_sets():
+    """The set-equality property the whole case rests on, asserted here as well
+    as by replay so a silently widened declaration is caught in one place."""
+    by_variant = {r.variant: set(r.expect_fail)
+                  for r in cases.BY_ID["natural-prose"].recordings}
+    assert by_variant["compliant"] == set()
+    assert by_variant["slop"] == {"slop.phrases", "slop.stock_names",
+                                  "slop.beat_words", "slop.not_x_but_y"}
+    assert by_variant["flat"] == {"slop.sentence_variance",
+                                  "slop.paragraph_uniformity",
+                                  "slop.em_dash_spacing"}
+    assert by_variant["terse"] == {"slop.measurable"}
+
+
+def test_prompt_natural_prose_fails_when_the_section_is_absent():
+    """The check that closes the content hole verify_templates structurally
+    cannot: that harness keeps an independent section-order mirror, so a
+    DELETED SECTIONS entry already fails there -- but it never pins template
+    text, so an emptied template renders to nothing on both sides and passes."""
+    messages = [{"role": "system", "content": "Nothing of the sort."}]
+    checks = graders.grade_prompt_section(
+        messages, "natural_prose", "scene/sections/natural_prose.j2")
+    assert not checks[0].ok
+    assert checks[0].name == "prompt.natural_prose"

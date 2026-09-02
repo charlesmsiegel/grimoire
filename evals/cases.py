@@ -36,6 +36,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from grimoire import prompts
 from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
@@ -64,7 +65,7 @@ from grimoire.store import (
 )
 from grimoire.store.context import art
 
-from . import graders
+from . import graders, slop
 from .graders import Check
 
 RECORDINGS = Path(__file__).resolve().parent / "recordings"
@@ -621,6 +622,79 @@ def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
         output, nomination, ctx["players"], ctx["npc_names"])
 
 
+# ------------------------------------------------- case 6: natural prose
+
+def build_natural_prose() -> dict:
+    """A three-hander at the pier under `cinematic`, the widest preset.
+
+    Three fixture properties are load-bearing:
+
+    - `cinematic` rather than `terse`: rhythm statistics over three blocks are
+      noise. Its 900 words are a target and its 7 blocks a maximum, not a
+      promised shape, which is why slop.measurable exists rather than the
+      preset's numbers being trusted as a sample size.
+    - No prose style guide and no voice anchors. natural_prose.j2 says a style
+      guide overrides its rhythm guidance and that a character's established
+      voice wins where it conflicts; a fixture carrying either would be graded
+      against rules the template disclaims.
+    - Every name invented, none colliding with slop.STOCK_NAMES, and all of
+      them passed to the grader in `established` -- the template's rule is that
+      names already in the scene, cast or world are reproduced exactly.
+    """
+    wid, wroot, sera = _world_with_sera()
+    pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
+                                  "Fog-slick planks stacked with unlogged crates.",
+                                  keys="pier, dock")
+    rowan_card = characters.blank_card("Rowan")
+    rowan_card["data"].update({
+        "description": "A dock hand with a bad shoulder and a good memory.",
+        "personality": "Slow to speak, slower to forget a slight."})
+    rowan, _ = characters.create_character(wroot, "Rowan", "default", rowan_card)
+
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    campaigns.set_campaign_response(cid, {"response_preset": "cinematic"})
+    croot = campaigns.campaign_root(cid)
+
+    persona = pcs.blank_persona("Winifred")
+    persona.update({"pronouns": "she/her", "summary": "A courier working off a debt.",
+                    "description": "Quick, kind, unlucky."})
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=persona)
+
+    sid = scenes.create_scene(cid, "The Pier at Dusk")
+    appearances.appear(cid, sid, "characters", sera, "default", "npc")
+    appearances.appear(cid, sid, "characters", rowan, "default", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    scenes.set_location(cid, sid, pier)
+    scenes.append_message(cid, sid, "user",
+                          "I come down the steps and ask them both what the "
+                          "manifest is missing.",
+                          speaker="Winifred")
+
+    players = frozenset(appearances.player_names(cid, sid))
+    # The full established set the template's precedence rule requires: cast,
+    # players, and every named record this fixture wrote -- the world, the
+    # location, the campaign and the scene. Assembled from what was created
+    # rather than scraped from record bodies. None of these tokens collides
+    # with slop.STOCK_NAMES today, so an omission here would not show up in the
+    # recordings; it is written out in full because the rule, not the fixture,
+    # is what the check is meant to honour.
+    established = slop.established_tokens(
+        list(players) + _npc_names(cid, sid)
+        + ["Saltmarch Pier", "Realm", "Saltmarch Nights", "The Pier at Dusk"])
+    return {"cid": cid, "sid": sid, "players": players, "established": established}
+
+
+def grade_natural_prose(ctx: dict, output: str) -> list[Check]:
+    # The whole section, rendered from the template itself. This is the half a
+    # template edit can break silently: verify_templates.py never pins template
+    # text, so an emptied natural_prose.j2 passes there.
+    return (
+        graders.grade_prompt_section(ctx["messages"], "natural_prose",
+                                     "scene/sections/natural_prose.j2")
+        + graders.grade_slop(output, ctx["players"], ctx["established"],
+                             prompts.render("scene/sections/natural_prose.j2")))
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -709,6 +783,27 @@ CASES: tuple[Case, ...] = (
          recordings=(
              Recording(BASELINE),
              Recording("leaked", ("containment.output",)))),
+    Case(id="natural-prose",
+         hypothesis="a reply contains none of the stock names or literal "
+                    "banned phrases the natural-prose block lists, does not "
+                    "repeat a single beat word past the cap or use the "
+                    "enumerated not-X-but-Y forms, and does not flatten into "
+                    "uniform sentence and paragraph length",
+         build=build_natural_prose, prompt=_scene_prompt,
+         grade=grade_natural_prose,
+         recordings=(
+             Recording(BASELINE),
+             # Literally sloppy, rhythmically fine: so the four literal checks
+             # cannot pass unnoticed behind a rhythm hit.
+             Recording("slop", ("slop.phrases", "slop.stock_names",
+                                "slop.beat_words", "slop.not_x_but_y")),
+             # Rhythmically flat, literally clean: the reverse.
+             Recording("flat", ("slop.sentence_variance",
+                                "slop.paragraph_uniformity",
+                                "slop.em_dash_spacing")),
+             # A collapsed generation. Proves the vacuous-pass gate gates:
+             # without slop.measurable this recording would score all green.
+             Recording("terse", ("slop.measurable",)))),
 )
 
 BY_ID = {c.id: c for c in CASES}
