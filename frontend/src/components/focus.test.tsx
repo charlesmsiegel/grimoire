@@ -176,3 +176,26 @@ test("the word gives way to the glyph, so 44px costs the header no more than tha
   expect(bodiesNaming(css, "header-focus-glyph")
     .some((b) => declares(b, "display") === "none")).toBe(true);
 });
+
+test("the pill yields the room, so the way in is never pushed off a 320px screen", () => {
+  // Codex caught this on the PR that restored the button, and it was real:
+  // `.scene-pill` is `flex: none`, so at 320px the widest true pill (an
+  // unpriced scene's `NOT REPORTED · CTX 100%`) plus the wordmark, the dot,
+  // the gutters and a 44px target overran the viewport by 28px -- and a flex
+  // row spends its overrun on the LAST item, which is this control. Measured
+  // in a browser: 320px fit exactly until the button came back.
+  //
+  // jsdom runs no layout engine, so this asserts the declarations that make
+  // the overflow impossible rather than the geometry -- `pickerLayout.test.ts`
+  // says why, about the same bug one surface over. What must hold is that the
+  // pill can give width up: a truncated number is a worse read, an untappable
+  // control is not a control.
+  const phone = atWidth(PHONE_PX);
+  const [body] = bodiesNaming(phone, "scene-pill");
+  expect(body).toBeDefined();
+  expect(declares(body, "min-width")).toBe("0");
+  // `flex: none` is what the desktop rule sets and what must not survive here;
+  // `min-width: 0` alone would still leave a rigid item rigid.
+  expect(declares(body, "flex")).not.toBe("none");
+  expect(declares(body, "text-overflow")).toBe("ellipsis");
+});

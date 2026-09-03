@@ -4265,6 +4265,36 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   }
   .app-header .header-focus-word { display: none; }
   .app-header .header-focus-glyph { display: flex; }
+  /* And the room for it comes from the pill, which is the only item on this
+     strip that can give any up.
+
+     `.scene-pill` is `flex: none` at every other width, which is right where
+     there is room: a cost that reflows as it grows is a cost you re-read. At
+     320px there is not. The widest real pill is an unpriced scene's `NOT
+     REPORTED · CTX 100%` at 167px, and against a 320px viewport that plus the
+     wordmark, the dot, the gutters and a 44px target overruns by 28px -- which
+     the header spends on its last item, so the control this block just
+     restored is the thing hanging off the screen edge. Measured, not
+     estimated: 320px fit exactly before the button came back.
+
+     So the pill shrinks and ellipsizes here, and the button never does. A
+     number that is one character short of complete is a worse READ; a 44px
+     target half off the viewport is not tappable at all, and this one is the
+     way into a mode whose only other door is the pill it would be hidden
+     behind. The spend is first in the markup and the tail is the context
+     percentage, so what truncation eats is the half the rule twelve lines
+     above `.scene-pill-spend` already calls "context" -- in that order by
+     construction, not by luck.
+
+     `display: block` because `text-overflow` has nothing to act on in a flex
+     container; the line-height replaces the `align-items: center` that costs.
+     This is `pickerLayout.test.ts`'s bug one surface over -- a rigid flex item
+     pushing the trailing control out of reach -- and its remedy. */
+  .app-header .scene-pill {
+    flex: 0 1 auto; min-width: 0;
+    display: block; line-height: 24px;
+    overflow: hidden; text-overflow: ellipsis;
+  }
   .app-header .brand { font-size: 14px; letter-spacing: 0.1em; gap: 0; }
   /* The mark and the wordmark both say the same thing and both go home; at
      46px only one of them fits, and the design's phone frame keeps the word.
