@@ -155,7 +155,16 @@ export default function AppHeader(
 
       <button type="button" className="header-focus" onClick={() => setFocus(true)}
               title="Hide the toolbars and read the scene" aria-label="Enter focus mode">
-        FOCUS
+        {/* Two spellings of one control, swapped by a media query rather than by
+            a resize listener: which one shows is a width question, and this
+            file already has no business re-answering those in React. Below
+            PHONE_PX the header keeps the wordmark, the scene pill and the dot,
+            and a 44px touch target is the whole of what is left to spend --
+            which the word, at 10px and five letters, does not fit inside.
+            The `aria-label` above carries the name either way, so the glyph is
+            never the only thing saying what this does. */}
+        <span className="header-focus-word">FOCUS</span>
+        <span className="header-focus-glyph" aria-hidden>⛶</span>
       </button>
     </header>
   );

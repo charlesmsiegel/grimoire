@@ -251,6 +251,11 @@ body::before {
   text-transform: uppercase; color: var(--muted);
 }
 .app-header .header-focus:hover { color: var(--ink); }
+/* The word is the desktop spelling; the glyph below is the phone one, and each
+   is hidden where the other shows. Both live in the markup so the swap costs a
+   media query rather than a resize listener -- and so neither can be the only
+   carrier of the control's name, which the button's `aria-label` is. */
+.app-header .header-focus-glyph { display: none; }
 
 /* The one control focus mode leaves on screen, and therefore the only thing
    standing between the reader and a view they cannot leave: fixed, so a long
@@ -4221,16 +4226,45 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   /* The 46px header. What is left is what the design's phone frame keeps: the
      wordmark, the scene's cost and context, and the health dot. The ⌘K pill
      goes because Search is a rail row and the rail is one tap away as `More`;
-     the theme and focus controls go because neither is something a phone
-     reaches for mid-scene, and both are in Configuration. Dropped rather than
-     clipped -- the design's own rule for this breakpoint. */
+     the theme control goes because Configuration owns the picker and a look is
+     not something a phone changes mid-scene. Dropped rather than clipped --
+     the design's own rule for this breakpoint. Focus mode is not one of the
+     drops: see its rule below. */
   .app-header {
     height: 46px; gap: 8px; padding: 0 12px;
   }
   .app-header .kbar,
   .app-header .header-rail,
-  .app-header .header-theme,
-  .app-header .header-focus { display: none; }
+  .app-header .header-theme { display: none; }
+  /* `.header-focus` is NOT in that list, and the comment above no longer says
+     it is. It was dropped alongside the theme toggle on the grounds that both
+     are "in Configuration", which is true of the theme picker and was never
+     true of focus mode -- so below this breakpoint the only way in was the
+     palette's `action:focus` row, behind a `.kbar` the same rule hides and
+     otherwise behind a chord a phone has no keyboard for. The way OUT kept its
+     44px target eleven rules up while the way in had none, which is backwards:
+     the header's own comment beside this control, and `focus.tsx`'s, both argue
+     focus mode is FOR this width -- 375x660 is where the chrome it drops is
+     closest to half the viewport. `focus.test.tsx` reads this block. */
+  .app-header .header-focus {
+    display: flex; align-items: center; justify-content: center;
+    /* The same 44px floor as `.focus-restore`, whose corner this control hands
+       over to when the mode goes on: they are one control's two states, so a
+       thumb that found one has found the other. */
+    width: 44px; height: 44px;
+    /* -4px against the header's own 12px gutter puts this button's right edge
+       8px from the viewport, which is `.focus-restore`'s `right: 8px`. The two
+       cannot share a vertical centre -- the pill is fixed at `top: 8px` and
+       this sits inside a 46px band -- but the column they swap in is the same
+       one, and a control that jumped sideways on the swap would read as two. */
+    margin-right: -4px;
+    /* The base rule's 10px and 0.12em are the WORD's measurements. Tracking
+       applied to a lone glyph is trailing space inside a box being centred,
+       which is a glyph centred slightly left of where it looks like it is. */
+    font-size: 16px; letter-spacing: 0; line-height: 1;
+  }
+  .app-header .header-focus-word { display: none; }
+  .app-header .header-focus-glyph { display: flex; }
   .app-header .brand { font-size: 14px; letter-spacing: 0.1em; gap: 0; }
   /* The mark and the wordmark both say the same thing and both go home; at
      46px only one of them fits, and the design's phone frame keeps the word.
