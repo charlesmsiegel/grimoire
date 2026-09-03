@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 // The header's theme toggle persists on click, so it reaches the api client.
@@ -9,6 +9,7 @@ vi.mock("../api/client", () => ({
 import AppHeader from "./AppHeader";
 import type { ProviderHealth } from "../api/types";
 import { ThemeProvider } from "../theme/ThemeProvider";
+import { FocusProvider, useFocus } from "./focus";
 import { ShellStatusProvider, usePublishContextUsage, usePublishSceneModel,
          usePublishSceneSpend, usePublishShellContext } from "./ShellStatus";
 
@@ -29,11 +30,13 @@ function renderHeader(published?: string | null, ready: boolean | null = null,
   return render(
     <MemoryRouter>
       <ThemeProvider initial="light">
+      <FocusProvider>
       <ShellStatusProvider>
         {published !== undefined && <Publisher model={published} ready={ready} />}
         <AppHeader model="vendor/active" connection="OpenRouter" ready health={health}
                    railDrawer={false} onOpenRail={() => {}} />
       </ShellStatusProvider>
+      </FocusProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -63,10 +66,12 @@ test("leaving the campaign restores the global model", async () => {
   rerender(
     <MemoryRouter>
       <ThemeProvider initial="light">
+        <FocusProvider>
         <ShellStatusProvider>
           <AppHeader model="vendor/active" connection="OpenRouter" ready health={null}
                      railDrawer={false} onOpenRail={() => {}} />
         </ShellStatusProvider>
+      </FocusProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -118,11 +123,13 @@ function renderPill(spend: string | null, usage: number | null,
   return render(
     <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
       <ThemeProvider initial="light">
+      <FocusProvider>
       <ShellStatusProvider>
         <ScenePublisher spend={spend} usage={usage} scene={scene} />
         <AppHeader model="vendor/active" connection="OpenRouter" ready health={null}
                    railDrawer={false} onOpenRail={() => {}} />
       </ShellStatusProvider>
+      </FocusProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -167,4 +174,41 @@ test("outside a scene the pill says nothing about one", async () => {
 
   expect(screen.queryByText("$0.41")).not.toBeInTheDocument();
   expect(screen.queryByText(/CTX/)).not.toBeInTheDocument();
+});
+
+
+// The header's focus control PERSISTS on click, so a test that presses it
+// leaves `grimoire.focus` set for whatever runs next -- and the case below
+// asserts the mode starts off. `focus.test.tsx` clears for the same reason.
+beforeEach(() => localStorage.clear());
+
+/** Reports the focus flag from inside the same provider the header writes to. */
+function FocusProbe() {
+  const { focus } = useFocus();
+  return <span data-testid="focus">{focus ? "on" : "off"}</span>;
+}
+
+test("the header is the way into focus mode, at every width", async () => {
+  // The control is in the markup unconditionally; what width it is USABLE at is
+  // a stylesheet question, and `focus.test.tsx` holds that half. This holds the
+  // half jsdom can see: the button exists, is named for what it does rather
+  // than for the glyph it draws, and actually enters the mode.
+  render(
+    <MemoryRouter>
+      <ThemeProvider initial="light">
+      <FocusProvider>
+      <ShellStatusProvider>
+        <FocusProbe />
+        <AppHeader model="vendor/active" connection="OpenRouter" ready health={null}
+                   railDrawer={false} onOpenRail={() => {}} />
+      </ShellStatusProvider>
+      </FocusProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+  const enter = await screen.findByRole("button", { name: /enter focus mode/i });
+  expect(screen.getByTestId("focus")).toHaveTextContent("off");
+
+  fireEvent.click(enter);
+  expect(screen.getByTestId("focus")).toHaveTextContent("on");
 });
