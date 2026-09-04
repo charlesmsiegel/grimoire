@@ -752,6 +752,18 @@ async function streamGet<T = ChatEvent>(
   }
 }
 
+/** The reply of a raw `fetch` as `request` would hand it back: the parsed
+ *  JSON on success, an `ApiError` carrying the server's `detail` and `kind`
+ *  otherwise. `requestForm` and `postZip` bypass `request` only because their
+ *  bodies are not JSON; the error shape must not diverge with them. */
+async function parseReply<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
+  }
+  return res.json() as Promise<T>;
+}
+
 async function requestForm<T>(path: string, form: FormData, method = "POST",
                               attempt?: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
@@ -759,11 +771,14 @@ async function requestForm<T>(path: string, form: FormData, method = "POST",
     headers: attempt ? { "X-Grimoire-Attempt": attempt } : undefined,
     signal,
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
-  }
-  return res.json() as Promise<T>;
+  return parseReply<T>(res);
+}
+
+/** POST an archive as the whole request body -- the two import endpoints. */
+async function postZip<T>(path: string, file: Blob): Promise<T> {
+  const res = await fetch(path, { method: "POST", body: file,
+                                  headers: { "content-type": "application/zip" } });
+  return parseReply<T>(res);
 }
 
 function entityBase(scope: EntityScope): string {
@@ -932,15 +947,10 @@ export const api = {
   // pull through fetch and hold in a Blob.
   exportWorldUrl: (wid: string) => `/api/worlds/${wid}/export.zip`,
   importWorld: (file: Blob) =>
-    fetch("/api/worlds/import", { method: "POST", body: file,
-      headers: { "content-type": "application/zip" } }).then(async (r) => {
-        if (!r.ok) {
-          const data = await r.json().catch(() => ({}));
-          throw new ApiError(r.status, data.detail ?? r.statusText, data.kind);
-        }
-        invalidateConfigCache();   // same as createWorld: this changes `first_run`
-        return r.json() as Promise<{ id: string }>;
-      }),
+    postZip<{ id: string }>("/api/worlds/import", file).then((res) => {
+      invalidateConfigCache();   // same as createWorld: this changes `first_run`
+      return res;
+    }),
 
   /** The nav rail's badges. `cid` is the campaign the browser remembers, which
    *  may name one that has since been deleted -- the route answers
@@ -2643,15 +2653,7 @@ export const api = {
   createModule: (name: string) => request<{ id: string }>("POST", "/api/modules", { name }),
   duplicateModule: (mid: string, name: string) =>
     request<{ id: string }>("POST", `/api/modules/${mid}/duplicate`, { name }),
-  importModule: (file: Blob) =>
-    fetch("/api/modules/import", { method: "POST", body: file,
-      headers: { "content-type": "application/zip" } }).then(async (r) => {
-        if (!r.ok) {
-          const data = await r.json().catch(() => ({}));
-          throw new ApiError(r.status, data.detail ?? r.statusText, data.kind);
-        }
-        return r.json() as Promise<{ id: string }>;
-      }),
+  importModule: (file: Blob) => postZip<{ id: string }>("/api/modules/import", file),
   exportModuleUrl: (mid: string) => `/api/modules/${mid}/export`,
   putModuleManifest: (mid: string, body: { name: string; description: string;
     version: string; dice: string; notes: string; dry_run: boolean }) =>

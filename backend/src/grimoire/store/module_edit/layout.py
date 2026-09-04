@@ -63,20 +63,20 @@ def _specialize_layout(layout: dict, in_scope: set[str], edit_fn) -> dict:
     return out
 
 
-def _prune_node(node, group: str | None, names: set[str]):
+def _prune_node(node, groups: set[str], names: set[str]):
     """Returns the pruned node or None when it empties (cascade-cosmetic)."""
     if not isinstance(node, dict):
         return node
     out = dict(node)
     for container in ("row", "column"):
         if isinstance(out.get(container), list):
-            kids = [k for k in (_prune_node(k, group, names) for k in out[container])
+            kids = [k for k in (_prune_node(k, groups, names) for k in out[container])
                     if k is not None]
             if not kids:
                 return None
             out[container] = kids
             return out
-    if group is not None and out.get("group") == group:
+    if out.get("group") in groups:
         return None
     for arr in ("fields", "derived"):
         if isinstance(out.get(arr), list):
@@ -88,14 +88,17 @@ def _prune_node(node, group: str | None, names: set[str]):
 
 
 def _prune_layout(root: Path, *, in_scope: set[str], group: str | None = None,
-                  names: set[str] = frozenset(),
+                  names: set[str] = frozenset(), groups: set[str] = frozenset(),
                   drop_type: str | None = None) -> None:
     """Cascade-cosmetic prune, SCOPED to the sheet types that compose the
     edited container (codex plan review: a global prune would strip a
     disjoint type's same-spelled field from its own layout). `group` prunes
-    apply everywhere (group ids are globally unique); `names` prunes run
-    through the fragment-specialization walk so a fragment shared with
-    out-of-scope types is cloned-pruned-repointed, never damaged in place."""
+    apply everywhere (group ids are globally unique -- a deleted group is
+    gone from every type); `names` and `groups` prunes run through the
+    fragment-specialization walk so a fragment shared with out-of-scope
+    types is cloned-pruned-repointed, never damaged in place. `groups` is
+    the scoped form: a type that stopped composing a group loses that
+    group's node while every other type keeps its own."""
     layout = _read_json(root, "layout.json")
     if not layout:
         return
@@ -108,15 +111,15 @@ def _prune_layout(root: Path, *, in_scope: set[str], group: str | None = None,
             if not isinstance(entries, dict):
                 continue
             for key in list(entries):
-                pruned = _prune_node(entries[key], group, frozenset())
+                pruned = _prune_node(entries[key], frozenset({group}), frozenset())
                 if pruned is None:
                     entries.pop(key)
                 else:
                     entries[key] = pruned
-    if names:
+    if names or groups:
         layout = _specialize_layout(
             layout, in_scope,
-            lambda node: _prune_node(node, None, names))
+            lambda node: _prune_node(node, frozenset(groups), names))
     _write_json(root, "layout.json", layout)
 
 

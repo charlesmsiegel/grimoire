@@ -27,6 +27,12 @@ from .staging import _M, _publish, _staging_root, locked, new_mid
 MAX_MEMBERS = 2000
 MAX_UNCOMPRESSED = 64 * 1024 * 1024
 
+#: What a duplicate leaves behind. A pack that has lived in a synced folder
+#: carries `.DS_Store`, `Thumbs.db` and the like beside its real files; none of
+#: it is part of the module, and a copy that is asked for by name should not
+#: inherit it. Dotfiles as a class: nothing in the pack contract is one.
+_CRUFT = shutil.ignore_patterns(".*", "Thumbs.db", "desktop.ini", "__MACOSX")
+
 
 def duplicate_module(mid: str, name: str) -> str:
     """Copy any pack (builtin or user) to staging, publish by single rename
@@ -40,7 +46,7 @@ def duplicate_module(mid: str, name: str) -> str:
         try:
             staging = base / new
             base.mkdir(parents=True)
-            shutil.copytree(root, staging)
+            shutil.copytree(root, staging, ignore=_CRUFT)
             if name:
                 manifest = staging / "module.md"
                 meta, body = parse_frontmatter(manifest.read_text(encoding="utf-8"))

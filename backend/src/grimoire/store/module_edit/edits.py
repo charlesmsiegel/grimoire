@@ -63,6 +63,18 @@ def delete_group(mid: str, gid: str, *, dry_run: bool = False) -> dict:
     return _apply(mid, mutate, dry_run=dry_run, impact=True, affected_types=affected)
 
 
+def _provided_names(data: dict, st: dict) -> set[str]:
+    """Every name a sheet type's layout may reference: its own fields and
+    derived, plus those of each group it composes."""
+    names = _field_keys(st)
+    groups = data.get("groups", {})
+    for gid in st.get("groups") or []:
+        g = groups.get(gid) if isinstance(gid, str) and isinstance(groups, dict) else None
+        if isinstance(g, dict):
+            names |= _field_keys(g)
+    return names
+
+
 def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
                       dry_run: bool = False) -> dict:
     def mutate(root: Path) -> None:
@@ -71,10 +83,18 @@ def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
         data["sheet_types"][tid] = sheet_type
         _write_json(root, "sheets.json", data)
         if isinstance(old, dict):
-            removed = _field_keys(old) - _field_keys(
-                sheet_type if isinstance(sheet_type, dict) else {})
-            if removed:
-                _prune_layout(root, in_scope={tid}, names=removed)
+            new = sheet_type if isinstance(sheet_type, dict) else {}
+            # Names are judged over the ASSEMBLED set, not the type's own
+            # fields: dropping a group from `groups` takes that group's names
+            # out of this type's layout scope just as deleting an own field
+            # does, and the `{"group": gid}` node itself goes with them. Both
+            # are scoped to this type -- another type still composing the
+            # group keeps its node (#227 T3).
+            removed = _provided_names(data, old) - _provided_names(data, new)
+            dropped = {g for g in (old.get("groups") or []) if isinstance(g, str)} \
+                - {g for g in (new.get("groups") or []) if isinstance(g, str)}
+            if removed or dropped:
+                _prune_layout(root, in_scope={tid}, names=removed, groups=dropped)
     return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True,
                  affected_types={tid})
 
@@ -160,6 +180,16 @@ def upsert_content(mid: str, kind: str, content_id: str, *, name: str,
         return {"ok": False, "errors": [f"unknown content kind {kind!r}"], "display_errors": []}
     if not safe_id(content_id):
         return {"ok": False, "errors": [f"bad content id {content_id!r}"], "display_errors": []}
+    # Frontmatter carries string scalars only (`dump_frontmatter` would
+    # stringify anything else and the reader would hand back that spelling),
+    # so a non-string value cannot be stored faithfully. Refused rather than
+    # dropped: the payload came from a form or a script, and a save that
+    # reports success while losing a field is the worse of the two answers.
+    bad = sorted(k for k, v in (fields or {}).items()
+                 if k not in ("name", "keys") and not isinstance(v, str))
+    if bad:
+        return {"ok": False, "display_errors": [],
+                "errors": [f"metadata value for {k!r} must be a string" for k in bad]}
     def mutate(root: Path) -> None:
         d = root / "content" / kind
         d.mkdir(parents=True, exist_ok=True)
@@ -167,7 +197,7 @@ def upsert_content(mid: str, kind: str, content_id: str, *, name: str,
         if keys:
             meta["keys"] = keys
         for k, v in (fields or {}).items():
-            if k not in ("name", "keys") and isinstance(v, str):
+            if k not in ("name", "keys"):
                 meta[k] = v
         atomic.write_text(d / f"{content_id}.md", dump_frontmatter(meta, body))
         sidecar = d / f"{content_id}.sheet.json"

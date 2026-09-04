@@ -9,20 +9,31 @@ const FONT_OPTIONS = ["display", "body", "mono", "serif", "sans"] as const;
 const DOTS_OPTIONS = ["circle", "square", "diamond"] as const;
 const CORNERS_OPTIONS = ["sharp", "rounded"] as const;
 
+/** Mirrors the server's `MAX_DEPTH` (store/modules/display.py): the same tree
+ *  the backend would refuse is the one the preview stops descending. */
+export const MAX_LAYOUT_DEPTH = 32;
+
 /** Client-side counterpart to the server's fragment splice (Phase 6): resolves
  *  `{ use: "fragmentId" }` nodes against `fragments` so a live-edited layout
  *  draft can be previewed without a server round trip. Cycle-guarded (a
  *  fragment can't reference itself, directly or transitively) and depth-capped
- *  so a malformed draft degrades to an empty node instead of hanging the tab. */
-function splice(node: any, fragments: Record<string, any>, seen: string[] = []): any {
+ *  so a malformed draft degrades to an empty node instead of hanging the tab.
+ *  The cap counts every structural step -- a `row`/`column` nesting as much as
+ *  a `use` hop -- because a draft that nests raw columns a thousand deep is the
+ *  same runaway recursion with no fragment in it. */
+export function splice(node: any, fragments: Record<string, any>, seen: string[] = [],
+                       depth = 0): any {
   if (!node || typeof node !== "object") return node;
+  if (depth > MAX_LAYOUT_DEPTH) return {};
   if (typeof node.use === "string") {
-    if (seen.includes(node.use) || seen.length > 32) return {};
-    return splice(fragments[node.use] ?? {}, fragments, [...seen, node.use]);
+    if (seen.includes(node.use)) return {};
+    return splice(fragments[node.use] ?? {}, fragments, [...seen, node.use], depth + 1);
   }
   const out: any = { ...node };
   for (const arr of ["row", "column"] as const) {
-    if (Array.isArray(out[arr])) out[arr] = out[arr].map((k: any) => splice(k, fragments, seen));
+    if (Array.isArray(out[arr])) {
+      out[arr] = out[arr].map((k: any) => splice(k, fragments, seen, depth + 1));
+    }
   }
   return out;
 }

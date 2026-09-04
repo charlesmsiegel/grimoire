@@ -31,10 +31,12 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not text.startswith("---\n"):
         return {}, text
     rest = text[4:]
-    if rest.startswith("---"):
+    if rest == "---" or rest.startswith("---\n"):
         # empty block: the opening fence's own newline doubles as the
         # separator, so the closing fence sits at rest[0] with no leading
-        # "\n" for the usual "\n---" search to find.
+        # "\n" for the usual "\n---" search to find. A whole line, not a
+        # prefix: `----` is a body's first line, and reading it as the fence
+        # handed back `-` as the body's first character.
         block, after = "", rest[3:]
     else:
         end = rest.find("\n---")
