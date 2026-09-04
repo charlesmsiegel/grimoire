@@ -1,7 +1,26 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { api, type Appearance, type EntityScope } from "../../api/client";
+import { errorText } from "../../api/errors";
 import { ImageDescriptionField } from "../ImageDescriptionField";
 import { avatarSrc, withToken } from "./shared";
+
+/** The names a batch of newly-picked files lands under.
+ *
+ *  Named in ONE pass over the shelf as it stands rather than re-read between
+ *  uploads, which is what makes picking several files at once safe: every name
+ *  is decided before the first upload lands, so nothing in the batch can be
+ *  handed a `gallery_N` another file in the same batch is already taking.
+ *
+ *  An empty avatar slot takes the first file — the rule the PC and entity
+ *  shelves use too — and the rest queue after the highest number on the shelf.
+ *  That is a high-water mark and not a count: removing `gallery_2` from a shelf
+ *  that also has `gallery_3` must not make the next upload overwrite it.
+ */
+export function nextImageNames(count: number, hasAvatar: boolean, gallery: string[]): string[] {
+  let top = gallery.reduce((m, n) => Math.max(m, Number(n.slice("gallery_".length))), 0);
+  return Array.from({ length: count },
+                    (_, i) => (i === 0 && !hasAvatar ? "avatar" : `gallery_${++top}`));
+}
 
 /** Every image this version has, plus the greeting art it could borrow.
  *
@@ -34,19 +53,43 @@ export function ArtTab(
   },
 ) {
   const shelfFileRef = useRef<HTMLInputElement>(null);
+  const [adding, setAdding] = useState<{ done: number; total: number } | null>(null);
 
   async function guard(run: () => Promise<unknown>) {
     try { await run(); await onRefresh(); } catch (err: unknown) { onError(err); }
   }
 
+  /** Store every picked file, then re-read the character once.
+   *
+   *  Sequential and all-attempted, the shape the card import already uses: a
+   *  rejected upload is one picture missing rather than a batch abandoned
+   *  half-way, and the report names the files that did not land so the reader
+   *  knows which to pick again. One refresh at the end rather than one per
+   *  file — the tiles are worth redrawing when the batch is in, not thirty
+   *  times on the way there.
+   */
   async function onAdd(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    const next = hasAvatar
-      ? `gallery_${galleryImages.reduce((m, n) => Math.max(m, Number(n.slice("gallery_".length))), 0) + 1}`
-      : "avatar";
-    await guard(() => api.putImage(scope, cid, vid, next, file));
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";   // the same file twice in a row must still fire onChange
+    if (!files.length) return;
+    const names = nextImageNames(files.length, hasAvatar, galleryImages);
+    const failures: string[] = [];
+    setAdding({ done: 0, total: files.length });
+    for (let i = 0; i < files.length; i++) {
+      try {
+        await api.putImage(scope, cid, vid, names[i], files[i]);
+      } catch (err: unknown) {
+        failures.push(`${files[i].name}: ${errorText(err)}`);
+      }
+      setAdding({ done: i + 1, total: files.length });
+    }
+    setAdding(null);
+    await onRefresh().catch((err: unknown) => onError(err));
+    // Last, so it is the failure the banner ends up showing: a refresh that
+    // also failed is the lesser news when three of five pictures are missing.
+    if (failures.length) {
+      onError(`Couldn’t add ${failures.length} of ${files.length} — ${failures.join("; ")}`);
+    }
   }
 
   return <>
@@ -95,9 +138,12 @@ export function ArtTab(
             </div>
           );
         })}
-        <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
-        <input ref={shelfFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
-               aria-label="Add image" onChange={(e) => void onAdd(e)} />
+        <button className="shelf-add" disabled={!!adding}
+                onClick={() => shelfFileRef.current?.click()}>
+          {adding ? `adding ${adding.done}/${adding.total}…` : "+ add"}
+        </button>
+        <input ref={shelfFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+               multiple hidden aria-label="Add images" onChange={(e) => void onAdd(e)} />
       </div>
     </div>
 

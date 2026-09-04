@@ -1521,7 +1521,10 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   font-family: var(--fm); font-size: 10px; text-transform: uppercase;
 }
 .shelf-add { cursor: pointer; }
-.shelf-add:hover { color: var(--accent); border-color: var(--accent); }
+/* A hover rule alone still lights up a DISABLED button, which is what the
+   shelf's add tile becomes while a batch of images is uploading. */
+.shelf-add:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.shelf-add:disabled { cursor: default; }
 /* Per-image descriptions (store/image_descriptions.py). The collapsed form is
    a tile-width button: two lines of the description, or an invitation to write
    one. `-empty` is the visual half of the absent-vs-"" distinction the store

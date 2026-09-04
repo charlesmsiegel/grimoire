@@ -586,6 +586,52 @@ test("the art tab shows the avatar tile and offers a description per image", asy
   expect(screen.getByText("a novice at the gate")).toBeTruthy();
 });
 
+const imgFile = (name: string) => new File(["x"], name, { type: "image/png" });
+
+/** Open the art tab on a version whose images are `images`. */
+async function artTab(images: string[]) {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ ...DETAIL.versions[0], images,
+                 image_v: Object.fromEntries(images.map((n) => [n, `v-${n}`])),
+                 image_descriptions: {} }],
+  });
+  (api.putImage as any).mockResolvedValue({ name: "x", ext: "png" });
+  await renderWorld();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  return await screen.findByLabelText("Add images");
+}
+
+const putNames = () => (api.putImage as any).mock.calls.map((c: any[]) => c[3]);
+
+test("the shelf takes several files at once, queued after the highest gallery slot", async () => {
+  const input = await artTab(["avatar", "gallery_2"]);
+  fireEvent.change(input,
+    { target: { files: [imgFile("a.png"), imgFile("b.png"), imgFile("c.png")] } });
+  // Named from ONE read of the shelf, not from a re-read per file: the names
+  // are picked before any of them lands, so three in a batch cannot collide.
+  await waitFor(() => expect(putNames()).toEqual(["gallery_3", "gallery_4", "gallery_5"]));
+  expect((api.readCharacter as any).mock.calls.length).toBeGreaterThan(1);
+});
+
+test("with no avatar yet, the first of a batch fills the avatar slot", async () => {
+  const input = await artTab([]);
+  fireEvent.change(input, { target: { files: [imgFile("a.png"), imgFile("b.png")] } });
+  await waitFor(() => expect(putNames()).toEqual(["avatar", "gallery_1"]));
+});
+
+test("one bad file in a batch does not stop the rest, and is named in the error", async () => {
+  const input = await artTab(["avatar"]);
+  (api.putImage as any)
+    .mockResolvedValueOnce({ name: "gallery_1", ext: "png" })
+    .mockRejectedValueOnce({ detail: "unsupported image" })
+    .mockResolvedValueOnce({ name: "gallery_3", ext: "png" });
+  fireEvent.change(input,
+    { target: { files: [imgFile("a.png"), imgFile("b.png"), imgFile("c.png")] } });
+  await waitFor(() => expect(putNames()).toEqual(["gallery_1", "gallery_2", "gallery_3"]));
+  expect(await screen.findByText(/b\.png: unsupported image/)).toBeTruthy();
+});
+
 test("promoting a gallery image re-reads the character, so the avatar is not the old one", async () => {
   (api.readCharacter as any).mockResolvedValue({
     ...DETAIL,
