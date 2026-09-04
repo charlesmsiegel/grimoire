@@ -34,6 +34,7 @@ from .common import (
     _dump,
     _require_connection,
     _serve_image,
+    _sheet_failure_status,
     _spooled_upload,
     _upload_image_ext,
     _world_root_or_404,
@@ -362,7 +363,7 @@ def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
             # routes: this restores the state before the create, and anything
             # sitting under `eid` was already sitting there then (#225).
             store.entities.delete_entity(root, kind, eid)
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=_sheet_failure_status(e), detail=str(e))
     return {"id": eid}
 
 

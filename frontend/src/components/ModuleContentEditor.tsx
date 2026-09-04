@@ -17,6 +17,13 @@ type ContentEntry = ModuleContentEntry & Record<string, unknown>;
 function metaFromEntry(entry: ContentEntry): Record<string, string> {
   const meta: Record<string, string> = {};
   for (const [k, v] of Object.entries(entry)) {
+    // `String(v)` narrows the type for the rows, it does not convert data:
+    // every unknown key here came out of the entry's frontmatter, and the
+    // parser (`store.frontmatter.parse_frontmatter`) yields string scalars
+    // only, so a non-string never arrives. Were one to (a future typed key
+    // left out of KNOWN_ENTRY_KEYS), it would be shown as its string form and
+    // saved back as that -- which `upsert_content` refuses for anything but
+    // a string in the first place.
     if (!KNOWN_ENTRY_KEYS.has(k)) meta[k] = typeof v === "string" ? v : String(v);
   }
   return meta;

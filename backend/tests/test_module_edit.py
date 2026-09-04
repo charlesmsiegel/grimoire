@@ -1146,3 +1146,209 @@ def test_r2_consumers_reference_campaign_lock():
     assert "campaign_lock" in inspect.getsource(checks_mod.resolve_check)
     assert "campaign_lock" in inspect.getsource(context_mod._mechanics)
     assert "campaign_lock" in inspect.getsource(mechanics._continuation_rule_bodies)
+
+
+# ---- Phase 8 review follow-ups (#227) ---------------------------------------
+
+def test_recover_survives_an_io_error_during_replay(monkeypatch, tmp_path):
+    """T2. A journal whose replay dies on I/O must neither abort startup
+    (lifespan calls `recover`) nor break `_apply`'s result-dict contract (every
+    edit calls it first). The journal stays for the next attempt and the
+    debris sweep is skipped, exactly as a quarantined journal skips it."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    _wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    real = me_migrate._run_migration
+    monkeypatch.setattr(me_migrate, "_run_migration",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    journals = list(me_migrate._staging_root().glob("*.journal.json"))
+    assert len(journals) == 1
+
+    def flaky(*a, **k):
+        raise OSError("disk went away")
+    monkeypatch.setattr(me_migrate, "_run_migration", flaky)
+    module_edit.recover()                                   # no raise
+    assert journals[0].exists()                             # kept for next time
+    res = module_edit.set_manifest(mid, name="Realm System", description="", version="",
+                                   dice="", notes="")
+    assert isinstance(res, dict) and "ok" in res            # the contract held
+    assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"strength": 3}
+    monkeypatch.setattr(me_migrate, "_run_migration", real)
+    module_edit.recover()
+    assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"brawn": 3}
+    assert not list(me_migrate._staging_root().glob("*.journal.json"))
+
+
+def test_upsert_content_rejects_a_non_string_metadata_value(monkeypatch, tmp_path):
+    """T4. Frontmatter carries string scalars only, so a non-string value
+    cannot be written faithfully. It used to be dropped on the floor; a save
+    that reports success and loses a field is the worse outcome."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.upsert_content(mid, "items", "sunblade", name="Sunblade", body="",
+                                     keys="", fields={"rarity": 3, "item_type": "blade"},
+                                     sheet=None)
+    assert res["ok"] is False
+    assert any("rarity" in e for e in res["errors"])
+    with pytest.raises(modules.ContentNotFound):
+        modules.read_content(mid, "items", "sunblade")
+    ok = module_edit.upsert_content(mid, "items", "sunblade", name="Sunblade", body="",
+                                    keys="", fields={"item_type": "blade"}, sheet=None)
+    assert ok["ok"]
+    assert modules.read_content(mid, "items", "sunblade")["item_type"] == "blade"
+
+
+def test_sheet_type_migration_leaves_a_malformed_fields_value_alone(monkeypatch, tmp_path):
+    """T7. A type rename touches `sheet_type` only. The rewrite used to
+    reassign `fields` too, replacing a malformed value with `{}` -- a
+    migration quietly editing what it did not migrate."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    _wid, cid = _bound_campaign(mid)
+    p = campaigns.campaign_root(cid) / "sheets" / "characters--mara.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"sheet_type": "warden", "fields": ["not", "a", "dict"]}),
+                 encoding="utf-8")
+    res = module_edit.rename(mid, "sheet_type", {"from": "warden"}, "keeper")
+    assert res["ok"], res["errors"]
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["sheet_type"] == "keeper"
+    assert data["fields"] == ["not", "a", "dict"]
+
+
+def test_a_migrated_sheet_is_written_the_way_a_save_writes_one(monkeypatch, tmp_path):
+    """T7. Same bytes as the sheet writer produces, so a migration does not
+    leave a file that differs from a saved one by a trailing newline."""
+    from grimoire.store import sheets
+    mid = _mk_schema(monkeypatch, tmp_path)
+    _wid, cid = _bound_campaign(mid)
+    from grimoire.store import characters
+    characters.create_character(worlds.world_root(_wid), "Mara")
+    sheets.write(cid, "characters", "mara", "warden", {"strength": 3}, expected=None)
+    p = campaigns.campaign_root(cid) / "sheets" / "characters--mara.json"
+    saved = p.read_text(encoding="utf-8")
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"], res["errors"]
+    migrated = p.read_text(encoding="utf-8")
+    assert migrated.endswith("\n") == saved.endswith("\n")
+    assert json.loads(migrated)["fields"] == {"brawn": 3}
+
+
+def test_world_sheets_migrate_regardless_of_any_binding(monkeypatch, tmp_path):
+    """T7. A world's starting sheets are keyed by module id, so they are this
+    module's whether or not any campaign -- or the world's own default --
+    currently resolves to it."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Run", wid)   # bound to nothing
+    assert modules.resolve(cid) is None
+    wp = worlds.world_root(wid) / "sheets" / mid / "characters--winifred.json"
+    wp.parent.mkdir(parents=True, exist_ok=True)
+    wp.write_text(json.dumps({"sheet_type": "warden", "fields": {"strength": 2}, "gen": "g0"}),
+                  encoding="utf-8")
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"], res["errors"]
+    assert res["migration"]["migrated"] == 1
+    assert json.loads(wp.read_text(encoding="utf-8"))["fields"] == {"brawn": 2}
+
+
+def test_impact_reads_each_sheet_once(monkeypatch, tmp_path):
+    """T8. The migration count and the newly-invalid count come from one walk
+    over the stored sheets, not two."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    _wid, cid = _bound_campaign(mid)
+    _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    _write_campaign_sheet(cid, "characters", "seraphine", "warden", {"strength": 1})
+    opened: list[str] = []
+    real = me_migrate._sheet_files
+
+    def counting(m):
+        for p, c in real(m):
+            opened.append(p.name)
+            yield p, c
+    monkeypatch.setattr(me_migrate, "_sheet_files", counting)
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn",
+                             dry_run=True)
+    assert res["ok"], res["errors"]
+    assert res["impact"]["sheets_migrated"] == 2
+    assert sorted(opened) == ["characters--mara.json", "characters--seraphine.json"]
+
+
+def test_narrowing_a_sheet_types_groups_prunes_its_layout(monkeypatch, tmp_path):
+    """T3. Dropping a group from a sheet type used to leave that type's
+    `{"group": gid}` layout node (and the group's field names) behind -- a
+    display error on every render until somebody found it. Scoped to the
+    edited type: another type still composing the group keeps its node."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    keeper = {"label": "Keeper", "kind": "characters", "groups": ["attributes"], "fields": []}
+    assert module_edit.upsert_sheet_type(mid, "keeper", keeper)["ok"]
+    layout = {"sheet_types": {
+        "warden": {"column": [{"group": "attributes"},
+                              {"fields": ["strength", "notes_line"]},
+                              {"derived": ["might"]}]},
+        "keeper": {"column": [{"group": "attributes"}]},
+    }}
+    assert module_edit.set_layout(mid, layout)["ok"]
+    narrowed = {"label": "Warden", "kind": "characters", "groups": [],
+                "fields": [{"key": "notes_line", "label": "Notes", "type": "text"}]}
+    res = module_edit.upsert_sheet_type(mid, "warden", narrowed)
+    assert res["ok"], res["errors"]
+    pack = modules.load_pack(mid)
+    assert pack["display_errors"] == []
+    trees = pack["layout_source"]["sheet_types"]
+    assert trees["warden"] == {"column": [{"fields": ["notes_line"]}]}
+    assert trees["keeper"] == {"column": [{"group": "attributes"}]}
+
+
+def test_duplicate_module_drops_dotfiles_and_os_cruft(monkeypatch, tmp_path):
+    """T9. A duplicate is a fresh pack; the source's `.DS_Store` is not part of
+    what was asked for."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    root = modules.pack_root(mid)[0]
+    (root / ".DS_Store").write_bytes(b"\x00")
+    (root / "rules").mkdir(exist_ok=True)
+    (root / "rules" / "Thumbs.db").write_bytes(b"\x00")
+    (root / "rules" / "combat.md").write_text("---\nalways: true\n---\nbody\n", encoding="utf-8")
+    new = module_edit.duplicate_module(mid, "Realm Copy")
+    copied = modules.pack_root(new)[0]
+    assert not (copied / ".DS_Store").exists()
+    assert not (copied / "rules" / "Thumbs.db").exists()
+    assert (copied / "rules" / "combat.md").exists()
+    assert (copied / "sheets.json").exists()
+
+
+def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
+    """T11. Replaces a whole-module substring check that passed as long as the
+    file mentioned both names somewhere. Every `proposals.new(` call in the
+    streaming finalizers must be lexically inside a `with ...campaign_lock(...)`
+    block -- the exclusion `test_proposal_derivation_excluded_by_edit_lock`
+    proves at runtime for one site is here proved for all of them."""
+    import ast
+    import inspect
+
+    from grimoire.routes import streaming
+
+    tree = ast.parse(inspect.getsource(streaming))
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    def is_lock(expr) -> bool:
+        return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
+                and expr.func.attr == "campaign_lock")
+
+    sites = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "new" and isinstance(n.func.value, ast.Attribute)
+             and n.func.value.attr == "proposals"]
+    assert sites, "no proposals.new call sites found -- did the finalizers move?"
+    for call in sites:
+        node = call
+        covered = False
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.With) and any(is_lock(i.context_expr) for i in node.items):
+                covered = True
+                break
+        assert covered, f"proposals.new at line {call.lineno} is outside a campaign lock"

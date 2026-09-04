@@ -39,6 +39,7 @@ from .common import (
     _routing_body,
     _routing_fields,
     _serve_image,
+    _sheet_failure_status,
     _serve_image_file,
     _upload_image_ext,
     _with_descriptions,
@@ -2376,5 +2377,5 @@ def post_campaign_instantiate(cid: str, kind: str, mid: str, content_id: str):
             # campaign file cleanly (no tombstone) -- roll it back so a failed
             # instantiate leaves no sheetless orphan.
             store.overlay.delete_entity(cid, kind, eid)
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=_sheet_failure_status(e), detail=str(e))
     return {"id": eid}

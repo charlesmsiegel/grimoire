@@ -47,3 +47,18 @@ def test_head_matches_full_parse_on_unterminated_block(tmp_path):
     text = "---\ntitle: t\nno terminator"
     p.write_text(text, encoding="utf-8")
     assert parse_frontmatter_head(p) == parse_frontmatter(text)[0] == {}
+
+
+def test_four_dashes_are_not_the_closing_fence_of_an_empty_block():
+    # The empty-block special case reads the closing fence at rest[0]; a
+    # `startswith("---")` there took `----` for it and handed back `-` as the
+    # first line of the body. A fence is a whole line, so this is a document
+    # with no frontmatter at all -- which is what the general path says too.
+    text = "---\n----\nbody\n"
+    assert parse_frontmatter(text) == ({}, text)
+
+
+def test_empty_block_still_parses_with_and_without_a_trailing_newline():
+    assert parse_frontmatter("---\n---\nbody\n") == ({}, "body\n")
+    assert parse_frontmatter("---\n---\n\nbody\n") == ({}, "body\n")
+    assert parse_frontmatter("---\n---") == ({}, "")

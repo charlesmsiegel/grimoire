@@ -16,12 +16,13 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from .. import atomic, locks, revision
+from .. import atomic, locks, logs, revision
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..modules import binding as modules_binding
 from ..modules import pack as modules_pack
 from ..paths import safe_id
+from ..sheets import paths as sheets_paths
 from ..sheets import schema as sheets_schema
 from ..worlds import paths as worlds_paths
 from ..worlds import read as worlds_read
@@ -56,7 +57,21 @@ def recover() -> None:
         if journals:
             with _campaign_locks():
                 for jp in journals:
-                    _replay_journal(jp, quarantined)
+                    try:
+                        _replay_journal(jp, quarantined)
+                    except OSError as e:
+                        # A replay that dies on I/O -- a rename refused, a
+                        # sheet rewrite failing under `_run_migration` -- must
+                        # not abort startup (lifespan calls this) or escape
+                        # `_apply`, whose callers are promised a result dict.
+                        # The journal is left where it is: replay is
+                        # idempotent, so the next recover() finishes it. It
+                        # counts as quarantined for the sweep below, since its
+                        # staging dir may still be the only copy of the pack.
+                        quarantined.add(jp.name)
+                        logs.record("error", __name__,
+                                    f"module journal replay failed: {jp.name}: {e}",
+                                    kind="module_edit")
         # non-journaled debris (crash before journal write); no edit can be
         # in flight here — edits hold _M for their whole operation. If ANY
         # journal was quarantined we cannot know which dirs it references,
@@ -141,10 +156,16 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
     fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
     changed = False
     op = mig.get("op")
+    # `data["fields"]` is reassigned only by the two ops that edit it. A type
+    # rename touches `sheet_type` alone, and writing `fields` back from that
+    # branch replaced a malformed value (a list, a string) with `{}` -- a
+    # migration quietly editing what it did not migrate. The reader flags such
+    # a sheet as invalid either way; the file should still say why.
     if op == "field":
         if data.get("sheet_type") in (mig.get("sheet_types") or []) \
                 and mig["from"] in fields and mig["to"] not in fields:
             fields[mig["to"]] = fields.pop(mig["from"])
+            data["fields"] = fields
             changed = True
     elif op == "sheet_type":
         if data.get("sheet_type") == mig["from"]:
@@ -156,11 +177,16 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
         for k, v in list(fields.items()):
             if isinstance(v, list) and marker in v:
                 fields[k] = [repl if e == marker else e for e in v]
+                data["fields"] = fields
                 changed = True
     if changed:
-        data["fields"] = fields
         data["gen"] = uuid.uuid4().hex
-        atomic.write_text(p, json.dumps(data, indent=2))
+        # Through the sheet writer's own function, so a migrated sheet is
+        # byte-for-byte what a save would have written (the pack-file writer
+        # `_write_json` ends with a newline; a sheet does not). `store.atomic`
+        # underneath it discards its temp on any failure, so a crash between
+        # write and replace leaves no stray file beside the sheet.
+        sheets_paths._atomic_write_json(p, data)
     return changed
 
 
@@ -238,6 +264,7 @@ def _impact(mid: str, staged_pack: dict, migration: dict | None, staging_root: P
     dangling = 0
     staged_ids = _content_ids(staged_pack)
     live_ids = _content_ids(live_pack)
+    migrated = 0
     for p, _cid in _sheet_files(mid):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
@@ -248,6 +275,10 @@ def _impact(mid: str, staged_pack: dict, migration: dict | None, staging_root: P
         st = data.get("sheet_type")
         fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
         if migration:   # judge post-migration state, not the raw file
+            # Counted here, on the raw file, before the preview rewrites it:
+            # one walk over the stored sheets answers both questions.
+            if _would_migrate(data, migration):
+                migrated += 1
             mig_fields = dict(fields)
             _migrate_preview(mig_fields, data, migration)
             st = data.get("sheet_type")
@@ -268,14 +299,6 @@ def _impact(mid: str, staged_pack: dict, migration: dict | None, staging_root: P
     if migration:
         out["sheet_types"] = list(migration.get("sheet_types")
                                   or ([migration["from"]] if migration["op"] == "sheet_type" else []))
-        migrated = 0
-        for p, _cid in _sheet_files(mid):
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-                continue
-            if isinstance(data, dict) and _would_migrate(data, migration):
-                migrated += 1
         out["sheets_migrated"] = migrated
     elif affected_types:
         # ordinary (non-rename) schema edits carry no migration, but the

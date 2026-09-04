@@ -1045,6 +1045,20 @@ def _content_fields(kind: str, content: dict) -> dict:
     return fields
 
 
+def _sheet_failure_status(exc: Exception) -> int:
+    """The status a rejected sheet write answers with: 409 for a CAS conflict,
+    400 for everything else the writer refuses.
+
+    Every sheet route in `mechanics.py` and `worlds.py` splits the two this
+    way. The instantiate routes catch the base class in one clause (their
+    rollback runs for both), and used to answer 400 for the subclass too --
+    an id freshly minted by `create_entity` cannot carry a sheet yet, so the
+    conflict is unreachable there today, but the mapping is one rule, not
+    one per route.
+    """
+    return 409 if isinstance(exc, store.sheets.SheetConflict) else 400
+
+
 def _campaign_routing_meta(cid: str) -> dict:
     """A campaign's frontmatter, for the routing walk -- {} for anything unreadable.
 
