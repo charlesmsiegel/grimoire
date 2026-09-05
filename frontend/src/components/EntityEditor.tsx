@@ -250,7 +250,7 @@ function ChoiceField({ spec, options, value, onChange }: {
  *  applies before it sanitizes a value it cannot parse to blank. `Number()`
  *  is wider (`0x10`, padded strings) and would say yes to values the input
  *  then shows as empty. */
-const HTML_FLOAT = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+const HTML_FLOAT = /^-?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
 
 /** Can a number input show this stored value? A hand-written `wet` cannot be
  *  rendered by `<input type="number">` -- the browser sanitizes it to blank --
