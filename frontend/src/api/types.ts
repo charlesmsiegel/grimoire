@@ -235,6 +235,10 @@ export type WorldMeta = {
   updated: string;
   counts: Record<string, number>;
   module?: string;
+  /** Cache-busting token for the world's cover, `""` when it has none. Derived
+   *  by the route rather than stored in `world.md` — the same split the
+   *  campaigns list makes, and for the same reason. */
+  cover?: string;
 };
 export type CampaignMeta = {
   id: string;
@@ -862,6 +866,12 @@ export type GalleryImage = {
 };
 export type CampaignImage = {
   name: string; ext: string; v: string;
+  /** True when the picture belongs to the campaign's WORLD and this campaign
+   *  is only reading through to it. The two are different sentences everywhere
+   *  they are shown: the picker offers "remove from this campaign" (which hides
+   *  it, reversibly) for one and a real delete for the other, and only a
+   *  campaign's own image can be described here rather than in its world. */
+  inherited?: boolean;
   /** What the picture shows. `described` is separate on purpose: `description`
    *  is `""` both for "never reviewed" and for "reviewed, nothing to say", and
    *  only `described` tells them apart. */
@@ -2181,4 +2191,20 @@ export type CalendarYear = {
     month_key: string;
     month?: string | number; month_name?: string; day?: number; friendly?: string;
   }[];
+};
+
+/** What `GET /api/campaigns/{cid}/images` answers with.
+
+ *  An envelope rather than a bare array since the library began reading through
+ *  to the world: `hidden` names the inherited pictures this campaign has
+ *  tombstoned, which appear in no listing by construction and so would be
+ *  unreachable — and un-restorable — if they were not reported separately. */
+export type CampaignLibrary = { images: CampaignImage[]; hidden: string[] };
+
+/** One image in a WORLD's own library (`store/world_images.py`). No
+ *  `inherited`: a world's library is its own by definition, and it is the thing
+ *  campaigns inherit FROM. */
+export type WorldImage = {
+  name: string; ext: string; v: string;
+  description?: string; described?: boolean;
 };

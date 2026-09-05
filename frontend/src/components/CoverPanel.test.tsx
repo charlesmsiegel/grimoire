@@ -1,9 +1,13 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { CampaignCover } from "./CampaignCover";
+import { CampaignCover, CoverPanel } from "./CoverPanel";
 
 vi.mock("../api/client", () => ({
   api: {
     getCampaign: vi.fn(),
+    getWorld: vi.fn(),
+    putWorldCover: vi.fn(),
+    deleteWorldCover: vi.fn(),
+    worldCoverUrl: vi.fn(),
     putCampaignCover: vi.fn(),
     deleteCampaignCover: vi.fn(),
     campaignCoverUrl: (cid: string, o?: { v?: string }) =>
@@ -168,4 +172,47 @@ test("a cover that fails to load falls back to the placeholder, like the list do
   // broken — the same reason CampaignsView keys its `broken` map that way.
   fireEvent.change(screen.getByLabelText(/cover image/i), { target: { files: [file()] } });
   expect((await screen.findByRole("img")).getAttribute("src")).toBe("/api/campaigns/run/cover?v=abc");
+});
+
+
+// ---- the same panel, pointed at a world ------------------------------------
+
+test("a world cover loads, uploads and removes through the world routes", async () => {
+  (api.getWorld as any).mockResolvedValue({ meta: { cover: "" } });
+  (api.putWorldCover as any).mockResolvedValue({ ext: "png", v: "w1" });
+  (api.deleteWorldCover as any).mockResolvedValue({ ok: true });
+  (api.worldCoverUrl as any).mockImplementation(
+    (wid: string, o: any) => `/api/worlds/${wid}/cover?v=${o.v}`);
+
+  render(<CoverPanel scope={{ kind: "world", id: "realm" }} />);
+  expect(await screen.findByText(/No cover set/)).toBeTruthy();
+  // The world's copy says where a world cover is actually seen, not the
+  // campaign's sentence about the EPUB.
+  expect(screen.getByText(/worlds shelf/)).toBeTruthy();
+
+  const file = new File(["x"], "c.png", { type: "image/png" });
+  fireEvent.change(screen.getByLabelText("Cover image"), { target: { files: [file] } });
+  await waitFor(() => expect(api.putWorldCover).toHaveBeenCalledWith("realm", expect.any(File)));
+  expect(api.putCampaignCover).not.toHaveBeenCalled();
+
+  const img = await screen.findByAltText("World cover");
+  expect(img.getAttribute("src")).toContain("/api/worlds/realm/cover");
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove cover" }));
+  await waitFor(() => expect(api.deleteWorldCover).toHaveBeenCalledWith("realm"));
+});
+
+test("a world cover that will not load falls back to the placeholder", async () => {
+  // The case is a cover removed in another tab: a placeholder beside a live
+  // "Remove cover" button is the same contradiction the broken-image glyph was.
+  (api.getWorld as any).mockResolvedValue({ meta: { cover: "w1" } });
+  (api.worldCoverUrl as any).mockImplementation(
+    (wid: string, o: any) => `/api/worlds/${wid}/cover?v=${o.v}`);
+
+  render(<CoverPanel scope={{ kind: "world", id: "realm" }} />);
+  const img = await screen.findByAltText("World cover");
+  fireEvent.error(img);
+
+  expect(await screen.findByText(/No cover set/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Remove cover" })).toBeNull();
 });

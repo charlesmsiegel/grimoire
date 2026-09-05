@@ -1,10 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 
-/** The campaign's cover image: shown on the campaigns list and used as the
- *  cover of the exported EPUB. A settings panel (the CalendarConfig shape),
- *  not a list/detail editor — there is one image or none. */
-export function CampaignCover({ cid }: { cid: string }) {
+/** A cover image, for a campaign or for a world.
+ *
+ *  A campaign's is shown on the campaigns list and used as the cover of the
+ *  exported EPUB; a world's is shown on the worlds shelf and in the world
+ *  header, and travels in a world bundle. A settings panel (the CalendarConfig
+ *  shape), not a list/detail editor — there is one image or none.
+ *
+ *  One component for both because the interesting part is not the image, it is
+ *  the `live` ref discipline below: the panel is reused across navigation and
+ *  every await here can resolve after the reader has moved on. Two copies would
+ *  be two chances to get that wrong.
+ *
+ *  Deliberately NOT class `.campaign-cover` any more: `index.css` records that
+ *  taking that name once redefined a 260px preview into a 104px thumbnail
+ *  everywhere this renders. */
+export type CoverScope = { kind: "campaign" | "world"; id: string };
+
+export function CoverPanel({ scope }: { scope: CoverScope }) {
+  const isWorld = scope.kind === "world";
+  const cid = scope.id;
   const [version, setVersion] = useState<string | null>(null);  // null = loading
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,8 +52,8 @@ export function CampaignCover({ cid }: { cid: string }) {
     setError(null);
     setBroken(null);
     const mine = cid;
-    api.getCampaign(cid)
-      .then((r) => { if (live.current === mine) setVersion(r.meta.cover ?? ""); })
+    (isWorld ? api.getWorld(cid) : api.getCampaign(cid))
+      .then((r: any) => { if (live.current === mine) setVersion(r.meta.cover ?? ""); })
       .catch(() => { if (live.current === mine) setVersion(""); });
   }, [cid]);
 
@@ -46,7 +62,8 @@ export function CampaignCover({ cid }: { cid: string }) {
     setError(null);
     setBusy(true);
     try {
-      const r = await api.putCampaignCover(cid, file);
+      const r = isWorld ? await api.putWorldCover(cid, file)
+                        : await api.putCampaignCover(cid, file);
       if (live.current !== mine) return;   // the reader switched campaigns mid-upload
       setBroken(null);
       setVersion(r.v);
@@ -68,7 +85,7 @@ export function CampaignCover({ cid }: { cid: string }) {
     setError(null);
     setBusy(true);
     try {
-      await api.deleteCampaignCover(cid);
+      await (isWorld ? api.deleteWorldCover(cid) : api.deleteCampaignCover(cid));
       if (live.current !== mine) return;
       setVersion("");
     } catch (err: any) {
@@ -92,16 +109,19 @@ export function CampaignCover({ cid }: { cid: string }) {
   const hasCover = Boolean(version) && broken !== version;
 
   return (
-    <div className="campaign-cover">
+    <div className="cover-panel">
       {error && <div className="banner">{error}</div>}
       {hasCover
-        ? <img className="cover-preview" src={api.campaignCoverUrl(cid, { v: version })}
-               alt="Campaign cover" onError={() => setBroken(version)} />
-        : <p className="field-hint">No cover set. It is used on the campaigns list and as the cover of the exported EPUB.</p>}
-      <label className="field-hint" htmlFor="campaign-cover-file">
+        ? <img className="cover-preview" src={isWorld ? api.worldCoverUrl(cid, { v: version })
+                            : api.campaignCoverUrl(cid, { v: version })}
+               alt={isWorld ? "World cover" : "Campaign cover"} onError={() => setBroken(version)} />
+        : <p className="field-hint">{isWorld
+            ? "No cover set. It is shown on the worlds shelf and travels in a world bundle."
+            : "No cover set. It is used on the campaigns list and as the cover of the exported EPUB."}</p>}
+      <label className="field-hint" htmlFor={`${scope.kind}-cover-file`}>
         {hasCover ? "Replace cover image" : "Cover image"}
       </label>
-      <input id="campaign-cover-file" ref={input} type="file" disabled={busy}
+      <input id={`${scope.kind}-cover-file`} ref={input} type="file" disabled={busy}
              accept="image/png,image/jpeg,image/gif,image/webp"
              onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
       {hasCover && (
@@ -109,4 +129,10 @@ export function CampaignCover({ cid }: { cid: string }) {
       )}
     </div>
   );
+}
+
+
+/** The campaign face, kept so the two existing call sites read as they did. */
+export function CampaignCover({ cid }: { cid: string }) {
+  return <CoverPanel scope={{ kind: "campaign", id: cid }} />;
 }

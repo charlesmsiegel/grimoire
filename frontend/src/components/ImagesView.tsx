@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Appearance, type CharacterSummary, type EntityScope,
   type GalleryImage, type Greeting } from "../api/client";
 import { TaggingQueue } from "./TaggingQueue";
+import { WorldArtPanel } from "./WorldArtPanel";
 
 /** What a base is called in the rail. The gallery spans eight of them and the
  *  row carries the store's slug, which is not what a reader calls a group of
@@ -17,7 +18,7 @@ const KIND_LABELS: Record<string, string> = {
  *  the server starts sending — or stops — cannot silently reorder the rail. */
 const KINDS = Object.keys(KIND_LABELS);
 
-type Tab = "gallery" | "queue";
+type Tab = "gallery" | "queue" | "world";
 
 /** What still wants a human: art nobody has described, and greeting art nobody
  *  has said who is in.
@@ -273,7 +274,12 @@ export function ImagesView({ wid, forCampaign = null }:
   return (
     <div className="images-view">
       <div className="tabs" role="tablist" aria-label="Images">
-        {([["gallery", "Gallery"], ["queue", "Tagging queue"]] as [Tab, string][])
+        {/* "World art" is world-scoped and rendered whether or not a campaign
+            is open: `shell/rail.ts` appends `&for=<cid>` to this row's target
+            whenever one is, so hiding it under that flag would put the world's
+            only art editor out of reach for as long as a campaign is played. */}
+        {([["gallery", "Gallery"], ["queue", "Tagging queue"],
+           ["world", "World art"]] as [Tab, string][])
           .map(([key, label]) => (
             <button key={key} role="tab" aria-selected={tab === key}
                     className={"tab" + (tab === key ? " active" : "")}
@@ -293,7 +299,9 @@ export function ImagesView({ wid, forCampaign = null }:
           <button className="retry" onClick={() => void load(true)}>Retry</button>
         </p>
       )}
-      {images === null && !err && <p className="field-hint">Reading the world’s art…</p>}
+      {tab === "world" && <WorldArtPanel wid={wid} />}
+      {tab !== "world" && images === null && !err
+        && <p className="field-hint">Reading the world’s art…</p>}
       {images !== null && !err && tab === "queue" && (
         untagged && untagged.length > 0 ? (
           <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}

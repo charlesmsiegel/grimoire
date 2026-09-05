@@ -4,6 +4,7 @@ import { PostImagePicker, freeName, insertion, nameFromFile } from "./PostImageP
 vi.mock("../api/client", () => ({
   api: {
     listCampaignImages: vi.fn(),
+    restoreCampaignImage: vi.fn(),
     putCampaignImage: vi.fn(),
     deleteCampaignImage: vi.fn(),
     setCampaignImageDescription: vi.fn(),
@@ -21,10 +22,13 @@ const file = (name: string) => new File(["png"], name, { type: "image/png" });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listCampaignImages as any).mockResolvedValue([
-    { name: "coastline", ext: "png", v: "a1" },
-    { name: "the-inn", ext: "jpg", v: "b2" },
-  ]);
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [
+      { name: "coastline", ext: "png", v: "a1" },
+      { name: "the-inn", ext: "jpg", v: "b2" },
+    ],
+    hidden: [],
+  });
   (api.putCampaignImage as any).mockResolvedValue({ name: "x", ext: "png", v: "c3" });
   (api.deleteCampaignImage as any).mockResolvedValue({ ok: true });
   (api.readCharacter as any).mockResolvedValue({
@@ -90,12 +94,12 @@ test("a narrator post is offered the campaign's images", async () => {
 });
 
 test("an empty library says so, and an upload lands under a name from the file", async () => {
-  (api.listCampaignImages as any).mockResolvedValue([]);
+  (api.listCampaignImages as any).mockResolvedValue({ images: [], hidden: [] });
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   expect(await screen.findByText(/no campaign images yet/i)).toBeTruthy();
 
-  (api.listCampaignImages as any).mockResolvedValue([{ name: "Coast-at-Dusk", ext: "png", v: "z" }]);
+  (api.listCampaignImages as any).mockResolvedValue({ images: [{ name: "Coast-at-Dusk", ext: "png", v: "z" }], hidden: [] });
   fireEvent.change(screen.getByLabelText(/add an image/i),
                    { target: { files: [file("Coast at Dusk.png")] } });
   await waitFor(() => expect(api.putCampaignImage)
@@ -290,11 +294,14 @@ test("a name a markdown link cannot carry bare is percent-encoded", () => {
 
 
 test("the library shows each image's description and saves an edit", async () => {
-  (api.listCampaignImages as any).mockResolvedValue([
-    { name: "coastline", ext: "png", v: "a1",
-      description: "A hand-drawn map of the coast.", described: true },
-    { name: "the-inn", ext: "jpg", v: "b2", description: "", described: false },
-  ]);
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [
+      { name: "coastline", ext: "png", v: "a1",
+        description: "A hand-drawn map of the coast.", described: true },
+      { name: "the-inn", ext: "jpg", v: "b2", description: "", described: false },
+    ],
+    hidden: [],
+  });
   (api.setCampaignImageDescription as any).mockResolvedValue({ ok: true });
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
@@ -312,14 +319,89 @@ test("the library shows each image's description and saves an edit", async () =>
 });
 
 test("inserting a described library image uses the description as alt text", async () => {
-  (api.listCampaignImages as any).mockResolvedValue([
-    { name: "coastline", ext: "png", v: "a1",
-      description: "A hand-drawn map of the coast.", described: true },
-  ]);
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [
+      { name: "coastline", ext: "png", v: "a1",
+        description: "A hand-drawn map of the coast.", described: true },
+    ],
+    hidden: [],
+  });
   const onInsert = vi.fn();
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={onInsert} onClose={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: "Insert coastline" }));
   expect(onInsert).toHaveBeenCalledWith(
     "![A hand-drawn map of the coast.](/api/campaigns/run/images/coastline)");
+});
+
+
+test("an inherited image is offered under the world, and inserted with a campaign URL", async () => {
+  // The URL a post carries is campaign-scoped even for a picture the campaign
+  // only reads through to (`store/context/art.py:url_for`) -- a world URL is
+  // the one shape that does not follow a campaign, which is why the picker
+  // refuses greeting art outright.
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [
+      { name: "handout", ext: "png", v: "a1" },
+      { name: "coastline", ext: "png", v: "b2", inherited: true },
+    ],
+    hidden: [],
+  });
+  const onInsert = vi.fn();
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={onInsert} onClose={() => {}} />);
+
+  expect(await screen.findByText("From this world")).toBeTruthy();
+  expect(screen.getByText("Campaign images")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Insert coastline" }));
+  expect(onInsert.mock.calls[0][0]).toContain("/api/campaigns/run/images/coastline");
+});
+
+test("removing an inherited image is called hiding, and says the world keeps it", async () => {
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [{ name: "coastline", ext: "png", v: "b2", inherited: true }],
+    hidden: [],
+  });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Hide coastline" }));
+  expect(confirm.mock.calls[0][0]).toContain("stays in the world");
+  expect(api.deleteCampaignImage).toHaveBeenCalledWith("run", "coastline");
+  confirm.mockRestore();
+});
+
+test("an inherited image is not describable here", async () => {
+  // Describing it belongs to the world, where doing it once serves every
+  // campaign -- and the route refuses it here, so the field would always fail.
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [
+      { name: "handout", ext: "png", v: "a1" },
+      { name: "coastline", ext: "png", v: "b2", inherited: true },
+    ],
+    hidden: [],
+  });
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+
+  await screen.findByText("From this world");
+  expect(screen.queryByLabelText("Description of handout")).toBeTruthy();
+  expect(screen.queryByLabelText("Description of coastline")).toBeNull();
+});
+
+test("a hidden image is listed with a way back", async () => {
+  // Hidden pictures are in no group by construction, so this row is the only
+  // route back -- and it is what lets the world-side sweep be best-effort.
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [], hidden: ["coastline"],
+  });
+  (api.restoreCampaignImage as any).mockResolvedValue({ ok: true });
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+
+  expect(await screen.findByText("Hidden from this campaign")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Show coastline/ }));
+  expect(api.restoreCampaignImage).toHaveBeenCalledWith("run", "coastline");
 });

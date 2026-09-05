@@ -16,7 +16,8 @@ export * from "./types";
 import {
   type Actor, type AdvanceDigest, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
-  type CalendarScope, type CampaignClock, type CampaignImage, type CampaignMeta,
+  type CalendarScope, type CampaignClock, type CampaignImage, type CampaignLibrary,
+  type CampaignMeta,
   type CampaignModule, type Card,
   type CampaignBudget,
   type CampaignSceneCosts,
@@ -62,7 +63,7 @@ import {
   type WeatherSpan,
   type CalendarYear, type ChoreItems,
   type ShellPayload, type TodoPayload,
-  type WorldCampaignPending, type WorldMeta,
+  type WorldCampaignPending, type WorldImage, type WorldMeta,
 } from "./types";
 
 /** Announce a campaign mutation once it has actually landed, passing the
@@ -1623,8 +1624,20 @@ export const api = {
     const qs = q.toString();
     return `/api/campaigns/${cid}/images/${name}${qs ? `?${qs}` : ""}`;
   },
+  /** The library this campaign can see, and what it has hidden.
+   *
+   *  `{images, hidden}` rather than a bare array since the library began
+   *  reading through to the world: `images` carries the campaign's own uploads
+   *  and its world's alike (each row saying which via `inherited`), and
+   *  `hidden` names the inherited pictures this campaign has tombstoned — the
+   *  only surface from which one can be restored. */
   listCampaignImages: (cid: string) =>
-    request<CampaignImage[]>("GET", `/api/campaigns/${cid}/images`),
+    request<CampaignLibrary>("GET", `/api/campaigns/${cid}/images`),
+  /** Un-hide an inherited image. Idempotent, so a stale entry left by a sweep
+   *  that could not reach this campaign clears the same way a fresh one does. */
+  restoreCampaignImage: (cid: string, name: string) =>
+    request<{ ok: boolean }>(
+      "POST", `/api/campaigns/${cid}/images/${encodeSegment(name)}/restore`),
   putCampaignImage: (cid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -1632,6 +1645,56 @@ export const api = {
   },
   deleteCampaignImage: (cid: string, name: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/images/${name}`),
+  // ---- the world's cover and its own image library ----
+  /** The world's cover: the worlds shelf, the world header, and a bundle. */
+  worldCoverUrl: (wid: string, opts?: { w?: number; v?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.w) q.set("w", String(opts.w));
+    if (opts?.v) q.set("v", opts.v);
+    const qs = q.toString();
+    return `/api/worlds/${wid}/cover${qs ? `?${qs}` : ""}`;
+  },
+  putWorldCover: (wid: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{ ext: string; v: string }>(`/api/worlds/${wid}/cover`, form, "PUT");
+  },
+  deleteWorldCover: (wid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/cover`),
+
+  /** Art that belongs to the world and to none of its records — a map, a
+   *  banner, establishing art for the setting. Every campaign on the world
+   *  reads through to these, so describing one here describes it once for all
+   *  of them.
+   *
+   *  This URL is for the world's OWN surfaces. A post never carries it: what a
+   *  campaign inserts is `campaignImageUrl`, which follows the campaign even
+   *  for a picture it inherits (`store/context/art.py:url_for`). */
+  worldImageUrl: (wid: string, name: string, opts?: { w?: number; v?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.w) q.set("w", String(opts.w));
+    if (opts?.v) q.set("v", opts.v);
+    const qs = q.toString();
+    return `/api/worlds/${wid}/images/${name}${qs ? `?${qs}` : ""}`;
+  },
+  /** Named for the library, not for "the world's images": `listWorldImages`
+   *  next door is the whole-world GALLERY (every record's art), and two
+   *  functions a letter apart returning different things is how the wrong one
+   *  gets called. */
+  listWorldLibrary: (wid: string) =>
+    request<WorldImage[]>("GET", `/api/worlds/${wid}/images`),
+  putWorldImage: (wid: string, name: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<WorldImage>(`/api/worlds/${wid}/images/${name}`, form, "PUT");
+  },
+  deleteWorldImage: (wid: string, name: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/images/${encodeSegment(name)}`),
+  setWorldImageDescription: (wid: string, name: string, description: string) =>
+    request<{ ok: boolean }>(
+      "PUT", `/api/worlds/${wid}/images/${encodeSegment(name)}/description`,
+      { description }),
+
   putEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -1793,6 +1856,11 @@ export const api = {
   draftCampaignImageDescription: (cid: string, name: string, signal?: AbortSignal) =>
     describeImage({ at: "campaign", id: cid },
       `/api/campaigns/${cid}/images/${encodeSegment(name)}/description/draft`, signal),
+  /** The world library's draft. `at: "world"` like its three world siblings —
+   *  the run is subjected to the world, not to a campaign. */
+  draftWorldImageDescription: (wid: string, name: string, signal?: AbortSignal) =>
+    describeImage({ at: "world", id: wid },
+      `/api/worlds/${wid}/images/${encodeSegment(name)}/description/draft`, signal),
   setPCImageDescription: (scope: EntityScope, pid: string, vid: string,
                           name: string, description: string) =>
     request<{ ok: boolean }>("PUT",

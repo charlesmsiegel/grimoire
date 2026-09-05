@@ -119,8 +119,8 @@ body::before {
 .list-row-arrow { font-family: var(--fd); font-weight: 900; font-size: 22px; color: var(--accent); padding: 0 20px; }
 .list-row .row-actions { opacity: 0; }
 .list-row:hover .row-actions, .list-row:focus-within .row-actions { opacity: 1; }
-.campaign-cover { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
-.campaign-cover .cover-preview { max-width: 260px; max-height: 340px; object-fit: contain;
+.cover-panel { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.cover-panel .cover-preview { max-width: 260px; max-height: 340px; object-fit: contain;
                                  border: 1px solid var(--rule-soft); }
 .page-note { color: var(--subtle); font-style: italic; }
 .page-note a { color: var(--accent); }
@@ -426,9 +426,11 @@ body::before {
    nothing. `margin-left` is set per card in CampaignsView, since it carries the
    depth; only the mark belongs here. */
 .campaign-card.forked { border-left: 2px solid var(--rule); }
-/* `.shelf-cover`, not `.campaign-cover`: that name belongs to CampaignCover.tsx,
+/* `.shelf-cover`, not `.cover-panel`: that name belongs to CoverPanel.tsx,
    the cover *editor*, and taking it redefined a 260px preview into a 104px
-   thumbnail everywhere that component renders. */
+   thumbnail everywhere that component renders. (The editor was
+   `.campaign-cover` until the world got one too; the hazard is the name being
+   shared, not which name it is.) */
 .shelf-cover {
   width: 104px; height: 130px; flex: none; border: 1px dashed var(--line);
   border-radius: 3px; display: flex; align-items: center; justify-content: center;

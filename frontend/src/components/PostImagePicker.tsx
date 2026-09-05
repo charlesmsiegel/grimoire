@@ -122,6 +122,11 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   // that FAILED would propose a name that is taken and quietly replace somebody
   // else's image — an empty array cannot tell "no images" from "did not ask".
   const [library, setLibrary] = useState<CampaignImage[] | null>(null);
+  // Inherited names this campaign has hidden. They appear in no listing by
+  // construction -- that is what hiding means -- so without this they would be
+  // unreachable and un-restorable, which is also what lets the world-side
+  // delete sweep be best-effort.
+  const [hidden, setHidden] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Bumped after every upload and removal so the effect below re-reads the
@@ -157,16 +162,33 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     (async () => {
       try {
         if (target.kind === "campaign") {
-          const images = await api.listCampaignImages(cid);
+          const { images, hidden } = await api.listCampaignImages(cid);
           if (!live) return;
           setLibrary(images);
-          setGroups([{
-            key: "library", label: "Campaign images",
-            images: images.map((i) => ({
-              name: i.name, url: api.campaignImageUrl(cid, i.name),
-              description: i.described ? (i.description ?? "") : undefined,
-            })),
-          }]);
+          setHidden(hidden);
+          // Two groups, because the two have different verbs. The world's
+          // pictures are read through -- every campaign on the world sees them
+          // -- so removing one HIDES it here and leaves it where it is, while
+          // removing one of the campaign's own deletes the bytes. A single
+          // grid would have to explain that per tile.
+          const own = images.filter((i) => !i.inherited);
+          const world = images.filter((i) => i.inherited);
+          setGroups([
+            ...(own.length ? [{
+              key: "library", label: "Campaign images",
+              images: own.map((i) => ({
+                name: i.name, url: api.campaignImageUrl(cid, i.name),
+                description: i.described ? (i.description ?? "") : undefined,
+              })),
+            }] : []),
+            ...(world.length ? [{
+              key: "world", label: "From this world",
+              images: world.map((i) => ({
+                name: i.name, url: api.campaignImageUrl(cid, i.name),
+                description: i.described ? (i.description ?? "") : undefined,
+              })),
+            }] : []),
+          ]);
           return;
         }
         const scope = { kind: "campaign", id: cid } as const;
@@ -229,10 +251,23 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     // and one of these can already be linked from forty posts, which would then
     // render as broken images with no way back but re-uploading under the very
     // same name. Same posture the cut and the fork take.
-    if (!window.confirm(
-      `Remove "${name}" from this campaign? Posts that already link to it will `
-      + "show a broken image.")) return;
+    //
+    // Two different sentences for two different things. An inherited picture is
+    // the world's: this hides it here and the world keeps it, which is why the
+    // wording says so and why it is reversible from the Hidden row below. The
+    // campaign's own is a real delete.
+    const inherited = (library ?? []).some((i) => i.name === name && i.inherited);
+    const prompt = inherited
+      ? `Hide "${name}" from this campaign? It stays in the world, and you can `
+        + "bring it back. Posts that already link to it will show a broken image."
+      : `Remove "${name}" from this campaign? Posts that already link to it will `
+        + "show a broken image.";
+    if (!window.confirm(prompt)) return;
     void mutate(() => api.deleteCampaignImage(cid, name));
+  }
+
+  function restore(name: string) {
+    void mutate(() => api.restoreCampaignImage(cid, name));
   }
 
   const empty = groups !== null && groups.every((g) => g.images.length === 0);
@@ -279,7 +314,12 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                     <img src={`${img.url}?w=${THUMB}`} alt="" />
                     <span>{img.name}</span>
                   </button>
-                  {isLibrary && (
+                  {/* Describing belongs to whoever owns the picture. An
+                      inherited one is described in its WORLD, where doing it
+                      once serves every campaign on that world -- and the route
+                      refuses it here, so offering the field would be a control
+                      that always fails. */}
+                  {isLibrary && g.key === "library" && (
                     <ImageDescriptionField
                       key={img.name}
                       name={img.name} value={img.description}
@@ -292,8 +332,12 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                   )}
                   {isLibrary && (
                     <button className="subtle image-picker-remove" type="button"
-                            disabled={busy} aria-label={`Remove ${img.name}`}
-                            title={`Remove ${img.name} from the campaign`}
+                            disabled={busy}
+                            aria-label={g.key === "world"
+                              ? `Hide ${img.name}` : `Remove ${img.name}`}
+                            title={g.key === "world"
+                              ? `Hide ${img.name} from this campaign`
+                              : `Remove ${img.name} from the campaign`}
                             onClick={() => remove(img.name)}>✕</button>
                   )}
                 </div>
@@ -301,6 +345,23 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
             </div>
           </div>
         ))}
+        {/* Hidden pictures are in no group above -- that is what hiding means --
+            so this row is the only way back. It is also what lets the world-side
+            delete sweep be best-effort: a campaign it could not reach keeps a
+            stale entry, and the reader clears it here. */}
+        {isLibrary && hidden.length > 0 && (
+          <div className="side-section">
+            <h4>Hidden from this campaign</h4>
+            <div className="chips">
+              {hidden.map((name) => (
+                <button className="chip" key={name} type="button" disabled={busy}
+                        aria-label={`Show ${name} in this campaign again`}
+                        title={`Show ${name} in this campaign again`}
+                        onClick={() => restore(name)}>{name} ↩</button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="form-actions">
           {isLibrary && (
             // A plain, visible file input with a label, the way `CampaignCover`

@@ -10,7 +10,7 @@ import { errorText } from "../api/errors";
 import { MoneyColumns, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
-import { CampaignCover } from "../components/CampaignCover";
+import { CampaignCover } from "../components/CoverPanel";
 
 /** The campaign's front door.
  *

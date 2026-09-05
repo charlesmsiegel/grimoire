@@ -1,9 +1,13 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImagesView } from "./ImagesView";
 
 vi.mock("../api/client", () => ({
   api: {
     listWorldImages: vi.fn(), listCharacters: vi.fn(),
+    listWorldLibrary: vi.fn(), getWorld: vi.fn(), putWorldCover: vi.fn(),
+    deleteWorldCover: vi.fn(), worldCoverUrl: vi.fn(), worldImageUrl: vi.fn(),
+    putWorldImage: vi.fn(), deleteWorldImage: vi.fn(),
+    setWorldImageDescription: vi.fn(), draftWorldImageDescription: vi.fn(),
     listGreetings: vi.fn(), listUntaggedImages: vi.fn(), setImageSubjects: vi.fn(),
     listAppearances: vi.fn(), listCampaignGallery: vi.fn(),
   },
@@ -356,4 +360,41 @@ test("reading for a campaign reads that campaign's gallery instead", async () =>
   expect(api.listCampaignGallery).toHaveBeenCalledWith("run", false);
   expect(api.listWorldImages).not.toHaveBeenCalled();
   expect(screen.getByAltText("Campaign-only art.")).toBeInTheDocument();
+});
+
+
+// ---- the World art tab ----------------------------------------------------
+
+test("the World art tab edits the world's own library, and the gallery stays a browser", async () => {
+  (api.listWorldLibrary as any).mockResolvedValue([
+    { name: "coastline", ext: "png", v: "w1", description: "a rocky shore", described: true },
+  ]);
+  (api.getWorld as any).mockResolvedValue({ meta: { cover: "" } });
+  (api.deleteWorldImage as any).mockResolvedValue({ ok: true });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+  render(<ImagesView wid="realm" />);
+  fireEvent.click(await screen.findByRole("tab", { name: /World art/ }));
+
+  expect(await screen.findByText("World images")).toBeTruthy();
+  expect(screen.getByText("World cover")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Delete coastline" }));
+  // The confirmation names the consequence that is not local: these are read
+  // through by every campaign on the world.
+  expect(confirm.mock.calls[0][0]).toContain("Every campaign");
+  await waitFor(() => expect(api.deleteWorldImage).toHaveBeenCalledWith("realm", "coastline"));
+  confirm.mockRestore();
+});
+
+test("the World art tab is offered even with a campaign open", async () => {
+  // `shell/rail.ts` appends `&for=<cid>` to the Images row whenever a campaign
+  // is open, so hiding this tab under that flag would put the world's only art
+  // editor out of reach for as long as one is being played.
+  (api.listCampaignGallery as any).mockResolvedValue([]);
+  (api.listWorldLibrary as any).mockResolvedValue([]);
+  (api.getWorld as any).mockResolvedValue({ meta: { cover: "" } });
+
+  render(<ImagesView wid="realm" forCampaign="run" />);
+  expect(await screen.findByRole("tab", { name: /World art/ })).toBeTruthy();
 });

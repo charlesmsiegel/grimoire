@@ -72,6 +72,13 @@ export function DescribeQueue({ scope, wid, queue, onClose, onSaved }: {
       // The library hangs off no record, so it addresses by name alone.
       return api.setCampaignImageDescription(scope.id, cur.name, description);
     }
+    if (cur.kind === "world") {
+      // The WORLD's library, same shape one scope up. It reaches the world
+      // route by `wid` rather than `scope`, because this row is offered in the
+      // world's queue whichever scope the queue was opened in -- describing it
+      // once is what serves every campaign on that world.
+      return api.setWorldImageDescription(wid, cur.name, description);
+    }
     if (cur.kind === "characters") {
       return api.setCharacterImageDescription(scope, cur.id, cur.vid, cur.name, description);
     }
@@ -101,6 +108,7 @@ export function DescribeQueue({ scope, wid, queue, onClose, onSaved }: {
    *  from the bytes is a claim about the bytes and belongs where the art does. */
   function askForDraft() {
     if (cur.kind === "campaign") return api.draftCampaignImageDescription(scope.id, cur.name);
+    if (cur.kind === "world") return api.draftWorldImageDescription(wid, cur.name);
     if (cur.kind === "pcs") return api.draftPCImageDescription(wid, cur.id, cur.vid, cur.name);
     if (cur.kind === "characters") {
       return api.draftCharacterImageDescription(wid, cur.id, cur.vid, cur.name);
@@ -138,8 +146,9 @@ export function DescribeQueue({ scope, wid, queue, onClose, onSaved }: {
         <button className="subtle" disabled={busy !== null}
                 onClick={() => { void save(""); }}>No description</button>
         {/* The campaign library drafts campaign-side (it has no world copy);
-            everything else drafts world-side, where its bytes live. */}
-        {(worldScope || cur.kind === "campaign") && (
+            everything else drafts world-side, where its bytes live -- the
+            world's own library included, which is why it needs no scope test. */}
+        {(worldScope || cur.kind === "campaign" || cur.kind === "world") && (
           <button className="subtle" disabled={busy !== null}
                   onClick={() => { void draft(); }}>
             {busy === "draft" ? "Looking…" : "Describe it for me"}

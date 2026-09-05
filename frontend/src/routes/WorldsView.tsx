@@ -19,6 +19,10 @@ export default function WorldsView() {
   const navigate = useNavigate();
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
   const [name, setName] = useState("");
+  // Keyed by id AND version, not a bare boolean: a cover that failed to load
+  // must fall back to the placeholder, and a replacement uploaded afterwards
+  // must not inherit that failure. Same shape as CampaignsView's map.
+  const [brokenCover, setBrokenCover] = useState<Record<string, boolean>>({});
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [importing, setImporting] = useState(false);
   const [forking, setForking] = useState<string | null>(null);
@@ -186,6 +190,19 @@ export default function WorldsView() {
                 />
               ) : (
                 <button className="world-card-main" onClick={() => navigate(`/worlds/${w.id}`)}>
+                  <div className="shelf-cover world-card-cover">
+                    {w.cover && !brokenCover[`${w.id}:${w.cover}`] ? (
+                      // w=208 for a box index.css sizes at 104px wide: 2x of
+                      // headroom, so the cover is sharp on a 2x display rather
+                      // than upscaled. More than that only costs bytes.
+                      <img src={api.worldCoverUrl(w.id, { w: 208, v: w.cover })}
+                           alt={`${w.name} cover`}
+                           onError={() => setBrokenCover(
+                             (b) => ({ ...b, [`${w.id}:${w.cover}`]: true }))} />
+                    ) : (
+                      <span className="cover-empty" aria-hidden>◆</span>
+                    )}
+                  </div>
                   <h3>{w.name}</h3>
                   <footer>{footerLabel(w.counts)}</footer>
                 </button>

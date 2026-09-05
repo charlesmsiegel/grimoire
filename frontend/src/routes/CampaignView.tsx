@@ -30,7 +30,7 @@ import { ReplayPanel } from "../components/ReplayPanel";
 import { IncomingReview } from "../components/IncomingReview";
 import { CompositionPanel } from "../components/CompositionPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
-import { CampaignCover } from "../components/CampaignCover";
+import { CampaignCover } from "../components/CoverPanel";
 import { SceneInspector } from "../components/SceneInspector";
 import { PostCost, UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
