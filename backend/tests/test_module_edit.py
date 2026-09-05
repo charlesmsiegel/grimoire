@@ -1240,8 +1240,13 @@ def test_a_migrated_sheet_is_written_the_way_a_save_writes_one(monkeypatch, tmp_
     res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
     assert res["ok"], res["errors"]
     migrated = p.read_text(encoding="utf-8")
-    assert migrated.endswith("\n") == saved.endswith("\n")
-    assert json.loads(migrated)["fields"] == {"brawn": 3}
+    data = json.loads(migrated)
+    assert data["fields"] == {"brawn": 3}
+    # The exact serialisation, not only the trailing newline: re-encoding the
+    # document the way `sheets.paths._atomic_write_json` does must reproduce
+    # the file byte for byte, and the saved one must satisfy the same test.
+    assert migrated == json.dumps(data, indent=2)
+    assert saved == json.dumps(json.loads(saved), indent=2)
 
 
 def test_world_sheets_migrate_regardless_of_any_binding(monkeypatch, tmp_path):
@@ -1353,11 +1358,17 @@ def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
              and n.func.attr == "new" and isinstance(n.func.value, ast.Attribute)
              and n.func.value.attr == "proposals"]
     assert sites, "no proposals.new call sites found -- did the finalizers move?"
+    scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
     for call in sites:
         node = call
         covered = False
         while node in parents:
             node = parents[node]
+            # The walk stops at the enclosing function: a `with` around a
+            # nested `def` covers the definition, not the call, which runs
+            # whenever the function is invoked -- possibly with no lock held.
+            if isinstance(node, scopes):
+                break
             if isinstance(node, ast.With) and any(is_lock(i.context_expr) for i in node.items):
                 covered = True
                 break
