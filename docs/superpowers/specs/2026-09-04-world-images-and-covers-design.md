@@ -1,7 +1,7 @@
 # A world's own art: a cover, and an image library campaigns inherit
 
 **Date:** 2026-09-04
-**Status:** Draft for review
+**Status:** Draft for review (revision 2, after one adversarial gate)
 
 ## Problem
 
@@ -72,13 +72,28 @@ app write it, so that comment and that regex both move (below).
 
 ## Modules
 
-Three moves, all extraction rather than duplication.
+Three moves. **Policy is extracted; the write calls are not** — see the guard
+note below, which is the reason this seam sits where it does.
 
-**`store/image_library.py` (new).** The scope-free half of today's
+**`store/image_library.py` (new).** The scope-free *policy* half of today's
 `campaign_images`: `MAX_BYTES` (25 MB, the Chaquopy bound — unchanged and for
-its stated reason), `TOO_LARGE`, `validate_size`, `UNADDRESSABLE`, `RESERVED`,
-`addressable`, and list/put/delete/describe against a *given* directory. It
-knows nothing about campaigns or worlds.
+its stated reason), `TOO_LARGE`, `ImageTooLarge` (caught by name at
+`routes/campaigns.py:845`), `validate_size`, `UNADDRESSABLE`, `RESERVED`,
+`addressable`, and the `list_in`-filtering read. It knows nothing about
+campaigns or worlds.
+
+**It deliberately does not own `put` and `delete`.** Each scope module keeps its
+own `assets.put_in` / `assets.delete_in` call, because
+`test_lock_domain_guard.py` recognizes a mutating module by exactly those call
+sites — `_ASSETS_WRITERS` at `tests/test_lock_domain_guard.py:306`, consumed at
+`:912` — and mutation does **not** propagate across an import. Moving the write
+behind `image_library.put(...)` would drop `store.covers` and
+`store.campaign_images` out of `_survey()` entirely and fail
+`test_the_declaration_has_no_phantom_modules` (`:2315`), whose failure message
+invites deleting the two `DOMAIN_MODULES` entries — deleting the guard's grip on
+the two modules that most need it. Two or three lines repeated per scope, in
+exchange for the write call staying visibly next to the lock it is taken under,
+is the right trade and not an accident.
 
 `RESERVED = {"undescribed"}` carries over looking incidental and is load-bearing:
 `GET /worlds/{wid}/images/undescribed` is a live route
@@ -92,12 +107,15 @@ an unknown id must not create a directory of bytes no listing can show).
 
 **`store/campaign_images.py` (rewritten around the overlay).** Below.
 
-**`store/covers.py` (widened).** `validate()`, `_FORMAT_EXT`, `MAX_BYTES`,
-`MAX_PIXELS` and `TOO_LARGE` are already scope-free. `cover_path`,
-`cover_version`, `put_cover` and `delete_cover` grow root-taking cores with
-campaign and world faces. The PIL decode and the 50 MP raster bound stay exactly
-where they are and apply to both: a cover is the one image thumbnailed for a
-list, which is the reason that check exists, and both covers are.
+**`store/covers.py` (widened, one module).** `validate()`, `_FORMAT_EXT`,
+`MAX_BYTES`, `MAX_PIXELS` and `TOO_LARGE` are already scope-free. The module
+grows `world_*` faces beside its campaign ones, each with its own
+`assets.put_in` / `assets.delete_in` call for the reason above. The PIL decode
+and the 50 MP raster bound stay exactly where they are and apply to both: a
+cover is the one image thumbnailed for a list, which is the reason that check
+exists, and both covers are. A `wid`-taking function is not a campaign mutator
+by `_takes_cid`'s convention, so the world faces do not disturb this module's
+existing `DOMAIN_MODULES` standing.
 
 ### Locking, and an asymmetry stated rather than discovered
 
@@ -112,10 +130,34 @@ have no lock domain at all.** That is not a gap this spec opens; it is the one
 > there in exactly the same way.
 
 The new world writes join that set rather than inventing a half-lock for one
-directory. `store/locks.py` classifies `world_images` in `OUTSIDE_DOMAIN` with
-that reason, and `image_library` likewise (it takes no `cid` and so has no
-campaign to lock). `campaign_images` stays in `DOMAIN_MODULES`.
-`test_lock_domain_guard.py` is what fails if a future mutator forgets.
+directory.
+
+**No new `store/locks.py` entries.** `_survey()` only yields a module that has a
+function taking a parameter literally named `cid` (`_takes_cid`,
+`tests/test_lock_domain_guard.py:443`), and `world_images` takes `wid` while
+`image_library` takes a `Path` — so neither is ever surveyed, and declaring
+either would fail `test_the_declaration_has_no_phantom_modules` (`:2315`) as a
+phantom. The reason each takes no lock goes in its own module docstring, which
+is where a reader meets it. `campaign_images` stays in `DOMAIN_MODULES`, and
+stays surveyed because it keeps its own `assets` write calls.
+
+### `overlay.add_deleted` has to take the lock
+
+This is a correctness fix the inheritance design depends on, not a nicety.
+`overlay.add_deleted` (`store/overlay.py:138`) is an **unlocked**
+read-modify-write of the whole `deleted.json`, and `overlay.delete_image` calls
+it unlocked too. A library tombstone written under `campaign_lock` concurrently
+with a record-image tombstone written without it loses one of the two, silently
+and permanently — and the lost one resurrects an image the user deleted, which
+is the one direction of failure `overlay.deleted`'s own fail-soft docstring says
+a user cannot spot by looking.
+
+So `add_deleted` takes `campaign_lock(cid)`. The lock is reentrant, so the
+callers already inside a hold pay nothing; the ones that are not are
+`overlay.py:645,913,1276,1516`, `campaigns/lifecycle.py:239,380` and
+`reclassify.py:156`, each of which must be checked for an enclosing hold rather
+than assumed. `_drop_deleted` takes it for the same reason — it is the same
+file, rewritten whole.
 
 ### No focus point on either cover
 
@@ -136,13 +178,34 @@ is already ref-string-keyed and needs no new concept:
 | `list_images(cid)` | campaign names union world names, campaign wins a collision, minus tombstones. Each row carries `inherited: bool`. |
 | `image_path(cid, name)` | campaign file; else **if tombstoned, stop** (the serve route 404s rather than falling through); else the world file. The shape of `overlay.image_root`. |
 | `put_image(cid, name, ...)` | writes campaign-side. Over an inherited name this is a divergence — no copy-up step, because for a library image the bytes *are* the whole record. |
-| `delete_image(cid, name)` | campaign-local: unlink and confirm, as today. Inherited: `overlay.add_deleted(cid, "assets/library/<name>")`. Both drop the campaign-side description entry. |
-| descriptions | campaign-over-world merge, the rule `overlay.read_descriptions` applies to record art. |
+| `delete_image(cid, name)` | unlink campaign-side if a copy is there, **then** tombstone if the world still holds the name — `overlay.delete_image`'s order (`store/overlay.py:1456`), which is the only one that gets a *shadowed* name right. Deleting a shadow with only the first half turns Delete into Revert; with only the second, into a delete that leaves the bytes. Either way the campaign-side description entry is dropped. |
+| `read_descriptions(cid)` | the merged campaign-over-world map, the rule `overlay.read_descriptions` applies to record art. It is a **named function on this module**, because `context/art.py:342,650` and the listing routes each need it and a second hand-rolled merge is the thing that drifts. |
 
 `assets/library/<name>` is a new ref shape beside `_asset_ref`'s
 `assets/<base>/<aid>/<vid>/<name>`. It cannot collide: every existing asset ref
 has five segments and a base drawn from the kind roster, and `library` is not a
-kind.
+kind. Checked against the other readers of `deleted.json` rather than assumed —
+`campaigns/lifecycle.py`'s slim migration only walks `wroot/<kind>` and requires
+a 5-part path whose `parts[2]` is `assets`; `sync.dependents` and
+`record_refs.repoint` handle record refs only, and the latter excludes
+`deleted.json` by name.
+
+### A tombstone may not outlive the image it hid
+
+`overlay.forget_world_record` (`store/overlay.py:1849`) already calls this exact
+shape a defect for record art — "per-asset tombstones outlive the record they
+hid, and they hide by slot" — and sweeps `assets/<kind>/<rid>/` when the world
+record goes. A library image has no record, so nothing would sweep it: deleting
+`map` world-side and re-uploading a new `map` would leave every campaign that
+had tombstoned the old one permanently blind to the new one, with no UI to
+undo it, because `list_images(cid)` hides the name it is hiding.
+
+So **a world-side library delete sweeps the dependent campaigns' refs**, the
+mirror of `forget_world_record` and reached the same way: `dependent_campaigns`
+for the world root, then the drop under `locks.hold_all` (the only sanctioned
+way to hold more than one campaign lock — `test_lock_order_guard.py`).
+`DELETE /worlds/{wid}/images/{name}` is therefore a multi-campaign write, which
+also makes it one that stamps every campaign it wrote (`store/revision.py`).
 
 **The describe backlog split does not change, and that is the point.**
 `GET /campaigns/{cid}/images/undescribed` says in its docstring that inherited
@@ -153,14 +216,23 @@ library images too — so the campaign backlog must filter its library rows to
 the now-merged `list_images` there unfiltered would re-offer every world image
 in every campaign's queue: the exact failure that docstring exists to prevent.
 
-**One honest gap.** `test_overlay_guard.py` flags "a campaign root meeting an
-inheritable *kind*". The library is not a kind, so the guard structurally cannot
-catch a future read of `campaign_root(cid) / "assets" / "images"` that forgets to
-read through — this codebase's most repeated bug class, in the one shape the
-guard misses. The mitigation is containment and a stated claim, not a pretence
-of coverage: all library resolution lives in `campaign_images`, its docstring
-says so, and the guard's own docstring already declares this class of blind spot
-("Passing a campaign root into a *separate* helper ... escapes it").
+**One honest gap, and what closing it would cost.** `test_overlay_guard.py`
+flags "a campaign root meeting an inheritable *kind*", and the library is not a
+kind — so as it stands nothing catches a future read of
+`campaign_root(cid) / "assets" / "images"` that forgets to read through, which is
+this codebase's most repeated bug class.
+
+It is not true that the guard *cannot* catch it. Its raw-path form already
+matches `croot / "<literal>"`, so adding `assets` to the flagged roster would
+work. The cost is the two call sites that legitimately build that path
+(`covers.py:117` and `campaign_images.images_dir`) needing `# overlay-ok:`
+markers against a budget that is **already full at 4/4**
+(`test_overlay_guard.py:476`) — so it means raising a cap, which is a decision
+about the exemption budget rather than about this feature. Deferred on those
+terms, not waved away: the mitigation here is containment plus a stated claim
+(all library resolution lives in `campaign_images`, and its docstring says so),
+and the roster extension is recorded as the follow-up that would make it
+enforced.
 
 ## Routes
 
@@ -196,7 +268,15 @@ registered in `worlds.py` matches first and turns the describe backlog into a
 404 for an image named `undescribed` — the same class of break the campaign
 side records in `campaign_images.RESERVED`'s comment, where it cost a broken
 picker tile and a broken post. A route-order test asserts the backlog still
-answers with the backlog.
+answers with the backlog, and the new module's inclusion is itself covered by
+`test_every_domain_router_is_composed` (`test_route_order.py:217`).
+
+The description-draft route needs a **`CROSSING_PAIRS` entry**: it crosses
+`POST /api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}` at eight segments
+with neither pattern generalizing the other, which `test_route_order.py:172`
+fails on unless the pair is pinned. The campaign mirror is already pinned
+(`:99-101`) with the reasoning to copy — "images" is not an entity kind, so the
+instantiate pattern can never legitimately claim a URL under it.
 
 Campaign side, unchanged in shape and changed in resolution:
 
@@ -209,12 +289,22 @@ Campaign side, unchanged in shape and changed in resolution:
 - `GET /campaigns/{cid}/images/undescribed` filters to campaign-owned library
   images.
 - `GET /campaigns/{cid}/gallery` and `GET /worlds/{wid}/gallery` each gain the
-  library as a base: `kind: "world"` world-side, `kind: "campaign"`
-  campaign-side, with `id` and `vid` empty and `record_name` "World library" /
-  "Campaign library". Those two kind strings are the ones already on the wire —
-  `list_campaign_undescribed_images` emits `kind: "campaign"` and
-  `DescribeQueue.tsx:71` already branches on it — so this adds one and renames
-  none.
+  library as a base, with `id` and `vid` empty. The world gallery emits
+  `kind: "world"`. **The campaign gallery emits `kind: "campaign"` for every
+  library row, inherited ones included** — that route requires a campaign-scoped
+  URL on every row it returns (`routes/characters.py:800`), and the kind is what
+  names the URL scope, so an inherited row cannot be `kind: "world"` there.
+  Origin is carried by `record_name` instead ("World library" when inherited,
+  "Campaign library" when the campaign's own), which is also the honest label
+  for a reader.
+
+  `kind: "campaign"` is already on the wire in the *describe backlog*
+  (`list_campaign_undescribed_images`, branched on at `DescribeQueue.tsx:71`) —
+  but it is **not** on the wire in either gallery today, and
+  `ImagesView.tsx:10-18`'s `KIND_LABELS`/`KINDS` is a fixed eight-kind map the
+  rail iterates at `:322`. Both new kinds must be added there or they get no
+  filter row at all (the `??` fallback at `:61` prevents a crash, not an
+  omission).
 
 `GET /worlds` rows and `GET /worlds/{wid}` gain a `cover` version token, exactly
 as `routes/campaigns.py:178,567` do for campaigns.
@@ -232,18 +322,34 @@ half bigger by exactly the number of *described* world images. The note gets the
 truth; no limit is added, because a limit nobody has hit is a threshold invented
 without evidence.
 
-**Export (`store/export.py`).** Two edits, and they are the risky ones:
+**The describe badge (`routes/todo.py`, `routes/shell.py`).** `_DESCRIBE_BASES`
+(`routes/todo.py:366`) is a base roster whose comment says "it must stay that
+list", and it feeds `_world_describe_counts`, the chore, and the rail badge in
+`routes/shell.py:129`. Its counter, `image_descriptions.undescribed_count`, is a
+*base walker* and structurally cannot reach a flat library directory — so
+without an explicit library count the queue grows rows while the badge reads
+zero, which is the rail's own "a count nobody can answer cheaply is `null`" rule
+being broken in the worse direction. Both files get the library's own count.
+
+**Export (`store/export.py`).** Three edits, and they are the risky ones:
 
 - `_IMG_URL` gains `/api/worlds/<wid>/images/<name>`, replacing the comment that
   reserves it as never-written. The regex header states the stakes correctly
   already: "A URL shape missing from here is not a rendering bug — it is a book
   shipped with that image silently degraded to its alt text."
-- `_resolve_image`'s library branch resolves through the campaign overlay
-  (campaign copy, tombstone, then world) rather than campaign-only; a
-  world-shaped library URL resolves against `overlay.wroot_of(cid)` — the
-  campaign being exported, not the wid written in the URL, which is the same
-  rule the campaign branch already applies and the reason a forked campaign's
-  book carries its own copies.
+- It must be a **second named group** (or a second alternative), not a widened
+  prefix on the existing one. Today `(?P<lib>images)` captures the literal
+  segment rather than the scope (`store/export.py:46`) and `_resolve_image`
+  branches on `if m["lib"]` alone (`:157`) — so a shared group would leave the
+  resolver unable to tell a world-shaped URL from a campaign-shaped one.
+- `_resolve_image`'s library branch resolves through the campaign's library view
+  (campaign copy, tombstone, then world) rather than campaign-only. **The
+  world-shaped branch resolves through that same view**, not straight at
+  `wroot_of(cid)`: the campaign's tombstone means "this campaign does not have
+  this image", and a world-shaped URL sitting in an inherited lore body is still
+  being exported *for that campaign*. Resolving it world-side would pack, into
+  the book, the one image the reader deleted. The world root is still what the
+  view falls through to, so a non-tombstoned image resolves exactly as before.
 
 **World bundles.** `store/world_bundle.py` zips the world directory whole and
 enumerates nothing, so `assets/` rides along on export and import with no code
@@ -266,11 +372,19 @@ about assets, and neither needs to.
   scope, keeping its `live` ref discipline verbatim — that guard exists because
   the panel is reused across navigation and every await can resolve after the
   reader has moved on. `CampaignCover` becomes its campaign face at the two
-  existing call sites (`CampaignHub.tsx:350`, `CampaignView.tsx:4328`).
-- `components/ImagesView.tsx` gains a library base in the rail, labelled
-  "World library" (or "Campaign library" under `?for=`), with upload, replace
-  and delete, plus the world's `CoverPanel` at the top of the tab. This is where
-  brainstorming put both halves.
+  existing call sites (`CampaignHub.tsx:350`, `CampaignView.tsx:4328`). It must
+  **not** claim the `.campaign-cover` class name: `index.css:429` records that
+  taking that name once redefined a 260px preview into a 104px thumbnail
+  everywhere the component renders.
+- **The gallery stays a browser.** `ImagesView.tsx:68` says so in as many words
+  — "There is nothing to edit here — the gallery is a browser, and the two
+  sidecars it reports are written in the editors that own them" — and its tab
+  strip is `"gallery" | "queue"` (`:20`). Hanging upload and delete off the grid
+  would contradict the one sentence that component is built around. So the
+  Images tab gains a **third tab, "World art"**, holding the `CoverPanel` and
+  the library editor; the gallery keeps its contract and merely gains the
+  library as a base it *reports* on, like every other base. Brainstorming put
+  both halves in this tab, and this is how they fit in it without breaking it.
 - `components/DescribeQueue.tsx` handles `kind === "world"` alongside its
   existing `kind === "campaign"` branch (draft and save go to the world routes).
 - `components/PostImagePicker.tsx` shows inherited images with their origin
@@ -279,8 +393,10 @@ about assets, and neither needs to.
 - `routes/WorldsView.tsx` cards render the cover with the `broken`-by-version
   fallback `CampaignsView.tsx:83` documents, and `routes/WorldView.tsx` shows it
   in the header. CSS mirrors `.shelf-cover`.
-- `api/client.ts` gains the world cover and world library calls; `CampaignImage`
-  gains `inherited`.
+- `api/client.ts` gains the world cover and world library calls, and
+  `KIND_LABELS`/`KINDS` in `ImagesView.tsx` gain both new kinds. `CampaignImage`
+  gains `inherited` — it is declared in `api/types.ts:847` and re-exported
+  through `client.ts:15`, so the type edit goes in `types.ts`.
 
 ## Testing
 
@@ -291,19 +407,40 @@ Backend (pytest, `GRIMOIRE_HOME` per test as always):
 - `world_images` and the world cover: put/list/serve/replace/delete, the
   extension named from bytes and not the filename, unknown-world put creates
   nothing.
-- Inheritance: inherited list and serve; campaign shadow wins; tombstone hides
-  and 404s; tombstone survives a re-added world image of the same name;
-  description merge; campaign backlog excludes inherited; world backlog includes
-  the world library.
-- Route order: `/worlds/{wid}/images/undescribed` still answers the backlog.
+- Inheritance: inherited list and serve; campaign shadow wins; deleting a
+  *shadowed* name removes the campaign copy **and** tombstones (it does not
+  revert to the world's); tombstone hides and 404s; description merge; campaign
+  backlog excludes inherited; world backlog and the `todo`/`shell` badge counts
+  both include the world library.
+- Tombstone lifetime: a world-side delete sweeps dependent campaigns' refs, so a
+  re-uploaded world image of the same name is visible again in a campaign that
+  had tombstoned the old one.
+- `add_deleted` under the lock: two concurrent tombstone writes to one campaign
+  both survive.
+- Route order: `/worlds/{wid}/images/undescribed` still answers the backlog, and
+  the new `CROSSING_PAIRS` entry is present.
 - Export: a post carrying an inherited library URL packs the world's bytes; a
-  world-shaped library URL in an inherited lore body packs too; a tombstoned
-  image degrades to alt text.
+  world-shaped library URL in an inherited lore body packs too; **both shapes**
+  degrade to alt text when the campaign has tombstoned the image.
 - Art pool: a described world image is offered to a campaign and resolves; a
   tombstoned one is not offered.
 - Bundle: cover and library survive export then import under a new id, with the
   URL rewrite.
-- Guards: lock-domain classification, and `make baseline` if a lint count moves.
+- Guards and frozen rosters, none of which are optional:
+  - `backend/tests/store_api_baseline.json` is a frozen facade roster already
+    listing `campaign_images` and `covers`; re-exporting `image_library` and
+    `world_images` from `store/__init__.py` fails
+    `test_store_api_baseline.py:69` until it is regenerated. That regeneration
+    is a reviewed act in the same commit, not a silencing.
+  - `test_lock_domain_guard.py`: `covers` and `campaign_images` must still be
+    surveyed after the seam moves (the reason the write calls stay put).
+  - **Every relevant marker budget is already full**, counted in `backend/src`:
+    `overlay-ok` 4/4 (`test_overlay_guard.py:476`), `lock-domain-ok` 2/2
+    (`test_lock_domain_guard.py:2378`), `routing-ok` 3/3
+    (`test_routing_guard.py:216`), `atomic-ok` 2/3
+    (`test_atomic_guard.py:172`). Any new exemption means raising a cap, which
+    is part of this change and a thing to argue for rather than bump.
+  - `make baseline` if a lint count moves, committed with the fix.
 
 Frontend (vitest, run from `frontend/`): `CoverPanel` in both scopes; the Images
 tab library base uploads and deletes; `DescribeQueue` on a world library image;
