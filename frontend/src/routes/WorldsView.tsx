@@ -190,7 +190,7 @@ export default function WorldsView() {
                 />
               ) : (
                 <button className="world-card-main" onClick={() => navigate(`/worlds/${w.id}`)}>
-                  <div className="shelf-cover world-card-cover">
+                  <div className="shelf-cover">
                     {w.cover && !brokenCover[`${w.id}:${w.cover}`] ? (
                       // w=208 for a box index.css sizes at 104px wide: 2x of
                       // headroom, so the cover is sharp on a 2x display rather

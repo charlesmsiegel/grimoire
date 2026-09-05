@@ -80,6 +80,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [name, setName] = useState("");
+  // The world's cover token, for the header thumbnail. "" when it has none and
+  // when the campaign branch below is what set the name -- that branch reads an
+  // embedded meta rather than fetching the world, and a header picture is not
+  // worth a second request on a path that deliberately avoids one.
+  const [cover, setCover] = useState("");
+  const [coverBroken, setCoverBroken] = useState(false);
   const [section, setSection] = useState<SectionKey>(campaign ? "characters" : "overview");
   const [counts, setCounts] = useState<Record<string, number | null>>({});
   const [campaignCount, setCampaignCount] = useState<number | null>(null);
@@ -165,7 +171,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         .catch(() => setModuleCtx(null));
     } else {
       setWid(widParam);
-      api.getWorld(widParam).then((w) => setName(w.meta.name)).catch(() => setName(widParam));
+      api.getWorld(widParam)
+        .then((w) => { setName(w.meta.name); setCover(w.meta.cover ?? ""); })
+        .catch(() => { setName(widParam); setCover(""); });
       Promise.all([api.getWorldSheetsIndex(widParam), api.listModules()])
         .then(([index, installed]) =>
           setWorldMid(index.default || index.modules[0] || installed[0]?.id || ""))
@@ -482,6 +490,17 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           </div>
         )}
         <div className="shelf-head">
+          {/* The cover, when the world has one and it loads. Dropped entirely
+              rather than shown as a placeholder: on the worlds shelf the empty
+              box is what tells you a world has no picture yet, but here the
+              header already has a name and a section, and an empty frame beside
+              them says nothing a reader wanted. */}
+          {cover && !coverBroken && (
+            <div className="shelf-cover">
+              <img src={api.worldCoverUrl(wid, { w: 208, v: cover })}
+                   alt={`${name} cover`} onError={() => setCoverBroken(true)} />
+            </div>
+          )}
           <div>
             <div className="eyebrow">{name} · {groupOf(section)}</div>
             <h1 className="screen-title">{labelOf(section)}</h1>

@@ -449,9 +449,18 @@ art is library art gets a fixed count and a fixed badge, while the probe returns
 False, the chore never renders, and nobody is told the queue has rows. Two
 consequences to handle rather than discover: `_DESCRIBE_BASES`' comment stops
 being true once the world backlog holds a non-base, so it gets restated; and
-`_chore_world_describe`'s `fix_label` is "The cast" (`todo.py:381`), which is
-wrong for a library-only backlog — it becomes "Images", the tab both kinds of art
-are now reached through.
+`_chore_world_describe`'s `fix_label` is "The cast" (`todo.py:381`), which reads
+wrong for a library-only backlog.
+
+**Corrected during implementation: it stays "The cast".** `DescribeQueue` is
+mounted in exactly one place — `components/CharacterGrid.tsx`, the cast page —
+and *its* queue reads `/images/undescribed`, which carries the library rows this
+change adds and which `DescribeQueue` already handles as `kind: "world"`. So the
+cast page is where the whole backlog is worked, library art included, and
+pointing the chore at the Images tab (where library art is *edited*) sends the
+reader to a page with no describe queue on it at all. Recorded here rather than
+left in a code comment, because the sentence above is the one a future reader
+would otherwise "fix" back.
 
 **Export (`store/export.py`).** Three edits, and they are the risky ones:
 

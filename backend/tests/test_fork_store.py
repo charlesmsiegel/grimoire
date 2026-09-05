@@ -475,3 +475,33 @@ def test_a_fork_whose_parent_was_deleted_lists_as_a_root(cid):
     rows = {c["id"]: c for c in campaigns.list_campaigns()}
     assert rows[child]["parent"] == cid
     assert cid not in rows
+
+
+def test_a_fork_inherits_the_same_library_and_the_same_hidden_entries(monkeypatch, tmp_path):
+    """`store.fork` copies a campaign's own tree and the world is shared, so a
+    fork sees the same world library and carries the same tombstones. Nothing
+    in `fork.py` changed for this -- which is exactly why it is worth asserting
+    rather than assuming.
+    """
+    from grimoire.store import campaign_images, campaigns, fork, world_images, worlds
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    world_images.put_image(wid, "coastline", _fork_png(), "png")
+    world_images.put_image(wid, "banner", _fork_png(), "png")
+    campaign_images.delete_image(cid, "banner")          # hidden in the source
+
+    branch = fork.fork_campaign(cid, "Saltmarch Nights II")["id"]
+
+    assert [r["name"] for r in campaign_images.list_images(branch)] == ["coastline"]
+    assert campaign_images.list_hidden(branch) == ["banner"]
+
+
+def _fork_png() -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()

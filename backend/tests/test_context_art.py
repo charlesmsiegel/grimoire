@@ -243,7 +243,7 @@ def test_resolve_leaves_text_with_no_handles_untouched(world, sid):
 
 def test_a_link_breaking_image_name_is_percent_encoded(world, sid):
     """`assets.storable` accepts `art(1)`, `my art` and `a#b` -- names
-    `campaign_images.addressable` refuses precisely because each of them ends a
+    `image_library.addressable` refuses precisely because each of them ends a
     markdown destination early and spills the rest of the URL into the prose.
     Only the library has that rule, so the other three surfaces have to encode."""
     camp, loc, wroot = world["cid"], world["loc"], world["wroot"]

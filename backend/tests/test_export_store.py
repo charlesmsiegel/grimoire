@@ -675,3 +675,18 @@ def test_a_raw_name_with_a_percent_still_resolves_when_nothing_else_does(
         f"![A pier](/api/campaigns/{cid}/locations/{docks}/images/a%2Fb)",
         cid, export.Images())
     assert out == "![A pier](images/img-000.png)"
+
+
+def test_an_inherited_library_url_packs_the_worlds_bytes(monkeypatch, tmp_path):
+    """The ordinary inherited export path, which the negative cases around it
+    left untested: a post carrying the CAMPAIGN-scoped URL for a picture the
+    campaign only reads through to."""
+    from grimoire.store import world_images
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    world_images.put_image(wid, "coastline", _img(), "png")
+
+    images = export.Images()
+    out = export.rewrite_images(
+        f"![shore](/api/campaigns/{cid}/images/coastline)", cid, images)
+    assert out == "![shore](images/img-000.png)"
+    assert list(images.by_path) == [world_images.image_path(wid, "coastline")]

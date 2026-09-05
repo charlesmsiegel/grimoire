@@ -1614,7 +1614,7 @@ export const api = {
   /** Images that belong to the campaign and to none of its records — what a
    *  narrator post has to draw on, since "Grimoire" is not an actor with a
    *  version to hold art. `name` goes into the URL raw: the server accepts
-   *  only names that survive one (`store.campaign_images.addressable`), which
+   *  only names that survive one (`store.image_library.addressable`), which
    *  is the same rule its listing filters by, so a name this builder is ever
    *  handed is already URL- and markdown-safe. */
   campaignImageUrl: (cid: string, name: string, opts?: { w?: number; v?: string }) => {

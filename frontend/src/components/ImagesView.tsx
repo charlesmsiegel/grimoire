@@ -11,6 +11,13 @@ import { WorldArtPanel } from "./WorldArtPanel";
 const KIND_LABELS: Record<string, string> = {
   characters: "Characters", pcs: "PCs", locations: "Locations", items: "Items",
   lore: "Lore", groups: "Groups", creatures: "Creatures", greetings: "Greetings",
+  // The library, which hangs off no record. Two kinds rather than one because
+  // the two galleries name the URL scope with it: the world's rows are
+  // `world`, and a CAMPAIGN's are `campaign` even for a picture it inherits,
+  // since every row that route returns carries a campaign-scoped URL. Only one
+  // of the two can appear in any given scope, and the rail drops a kind with no
+  // rows, so neither costs an empty filter.
+  world: "World library", campaign: "Library",
 };
 
 /** The rail's order. The gallery arrives grouped by base already (the route

@@ -278,7 +278,7 @@ test("a description carrying link punctuation cannot break the markdown", () => 
 
 test("a name a markdown link cannot carry bare is percent-encoded", () => {
   // Only the campaign LIBRARY refuses link punctuation in a name
-  // (`campaign_images.addressable`); a character or entity image is named under
+  // (`image_library.addressable`); a character or entity image is named under
   // `assets.storable` alone, which accepts `art(1)`, `my art` and `a#b`.
   // The encoding matches `context.art.url_for` exactly, so a picture inserted
   // by hand and the same one inserted by the narrator are byte-identical -- and

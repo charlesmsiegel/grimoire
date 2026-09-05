@@ -78,7 +78,7 @@ export function insertion(name: string, url: string, description?: string): stri
   // answers with a 304.
   //
   // The DESTINATION needs care on three of the four surfaces. The library's
-  // names are safe -- `store.campaign_images.addressable` refuses the link
+  // names are safe -- `store.image_library.addressable` refuses the link
   // punctuation outright -- but a character, PC or entity image is named under
   // `assets.storable` alone, which is `safe_id` plus a glob-metacharacter ban
   // and happily accepts `art(1)`, `my art` and `a#b`. Each of those ends the

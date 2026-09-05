@@ -20,6 +20,7 @@ vi.mock("../api/client", () => ({
   },
   api: {
     getWorld: vi.fn(),
+    worldCoverUrl: vi.fn(),
     getCampaign: vi.fn(),
     listCampaigns: vi.fn(),
     listCharacters: vi.fn(),
@@ -774,4 +775,34 @@ test("a focused PC is not carried into another scope's render", async () => {
   fireEvent.click(screen.getByRole("button", { name: "go" }));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
   expect(api.readPC).not.toHaveBeenCalled();
+});
+
+
+test("the world header shows the world's cover, and drops it if it will not load", async () => {
+  (api.getWorld as any).mockResolvedValue({
+    meta: { id: "w", name: "Drowned Realm", cover: "v1" }, body: "", counts: {},
+  });
+  (api.worldCoverUrl as any).mockImplementation(
+    (wid: string, o: any) => `/api/worlds/${wid}/cover?w=${o.w}&v=${o.v}`);
+
+  renderAt();
+  const img = await screen.findByAltText("Drowned Realm cover");
+  // 2x of headroom for a box index.css sizes at 104px, the campaigns shelf's rule
+  expect(img.getAttribute("src")).toContain("w=208");
+
+  // A cover that will not load leaves no empty frame in a header that already
+  // has a name and a section to show.
+  fireEvent.error(img);
+  await waitFor(() => expect(screen.queryByAltText("Drowned Realm cover")).toBeNull());
+});
+
+test("a world with no cover renders no header thumbnail", async () => {
+  (api.getWorld as any).mockResolvedValue({
+    meta: { id: "w", name: "Drowned Realm", cover: "" }, body: "", counts: {},
+  });
+  renderAt();
+  // The eyebrow carries the world name on every section, so wait on something
+  // unambiguous rather than the name itself.
+  await screen.findByRole("heading", { level: 1 });
+  expect(screen.queryByAltText("Drowned Realm cover")).toBeNull();
 });

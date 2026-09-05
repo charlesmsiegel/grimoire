@@ -1273,6 +1273,12 @@ def test_a_library_only_backlog_still_raises_the_chore(client, wid):
   `_DESCRIBE_BASES`' "it must stay that list" comment, which stops being true
   once the backlog holds a non-base. Change `fix_label` from "The cast" to
   "Images".
+
+  **Reversed during implementation — it stays "The cast", and the test asserts
+  that.** `DescribeQueue` is mounted only on the cast page, whose queue reads
+  `/images/undescribed` and so already carries the library rows; the Images tab
+  edits library art but has no describe queue. See the spec's corrected
+  paragraph. The assertion below reads `"The cast"` for that reason.
 - `routes/shell.py:130`: add the library's count to the badge.
 
 **All three new calls go INSIDE the existing per-world `except` handler.** Each
