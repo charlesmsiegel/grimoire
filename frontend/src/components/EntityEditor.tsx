@@ -203,14 +203,19 @@ const OPTION_SOURCES: Record<OptionSource, () => Promise<ChoiceOption[]>> = {
     r.climates.map((c) => ({ value: c.id, label: c.name }))),
 };
 
+/** What a sourced `choice` field knows about its list: the list, `"failed"`
+ *  when the request for it did not come back, and absent while it is still in
+ *  flight. Three states, because two would conflate the two the picker must
+ *  keep apart -- a list that has not arrived is not an empty list, and only
+ *  one that has can say a stored value is not on it. */
+type ChoiceList = ChoiceOption[] | "failed";
+
 /** The options a `choice` spec offers: its literal list, or what its source
- *  answered. `null` while the source is still in flight or after it failed --
- *  a list that has not arrived is not an empty list, and only one that has can
- *  say a stored value is not on it. */
+ *  answered so far. */
 function choiceOptions(spec: EntityFieldSpec,
-                       loaded: Record<string, ChoiceOption[]>): ChoiceOption[] | null {
+                       loaded: Record<string, ChoiceList>): ChoiceList | undefined {
   if (spec.options) return spec.options.map((o) => ({ value: o, label: o }));
-  return loaded[spec.key] ?? null;
+  return loaded[spec.key];
 }
 
 /** A `choice` as a picker. A stored value none of the options answers to -- a
@@ -219,23 +224,34 @@ function choiceOptions(spec: EntityFieldSpec,
  *  the same reason `RefField` keeps a dangling ref. It is called "not an
  *  option" only once the list has actually arrived; until then (and after a
  *  failed load) the value is simply shown, because a request outage is not a
- *  fact about the value. */
+ *  fact about the value -- and a failed load says so under the control, since
+ *  a picker that offers nothing and says nothing reads as a broken one. */
 function ChoiceField({ spec, options, value, onChange }: {
-  spec: EntityFieldSpec; options: ChoiceOption[] | null; value: string;
+  spec: EntityFieldSpec; options: ChoiceList | undefined; value: string;
   onChange: (v: string) => void;
 }) {
-  const listed = options !== null && options.some((o) => o.value === value);
+  const list = Array.isArray(options) ? options : null;
+  const listed = list !== null && list.some((o) => o.value === value);
   return (
-    <Field key={spec.key} label={spec.label}>
+    <Field label={spec.label}
+           hint={options === "failed" ? "Could not load the choices for this field." : undefined}>
       <select value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">(none)</option>
         {value !== "" && !listed && (
-          <option value={value}>{options === null ? value : `${value} (not an option)`}</option>
+          <option value={value}>{list === null ? value : `${value} (not an option)`}</option>
         )}
-        {(options ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {(list ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </Field>
   );
+}
+
+/** Can a number input show this stored value? A hand-written `wet` cannot be
+ *  rendered by `<input type="number">` -- the browser sanitizes it to blank --
+ *  which would make the field look unfilled while still holding the value it
+ *  would resend. Such a value gets the text box instead, where it is visible. */
+function numberInputCanShow(value: string): boolean {
+  return value === "" || Number.isFinite(Number(value));
 }
 
 function RefField({ spec, options, value, onChange, unresolvedHint, optionsComplete }: {
@@ -366,7 +382,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [refOptsComplete, setRefOptsComplete] = useState(false);
   // What each sourced `choice` field on this kind may offer, by field key.
   // Loaded per kind; a literal `options` list never lands here.
-  const [choiceOpts, setChoiceOpts] = useState<Record<string, ChoiceOption[]>>({});
+  const [choiceOpts, setChoiceOpts] = useState<Record<string, ChoiceList>>({});
   // Token for the in-flight candidate fetch, so a slow earlier response cannot
   // land on top of a newer one — the same guard `PCEditor` uses for its lock
   // lookup, and for the same reason.
@@ -416,16 +432,18 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }, [wid, kind]);
 
   useEffect(() => {
-    // Re-read on every kind change rather than cached: the climates are the
-    // user's list, and one saved on the Climates page a moment ago should be
-    // offered here without a reload.
+    // Fetched on mount and on every kind change rather than cached across
+    // them: the climates are the user's list, and coming back from the
+    // Climates page (which remounts this editor) must offer what was just
+    // saved. `live` discards a reply that lands after the kind moved on.
     let live = true;
     setChoiceOpts({});
     for (const spec of fieldSpecs) {
       if (spec.widget !== "choice" || !spec.source) continue;
+      const key = spec.key;
       OPTION_SOURCES[spec.source]()
-        .then((opts) => { if (live) setChoiceOpts((cur) => ({ ...cur, [spec.key]: opts })); })
-        .catch(() => { /* the picker shows what it has; a stored value survives regardless */ });
+        .then((opts) => { if (live) setChoiceOpts((cur) => ({ ...cur, [key]: opts })); })
+        .catch(() => { if (live) setChoiceOpts((cur) => ({ ...cur, [key]: "failed" })); });
     }
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -433,10 +451,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
   /** A field value as the sidebar shows it: a choice by its option's label
    *  when the option is known, anything else as stored. */
-  const displayValue = (spec: EntityFieldSpec, value: string) =>
-    spec.widget === "choice"
-      ? (choiceOptions(spec, choiceOpts)?.find((o) => o.value === value)?.label ?? value)
-      : value;
+  const displayValue = (spec: EntityFieldSpec, value: string) => {
+    const list = spec.widget === "choice" ? choiceOptions(spec, choiceOpts) : undefined;
+    return (Array.isArray(list) && list.find((o) => o.value === value)?.label) || value;
+  };
 
   useEffect(() => {
     // Cleared FIRST, and every response checked against the request that is
@@ -1195,6 +1213,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                                  value={value} onChange={set} />
                   );
                 case "number":
+                  if (!numberInputCanShow(value)) break;   // the text box below
                   // `step="any"`: the bound is on the value, not its precision --
                   // a persistence of 0.35 is as valid as 0.5.
                   return (
@@ -1204,12 +1223,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                     </Field>
                   );
                 default:
-                  return (
-                    <Field key={f.key} label={f.label}>
-                      <input type="text" value={value} onChange={(e) => set(e.target.value)} />
-                    </Field>
-                  );
+                  break;
               }
+              return (
+                <Field key={f.key} label={f.label}>
+                  <input type="text" value={value} onChange={(e) => set(e.target.value)} />
+                </Field>
+              );
             })}
             {kind === "lore" && (
               <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">

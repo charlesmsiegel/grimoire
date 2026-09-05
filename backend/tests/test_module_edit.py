@@ -1414,3 +1414,50 @@ def test_export_drops_the_cruft_a_duplicate_drops(monkeypatch, tmp_path):
         names = z.namelist()
     assert f"{mid}/rules/combat.md" in names and f"{mid}/sheets.json" in names
     assert not any(n.endswith((".DS_Store", "Thumbs.db")) for n in names)
+
+
+def test_import_drops_the_cruft_export_drops(monkeypatch, tmp_path):
+    """One predicate for duplicate, export and import: an archive that carries
+    `.DS_Store` unpacks without it, so a round trip through a synced folder
+    cannot smuggle it back in."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    z = tmp_path / "pack.zip"
+    z.write_bytes(_zip_bytes({
+        "realm/module.md": "---\nname: Realm\n---\n",
+        "realm/sheets.json": '{"groups": {}, "sheet_types": {}}',
+        "realm/.DS_Store": "\x00",
+        "realm/rules/Thumbs.db": "\x00",
+        "realm/rules/combat.md": "---\nalways: true\n---\nbody\n",
+    }))
+    mid = module_edit.import_module(z)
+    root = modules.pack_root(mid)[0]
+    assert not (root / ".DS_Store").exists()
+    assert not (root / "rules" / "Thumbs.db").exists()
+    assert (root / "rules" / "combat.md").exists()
+    assert modules.load_pack(mid)["errors"] == []
+
+
+def test_a_content_rename_journal_replays_after_a_crash(monkeypatch, tmp_path):
+    """The journal a content rename writes, replayed through recovery: the
+    shape `rename` produces must pass the well-formedness check that
+    quarantines torn journals, or every crashed content rename would be
+    quarantined rather than finished."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    ref_type = {"label": "Adept", "kind": "characters", "groups": [],
+                "fields": [{"key": "known", "type": "ref", "ref_kind": "lore"}]}
+    assert module_edit.upsert_sheet_type(mid, "adept", ref_type)["ok"]
+    assert module_edit.upsert_content(mid, "lore", "old-rite", name="Old Rite",
+                                      body="", keys="", fields={}, sheet=None)["ok"]
+    _wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "adept",
+                               {"known": ["lore:module:old-rite"]})
+    real = me_migrate._run_migration
+    monkeypatch.setattr(me_migrate, "_run_migration",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        module_edit.rename(mid, "content", {"from": "old-rite", "kind": "lore"}, "new-rite")
+    monkeypatch.setattr(me_migrate, "_run_migration", real)
+    assert module_edit.recover() == set()
+    assert not list(me_migrate._staging_root().glob("*.journal.bad"))
+    got = json.loads(cp.read_text(encoding="utf-8"))["fields"]["known"]
+    assert got == ["lore:module:new-rite"]

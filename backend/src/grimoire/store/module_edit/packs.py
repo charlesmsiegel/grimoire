@@ -28,12 +28,13 @@ from .staging import _M, _publish, _staging_root, locked, new_mid
 MAX_MEMBERS = 2000
 MAX_UNCOMPRESSED = 64 * 1024 * 1024
 
-#: What a duplicate and an export leave behind. A pack that has lived in a
-#: synced folder carries `.DS_Store`, `Thumbs.db` and the like beside its real
-#: files; none of it is part of the module, and neither a copy asked for by
-#: name nor an archive handed to someone else should carry it. Dotfiles as a
-#: class: nothing in the pack contract is one. One list, read by both paths,
-#: so the two cannot disagree about what a pack member is.
+#: What a duplicate, an export and an import leave behind. A pack that has
+#: lived in a synced folder carries `.DS_Store`, `Thumbs.db` and the like
+#: beside its real files; none of it is part of the module, and neither a copy
+#: asked for by name, an archive handed to someone else, nor a pack unpacked
+#: from one should carry it. Dotfiles as a class: nothing in the pack contract
+#: is one. One list, read by all three paths, so they cannot disagree about
+#: what a pack member is.
 _CRUFT_PATTERNS = (".*", "Thumbs.db", "desktop.ini", "__MACOSX")
 _CRUFT = shutil.ignore_patterns(*_CRUFT_PATTERNS)
 
@@ -95,7 +96,7 @@ def delete_module(mid: str) -> None:
         _root, source = modules_pack.pack_root(mid)  # 404 before taking every lock
         if source != "user":
             raise modules_pack.ModuleError("built-in modules cannot be deleted")
-        if mid in stuck or "" in stuck:
+        if migrate.edits_blocked(mid, stuck):
             # With its journal still pending, deleting the live pack would
             # have the next replay read "live missing, staging present" and
             # publish the half-finished edit as the module's resurrection.
@@ -148,6 +149,9 @@ def import_module(path: Path) -> str:
             raise modules_pack.ModuleError(f"not a zip archive: {e}")
         with z:
             src_root, infos = _check_archive(z)
+            # Every member was validated above; this only chooses among them.
+            infos = [i for i in infos
+                     if _is_pack_member(Path(*_member_parts(i.filename)[1:]))]
             mid = new_mid(src_root)
             nonce = uuid.uuid4().hex
             base = _staging_root() / nonce

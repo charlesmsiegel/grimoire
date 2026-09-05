@@ -94,7 +94,7 @@ def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
             dropped = {g for g in (old.get("groups") or []) if isinstance(g, str)} \
                 - {g for g in (new.get("groups") or []) if isinstance(g, str)}
             if removed or dropped:
-                _prune_layout(root, in_scope={tid}, names=removed, groups=dropped)
+                _prune_layout(root, in_scope={tid}, names=removed, dropped_groups=dropped)
     return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True,
                  affected_types={tid})
 
