@@ -13,9 +13,20 @@ verbatim:
   by ``campaigns.read.touch``, ``rename_campaign`` and ``set_campaign_response``
   (see ``OUTSIDE_DOMAIN`` in ``locks.py``), so a name recorded there could be
   dropped by a concurrent rename. The files' presence on disk is the record.
-- **Not under the overlay.** These images are campaign-local and are never
-  inherited from the campaign's world, so there is no world-side copy to shadow
-  and nothing to tombstone. ``store/overlay.py`` does not know about them.
+- **Under the overlay now**, which this file once said it was not. The world has
+  a library of its own (``store.world_images``), so this module is the
+  campaign's *view* of one: its own uploads, then a tombstone check, then the
+  world's. Three rules carry the whole design, and each is stated where it is
+  implemented below:
+
+  - a campaign **may not shadow** a world image -- ``put_image`` refuses a name
+    the world holds, because a library image is bytes rather than a document you
+    edit, and "a different picture in this campaign" is answered by a different
+    name;
+  - a campaign **may hide** one, with an ``assets/library/<name>`` tombstone,
+    and ``list_hidden`` is what makes that reversible;
+  - the tombstone filter applies to the **inherited half only** -- see
+    ``list_images``, which is where getting this wrong costs the most.
 - **``assets``' directory-level primitives**, with ``supported_only``, because
   this is a directory a human browses and a sync client writes into: a
   ``notes.txt`` left beside ``coastline.png`` must neither win resolution nor be
@@ -91,6 +102,9 @@ def images_dir(cid: str) -> Path:
     """
     if not campaigns_paths.campaign_exists(cid):
         raise campaigns_paths.CampaignNotFound(cid)
+    # overlay-ok: the campaign's OWN half of the library, which is what this
+    # function means -- reading through to the world is `list_images`'
+    # job and every read-through caller goes there, not here.
     return campaigns_paths.campaign_root(cid) / "assets" / DIRNAME
 
 

@@ -115,6 +115,9 @@ def _assets_dir(cid: str) -> Path:
     """
     if not campaigns_paths.campaign_exists(cid):
         raise campaigns_paths.CampaignNotFound(cid)
+    # overlay-ok: a cover is campaign-local and is never inherited from the
+    # campaign's world -- there is no world-side copy to shadow and nothing
+    # to tombstone, which is why `store/overlay.py` does not know about covers.
     return campaigns_paths.campaign_root(cid) / "assets"
 
 

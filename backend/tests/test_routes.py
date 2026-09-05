@@ -15346,3 +15346,58 @@ def test_the_campaign_backlog_leaves_inherited_art_to_the_world(client):
 def test_restoring_a_name_that_was_never_hidden_is_a_no_op(client):
     wid, cid = _world_and_campaign(client)
     assert client.post(f"/api/campaigns/{cid}/images/whatever/restore").status_code == 200
+
+
+def _world_library_write_routes(client):
+    """Every registered write route on the WORLD image and cover surface.
+
+    The sibling of `_campaign_library_write_routes`, and enumerated from the app
+    for the same stated reason: the point is to catch route number five, added
+    later by someone who did not read this file.
+
+    Separate from the campaign one because neither existing enumeration reaches
+    here -- `_image_write_routes` requires a record segment before `/images`, and
+    `_campaign_library_write_routes` is anchored to `^/api/campaigns/`. This
+    surface has no actor and no version, so the only id it can get wrong is the
+    world's, and `covers` rides along because it is the same directory and the
+    same failure.
+    """
+    def flatten(routes):
+        out = []
+        for r in routes:
+            if type(r).__name__ == "_IncludedRouter":   # lazily expanded include
+                out.extend(flatten(r.effective_candidates()))
+            elif hasattr(r, "methods") and hasattr(r, "path"):
+                out.append((frozenset(r.methods), r.path))
+        return out
+
+    surface = re.compile(r"^/api/worlds/\{\w+\}/(images|cover)(/|$)")
+    return sorted({(m, path) for methods, path in flatten(client.app.routes)
+                   for m in methods & {"PUT", "POST", "DELETE"}
+                   if surface.match(path)})
+
+
+def test_every_world_library_write_route_refuses_an_unknown_world(client):
+    """#360/#373 one scope up.
+
+    `assets.put_in` creates the directory it writes into, so a write against an
+    id nothing can reach files bytes under `worlds/<typo>/assets/` that no
+    listing will show and no delete route can name -- reported to the caller as
+    a success. The world routes have no `_campaign_root_or_404` equivalent and
+    no global handler, so each one gates by hand and this is what proves every
+    one of them does.
+
+    The detail is checked, not merely the status: a URL this test built wrongly
+    would match no route at all, and Starlette answers that with its own 404 --
+    a guard accepting any 404 would pass hardest when its URLs were most wrong.
+    """
+    routes_found = _world_library_write_routes(client)
+    assert len(routes_found) >= 5, routes_found   # images PUT/DELETE/description
+                                                  # + cover PUT/DELETE
+
+    for method, path in routes_found:
+        url = path.replace("{wid}", "ghost").replace("{name}", "coastline")
+        assert "{" not in url, (method, path)     # a shape this test cannot fill
+        r = _write_request(client, method, url, gid="")
+        assert (r.status_code, r.json().get("detail")) == (404, "world not found"), \
+            f"{method} {url} answered {r.status_code} {r.text[:120]}"

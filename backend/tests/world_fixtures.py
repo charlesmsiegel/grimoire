@@ -15,6 +15,7 @@ from pathlib import Path
 
 from grimoire.store import (
     characters,
+    covers,
     entities,
     greetings,
     image_descriptions,
@@ -22,6 +23,7 @@ from grimoire.store import (
     pcs,
     taglines,
     tags,
+    world_images,
     worlds,
 )
 
@@ -45,6 +47,13 @@ SEEDED_FILES = (
     "greetings/the-gala/assets/default/subjects.json",
     "characters/seraphine/tagline.md",
     "characters/seraphine/assets/winifred/embed-old789.png",
+    # The world's OWN art: a cover and a described library image, which hang
+    # off no record and so are carried by none of the per-record cases above.
+    # Without these the bundle and fork round-trips compare an empty set for
+    # `assets/` and pass while proving nothing about it.
+    "assets/cover.png",
+    "assets/images/coastline.png",
+    "assets/images/descriptions.json",
 )
 
 
@@ -125,6 +134,17 @@ def seed_world(name: str = "Saltmarch") -> str:
     tags.add_tag(root, "Coastal")
     greetings.set_edges(root, gid, leads_to=[gid])
     (root / "calendar.json").write_text(json.dumps({"primary": "gregorian"}), encoding="utf-8")
+    # The world's own cover and image library, and a lore body carrying a
+    # world-shaped library URL -- the shape a campaign inherits and an export
+    # has to resolve (`export._IMG_URL`'s `wlib` group).
+    covers.put_world_cover(wid, PNG, "png")
+    world_images.put_image(wid, "coastline", PNG, "png")
+    world_images.set_description(wid, "coastline", "a rocky shore at dusk")
+    entities.update_entity(
+        root, "lore", "the-tide-accord",
+        body=f"Signed at the water line.\n\n"
+             f"![](/api/worlds/{wid}/images/coastline)\n")
+
     for rel in SEEDED_FILES:
         assert (root / rel).is_file(), f"seed did not produce {rel}"
     return wid

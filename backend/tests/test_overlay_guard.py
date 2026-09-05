@@ -152,8 +152,21 @@ OWNERS: dict[str, dict[str, str]] = {
 
 MARKER = "overlay-ok:"
 
+#: Campaign-root segments that resolve through to the world and are NOT records,
+#: so `overlay`'s own constants do not name them. Test-local on purpose: adding
+#: `assets` to `INHERITED_KINDS` would change what the overlay *means* rather
+#: than what this guard looks at.
+#:
+#: `assets` is the image library (`store.campaign_images`), which reads through
+#: to `store.world_images`. It is the one shape of this codebase's most repeated
+#: bug class -- a campaign read that silently misses what the campaign inherits
+#: -- that the kind-based roster structurally cannot see, because a library
+#: image hangs off no record.
+EXTRA_INHERITABLE_SEGMENTS = frozenset({"assets"})
+
 #: Path segments that resolve through to the world, from the overlay itself.
-INHERITED_SEGMENTS = frozenset(overlay.INHERITED_KINDS + overlay.INHERITED_FILES)
+INHERITED_SEGMENTS = (frozenset(overlay.INHERITED_KINDS + overlay.INHERITED_FILES)
+                      | EXTRA_INHERITABLE_SEGMENTS)
 
 
 def _inheritable_literal(value) -> str | None:
@@ -473,7 +486,14 @@ def test_the_marker_is_not_a_rubber_stamp():
 
     unexplained = [loc for loc, reason in marked if len(reason) < 15]
     assert not unexplained, f"`overlay-ok` with no real reason: {unexplained}"
-    assert len(marked) <= 4, (
+    # Raised from 4 to 6 when the image library became inheritable and `assets`
+    # joined the flagged roster. The two new exemptions are the pair of call
+    # sites that legitimately build a campaign-root `assets` path -- the cover
+    # (campaign-local, inherits nothing) and `campaign_images.images_dir` (the
+    # campaign's OWN half by definition, with `list_images` doing the reading
+    # through). Both were reviewed as part of that change; the cap moved
+    # because the roster widened, not because a finding was inconvenient.
+    assert len(marked) <= 6, (
         f"{len(marked)} overlay-ok exemptions; each one is a record that can "
         f"silently miss world inheritance, so they need review rather than a "
         f"raised limit: {marked}")
