@@ -246,12 +246,18 @@ function ChoiceField({ spec, options, value, onChange }: {
   );
 }
 
+/** HTML's "valid floating-point number", the grammar `<input type="number">`
+ *  applies before it sanitizes a value it cannot parse to blank. `Number()`
+ *  is wider (`0x10`, padded strings) and would say yes to values the input
+ *  then shows as empty. */
+const HTML_FLOAT = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
 /** Can a number input show this stored value? A hand-written `wet` cannot be
  *  rendered by `<input type="number">` -- the browser sanitizes it to blank --
  *  which would make the field look unfilled while still holding the value it
  *  would resend. Such a value gets the text box instead, where it is visible. */
 function numberInputCanShow(value: string): boolean {
-  return value === "" || Number.isFinite(Number(value));
+  return value === "" || HTML_FLOAT.test(value);
 }
 
 function RefField({ spec, options, value, onChange, unresolvedHint, optionsComplete }: {
