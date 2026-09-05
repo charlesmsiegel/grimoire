@@ -26,6 +26,7 @@ from PIL import Image
 
 from . import assets, locks
 from .campaigns import paths as campaigns_paths
+from .worlds import paths as worlds_paths
 
 NAME = "cover"
 
@@ -163,3 +164,82 @@ def delete_cover(cid: str) -> None:
         assets.delete_in(d, NAME, supported_only=True)
         if assets.path_in(d, NAME, supported_only=True) is not None:
             raise OSError("cover could not be removed")
+
+
+# ---- the world's cover -----------------------------------------------------
+#
+# Same image, one directory up the ownership chain: ``<world>/assets/cover.<ext>``,
+# drawn on the worlds shelf and carried in a world bundle. It shares `validate`
+# and every constant with the campaign's, because a cover is a cover -- what
+# differs is only whose it is, and therefore what lock protects it.
+#
+# **These take no lock**, and that is not an oversight this closes: worlds have
+# no lock domain at all, and `focus.json`, `subjects.json` and the world-side
+# description write all race there in exactly the same way (see
+# `overlay.set_description`'s docstring, which names the asymmetry). Inventing
+# a half-lock for one directory would imply a guarantee the world root does not
+# make.
+#
+# A `wid`-taking function is not a campaign mutator by `_takes_cid`'s
+# convention, so these do not disturb this module's `DOMAIN_MODULES` standing --
+# and each keeps its own `assets` write call, which is what keeps the campaign
+# faces visible to `test_lock_domain_guard`'s survey.
+
+
+def _world_assets_dir(wid: str) -> Path:
+    """``<world>/assets``, after proving the world is actually there.
+
+    ``world_root`` is a syntax guard, not an existence check -- it only rejects
+    ids ``safe_id`` refuses. Without this, a put for an unknown id would create
+    a world directory holding an image and no ``world.md``: bytes no listing can
+    show and no delete route can name, reported to the caller as a successful
+    upload (#360, #373). The campaign face makes the same check for the same
+    reason.
+    """
+    if not worlds_paths.world_exists(wid):
+        raise worlds_paths.WorldNotFound(wid)
+    return worlds_paths.world_root(wid) / "assets"
+
+
+def world_cover_path(wid: str) -> Path | None:
+    return assets.path_in(_world_assets_dir(wid), NAME, supported_only=True)
+
+
+def world_cover_version(wid: str) -> str:
+    """Cache-busting token for the current world cover, "" when there is none.
+
+    Swallows `OSError` for `cover_version`'s reason: this runs once per row in
+    ``GET /worlds``, and a cover deleted between resolution and stat must read
+    as "no cover" rather than 500 the listing.
+    """
+    p = world_cover_path(wid)
+    if p is None:
+        return ""
+    try:
+        return assets.image_version(p)
+    except OSError:
+        return ""
+
+
+def put_world_cover(wid: str, data: bytes, ext: str) -> str:
+    """Store `data` as the world's cover; returns the stored extension.
+
+    `ext` is what `validate` detected in these bytes, not anything a filename
+    claimed -- the route passes one straight to the other.
+    """
+    return assets.put_in(_world_assets_dir(wid), NAME, data, ext, supported_only=True)
+
+
+def delete_world_cover(wid: str) -> None:
+    """Remove the world's cover, and confirm it.
+
+    ``assets.delete_in`` swallows a failed unlink by design -- a lost cleanup
+    self-heals there, because resolution prefers the newest file. Here the
+    unlink IS the operation: on Windows a sync client or a scanner can hold the
+    file, and a swallowed failure would answer "removed" to a Remove that did
+    nothing. Same shape as ``delete_cover``.
+    """
+    d = _world_assets_dir(wid)
+    assets.delete_in(d, NAME, supported_only=True)
+    if assets.path_in(d, NAME, supported_only=True) is not None:
+        raise OSError("cover could not be removed")

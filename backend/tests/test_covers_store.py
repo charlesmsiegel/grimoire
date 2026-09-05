@@ -152,3 +152,73 @@ def test_validate_rejects_an_absurd_raster(cid, monkeypatch):
     monkeypatch.setattr(covers, "MAX_PIXELS", 4)  # our 4x4 fixture is 16px
     with pytest.raises(covers.CoverInvalid):
         covers.validate(data)
+
+
+# ---- the world's cover (`covers.world_*`) ----------------------------------
+
+@pytest.fixture
+def wid(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return worlds.create_world("Realm")
+
+
+def test_a_world_cover_round_trips_and_is_confirmed_on_removal(wid):
+    assert covers.world_cover_path(wid) is None
+    assert covers.world_cover_version(wid) == ""
+
+    data = _png()
+    assert covers.put_world_cover(wid, data, covers.validate(data)) == "png"
+    p = covers.world_cover_path(wid)
+    assert p is not None and p.read_bytes() == data
+    assert p == worlds.world_root(wid) / "assets" / "cover.png"
+    assert covers.world_cover_version(wid)
+
+    covers.delete_world_cover(wid)
+    assert covers.world_cover_path(wid) is None
+    assert covers.world_cover_version(wid) == ""
+
+
+def test_a_world_cover_is_named_by_its_bytes_not_its_extension(wid):
+    """`validate` reads the format out of the image, and the campaign cover's
+    reason carries over verbatim: a JPEG stored as `.png` is served as
+    `image/png` and manifested as one, which epubcheck calls an error."""
+    data = _png()
+    assert covers.validate(data) == "png"
+    covers.put_world_cover(wid, data, "png")
+    assert covers.world_cover_path(wid).suffix == ".png"
+
+
+def test_replacing_a_world_cover_leaves_one_file(wid):
+    covers.put_world_cover(wid, _png(), "png")
+    covers.put_world_cover(wid, _png((6, 6), color=(200, 100, 50)), "jpg")
+    d = worlds.world_root(wid) / "assets"
+    assert [p.name for p in sorted(d.iterdir())] == ["cover.jpg"]
+
+
+def test_a_file_that_is_not_ours_survives_a_world_cover_replace_and_remove(wid):
+    """`supported_only`, the same call the campaign cover makes: this directory
+    is one a human browses and a sync client writes into."""
+    d = worlds.world_root(wid) / "assets"
+    covers.put_world_cover(wid, _png(), "png")
+    (d / "cover.txt").write_text("not art", encoding="utf-8")
+
+    covers.put_world_cover(wid, _png((6, 6)), "jpg")
+    assert (d / "cover.txt").exists()
+    covers.delete_world_cover(wid)
+    assert (d / "cover.txt").exists()
+    assert covers.world_cover_path(wid) is None
+
+
+def test_a_cover_for_a_world_that_is_not_there_creates_nothing(monkeypatch, tmp_path):
+    """`world_root` is a syntax guard, not an existence check -- without the
+    check a put would build a world directory holding an image and no
+    `world.md`, and report it to the caller as a success (#360, #373)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with pytest.raises(worlds.WorldNotFound):
+        covers.put_world_cover("nope", _png(), "png")
+    assert not (tmp_path / "worlds" / "nope").exists()
+
+
+def test_removing_a_world_cover_that_is_not_there_is_quiet(wid):
+    covers.delete_world_cover(wid)
+    assert covers.world_cover_path(wid) is None
