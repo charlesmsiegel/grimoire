@@ -13,18 +13,15 @@
   },
   "backend/src/grimoire/routes/mechanics.py": {
     "assignment": 1,
-    "index": 1,
-    "return": 1
+    "index": 1
   },
   "backend/src/grimoire/routes/scenes.py": {
     "arg-type": 1,
-    "return": 3,
     "var-annotated": 1
   },
   "backend/src/grimoire/routes/streaming.py": {
     "arg-type": 1,
-    "misc": 1,
-    "return": 1
+    "misc": 1
   },
   "backend/src/grimoire/routes/weather.py": {
     "arg-type": 10,
@@ -48,9 +45,6 @@
   "backend/src/grimoire/store/appearances/transitions.py": {
     "arg-type": 1
   },
-  "backend/src/grimoire/store/backups.py": {
-    "return": 2
-  },
   "backend/src/grimoire/store/briefing.py": {
     "var-annotated": 1
   },
@@ -68,35 +62,23 @@
   "backend/src/grimoire/store/campaign_climate.py": {
     "return-value": 1
   },
-  "backend/src/grimoire/store/campaign_images.py": {
-    "return": 1
-  },
   "backend/src/grimoire/store/cards.py": {
     "index": 2
   },
-  "backend/src/grimoire/store/cascade.py": {
-    "return": 2
-  },
   "backend/src/grimoire/store/characters.py": {
-    "arg-type": 4,
+    "arg-type": 2,
     "index": 1,
-    "return-value": 1,
     "union-attr": 4
   },
   "backend/src/grimoire/store/checks.py": {
     "arg-type": 1,
-    "return": 1,
     "union-attr": 1
   },
   "backend/src/grimoire/store/commitments.py": {
-    "arg-type": 2,
-    "return": 1
+    "arg-type": 2
   },
   "backend/src/grimoire/store/commits.py": {
     "assignment": 1
-  },
-  "backend/src/grimoire/store/config.py": {
-    "return": 1
   },
   "backend/src/grimoire/store/context/assemble.py": {
     "arg-type": 4,
@@ -109,19 +91,10 @@
     "arg-type": 2,
     "misc": 1
   },
-  "backend/src/grimoire/store/context/mechanics.py": {
-    "return": 1
-  },
   "backend/src/grimoire/store/context/world_state.py": {
     "arg-type": 2,
     "call-overload": 1,
     "operator": 1
-  },
-  "backend/src/grimoire/store/covers.py": {
-    "return": 1
-  },
-  "backend/src/grimoire/store/events.py": {
-    "return": 5
   },
   "backend/src/grimoire/store/export.py": {
     "assignment": 1
@@ -134,18 +107,13 @@
     "return-value": 1
   },
   "backend/src/grimoire/store/facts.py": {
-    "index": 6,
-    "return": 2
+    "index": 6
   },
   "backend/src/grimoire/store/groupstate.py": {
     "var-annotated": 1
   },
-  "backend/src/grimoire/store/journal.py": {
-    "return": 2
-  },
   "backend/src/grimoire/store/locks.py": {
-    "attr-defined": 2,
-    "exit-return": 1
+    "attr-defined": 2
   },
   "backend/src/grimoire/store/module_edit/layout.py": {
     "arg-type": 1,
@@ -155,11 +123,7 @@
     "arg-type": 4,
     "index": 2,
     "operator": 2,
-    "return": 1,
     "union-attr": 3
-  },
-  "backend/src/grimoire/store/module_edit/packs.py": {
-    "return": 3
   },
   "backend/src/grimoire/store/module_edit/renaming.py": {
     "dict-item": 1,
@@ -186,9 +150,6 @@
     "arg-type": 2,
     "operator": 3
   },
-  "backend/src/grimoire/store/pins.py": {
-    "return": 1
-  },
   "backend/src/grimoire/store/playstate.py": {
     "var-annotated": 1
   },
@@ -197,24 +158,6 @@
   },
   "backend/src/grimoire/store/proclock.py": {
     "attr-defined": 4
-  },
-  "backend/src/grimoire/store/proposals.py": {
-    "return": 5
-  },
-  "backend/src/grimoire/store/provenance.py": {
-    "return": 1
-  },
-  "backend/src/grimoire/store/replay.py": {
-    "return": 4
-  },
-  "backend/src/grimoire/store/retcon.py": {
-    "return": 1
-  },
-  "backend/src/grimoire/store/rolls.py": {
-    "return": 3
-  },
-  "backend/src/grimoire/store/scene_ideas.py": {
-    "return": 2
   },
   "backend/src/grimoire/store/scenes/serialize.py": {
     "return-value": 1
@@ -225,7 +168,6 @@
   "backend/src/grimoire/store/sheets/advancement.py": {
     "arg-type": 1,
     "dict-item": 1,
-    "return": 1,
     "return-value": 1,
     "union-attr": 2
   },
@@ -239,8 +181,7 @@
     "union-attr": 1
   },
   "backend/src/grimoire/store/sheets/tally.py": {
-    "misc": 1,
-    "return": 1
+    "misc": 1
   },
   "backend/src/grimoire/store/sync.py": {
     "assignment": 1
@@ -251,7 +192,6 @@
   "backend/src/grimoire/store/undo.py": {
     "arg-type": 4,
     "assignment": 1,
-    "return": 1,
     "union-attr": 3
   },
   "backend/src/grimoire/store/usage.py": {
