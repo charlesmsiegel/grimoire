@@ -67,7 +67,20 @@ UNADDRESSABLE = frozenset("()<>#?%\"'`\\") | frozenset(" \t\n\r\v\f")
 #: ``promote-tmp``, and case-folded for its reason: on Windows and macOS
 #: ``Undescribed.png`` *is* ``undescribed.png``, so a case variant would claim
 #: the same file as the name the route owns.
-RESERVED = frozenset({"undescribed"})
+#: ``instantiate`` joins it for the same reason one step removed. The description
+#: -draft route crosses the instantiate route at eight segments --
+#: ``/worlds/{wid}/images/instantiate/description/draft`` matches both patterns --
+#: and on the WORLD side instantiate is registered first (it lives in
+#: ``routes/worlds.py``, included before ``routes/world_images.py``, which has to
+#: come after ``characters`` so the describe backlog is not shadowed). So an image
+#: named ``instantiate`` would be an image whose description could never be
+#: drafted, on one scope and not the other.
+#:
+#: Reserving the name is what makes that crossing unreachable rather than merely
+#: declared, and it keeps the two libraries identical: the alternative was a
+#: world library that behaves differently from the campaign one for a single
+#: name, which is exactly the kind of asymmetry nobody remembers.
+RESERVED = frozenset({"undescribed", "instantiate"})
 
 
 class ImageTooLarge(Exception):

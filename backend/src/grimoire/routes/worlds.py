@@ -65,7 +65,14 @@ router = APIRouter()
 # ---- worlds ----
 @router.get("/worlds")
 def get_worlds():
-    return store.worlds.list_worlds()
+    # The cover token is derived HERE rather than in `store.worlds.list_worlds`,
+    # exactly as the campaigns list derives its own: nothing about a cover is
+    # written into `world.md`, and a store reader that resolved one would put a
+    # `covers` import and a per-world `stat` in front of every caller --
+    # `routes/todo.py`'s chore sweep and `routes/shell.py`'s badge included --
+    # which none of them asked for.
+    return [{**w, "cover": store.covers.world_cover_version(w["id"])}
+            for w in store.worlds.list_worlds()]
 
 
 @router.post("/worlds")
@@ -82,9 +89,11 @@ def post_world(body: NameBody):
 @router.get("/worlds/{wid}")
 def get_world(wid: str):
     try:
-        return store.worlds.read_world(wid)
+        out = store.worlds.read_world(wid)
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found")
+    out["meta"]["cover"] = store.covers.world_cover_version(wid)
+    return out
 
 
 @router.put("/worlds/{wid}")

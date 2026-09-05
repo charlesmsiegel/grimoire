@@ -71,6 +71,7 @@ from . import (
     todo,
     usage,
     weather,
+    world_images,
     worlds,
 )
 from .common import (
@@ -92,7 +93,10 @@ __all__ = [
 
 router = APIRouter()
 
-for _domain in (config, modules, worlds, characters, greetings,
+# `world_images` AFTER `characters`: `/worlds/{wid}/images/{name}` generalizes
+# `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
+# and the `{name}` route swallows the describe backlog.
+for _domain in (config, modules, worlds, characters, world_images, greetings,
                 runs, scenes, weather, mechanics, usage, observability,
                 campaigns, ledger, search, shell, todo):
     router.include_router(_domain.router)

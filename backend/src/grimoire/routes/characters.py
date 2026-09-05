@@ -688,6 +688,14 @@ def list_undescribed_images(wid: str):
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
                         "name": item["name"], "record_name": name,
                         "url": _undescribed_url(wid, base, item)})
+    # The world's own library, which hangs off no record and so is reachable by
+    # none of the base walks above. It belongs in THIS queue rather than each
+    # campaign's: every campaign on the world inherits these pictures, so
+    # describing one here describes it once for all of them.
+    out.extend({"kind": "world", "id": "", "vid": "", "name": image["name"],
+                "record_name": "World library",
+                "url": f"/api/worlds/{wid}/images/{quote(image['name'], safe='')}"}
+               for image in store.world_images.undescribed(wid))
     return out
 
 

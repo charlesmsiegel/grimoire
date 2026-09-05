@@ -101,6 +101,18 @@ CROSSING_PAIRS = [
     # registered first because `entities.router` is included last.
     ("/api/campaigns/{cid}/images/{name}/description/draft",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    # The world library's mirror of the pair above, with the winner the other
+    # way round -- and deliberately so. The world's instantiate route lives in
+    # `routes/worlds.py`, which is included before `routes/world_images.py`
+    # (which must come after `characters`, or `{name}` swallows the describe
+    # backlog), so instantiate wins here where the library wins on the campaign
+    # side.
+    #
+    # That asymmetry is made harmless rather than tolerated: `instantiate` is in
+    # `image_library.RESERVED`, so no image on EITHER scope can be named it, and
+    # the only URL that could reach this crossing cannot be generated.
+    ("/api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}",
+     "/api/worlds/{wid}/images/{name}/description/draft"),
     ("/api/campaigns/{cid}/scenes/{sid}/cast/batch",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     # Same shape and same decision as `cast/batch` directly above: only
