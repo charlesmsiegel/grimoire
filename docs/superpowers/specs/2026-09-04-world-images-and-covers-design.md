@@ -1,7 +1,7 @@
 # A world's own art: a cover, and an image library campaigns inherit
 
 **Date:** 2026-09-04
-**Status:** Draft for review (revision 2, after one adversarial gate)
+**Status:** Draft for review (revision 3, after two adversarial gates)
 
 ## Problem
 
@@ -152,12 +152,24 @@ and permanently — and the lost one resurrects an image the user deleted, which
 is the one direction of failure `overlay.deleted`'s own fail-soft docstring says
 a user cannot spot by looking.
 
-So `add_deleted` takes `campaign_lock(cid)`. The lock is reentrant, so the
-callers already inside a hold pay nothing; the ones that are not are
-`overlay.py:645,913,1276,1516`, `campaigns/lifecycle.py:239,380` and
-`reclassify.py:156`, each of which must be checked for an enclosing hold rather
-than assumed. `_drop_deleted` takes it for the same reason — it is the same
-file, rewritten whole.
+So `add_deleted` takes `campaign_lock(cid)`. The lock is reentrant, so callers
+already inside a hold pay nothing — `reclassify.py:156` is one of those, inside
+the hold opened at `reclassify.py:145`. The genuinely unserialized callers are
+`overlay.py:645,913,1276,1459` (the last being `overlay.delete_image`, the very
+race this closes) and `campaigns/lifecycle.py:239,380`. `_drop_deleted` takes it
+for the same reason — same file, rewritten whole.
+
+**Two of those callers must take the lock around their loop, not per ref.**
+`campaigns/lifecycle.py:238` is `for ref in deleted_by_user: add_deleted(...)`
+and `:380` calls it per name inside a per-version loop. Locking inside
+`add_deleted` alone would turn each into N advisory file-lock round trips
+(`locks.py:47`, `proclock.acquire` when `_depth == 0`) on top of N whole-file
+rewrites — and, worse, make each iteration individually able to raise
+`CampaignBusy`, leaving `ensure_campaign_slim` **half-migrated**. That migration
+runs lazily on ordinary request paths (`routes/common.py:1015`), so a contended
+campaign would turn it into a 409. Holding the lock around each loop fixes the
+cost and the atomicity together: the migration's tombstone set lands whole,
+which it does not today.
 
 ### No focus point on either cover
 
@@ -200,12 +212,35 @@ record goes. A library image has no record, so nothing would sweep it: deleting
 had tombstoned the old one permanently blind to the new one, with no UI to
 undo it, because `list_images(cid)` hides the name it is hiding.
 
-So **a world-side library delete sweeps the dependent campaigns' refs**, the
-mirror of `forget_world_record` and reached the same way: `dependent_campaigns`
-for the world root, then the drop under `locks.hold_all` (the only sanctioned
-way to hold more than one campaign lock — `test_lock_order_guard.py`).
+So **a world-side library delete sweeps the dependent campaigns' refs**:
+`dependent_campaigns` for the world root, then drop `assets/library/<name>` from
+each.
+
+**It takes `locks.hold_all` BEFORE deleting the bytes, and that is deliberately
+the opposite of `forget_world_record`'s design.** That sweep loops per campaign
+and catches `locks.StoreBusy` per campaign, for a reason its comment states
+plainly: a campaign busy for `LOCK_TIMEOUT` "would otherwise abort the sweep for
+every campaign after it and 500 a delete that has already happened". `hold_all`
+raises `CampaignBusy` on the first lock it cannot take
+(`store/locks.py:777-783`), so specifying it *after* the delete would produce
+exactly that: bytes gone, zero campaigns swept, a 500, and every stale tombstone
+left standing.
+
+The two cases differ in what a skipped campaign costs. For a record, skipping
+leaves that campaign at the pre-#225 behaviour — visible state that a later
+sweep or a human can still reach. For a library image, a skipped campaign is
+**permanently and invisibly blind** to any future image of that name, with no UI
+that can show it, which is the whole failure this section exists to prevent. A
+partial sweep is therefore not an acceptable outcome here, and the operation
+must be all-or-nothing. So this mirrors `reclassify.world_entity`
+(`store/reclassify.py:198`) instead: acquire every dependent campaign's lock
+first, and let a busy campaign refuse the *whole* delete with `CampaignBusy`.
+A refusal is retryable; a half-done sweep is not.
+
 `DELETE /worlds/{wid}/images/{name}` is therefore a multi-campaign write, which
-also makes it one that stamps every campaign it wrote (`store/revision.py`).
+also makes it one that stamps every campaign it wrote (`store/revision.py`). It
+carries no `@leaves_campaign_unchanged`: that marker is for campaign-path routes
+(`routes/common.py:1314`), and this route's path names a world.
 
 **The describe backlog split does not change, and that is the point.**
 `GET /campaigns/{cid}/images/undescribed` says in its docstring that inherited
@@ -248,8 +283,17 @@ GET    /api/worlds/{wid}/images/{name}
 PUT    /api/worlds/{wid}/images/{name}
 DELETE /api/worlds/{wid}/images/{name}
 PUT    /api/worlds/{wid}/images/{name}/description
-POST   /api/worlds/{wid}/images/{name}/description/draft   -> 202, @computes_only
+POST   /api/worlds/{wid}/images/{name}/description/draft   -> 202
 ```
+
+The draft route carries **no `@computes_only`**, matching the three world
+description-draft routes that already exist (`routes/worlds.py:583`,
+`routes/entities.py:463`, `routes/characters.py:249`). The marker is resolved
+from a `cid` path parameter (`main.py:286`) and its own docstring says it marks
+"a campaign-scoped POST" (`routes/common.py:1296`) — on a world route it would
+be inert, and an inert decorator in a spec is a false claim. The rest of the
+draft contract does hold: `runs.world_subject` and all four `("world", wid)` run
+routes exist (`routes/runs.py:1162,1252`).
 
 Upload keeps both size checks and their order: `UploadFile.size` **before**
 `read()` (the allocation `MAX_BYTES` bounds, and the one that OOMs Chaquopy),
@@ -285,7 +329,13 @@ Campaign side, unchanged in shape and changed in resolution:
 - `GET|PUT|DELETE /campaigns/{cid}/images/{name}` resolve, shadow and tombstone
   per the table above.
 - `PUT .../description` on an inherited image writes campaign-side — a
-  description divergence, which is what the record surfaces already do.
+  description divergence, which is what the record surfaces already do. This
+  works **because** `set_description` passes `names={...list_images(cid)}` into
+  `image_descriptions.set_in`, where `names` is the existence check that raises
+  "unknown image" (`image_descriptions.py:160`): once `list_images` is merged,
+  that set admits inherited names. Said out loud because it is load-bearing and
+  otherwise invisible — keeping `names` campaign-only would 404 exactly the
+  divergence this bullet promises.
 - `GET /campaigns/{cid}/images/undescribed` filters to campaign-owned library
   images.
 - `GET /campaigns/{cid}/gallery` and `GET /worlds/{wid}/gallery` each gain the
@@ -322,14 +372,24 @@ half bigger by exactly the number of *described* world images. The note gets the
 truth; no limit is added, because a limit nobody has hit is a threshold invented
 without evidence.
 
-**The describe badge (`routes/todo.py`, `routes/shell.py`).** `_DESCRIBE_BASES`
-(`routes/todo.py:366`) is a base roster whose comment says "it must stay that
-list", and it feeds `_world_describe_counts`, the chore, and the rail badge in
-`routes/shell.py:129`. Its counter, `image_descriptions.undescribed_count`, is a
-*base walker* and structurally cannot reach a flat library directory — so
-without an explicit library count the queue grows rows while the badge reads
-zero, which is the rail's own "a count nobody can answer cheaply is `null`" rule
-being broken in the worse direction. Both files get the library's own count.
+**The describe badge — three call sites, not two.** `_DESCRIBE_BASES`
+(`routes/todo.py:366`) is a base roster consumed at `routes/todo.py:354` (the
+count), `routes/shell.py:129` (the rail badge) and **`routes/todo.py:492`**,
+`_has_world_describe` — the cheap yes/no that decides whether the chore is
+computed at all. Its counter, `image_descriptions.undescribed_count`, is a
+*base walker* (`image_descriptions.py:222` requires
+`<root>/<base>/<record>/assets/<vid>/`) and structurally cannot reach a flat
+library directory.
+
+Miss the third and the bug survives one level up: a world whose only undescribed
+art is library art gets a fixed count and a fixed badge, while the probe returns
+False, the chore row never renders, and nobody is told the queue has rows. All
+three get the library's own count. Two consequences to handle rather than
+discover: `_DESCRIBE_BASES`' comment ("it must stay that list", mirroring
+`characters.list_undescribed_images`) stops being true once the world backlog
+holds a non-base, so it gets restated; and `_chore_world_describe`'s `fix_label`
+is "The cast" (`todo.py:381`), which points a library-only backlog at the wrong
+section.
 
 **Export (`store/export.py`).** Three edits, and they are the risky ones:
 
@@ -385,6 +445,16 @@ about assets, and neither needs to.
   the library editor; the gallery keeps its contract and merely gains the
   library as a base it *reports* on, like every other base. Brainstorming put
   both halves in this tab, and this is how they fit in it without breaking it.
+- **That third tab is world-scoped only.** `ImagesView` is also reached
+  campaign-scoped (`WorldView.tsx:516` passes `forCampaign`, and the gallery
+  then reads `listCampaignGallery`, `ImagesView.tsx:184`). The tab strip omits
+  "World art" when `forCampaign` is set: a world cover and a world library are
+  the world's, and offering their upload and delete buttons from inside a
+  campaign view would edit one thing while the reader is looking at another.
+  The Tagging queue is unconditionally world-scoped (`:296`) and is precedent
+  for reaching world state from here — but tagging edits a sidecar, while this
+  replaces a cover and deletes bytes for every campaign in the world, which is
+  not the same weight.
 - `components/DescribeQueue.tsx` handles `kind === "world"` alongside its
   existing `kind === "campaign"` branch (draft and save go to the world routes).
 - `components/PostImagePicker.tsx` shows inherited images with their origin
@@ -424,14 +494,31 @@ Backend (pytest, `GRIMOIRE_HOME` per test as always):
   degrade to alt text when the campaign has tombstoned the image.
 - Art pool: a described world image is offered to a campaign and resolves; a
   tombstoned one is not offered.
-- Bundle: cover and library survive export then import under a new id, with the
-  URL rewrite.
+- Bundle and fork: cover and library survive export then import under a new id,
+  with the URL rewrite. `world_fixtures.tree()` diffs the whole tree, so
+  `test_world_bundle` and `test_world_fork` cover `assets/` automatically —
+  **but only once `SEEDED_FILES` (`world_fixtures.py:39`) actually writes one**,
+  which today it does not. Seeding a world cover and a library image with a
+  description is what turns those two existing tests from vacuously passing to
+  load-bearing.
+- Unknown-id sweeps: the two targeted image-write enumerations reach neither new
+  route — `test_routes.py:1092` requires a record segment before `/images`, and
+  `test_path_guard_store.py:353` is `^/api/campaigns/` only. Both docstrings say
+  their point is catching "route number five, added later by someone who did not
+  read this file", which is this change. A `_world_library_write_routes` sibling
+  is part of the work.
 - Guards and frozen rosters, none of which are optional:
   - `backend/tests/store_api_baseline.json` is a frozen facade roster already
-    listing `campaign_images` and `covers`; re-exporting `image_library` and
-    `world_images` from `store/__init__.py` fails
-    `test_store_api_baseline.py:69` until it is regenerated. That regeneration
-    is a reviewed act in the same commit, not a silencing.
+    listing `campaign_images` and `covers`. It compares **both** `store.__all__`
+    and the public names in `dir(store)`, and that second list already carries
+    modules nothing re-exports (`paths`, `statcache`, `vectors`) — so it fails
+    the moment anything imports `grimoire.store.world_images`, re-export or not.
+    Regenerating it is a reviewed act in the same commit, not a silencing, and
+    it is not optional by declining to re-export.
+  - `backend/tests/fixtures/frozen_campaign/snapshot.json` moves: `sweep.py:110`
+    and `:115` call `list_worlds` and `read_world`, both of which gain a `cover`
+    field. Regenerated deliberately with the change, per that directory's README
+    — `home/` itself is never touched.
   - `test_lock_domain_guard.py`: `covers` and `campaign_images` must still be
     surveyed after the seam moves (the reason the write calls stay put).
   - **Every relevant marker budget is already full**, counted in `backend/src`:
