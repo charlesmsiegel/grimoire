@@ -9,8 +9,78 @@ def test_descriptor_shape():
         "group_type", "leader", "headquarters"]
     assert [f["key"] for f in entity_schema.FIELDS["creatures"]] == [
         "creature_type", "threat", "habitat"]
-    assert all(f["widget"] in ("text", "ref")
+    assert all(f["widget"] in ("text", "ref", "number", "choice")
                for fs in entity_schema.FIELDS.values() for f in fs)
+
+
+def test_each_widget_carries_exactly_its_own_extras():
+    """The spec is the one declaration both sides read (#221): a constraint
+    lives on the spec, in the keys its widget defines, and nowhere else."""
+    for fs in entity_schema.FIELDS.values():
+        for f in fs:
+            extras = set(f) - {"key", "label", "widget"}
+            if f["widget"] == "text":
+                assert extras == set(), f
+            elif f["widget"] == "ref":
+                assert extras <= {"kinds", "multi"} and "kinds" in extras, f
+            elif f["widget"] == "number":
+                assert extras <= {"min", "max"}, f
+                if "min" in f and "max" in f:
+                    assert f["min"] <= f["max"], f
+            elif f["widget"] == "choice":
+                # exactly one of a static option list or a named source
+                assert extras in ({"options"}, {"source"}), f
+                if "source" in f:
+                    assert f["source"] in entity_schema.OPTION_SOURCES, f
+                else:
+                    assert f["options"] and all(isinstance(o, str) for o in f["options"]), f
+
+
+def test_the_location_weather_fields_declare_their_constraints():
+    specs = {f["key"]: f for f in entity_schema.FIELDS["locations"]}
+    assert specs["climate"]["widget"] == "choice" and specs["climate"]["source"] == "climates"
+    assert specs["persistence"]["widget"] == "number"
+    assert (specs["persistence"]["min"], specs["persistence"]["max"]) == (0, 1)
+    assert specs["weather_zone"]["widget"] == "text"
+
+
+def test_climate_options_are_the_climate_ids(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import climates
+    spec = next(f for f in entity_schema.FIELDS["locations"] if f["key"] == "climate")
+    got = entity_schema.choice_options(spec)
+    assert got == [c["id"] for c in climates.list_climates()]
+    assert "temperate-interior" in got
+
+
+def test_a_static_choice_accepts_only_its_options():
+    spec = {"key": "rarity", "label": "Rarity", "widget": "choice",
+            "options": ("common", "rare")}
+    assert entity_schema.valid_value(spec, "rare")
+    assert not entity_schema.valid_value(spec, "legendary")
+    assert not entity_schema.valid_value(spec, ["rare"])
+    assert entity_schema.choice_options(spec) == ["common", "rare"]
+
+
+def test_a_number_spec_bounds_only_what_it_declares():
+    open_ended = {"key": "n", "label": "N", "widget": "number"}
+    for v in ("-5", "0", "1e6", 3, 2.5):
+        assert entity_schema.valid_value(open_ended, v), v
+    for v in ("NaN", "inf", "wet", True, 10 ** 1000):
+        assert not entity_schema.valid_value(open_ended, v), v
+    floor_only = {"key": "n", "label": "N", "widget": "number", "min": 1}
+    assert entity_schema.valid_value(floor_only, "1")
+    assert entity_schema.valid_value(floor_only, "1000")
+    assert not entity_schema.valid_value(floor_only, "0.5")
+
+
+def test_a_text_field_must_be_a_string():
+    # The store would stringify anything else and the file would carry that
+    # spelling -- the same rule `upsert_content` applies to module content.
+    spec = {"key": "weather_zone", "label": "Zone", "widget": "text"}
+    assert entity_schema.valid_value(spec, "saltmarch")
+    assert not entity_schema.valid_value(spec, ["saltmarch"])
+    assert entity_schema.invalid_values("locations", {"weather_zone": 3}) == ["weather_zone"]
 
 
 def test_invalid_keys():

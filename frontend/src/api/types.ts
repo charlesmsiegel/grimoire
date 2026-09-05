@@ -415,18 +415,35 @@ export type RefKind = EntityKind | "characters" | "pcs";
  *  uses — one, or a comma-separated list when `multi`. `kinds` is what makes
  *  it a picker rather than a text box: the editor offers exactly those kinds'
  *  records, and the backend refuses anything else at the save boundary. */
+/** A `choice` whose options are only known at runtime names the list it
+ *  draws from; `EntityEditor` resolves each through the API. Mirrors
+ *  `entity_schema.OPTION_SOURCES`. */
+export type OptionSource = "climates";
+
+// Mirrors store/entity_schema.py FIELDS, key for key. The spec is the whole
+// constraint (#221): the save boundary refuses what a spec does not admit and
+// the form renders the control the spec implies, so a bound or an option list
+// declared here and not there (or the reverse) is a picker offering what the
+// server rejects.
 export type EntityFieldSpec = {
   key: string;
   label: string;
-  widget: "text" | "ref";
+  widget: "text" | "ref" | "number" | "choice";
+  /** `ref`: the kinds it may name, and whether it holds a list. */
   kinds?: readonly RefKind[];
   multi?: boolean;
+  /** `number`: inclusive bounds, each optional. */
+  min?: number;
+  max?: number;
+  /** `choice`: exactly one of a literal option list or a named source. */
+  options?: readonly string[];
+  source?: OptionSource;
 };
 
 export const ENTITY_FIELDS: Record<EntityKind, EntityFieldSpec[]> = {
   locations: [
-    { key: "climate", label: "Climate", widget: "text" },
-    { key: "persistence", label: "Weather persistence", widget: "text" },
+    { key: "climate", label: "Climate", widget: "choice", source: "climates" },
+    { key: "persistence", label: "Weather persistence", widget: "number", min: 0, max: 1 },
     { key: "weather_zone", label: "Weather zone", widget: "text" },
   ],
   lore: [],

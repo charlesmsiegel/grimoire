@@ -115,10 +115,6 @@
   "backend/src/grimoire/store/locks.py": {
     "attr-defined": 2
   },
-  "backend/src/grimoire/store/module_edit/layout.py": {
-    "arg-type": 1,
-    "assignment": 1
-  },
   "backend/src/grimoire/store/module_edit/migrate.py": {
     "arg-type": 4,
     "index": 2,

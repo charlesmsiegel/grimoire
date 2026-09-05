@@ -1,10 +1,28 @@
-"""Per-kind typed field descriptors (#37, #222).
+"""Per-kind typed field descriptors (#37, #222, #221).
 
 Fields are extra string scalars in the entity's frontmatter, so entity_hash,
 sync conflict detection, and campaign copy-on-write cover them for free. The
-frontend mirrors this table as ENTITY_FIELDS in frontend/src/api/client.ts —
-keep the two in sync. Two widgets: `text`, and `ref` (#222). Game mechanics
-are still deferred (#221).
+frontend mirrors this table as ENTITY_FIELDS in frontend/src/api/types.ts --
+keep the two in sync. Four widgets: `text`, `ref` (#222), `number` and
+`choice` (#221).
+
+## The spec is the constraint
+
+A `number` carries an optional `min`/`max`; a `choice` carries either a static
+`options` tuple or the name of a `source` in `OPTION_SOURCES` (a list that is
+only known at runtime -- the climates, which the user can add to). Both sides
+read the same keys: the save boundary refuses what the spec does not admit
+(`valid_value`), and the form renders the control the spec implies -- a
+bounded number input, a picker over exactly those options -- rather than a
+text box whose rule lives in Python it cannot see. Before this, `climate` and
+`persistence` were text boxes with bespoke validators: the typo was reported,
+but only after Save, and nothing offered the right spelling.
+
+Game *mechanics* -- stat blocks, resources, tracks -- are not fields here and
+never will be: they are sheets (`store/sheets`), typed per sheet type by the
+campaign's bound module and stored campaign-side, so a world record stays
+mechanics-agnostic and the same creature can be statted differently in two
+campaigns. The descriptor holds what is true of the record in every campaign.
 
 ## Ref-valued fields
 
@@ -83,7 +101,14 @@ from typing import Any
 from . import climates
 from .paths import safe_id
 
-TEXT, REF = "text", "ref"
+TEXT, REF, NUMBER, CHOICE = "text", "ref", "number", "choice"
+
+#: Where a `choice` spec's options come from when they are not a literal
+#: tuple: the user-extensible lists, read fresh each time so a climate saved a
+#: moment ago is offered (and accepted) at once.
+OPTION_SOURCES: dict[str, Callable[[], list[str]]] = {
+    "climates": lambda: [c["id"] for c in climates.list_climates()],
+}
 
 # The kinds a `ref` field may name. Wider than `entities.ENTITY_KINDS` because
 # the interesting refs point at actors -- and spelled out here rather than
@@ -101,8 +126,12 @@ REF_KINDS: tuple[str, ...] = (
 # carries no `kinds`, which no type can say.
 FIELDS: dict[str, tuple[dict[str, Any], ...]] = {
     "locations": (
-        {"key": "climate", "label": "Climate", "widget": TEXT},
-        {"key": "persistence", "label": "Weather persistence", "widget": TEXT},
+        {"key": "climate", "label": "Climate", "widget": CHOICE, "source": "climates"},
+        # A probability: the resolver (`store/weather`) reads it as the chance
+        # that a day's weather carries over, and falls back silently outside
+        # 0..1, which is exactly why the bound is declared here.
+        {"key": "persistence", "label": "Weather persistence", "widget": NUMBER,
+         "min": 0, "max": 1},
         {"key": "weather_zone", "label": "Weather zone", "widget": TEXT},
     ),
     "items": (
@@ -206,33 +235,53 @@ def invalid_keys(kind: str, fields: dict) -> list[str]:
     return sorted(k for k in fields if k not in allowed)
 
 
-def _valid_climate(value: str) -> bool:
-    return climates.get(value) is not None
+def choice_options(spec: dict[str, Any]) -> list[str]:
+    """The values a `choice` spec admits, in the order a picker should offer them."""
+    if "options" in spec:
+        return list(spec["options"])
+    return OPTION_SOURCES[spec["source"]]()
 
 
-def _valid_persistence(value: str) -> bool:
+def _valid_number(spec: dict[str, Any], value: object) -> bool:
     # bool first: `float(True)` is 1.0, so a JSON `true` would validate, but the
     # store writes it back as the string "True", which the resolver cannot parse
     # and silently replaces with the climate's own persistence. That is a save
-    # that reports success and never takes effect — the exact failure this
+    # that reports success and never takes effect -- the exact failure this
     # boundary exists to prevent.
     if isinstance(value, bool):
         return False
     try:
-        parsed = float(value)
+        parsed = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError, OverflowError):
         # OverflowError: `fields` is an untyped dict, so a JSON integer like
         # 10**1000 arrives as a Python int with no float value. Uncaught it
         # escapes _check_fields as a 500 instead of the 400 it is.
         return False
-    return math.isfinite(parsed) and 0.0 <= parsed <= 1.0
+    if not math.isfinite(parsed):
+        return False
+    if "min" in spec and parsed < spec["min"]:
+        return False
+    return not ("max" in spec and parsed > spec["max"])
 
 
-# Per-field value checks. Names are validated for every kind by invalid_keys;
-# only fields listed here have their contents checked as well.
-VALIDATORS: dict[str, dict[str, Callable[[str], bool]]] = {
-    "locations": {"climate": _valid_climate, "persistence": _valid_persistence},
-}
+def valid_value(spec: dict[str, Any], value: object) -> bool:
+    """Does `value` satisfy `spec`? Structural for every widget, and for a
+    `choice` also membership -- the one check that is a lookup rather than a
+    parse. Empties are not values and are decided by the caller.
+
+    A `text` value must be a string: `dump_frontmatter` would stringify
+    anything else and the file would carry that spelling, which is the same
+    save-reports-success-and-stores-something-else failure the number check
+    guards against, one widget over.
+    """
+    widget = spec.get("widget", TEXT)
+    if widget == REF:
+        return _valid_ref_value(spec, value)
+    if widget == NUMBER:
+        return _valid_number(spec, value)
+    if widget == CHOICE:
+        return isinstance(value, str) and value in choice_options(spec)
+    return isinstance(value, str)
 
 
 def invalid_values(kind: str, fields: dict) -> list[str]:
@@ -249,18 +298,13 @@ def invalid_values(kind: str, fields: dict) -> list[str]:
     empties — but only *after* route validation, so they must be skipped here
     or every ordinary location save is rejected.
     """
-    checks = VALIDATORS.get(kind, {})
-    refs = {f["key"]: f for f in ref_fields(kind)}
+    specs = {f["key"]: f for f in FIELDS.get(kind, ())}
     bad = []
     for key, value in (fields or {}).items():
         if value is None or value == "":
             continue
-        spec = refs.get(key)
-        if spec is not None and not _valid_ref_value(spec, value):
-            bad.append(key)
-            continue
-        check = checks.get(key)
-        if check and not check(value):
+        spec = specs.get(key)
+        if spec is not None and not valid_value(spec, value):
             bad.append(key)
     return sorted(bad)
 

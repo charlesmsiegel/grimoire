@@ -16,7 +16,11 @@ vi.mock("../api/client", () => ({
   ENTITY_KINDS: ["locations", "lore", "items", "groups", "creatures"],
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_FIELDS: {
-    locations: [], lore: [],
+    locations: [{ key: "climate", label: "Climate", widget: "choice", source: "climates" },
+                { key: "persistence", label: "Weather persistence", widget: "number",
+                  min: 0, max: 1 },
+                { key: "weather_zone", label: "Weather zone", widget: "text" }],
+    lore: [],
     items: [{ key: "item_type", label: "Type", widget: "text" },
             { key: "rarity", label: "Rarity", widget: "text" },
             { key: "holder", label: "Held by", widget: "ref",
@@ -38,6 +42,7 @@ vi.mock("../api/client", () => ({
     reclassifyEntity: vi.fn(),
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
+    listClimates: vi.fn(),
     listEntityImages: vi.fn(),
     setEntityImageDescription: vi.fn(),
     draftEntityImageDescription: vi.fn(),
@@ -81,6 +86,10 @@ beforeEach(() => {
   (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x", rev: "r1" });
   (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
   (api.listPCs as any).mockResolvedValue([]);
+  (api.listClimates as any).mockResolvedValue({ climates: [
+    { id: "temperate-interior", name: "Temperate interior", builtin: true, custom: false },
+    { id: "saltmarch-fog", name: "Saltmarch fog", builtin: false, custom: true },
+  ] });
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.setEntityImageDescription as any).mockResolvedValue({ ok: true });
   (api.putEntityImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
@@ -1421,4 +1430,60 @@ test("a record read still in flight when the scope changes does not land under t
   resolveRead({ meta: { id: "salt", name: "Salt" }, body: "old scope body", rev: "r1" });
   await waitFor(() => expect(api.listEntities).toHaveBeenCalled());
   expect(screen.queryByText("old scope body")).toBeNull();
+});
+
+// ---- choice and number widgets (#221) --------------------------------------
+
+test("a choice field is a picker over its source's options and sends the chosen id", async () => {
+  render(<EntityEditor wid="w" kind="locations" />);
+  const picker = await screen.findByLabelText("Climate");
+  expect(picker.tagName).toBe("SELECT");
+  await waitFor(() => expect(within(picker).getByText("Saltmarch fog")).toBeInTheDocument());
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Fogbank" } });
+  fireEvent.change(picker, { target: { value: "saltmarch-fog" } });
+  fireEvent.click(screen.getByRole("button", { name: /create location/i }));
+  await waitFor(() =>
+    expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "locations", {
+      name: "Fogbank", body: "", keys: "", owners: "", secrecy: "public",
+      fields: { climate: "saltmarch-fog" },
+    }),
+  );
+});
+
+test("a number field is a bounded number input", async () => {
+  render(<EntityEditor wid="w" kind="locations" />);
+  const input = await screen.findByLabelText("Weather persistence") as HTMLInputElement;
+  expect(input.type).toBe("number");
+  expect(input.min).toBe("0");
+  expect(input.max).toBe("1");
+  // and a text field stays a text box
+  expect((screen.getByLabelText("Weather zone") as HTMLInputElement).type).toBe("text");
+});
+
+test("a stored choice value outside the options is shown, not blanked", async () => {
+  // A climate since deleted, or a hand-edited file. The picker keeps it as a
+  // row of its own so the value is visible and clearable -- silently showing
+  // "(none)" would save a clear the user never asked for.
+  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "fogbank", name: "Fogbank", climate: "temperate-costal" }, body: "grey" });
+  render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Fogbank"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  const picker = await screen.findByLabelText("Climate") as HTMLSelectElement;
+  expect(picker.value).toBe("temperate-costal");
+  expect(within(picker).getByText(/temperate-costal \(not an option\)/)).toBeInTheDocument();
+});
+
+test("the sidebar names a chosen option by its label", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "fogbank", name: "Fogbank", climate: "temperate-interior", persistence: "0.4" },
+    body: "grey" });
+  const { container } = render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Fogbank"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText(/Climate: Temperate interior/)).toBeInTheDocument();
+  expect(within(side).getByText(/Weather persistence: 0.4/)).toBeInTheDocument();
 });
