@@ -22,8 +22,12 @@ Cost therefore scales with the SCENE for the record half — a handful of small
 JSON reads, the same order as `image_subjects.appearances`, which the store
 already treats as cheap.
 
-The campaign's own library is the exception, and it is stated rather than
-hidden: it has no record to be in scope through, so it is included whole. An
+The library is the exception, and it is stated rather than hidden: it has no
+record to be in scope through, so it is included whole -- and it is the
+campaign's OWN images *plus its world's*, since a campaign reads through to its
+world's library. That makes this half bigger by the number of DESCRIBED world
+images, which is the number worth watching if this ever needs a limit: an
+undescribed picture is not a candidate at all. An
 earlier draft of this docstring claimed cost scaled with scene size and not
 library size, which was simply false of that half. Measured, a 300-image
 described library costs ~9ms to assemble and ~4ms to rank by keyword, and
@@ -116,7 +120,6 @@ from .. import (
     config,
     embed_space,
     entities,
-    image_descriptions,
     overlay,
     pcs,
     vectors,
@@ -339,10 +342,14 @@ def _record_candidates(cid: str, kind: str, rid: str) -> list[dict]:
 
 
 def _library_candidates(cid: str) -> list[dict]:
-    d = campaign_images.images_dir(cid)
-    names = {i["name"] for i in campaign_images.list_images(cid)}
+    """The library this campaign can see: its own images and its world's.
+
+    `read_descriptions` rather than a read of `images_dir`, which now holds only
+    the campaign's own uploads -- resolving against that directory would offer
+    the narrator none of the world's art, however carefully it was described.
+    """
     out = []
-    for name, text in sorted(image_descriptions.read_in(d, names=names).items()):
+    for name, text in sorted(campaign_images.read_descriptions(cid).items()):
         if not text.strip():
             continue
         out.append({"kind": LIBRARY, "id": "", "vid": "", "name": name,
@@ -649,9 +656,7 @@ def _resolved(cid: str, kind: str, rid: str, name: str, sid: str) -> dict | None
     if kind == LIBRARY:
         if campaign_images.image_path(cid, name) is None:
             return None
-        d = campaign_images.images_dir(cid)
-        names = {i["name"] for i in campaign_images.list_images(cid)}
-        text = image_descriptions.read_in(d, names=names).get(name, "")
+        text = campaign_images.read_descriptions(cid).get(name, "")
         return {"url": url_for(cid, LIBRARY, "", "", name),
                 "description": text.strip()} if text.strip() else None
     vid = _version(cid, kind, rid)

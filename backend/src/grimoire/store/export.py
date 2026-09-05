@@ -45,11 +45,17 @@ from .scenes import serialize as scenes_serialize
 # with that image silently degraded to its alt text.
 _IMG_URL = re.compile(
     r"/api/(?:"
-    # The campaign's own image library: campaign-scoped, and the one shape with
-    # no record between the scope and `/images/` -- so it is spelled out as its
-    # own alternative rather than as an empty branch below, which would also
-    # have matched a `/api/worlds/<wid>/images/<name>` the app never writes.
+    # A library image: no record between the scope and `/images/`. Two named
+    # groups rather than one widened alternative, because the group has to say
+    # WHICH scope was written -- `(?P<lib>images)` captures the literal segment,
+    # not the scope, so a shared group would leave `_resolve_image` unable to
+    # tell a campaign-shaped URL from a world-shaped one.
+    #
+    # The world shape is written now: a lore body can embed the world's own
+    # library image, and a campaign inherits that body. This comment used to say
+    # the app never writes it.
     r"campaigns/[^/\s]+/(?P<lib>images)"
+    r"|worlds/[^/\s]+/(?P<wlib>images)"
     r"|(?:worlds|campaigns)/[^/\s]+/(?:"
     # `actor` carries the base as well as matching the segment: characters and
     # PCs address their images identically, differing only in the folder the
@@ -158,14 +164,22 @@ def _resolve_image(cid: str, m: re.Match) -> Path | None:
 
     Record images resolve through the campaign overlay: campaign tree first,
     then the campaign's world, with a campaign asset tombstone hiding an
-    inherited image (greeting images only live world-side). The campaign's own
-    library resolves campaign-side and only there -- it inherits nothing."""
-    if m["lib"]:
-        # No overlay: the campaign library is campaign-local and inherits
-        # nothing (`store.campaign_images`). Resolved against the campaign being
-        # EXPORTED, not against the id written in the URL -- which is what makes
-        # a forked campaign's book carry the fork's own copy of the image rather
-        # than reaching back into the campaign it branched from.
+    inherited image (greeting images only live world-side).
+
+    A library image resolves through `campaign_images`, which is the campaign's
+    own view of that library -- its uploads, then a tombstone check, then the
+    world's. BOTH URL shapes go through it, including the world-shaped one a
+    lore body can carry: that body is being exported *for this campaign*, and
+    resolving it world-side would pack the one picture the reader hid. What
+    the campaign has not hidden still falls through to the world, so nothing
+    else changes.
+
+    Resolved against the campaign being EXPORTED, not against the id written in
+    the URL -- which is what makes a forked campaign's book carry its own copies
+    rather than reaching back into the campaign it branched from, and is the
+    rule the record branch below already follows for world-shaped URLs.
+    """
+    if m["lib"] or m["wlib"]:
         return _first(lambda n: campaign_images.image_path(cid, n), m["name"])
     if m["actor"]:
         rid, vid, base = m["aid"], m["vid"], m["actor"]

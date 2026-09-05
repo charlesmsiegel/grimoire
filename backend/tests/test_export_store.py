@@ -18,6 +18,7 @@ from grimoire.store import (
     covers,
     entities,
     export,
+    image_library,
     pcs,
     scenes,
     worlds,
@@ -98,14 +99,14 @@ def test_rewrite_images_packs_a_campaign_library_image(monkeypatch, tmp_path):
 def test_every_name_the_library_accepts_is_a_url_the_export_can_read_back(monkeypatch, tmp_path, name):
     """The two ends of one rule, checked against each other.
 
-    `campaign_images.addressable` decides what may be stored; `export._IMG_URL`
+    `image_library.addressable` decides what may be stored; `export._IMG_URL`
     decides what can be resolved back out of a post. They are written in
     different files in different notations, and a name the first accepts and the
     second cannot match is a book that silently drops the image -- so the
     interesting cases are the ones neither author would think to try.
     """
     _wid, cid = _campaign(monkeypatch, tmp_path)
-    assert campaign_images.addressable(name)
+    assert image_library.addressable(name)
     campaign_images.put_image(cid, name, _img(), "png")
     images = export.Images()
     out = export.rewrite_images(f"![{name}](/api/campaigns/{cid}/images/{name})", cid, images)
@@ -129,15 +130,47 @@ def test_a_forked_campaigns_book_carries_its_own_library_copy(monkeypatch, tmp_p
     assert list(images.by_path) == [campaign_images.image_path(branch, "coastline")]
 
 
-def test_a_world_scoped_library_url_is_not_a_shape_the_app_writes(monkeypatch, tmp_path):
-    """The campaign library branch is spelled out as its own alternative rather
-    than as an empty one inside the shared `(worlds|campaigns)` prefix, which
-    would also have matched `/api/worlds/<wid>/images/<name>` -- a URL nothing
-    serves and nothing writes."""
+def test_a_world_scoped_library_url_is_now_a_shape_the_app_writes(monkeypatch, tmp_path):
+    """This shape used to be one nothing served and nothing wrote, and the
+    campaign branch was spelled out separately precisely so it could not match.
+
+    The world now has an image library of its own, and a lore body can embed
+    one of its pictures -- a body every campaign on that world inherits. A URL
+    shape missing from `_IMG_URL` is not a rendering bug, it is a book shipped
+    with that image silently degraded to its alt text, so it is matched now and
+    the two shapes have separate groups: the group has to say which scope was
+    written, and `(?P<lib>images)` captures the segment rather than the scope.
+    """
     wid, cid = _campaign(monkeypatch, tmp_path)
-    assert export._IMG_URL.match(f"/api/worlds/{wid}/images/coastline") is None
-    assert export.rewrite_images(
-        f"![c](/api/worlds/{wid}/images/coastline)", cid, export.Images()) == "c"
+    from grimoire.store import world_images
+    world_images.put_image(wid, "coastline", _img(), "png")
+
+    m = export._IMG_URL.match(f"/api/worlds/{wid}/images/coastline")
+    assert m is not None and m["wlib"] and not m["lib"]
+
+    images = export.Images()
+    out = export.rewrite_images(
+        f"![c](/api/worlds/{wid}/images/coastline)", cid, images)
+    assert out == "![c](images/img-000.png)"
+    assert list(images.by_path) == [world_images.image_path(wid, "coastline")]
+
+
+def test_a_hidden_library_image_degrades_to_alt_text_in_either_url_shape(
+        monkeypatch, tmp_path):
+    """Both shapes resolve through the campaign's own view of the library, so a
+    picture this campaign hid does not reach its book by the back door. A
+    world-shaped URL in an inherited lore body is still being exported *for
+    this campaign*."""
+    from grimoire.store import world_images
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    world_images.put_image(wid, "coastline", _img(), "png")
+    campaign_images.delete_image(cid, "coastline")      # hidden here
+
+    for url in (f"/api/campaigns/{cid}/images/coastline",
+                f"/api/worlds/{wid}/images/coastline"):
+        images = export.Images()
+        assert export.rewrite_images(f"![c]({url})", cid, images) == "c"
+        assert list(images.by_path) == []
 
 
 def test_rewrite_images_honors_asset_tombstone(monkeypatch, tmp_path):

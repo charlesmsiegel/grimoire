@@ -553,3 +553,52 @@ def test_the_scrub_runs_after_resolution_not_before(world, sid):
     out = art.resolve_handles(camp, "[[art:campaign:coastline]] and [[art:campaign]]", sid)
     assert out.startswith("![A hand-drawn map")
     assert "[[art:" not in out
+
+
+# ---- the world's library reaches the narrator -----------------------------
+
+def test_a_described_world_image_is_offered_to_a_campaign(monkeypatch, tmp_path):
+    """The pool is the campaign's view of the library, so a picture described
+    once in the world is offerable in every campaign on it -- which is the whole
+    reason the library moved up a level."""
+    from grimoire.store import campaign_images, campaigns, world_images, worlds
+    from grimoire.store.context import art
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    world_images.put_image(wid, "coastline", _art_png(), "png")
+    world_images.set_description(wid, "coastline", "a rocky shore at dusk")
+
+    cands = art.candidates(cid, [], None, [])
+    lib = [c for c in cands if c["kind"] == art.LIBRARY]
+    assert [c["name"] for c in lib] == ["coastline"]
+    # campaign-scoped URL and the ordinary library handle: an inherited picture
+    # is not a new kind, it is the same kind resolving one level further out
+    assert lib[0]["handle"] == "[[art:campaign:coastline]]"
+    assert lib[0]["url"] == f"/api/campaigns/{cid}/images/coastline"
+    assert art._resolved(cid, art.LIBRARY, "", "coastline", "s1") is not None
+
+
+def test_a_hidden_world_image_is_not_offered(monkeypatch, tmp_path):
+    from grimoire.store import campaign_images, campaigns, world_images, worlds
+    from grimoire.store.context import art
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    world_images.put_image(wid, "coastline", _art_png(), "png")
+    world_images.set_description(wid, "coastline", "a rocky shore at dusk")
+    campaign_images.delete_image(cid, "coastline")
+
+    assert [c for c in art.candidates(cid, [], None, []) if c["kind"] == art.LIBRARY] == []
+    assert art._resolved(cid, art.LIBRARY, "", "coastline", "s1") is None
+
+
+def _art_png() -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()
