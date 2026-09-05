@@ -38,7 +38,7 @@ def _require_user_root(mid: str) -> Path:
     return root
 
 
-def recover() -> set[str]:
+def recover() -> set[str | None]:
     """Replay leftover journals idempotently; delete staging debris. Runs
     under _M (startup + start of every edit). A journal is only written
     after staging validated, so the cases are exact (spec: Recovery).
@@ -59,14 +59,19 @@ def recover() -> set[str]:
     named here: journals replay in nonce order, which is random, so a second
     journal written behind a stuck one could replay first and leave the
     sheets renamed to a name the pack no longer has. A journal whose module
-    could not be read is reported as `""`, which refuses every edit."""
+    could not be read is reported as `None`, which refuses every edit."""
     with _M:
         return _recover_locked()
 
 
-def _recover_locked() -> set[str]:
+def edits_blocked(mid: str, stuck: set[str | None]) -> bool:
+    """Does `recover()`'s answer refuse an edit to `mid`?"""
+    return mid in stuck or None in stuck
+
+
+def _recover_locked() -> set[str | None]:
     d = _staging_root()
-    stuck: set[str] = set()
+    stuck: set[str | None] = set()
     if d.is_dir():
         journals = sorted(d.glob("*.journal.json"))
         quarantined: set[str] = set()
@@ -109,32 +114,30 @@ def _read_journal(jp: Path) -> dict | None:
     return j if isinstance(j, dict) else None
 
 
-def _journal_mid(jp: Path) -> str:
-    """The module a journal is for, or "" when that cannot be read."""
+def _journal_mid(jp: Path) -> str | None:
+    """The module a journal is for, or None when that cannot be read."""
     j = _read_journal(jp)
     mid = str(j.get("mid") or "") if j else ""
-    return mid if modules_pack._safe_mid(mid) else ""
+    return mid if modules_pack._safe_mid(mid) else None
 
 
 _MIGRATION_OPS = ("field", "sheet_type", "content")
 
 
 def _well_formed_migration(mig: object) -> bool:
-    """Does a journal's `migration` carry every key its op will read?
+    """Does a journal's `migration` carry what `_migrate_file` indexes
+    unconditionally -- an op it knows, and string `from`/`to`?
 
-    `_migrate_file` indexes `from`/`to` (and `kind`, for content) without
-    checking, which is right for a migration `rename` built a moment ago and
-    wrong for one read back from disk: a journal torn mid-write can parse as
-    JSON and still lack a key, and a KeyError out of replay is exactly the
-    startup abort the OSError handling in `recover` exists to prevent.
+    Exactly that and no more: `sheet_types` and `kind` are read through
+    `.get` there, so their absence is tolerated by the reader and must be
+    tolerated here, or a check stricter than the code it guards would
+    quarantine a journal `rename` wrote correctly. The check exists because a
+    journal torn mid-write can parse as JSON and still lack a key, and a
+    KeyError out of replay is the startup abort the OSError handling in
+    `recover` exists to prevent.
     """
-    if not isinstance(mig, dict) or mig.get("op") not in _MIGRATION_OPS:
-        return False
-    if not isinstance(mig.get("from"), str) or not isinstance(mig.get("to"), str):
-        return False
-    if mig["op"] == "field" and not isinstance(mig.get("sheet_types"), list):
-        return False
-    return not (mig["op"] == "content" and not isinstance(mig.get("kind"), str))
+    return (isinstance(mig, dict) and mig.get("op") in _MIGRATION_OPS
+            and isinstance(mig.get("from"), str) and isinstance(mig.get("to"), str))
 
 
 def _replay_journal(jp: Path, quarantined: set[str]) -> None:
@@ -154,7 +157,6 @@ def _replay_journal(jp: Path, quarantined: set[str]) -> None:
         quarantined.add(jp.name)
         jp.rename(jp.with_suffix(".bad"))
         return
-    assert j is not None  # a safe mid parsed out of it
     base = d / nonce
     staging = base / mid
     live = modules_pack.user_dir() / mid
@@ -202,19 +204,20 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
         return None
     if not isinstance(data, dict):
         return None
+    # `fields` IS `data["fields"]` when that is a dict, edited in place below;
+    # when it is not (a list, a string), it is a throwaway `{}` that neither
+    # field op can match anything in, so nothing is written back. The rewrite
+    # used to end with `data["fields"] = fields` regardless, which on a TYPE
+    # rename replaced a malformed value with `{}` -- a migration quietly
+    # editing what it did not migrate. The reader flags such a sheet as
+    # invalid either way; the file should still say why.
     fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
     changed = False
     op = mig.get("op")
-    # `data["fields"]` is reassigned only by the two ops that edit it. A type
-    # rename touches `sheet_type` alone, and writing `fields` back from that
-    # branch replaced a malformed value (a list, a string) with `{}` -- a
-    # migration quietly editing what it did not migrate. The reader flags such
-    # a sheet as invalid either way; the file should still say why.
     if op == "field":
         if data.get("sheet_type") in (mig.get("sheet_types") or []) \
                 and mig["from"] in fields and mig["to"] not in fields:
             fields[mig["to"]] = fields.pop(mig["from"])
-            data["fields"] = fields
             changed = True
     elif op == "sheet_type":
         if data.get("sheet_type") == mig["from"]:
@@ -226,7 +229,6 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
         for k, v in list(fields.items()):
             if isinstance(v, list) and marker in v:
                 fields[k] = [repl if e == marker else e for e in v]
-                data["fields"] = fields
                 changed = True
     if changed:
         data["gen"] = uuid.uuid4().hex
@@ -465,8 +467,7 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
     the writer from the LIVE pack before mutation) surfaces impact.sheet_types
     for non-migration writers, which otherwise report it empty (P2-3)."""
     with _M:
-        stuck = recover()
-        if mid in stuck or "" in stuck:
+        if edits_blocked(mid, recover()):
             why = "a previous edit to this module is still being recovered; retry in a moment"
             return {"ok": False, "display_errors": [], "errors": [why]}
         live = _require_user_root(mid)

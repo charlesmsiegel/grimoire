@@ -94,17 +94,18 @@ def _prune_node(node, groups: AbstractSet[str], names: AbstractSet[str]):
 
 
 def _prune_layout(root: Path, *, in_scope: set[str], group: str | None = None,
-                  names: AbstractSet[str] = frozenset(), groups: AbstractSet[str] = frozenset(),
+                  names: AbstractSet[str] = frozenset(),
+                  dropped_groups: AbstractSet[str] = frozenset(),
                   drop_type: str | None = None) -> None:
     """Cascade-cosmetic prune, SCOPED to the sheet types that compose the
     edited container (codex plan review: a global prune would strip a
     disjoint type's same-spelled field from its own layout). `group` prunes
     apply everywhere (group ids are globally unique -- a deleted group is
-    gone from every type); `names` and `groups` prunes run through the
-    fragment-specialization walk so a fragment shared with out-of-scope
-    types is cloned-pruned-repointed, never damaged in place. `groups` is
-    the scoped form: a type that stopped composing a group loses that
-    group's node while every other type keeps its own."""
+    gone from every type); `names` and `dropped_groups` prunes run through
+    the fragment-specialization walk so a fragment shared with out-of-scope
+    types is cloned-pruned-repointed, never damaged in place. `dropped_groups`
+    is the scoped counterpart of `group`: a type that stopped composing a
+    group loses that group's node while every other type keeps its own."""
     layout = _read_json(root, "layout.json")
     if not layout:
         return
@@ -122,10 +123,10 @@ def _prune_layout(root: Path, *, in_scope: set[str], group: str | None = None,
                     entries.pop(key)
                 else:
                     entries[key] = pruned
-    if names or groups:
+    if names or dropped_groups:
         layout = _specialize_layout(
             layout, in_scope,
-            lambda node: _prune_node(node, frozenset(groups), names))
+            lambda node: _prune_node(node, frozenset(dropped_groups), names))
     _write_json(root, "layout.json", layout)
 
 

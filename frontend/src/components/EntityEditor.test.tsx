@@ -1490,6 +1490,29 @@ test("a stored choice value is not called 'not an option' while the list has not
   expect(picker.value).toBe("temperate-interior");
   expect(within(picker).getByText("temperate-interior")).toBeInTheDocument();
   expect(within(picker).queryByText(/not an option/)).toBeNull();
+  // ...and the failure is said under the control, not left as an empty picker
+  expect(await screen.findByText(/Could not load the choices/)).toBeInTheDocument();
+});
+
+test("a stored number field value the number input cannot show gets a text box", async () => {
+  // A hand-written `wet` is sanitized to blank by <input type="number">, which
+  // would make the field look unfilled while it still holds the value. The
+  // text box shows it, and the boundary will say what is wrong on save.
+  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "fogbank", name: "Fogbank", persistence: "wet" }, body: "grey" });
+  render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Fogbank"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  const input = await screen.findByLabelText<HTMLInputElement>("Weather persistence");
+  expect(input.type).toBe("text");
+  expect(input.value).toBe("wet");
+  // Once the value parses, the same element becomes a number input (React
+  // changes the attribute, not the node, so the caret stays) with the value kept.
+  fireEvent.change(input, { target: { value: "0.4" } });
+  const after = screen.getByLabelText<HTMLInputElement>("Weather persistence");
+  expect(after.type).toBe("number");
+  expect(after.value).toBe("0.4");
 });
 
 test("the sidebar names a chosen option by its label", async () => {

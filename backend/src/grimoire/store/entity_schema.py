@@ -248,11 +248,11 @@ def _valid_number(spec: dict[str, Any], value: object) -> bool:
     # and silently replaces with the climate's own persistence. That is a save
     # that reports success and never takes effect -- the exact failure this
     # boundary exists to prevent.
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return False
     try:
-        parsed = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError, OverflowError):
+        parsed = float(value)
+    except (ValueError, OverflowError):
         # OverflowError: `fields` is an untyped dict, so a JSON integer like
         # 10**1000 arrives as a Python int with no float value. Uncaught it
         # escapes _check_fields as a 500 instead of the 400 it is.
