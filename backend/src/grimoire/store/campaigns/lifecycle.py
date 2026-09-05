@@ -235,9 +235,26 @@ def ensure_campaign_slim(cid: str) -> None:
             elif spent(entities.entity_hash(root, kind, eid), entities.entity_hash(wroot, kind, eid)):
                 redundant.append(ref)
                 manifest.pop(ref)
-        for ref in deleted_by_user:
-            overlay.add_deleted(cid, ref)
-        _tombstone_deleted_copied_assets(cid, root, wroot, copied)
+        # ONE hold across both, not a lock per ref and not a lock per call.
+        # `add_deleted` takes `campaign_lock` itself now (it is a whole-file
+        # rewrite of `deleted.json`), and left to do that per ref this would be
+        # N advisory file-lock acquisitions -- but the reason the hold belongs
+        # HERE is atomicity, not cost: `_tombstone_deleted_copied_assets` opens
+        # by reading `overlay.deleted(cid)` and writes back from it, so with two
+        # separate holds that read sits outside the one covering the loop above,
+        # and the second half can raise `CampaignBusy` after the first has
+        # already committed. The migration's tombstone set lands whole, which it
+        # did not before.
+        #
+        # The consequence, stated rather than discovered: `ensure_campaign_slim`
+        # can now raise `CampaignBusy`, and it runs lazily on ordinary read
+        # paths (`routes/common.py`'s lazy slim), so a contended campaign can
+        # answer 409 where it previously could not. A retryable 409 in exchange
+        # for a campaign that can no longer be left half-migrated.
+        with locks.campaign_lock(cid):
+            for ref in deleted_by_user:
+                overlay.add_deleted(cid, ref)
+            _tombstone_deleted_copied_assets(cid, root, wroot, copied)
         # Reserve, unlink, drop -- the same two-step `overlay._recorded_base` uses,
         # run backwards. Dropping the ref outright and then unlinking would leave an
         # interrupted prune as a copy the manifest does not name, and nothing on

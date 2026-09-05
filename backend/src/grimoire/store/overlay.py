@@ -136,13 +136,54 @@ def deleted(cid: str) -> set[str]:
 
 
 def add_deleted(cid: str, ref: str) -> None:
-    atomic.write_text(_deleted_path(cid), json.dumps(sorted(deleted(cid) | {ref}), indent=2) + "\n")
+    """Tombstone one ref, UNDER `campaign_lock`.
+
+    `deleted.json` is rewritten whole, so two unlocked writers lose one of the
+    two -- and what a lost tombstone does is resurrect a record or an image the
+    user deleted, which `deleted()` above names as the one direction of failure
+    a user cannot spot by looking. Reentrant, so the callers already inside a
+    hold pay nothing. `add_detached` is the precedent: same file, same shape,
+    already locked.
+    """
+    with locks.campaign_lock(cid):
+        atomic.write_text(_deleted_path(cid),
+                          json.dumps(sorted(deleted(cid) | {ref}), indent=2) + "\n")
 
 
 def _drop_deleted(cid: str, refs: set[str]) -> None:
-    keep = deleted(cid) - refs
-    if keep != deleted(cid):
-        atomic.write_text(_deleted_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
+    """Untombstone, under the same lock and for the same reason -- it is the
+    same whole-file rewrite read backwards."""
+    with locks.campaign_lock(cid):
+        keep = deleted(cid) - refs
+        if keep != deleted(cid):
+            atomic.write_text(_deleted_path(cid),
+                              json.dumps(sorted(keep), indent=2) + "\n")
+
+
+def library_ref(name: str) -> str:
+    """``assets/library/<name>`` -- how a campaign records hiding one of its
+    world's library images (`store.world_images`).
+
+    A third ref shape beside the flat `<kind>/<id>` and the per-asset
+    `assets/<base>/<aid>/<vid>/<name>`, and it cannot be confused with either:
+    every asset ref has five segments and a base drawn from the kind roster,
+    and `library` is not a kind. Public rather than private because
+    `store.campaign_images` builds and tests it on every read, and a private
+    name reached across a module boundary is what the import rule is about.
+    """
+    return f"assets/library/{name}"
+
+
+def drop_library_tombstone(cid: str, name: str) -> None:
+    """Un-hide one inherited library image.
+
+    The public door onto `_drop_deleted` for this ref shape, needed by two
+    callers with no other way in: the campaign's Restore, and
+    `world_images.delete_image`'s sweep of the campaigns that hid an image the
+    world no longer has. `forget_world_record` is the record-shaped equivalent
+    and cannot serve, since a library image has no record.
+    """
+    _drop_deleted(cid, {library_ref(name)})
 
 
 # ---- detached refs ----

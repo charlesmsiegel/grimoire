@@ -138,6 +138,7 @@ from . import (
     voice_anchors,
     voice_drift,
     world_bundle,
+    world_images,
     worlds,
     ziputil,
 )
@@ -217,6 +218,7 @@ __all__ = [
     "worlds",
     "WorldNotFound",
     "world_bundle",
+    "world_images",
     "BundleError",
     "ziputil",
     "campaigns",
