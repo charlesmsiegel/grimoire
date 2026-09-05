@@ -38,7 +38,7 @@ def _require_user_root(mid: str) -> Path:
     return root
 
 
-def recover() -> None:
+def recover() -> set[str]:
     """Replay leftover journals idempotently; delete staging debris. Runs
     under _M (startup + start of every edit). A journal is only written
     after staging validated, so the cases are exact (spec: Recovery).
@@ -47,11 +47,32 @@ def recover() -> None:
     process (a crashed edit followed by more requests, not just startup)
     that must exclude LLM flows exactly like a normal swap, so any journal
     that will publish or migrate replays under all campaign locks (codex
-    plan review: recovery without them re-opens the R1 race)."""
+    plan review: recovery without them re-opens the R1 race).
+
+    Returns the ids of modules with a journal that is STUCK: parsed and
+    safe, but its replay died on I/O -- a rename refused, a sheet rewrite
+    failing under `_run_migration`. Such a journal is left where it is
+    (replay is idempotent, so the next call finishes it) rather than
+    propagated, because this runs from lifespan and from the head of every
+    edit, and neither an aborted startup nor an exception past `_apply`'s
+    result-dict contract is an answer. `_apply` refuses an edit to a module
+    named here: journals replay in nonce order, which is random, so a second
+    journal written behind a stuck one could replay first and leave the
+    sheets renamed to a name the pack no longer has. A journal whose module
+    could not be read is reported as `""`, which refuses every edit."""
     with _M:
-        d = _staging_root()
-        if not d.is_dir():
-            return
+        stuck = _recover_locked()
+    # Returned outside the `with` on purpose, and the ruff marker says so: `_M`
+    # is the cross-process module-edit lock, whose `__exit__` mypy reads as
+    # able to swallow an exception, so a return inside the block is a missing
+    # return to it (the finding `_apply` carries in the baseline).
+    return stuck  # noqa: RET504
+
+
+def _recover_locked() -> set[str]:
+    d = _staging_root()
+    stuck: set[str] = set()
+    if d.is_dir():
         journals = sorted(d.glob("*.journal.json"))
         quarantined: set[str] = set()
         if journals:
@@ -60,15 +81,10 @@ def recover() -> None:
                     try:
                         _replay_journal(jp, quarantined)
                     except OSError as e:
-                        # A replay that dies on I/O -- a rename refused, a
-                        # sheet rewrite failing under `_run_migration` -- must
-                        # not abort startup (lifespan calls this) or escape
-                        # `_apply`, whose callers are promised a result dict.
-                        # The journal is left where it is: replay is
-                        # idempotent, so the next recover() finishes it. It
-                        # counts as quarantined for the sweep below, since its
+                        # Counts as quarantined for the sweep below, since its
                         # staging dir may still be the only copy of the pack.
                         quarantined.add(jp.name)
+                        stuck.add(_journal_mid(jp))
                         logs.record("error", __name__,
                                     f"module journal replay failed: {jp.name}: {e}",
                                     kind="module_edit")
@@ -87,25 +103,63 @@ def recover() -> None:
             for p in list(d.iterdir()):
                 if p.is_dir():
                     shutil.rmtree(p, ignore_errors=True)
+    return stuck
 
 
-def _replay_journal(jp: Path, quarantined: set[str]) -> None:
-    """Replay one journal. A journal that fails to parse or carries an
-    unsafe mid/nonce is QUARANTINED (renamed .journal.bad, its nonce dir
-    kept) — never acted on: deriving paths from a torn journal could
-    rmtree the whole recovery area (nonce '' → base == .module-staging) or
-    walk outside it (codex plan review round 2)."""
-    d = _staging_root()
+def _read_journal(jp: Path) -> dict | None:
     try:
         j = json.loads(jp.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-        j = None
-    mid = str(j.get("mid") or "") if isinstance(j, dict) else ""
-    nonce = str(j.get("nonce") or "") if isinstance(j, dict) else ""
-    if not modules_pack._safe_mid(mid) or not safe_id(nonce):
+        return None
+    return j if isinstance(j, dict) else None
+
+
+def _journal_mid(jp: Path) -> str:
+    """The module a journal is for, or "" when that cannot be read."""
+    j = _read_journal(jp)
+    mid = str(j.get("mid") or "") if j else ""
+    return mid if modules_pack._safe_mid(mid) else ""
+
+
+_MIGRATION_OPS = ("field", "sheet_type", "content")
+
+
+def _well_formed_migration(mig: object) -> bool:
+    """Does a journal's `migration` carry every key its op will read?
+
+    `_migrate_file` indexes `from`/`to` (and `kind`, for content) without
+    checking, which is right for a migration `rename` built a moment ago and
+    wrong for one read back from disk: a journal torn mid-write can parse as
+    JSON and still lack a key, and a KeyError out of replay is exactly the
+    startup abort the OSError handling in `recover` exists to prevent.
+    """
+    if not isinstance(mig, dict) or mig.get("op") not in _MIGRATION_OPS:
+        return False
+    if not isinstance(mig.get("from"), str) or not isinstance(mig.get("to"), str):
+        return False
+    if mig["op"] == "field" and not isinstance(mig.get("sheet_types"), list):
+        return False
+    return not (mig["op"] == "content" and not isinstance(mig.get("kind"), str))
+
+
+def _replay_journal(jp: Path, quarantined: set[str]) -> None:
+    """Replay one journal. A journal that fails to parse, carries an unsafe
+    mid/nonce, or names a migration missing what its op reads is QUARANTINED
+    (renamed .journal.bad, its nonce dir kept) — never acted on: deriving
+    paths from a torn journal could rmtree the whole recovery area (nonce ''
+    → base == .module-staging) or walk outside it (codex plan review round
+    2), and replaying a torn migration would raise out of startup."""
+    d = _staging_root()
+    j = _read_journal(jp)
+    mid = str(j.get("mid") or "") if j else ""
+    nonce = str(j.get("nonce") or "") if j else ""
+    migration = j.get("migration") if j else None
+    if (not modules_pack._safe_mid(mid) or not safe_id(nonce)
+            or (migration is not None and not _well_formed_migration(migration))):
         quarantined.add(jp.name)
         jp.rename(jp.with_suffix(".bad"))
         return
+    assert j is not None  # a safe mid parsed out of it
     base = d / nonce
     staging = base / mid
     live = modules_pack.user_dir() / mid
@@ -118,10 +172,10 @@ def _replay_journal(jp: Path, quarantined: set[str]) -> None:
         published = True
     elif live.exists():
         published = True  # post-swap crash: trash cleanup + migration
-    if published and isinstance(j.get("migration"), dict):
+    if published and isinstance(migration, dict):
         # `recovering`: the dead pass may have renamed some sheets already, and
         # an idempotent migration cannot tell which -- see `_run_migration`.
-        _run_migration(mid, j["migration"], recovering=True)
+        _run_migration(mid, migration, recovering=True)
     shutil.rmtree(base, ignore_errors=True)
     jp.unlink(missing_ok=True)
 
@@ -416,7 +470,10 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
     the writer from the LIVE pack before mutation) surfaces impact.sheet_types
     for non-migration writers, which otherwise report it empty (P2-3)."""
     with _M:
-        recover()
+        stuck = recover()
+        if mid in stuck or "" in stuck:
+            why = "a previous edit to this module is still being recovered; retry in a moment"
+            return {"ok": False, "display_errors": [], "errors": [why]}
         live = _require_user_root(mid)
         nonce = uuid.uuid4().hex
         base = _staging_root() / nonce

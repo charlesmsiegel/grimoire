@@ -204,28 +204,35 @@ const OPTION_SOURCES: Record<OptionSource, () => Promise<ChoiceOption[]>> = {
 };
 
 /** The options a `choice` spec offers: its literal list, or what its source
- *  answered (nothing yet while that is in flight). */
+ *  answered. `null` while the source is still in flight or after it failed --
+ *  a list that has not arrived is not an empty list, and only one that has can
+ *  say a stored value is not on it. */
 function choiceOptions(spec: EntityFieldSpec,
-                       loaded: Record<string, ChoiceOption[]>): ChoiceOption[] {
+                       loaded: Record<string, ChoiceOption[]>): ChoiceOption[] | null {
   if (spec.options) return spec.options.map((o) => ({ value: o, label: o }));
-  return loaded[spec.key] ?? [];
+  return loaded[spec.key] ?? null;
 }
 
 /** A `choice` as a picker. A stored value none of the options answers to -- a
  *  climate since deleted, a hand-edited file -- is kept as a row of its own so
  *  it is VISIBLE and clearable rather than silently blanked on the next save,
- *  the same reason `RefField` keeps a dangling ref. */
+ *  the same reason `RefField` keeps a dangling ref. It is called "not an
+ *  option" only once the list has actually arrived; until then (and after a
+ *  failed load) the value is simply shown, because a request outage is not a
+ *  fact about the value. */
 function ChoiceField({ spec, options, value, onChange }: {
-  spec: EntityFieldSpec; options: ChoiceOption[]; value: string;
+  spec: EntityFieldSpec; options: ChoiceOption[] | null; value: string;
   onChange: (v: string) => void;
 }) {
-  const unknown = value !== "" && !options.some((o) => o.value === value);
+  const listed = options !== null && options.some((o) => o.value === value);
   return (
     <Field key={spec.key} label={spec.label}>
       <select value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">(none)</option>
-        {unknown && <option value={value}>{value} (not an option)</option>}
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {value !== "" && !listed && (
+          <option value={value}>{options === null ? value : `${value} (not an option)`}</option>
+        )}
+        {(options ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </Field>
   );
@@ -428,7 +435,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
    *  when the option is known, anything else as stored. */
   const displayValue = (spec: EntityFieldSpec, value: string) =>
     spec.widget === "choice"
-      ? (choiceOptions(spec, choiceOpts).find((o) => o.value === value)?.label ?? value)
+      ? (choiceOptions(spec, choiceOpts)?.find((o) => o.value === value)?.label ?? value)
       : value;
 
   useEffect(() => {

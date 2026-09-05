@@ -7,9 +7,9 @@
     "@typescript-eslint/no-unnecessary-type-assertion": 61
   },
   "frontend/src/api/client.ts": {
-    "@typescript-eslint/no-unsafe-argument": 11,
-    "@typescript-eslint/no-unsafe-assignment": 5,
-    "@typescript-eslint/no-unsafe-member-access": 10,
+    "@typescript-eslint/no-unsafe-argument": 7,
+    "@typescript-eslint/no-unsafe-assignment": 3,
+    "@typescript-eslint/no-unsafe-member-access": 6,
     "@typescript-eslint/restrict-plus-operands": 1
   },
   "frontend/src/components/BackupsPanel.tsx": {

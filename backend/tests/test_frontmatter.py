@@ -53,9 +53,26 @@ def test_four_dashes_are_not_the_closing_fence_of_an_empty_block():
     # The empty-block special case reads the closing fence at rest[0]; a
     # `startswith("---")` there took `----` for it and handed back `-` as the
     # first line of the body. A fence is a whole line, so this is a document
-    # with no frontmatter at all -- which is what the general path says too.
+    # with no frontmatter at all.
     text = "---\n----\nbody\n"
     assert parse_frontmatter(text) == ({}, text)
+
+
+def test_a_fence_is_a_whole_line_in_both_parsers(tmp_path):
+    # The same rule on the general path and in the head parser, held against
+    # each other: a list endpoint and a full read must not describe one file
+    # differently. `----` after a block is a body line (an unterminated block,
+    # so no frontmatter); a real `---` later closes it.
+    cases = {
+        "---\nk: v\n----\nbody\n": ({}, "---\nk: v\n----\nbody\n"),
+        "---\n----\nk: v\n---\nbody\n": ({"k": "v"}, "body\n"),
+        "---\nk: v\n---x\n---\nbody\n": ({"k": "v"}, "body\n"),
+    }
+    for text, expected in cases.items():
+        assert parse_frontmatter(text) == expected, text
+        p = tmp_path / "f.md"
+        p.write_text(text, encoding="utf-8")
+        assert parse_frontmatter_head(p) == expected[0], text
 
 
 def test_empty_block_still_parses_with_and_without_a_trailing_newline():
