@@ -29,16 +29,6 @@
   "frontend/src/components/CalendarDatePicker.tsx": {
     "react-hooks/exhaustive-deps": 3
   },
-  "frontend/src/components/CampaignCover.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 8
-  },
-  "frontend/src/components/CampaignCover.tsx": {
-    "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 1,
-    "@typescript-eslint/no-unsafe-argument": 2,
-    "@typescript-eslint/no-unsafe-member-access": 2
-  },
   "frontend/src/components/CastPanel.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 3
   },
@@ -86,6 +76,16 @@
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 1,
     "react/no-array-index-key": 1
+  },
+  "frontend/src/components/CoverPanel.test.tsx": {
+    "@typescript-eslint/no-unnecessary-type-assertion": 8
+  },
+  "frontend/src/components/CoverPanel.tsx": {
+    "@typescript-eslint/no-explicit-any": 2,
+    "@typescript-eslint/no-floating-promises": 1,
+    "@typescript-eslint/no-misused-promises": 1,
+    "@typescript-eslint/no-unsafe-argument": 2,
+    "@typescript-eslint/no-unsafe-member-access": 2
   },
   "frontend/src/components/CreationWizard.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 5

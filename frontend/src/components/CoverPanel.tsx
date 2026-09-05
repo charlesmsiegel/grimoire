@@ -52,10 +52,18 @@ export function CoverPanel({ scope }: { scope: CoverScope }) {
     setError(null);
     setBroken(null);
     const mine = cid;
-    (isWorld ? api.getWorld(cid) : api.getCampaign(cid))
-      .then((r: any) => { if (live.current === mine) setVersion(r.meta.cover ?? ""); })
+    // Both payloads carry the token on `meta.cover`, so the read is one shape
+    // and only the endpoint differs — typed as that shape rather than `any`,
+    // which would have made a rename of the field silent on both sides.
+    const read: Promise<{ meta: { cover?: string } }> =
+      isWorld ? api.getWorld(cid) : api.getCampaign(cid);
+    read
+      .then((r) => { if (live.current === mine) setVersion(r.meta.cover ?? ""); })
       .catch(() => { if (live.current === mine) setVersion(""); });
-  }, [cid]);
+    // `isWorld` is in the deps as well as `cid`: it is derived from
+    // `scope.kind`, and a panel handed a different scope for the same id would
+    // otherwise keep reading the endpoint it first mounted with.
+  }, [cid, isWorld]);
 
   async function upload(file: File) {
     const mine = cid;

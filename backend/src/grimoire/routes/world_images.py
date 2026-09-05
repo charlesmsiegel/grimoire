@@ -74,13 +74,13 @@ async def put_world_cover(wid: str, file: UploadFile = File(...)):
         # as `cover.png` cannot be served (or manifested) as PNG (#321).
         ext = store.covers.validate(data)
     except store.covers.CoverTooLarge as exc:
-        raise HTTPException(status_code=413, detail=str(exc))
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except store.covers.CoverInvalid as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         stored = store.covers.put_world_cover(wid, data, ext)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ext": stored, "v": store.covers.world_cover_version(wid)}
 
 
@@ -89,11 +89,12 @@ def delete_world_cover(wid: str):
     _world_or_404(wid)
     try:
         store.covers.delete_world_cover(wid)
-    except OSError:
+    except OSError as exc:
         # `delete_world_cover` confirms the removal rather than swallowing a
         # failed unlink, so this is a cover that is genuinely still there -- a
         # held file on Windows, a read-only store. 200 would be a lie.
-        raise HTTPException(status_code=500, detail="cover could not be removed")
+        raise HTTPException(
+            status_code=500, detail="cover could not be removed") from exc
     return {"ok": True}
 
 
@@ -131,12 +132,12 @@ async def put_world_library_image(wid: str, name: str, file: UploadFile = File(.
     try:
         store.image_library.validate_size(data)
     except store.image_library.ImageTooLarge as exc:
-        raise HTTPException(status_code=413, detail=str(exc))
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
         stored = store.world_images.put_image(wid, name, data, ext)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # `v` so the client can build the immutable `?v=` URL without a second round
     # trip. It resolves and stats, and answers "" rather than raising if the
     # file went between the two -- a write that landed must not report a 500.
@@ -156,8 +157,9 @@ def delete_world_library_image(wid: str, name: str):
     # never resolved.
     try:
         store.world_images.delete_image(wid, name)
-    except OSError:
-        raise HTTPException(status_code=500, detail="image could not be removed")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail="image could not be removed") from exc
     return {"ok": True}
 
 

@@ -15344,7 +15344,7 @@ def test_the_campaign_backlog_leaves_inherited_art_to_the_world(client):
 
 
 def test_restoring_a_name_that_was_never_hidden_is_a_no_op(client):
-    wid, cid = _world_and_campaign(client)
+    _wid, cid = _world_and_campaign(client)
     assert client.post(f"/api/campaigns/{cid}/images/whatever/restore").status_code == 200
 
 

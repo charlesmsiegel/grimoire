@@ -137,6 +137,7 @@
     "voice_anchors",
     "voice_drift",
     "world_bundle",
+    "world_images",
     "worlds",
     "write_config",
     "ziputil"
@@ -302,6 +303,7 @@
     "voice_drift",
     "weather",
     "world_bundle",
+    "world_images",
     "worlds",
     "write_config",
     "ziputil"

@@ -5,8 +5,14 @@ import io
 import pytest
 from PIL import Image
 
-from grimoire.store import (assets, campaign_images, campaigns,
-                            image_library, overlay, world_images, worlds)
+from grimoire.store import (
+    assets,
+    campaign_images,
+    campaigns,
+    image_library,
+    world_images,
+    worlds,
+)
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:

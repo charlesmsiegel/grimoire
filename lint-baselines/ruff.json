@@ -144,9 +144,6 @@
     "PERF401": 1,
     "RUF012": 1
   },
-  "backend/src/grimoire/store/campaign_images.py": {
-    "N818": 1
-  },
   "backend/src/grimoire/store/campaigns/lifecycle.py": {
     "B023": 2,
     "C901": 2
@@ -242,6 +239,9 @@
     "C901": 1,
     "N818": 1,
     "RUF005": 1
+  },
+  "backend/src/grimoire/store/image_library.py": {
+    "N818": 1
   },
   "backend/src/grimoire/store/image_subjects.py": {
     "PERF401": 1

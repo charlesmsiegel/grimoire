@@ -872,23 +872,35 @@ def list_campaign_gallery(cid: str):
                 if base == "greetings":
                     row["subjects"] = subjects.lookup(rid, item["name"])
                 out.append(row)
-    # The library this campaign can see: its own images and the world's alike.
-    # `kind: "campaign"` for BOTH, because this route promises a campaign-scoped
-    # URL on every row it returns and the kind is what names that scope -- an
-    # inherited row cannot be `kind: "world"` here without lying about where its
-    # bytes are served from. Which one it is rides on `record_name`.
+    out.extend(_campaign_library_rows(cid))
+    return out
+
+
+def _campaign_library_rows(cid: str) -> list[dict]:
+    """The library this campaign can see: its own images and the world's alike.
+
+    Its own function because the sweep above was already at the complexity gate
+    and this is a separate question -- everything above walks records, and a
+    library image hangs off none.
+
+    `kind: "campaign"` for BOTH halves, because this route promises a
+    campaign-scoped URL on every row it returns and the kind is what names that
+    scope: an inherited row cannot be `kind: "world"` here without lying about
+    where its bytes are served from. Which one it is rides on `record_name`.
+    """
     descs = store.campaign_images.read_descriptions(cid)
+    rows = []
     for image in store.campaign_images.list_images(cid):
         url = f"/api/campaigns/{quote(cid, safe='')}/images/{quote(image['name'], safe='')}"
         v = quote(image["v"], safe="")
-        out.append({"kind": "campaign", "id": "", "vid": "", "name": image["name"],
-                    "ext": image["ext"],
-                    "record_name": "World library" if image["inherited"]
-                                   else "Campaign library",
-                    "described": image["name"] in descs,
-                    "description": descs.get(image["name"], ""),
-                    "url": f"{url}?v={v}", "thumb": f"{url}?w={THUMB_W}&v={v}"})
-    return out
+        rows.append({"kind": "campaign", "id": "", "vid": "", "name": image["name"],
+                     "ext": image["ext"],
+                     "record_name": "World library" if image["inherited"]
+                                    else "Campaign library",
+                     "described": image["name"] in descs,
+                     "description": descs.get(image["name"], ""),
+                     "url": f"{url}?v={v}", "thumb": f"{url}?w={THUMB_W}&v={v}"})
+    return rows
 
 
 class _GreetingSubjects:

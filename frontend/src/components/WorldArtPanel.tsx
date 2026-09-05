@@ -3,6 +3,14 @@ import { api, type WorldImage } from "../api/client";
 import { CoverPanel } from "./CoverPanel";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 
+/** What went wrong, in the shape `api.request` rejects with (`{detail}`) —
+ *  falling back to the value itself for anything that is not ours. Narrowed
+ *  rather than typed `any`, so a rejection shape that changes shows up here. */
+function reason(e: unknown): string {
+  const detail = (e as { detail?: unknown } | null)?.detail;
+  return typeof detail === "string" ? detail : String(e);
+}
+
 /** A world's own art: its cover, and the image library every campaign on it
  *  reads through to.
  *
@@ -34,8 +42,8 @@ export function WorldArtPanel({ wid }: { wid: string }) {
     try {
       const got = await api.listWorldLibrary(wid);
       if (live.current === mine) { setImages(got); setErr(null); }
-    } catch (e: any) {
-      if (live.current === mine) { setImages([]); setErr(e?.detail ?? String(e)); }
+    } catch (e: unknown) {
+      if (live.current === mine) { setImages([]); setErr(reason(e)); }
     }
   }, [wid]);
 
@@ -48,8 +56,8 @@ export function WorldArtPanel({ wid }: { wid: string }) {
     try {
       await fn();
       if (live.current === mine) await load();
-    } catch (e: any) {
-      if (live.current === mine) setErr(e?.detail ?? String(e));
+    } catch (e: unknown) {
+      if (live.current === mine) setErr(reason(e));
     } finally {
       if (live.current === mine) {
         setBusy(false);

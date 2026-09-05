@@ -561,7 +561,7 @@ def test_a_described_world_image_is_offered_to_a_campaign(monkeypatch, tmp_path)
     """The pool is the campaign's view of the library, so a picture described
     once in the world is offerable in every campaign on it -- which is the whole
     reason the library moved up a level."""
-    from grimoire.store import campaign_images, campaigns, world_images, worlds
+    from grimoire.store import campaigns, world_images, worlds
     from grimoire.store.context import art
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
