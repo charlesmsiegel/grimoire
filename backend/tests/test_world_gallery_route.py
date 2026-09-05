@@ -236,3 +236,61 @@ def test_the_listing_is_ordered_and_stable(client, world):
     assert got == [("characters", "avatar"), ("characters", "gallery_1"),
                    ("characters", "gallery_2"), ("locations", "gallery_1")]
     assert got == [(r["kind"], r["name"]) for r in _gallery(client, world)]
+
+
+# ---- the world's own library, as a gallery base ---------------------------
+
+def _lib_png() -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_the_world_gallery_carries_the_library(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _lib_png(), "image/png")})
+    client.put(f"/api/worlds/{wid}/images/coastline/description",
+               json={"description": "a rocky shore"})
+
+    row = next(r for r in client.get(f"/api/worlds/{wid}/gallery").json()
+               if r["kind"] == "world")
+    assert row["name"] == "coastline" and row["record_name"] == "World library"
+    assert row["id"] == "" and row["vid"] == ""
+    assert row["described"] and row["description"] == "a rocky shore"
+    assert "?v=" in row["url"] and "?w=" in row["thumb"]
+
+
+def test_the_campaign_gallery_names_the_owner_but_serves_it_here(client):
+    """Every row this route returns carries a campaign-scoped URL, and the kind
+    is what names that scope -- so an inherited row is `kind: "campaign"` and
+    says where it came from in `record_name` instead."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns",
+                      json={"name": "Saltmarch Nights", "world": wid}).json()["id"]
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _lib_png(), "image/png")})
+    client.put(f"/api/campaigns/{cid}/images/handout",
+               files={"file": ("h.png", _lib_png(), "image/png")})
+
+    rows = {r["name"]: r for r in client.get(f"/api/campaigns/{cid}/gallery").json()
+            if r["kind"] == "campaign"}
+    assert rows["coastline"]["record_name"] == "World library"
+    assert rows["handout"]["record_name"] == "Campaign library"
+    for r in rows.values():
+        assert r["url"].startswith(f"/api/campaigns/{cid}/images/")
+
+
+def test_a_hidden_image_is_absent_from_the_campaign_gallery(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns",
+                      json={"name": "Saltmarch Nights", "world": wid}).json()["id"]
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _lib_png(), "image/png")})
+    client.delete(f"/api/campaigns/{cid}/images/coastline")
+
+    assert [r for r in client.get(f"/api/campaigns/{cid}/gallery").json()
+            if r["kind"] == "campaign"] == []

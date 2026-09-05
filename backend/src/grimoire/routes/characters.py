@@ -783,6 +783,19 @@ def list_world_gallery(wid: str):
                 row["subjects"] = (subjects[item["id"]].get(item["name"], [])
                                    if item["name"] in answered[item["id"]] else None)
             out.append(row)
+    # The world's own library, which hangs off no record and so is reached by
+    # none of the base walks above. `kind: "world"` is a new kind on this wire
+    # rather than a reuse: `id` and `vid` are empty because there is no record
+    # to name, and the rail labels it from the kind.
+    descs = store.world_images.read_descriptions(wid)
+    for image in store.world_images.list_images(wid):
+        url = f"/api/worlds/{quote(wid, safe='')}/images/{quote(image['name'], safe='')}"
+        v = quote(image["v"], safe="")
+        out.append({"kind": "world", "id": "", "vid": "", "name": image["name"],
+                    "ext": image["ext"], "record_name": "World library",
+                    "described": image["name"] in descs,
+                    "description": descs.get(image["name"], ""),
+                    "url": f"{url}?v={v}", "thumb": f"{url}?w={THUMB_W}&v={v}"})
     return out
 
 
@@ -859,6 +872,22 @@ def list_campaign_gallery(cid: str):
                 if base == "greetings":
                     row["subjects"] = subjects.lookup(rid, item["name"])
                 out.append(row)
+    # The library this campaign can see: its own images and the world's alike.
+    # `kind: "campaign"` for BOTH, because this route promises a campaign-scoped
+    # URL on every row it returns and the kind is what names that scope -- an
+    # inherited row cannot be `kind: "world"` here without lying about where its
+    # bytes are served from. Which one it is rides on `record_name`.
+    descs = store.campaign_images.read_descriptions(cid)
+    for image in store.campaign_images.list_images(cid):
+        url = f"/api/campaigns/{quote(cid, safe='')}/images/{quote(image['name'], safe='')}"
+        v = quote(image["v"], safe="")
+        out.append({"kind": "campaign", "id": "", "vid": "", "name": image["name"],
+                    "ext": image["ext"],
+                    "record_name": "World library" if image["inherited"]
+                                   else "Campaign library",
+                    "described": image["name"] in descs,
+                    "description": descs.get(image["name"], ""),
+                    "url": f"{url}?v={v}", "thumb": f"{url}?w={THUMB_W}&v={v}"})
     return out
 
 

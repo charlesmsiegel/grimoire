@@ -521,3 +521,40 @@ def test_an_ignored_chore_takes_its_heading_with_it(client, campaign):
         assert victim["group"] not in after["groups"]
     else:
         assert victim["group"] in after["groups"]
+
+
+def _todo_lib_png() -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_a_library_only_backlog_still_raises_the_describe_chore(client):
+    """The count, the badge and the CHEAP presence probe are three call sites,
+    and the probe is the one that decides whether the chore is computed at all.
+    A world whose only undescribed art is library art exercises all three: miss
+    the probe and the row never renders, however right the count is."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _todo_lib_png(), "image/png")})
+
+    chores = client.get("/api/todo").json()["chores"]
+    describe = next(c for c in chores if c["id"] == "world-describe")
+    assert describe["n"] == 1
+    # and it points at the tab that actually shows library art
+    assert describe["fix_label"] == "Images"
+    assert describe["fix"].endswith("?section=images")
+
+
+def test_the_rail_badge_counts_library_art_too(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns",
+                      json={"name": "Saltmarch Nights", "world": wid}).json()["id"]
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _todo_lib_png(), "image/png")})
+
+    shell = client.get(f"/api/shell?campaign={cid}").json()
+    assert shell["campaign"]["images_undescribed"] == 1

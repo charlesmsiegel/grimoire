@@ -125,8 +125,11 @@ def _images_undescribed(wid: str) -> int | None:
     """
     try:
         root = store.worlds.paths.world_root(wid)
-        return sum(store.image_descriptions.undescribed_count(root, base)
-                   for base in todo_routes._DESCRIBE_BASES)
+        return (sum(store.image_descriptions.undescribed_count(root, base)
+                    for base in todo_routes._DESCRIBE_BASES)
+                # The world's own library, which no base walk reaches. Inside
+                # the same `try`: a leak here 500s every navigation.
+                + store.world_images.undescribed_count(wid))
     except (OSError, store.worlds.paths.WorldNotFound):
         return None
 

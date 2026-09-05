@@ -726,6 +726,14 @@ def post_campaign_library_description_draft(
 @router.put("/campaigns/{cid}/images/{name}/description")
 def put_campaign_library_image_description(cid: str, name: str, body: ImageDescription):
     _campaign_root_or_404(cid)
+    if any(i["name"] == name and i["inherited"]
+           for i in store.campaign_images.list_images(cid)):
+        # Inherited art is described in the WORLD's editor, where describing it
+        # once serves every campaign on that world -- the split the campaign
+        # backlog above already draws. 409 rather than 404: the image is right
+        # there, it is just not this scope's to describe.
+        raise HTTPException(status_code=409,
+                            detail="describe this image in its world")
     try:
         store.campaign_images.set_description(cid, name, body.description)
     except ValueError:
@@ -738,12 +746,23 @@ def put_campaign_library_image_description(cid: str, name: str, body: ImageDescr
 
 @router.get("/campaigns/{cid}/images")
 def list_campaign_library(cid: str):
+    """Every image this campaign can put in a post, and what it has hidden.
+
+    `read_descriptions` rather than a read of `images_dir`: that directory holds
+    only the campaign's OWN uploads now, so resolving descriptions against it
+    while listing merged images would report every inherited picture as
+    undescribed -- art described once in the world reading as unfinished in
+    every campaign that inherits it.
+
+    `hidden` rides along rather than taking a request of its own: it is the
+    other half of the same question, and the surface that shows it is the same
+    picker.
+    """
     _campaign_root_or_404(cid)
     images = store.campaign_images.list_images(cid)
-    return _with_descriptions(
-        images,
-        store.image_descriptions.read_in(store.campaign_images.images_dir(cid),
-                                         names={i["name"] for i in images}))
+    return {"images": _with_descriptions(
+                images, store.campaign_images.read_descriptions(cid)),
+            "hidden": store.campaign_images.list_hidden(cid)}
 
 
 @router.get("/campaigns/{cid}/images/undescribed")
@@ -762,13 +781,14 @@ def list_campaign_undescribed_images(cid: str):
     """
     root = _campaign_root_or_404(cid)
     out: list[dict] = []
-    lib = store.campaign_images.images_dir(cid)
-    reviewed = store.image_descriptions.read_raw(lib)
+    # `own_undescribed`, NOT the merged listing: the library reads through to
+    # the world now, and handing the merged names to this queue would re-offer
+    # every world image in every campaign's backlog -- the exact failure the
+    # docstring above exists to prevent.
     out.extend({"kind": "campaign", "id": "", "vid": "", "name": image["name"],
                 "record_name": "Campaign library",
                 "url": f"/api/campaigns/{cid}/images/{quote(image['name'], safe='')}"}
-               for image in store.campaign_images.list_images(cid)
-               if image["name"] not in reviewed)
+               for image in store.campaign_images.own_undescribed(cid))
 
     # One read per record, name and versions together -- see the world queue's
     # `_record_name_and_versions` for why both, and why one memo.
@@ -849,12 +869,31 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
     try:
         stored = store.campaign_images.put_image(cid, name, data, ext)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        # 409 for a name the world holds, 400 for a name no link could carry.
+        # The distinction is the caller's to act on: one is "pick another name",
+        # the other is "that name is not usable at all".
+        code = 409 if "belongs to the world" in str(exc) else 400
+        raise HTTPException(status_code=code, detail=str(exc))
     # `v` so the client can build the immutable `?v=` URL without a second round
     # trip. It resolves and stats, and answers "" rather than raising if the
     # file went between the two -- a write that landed must not report a 500.
     return {"name": name, "ext": stored,
             "v": store.campaign_images.image_version(cid, name)}
+
+
+@router.post("/campaigns/{cid}/images/{name}/restore")
+def post_restore_campaign_library_image(cid: str, name: str):
+    """Un-hide an inherited library image.
+
+    The exit from a tombstone, and the reason the world-side delete sweep can
+    afford to be best-effort: a campaign the sweep could not reach keeps a
+    stale hidden entry, and this is what clears it. Idempotent -- restoring a
+    name that was never hidden is a no-op rather than a 404, because the
+    caller's intent ("this should be visible") is already satisfied.
+    """
+    _campaign_root_or_404(cid)
+    store.campaign_images.restore_image(cid, name)
+    return {"ok": True}
 
 
 @router.delete("/campaigns/{cid}/images/{name}")

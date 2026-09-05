@@ -350,8 +350,12 @@ def _world_describe_counts(worlds: list[dict]) -> list[dict]:
     for w in worlds:
         try:
             root = store.worlds.paths.world_root(w["id"])
-            n = sum(store.image_descriptions.undescribed_count(root, base)
-                    for base in _DESCRIBE_BASES)
+            n = (sum(store.image_descriptions.undescribed_count(root, base)
+                     for base in _DESCRIBE_BASES)
+                 # The world's own library hangs off no record, so no base walk
+                 # can reach it. Inside the same `try`: a leak here 500s the
+                 # whole chore sweep, which is what its `except` is for.
+                 + store.world_images.undescribed_count(w["id"]))
         except (OSError, store.worlds.paths.WorldNotFound):
             continue
         if n:
@@ -359,8 +363,11 @@ def _world_describe_counts(worlds: list[dict]) -> list[dict]:
     return out
 
 
-#: The bases the describe queue walks -- `routes/characters.list_undescribed_images`'
-#: list, and it must stay that list. Greetings are deliberately absent there
+#: The RECORD bases the describe queue walks -- `routes/characters.list_undescribed_images`'
+#: list, and it must stay that list. The queue also offers the world's own image
+#: library, which hangs off no record and so appears in none of these; every
+#: reader of this roster adds `world_images` alongside it rather than expecting
+#: this tuple to cover the whole backlog. Greetings are deliberately absent there
 #: (their sidecar is `image_subjects`, a different question), so a chore that
 #: counted them would offer a backlog the queue cannot empty.
 _DESCRIBE_BASES = ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS)
@@ -377,8 +384,13 @@ def _chore_world_describe(ctx: _Ctx) -> dict | None:
         "what": f"{n} image{'s' if n != 1 else ''} with no description",
         "why": "An undescribed image is one nothing can offer a scene, because "
                "what it depicts is written down nowhere.",
-        "fix": f"/worlds/{rows[0]['wid']}" if len(rows) == 1 else "/worlds",
-        "fix_label": "The cast" if len(rows) == 1 else "The worlds",
+        # The Images tab, not the cast: this backlog spans every base a world
+        # holds art on -- characters, PCs, the five entity kinds, and now the
+        # world's own library, which is not a record at all. "The cast" named
+        # one of them and sent a reader with a library-only backlog to a page
+        # showing none of it.
+        "fix": f"/worlds/{rows[0]['wid']}?section=images" if len(rows) == 1 else "/worlds",
+        "fix_label": "Images" if len(rows) == 1 else "The worlds",
     }
 
 
@@ -489,8 +501,13 @@ def _any_undescribed(ctx: _Ctx) -> bool:
     for w in ctx.worlds():
         try:
             root = store.worlds.paths.world_root(w["id"])
-            if any(store.image_descriptions.has_undescribed(root, base)
-                   for base in _DESCRIBE_BASES):
+            # `has_undescribed`, never a count: this probe exists because the
+            # `_CHEAP` roster is for chores whose COUNT costs far more than
+            # their presence, and summing a backlog to answer "is it empty" is
+            # the thing that roster avoids.
+            if (any(store.image_descriptions.has_undescribed(root, base)
+                    for base in _DESCRIBE_BASES)
+                    or store.world_images.has_undescribed(w["id"])):
                 return True
         except (OSError, store.worlds.paths.WorldNotFound):
             continue

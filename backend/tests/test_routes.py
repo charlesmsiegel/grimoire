@@ -1082,7 +1082,7 @@ def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(clie
 
 # ---- the campaign's own image library (#376) --------------------------------
 def _library_names(client, cid) -> list:
-    return [i["name"] for i in client.get(f"/api/campaigns/{cid}/images").json()]
+    return [i["name"] for i in client.get(f"/api/campaigns/{cid}/images").json()["images"]]
 
 
 def _campaign_library_write_routes(client):
@@ -1142,7 +1142,7 @@ def test_every_campaign_library_write_route_refuses_an_unknown_campaign(client):
 
 def test_campaign_library_round_trip_through_the_routes(client):
     _wid, cid = _campaign(client)
-    assert client.get(f"/api/campaigns/{cid}/images").json() == []
+    assert client.get(f"/api/campaigns/{cid}/images").json()["images"] == []
 
     png = _png_bytes()
     r = client.put(f"/api/campaigns/{cid}/images/coastline",
@@ -1151,7 +1151,7 @@ def test_campaign_library_round_trip_through_the_routes(client):
     assert r.json()["name"] == "coastline" and r.json()["ext"] == "png"
     assert r.json()["v"], r.json()          # the token the `?v=` URL is built from
 
-    listed = client.get(f"/api/campaigns/{cid}/images").json()
+    listed = client.get(f"/api/campaigns/{cid}/images").json()["images"]
     assert [i["name"] for i in listed] == ["coastline"]
     assert listed[0]["v"] == r.json()["v"]
 
@@ -1163,7 +1163,7 @@ def test_campaign_library_round_trip_through_the_routes(client):
     assert versioned.headers["cache-control"] == "public, max-age=31536000, immutable"
 
     assert client.delete(f"/api/campaigns/{cid}/images/coastline").json() == {"ok": True}
-    assert client.get(f"/api/campaigns/{cid}/images").json() == []
+    assert client.get(f"/api/campaigns/{cid}/images").json()["images"] == []
     assert client.get(f"/api/campaigns/{cid}/images/coastline").status_code == 404
 
 
@@ -15251,3 +15251,98 @@ def test_instantiating_bad_module_content_into_a_campaign_is_refused(client, tmp
     r = client.post(f"/api/campaigns/{cid}/items/instantiate/{mid}/lantern")
     assert r.status_code == 400
     assert "holder" in r.json()["detail"]
+
+
+# ---- the campaign library, reading through to its world --------------------
+
+def _world_and_campaign(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns",
+                      json={"name": "Saltmarch Nights", "world": wid}).json()["id"]
+    return wid, cid
+
+
+def _lib_png() -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_a_campaign_serves_and_hides_its_worlds_images(client):
+    wid, cid = _world_and_campaign(client)
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _lib_png(), "image/png")})
+
+    listed = client.get(f"/api/campaigns/{cid}/images").json()
+    assert [(i["name"], i["inherited"]) for i in listed["images"]] == [("coastline", True)]
+    assert listed["hidden"] == []
+    assert client.get(f"/api/campaigns/{cid}/images/coastline").status_code == 200
+
+    # Hiding is a campaign-side delete of an image the campaign does not own.
+    assert client.delete(f"/api/campaigns/{cid}/images/coastline").status_code == 200
+    hidden = client.get(f"/api/campaigns/{cid}/images").json()
+    assert hidden["images"] == [] and hidden["hidden"] == ["coastline"]
+    # and the serve route stops at the tombstone rather than falling through
+    assert client.get(f"/api/campaigns/{cid}/images/coastline").status_code == 404
+    # while the world still has its picture
+    assert client.get(f"/api/worlds/{wid}/images/coastline").status_code == 200
+
+    assert client.post(f"/api/campaigns/{cid}/images/coastline/restore").status_code == 200
+    back = client.get(f"/api/campaigns/{cid}/images").json()
+    assert [i["name"] for i in back["images"]] == ["coastline"]
+    assert back["hidden"] == []
+
+
+def test_an_inherited_description_is_reported_to_the_campaign(client):
+    """The listing resolves descriptions through the campaign's view. Reading
+    the campaign's own directory instead would report every inherited picture
+    as undescribed -- art described once in the world reading as unfinished in
+    every campaign that inherits it."""
+    wid, cid = _world_and_campaign(client)
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _lib_png(), "image/png")})
+    client.put(f"/api/worlds/{wid}/images/coastline/description",
+               json={"description": "a rocky shore"})
+
+    row = client.get(f"/api/campaigns/{cid}/images").json()["images"][0]
+    assert row["description"] == "a rocky shore" and row["described"] is True
+
+
+def test_a_campaign_may_not_take_or_describe_a_world_name(client):
+    wid, cid = _world_and_campaign(client)
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _lib_png(), "image/png")})
+
+    # 409 rather than 400: the name is not malformed, it is taken.
+    r = client.put(f"/api/campaigns/{cid}/images/coastline",
+                   files={"file": ("c.png", _lib_png(), "image/png")})
+    assert r.status_code == 409
+
+    # and describing it belongs to the world, where it serves every campaign
+    r = client.put(f"/api/campaigns/{cid}/images/coastline/description",
+                   json={"description": "mine"})
+    assert r.status_code == 409
+
+
+def test_the_campaign_backlog_leaves_inherited_art_to_the_world(client):
+    wid, cid = _world_and_campaign(client)
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _lib_png(), "image/png")})
+    client.put(f"/api/campaigns/{cid}/images/handout",
+               files={"file": ("h.png", _lib_png(), "image/png")})
+
+    names = [i["name"] for i in
+             client.get(f"/api/campaigns/{cid}/images/undescribed").json()]
+    assert names == ["handout"]
+    # the world's queue is where the inherited one is offered
+    world_names = [i["name"] for i in
+                   client.get(f"/api/worlds/{wid}/images/undescribed").json()]
+    assert "coastline" in world_names
+
+
+def test_restoring_a_name_that_was_never_hidden_is_a_no_op(client):
+    wid, cid = _world_and_campaign(client)
+    assert client.post(f"/api/campaigns/{cid}/images/whatever/restore").status_code == 200
