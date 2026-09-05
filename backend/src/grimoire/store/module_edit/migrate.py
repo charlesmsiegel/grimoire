@@ -61,12 +61,7 @@ def recover() -> set[str]:
     sheets renamed to a name the pack no longer has. A journal whose module
     could not be read is reported as `""`, which refuses every edit."""
     with _M:
-        stuck = _recover_locked()
-    # Returned outside the `with` on purpose, and the ruff marker says so: `_M`
-    # is the cross-process module-edit lock, whose `__exit__` mypy reads as
-    # able to swallow an exception, so a return inside the block is a missing
-    # return to it (the finding `_apply` carries in the baseline).
-    return stuck  # noqa: RET504
+        return _recover_locked()
 
 
 def _recover_locked() -> set[str]:
