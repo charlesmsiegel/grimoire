@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type RefKind, type Secrecy } from "../api/client";
+import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
 import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
@@ -193,6 +193,44 @@ const UNLOADED_HINT = "Could not load the list of records, so this reference cou
  *  is what makes each option's own label unambiguous — "Mara" under Leader and
  *  "Mara" under Held by are two different controls, and only the group says so.
  */
+type ChoiceOption = { value: string; label: string };
+
+/** How each named `source` on a `choice` spec is resolved. One entry per
+ *  `OptionSource`; the type is what keeps a source the schema names and the
+ *  editor cannot load from compiling. */
+const OPTION_SOURCES: Record<OptionSource, () => Promise<ChoiceOption[]>> = {
+  climates: () => api.listClimates().then((r) =>
+    r.climates.map((c) => ({ value: c.id, label: c.name }))),
+};
+
+/** The options a `choice` spec offers: its literal list, or what its source
+ *  answered (nothing yet while that is in flight). */
+function choiceOptions(spec: EntityFieldSpec,
+                       loaded: Record<string, ChoiceOption[]>): ChoiceOption[] {
+  if (spec.options) return spec.options.map((o) => ({ value: o, label: o }));
+  return loaded[spec.key] ?? [];
+}
+
+/** A `choice` as a picker. A stored value none of the options answers to -- a
+ *  climate since deleted, a hand-edited file -- is kept as a row of its own so
+ *  it is VISIBLE and clearable rather than silently blanked on the next save,
+ *  the same reason `RefField` keeps a dangling ref. */
+function ChoiceField({ spec, options, value, onChange }: {
+  spec: EntityFieldSpec; options: ChoiceOption[]; value: string;
+  onChange: (v: string) => void;
+}) {
+  const unknown = value !== "" && !options.some((o) => o.value === value);
+  return (
+    <Field key={spec.key} label={spec.label}>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">(none)</option>
+        {unknown && <option value={value}>{value} (not an option)</option>}
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </Field>
+  );
+}
+
 function RefField({ spec, options, value, onChange, unresolvedHint, optionsComplete }: {
   spec: EntityFieldSpec;
   options: RecordRef[];
@@ -319,6 +357,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   // flight and after any of them failed, and that is the only thing that
   // entitles the UI to call an unresolved ref *deleted*.
   const [refOptsComplete, setRefOptsComplete] = useState(false);
+  // What each sourced `choice` field on this kind may offer, by field key.
+  // Loaded per kind; a literal `options` list never lands here.
+  const [choiceOpts, setChoiceOpts] = useState<Record<string, ChoiceOption[]>>({});
   // Token for the in-flight candidate fetch, so a slow earlier response cannot
   // land on top of a newer one — the same guard `PCEditor` uses for its lock
   // lookup, and for the same reason.
@@ -366,6 +407,29 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   useEffect(() => {
     if (kind === "lore") loreOwnerOptions(scope).then(setOwnerOpts);
   }, [wid, kind]);
+
+  useEffect(() => {
+    // Re-read on every kind change rather than cached: the climates are the
+    // user's list, and one saved on the Climates page a moment ago should be
+    // offered here without a reload.
+    let live = true;
+    setChoiceOpts({});
+    for (const spec of fieldSpecs) {
+      if (spec.widget !== "choice" || !spec.source) continue;
+      OPTION_SOURCES[spec.source]()
+        .then((opts) => { if (live) setChoiceOpts((cur) => ({ ...cur, [spec.key]: opts })); })
+        .catch(() => { /* the picker shows what it has; a stored value survives regardless */ });
+    }
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
+
+  /** A field value as the sidebar shows it: a choice by its option's label
+   *  when the option is known, anything else as stored. */
+  const displayValue = (spec: EntityFieldSpec, value: string) =>
+    spec.widget === "choice"
+      ? (choiceOptions(spec, choiceOpts).find((o) => o.value === value)?.label ?? value)
+      : value;
 
   useEffect(() => {
     // Cleared FIRST, and every response checked against the request that is
@@ -986,7 +1050,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   <h4>Details</h4>
                   <div className="chips">
                     {fieldSpecs.filter((f) => f.widget !== "ref" && fields[f.key]).map((f) => (
-                      <span key={f.key} className="chip on">{f.label}: {fields[f.key]}</span>
+                      <span key={f.key} className="chip on">
+                        {f.label}: {displayValue(f, fields[f.key])}
+                      </span>
                     ))}
                   </div>
                 </div>
@@ -1106,17 +1172,38 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                 ))}
               </div>
             </Field>
-            {fieldSpecs.map((f) => (f.widget === "ref" ? (
-              <RefField key={f.key} spec={f} options={optionsFor(f)}
-                        value={fields[f.key] ?? ""} unresolvedHint={unresolvedHint}
-                        optionsComplete={refOptsComplete}
-                        onChange={(v) => setFields({ ...fields, [f.key]: v })} />
-            ) : (
-              <Field key={f.key} label={f.label}>
-                <input type="text" value={fields[f.key] ?? ""}
-                       onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} />
-              </Field>
-            )))}
+            {fieldSpecs.map((f) => {
+              const set = (v: string) => setFields({ ...fields, [f.key]: v });
+              const value = fields[f.key] ?? "";
+              switch (f.widget) {
+                case "ref":
+                  return (
+                    <RefField key={f.key} spec={f} options={optionsFor(f)} value={value}
+                              unresolvedHint={unresolvedHint} optionsComplete={refOptsComplete}
+                              onChange={set} />
+                  );
+                case "choice":
+                  return (
+                    <ChoiceField key={f.key} spec={f} options={choiceOptions(f, choiceOpts)}
+                                 value={value} onChange={set} />
+                  );
+                case "number":
+                  // `step="any"`: the bound is on the value, not its precision --
+                  // a persistence of 0.35 is as valid as 0.5.
+                  return (
+                    <Field key={f.key} label={f.label}>
+                      <input type="number" value={value} min={f.min} max={f.max} step="any"
+                             onChange={(e) => set(e.target.value)} />
+                    </Field>
+                  );
+                default:
+                  return (
+                    <Field key={f.key} label={f.label}>
+                      <input type="text" value={value} onChange={(e) => set(e.target.value)} />
+                    </Field>
+                  );
+              }
+            })}
             {kind === "lore" && (
               <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
                 <div className="chips owner-picker">

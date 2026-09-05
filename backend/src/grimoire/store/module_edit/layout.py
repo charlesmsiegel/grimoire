@@ -5,6 +5,7 @@ graph, the cascade-cosmetic prune, and the rename edit_fn both share.
 from __future__ import annotations
 
 import json
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from .packfile import _read_json, _write_json
@@ -63,7 +64,7 @@ def _specialize_layout(layout: dict, in_scope: set[str], edit_fn) -> dict:
     return out
 
 
-def _prune_node(node, groups: set[str], names: set[str]):
+def _prune_node(node, groups: AbstractSet[str], names: AbstractSet[str]):
     """Returns the pruned node or None when it empties (cascade-cosmetic)."""
     if not isinstance(node, dict):
         return node
@@ -88,7 +89,7 @@ def _prune_node(node, groups: set[str], names: set[str]):
 
 
 def _prune_layout(root: Path, *, in_scope: set[str], group: str | None = None,
-                  names: set[str] = frozenset(), groups: set[str] = frozenset(),
+                  names: AbstractSet[str] = frozenset(), groups: AbstractSet[str] = frozenset(),
                   drop_type: str | None = None) -> None:
     """Cascade-cosmetic prune, SCOPED to the sheet types that compose the
     edited container (codex plan review: a global prune would strip a
