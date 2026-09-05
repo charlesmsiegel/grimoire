@@ -699,6 +699,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     if avatar and _carried_uri(avatar[2]):
         _drop_avatar_uri(card, avatar[2])
     if update_vid is not None:
+        if into_cid is None:
+            raise ValueError("update_vid names a version of a character, so into_cid is required")
         cid, vid = into_cid, update_vid
         # The incoming card REPLACES the stored one, so anything grimoire owns
         # rather than the source does has to be carried across or a re-download

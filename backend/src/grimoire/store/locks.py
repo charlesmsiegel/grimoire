@@ -119,6 +119,7 @@ from __future__ import annotations
 import threading
 import time
 from contextlib import ExitStack, contextmanager
+from typing import Literal
 
 from . import paths, proclock
 
@@ -592,7 +593,13 @@ class _ProcessScopedLock:
             raise self._busy(self._name)
         return self
 
-    def __exit__(self, *exc) -> bool:
+    def __exit__(self, *exc) -> Literal[False]:
+        # `Literal[False]`, not `bool`: a context manager whose `__exit__` may
+        # return True can swallow an exception, so under `-> bool` mypy treats
+        # every `with lock:` block as one control may fall out of -- and reports
+        # a function that returns only inside the block as missing a return.
+        # This lock never swallows, and saying so is what lets those functions
+        # type-check as written.
         self.release()
         return False
 
