@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from grimoire.store import (assets, campaign_images, campaigns,
-                            image_library, worlds)
+                            image_library, overlay, world_images, worlds)
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
@@ -16,9 +16,15 @@ def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
 
 
 @pytest.fixture
-def cid(monkeypatch, tmp_path):
+def wid(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
+    return worlds.create_world("Realm")
+
+
+@pytest.fixture
+def cid(wid):
+    """Split from `wid` so a test can reach the world this campaign reads
+    through to; every existing test in this file still asks only for `cid`."""
     return campaigns.create_campaign("Saltmarch Nights", wid)
 
 
@@ -206,9 +212,190 @@ def test_unknown_campaign_raises_and_creates_nothing(monkeypatch, tmp_path):
 
 
 def test_the_library_is_campaign_local_and_not_inherited(cid, monkeypatch, tmp_path):
-    """Not under the overlay, by design: there is no world-side copy to shadow,
-    so a second campaign on the same world starts empty."""
+    """A campaign's OWN images stay its own.
+
+    What a campaign shares with its siblings is the *world's* library, not each
+    other's uploads -- so a second campaign on the same world sees the world's
+    images (none here) and none of this one's.
+    """
     campaign_images.put_image(cid, "map", _png(), "png")
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     other = campaigns.create_campaign("Another Chronicle", wid)
     assert campaign_images.list_images(other) == []
+
+
+# ---- the world's library, read through ------------------------------------
+#
+# Read-through plus hiding, and NOT shadowing. A campaign sees every world
+# library image, may hide one it does not want, and may not replace one under
+# the same name -- "a different picture in this campaign" is answered by a
+# different name, and copy-on-write for bytes buys nothing.
+
+def test_a_campaign_sees_its_worlds_library(cid, wid):
+    world_images.put_image(wid, "coastline", _png(), "png")
+
+    rows = campaign_images.list_images(cid)
+    assert [(r["name"], r["inherited"]) for r in rows] == [("coastline", True)]
+    assert campaign_images.image_path(cid, "coastline") == \
+        worlds.world_root(wid) / "assets" / "images" / "coastline.png"
+
+
+def test_own_and_inherited_images_are_listed_together_by_name(cid, wid):
+    world_images.put_image(wid, "coastline", _png(), "png")
+    campaign_images.put_image(cid, "handout", _png(), "png")
+
+    assert [(r["name"], r["inherited"]) for r in campaign_images.list_images(cid)] \
+        == [("coastline", True), ("handout", False)]
+
+
+def test_a_campaign_may_not_take_a_name_the_world_holds(cid, wid):
+    """No shadowing: the refusal is what keeps the accidental collision below
+    rare rather than routine."""
+    world_images.put_image(wid, "coastline", _png(), "png")
+    with pytest.raises(ValueError):
+        campaign_images.put_image(cid, "coastline", _png(), "png")
+
+
+def test_a_logical_name_is_one_image_across_extensions(cid, wid):
+    """A `.webp` in the world and a `.png` here are the SAME name. Shipping the
+    other rule was a real bug (`campaigns/lifecycle.py`)."""
+    world_images.put_image(wid, "coastline", _png(), "webp")
+    with pytest.raises(ValueError):
+        campaign_images.put_image(cid, "coastline", _png(), "png")
+
+
+def test_a_campaign_keeps_its_own_name_when_the_world_later_takes_it(cid, wid):
+    """The accidental collision. Nothing can stop a world adding a name a
+    campaign already holds, so the campaign's own file wins: it is theirs, and
+    its posts already point at it."""
+    own = _png(color=(90, 90, 90))
+    campaign_images.put_image(cid, "coastline", own, "png")
+    world_images.put_image(wid, "coastline", _png(), "png")
+
+    assert [(r["name"], r["inherited"]) for r in campaign_images.list_images(cid)] \
+        == [("coastline", False)]
+    assert campaign_images.image_path(cid, "coastline").read_bytes() == own
+
+
+def test_hiding_an_inherited_image_and_getting_it_back(cid, wid):
+    world_images.put_image(wid, "coastline", _png(), "png")
+
+    campaign_images.delete_image(cid, "coastline")
+    assert campaign_images.list_images(cid) == []
+    # Stops at the tombstone rather than falling through to the world's file.
+    assert campaign_images.image_path(cid, "coastline") is None
+    assert campaign_images.list_hidden(cid) == ["coastline"]
+    # and the world still has its picture -- hiding is per campaign
+    assert world_images.image_path(wid, "coastline") is not None
+
+    campaign_images.restore_image(cid, "coastline")
+    assert [r["name"] for r in campaign_images.list_images(cid)] == ["coastline"]
+    assert campaign_images.list_hidden(cid) == []
+
+
+def test_a_campaign_image_under_a_hidden_name_is_listed_and_served(cid, wid):
+    """The tombstone filter is the INHERITED half's, never the union's.
+
+    Subtracting tombstones from the whole union hides the campaign's own bytes:
+    they serve but never list, so no picker tile, no gallery row, no describe
+    row -- and no way to clear the tombstone that hid them. That is #373's
+    lesson (a token naming a file the server would not serve) inverted.
+    """
+    world_images.put_image(wid, "coastline", _png(), "png")
+    campaign_images.delete_image(cid, "coastline")     # hide the world's
+    world_images.delete_image(wid, "coastline")        # and the world drops it
+
+    own = _png(color=(90, 90, 90))
+    campaign_images.put_image(cid, "coastline", own, "png")
+
+    assert [(r["name"], r["inherited"]) for r in campaign_images.list_images(cid)] \
+        == [("coastline", False)]
+    p = campaign_images.image_path(cid, "coastline")
+    assert p is not None and p.read_bytes() == own
+
+
+def test_deleting_an_image_the_campaign_owns_over_a_world_name_does_not_revert(cid, wid):
+    """The accidental collision's delete. Unlink then tombstone, which is
+    `overlay.delete_image`'s order: with only the unlink this is a Revert, and
+    the world's picture reappears under a name the user just deleted."""
+    campaign_images.put_image(cid, "coastline", _png(color=(90, 90, 90)), "png")
+    world_images.put_image(wid, "coastline", _png(), "png")
+
+    campaign_images.delete_image(cid, "coastline")
+    assert campaign_images.image_path(cid, "coastline") is None
+    assert campaign_images.list_images(cid) == []
+
+
+def test_hidden_entries_are_cleared_when_the_world_drops_the_image(cid, wid):
+    world_images.put_image(wid, "coastline", _png(), "png")
+    campaign_images.delete_image(cid, "coastline")
+    assert campaign_images.list_hidden(cid) == ["coastline"]
+
+    world_images.delete_image(wid, "coastline")
+    assert campaign_images.list_hidden(cid) == []
+
+    # so a re-upload under that name is visible again, rather than hidden by a
+    # tombstone aimed at a picture that no longer exists
+    world_images.put_image(wid, "coastline", _png(), "png")
+    assert [r["name"] for r in campaign_images.list_images(cid)] == ["coastline"]
+
+
+def test_an_inherited_image_is_versioned_by_the_file_that_backs_it(cid, wid):
+    """`?v=` is answered immutable for a year, so a token that did not follow
+    the world's bytes would pin a reader to art that is gone."""
+    world_images.put_image(wid, "coastline", _png(), "png")
+    assert campaign_images.image_version(cid, "coastline") == \
+        world_images.image_version(wid, "coastline") != ""
+
+
+def test_descriptions_come_from_whichever_side_owns_the_image(cid, wid):
+    world_images.put_image(wid, "coastline", _png(), "png")
+    world_images.set_description(wid, "coastline", "a rocky shore")
+    campaign_images.put_image(cid, "handout", _png(), "png")
+    campaign_images.set_description(cid, "handout", "the party's map")
+
+    assert campaign_images.read_descriptions(cid) == {
+        "coastline": "a rocky shore", "handout": "the party's map"}
+
+
+def test_a_campaign_may_not_describe_an_inherited_image(cid, wid):
+    """Inherited art is described in the WORLD's queue, where describing it
+    once serves every campaign on that world."""
+    world_images.put_image(wid, "coastline", _png(), "png")
+    with pytest.raises(ValueError):
+        campaign_images.set_description(cid, "coastline", "mine")
+
+
+def test_the_campaign_backlog_is_its_own_images_only(cid, wid):
+    """Inherited art belongs to the world's queue. Reusing the merged listing
+    here would re-offer every world image in every campaign's queue."""
+    world_images.put_image(wid, "coastline", _png(), "png")
+    campaign_images.put_image(cid, "handout", _png(), "png")
+    campaign_images.put_image(cid, "sketch", _png(), "png")
+
+    assert [i["name"] for i in campaign_images.own_undescribed(cid)] == [
+        "handout", "sketch"]
+
+    campaign_images.set_description(cid, "handout", "the party's map")
+    assert [i["name"] for i in campaign_images.own_undescribed(cid)] == ["sketch"]
+
+
+def test_a_campaign_whose_world_is_gone_reads_as_an_empty_world_half(cid, wid):
+    """Not an exception. `GET /images`, the gallery, the narrator's art pool and
+    an EPUB export all run through here, and a missing world must not become
+    four 500s.
+
+    The app itself refuses to delete a world a campaign is using, so the way
+    this state is actually reached is a store that is half-synced or hand-edited
+    -- which is exactly why `overlay.wroot_of` documents never raising for it.
+    """
+    import shutil
+
+    world_images.put_image(wid, "coastline", _png(), "png")
+    campaign_images.put_image(cid, "handout", _png(), "png")
+    shutil.rmtree(worlds.world_root(wid))
+
+    assert [r["name"] for r in campaign_images.list_images(cid)] == ["handout"]
+    assert campaign_images.image_path(cid, "coastline") is None
+    assert campaign_images.read_descriptions(cid) == {}
+    assert campaign_images.list_hidden(cid) == []
