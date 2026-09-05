@@ -5,7 +5,8 @@ import io
 import pytest
 from PIL import Image
 
-from grimoire.store import assets, campaign_images, campaigns, worlds
+from grimoire.store import (assets, campaign_images, campaigns,
+                            image_library, worlds)
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
@@ -85,7 +86,7 @@ def test_a_name_no_post_could_link_to_is_refused(cid, name):
     """#373's lesson, in the place the next instance of it would start: a name
     that gets stored but cannot go in `![alt](url)` is bytes the app can never
     show, filed under a token it can never insert."""
-    assert not campaign_images.addressable(name)
+    assert not image_library.addressable(name)
     with pytest.raises(ValueError):
         campaign_images.put_image(cid, name, _png(), "png")
     d = campaigns.campaign_root(cid) / "assets" / "images"
@@ -96,7 +97,7 @@ def test_a_name_in_any_script_is_addressable(cid):
     """The rule is about the punctuation the surrounding syntax owns, not about
     ASCII: a library is not English, and a name in any script survives both a
     URL path and a markdown link."""
-    assert campaign_images.addressable("海岸線")
+    assert image_library.addressable("海岸線")
     assert campaign_images.put_image(cid, "海岸線", _png(), "png") == "png"
     assert [i["name"] for i in campaign_images.list_images(cid)] == ["海岸線"]
 
@@ -125,7 +126,7 @@ def test_a_name_this_store_would_not_serve_back_is_refused_and_hidden(cid, name)
     per-version folder it is crash residue worth seeing -- but `put_in` and
     `path_in` both refuse the name, so in this flat directory it is a file the
     server answers 404 to. Offering it would be #373 with a new hat on."""
-    assert not campaign_images.addressable(name)
+    assert not image_library.addressable(name)
     with pytest.raises(ValueError):
         campaign_images.put_image(cid, name, _png(), "png")
 
@@ -160,11 +161,11 @@ def test_the_byte_cap_is_re_checked_on_what_was_actually_received(cid, monkeypat
     """The route refuses an oversized upload from `UploadFile.size` before it
     reads the body — but `size` is Optional in the ASGI contract, so a client
     that omits it would otherwise buy an unbounded read. This is the belt."""
-    monkeypatch.setattr(campaign_images, "MAX_BYTES", 8)
-    campaign_images.validate_size(b"12345678")            # exactly at the cap
-    with pytest.raises(campaign_images.ImageTooLarge) as exc:
-        campaign_images.validate_size(b"123456789")
-    assert str(exc.value) == campaign_images.TOO_LARGE
+    monkeypatch.setattr(image_library, "MAX_BYTES", 8)
+    image_library.validate_size(b"12345678")            # exactly at the cap
+    with pytest.raises(image_library.ImageTooLarge) as exc:
+        image_library.validate_size(b"123456789")
+    assert str(exc.value) == image_library.TOO_LARGE
 
 
 def test_a_version_token_survives_the_file_going_away(cid, monkeypatch):

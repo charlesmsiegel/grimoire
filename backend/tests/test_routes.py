@@ -1219,10 +1219,10 @@ def test_campaign_library_oversized_upload_is_rejected_before_it_is_read(client,
         raise AssertionError("the body was read before the size was checked")
     monkeypatch.setattr("starlette.datastructures.UploadFile.read", _no)
 
-    huge = b"\x89PNG" + b"\0" * store.campaign_images.MAX_BYTES
+    huge = b"\x89PNG" + b"\0" * store.image_library.MAX_BYTES
     r = client.put(f"/api/campaigns/{cid}/images/map",
                    files={"file": ("a.png", io.BytesIO(huge), "image/png")})
-    assert r.status_code == 413 and r.json()["detail"] == store.campaign_images.TOO_LARGE
+    assert r.status_code == 413 and r.json()["detail"] == store.image_library.TOO_LARGE
     assert not (store.campaigns.campaign_root(cid) / "assets" / "images").exists()
 
 

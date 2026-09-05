@@ -830,7 +830,7 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
     # this app can never show -- reported to the caller as a successful upload.
     # `put_image` refuses it too; this is what makes the refusal a 400 with a
     # reason rather than a `ValueError` mapped after the fact.
-    if not store.campaign_images.addressable(name):
+    if not store.image_library.addressable(name):
         raise HTTPException(status_code=400,
                             detail="image name cannot be used in a link")
     # Size BEFORE the read, exactly as `put_campaign_cover` does and for the
@@ -838,12 +838,12 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
     # and on Android (Chaquopy) that allocation is what OOMs the process before
     # a 413 could be composed. `validate_size` is the belt to those braces --
     # see it for why `file.size` alone is not enough.
-    if file.size is not None and file.size > store.campaign_images.MAX_BYTES:
-        raise HTTPException(status_code=413, detail=store.campaign_images.TOO_LARGE)
+    if file.size is not None and file.size > store.image_library.MAX_BYTES:
+        raise HTTPException(status_code=413, detail=store.image_library.TOO_LARGE)
     data = await file.read()
     try:
-        store.campaign_images.validate_size(data)
-    except store.campaign_images.ImageTooLarge as exc:
+        store.image_library.validate_size(data)
+    except store.image_library.ImageTooLarge as exc:
         raise HTTPException(status_code=413, detail=str(exc))
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
