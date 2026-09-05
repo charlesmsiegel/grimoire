@@ -145,7 +145,7 @@ def test_library_description_roundtrip(client, world):
     r = client.put(f"/api/campaigns/{camp}/images/coastline/description",
                    json={"description": "A hand-drawn map."})
     assert r.status_code == 200
-    listing = client.get(f"/api/campaigns/{camp}/images").json()
+    listing = client.get(f"/api/campaigns/{camp}/images").json()["images"]
     assert [i["name"] for i in listing] == ["coastline"]
     assert store.image_descriptions.read_in(
         store.campaign_images.images_dir(camp)) == {"coastline": "A hand-drawn map."}
@@ -293,7 +293,7 @@ def test_deleting_a_library_image_takes_its_description_with_it(client, world):
     client.delete(f"/api/campaigns/{camp}/images/coastline")
     client.put(f"/api/campaigns/{camp}/images/coastline",
                files={"file": ("b.png", b"\x89PNG\r\n\x1a\n", "image/png")})
-    listing = client.get(f"/api/campaigns/{camp}/images").json()
+    listing = client.get(f"/api/campaigns/{camp}/images").json()["images"]
     assert [(i["name"], i["description"], i["described"]) for i in listing] == [
         ("coastline", "", False)]
 
@@ -362,4 +362,4 @@ def test_the_library_refuses_the_name_the_backlog_route_owns(client, world):
         r = client.put(f"/api/campaigns/{camp}/images/{name}",
                        files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
         assert r.status_code == 400
-    assert client.get(f"/api/campaigns/{camp}/images").json() == []
+    assert client.get(f"/api/campaigns/{camp}/images").json()["images"] == []

@@ -215,12 +215,16 @@ def world_cover_version(wid: str) -> str:
     ``GET /worlds``, and a cover deleted between resolution and stat must read
     as "no cover" rather than 500 the listing.
     """
-    p = world_cover_path(wid)
-    if p is None:
-        return ""
+    # `WorldNotFound` as well as `OSError`: this runs once per row in
+    # ``GET /worlds``, and `_world_assets_dir` raises for a world that went
+    # between `list_worlds` and this stat -- which would take down the whole
+    # shelf for one row that is no longer there.
     try:
+        p = world_cover_path(wid)
+        if p is None:
+            return ""
         return assets.image_version(p)
-    except OSError:
+    except (OSError, worlds_paths.WorldNotFound):
         return ""
 
 

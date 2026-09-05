@@ -142,7 +142,7 @@ RECORD_KINDS: tuple[str, ...] = ACTOR_KINDS + entities.ENTITY_KINDS
 #: ``[[art:kind:id:name]]`` / ``[[art:campaign:name]]``.
 #:
 #: The field pattern is a denylist (anything but ``:`` and ``]``) rather than an
-#: ASCII allowlist, for the reason `campaign_images.UNADDRESSABLE` states: a
+#: ASCII allowlist, for the reason `image_library.UNADDRESSABLE` states: a
 #: library is not English and an image name in any script is a perfectly good
 #: name. Neither excluded character can occur in a real one -- `paths.safe_id`
 #: rejects the colon outright, and `assets.storable` rejects the glob
@@ -301,7 +301,7 @@ def url_for(cid: str, kind: str, rid: str, vid: str, name: str) -> str:
     under the same name would leave the post pinned for a year to bytes that are
     gone. Bare revalidates, which an ETag answers with a 304.
 
-    **Percent-encoded, segment by segment.** `campaign_images.addressable` keeps
+    **Percent-encoded, segment by segment.** `image_library.addressable` keeps
     the library's names inside what a markdown link can carry, but the other
     three surfaces have no such rule: `assets.storable` is `safe_id` plus a
     glob-metacharacter ban, and it accepts ``art(1)``, ``my art`` and ``a#b``

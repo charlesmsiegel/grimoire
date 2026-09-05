@@ -242,7 +242,12 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
 
   function upload(file: File | undefined) {
     if (!file) return;
-    const name = freeName(nameFromFile(file.name), (library ?? []).map((i) => i.name));
+    // Hidden names count as taken. They are in no listing by construction, but
+    // the WORLD still holds the bytes, so `put_image` refuses them -- and the
+    // 409 would land on a name the reader never typed, over a picture visible
+    // nowhere but the Hidden row.
+    const name = freeName(nameFromFile(file.name),
+                          [...(library ?? []).map((i) => i.name), ...hidden]);
     void mutate(() => api.putCampaignImage(cid, name, file));
   }
 

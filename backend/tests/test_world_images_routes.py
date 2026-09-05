@@ -85,11 +85,26 @@ def test_a_name_the_backlog_route_owns_is_refused(client, wid):
     assert r.status_code == 400
 
 
-def test_an_oversized_upload_is_refused_before_it_is_read(client, wid):
-    huge = b"\x89PNG" + b"\0" * (25 * 1024 * 1024)
+def test_an_oversized_upload_is_refused_before_it_is_read(client, wid, monkeypatch):
+    """BEFORE it is read, which is the whole claim in the name.
+
+    Without the monkeypatch this passes on `validate_size` alone -- the same
+    413, from the check *after* the body has been materialized as one `bytes`
+    object, which is the allocation `MAX_BYTES` exists to bound and the one that
+    OOMs the Android build. So the read is made to fail the test if it happens
+    at all, the way the campaign sibling does it in `test_routes.py`.
+    """
+    from grimoire import store
+
+    async def _no(self, *a, **k):
+        raise AssertionError("the body was read before the size was checked")
+    monkeypatch.setattr("starlette.datastructures.UploadFile.read", _no)
+
+    huge = b"\x89PNG" + b"\0" * store.image_library.MAX_BYTES
     r = client.put(f"/api/worlds/{wid}/images/big",
-                   files={"file": ("big.png", huge, "image/png")})
-    assert r.status_code == 413
+                   files={"file": ("big.png", io.BytesIO(huge), "image/png")})
+    assert r.status_code == 413 and r.json()["detail"] == store.image_library.TOO_LARGE
+    assert client.get(f"/api/worlds/{wid}/images").json() == []
 
 
 def test_bytes_in_no_format_we_can_name_are_refused(client, wid):

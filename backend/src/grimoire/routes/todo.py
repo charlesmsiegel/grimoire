@@ -384,13 +384,14 @@ def _chore_world_describe(ctx: _Ctx) -> dict | None:
         "what": f"{n} image{'s' if n != 1 else ''} with no description",
         "why": "An undescribed image is one nothing can offer a scene, because "
                "what it depicts is written down nowhere.",
-        # The Images tab, not the cast: this backlog spans every base a world
-        # holds art on -- characters, PCs, the five entity kinds, and now the
-        # world's own library, which is not a record at all. "The cast" named
-        # one of them and sent a reader with a library-only backlog to a page
-        # showing none of it.
-        "fix": f"/worlds/{rows[0]['wid']}?section=images" if len(rows) == 1 else "/worlds",
-        "fix_label": "Images" if len(rows) == 1 else "The worlds",
+        # The cast page, because that is the only place `DescribeQueue` is
+        # mounted (`components/CharacterGrid.tsx`) -- and its queue reads
+        # `/images/undescribed`, which carries the world's own library rows too
+        # and which `DescribeQueue` handles as `kind: "world"`. Pointing this at
+        # the Images tab looked righter (that is where library art is edited)
+        # and sent the reader to a page with no describe queue on it at all.
+        "fix": f"/worlds/{rows[0]['wid']}" if len(rows) == 1 else "/worlds",
+        "fix_label": "The cast" if len(rows) == 1 else "The worlds",
     }
 
 

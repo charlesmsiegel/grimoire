@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type WorldImage } from "../api/client";
 import { CoverPanel } from "./CoverPanel";
 import { ImageDescriptionField } from "./ImageDescriptionField";
+import { freeName, nameFromFile } from "./PostImagePicker";
 
 /** What went wrong, in the shape `api.request` rejects with (`{detail}`) —
  *  falling back to the value itself for anything that is not ours. Narrowed
@@ -66,21 +67,18 @@ export function WorldArtPanel({ wid }: { wid: string }) {
     }
   }
 
-  /** A file's name, minus its extension, reduced to something a markdown link
-   *  can carry -- the server's rule (`store/image_library.py`), applied here so
-   *  the reader gets a working upload rather than a 400 on a name they never
-   *  chose. */
-  function nameFor(file: File, taken: string[]): string {
-    const stem = file.name.replace(/\.[^.]+$/, "");
-    const safe = stem.replace(/[()<>#?%"'`\\[\].\s]+/g, "-")
-      .replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "image";
-    if (!taken.includes(safe)) return safe;
-    for (let n = 2; ; n += 1) if (!taken.includes(`${safe}-${n}`)) return `${safe}-${n}`;
-  }
-
   function upload(file: File | undefined) {
     if (!file || images === null) return;
-    void mutate(() => api.putWorldImage(wid, nameFor(file, images.map((i) => i.name)), file));
+    // `nameFromFile` and `freeName` from the picker rather than a second
+    // derivation here. This had one, and it got two things wrong that those
+    // already have right: its occupancy check was case-SENSITIVE, so on Windows
+    // or macOS uploading `Coast.png` beside an existing `coast.png` claimed a
+    // name that cannot be held without replacing somebody's image -- and every
+    // campaign on this world would have lost that picture. Its denylist also
+    // missed `*`, `:` and the reserved names, each of which is a 400 on a name
+    // the reader never chose. One rule, in one place.
+    const name = freeName(nameFromFile(file.name), images.map((i) => i.name));
+    void mutate(() => api.putWorldImage(wid, name, file));
   }
 
   function remove(name: string) {

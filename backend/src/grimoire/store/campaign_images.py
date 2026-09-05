@@ -116,9 +116,14 @@ def _world_of(cid: str) -> str:
     Answers "" rather than raising for a campaign whose meta cannot be read --
     the callers below turn that into an empty world half.
     """
+    # `OSError` is deliberately NOT caught. A campaign.md that cannot be read at
+    # all is an operational fault, and swallowing it here would make every
+    # inherited image vanish silently -- worse, `delete_image` would then unlink
+    # nothing, write no tombstone, and report a successful Remove for a picture
+    # still on screen. Absent is a different answer from unreadable.
     try:
         return str(campaigns_read.read_campaign(cid)["meta"].get("world") or "")
-    except (campaigns_paths.CampaignNotFound, KeyError, OSError, UnicodeDecodeError):
+    except (campaigns_paths.CampaignNotFound, KeyError, UnicodeDecodeError):
         return ""
 
 
@@ -198,8 +203,13 @@ def list_hidden(cid: str) -> list[str]:
     something to restore.
     """
     gone = overlay.deleted(cid)
+    own = {i["name"] for i in _own_images(cid)}
+    # Filtered by what the campaign OWNS as well as by what the world holds: a
+    # stale tombstone over a name the campaign has since taken for itself would
+    # otherwise put that name in the grid and in Hidden at once, with a Restore
+    # beside it that visibly does nothing.
     return sorted(i["name"] for i in _world_images(cid)
-                  if overlay.library_ref(i["name"]) in gone)
+                  if overlay.library_ref(i["name"]) in gone and i["name"] not in own)
 
 
 def image_path(cid: str, name: str) -> Path | None:
@@ -283,8 +293,8 @@ def read_descriptions(cid: str) -> dict[str, str]:
     name can be described twice. (The accidental collision is the one exception,
     and the campaign's own wins there for the same reason its bytes do.)
     """
-    own = image_descriptions.read_in(images_dir(cid),
-                                     names={i["name"] for i in _own_images(cid)})
+    own_names = {i["name"] for i in _own_images(cid)}
+    own = image_descriptions.read_in(images_dir(cid), names=own_names)
     wid = _world_of(cid)
     inherited: dict[str, str] = {}
     if wid:
@@ -292,6 +302,14 @@ def read_descriptions(cid: str) -> dict[str, str]:
             inherited = world_images.read_descriptions(wid)
         except (worlds_paths.WorldNotFound, OSError):
             inherited = {}
+    # The world's half is filtered by NAME, not merged and overwritten. A
+    # dict update would only let the campaign win where it has actually
+    # written a description -- so an image the campaign owns and has never
+    # described would keep the world's sentence about a completely different
+    # picture, and hand it to the narrator's art section as the caption for
+    # bytes it does not describe. `own_undescribed` would call the same image
+    # undescribed in the same breath.
+    inherited = {n: t for n, t in inherited.items() if n not in own_names}
     visible = {i["name"] for i in list_images(cid)}
     return {name: text for name, text in {**inherited, **own}.items()
             if name in visible}

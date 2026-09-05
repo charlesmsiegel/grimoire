@@ -5,7 +5,7 @@ a reason that is a live shadowing bug rather than taste:
 ``/worlds/{wid}/images/{name}`` generalizes ``/worlds/{wid}/images/undescribed``,
 which `routes/characters.py` owns. Registered any earlier, the `{name}` route
 matches first and the describe backlog becomes a 404 for an image nobody has --
-the break `campaign_images.RESERVED` records on the campaign side, where it cost
+the break `image_library.RESERVED` records on the campaign side, where it cost
 a broken picker tile and a post that rendered as broken markdown.
 ``test_no_route_is_shadowed_by_an_earlier_one`` is what holds it.
 

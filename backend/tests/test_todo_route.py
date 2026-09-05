@@ -544,9 +544,13 @@ def test_a_library_only_backlog_still_raises_the_describe_chore(client):
     chores = client.get("/api/todo").json()["chores"]
     describe = next(c for c in chores if c["id"] == "world-describe")
     assert describe["n"] == 1
-    # and it points at the tab that actually shows library art
-    assert describe["fix_label"] == "Images"
-    assert describe["fix"].endswith("?section=images")
+    # and it points where the describe QUEUE is -- `DescribeQueue` is mounted
+    # only on the cast page (`components/CharacterGrid.tsx`), whose queue reads
+    # `/images/undescribed` and so carries these library rows too. Pointing this
+    # at the Images tab, where library art is edited, sent the reader to a page
+    # with no describe queue on it at all.
+    assert describe["fix_label"] == "The cast"
+    assert describe["fix"].endswith(f"/worlds/{wid}")
 
 
 def test_the_rail_badge_counts_library_art_too(client):

@@ -68,7 +68,7 @@ def storable(name: str) -> bool:
     it filters on `_addressable_name`, one name looser, because a stranded
     `promote-tmp` is shown on purpose (#253) -- and that exception belongs to a
     per-version folder, not to every directory built on these primitives. See
-    `campaign_images.addressable` for what a caller without promotions does
+    `image_library.addressable` for what a caller without promotions does
     with it.
     """
     return _safe_name(name)

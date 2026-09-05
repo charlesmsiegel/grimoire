@@ -51,7 +51,7 @@ class TranscriptTooLargeError(SceneImportError):
     """The upload is bigger than `MAX_BYTES` (HTTP 413).
 
     Spelled with the suffix ruff's N818 asks for, unlike its older siblings
-    (`covers.CoverTooLarge`, `campaign_images.ImageTooLarge`) which predate the
+    (`covers.CoverTooLarge`, `image_library.ImageTooLarge`) which predate the
     widened rule selection and sit in the lint baseline. The baseline may only
     shrink, so a new one has to be named the way the rule wants.
     """

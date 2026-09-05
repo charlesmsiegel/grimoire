@@ -10,6 +10,7 @@ from grimoire.store import (
     campaign_images,
     campaigns,
     image_library,
+    overlay,
     world_images,
     worlds,
 )
@@ -405,3 +406,74 @@ def test_a_campaign_whose_world_is_gone_reads_as_an_empty_world_half(cid, wid):
     assert campaign_images.image_path(cid, "coastline") is None
     assert campaign_images.read_descriptions(cid) == {}
     assert campaign_images.list_hidden(cid) == []
+
+
+def test_the_worlds_sentence_never_captions_the_campaigns_own_bytes(cid, wid):
+    """The accidental collision, described only on the world's side.
+
+    A dict update lets the campaign win only where it has actually written a
+    description -- so an image the campaign owns and has NOT described kept the
+    world's sentence about a completely different picture, and
+    `context.art` handed that sentence to the narrator as the caption for bytes
+    it does not describe. The same image read as undescribed in the same breath.
+    """
+    campaign_images.put_image(cid, "coastline", _png(color=(90, 90, 90)), "png")
+    world_images.put_image(wid, "coastline", _png(), "png")
+    world_images.set_description(wid, "coastline", "a rocky shore")
+
+    # The campaign's bytes are what is served ...
+    assert [(r["name"], r["inherited"]) for r in campaign_images.list_images(cid)] \
+        == [("coastline", False)]
+    # ... so no description at all is the honest answer, not the world's.
+    assert campaign_images.read_descriptions(cid) == {}
+    assert [i["name"] for i in campaign_images.own_undescribed(cid)] == ["coastline"]
+
+
+def test_a_name_the_campaign_owns_is_not_also_listed_as_hidden(cid, wid):
+    """Reachable through a sweep the world-side delete could not finish: hide
+    `coastline`, the world drops it while this campaign is busy, the campaign
+    uploads its own under that name, and the world adds one again. The tile and
+    a Restore chip that does nothing would otherwise both be on screen."""
+    from grimoire.store import locks
+
+    world_images.put_image(wid, "coastline", _png(), "png")
+    campaign_images.delete_image(cid, "coastline")           # hidden here
+
+    # The world drops it while this campaign is busy, so the sweep skips it and
+    # the tombstone survives -- the state `list_hidden` exists to surface.
+    def busy(_cid, _name):
+        raise locks.CampaignBusy(_cid)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(overlay, "drop_library_tombstone", busy)
+        world_images.delete_image(wid, "coastline")
+    # Not surfaced yet, and deliberately: `list_hidden` reports what the world
+    # still holds, and right now it holds nothing under that name -- a tombstone
+    # over an image that does not exist hides nothing and is not worth a row.
+    assert campaign_images.list_hidden(cid) == []
+
+    # Now the campaign takes that name for itself, and the world adds one again.
+    # THIS is where the stale tombstone would bite: without the own-name filter
+    # the tile and a dead Restore chip would both be on screen.
+    campaign_images.put_image(cid, "coastline", _png(color=(90, 90, 90)), "png")
+    world_images.put_image(wid, "coastline", _png(), "png")
+
+    assert [r["name"] for r in campaign_images.list_images(cid)] == ["coastline"]
+    assert campaign_images.list_hidden(cid) == []
+
+
+def test_a_campaign_whose_meta_cannot_be_read_does_not_report_a_silent_delete(cid, wid,
+                                                                              monkeypatch):
+    """Absent is a different answer from unreadable.
+
+    Swallowing `OSError` on the campaign meta made every inherited image vanish
+    -- and made `delete_image` unlink nothing, write no tombstone, and return
+    cleanly for a picture still on screen.
+    """
+    world_images.put_image(wid, "coastline", _png(), "png")
+
+    def unreadable(_cid):
+        raise OSError("campaign.md is held by another process")
+    monkeypatch.setattr(campaign_images.campaigns_read, "read_campaign", unreadable)
+
+    with pytest.raises(OSError):
+        campaign_images.list_images(cid)
