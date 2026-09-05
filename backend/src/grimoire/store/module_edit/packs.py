@@ -15,6 +15,7 @@ import io
 import shutil
 import uuid
 import zipfile
+from fnmatch import fnmatch
 from pathlib import Path
 
 from .. import atomic, ziputil
@@ -27,11 +28,19 @@ from .staging import _M, _publish, _staging_root, locked, new_mid
 MAX_MEMBERS = 2000
 MAX_UNCOMPRESSED = 64 * 1024 * 1024
 
-#: What a duplicate leaves behind. A pack that has lived in a synced folder
-#: carries `.DS_Store`, `Thumbs.db` and the like beside its real files; none of
-#: it is part of the module, and a copy that is asked for by name should not
-#: inherit it. Dotfiles as a class: nothing in the pack contract is one.
-_CRUFT = shutil.ignore_patterns(".*", "Thumbs.db", "desktop.ini", "__MACOSX")
+#: What a duplicate and an export leave behind. A pack that has lived in a
+#: synced folder carries `.DS_Store`, `Thumbs.db` and the like beside its real
+#: files; none of it is part of the module, and neither a copy asked for by
+#: name nor an archive handed to someone else should carry it. Dotfiles as a
+#: class: nothing in the pack contract is one. One list, read by both paths,
+#: so the two cannot disagree about what a pack member is.
+_CRUFT_PATTERNS = (".*", "Thumbs.db", "desktop.ini", "__MACOSX")
+_CRUFT = shutil.ignore_patterns(*_CRUFT_PATTERNS)
+
+
+def _is_pack_member(rel: Path) -> bool:
+    """Is a file at this pack-relative path part of the pack, or cruft?"""
+    return not any(fnmatch(part, pat) for part in rel.parts for pat in _CRUFT_PATTERNS)
 
 
 def duplicate_module(mid: str, name: str) -> str:
@@ -82,10 +91,16 @@ def delete_module(mid: str) -> None:
     falling through to the builtin) mid-LLM-computation must be impossible —
     the campaign locks are exactly what those consumers hold."""
     with _M:
-        migrate.recover()
+        stuck = migrate.recover()
         _root, source = modules_pack.pack_root(mid)  # 404 before taking every lock
         if source != "user":
             raise modules_pack.ModuleError("built-in modules cannot be deleted")
+        if mid in stuck or "" in stuck:
+            # With its journal still pending, deleting the live pack would
+            # have the next replay read "live missing, staging present" and
+            # publish the half-finished edit as the module's resurrection.
+            raise modules_pack.ModuleError(
+                "a previous edit to this module is still being recovered; retry in a moment")
         with migrate._campaign_locks():
             modules_admin.delete_module(mid)
 
@@ -96,7 +111,7 @@ def export_module(mid: str) -> bytes:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for p in sorted(root.rglob("*")):
-                if p.is_file():
+                if p.is_file() and _is_pack_member(p.relative_to(root)):
                     z.write(p, f"{mid}/{p.relative_to(root).as_posix()}")
         return buf.getvalue()
 

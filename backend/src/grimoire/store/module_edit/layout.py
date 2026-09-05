@@ -77,7 +77,12 @@ def _prune_node(node, groups: AbstractSet[str], names: AbstractSet[str]):
                 return None
             out[container] = kids
             return out
-    if out.get("group") in groups:
+    # `isinstance` first: a layout `set_layout` published with a display error
+    # can carry a non-string `group` (a list), and `in groups` on one raises
+    # where the equality this replaced never did -- out of every later schema
+    # edit on the pack, past `_apply`'s result-dict contract.
+    gid = out.get("group")
+    if isinstance(gid, str) and gid in groups:
         return None
     for arr in ("fields", "derived"):
         if isinstance(out.get(arr), list):

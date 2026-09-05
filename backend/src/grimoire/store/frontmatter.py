@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+#: The closing fence: a line that is exactly `---`. A line, not a prefix --
+#: `----` is a body's first line (or a horizontal rule inside a block nobody
+#: closed), and both parsers below ask this same question so a list endpoint
+#: and a full read cannot disagree about one file.
+_CLOSING_FENCE = re.compile(r"^---$", re.MULTILINE)
+
+
+def _is_fence_line(line: str) -> bool:
+    return line.rstrip("\n") == "---"
 
 
 def _needs_quotes(value: str) -> bool:
@@ -31,19 +42,14 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not text.startswith("---\n"):
         return {}, text
     rest = text[4:]
-    if rest == "---" or rest.startswith("---\n"):
-        # empty block: the opening fence's own newline doubles as the
-        # separator, so the closing fence sits at rest[0] with no leading
-        # "\n" for the usual "\n---" search to find. A whole line, not a
-        # prefix: `----` is a body's first line, and reading it as the fence
-        # handed back `-` as the body's first character.
-        block, after = "", rest[3:]
-    else:
-        end = rest.find("\n---")
-        if end == -1:
-            return {}, text
-        block = rest[:end]
-        after = rest[end + 4:]
+    # `^` in MULTILINE also matches at rest[0], which is where an EMPTY block's
+    # closing fence sits: the opening fence's own newline doubles as the
+    # separator, and a search for "\n---" found nothing there.
+    fence = _CLOSING_FENCE.search(rest)
+    if fence is None:
+        return {}, text
+    block = rest[:fence.start()]
+    after = rest[fence.end():]
     after = after.removeprefix("\n")
     after = after.removeprefix("\n")
     meta: dict[str, str] = {}
@@ -68,7 +74,7 @@ def parse_frontmatter_head(path: Path) -> dict[str, str]:
         if f.readline() != "---\n":
             return {}
         for line in f:
-            if line.startswith("---"):
+            if _is_fence_line(line):
                 return meta
             if not line.strip():
                 continue

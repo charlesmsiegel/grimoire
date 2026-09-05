@@ -409,22 +409,21 @@ export type LibraryDependent = { id: string; name: string; has_copy: boolean };
  *  two actor kinds. Mirrors `entity_schema.REF_KINDS`. */
 export type RefKind = EntityKind | "characters" | "pcs";
 
-/** One typed field on an entity kind.
- *
- *  A `ref` field names other records in the `<kind>:<id>` spelling `owners:`
- *  uses — one, or a comma-separated list when `multi`. `kinds` is what makes
- *  it a picker rather than a text box: the editor offers exactly those kinds'
- *  records, and the backend refuses anything else at the save boundary. */
 /** A `choice` whose options are only known at runtime names the list it
  *  draws from; `EntityEditor` resolves each through the API. Mirrors
  *  `entity_schema.OPTION_SOURCES`. */
 export type OptionSource = "climates";
 
-// Mirrors store/entity_schema.py FIELDS, key for key. The spec is the whole
-// constraint (#221): the save boundary refuses what a spec does not admit and
-// the form renders the control the spec implies, so a bound or an option list
-// declared here and not there (or the reverse) is a picker offering what the
-// server rejects.
+/** One typed field on an entity kind. Mirrors store/entity_schema.py FIELDS,
+ *  key for key: the spec is the whole constraint (#221), the save boundary
+ *  refuses what a spec does not admit and the form renders the control the
+ *  spec implies, so a bound or an option list declared here and not there
+ *  (or the reverse) is a picker offering what the server rejects.
+ *
+ *  A `ref` field names other records in the `<kind>:<id>` spelling `owners:`
+ *  uses — one, or a comma-separated list when `multi`. `kinds` is what makes
+ *  it a picker rather than a text box: the editor offers exactly those kinds'
+ *  records, and the backend refuses anything else at the save boundary. */
 export type EntityFieldSpec = {
   key: string;
   label: string;

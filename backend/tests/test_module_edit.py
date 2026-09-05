@@ -1169,11 +1169,21 @@ def test_recover_survives_an_io_error_during_replay(monkeypatch, tmp_path):
     def flaky(*a, **k):
         raise OSError("disk went away")
     monkeypatch.setattr(me_migrate, "_run_migration", flaky)
-    module_edit.recover()                                   # no raise
+    assert module_edit.recover() == {mid}                   # no raise; names the module
     assert journals[0].exists()                             # kept for next time
+    # An edit to THIS module is refused while its journal is stuck: journals
+    # replay in nonce order, which is random, so a second one written behind
+    # it could replay first and leave the sheets renamed to a name the pack
+    # no longer has. The contract still holds -- a result dict, not a raise.
     res = module_edit.set_manifest(mid, name="Realm System", description="", version="",
                                    dice="", notes="")
-    assert isinstance(res, dict) and "ok" in res            # the contract held
+    assert res["ok"] is False and any("recovered" in e for e in res["errors"])
+    with pytest.raises(modules.ModuleError):
+        module_edit.delete_module(mid)
+    # ...while another module edits as usual.
+    other = modules.create_module("Other System")
+    assert module_edit.set_manifest(other, name="Other System", description="", version="",
+                                    dice="", notes="")["ok"]
     assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"strength": 3}
     monkeypatch.setattr(me_migrate, "_run_migration", real)
     module_edit.recover()
@@ -1352,3 +1362,55 @@ def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
                 covered = True
                 break
         assert covered, f"proposals.new at line {call.lineno} is outside a campaign lock"
+
+
+def test_a_journal_whose_migration_is_torn_is_quarantined_not_replayed(monkeypatch, tmp_path):
+    """A journal can parse as JSON and still lack a key its op reads -- torn
+    mid-write. Replaying it raised KeyError out of recover(), which is the
+    startup abort the I/O handling exists to prevent. Quarantined like an
+    unparseable one: renamed .bad, never acted on, its staging kept."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    _wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    d = me_migrate._staging_root()
+    d.mkdir(parents=True, exist_ok=True)
+    nonce = "a" * 32
+    (d / nonce).mkdir()
+    jp = d / f"{nonce}.journal.json"
+    jp.write_text(json.dumps({"mid": mid, "nonce": nonce,
+                              "migration": {"op": "field", "sheet_types": ["warden"]}}),
+                  encoding="utf-8")
+    assert module_edit.recover() == set()                   # no raise, nothing stuck
+    assert not jp.exists() and jp.with_suffix(".bad").exists()
+    assert (d / nonce).is_dir()                             # debris sweep skipped
+    assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"strength": 3}
+    # and an edit to the module proceeds: a quarantined journal is inert
+    assert module_edit.set_manifest(mid, name="Realm System", description="", version="",
+                                    dice="", notes="")["ok"]
+
+
+def test_a_layout_with_a_non_string_group_does_not_break_later_edits(monkeypatch, tmp_path):
+    """`set_layout` publishes a tree with a display error (ok=True), so a
+    `{"group": [...]}` node can be live. The prune must skip it, not raise
+    `unhashable type` out of every later schema edit."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.set_layout(mid, {"sheet_types": {
+        "warden": {"column": [{"group": ["attributes"]}, {"fields": ["notes_line"]}]}}})
+    assert res["ok"] and res["display_errors"]
+    narrowed = {"label": "Warden", "kind": "characters", "groups": [],
+                "fields": [{"key": "notes_line", "label": "Notes", "type": "text"}]}
+    assert module_edit.upsert_sheet_type(mid, "warden", narrowed)["ok"]
+    assert module_edit.delete_group(mid, "attributes")["ok"]
+
+
+def test_export_drops_the_cruft_a_duplicate_drops(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    root = modules.pack_root(mid)[0]
+    (root / ".DS_Store").write_bytes(b"\x00")
+    (root / "rules").mkdir(exist_ok=True)
+    (root / "rules" / "Thumbs.db").write_bytes(b"\x00")
+    (root / "rules" / "combat.md").write_text("---\nalways: true\n---\nbody\n", encoding="utf-8")
+    with zipfile.ZipFile(io.BytesIO(module_edit.export_module(mid))) as z:
+        names = z.namelist()
+    assert f"{mid}/rules/combat.md" in names and f"{mid}/sheets.json" in names
+    assert not any(n.endswith((".DS_Store", "Thumbs.db")) for n in names)

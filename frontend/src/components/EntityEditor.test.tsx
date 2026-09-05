@@ -1452,12 +1452,12 @@ test("a choice field is a picker over its source's options and sends the chosen 
 
 test("a number field is a bounded number input", async () => {
   render(<EntityEditor wid="w" kind="locations" />);
-  const input = await screen.findByLabelText("Weather persistence") as HTMLInputElement;
+  const input = await screen.findByLabelText<HTMLInputElement>("Weather persistence");
   expect(input.type).toBe("number");
   expect(input.min).toBe("0");
   expect(input.max).toBe("1");
   // and a text field stays a text box
-  expect((screen.getByLabelText("Weather zone") as HTMLInputElement).type).toBe("text");
+  expect(screen.getByLabelText<HTMLInputElement>("Weather zone").type).toBe("text");
 });
 
 test("a stored choice value outside the options is shown, not blanked", async () => {
@@ -1470,9 +1470,26 @@ test("a stored choice value outside the options is shown, not blanked", async ()
   render(<EntityEditor wid="w" kind="locations" />);
   fireEvent.click(await screen.findByText("Fogbank"));
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
-  const picker = await screen.findByLabelText("Climate") as HTMLSelectElement;
+  const picker = await screen.findByLabelText<HTMLSelectElement>("Climate");
+  await waitFor(() => expect(within(picker).getByText("Saltmarch fog")).toBeInTheDocument());
   expect(picker.value).toBe("temperate-costal");
   expect(within(picker).getByText(/temperate-costal \(not an option\)/)).toBeInTheDocument();
+});
+
+test("a stored choice value is not called 'not an option' while the list has not arrived", async () => {
+  // A request outage is not a fact about the value: until the source answers
+  // (and for good if it fails) the value is simply shown, still selected.
+  (api.listClimates as any).mockRejectedValue(new Error("offline"));
+  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "fogbank", name: "Fogbank", climate: "temperate-interior" }, body: "grey" });
+  render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Fogbank"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  const picker = await screen.findByLabelText<HTMLSelectElement>("Climate");
+  expect(picker.value).toBe("temperate-interior");
+  expect(within(picker).getByText("temperate-interior")).toBeInTheDocument();
+  expect(within(picker).queryByText(/not an option/)).toBeNull();
 });
 
 test("the sidebar names a chosen option by its label", async () => {
