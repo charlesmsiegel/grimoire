@@ -46,6 +46,69 @@ for the cover decode only.
   deliberately; do not raise any other cap without saying why in the commit.
 - **Commit after every task.** Small commits, present tense, no "fix" or "wip".
 
+### Test files and fixtures — read this before Task 1
+
+**There are no global `cid`, `wid` or `_png` fixtures.** `backend/tests/conftest.py`
+defines `client` (`:52`) and nothing else you will want. `cid` is a *local*
+fixture in thirteen modules, `wid` in three, and `_png` is a module-level helper
+function, not a fixture — so `def test_x(cid, wid)` errors with *fixture not
+found* and a bare `_png()` is a `NameError`. **Every task below that adds tests
+ships its own preamble**, and they are written out rather than implied.
+
+The standard preamble, used verbatim by Tasks 3, 6, 7, 8, 9 and 10:
+
+```python
+import io
+
+import pytest
+from PIL import Image
+
+from grimoire.store import campaigns, worlds
+
+
+def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def wid(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return worlds.create_world("Realm")
+
+
+@pytest.fixture
+def cid(wid):
+    return campaigns.create_campaign("Saltmarch Nights", wid)
+```
+
+For **route** tests the `client` fixture already sets `GRIMOIRE_HOME`, so build
+the world and campaign through the API inside the test rather than re-seeding.
+
+**Put new tests in the suites that already exist.** These files are real and are
+the ones that go red when you change the behaviour they cover — a new file
+beside them means the existing one stays unrun and stays red on its own:
+
+| Concern | The file that already owns it |
+|---|---|
+| campaign library store | `test_campaign_images_store.py` |
+| campaign library routes | `test_routes.py` (`:1088` onward) |
+| world gallery | `test_world_gallery_route.py` |
+| campaign gallery | `test_campaign_gallery.py` |
+| todo chores | `test_todo_route.py` (singular) |
+| rail badges | `test_shell_route.py` (singular) |
+| export image rewriting | `test_export_store.py` (`:51,68,81`) |
+| EPUB | `test_epub_store.py` |
+| campaign lifecycle | `test_campaigns_store.py` |
+| sync | `test_sync_store.py` |
+| world routes | `test_routes.py` |
+
+`test_campaign_lifecycle.py`, `test_sync.py`, `test_worlds_routes.py`,
+`test_shell_routes.py` and `test_epub.py` **do not exist**. `pytest` exits 4 on a
+missing path and runs *nothing else in that invocation*, so naming one silently
+skips the whole verification step.
+
 ---
 
 ### Task 1: Extract the scope-free policy into `store/image_library.py`
@@ -341,6 +404,9 @@ door. `delete_image` here removes bytes only; Task 5 wires the sweep in.
 
 - [ ] **Step 1: Write the failing test**
 
+Open the file with the standard preamble from Global Constraints (it needs
+`wid` and `_png`), then:
+
 ```python
 def test_put_list_serve_delete_round_trip(wid):
     assert world_images.list_images(wid) == []
@@ -507,14 +573,18 @@ the world-side sweep both need (`_drop_deleted` is private and
 ```python
 def drop_library_tombstone(cid: str, name: str) -> None:
     """Un-hide one inherited library image. See `store.campaign_images`."""
-    _drop_deleted(cid, {_library_ref(name)})
+    _drop_deleted(cid, {library_ref(name)})
 
 
-def _library_ref(name: str) -> str:
+def library_ref(name: str) -> str:
     """`assets/library/<name>`, the library's tombstone shape.
 
     Three segments where `_asset_ref`'s are five, and `library` is not a kind —
     so it cannot be misread by anything that parses the record shape.
+
+    Public, because `store.campaign_images` builds and tests this ref on every
+    read: a private name reached across the module boundary is the thing the
+    import guard's reasoning is about.
     """
     return f"assets/library/{name}"
 ```
@@ -543,7 +613,7 @@ now true; leave the rest of the entry's claims alone.
 
 - [ ] **Step 6: Run the guards and the touched suites**
 
-Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_overlay_tombstones.py tests/test_lock_domain_guard.py tests/test_lock_order_guard.py tests/test_overlay.py tests/test_campaign_lifecycle.py tests/test_sync.py -q`
+Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_overlay_tombstones.py tests/test_lock_domain_guard.py tests/test_lock_order_guard.py tests/test_overlay.py tests/test_campaigns_store.py tests/test_sync_store.py -q`
 Expected: PASS. A hang here means a caller of `add_deleted` holds a *different*
 campaign's lock — find it and hoist the hold rather than dropping this one.
 
@@ -574,7 +644,26 @@ table and its warning about the tombstone filter before writing a line.
   `images_dir(cid)` now means *the campaign's own directory* and its docstring
   says so.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Widen the existing fixture, then write the failing tests**
+
+These go in the **existing** `test_campaign_images_store.py`, whose `cid` fixture
+(`:18`) does not expose the world id. Widen it first — every existing test in the
+file keeps working, because they only ask for `cid`:
+
+```python
+@pytest.fixture
+def wid(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return worlds.create_world("Realm")
+
+
+@pytest.fixture
+def cid(wid):
+    return campaigns.create_campaign("Saltmarch Nights", wid)
+```
+
+The file's `_png(size, color=...)` helper (`:11`) already takes a colour, so
+`_png(color=(90, 90, 90))` below is valid. Add `world_images` to its imports.
 
 ```python
 def test_a_campaign_sees_its_worlds_library(cid, wid):
@@ -627,7 +716,46 @@ def test_a_campaign_image_under_a_hidden_name_is_listed_and_served(cid, wid):
 def test_deleting_a_world_image_clears_the_campaigns_that_hid_it(cid, wid):
     world_images.put_image(wid, "coastline", _png(), "png")
     campaign_images.delete_image(cid, "coastline")
-    assert campaign_images.list_hidden(cid) == []  # placeholder; see Step 5
+    assert campaign_images.list_hidden(cid) == ["coastline"]
+
+    world_images.delete_image(wid, "coastline")     # the sweep runs here
+    assert campaign_images.list_hidden(cid) == []
+
+
+def test_a_campaign_keeps_its_own_name_when_the_world_later_takes_it(cid, wid):
+    """The accidental collision: nothing can stop a world adding a name a
+    campaign already holds, so the campaign's own file wins — it is theirs, and
+    its posts already point at it."""
+    own = _png(color=(90, 90, 90))
+    campaign_images.put_image(cid, "coastline", own, "png")
+    world_images.put_image(wid, "coastline", _png(), "png")
+
+    assert [(r["name"], r["inherited"]) for r in campaign_images.list_images(cid)] \
+        == [("coastline", False)]
+    assert campaign_images.image_path(cid, "coastline").read_bytes() == own
+
+
+def test_a_logical_name_is_one_image_across_extensions(cid, wid):
+    """`map.png` here and `map.webp` there are the SAME name. Shipping the other
+    rule was a real bug (`campaigns/lifecycle.py:333`)."""
+    world_images.put_image(wid, "coastline", _png(), "webp")
+    with pytest.raises(ValueError):
+        campaign_images.put_image(cid, "coastline", _png(), "png")
+
+
+def test_a_campaign_whose_world_is_gone_reads_as_an_empty_world_half(cid, wid):
+    """Not an exception: `GET /images`, the gallery, the art pool and the EPUB
+    export all run through here, and a 500 on each is worse than an empty half."""
+    worlds.delete_world(wid)
+    assert campaign_images.list_images(cid) == []
+    assert campaign_images.image_path(cid, "coastline") is None
+
+
+def test_an_inherited_image_is_versioned_by_the_file_that_backs_it(cid, wid):
+    world_images.put_image(wid, "coastline", _png(), "png")
+    assert campaign_images.image_version(cid, "coastline") == \
+        world_images.image_version(wid, "coastline") != ""
+
 
 def test_descriptions_come_from_whichever_side_owns_the_image(cid, wid):
     world_images.put_image(wid, "coastline", _png(), "png")
@@ -637,7 +765,12 @@ def test_descriptions_come_from_whichever_side_owns_the_image(cid, wid):
 
     assert campaign_images.read_descriptions(cid) == {
         "coastline": "a rocky shore", "handout": "the party's map"}
-    assert [i["name"] for i in campaign_images.own_undescribed(cid)] == []
+
+    # `own_undescribed` must be able to report something before an empty list
+    # means anything -- against a stub returning [] the assertion below passes
+    # for the wrong reason.
+    campaign_images.put_image(cid, "sketch", _png(), "png")
+    assert [i["name"] for i in campaign_images.own_undescribed(cid)] == ["sketch"]
 
 
 def test_a_campaign_may_not_describe_an_inherited_image(cid, wid):
@@ -646,10 +779,27 @@ def test_a_campaign_may_not_describe_an_inherited_image(cid, wid):
         campaign_images.set_description(cid, "coastline", "mine")
 ```
 
-Note: the fifth test above is a placeholder assertion — replace it in Step 5
-once the sweep exists. Fix `test_deleting_a_world_image_clears_the_campaigns_that_hid_it`
-to assert `campaign_images.list_hidden(cid) == []` **after**
-`world_images.delete_image(wid, "coastline")`.
+The sweep half of `test_deleting_a_world_image_clears_the_campaigns_that_hid_it`
+goes red until Step 5 wires the sweep in; everything above it goes green in
+Step 3. That is the one test in this task that spans two steps, and it is
+written with its real assertions rather than a placeholder so that a failure
+always means what it says.
+
+Also add the busy-campaign case, which is the whole reason the sweep may be
+best-effort:
+
+```python
+def test_a_busy_campaign_keeps_a_hidden_entry_it_can_still_clear(cid, wid, monkeypatch):
+    world_images.put_image(wid, "coastline", _png(), "png")
+    campaign_images.delete_image(cid, "coastline")
+
+    def busy(_cid, _name):
+        raise locks.CampaignBusy(_cid)
+    monkeypatch.setattr(overlay, "drop_library_tombstone", busy)
+
+    world_images.delete_image(wid, "coastline")      # must NOT raise
+    assert campaign_images.list_hidden(cid) == ["coastline"]   # visible, restorable
+```
 
 - [ ] **Step 2: Run and watch them fail**
 
@@ -658,6 +808,35 @@ Expected: the new tests FAIL; the pre-existing ones (except the known `[map*]`)
 still pass.
 
 - [ ] **Step 3: Implement resolution**
+
+First the helper both faces need. It does **not** exist yet, and it is not
+`overlay.wroot_of`: that returns a `Path` and deliberately never raises, while
+`world_images` takes a *wid* and raises `WorldNotFound` from `images_dir`.
+
+```python
+def _world_images(cid: str) -> list[dict]:
+    """The world's library as this campaign sees it, empty when there is none.
+
+    A campaign names its world in its own meta, so the id comes from there
+    rather than from `overlay.wroot_of(cid).name` — a path basename is a
+    spelling, not a reference.
+
+    `WorldNotFound` is caught rather than propagated, and that is the whole
+    reason this is a function. A campaign whose world was deleted still has to
+    answer `GET /images`, the gallery, the narrator's art pool and an EPUB
+    export; raising through all four turns a missing world into four 500s. An
+    empty world half is what the spec requires and what every other overlay read
+    already does.
+    """
+    try:
+        wid = campaigns_read.read_campaign(cid)["meta"].get("world") or ""
+        return world_images.list_images(wid) if wid else []
+    except (worlds_paths.WorldNotFound, campaigns_paths.CampaignNotFound, OSError):
+        return []
+```
+
+`image_path` needs the same tolerance, so give it the same treatment via a
+`_world_image_path(cid, name)` twin rather than repeating the `try`.
 
 ```python
 def list_images(cid: str) -> list[dict]:
@@ -670,10 +849,9 @@ def list_images(cid: str) -> list[dict]:
     mine = image_library.listing(images_dir(cid))
     have = {i["name"] for i in mine}
     gone = overlay.deleted(cid)
-    wid = _world_of(cid)
-    inherited = [i for i in world_images.list_images(wid)
+    inherited = [i for i in _world_images(cid)
                  if i["name"] not in have
-                 and overlay._library_ref(i["name"]) not in gone] if wid else []
+                 and overlay.library_ref(i["name"]) not in gone]
     return sorted([{**i, "inherited": False} for i in mine]
                   + [{**i, "inherited": True} for i in inherited],
                   key=lambda i: i["name"])
@@ -684,11 +862,14 @@ def image_path(cid: str, name: str) -> Path | None:
     mine = assets.path_in(images_dir(cid), name, supported_only=True)
     if mine is not None:
         return mine
-    if overlay._library_ref(name) in overlay.deleted(cid):
+    if overlay.library_ref(name) in overlay.deleted(cid):
         return None
-    wid = _world_of(cid)
-    return world_images.image_path(wid, name) if wid else None
+    return _world_image_path(cid, name)
 ```
+
+`image_version(cid, name)` follows `image_path`, not `images_dir` — an inherited
+image is versioned by the world file that backs it, which is what makes its
+`?v=` immutable URL correct.
 
 `put_image` refuses a name the world holds *now* (`ValueError`), `delete_image`
 unlinks campaign-side then tombstones if the world still holds the name
@@ -698,8 +879,9 @@ a revert), `restore_image` calls `overlay.drop_library_tombstone`,
 unions the world's map for inherited names with the campaign's for its own, and
 `set_description` raises `ValueError` for a name the campaign does not own.
 
-`_library_ref` is used across module boundaries, so promote it to public
-`overlay.library_ref(name)` and update Task 4's file accordingly.
+Add `image_version` to the module's public surface explicitly — it is easy to
+leave pointing at `images_dir` while everything around it learns to read
+through, and the failure (an inherited image versioned `""`) is silent.
 
 - [ ] **Step 4: Update the module docstring**
 
@@ -780,9 +962,17 @@ def test_the_library_round_trips_over_http(client, wid):
 
 
 def test_the_describe_backlog_is_not_shadowed_by_the_name_route(client, wid):
-    """`/images/undescribed` must keep answering the backlog, not 404 as an image."""
+    """`/images/undescribed` must keep answering the backlog, not 404 as an image.
+
+    Asserting on a NON-EMPTY backlog, because `[]` is what a shadowed route and
+    an empty backlog both look like -- which is the one distinction this test
+    exists to make.
+    """
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("c.png", _png(), "image/png")})
     r = client.get(f"/api/worlds/{wid}/images/undescribed")
-    assert r.status_code == 200 and isinstance(r.json(), list)
+    assert r.status_code == 200
+    assert [i["name"] for i in r.json()] == ["coastline"]
 
 
 def test_a_name_a_link_cannot_carry_is_refused_before_any_byte_is_written(client, wid):
@@ -805,10 +995,17 @@ Expected: 404s everywhere — the router does not exist.
 
 - [ ] **Step 3: Write the routes**
 
-Mirror `routes/campaigns.py`'s library block exactly, including the two-stage
-size check (`file.size` **before** `await file.read()`, then `validate_size`),
-`_upload_image_ext` for the stored extension, and an ungated `DELETE`. The module
-docstring carries the ordering constraint:
+Mirror `routes/campaigns.py`'s library block for the two-stage size check
+(`file.size` **before** `await file.read()`, then `validate_size`),
+`_upload_image_ext` for the stored extension, and an ungated `DELETE`.
+
+**One thing does not mirror: the 404.** The campaign block leans on
+`_campaign_root_or_404`; there is no world equivalent and no global handler —
+every world route catches `WorldNotFound` by hand (`routes/worlds.py:85,96,105`).
+Copying the campaign shape verbatim gives a **500** for an unknown world. Write a
+`_world_or_404(wid)` helper in the new module and use it in all nine routes.
+
+The module docstring carries the ordering constraint:
 
 ```python
 """The world's cover and image library (`store/world_images.py`, `store/covers.py`).
@@ -909,7 +1106,7 @@ functions rather than the routes.
 
 - [ ] **Step 5: Run, including the frozen fixture**
 
-Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_world_images_routes.py tests/test_worlds_routes.py tests/test_frozen_campaign.py -q`
+Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_world_images_routes.py tests/test_routes.py tests/test_frozen_campaign.py -q`
 Expected: PASS, and `test_frozen_campaign` must **not** need regenerating. If it
 does, the token leaked into a store function — move it back into the route.
 
@@ -927,7 +1124,7 @@ git commit -m "A world wears its cover on the shelf"
 
 **Files:**
 - Modify: `backend/src/grimoire/routes/campaigns.py`
-- Test: `backend/tests/test_campaign_images_routes.py`
+- Test: `backend/tests/test_routes.py` (the campaign library block from `:1088`)
 
 **Interfaces:**
 - Produces: `GET /campaigns/{cid}/images` rows carry `inherited`, and the
@@ -975,23 +1172,40 @@ def test_the_campaign_backlog_leaves_inherited_art_to_the_world(client, cid, wid
 
 - [ ] **Step 2: Run and watch it fail**
 
-Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_campaign_images_routes.py -q`
+Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_routes.py -q`
 
 - [ ] **Step 3: Change the routes**
 
-`GET /images` returns `{"images": [...], "hidden": [...]}` — a shape change, so
-update every caller in the same commit (`PostImagePicker` is Task 15; the
-frontend does not build until then, which is expected and fine). `PUT` maps the
+`GET /images` returns `{"images": [...], "hidden": [...]}`. `PUT` maps the
 store's `ValueError` for a world-held name to **409**, not 400: the name is not
 malformed, it is taken. `PUT .../description` does the same. Add the `restore`
 route. `GET /images/undescribed` switches its library half to `own_undescribed`.
 
+**Fix the descriptions read while you are here — this is a silent bug, not a
+tidy-up.** `routes/campaigns.py:744` builds its sidecar map as
+`image_descriptions.read_in(campaign_images.images_dir(cid), names=...)`. After
+Task 5 that directory holds only the campaign's *own* images while `images`
+carries inherited rows too, so **every inherited image would ship with
+`description: ""` and `described: false`** to the picker, the gallery and the
+describe queue — art that is described in the world reading as undescribed
+everywhere a campaign looks at it. Replace it with
+`campaign_images.read_descriptions(cid)`, and do the same at `:764`, the
+campaign-side describe route, which reads the same wrong directory.
+
+**The response shape changes, and the frontend does not follow until Task 15.**
+Say so plainly rather than implying a gate will catch it: nothing in this task
+touches TypeScript, so `tsc` stays green and vitest stays green (the picker
+mocks the api) while the running app's picker is broken. Green gates, broken
+app, for the seven commits between here and Task 15. The alternative — holding
+this task's commit until the client lands — trades a known window for a much
+larger commit, so keep the window and keep it named.
+
 - [ ] **Step 4: Run and commit**
 
-Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_campaign_images_routes.py tests/test_route_order.py -q`
+Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_routes.py tests/test_route_order.py tests/test_campaign_images_store.py -q`
 
 ```bash
-git add backend/src/grimoire/routes/campaigns.py backend/tests/test_campaign_images_routes.py
+git add backend/src/grimoire/routes/campaigns.py backend/tests/test_routes.py
 git commit -m "A campaign's library answers for its world's pictures too"
 ```
 
@@ -1003,7 +1217,9 @@ git commit -m "A campaign's library answers for its world's pictures too"
 - Modify: `backend/src/grimoire/routes/characters.py` (both galleries + backlog)
 - Modify: `backend/src/grimoire/routes/todo.py`
 - Modify: `backend/src/grimoire/routes/shell.py`
-- Test: `backend/tests/test_gallery_routes.py`, `backend/tests/test_todo_routes.py`
+- Test: `backend/tests/test_world_gallery_route.py`, `backend/tests/test_campaign_gallery.py`,
+  `backend/tests/test_todo_route.py`, `backend/tests/test_shell_route.py` (all
+  four exist; put each test in the suite that already owns the surface)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1059,14 +1275,25 @@ def test_a_library_only_backlog_still_raises_the_chore(client, wid):
   "Images".
 - `routes/shell.py:130`: add the library's count to the badge.
 
+**All three new calls go INSIDE the existing per-world `except` handler.** Each
+of those three sites already wraps its per-world work in
+`except (OSError, store.worlds.paths.WorldNotFound)`, and two existing tests
+exist precisely to hold that: `test_todo_route.py:375` monkeypatches
+`has_undescribed` to raise and asserts the badge survives, and
+`test_shell_route.py:208` monkeypatches `undescribed_count` to raise and asserts
+`images_undescribed is None`, with a docstring warning that a leak would 500
+every navigation. A library call placed outside the `try` passes its own new
+test and reds both of those.
+
 - [ ] **Step 4: Run and commit**
 
-Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_gallery_routes.py tests/test_todo_routes.py tests/test_shell_routes.py -q`
+Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_world_gallery_route.py tests/test_campaign_gallery.py tests/test_todo_route.py tests/test_shell_route.py -q`
 
 ```bash
 git add backend/src/grimoire/routes/characters.py backend/src/grimoire/routes/todo.py \
-        backend/src/grimoire/routes/shell.py backend/tests/test_gallery_routes.py \
-        backend/tests/test_todo_routes.py
+        backend/src/grimoire/routes/shell.py backend/tests/test_world_gallery_route.py \
+        backend/tests/test_campaign_gallery.py backend/tests/test_todo_route.py \
+        backend/tests/test_shell_route.py
 git commit -m "The gallery, the queue and the badge all count the world's own art"
 ```
 
@@ -1077,23 +1304,24 @@ git commit -m "The gallery, the queue and the badge all count the world's own ar
 **Files:**
 - Modify: `backend/src/grimoire/store/export.py`
 - Modify: `backend/src/grimoire/store/context/art.py`
-- Test: `backend/tests/test_export_images.py`, `backend/tests/test_context_art.py`
+- Test: `backend/tests/test_export_store.py` (`:51,68,81` already cover the
+  resolver this rewrites), `backend/tests/test_context_art.py`
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-def test_a_book_carries_the_worlds_picture_through_a_campaign_url(cid, wid):
+@pytest.mark.parametrize("shape", ["campaigns/{cid}", "worlds/{wid}"])
+def test_a_book_carries_the_worlds_picture_in_either_url_shape(cid, wid, shape):
+    """Asserting the exact rewrite AND the packed source, the bar
+    `test_export_store.py:81-89` already sets. `"images/" in out` is true for any
+    packed image and would pass while packing the wrong file."""
     world_images.put_image(wid, "coastline", _png(), "png")
-    text = f"![shore](/api/campaigns/{cid}/images/coastline)"
+    url = "/api/" + shape.format(cid=cid, wid=wid) + "/images/coastline"
     images = export.Images()
-    assert "images/" in export.rewrite_images(text, cid, images)
 
-
-def test_a_world_shaped_library_url_in_inherited_lore_packs_too(cid, wid):
-    world_images.put_image(wid, "coastline", _png(), "png")
-    text = f"![shore](/api/worlds/{wid}/images/coastline)"
-    images = export.Images()
-    assert "images/" in export.rewrite_images(text, cid, images)
+    out = export.rewrite_images(f"![shore]({url})", cid, images)
+    assert out == "![shore](images/img-000.png)"
+    assert list(images.by_path) == [world_images.image_path(wid, "coastline")]
 
 
 @pytest.mark.parametrize("shape", ["campaigns/{cid}", "worlds/{wid}"])
@@ -1116,6 +1344,12 @@ honoured in either shape: a world-shaped URL in an inherited lore body is still
 being exported *for that campaign*, and resolving it world-side would pack the
 one picture the reader hid.
 
+**Two comments in `export.py` become false and must move with the code**, not be
+left for a later reader to trip on: `:49-52` states the `lib` branch is spelled
+out separately *so that it does not match* `/api/worlds/<wid>/images/<name>`, and
+`:161-169` says "No overlay: the campaign library is campaign-local and inherits
+nothing." Both are load-bearing explanations of the exact lines being changed.
+
 In `context/art.py`, point `_library_candidates` and `_resolved` at
 `campaign_images.list_images` / `read_descriptions` / `image_path`. Correct the
 module docstring's cost note: the pool now includes the world's library, so the
@@ -1124,11 +1358,11 @@ add a limit.
 
 - [ ] **Step 4: Run and commit**
 
-Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_export_images.py tests/test_context_art.py tests/test_epub.py -q`
+Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_export_store.py tests/test_context_art.py tests/test_epub_store.py -q`
 
 ```bash
 git add backend/src/grimoire/store/export.py backend/src/grimoire/store/context/art.py \
-        backend/tests/test_export_images.py backend/tests/test_context_art.py
+        backend/tests/test_export_store.py backend/tests/test_context_art.py
 git commit -m "The book and the narrator both reach the world's pictures"
 ```
 
@@ -1172,6 +1406,23 @@ the campaign's own half by definition and the read-through is `list_images`'
 job. Raise the marker cap from 4 to 6 and say in the comment why the two new
 ones were spent.
 
+- [ ] **Step 3b: Add the campaign-fork inheritance test**
+
+The spec requires it and `store/fork.py` needs no change, which is exactly why it
+is worth asserting — a fork shares the world, so it inherits the same library and
+the same hidden entries. In `test_fork_store.py`:
+
+```python
+def test_a_fork_inherits_the_same_library_and_the_same_hidden_entries(cid, wid):
+    world_images.put_image(wid, "coastline", _png(), "png")
+    world_images.put_image(wid, "banner", _png(), "png")
+    campaign_images.delete_image(cid, "banner")          # hidden in the source
+
+    forked = fork.fork_campaign(cid, "Saltmarch Nights II")
+    assert [i["name"] for i in campaign_images.list_images(forked)] == ["coastline"]
+    assert campaign_images.list_hidden(forked) == ["banner"]
+```
+
 - [ ] **Step 4: Seed a world cover and a library image in the fixtures**
 
 `world_fixtures.SEEDED_FILES` has no world-root `assets/` entry, so
@@ -1182,13 +1433,19 @@ existing tests become load-bearing with no other change.
 
 - [ ] **Step 5: Run and commit**
 
-Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_overlay_guard.py tests/test_world_bundle.py tests/test_world_fork.py -q`
+Run: `cd backend && PYTHONPATH=src <PY> -m pytest tests/test_overlay_guard.py tests/test_world_bundle.py tests/test_world_fork.py tests/test_fork_store.py -q`
 
 ```bash
 git add backend/tests/test_overlay_guard.py backend/tests/world_fixtures.py \
+        backend/tests/test_fork_store.py \
         backend/src/grimoire/store/covers.py backend/src/grimoire/store/campaign_images.py
 git commit -m "The guard learns the one inheritable thing that is not a kind"
 ```
+
+**The `CampaignBusy` behaviour change has no CHANGELOG to go in** — there isn't
+one in the tree. It lives as the comment Task 4 Step 4 adds at the call site,
+and in the body of that task's commit message, which is where this repo's
+behaviour changes are recorded. Deliberate, not an omission.
 
 ---
 
@@ -1197,9 +1454,10 @@ git commit -m "The guard learns the one inheritable thing that is not a kind"
 **Files:**
 - Modify: `backend/tests/test_routes.py`
 
-`_actor_image_write_routes` (`:858`) requires a record segment before `/images`,
-and `_campaign_library_write_routes` (`:1088`) is `^/api/campaigns/` only — so
-neither reaches the new routes. `test_path_guard_store.py`'s generic `_id_routes()`
+`_image_write_routes` (`test_routes.py:830` — note that `:1092`'s docstring
+calls it `_actor_image_write_routes`, a name that no longer exists) requires a
+record segment before `/images`, and `_campaign_library_write_routes` (`:1088`)
+is `^/api/campaigns/` only — so neither reaches the new routes. `test_path_guard_store.py`'s generic `_id_routes()`
 sweep does, but the targeted enumerations are what catch "route number five,
 added later by someone who did not read this file".
 
@@ -1250,6 +1508,12 @@ and `CampaignLibrary = { images: CampaignImage[]; hidden: string[] }`.
 `restoreCampaignImage`. Mirror the campaign equivalents including
 `encodeSegment` on every name.
 
+**Retype `listCampaignImages` (`client.ts:1616`) from `CampaignImage[]` to
+`CampaignLibrary`.** Task 8 changed that response to `{images, hidden}`, and this
+is the single edit that carries the change through to every caller — without it
+`PostImagePicker` (`:160-169,223`) reads `.map` off an object and the picker
+breaks at runtime while `tsc` and vitest stay green.
+
 - [ ] **Step 3: Run and commit**
 
 Run: `cd frontend && npx vitest run src/api/client.test.ts`
@@ -1265,7 +1529,10 @@ git commit -m "The client learns the world's pictures"
 
 **Files:**
 - Create: `frontend/src/components/CoverPanel.tsx`
-- Delete: `frontend/src/components/CampaignCover.tsx` (moved, not rewritten)
+- Delete: `frontend/src/components/CampaignCover.tsx` (moved, not rewritten) **and
+  rename `CampaignCover.test.tsx` to `CoverPanel.test.tsx`** — it exists, and
+  left behind it imports a module that is gone, which fails `vitest run` for the
+  whole suite rather than one file
 - Modify: `frontend/src/routes/{CampaignHub,CampaignView,WorldsView,WorldView}.tsx`,
   `frontend/src/index.css`
 - Test: `frontend/src/components/CoverPanel.test.tsx`, `routes/WorldsView.test.tsx`
@@ -1295,6 +1562,11 @@ button.
 Run: `cd frontend && npx vitest run src/components/CoverPanel.test.tsx src/routes/WorldsView.test.tsx`
 
 ```bash
+git add frontend/src/components/CoverPanel.tsx frontend/src/components/CoverPanel.test.tsx \
+        frontend/src/routes/CampaignHub.tsx frontend/src/routes/CampaignView.tsx \
+        frontend/src/routes/WorldsView.tsx frontend/src/routes/WorldView.tsx \
+        frontend/src/index.css frontend/src/routes/WorldsView.test.tsx
+git add -u frontend/src/components/   # records the CampaignCover deletion
 git commit -m "The worlds shelf gets its pictures"
 ```
 
@@ -1353,13 +1625,22 @@ git commit -m "World art gets a tab, and a hidden picture gets a way back"
 export and art → 10; the guard gap, rosters and fixtures → 1, 3, 11, 12;
 frontend → 13–15. The no-migration note needs no task by construction.
 
-**Placeholders.** One deliberate marker: Task 5 Step 1's
-`test_deleting_a_world_image_clears_the_campaigns_that_hid_it` is written with a
-placeholder assertion and Step 5 says to finish it once the sweep exists. That is
-called out in both places rather than left to be discovered.
+**Placeholders.** None. The one test that spans two steps
+(`test_deleting_a_world_image_clears_the_campaigns_that_hid_it`) is written with
+its real assertions and the split is named in both places, so a failure there
+always means what it says.
 
-**Type consistency.** `overlay.library_ref(name)` is public from Task 4 (Task 5
-Step 3 promotes it and says so); `list_images` rows carry `inherited` everywhere
-from Task 5 on; `GET /campaigns/{cid}/images` returns `{images, hidden}` from
-Task 8, which Task 15 consumes; `has_undescribed`/`undescribed_count` are
-distinct in Task 3 and stay distinct in Task 9.
+**Type consistency.** `overlay.library_ref(name)` is public from Task 4 and is
+spelled that way in every Task 5 code block. `list_images` rows carry
+`inherited` from Task 5 on. `GET /campaigns/{cid}/images` returns
+`{images, hidden}` from Task 8; `listCampaignImages` is retyped to
+`CampaignLibrary` in Task 13 and consumed in Task 15 — that chain is the one the
+gates cannot check, so it is stated in all three places.
+`has_undescribed`/`undescribed_count` are distinct in Task 3 and stay distinct
+in Task 9. `campaign_images.image_version` follows `image_path` rather than
+`images_dir`, named explicitly in Task 5 because the failure is silent.
+
+**Fixtures.** Every task that adds tests either ships the standard preamble from
+Global Constraints (3, 6, 7, 8, 9, 10), widens an existing fixture and says so
+(5), or already resolves against the file it edits (1, 2). No task assumes a
+global `cid`, `wid` or `_png`.
