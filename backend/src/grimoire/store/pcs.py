@@ -111,7 +111,10 @@ def _write_meta(root: Path, pid: str, name: str, tags: list[str], default_versio
 
 
 def _tags_of(meta: dict) -> list[str]:
-    return [t for t in meta.get("tags", "").split(",") if t]
+    # Stripped, matching `greetings._tags_list`: a PC's tags are compared to a
+    # greeting's `requires_tags` verbatim, so a space on either side of the
+    # comma silently stops every gated greeting from being offered.
+    return [t for t in (x.strip() for x in meta.get("tags", "").split(",")) if t]
 
 
 def create_pc(root: Path, name: str, tags: list[str], version_name: str = "default",

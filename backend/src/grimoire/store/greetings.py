@@ -36,7 +36,11 @@ def _plotmap_path(root: Path) -> Path:
 
 
 def _tags_list(s: str) -> list[str]:
-    return [t for t in s.split(",") if t]
+    # Stripped, because these fields are hand-edited as often as they are
+    # written by the API. A `requires_tags: male, household` typed into a file
+    # used to read as the literal tag " household", which no player tag can
+    # ever match, and the greeting then silently never appeared.
+    return [t for t in (x.strip() for x in s.split(",")) if t]
 
 
 def _meta_dict(gid: str, meta: dict) -> dict:

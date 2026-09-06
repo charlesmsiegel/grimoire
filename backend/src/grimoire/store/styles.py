@@ -44,7 +44,8 @@ def _custom_path(sid: str) -> Path:
 
 
 def _tags_list(s: str) -> list[str]:
-    return [t for t in s.split(",") if t]
+    # Stripped, matching `greetings._tags_list` -- these are hand-edited too.
+    return [t for t in (x.strip() for x in s.split(",")) if t]
 
 
 def _meta_dict(sid: str, meta: dict, built_in: bool) -> dict:

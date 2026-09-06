@@ -825,10 +825,16 @@ def test_a_demoted_greeting_leaves_the_worlds_plot_map_clean(monkeypatch, tmp_pa
     assert overlay.read_greeting(cid, gid)["body"].strip() == "She waits."
 
 
-def test_promote_refuses_a_greeting_whose_cast_entry_is_not_a_usable_id(monkeypatch, tmp_path):
-    """`greetings._tags_list` does not strip, so `present: mara, winifred` is
-    read as the literal id " winifred". Validating the stripped form would pass
-    a greeting that then fails to seat its cast in every campaign."""
+def test_promote_accepts_a_hand_typed_space_in_the_cast_list(monkeypatch, tmp_path):
+    """`greetings._tags_list` strips, so `present: mara, winifred` reads as the
+    two real ids and the greeting seats its cast normally.
+
+    This check used to refuse it, mirroring a reader that did not strip: the
+    literal id " winifred" failed `safe_id`, so the guard returned early and the
+    promote was rejected for a greeting that was in fact fine. Both spellings
+    must agree, and they now agree on the stripped one. The genuinely dangling
+    case -- a cast member the library does not have -- is covered by
+    `test_promote_refuses_a_greeting_whose_present_cast_is_campaign_local`."""
     wid, cid = _world_and_campaign(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     aid, vid = characters.create_character(wroot, "Winifred")
@@ -842,8 +848,9 @@ def test_promote_refuses_a_greeting_whose_cast_entry_is_not_a_usable_id(monkeypa
         f"present: {other},{aid}", f"present: {other}, {aid}"), encoding="utf-8")
     assert f"present: {other}, {aid}" in p.read_text(encoding="utf-8")
 
-    with pytest.raises(sync.DanglingReferenceError):
-        sync.promote(cid, "greetings", gid)
+    sync.promote(cid, "greetings", gid)
+
+    assert greetings.read_greeting(wroot, gid)["meta"]["present"] == [other, aid]
 
 
 def test_push_refuses_when_only_the_records_leftovers_are_in_the_world(monkeypatch, tmp_path):

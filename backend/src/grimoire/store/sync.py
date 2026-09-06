@@ -776,13 +776,14 @@ def _require_world_character(cid: str, wroot: Path, text: str, gid: str) -> None
     # `playing.start_from_greeting` reads every one of them. A campaign-local
     # name there publishes a greeting that raises the moment anyone starts it
     # -- in a sibling campaign, where nothing explains why (Codex review).
-    for name in str(meta.get("present", "")).split(","):
+    for name in (x.strip() for x in str(meta.get("present", "")).split(",")):
         if not name:
             continue
-        # `name`, not `name.strip()`. `greetings._tags_list` does not strip, so
-        # a hand-edited `present: mara, winifred` is read as the literal id
-        # " winifred" -- validating the stripped form passes a greeting that
-        # then fails to seat its cast in every campaign (Codex review).
+        # Stripped, because `greetings._tags_list` now strips too. These two
+        # must agree: validating a different id than the reader resolves either
+        # passes a greeting that cannot seat its cast, or -- as when neither
+        # stripped -- quietly skips the check because " winifred" fails
+        # `safe_id` and this returns early (Codex review).
         _require_world_actor(wroot, detached_here, name, gid, "opens with")
 
 
