@@ -36,7 +36,11 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   const [persona, setPersona] = useState<Persona>(blankPersona);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
-  const [worldTags, setWorldTags] = useState<string[]>([]);
+  // id -> label, kept whole: a greeting's `requires_tags` names tag IDS, so the
+  // wizard suggests the label and commits the id. Offering `Object.values` here
+  // seated PCs carrying "Lost Prince" against greetings gated on `lost-prince`,
+  // which no comparison in `greetings.availability` ever folds together.
+  const [worldTags, setWorldTags] = useState<Record<string, string>>({});
   const [worldPCs, setWorldPCs] = useState<PCSummary[]>([]);
   const [pickedPC, setPickedPC] = useState<string | null>(null); // an existing world PC to play
 
@@ -73,7 +77,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   useEffect(() => {
     if (!world) return;
     let live = true;
-    api.listTags(world).then((m) => setWorldTags(Object.values(m))).catch(() => setWorldTags([]));
+    api.listTags(world).then(setWorldTags).catch(() => setWorldTags({}));
     setPickedPC(null); // a pick belongs to one world
     api.listPCs({ kind: "world", id: world }).then(setWorldPCs).catch(() => setWorldPCs([]));
     // Seeded from the world, not left on this component's own default (#223).
@@ -97,9 +101,22 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     return () => { live = false; };
   }, [world]);
 
+  /** The id for what was typed: an id as-is, otherwise a label matched back to
+   *  its id (a reader who picks from the datalist sees the label), otherwise
+   *  the free string — a campaign tag need not be one the world declares. */
+  function tagId(typed: string): string {
+    if (worldTags[typed]) return typed;
+    const hit = Object.entries(worldTags)
+      .find(([, label]) => label.toLowerCase() === typed.toLowerCase());
+    return hit ? hit[0] : typed;
+  }
+
   function addTag() {
     const t = tagInput.trim();
-    if (t && !tags.includes(t)) setTags([...tags, t]);
+    if (t) {
+      const id = tagId(t);
+      if (!tags.includes(id)) setTags([...tags, id]);
+    }
     setTagInput("");
   }
 
@@ -327,7 +344,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
                 <div className="chips">
                   {tags.map((t) => (
                     <button key={t} className="chip on" onClick={() => setTags(tags.filter((x) => x !== t))}>
-                      {t} ✕
+                      {worldTags[t] ?? t} ✕
                     </button>
                   ))}
                 </div>
@@ -338,7 +355,9 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
                        onChange={(e) => setTagInput(e.target.value)}
                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }} />
                 <datalist id="wizard-tags">
-                  {worldTags.map((t) => <option key={t} value={t} />)}
+                  {Object.entries(worldTags).sort().map(([tid, label]) => (
+                    <option key={tid} value={label} />
+                  ))}
                 </datalist>
                 <button className="subtle" onClick={addTag} disabled={!tagInput.trim()}>Add</button>
               </div>

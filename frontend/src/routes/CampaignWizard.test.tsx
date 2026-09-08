@@ -316,3 +316,43 @@ test("switching worlds mid-flight keeps the world you landed on", async () => {
   await waitFor(() => expect(screen.getByLabelText("Calendar")).toHaveValue("gregorian"));
   expect(screen.getByLabelText("Holidays region")).toHaveValue("GB");
 });
+
+test("a world tag is suggested by label and committed as its id", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+
+  // the datalist offers the readable label, never the id a greeting matches on
+  const opts = await screen.findAllByRole("option", { hidden: true });
+  expect(opts.map((o) => (o as HTMLOptionElement).value)).toEqual(["rebel", "scholar"]);
+
+  fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "rebel" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  // the chip reads as the label, so picking one is not a lie about what was stored
+  await screen.findByRole("button", { name: /rebel ✕/ });
+
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
+    tags: ["t1"],
+  })));
+});
+
+test("a tag the world does not declare is committed verbatim", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+  fireEvent.change(await screen.findByLabelText("Add tag"), { target: { value: "stowaway" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await screen.findByRole("button", { name: /stowaway ✕/ });
+
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
+    tags: ["stowaway"],
+  })));
+});
