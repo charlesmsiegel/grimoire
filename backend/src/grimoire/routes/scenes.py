@@ -1718,7 +1718,8 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,
             return [], {**mech, "status": "failed",
                         "reason": "all scoped sheets invalid", "dropped": excluded}
         scene = store.scenes.read_scene(cid, sid)
-        transcript = store.chronicle.transcript_text(scene["messages"])
+        transcript = store.chronicle.transcript_text(
+            scene["messages"], store.appearances.player_label(cid, sid))
         messages = store.audit.build_prompt(transcript, blocks,
                                             store.audit.roll_lines(cid, sid))
         # `mech` is the accumulator every failure return below spreads, so the
@@ -2254,6 +2255,12 @@ class _Prepared(NamedTuple):
     transcript: str
     messages: list
     watermark: dict
+    #: The name this snapshot's transcript put on the player's unstamped posts.
+    #: Part of the snapshot for the same reason `scene` is: it is an input to
+    #: the render the model was shown, and a PC renamed while the call is in
+    #: flight would otherwise have every citation of those lines judged against
+    #: a name the prompt never used.
+    player_label: str
 
 
 class _ReviewCancelledError(Exception):
@@ -2433,9 +2440,11 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     # so the token alone would let a summary of a transcript that has moved
     # save with every check returning green.
     facts = store.chronicle.scene_facts(cid, sid)
-    transcript = store.chronicle.transcript_text(scene["messages"])
+    player_label = store.appearances.player_label(cid, sid)
+    transcript = store.chronicle.transcript_text(scene["messages"], player_label)
     prepared = _Prepared(
         epoch=epoch, scene=scene, ledger=ledger, facts=facts, transcript=transcript,
+        player_label=player_label,
         messages=store.absorb.build_prompt(
             transcript, facts,
             store.absorb.state_snapshot(cid, sid),
@@ -2530,7 +2539,8 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # never saw, and promotion (#121) measure a ledger this review does not
         # summarize.
         edits = store.absorb.materialize(cid, sid, parsed, prepared.scene["messages"],
-                                         turn_ledger=prepared.ledger)
+                                         turn_ledger=prepared.ledger,
+                                         player_label=prepared.player_label)
         # Unpacked in the order the phases were listed, not the order they
         # finished, so `edits` reads the same way every time.
         dossier_edits, dossiers = _phase_or_raise(dossier_result)
@@ -2959,7 +2969,8 @@ def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
     has_summary = bool(stored["summary"])
     intact = (has_summary
               and stored["at"] <= total
-              and store.rolling_summary.covered_digest(messages[:stored["at"]])
+              and store.rolling_summary.covered_digest(
+                  messages[:stored["at"]], store.appearances.player_label(cid, sid))
               == stored["digest"]
               and store.rolling_summary.facts_digest(facts) == stored["facts"])
     return {"summary": stored["summary"],
@@ -3021,7 +3032,8 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
         #
         # The prefix must be intact -- the fold describes those messages.
         intact = store.rolling_summary.covered_digest(
-            scene["messages"][:covered]) == digest
+            scene["messages"][:covered],
+            store.appearances.player_label(cid, sid)) == digest
         # ...the facts must be the facts it was given, for the same reason the
         # prefix must be the prefix. Review caught that adding facts to the
         # stored validity key did not, on its own, make them a PRECONDITION: a
@@ -3230,9 +3242,13 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     # landing while the model is answering must not be counted as covered by a
     # summary that never saw it.
     covered, base = len(messages), view["base"]
-    digest = store.rolling_summary.covered_digest(messages)
+    digest = store.rolling_summary.covered_digest(
+        messages, store.appearances.player_label(cid, sid))
     prompt = store.rolling_summary.build_prompt(
-        view["prior"], store.chronicle.transcript_text(messages[base:]), facts)
+        view["prior"],
+        store.chronicle.transcript_text(messages[base:],
+                                        store.appearances.player_label(cid, sid)),
+        facts)
     try:
         with store.usage.meter("rolling-summary", campaign=cid, scene=sid) as m:
             text = await client.complete(prompt, conn, m.usage)
@@ -3305,7 +3321,7 @@ def _break_provider(cid: str):
         return None
 
 
-def _break_intact(messages: list[dict], stored: dict) -> bool:
+def _break_intact(messages: list[dict], stored: dict, player_label: str = "") -> bool:
     """Whether a stored watermark still describes the transcript on disk.
 
     `_rolling_view`'s check, for `_rolling_view`'s reason and with its own
@@ -3324,10 +3340,11 @@ def _break_intact(messages: list[dict], stored: dict) -> bool:
     about thirty posts, but cannot say which" is that we did not.
     """
     return bool(stored["digest"]) and stored["at"] <= len(messages) \
-        and store.rolling_summary.covered_digest(messages[:stored["at"]]) == stored["digest"]
+        and store.rolling_summary.covered_digest(
+            messages[:stored["at"]], player_label) == stored["digest"]
 
 
-def _break_view(scene: dict, every: int, provider) -> dict:
+def _break_view(scene: dict, every: int, provider, player_label: str = "") -> dict:
     """The scene's break state, scored out of ONE snapshot of the scene.
 
     The transcript, the watermark and both histories all come off the `scene`
@@ -3337,6 +3354,10 @@ def _break_view(scene: dict, every: int, provider) -> dict:
     `location_history`), so reading them separately can produce a location move
     counted against a transcript that does not contain the post announcing it.
 
+    `player_label` travels with the snapshot for the same reason: it is an
+    input to the render the stored digest was taken of, so a view built without
+    it would call every watermark void and re-ask the question every time.
+
     A watermark whose prefix moved is VOID, not merely old: the scene is scored
     from zero, which is the same answer the rolling summary gives a fold whose
     ground moved. Review caught what carrying it forward instead did -- a scene
@@ -3345,7 +3366,7 @@ def _break_view(scene: dict, every: int, provider) -> dict:
     until the count passed thirty again.
     """
     stored = store.scenes.scene_break_fields(scene["meta"])
-    intact = _break_intact(scene["messages"], stored)
+    intact = _break_intact(scene["messages"], stored, player_label)
     history = store.scenes.histories(scene["meta"])
     scored = store.scene_break.evaluate(
         scene["messages"], history["locations"], history["times"],
@@ -3390,7 +3411,8 @@ def get_scene_break(cid: str, sid: str):
     """
     scene = _require_scene(cid, sid)
     every = store.config.scene_break_every()
-    return _break_body(_break_view(scene, every, _break_provider(cid)), every)
+    return _break_body(_break_view(scene, every, _break_provider(cid),
+                                   store.appearances.player_label(cid, sid)), every)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/scene-break")
@@ -3443,7 +3465,8 @@ async def _break_once(cid: str, sid: str, force: bool, upto: int | None,
     conn = _require_connection("scene-break", cid)
     every = store.config.scene_break_every()
     provider = _break_provider(cid)
-    view = _break_view(scene, every, provider)
+    view = _break_view(scene, every, provider,
+                       store.appearances.player_label(cid, sid))
     # `force` overrides the threshold, never the emptiness: a forced question
     # about a scene with nothing new since the last one would pay a provider to
     # answer the question it just answered.
@@ -3465,7 +3488,9 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     base = min(view["stored"]["at"], len(messages)) if view["intact"] else 0
     facts = store.chronicle.scene_facts(cid, sid)
     prompt = store.scene_break.build_prompt(
-        store.chronicle.transcript_text(messages[base:]), view["signals"], facts,
+        store.chronicle.transcript_text(messages[base:],
+                                        store.appearances.player_label(cid, sid)),
+        view["signals"], facts,
         scene["meta"].get("title", ""))
     try:
         with store.usage.meter("scene-break", campaign=cid, scene=sid) as m:
@@ -3477,7 +3502,8 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     # anywhere near the file. `rolling_summary.covered_digest` is the right tool
     # and is reused rather than reimplemented: same transcript, same question
     # ("is this still the same prose?"), same three fields.
-    digest = store.rolling_summary.covered_digest(messages)
+    digest = store.rolling_summary.covered_digest(
+        messages, store.appearances.player_label(cid, sid))
     try:
         result = await run_in_threadpool(_break_commit, cid, sid, view["watermark"],
                                          answer, digest)
@@ -3493,7 +3519,8 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     # `scenes.moment.set_datetime` and `scenes.lifecycle._date_hint` make the
     # same cut, and review caught that resolving the provider outside the hold
     # while still CALLING it inside was only half of the rule.
-    return {**_break_body(_break_view(result["scene"], every, provider), every),
+    return {**_break_body(_break_view(result["scene"], every, provider,
+                                      store.appearances.player_label(cid, sid)), every),
             "asked": result["landed"]}
 
 
@@ -3538,11 +3565,13 @@ def _break_commit(cid: str, sid: str, watermark: dict, answer: dict,
         # already covers at least as much.
         unchanged = (watermark["at"] <= len(scene["messages"])
                      and store.rolling_summary.covered_digest(
-                         scene["messages"][:watermark["at"]]) == digest)
+                         scene["messages"][:watermark["at"]],
+                         store.appearances.player_label(cid, sid)) == digest)
         # Against the stored watermark only while IT is still about this
         # transcript: a rewind voids it, and a voided watermark is no bar to an
         # answer about the scene as it now stands.
-        superseded = (_break_intact(scene["messages"], stored)
+        superseded = (_break_intact(scene["messages"], stored,
+                                    store.appearances.player_label(cid, sid))
                       and stored["at"] >= watermark["at"])
         landed = unchanged and not superseded
         if landed:
@@ -3572,7 +3601,8 @@ def post_scene_break_dismiss(cid: str, sid: str):
     store.scenes.dismiss_scene_break(cid, sid)
     scene = _require_scene(cid, sid)
     every = store.config.scene_break_every()
-    return _break_body(_break_view(scene, every, _break_provider(cid)), every)
+    return _break_body(_break_view(scene, every, _break_provider(cid),
+                                   store.appearances.player_label(cid, sid)), every)
 
 
 # ---- what a landed turn asks for next (#397) --------------------------------
@@ -3745,7 +3775,8 @@ def post_dossiers(cid: str, sid: str, request: Request,
         # guard: with nothing to audit it simply finds nothing, where this would
         # stage a proposal to overwrite a real dossier with fiction.
         raise HTTPException(status_code=400, detail="nothing to build dossiers from")
-    transcript = store.chronicle.transcript_text(scene["messages"])
+    transcript = store.chronicle.transcript_text(
+        scene["messages"], store.appearances.player_label(cid, sid))
 
     def work_for(run, generation):
         async def work():

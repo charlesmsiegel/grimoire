@@ -690,3 +690,50 @@ def test_an_inherited_library_url_packs_the_worlds_bytes(monkeypatch, tmp_path):
         f"![shore](/api/campaigns/{cid}/images/coastline)", cid, images)
     assert out == "![shore](images/img-000.png)"
     assert list(images.by_path) == [world_images.image_path(wid, "coastline")]
+
+
+def _unstamped_player_scene(monkeypatch, tmp_path):
+    """A scene whose player post carries no speaker -- what the app actually
+    writes. `**You:**` is the stored label; the book should not use it."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    pcs.create_pc(wroot, "Elara Vane", [], persona={"name": "Elara Vane", "pronouns": "she/her",
+                                                    "summary": "scholar", "description": "A wanderer."})
+    cid = campaigns.create_campaign("Run One", wid)
+    sid = scenes.create_scene(cid, "Arrival")
+    appearances.appear(cid, sid, "pcs", "elara-vane", "default", "player")
+    appearances.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    scenes.append_message(cid, sid, "user", "I step off the boat.")
+    scenes.append_message(cid, sid, "assistant", "\"Welcome,\" she says.", speaker="Seraphine")
+    return cid, sid
+
+
+def test_collect_names_the_player_on_an_unstamped_post(monkeypatch, tmp_path):
+    cid, _sid = _unstamped_player_scene(monkeypatch, tmp_path)
+    ch = export.collect(cid)["chapters"][0]
+    player_post = next(m for m in ch["messages"] if m["content"].startswith("I step off"))
+    assert player_post["speaker"] == "Elara Vane"
+
+
+def test_every_book_format_names_the_player_rather_than_you(monkeypatch, tmp_path):
+    """One stamp in `_chapter`, so markdown, HTML and plain text agree.
+
+    Markdown and plain text share the `**bold:**` marker (both render through
+    `chronicle.transcript_text`); HTML builds its own `<span class="speaker">`.
+    An unstamped post used to come out of all three as bare prose with no
+    attribution at all.
+    """
+    cid, _sid = _unstamped_player_scene(monkeypatch, tmp_path)
+
+    md = zipfile.ZipFile(io.BytesIO(export.build_markdown_bundle(cid)[0])).read(
+        "001-arrival.md").decode()
+    assert "**Elara Vane:** I step off the boat." in md
+
+    html = export.build_html(cid)[0].decode()
+    assert ">Elara Vane</span>" in html
+
+    text = export.build_text(cid)[0].decode()
+    assert "**Elara Vane:** I step off the boat." in text
+    assert "You:" not in text

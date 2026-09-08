@@ -21,7 +21,7 @@ import json
 from .. import prompts
 
 
-def covered_digest(messages: list[dict]) -> str:
+def covered_digest(messages: list[dict], player_label: str = "") -> str:
     """A stable digest of the messages a stored summary covers.
 
     The transcript is not append-only. A reroll replaces the trailing reply,
@@ -36,16 +36,27 @@ def covered_digest(messages: list[dict]) -> str:
     an error -- it just means the fold has to start over from the whole
     transcript, which is the correct answer to "the ground moved".
 
-    Role, speaker and content, in order: those are the three fields the
-    transcript renders (`snippets/transcript.j2`), so two prefixes with the same
-    digest produce the same prompt. Frontmatter and turn boundaries are
+    Role, speaker and content, in order, plus the label the render puts on an
+    unstamped user post: those are the four inputs the transcript render takes
+    (`snippets/transcript.j2` via `chronicle.transcript_text`), so two prefixes
+    with the same digest produce the same prompt.
+
+    The label is in here because it is NOT recoverable from the three fields --
+    an unstamped post stores no speaker, so renaming the seated PC changes every
+    line of the rendered transcript while leaving all three untouched, and
+    `facts_digest` cannot see it either (the facts carry `kind/id` refs, not
+    names). Without it a stored summary written about "Winifred" stays valid
+    forever against a transcript that now says "Mara". The cost is one extra
+    fold per active scene the first time this ships, since no stored digest was
+    computed with it. Frontmatter and turn boundaries are
     deliberately out -- they do not reach the summary, and folding them in would
     invalidate a perfectly good summary every time a location line was stamped.
     """
     canonical = [[m.get("role", ""), m.get("speaker") or "", m.get("content", "")]
                  for m in messages]
     return hashlib.sha256(
-        json.dumps(canonical, ensure_ascii=False).encode("utf-8")).hexdigest()
+        json.dumps([canonical, player_label],
+                   ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def facts_digest(facts: dict | None) -> str:

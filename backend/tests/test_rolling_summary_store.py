@@ -218,3 +218,36 @@ def test_parse_output_collapses_to_a_single_line():
 
 def test_parse_output_of_an_empty_reply_is_empty():
     assert rolling_summary.parse_output("   \n\n  ") == ""
+
+
+def test_covered_digest_follows_the_rendered_player_label():
+    """The digest's promise is "same digest, same prompt", and the label is an
+    input to that prompt which no stored field carries.
+
+    An unstamped user post stores no speaker, so renaming the seated PC changes
+    every rendered line while role/speaker/content stay byte-identical -- and
+    `facts_digest` cannot see it either, since the facts hold `kind/id` refs
+    rather than names. Without this a summary written about one name stays
+    valid forever against a transcript that now shows another.
+    """
+    messages = [{"role": "user", "content": "The lamps gutter out."},
+                {"role": "assistant", "content": "Fog rolls in."}]
+    assert (rolling_summary.covered_digest(messages, "Winifred")
+            != rolling_summary.covered_digest(messages, "Mara Cotgrave"))
+    # ...and it is still a digest of the messages: the label alone does not
+    # make two different transcripts look the same.
+    assert (rolling_summary.covered_digest(messages, "Winifred")
+            != rolling_summary.covered_digest(messages[:1], "Winifred"))
+
+
+def test_covered_digest_folds_the_label_in_flat_even_when_nothing_uses_it():
+    """A scene of stamped posts renders identically whoever is seated, so this
+    digest moves when it need not.
+
+    Deliberate, and the cheap direction: the label is folded in flat rather than
+    derived from which messages actually take it. A needless refold costs one
+    call; a missed one keeps a stale summary forever.
+    """
+    stamped = [{"role": "user", "content": "\"Mine.\"", "speaker": "Winifred"}]
+    assert (rolling_summary.covered_digest(stamped, "Winifred")
+            != rolling_summary.covered_digest(stamped, "Mara Cotgrave"))

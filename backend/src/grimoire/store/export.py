@@ -298,6 +298,16 @@ def _actor_sections(aroot: Path, kind: str, actor_id: str, vid: str) -> tuple[st
     return name, sections
 
 
+def _book_speaker(m: dict, player_label: str) -> str | None:
+    """The name this message is published under -- none for narration."""
+    speaker = m.get("speaker")
+    if speaker == scenes_serialize.TRANSITION_SPEAKER:
+        return None
+    if not speaker and m.get("role") == "user":
+        return player_label
+    return speaker
+
+
 def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: str) -> dict:
     scene = scenes_read.read_scene(cid, sid)
     meta = scene["meta"]
@@ -322,9 +332,16 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
     # scene, so a book of the campaign has no place for it -- the same
     # judgement the app makes by hiding it behind a toggle, one step further
     # because an export has no toggle.
+    # ...and an unstamped player post is NAMED rather than left bare. The
+    # transcript stores `**You:**` because the format derives the role from the
+    # label, but a book has no "you" in it -- the reader of one is not the
+    # player who typed it. Stamped here, in `collect`, so all four renderers
+    # (markdown, HTML, plain text, EPUB) say the same thing without each
+    # re-deriving it; `build_json` reads the scenes directly and stays verbatim,
+    # which is what that format is for.
+    player = appearances_cast.player_label(cid, sid)
     messages = [{"role": m["role"],
-                 "speaker": None if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER
-                            else m.get("speaker"),
+                 "speaker": _book_speaker(m, player),
                  "content": rewrite_images(m["content"], cid, images, prefix)}
                 for m in scene["messages"]
                 if not scenes_serialize.is_director_note(m)]

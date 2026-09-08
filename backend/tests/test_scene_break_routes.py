@@ -394,11 +394,13 @@ def test_an_answer_about_fewer_posts_cannot_overwrite_a_newer_one(client):
     scenes_routes._break_commit(
         cid, sid, {"at": 45, "locs": 0, "times": 0},
         {"break": True, "reason": "the player asked, and it was yes", "title": "Next"},
-        store.rolling_summary.covered_digest(messages))
+        store.rolling_summary.covered_digest(
+            messages, store.appearances.player_label(cid, sid)))
     stale = scenes_routes._break_commit(
         cid, sid, {"at": 40, "locs": 0, "times": 0},
         {"break": False, "reason": "stale no", "title": ""},
-        store.rolling_summary.covered_digest(messages[:40]))
+        store.rolling_summary.covered_digest(
+            messages[:40], store.appearances.player_label(cid, sid)))
     assert stale["landed"] is False
     kept = store.scenes.get_scene_break(cid, sid)
     assert kept["verdict"] == "yes" and kept["at"] == 45
@@ -412,7 +414,8 @@ def test_a_dismissal_is_not_undone_by_a_question_that_was_already_out(client):
     _use(client, _judge(YES))
     cid, sid = _scene(client, posts=40)
     messages = store.scenes.read_scene(cid, sid)["messages"]
-    digest = store.rolling_summary.covered_digest(messages)
+    digest = store.rolling_summary.covered_digest(
+        messages, store.appearances.player_label(cid, sid))
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break/dismiss")
     late = scenes_routes._break_commit(
         cid, sid, {"at": 40, "locs": 0, "times": 0},

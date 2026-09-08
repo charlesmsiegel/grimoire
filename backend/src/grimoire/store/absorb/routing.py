@@ -136,7 +136,7 @@ def band(score: float) -> str:
     return "low" if score < LOW else "medium"
 
 
-def _label(message: dict) -> str:
+def _label(message: dict, player_label: str = "") -> str:
     """The transcript label one stored message is rendered under.
 
     Composed from the same two pieces `snippets/transcript.j2` and
@@ -144,6 +144,13 @@ def _label(message: dict) -> str:
     the model was actually shown -- including the transition normalisation,
     without which an internal `⁣Scene` marker would read as a speaker the model
     could have cited but never saw.
+
+    `player_label` is the third piece, and it is not optional in practice: the
+    absorb prompt renders an unstamped user post under the seated player's name,
+    so an index built with the reserved word instead would fail to find the very
+    speaker the model just cited, and rank every quote from the player
+    `unattributed`. Defaulted only so a caller with no scene to ask keeps the
+    behaviour it had.
     """
     speaker = message.get("speaker")
     if not isinstance(speaker, str) or speaker == scenes_serialize.TRANSITION_SPEAKER:
@@ -151,7 +158,24 @@ def _label(message: dict) -> str:
     role = message.get("role", "assistant")
     if scenes_serialize.label_preserved(speaker):
         return speaker
+    if player_label and role == "user":
+        return player_label
     return str(scenes_serialize.ROLE_TO_LABEL.get(role, role))
+
+
+def _is_player_narration(m: dict) -> bool:
+    """A user post nothing stamped: the player narrating, not their PC speaking.
+
+    The distinction survives the relabelling and the tier depends on it. Once an
+    unstamped post is rendered under the PC's name it shares a canonical bucket
+    with that PC's stamped dialogue, so the LABEL can no longer tell the two
+    apart -- `authority` asks where the cited words are instead, and this is what
+    fills the bucket it asks about.
+    """
+    speaker = m.get("speaker")
+    if not isinstance(speaker, str) or speaker == scenes_serialize.TRANSITION_SPEAKER:
+        speaker = None
+    return m.get("role") == "user" and not scenes_serialize.label_preserved(speaker)
 
 
 #: `ROLL_SPEAKER` without its U+2063 sentinel -- the spelling a reader (and so
@@ -271,7 +295,8 @@ def _refs(cid: str, sid: str, canonical: list[str]) -> dict[str, str]:
     return refs
 
 
-def speaker_index(cid: str, sid: str, messages: list[dict] | None = None) -> dict:
+def speaker_index(cid: str, sid: str, messages: list[dict] | None = None,
+                  player_label: str | None = None) -> dict:
     """What this scene can say about a cited speaker, gathered once per absorb.
 
     - ``canonical`` -- one entry per speaker the transcript shows, and the only
@@ -289,7 +314,9 @@ def speaker_index(cid: str, sid: str, messages: list[dict] | None = None) -> dic
     a line worth quoting.
 
     `messages` is the transcript the model was SHOWN, and callers who have it
-    must pass it. `post_absorb` renders the prompt from a snapshot taken under
+    must pass it -- with `player_label`, the other half of what "shown" means
+    since an unstamped user post is rendered under the seated player's name.
+    `post_absorb` renders the prompt from a snapshot taken under
     the campaign lock and then awaits the extraction call, so re-reading the
     scene here would judge the model's citations against a transcript it never
     saw: a reroll or an append landing mid-call turns an honest quote into a
@@ -308,14 +335,32 @@ def speaker_index(cid: str, sid: str, messages: list[dict] | None = None) -> dic
     # A list, not a set: `match_name`'s prefix rule counts how many names a
     # label could mean by iterating. Deduped as it is built, so a speaker with
     # fifty lines does not look like fifty candidates.
+    # Snapshotted by the caller wherever there is one, for exactly the reason
+    # `messages` is: the label is an input to the render the model was shown, so
+    # re-reading it here would judge citations against a name the prompt never
+    # used. A PC renamed mid-call is not exotic -- the persona route allows it
+    # while the extraction is in flight -- and the cost is every quote of that
+    # player's lines coming back `unattributed`.
+    #
+    # Resolved live only as the fallback, and tolerantly: this runs after the
+    # call has been paid for, so an unreadable appearance record degrades to the
+    # reserved word rather than losing the whole review.
+    if player_label is None:
+        try:
+            player = appearances_cast.player_label(cid, sid)
+        except Exception:                                      # noqa: BLE001
+            player = ""
+    else:
+        player = player_label
     canonical: list[str] = []
     aliases: dict[str, str] = {}
     said: dict[str, list[str]] = {}
     roll_said: dict[str, list[str]] = {}
+    narration_said: dict[str, list[str]] = {}
     for m in messages:
         if not isinstance(m, dict):
             continue
-        label = _label(m)
+        label = _label(m, player)
         if not label:
             continue
         # Folded FIRST, so two spellings of one label are one speaker. `canonical`
@@ -335,12 +380,31 @@ def speaker_index(cid: str, sid: str, messages: list[dict] | None = None) -> dic
         # first-hand about herself in any scene that also held a dice line. What
         # is synthetic is the LINE, so that is what is recorded.
         bucket = roll_said if label == scenes_serialize.ROLL_SPEAKER else said
-        bucket.setdefault(canon, []).append(_normalized(m.get("content")))
+        text = _normalized(m.get("content"))
+        bucket.setdefault(canon, []).append(text)
+        # Recorded ALONGSIDE, never instead: the words are quotable as that
+        # canonical's lines whichever tier they earn, and only the tier turns on
+        # which of the two buckets holds them.
+        if player and _is_player_narration(m):
+            narration_said.setdefault(canon, []).append(text)
     # Joined with a separator no quote can straddle, so two adjacent messages
     # cannot be spliced into a sentence neither of them contains.
     return {"canonical": canonical, "aliases": aliases,
             "texts": {c: "\n".join(p) for c, p in said.items()},
             "roll_texts": {c: "\n".join(p) for c, p in roll_said.items()},
+            # The player's UNSTAMPED lines, kept apart for the same reason
+            # `roll_texts` is: they now share a canonical with that PC's stamped
+            # dialogue, and the two earn different tiers. Comparing the cited
+            # label against `player_label` instead would get both wrong -- it
+            # would tier the PC's real dialogue as narration, and it would miss
+            # entirely when an earlier line spelled the name differently and won
+            # the canonical (`aliases` folds case; a raw comparison does not).
+            "narration_texts": {c: "\n".join(p) for c, p in narration_said.items()},
+            # Carried rather than recomputed by `authority`: the tier a quote
+            # from the player earns must be decided against the label the index
+            # was BUILT with, or a scene whose cast changed between the two
+            # reads would tier the same citation two ways.
+            "player_label": player,
             "refs": _refs(cid, sid, canonical)}
 
 
@@ -361,7 +425,12 @@ def _found(index: dict, key: str, canons, excerpt: str) -> bool:
 
 def _narration_canons(index: dict) -> list[str]:
     """The canonical labels that stand for the narration in this scene -- the
-    reserved role labels, and only the ones the transcript actually used."""
+    reserved role labels, and only the ones the transcript actually used.
+
+    The player's unstamped lines are narration too, but they are not a LABEL --
+    they sit inside a canonical that also holds their PC's dialogue, so
+    `authority` reaches them through `narration_texts` rather than through
+    this."""
     return [c for c in index.get("canonical", []) if c in scenes_serialize.RESERVED_LABELS]
 
 
@@ -406,7 +475,13 @@ def authority(index: dict, speaker: str, subjects: tuple[str, ...] = (),
             return UNATTRIBUTED
         # A word for the narration rather than a label: check the excerpt
         # against every narrated line, since that is what the model meant by it.
-        return (NARRATION if _found(index, "texts", _narration_canons(index), excerpt)
+        return (NARRATION
+                if (_found(index, "texts", _narration_canons(index), excerpt)
+                    # "Narrator" means the un-labelled prose on BOTH sides of the
+                    # table, and the player's half is no longer reachable by any
+                    # label at all.
+                    or _found(index, "narration_texts",
+                              tuple(index.get("narration_texts", {})), excerpt))
                 else UNATTRIBUTED)
     # A dice line first, and under the SAME visible label as any actor sharing
     # the name: real transcript content, quotable, and spoken by nobody. So it
@@ -421,6 +496,14 @@ def authority(index: dict, speaker: str, subjects: tuple[str, ...] = (),
     if not _found(index, "texts", (matched,), excerpt):
         return UNATTRIBUTED
     if matched in scenes_serialize.RESERVED_LABELS:
+        return NARRATION
+    # The player's own unstamped posts are narration for the same reason
+    # `Grimoire` is: they are that player narrating rather than a character
+    # speaking. Asked of the WORDS rather than the label, because the label can
+    # no longer answer it -- the transcript shows those posts under the PC's
+    # name, so they share a canonical with everything that PC actually said out
+    # loud. Testing the label would tier her real dialogue as narration too.
+    if _found(index, "narration_texts", (matched,), excerpt):
         return NARRATION
     names = list(refs)
     name = scenes_serialize.match_name(matched, names)

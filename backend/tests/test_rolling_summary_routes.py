@@ -364,7 +364,8 @@ def test_an_older_refresh_does_not_overwrite_a_newer_one(client):
             msgs = store.scenes.read_scene(cid, sid)["messages"]
             store.scenes.set_rolling_summary(
                 cid, sid, "Newer summary, covering twelve.", len(msgs),
-                store.rolling_summary.covered_digest(msgs),
+                store.rolling_summary.covered_digest(
+                    msgs, store.appearances.player_label(cid, sid)),
                 store.rolling_summary.facts_digest(
                     store.chronicle.scene_facts(cid, sid)))
             return await super().complete(messages, conn)
@@ -763,7 +764,9 @@ def test_a_blanked_summary_leaves_no_coverage_behind(client):
     facts = store.chronicle.scene_facts(cid, sid)
     # Coverage and digests that are entirely valid, beside no summary at all.
     store.scenes.set_rolling_summary(
-        cid, sid, "", 12, store.rolling_summary.covered_digest(messages[:12]),
+        cid, sid, "", 12,
+        store.rolling_summary.covered_digest(
+            messages[:12], store.appearances.player_label(cid, sid)),
         store.rolling_summary.facts_digest(facts))
 
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
@@ -782,7 +785,9 @@ def test_a_blanked_summary_refolds_the_whole_transcript(client):
     cid, sid = _scene(client, posts=12)
     messages = store.scenes.read_scene(cid, sid)["messages"]
     store.scenes.set_rolling_summary(
-        cid, sid, "", 12, store.rolling_summary.covered_digest(messages[:12]),
+        cid, sid, "", 12,
+        store.rolling_summary.covered_digest(
+            messages[:12], store.appearances.player_label(cid, sid)),
         store.rolling_summary.facts_digest(store.chronicle.scene_facts(cid, sid)))
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true")

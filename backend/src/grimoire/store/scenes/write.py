@@ -727,7 +727,13 @@ def dismiss_scene_break(cid: str, sid: str) -> None:
     # Digested here too, off the same read: a dismissal's watermark has to
     # survive a later rewind exactly as a question's does, and one written
     # without a digest would be a watermark no reader could check.
-    digest = rolling_summary.covered_digest(scene["messages"])
+    #
+    # WITH the player label, like every other producer and checker of this
+    # digest. Written without it, the watermark this dismissal just stored fails
+    # its own next check -- the reader supplies the label, the writer did not,
+    # and the scene is scored from zero as though nothing had been dismissed.
+    digest = rolling_summary.covered_digest(
+        scene["messages"], cast.player_label(cid, sid))
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["break_at"], meta["break_locs"], meta["break_times"] = str(at), str(locs), str(times)
     meta["break_digest"] = digest

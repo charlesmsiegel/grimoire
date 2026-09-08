@@ -7833,3 +7833,49 @@ test("a shown director note carries what its turn cost", async () => {
   expect(within(note as HTMLElement).getByText("$0.21")).toBeInTheDocument();
   expect(within(note as HTMLElement).getByText(/1 reroll/)).toBeInTheDocument();
 });
+
+test("an unstamped player post is plated with the PC's name and portrait", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "elara", role: "player", name: "Elara Vane" },
+    { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" }]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "pcs", id: "elara", version: "default", role: "player", name: "Elara Vane" }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "I step off the boat." },
+    { role: "assistant", content: "a reply" }] });
+  const { container } = renderCampaign();
+  await screen.findByText("I step off the boat.");
+  const names = [...container.querySelectorAll(".plate-name")].map((n) => n.textContent);
+  expect(names).toEqual(["Elara Vane", "Grimoire"]);
+  // the portrait comes from the roster's locked version, like any other actor's
+  const avatar = container.querySelector(".plate-avatar img");
+  expect(avatar?.getAttribute("src")).toBe("/img/pcs/elara/default/avatar");
+});
+
+test("with two players seated the plate names the first, deterministically", async () => {
+  // An unstamped post says which side of the table it came from and no more, so
+  // this is a pick rather than a derivation -- matching what the backend renders
+  // into the book and into every prompt that quotes the transcript back.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "adair", role: "player", name: "Adair Finch" },
+    { kind: "pcs", id: "wren", role: "player", name: "Wren Halloway" }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "I step off the boat." }] });
+  const { container } = renderCampaign();
+  await screen.findByText("I step off the boat.");
+  const names = [...container.querySelectorAll(".plate-name")].map((n) => n.textContent);
+  expect(names).toEqual(["Adair Finch"]);
+});
+
+test("with nobody seated the plate keeps the reserved label", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "I step off the boat." }] });
+  const { container } = renderCampaign();
+  await screen.findByText("I step off the boat.");
+  const names = [...container.querySelectorAll(".plate-name")].map((n) => n.textContent);
+  expect(names).toEqual(["You"]);
+});

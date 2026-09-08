@@ -697,3 +697,55 @@ def test_creating_a_campaign_actor_takes_the_campaign_lock(monkeypatch, tmp_path
     # and the hold is released, so the ordinary path still works afterwards
     aid, _vid = overlay.create_character(cid, "Winifred")
     assert f"characters/{aid}" in overlay.detached(cid)
+
+
+def test_player_label_names_the_sole_player(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    pid, pvid = pcs.create_pc(wroot, "Elara Vane", [])
+    ap.appear(cid, sid, "pcs", pid, pvid, "player")
+    assert ap.player_label(cid, sid) == "Elara Vane"
+
+
+def test_player_label_falls_back_to_the_reserved_label(monkeypatch, tmp_path):
+    """No player seated -- the transcript's own word for an unstamped user post.
+
+    Not a blank and not the campaign's configured label: this names what the
+    stored line already says, and `scenes.serialize` is where that is decided.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    assert ap.player_label(cid, sid) == "You"
+
+
+def test_player_label_picks_the_first_of_several_players(monkeypatch, tmp_path):
+    """Two PCs seated: an unstamped post says which side of the table it came
+    from and no more, so the label is a deterministic pick rather than a
+    derivation. `players_in_scene` sorts by (kind, id), so it does not move
+    when a second player joins mid-scene."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    first, fvid = pcs.create_pc(wroot, "Adair Finch", [])
+    second, svid = pcs.create_pc(wroot, "Wren Halloway", [])
+    ap.appear(cid, sid, "pcs", second, svid, "player")
+    ap.appear(cid, sid, "pcs", first, fvid, "player")
+    assert ap.player_label(cid, sid) == "Adair Finch"
+
+
+def test_unstamped_player_label_matches_the_serializer():
+    """The fallback is spelled in two modules that cannot import each other.
+
+    `appearances.cast` is imported by `scenes.read`, so it cannot reach back for
+    `serialize.ROLE_TO_LABEL` without closing an import cycle. This is what
+    stops the copy from drifting: rename the user label in the serializer and
+    this fails rather than the plate quietly disagreeing with the transcript.
+    """
+    assert scenes.ROLE_TO_LABEL["user"] == ap.cast.UNSTAMPED_PLAYER_LABEL

@@ -962,7 +962,11 @@ def test_a_follow_up_that_lands_moves_the_token(client):
     for _ in range(3):
         store.scenes.append_message(cid, sid, "user", "The gate stands open.")
     messages = store.scenes.read_scene(cid, sid)["messages"]
-    digest = store.rolling_summary.covered_digest(messages)
+    # The label `_rolling_refresh` would have digested with: it is an input to
+    # the rendered transcript, so a commit checking against a digest taken
+    # without it finds the prefix "moved" and declines to write.
+    digest = store.rolling_summary.covered_digest(
+        messages, store.appearances.player_label(cid, sid))
     facts = store.chronicle.scene_facts(cid, sid)
 
     before = _token(client, cid)

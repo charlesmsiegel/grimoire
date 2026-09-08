@@ -234,8 +234,10 @@ def test_an_unreadable_scene_leaves_every_citation_uncorroborated(monkeypatch, t
     degrade to "nothing corroborates this", not to a 500."""
     cid, _ = _campaign(monkeypatch, tmp_path)
     index = routing.speaker_index(cid, "999--nope")
+    # `player_label` still answers: a scene with nobody seated is labelled the
+    # way an unstamped user post has always been labelled.
     assert index == {"canonical": [], "aliases": {}, "texts": {}, "roll_texts": {},
-                     "refs": {}}
+                     "narration_texts": {}, "player_label": "You", "refs": {}}
     assert routing.authority(index, "Seraphine Vale", (), SAID) == routing.UNATTRIBUTED
 
 
@@ -728,3 +730,106 @@ def test_materialize_judges_against_the_snapshot_it_is_given(monkeypatch, tmp_pa
          "quote": "I never touched the ledger.", "certainty": 0.9}]}
     staged = {e["id"]: e for e in absorb.materialize(cid, sid, parsed, shown)}
     assert staged[f"character_state:{sera}"]["review"]["authority"] == routing.UNATTRIBUTED
+
+
+def test_unstamped_player_post_is_indexed_under_the_pc_name(monkeypatch, tmp_path):
+    """The index must hold the label the PROMPT used, not the one on disk.
+
+    `chronicle.transcript_text` renders an unstamped user post under the seated
+    player's name, so a model quoting it cites that name. Indexed under the
+    reserved word instead, the citation would resolve to nobody and the row
+    would be collapsed as a fabrication -- the one failure this path exists to
+    avoid inventing.
+    """
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _sera, _mara, _win = _scene(cid, wroot)
+    scenes.append_message(cid, sid, "user", "I count nine crates on the pier.")
+    index = routing.speaker_index(cid, sid)
+    assert index["player_label"] == "Winifred"
+    assert "nine crates" in index["texts"]["Winifred"]
+    assert routing.authority(index, "Winifred", quote="I count nine crates") == routing.NARRATION
+
+
+def test_player_post_stays_narration_not_first_hand(monkeypatch, tmp_path):
+    """A player narrating is not the PC testifying about themself.
+
+    Before the plate named them, this was free: the label was `You`, a reserved
+    word, and reserved words are narration. Now that the transcript shows the
+    PC's name, the tier has to be granted deliberately or the reader's own prose
+    is promoted to first-hand evidence about their own character.
+    """
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _sera, _mara, _win = _scene(cid, wroot)
+    scenes.append_message(cid, sid, "user", "My leg has ached since the fall.")
+    index = routing.speaker_index(cid, sid)
+    tier = routing.authority(index, "Winifred", subjects=("Winifred",),
+                             quote="My leg has ached since the fall")
+    assert tier == routing.NARRATION
+    assert routing.WEIGHTS[tier] >= routing.WEIGHTS[routing.SELF]
+
+
+def test_narration_word_finds_the_player_lines_too(monkeypatch, tmp_path):
+    """"Narrator" means the un-labelled prose on BOTH sides of the table."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _sera, _mara, _win = _scene(cid, wroot)
+    scenes.append_message(cid, sid, "user", "The lamps along the quay gutter out.")
+    index = routing.speaker_index(cid, sid)
+    assert routing.authority(index, "narrator",
+                             quote="The lamps along the quay gutter out") == routing.NARRATION
+
+
+def test_the_pcs_own_dialogue_is_not_promoted_to_narration(monkeypatch, tmp_path):
+    """Sharing a bucket must not mean sharing a tier.
+
+    Once an unstamped post is rendered under the PC's name it canonicalizes
+    together with everything that PC said out loud, so a label test would hand
+    her real dialogue the narration weight -- ranking the reader's own character
+    above the hearsay tier she belongs in when she is talking.
+    """
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _sera, _mara, win = _scene(cid, wroot)
+    scenes.append_message(cid, sid, "user", "The tide is out.")              # narration
+    scenes.append_message(cid, sid, "user", "\"I paid for those crates.\"",
+                          speaker="Winifred")                                # dialogue
+    index = routing.speaker_index(cid, sid)
+    assert routing.authority(index, "Winifred", quote="The tide is out") == routing.NARRATION
+    assert routing.authority(index, "Winifred", (f"pcs:{win}",),
+                             "I paid for those crates") == routing.SELF
+
+
+def test_narration_survives_a_differently_cased_stamp(monkeypatch, tmp_path):
+    """The canonical is whichever spelling the transcript used first.
+
+    A scene that stamped `winifred` before the player narrated owns the folded
+    bucket, so comparing a cited label against the player's own spelling misses
+    it. The tier is decided by where the WORDS are, which has no spelling.
+    """
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _sera, _mara, _win = _scene(cid, wroot)
+    scenes.append_message(cid, sid, "user", "\"Mine.\"", speaker="winifred")
+    scenes.append_message(cid, sid, "user", "The lamps gutter out.")
+    index = routing.speaker_index(cid, sid)
+    assert routing.authority(index, "winifred",
+                             quote="The lamps gutter out") == routing.NARRATION
+    assert routing.authority(index, "narrator",
+                             quote="The lamps gutter out") == routing.NARRATION
+
+
+def test_a_snapshot_label_outranks_a_rename_landing_mid_call(monkeypatch, tmp_path):
+    """The label is half of what "the transcript the model was shown" means.
+
+    The persona route can rename a PC while an extraction is in flight. Re-read
+    live, the index would look for the new name in a prompt that used the old
+    one and rank every citation of the player's lines `unattributed` -- the one
+    verdict this path must never invent.
+    """
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _sera, _mara, win = _scene(cid, wroot)
+    scenes.append_message(cid, sid, "user", "The lamps gutter out.")
+    shown = scenes.read_scene(cid, sid)["messages"]
+    croot = campaigns.campaign_root(cid)
+    persona = pcs.read_persona(croot, win, "default")
+    pcs.update_version(croot, win, "default", {**persona, "name": "Mara Cotgrave"})
+    index = routing.speaker_index(cid, sid, shown, player_label="Winifred")
+    assert routing.authority(index, "Winifred",
+                             quote="The lamps gutter out") == routing.NARRATION

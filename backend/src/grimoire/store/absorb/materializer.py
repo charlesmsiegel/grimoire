@@ -306,13 +306,17 @@ def _promote(cid: str, sid: str, out: list[dict], stage,
 
 def materialize(cid: str, sid: str, parsed: dict,
                 messages: list[dict] | None = None,
-                turn_ledger: list | None = None) -> list[dict]:
+                turn_ledger: list | None = None,
+                player_label: str | None = None) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error).
 
     `messages` is the transcript the extraction call was SHOWN. Pass it whenever
     the caller has it -- the citations are judged against it, and the scene can
     move between rendering the prompt and this call (see `routing.speaker_index`).
+    `player_label` is the same snapshot one layer down: the name the prompt's
+    transcript put on the player's unstamped posts, which a rename landing
+    mid-call would otherwise change underneath the citations.
 
     `turn_ledger` is the transient-state entries (#120) the caller's review is
     being built from — named apart from the *fact* ledger this function also
@@ -329,7 +333,7 @@ def materialize(cid: str, sid: str, parsed: dict,
     out: list[dict] = []
     # Once per absorb, not once per edit: every row is checked against the same
     # transcript, and the index costs a scene read and a cast read.
-    index = routing.speaker_index(cid, sid, messages)
+    index = routing.speaker_index(cid, sid, messages, player_label)
 
     def _staged(edit: dict, row: dict, *subjects: str) -> dict:
         """One StagedEdit, stamped with the review block the panel routes on.

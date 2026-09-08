@@ -202,7 +202,23 @@ def scene_facts(cid: str, sid: str) -> dict:
     return {"cast": cast, "location": location, "date": time_hist[-1] if time_hist else ""}
 
 
-def transcript_text(messages: list[dict]) -> str:
+def _relabelled(m: dict, player_label: str | None) -> dict:
+    """One message as the transcript should show it.
+
+    Two substitutions, in the order they have to happen: the internal transition
+    marker is not a speaker at all and becomes none, and only THEN can an
+    unstamped user post take the player's name. A transition is assistant-role
+    and would not reach the second branch today; writing it this way is what
+    keeps that true if either rule moves.
+    """
+    if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER:
+        return {**m, "speaker": None}
+    if player_label and m.get("role") == "user" and not m.get("speaker"):
+        return {**m, "speaker": player_label}
+    return m
+
+
+def transcript_text(messages: list[dict], player_label: str | None = None) -> str:
     """Render messages via transcript.j2. The transition tag is internal drift
     metadata (`scenes_serialize.TRANSITION_SPEAKER`), never a speaker a prompt should see —
     strip it here so every caller (app transcript, exports, and the mechanics
@@ -210,9 +226,14 @@ def transcript_text(messages: list[dict]) -> str:
     than relying on each caller to normalize raw `scenes_read.read_scene` messages
     itself. `ROLL_SPEAKER` is left untouched: manual dice-roll lines are real
     transcript content and their labelling is intentional.
+
+    `player_label` names the seated player, so an unstamped user post renders as
+    that character rather than as the reserved word the file stores. Optional
+    because some callers have nobody to name -- a scene with no player seated --
+    and because it must default to what every existing caller already had.
     """
     normalized = [
-        {**m, "speaker": None} if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER else m
+        _relabelled(m, player_label)
         for m in messages
         # A director note is dropped, not unlabelled. Every caller of this is
         # either showing the reader what happened or asking a model to

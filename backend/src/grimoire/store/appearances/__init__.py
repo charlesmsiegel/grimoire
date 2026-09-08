@@ -18,6 +18,7 @@ from .cast import (  # noqa: F401
     _actor_name,
     cast_detail,
     is_appeared,
+    player_label,
     player_names,
     players_in_scene,
     roster,

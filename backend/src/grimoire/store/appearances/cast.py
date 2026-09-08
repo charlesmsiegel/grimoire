@@ -107,6 +107,33 @@ def player_names(cid: str, scene_id: str) -> list[str]:
     return out
 
 
+#: What a user post carries when nothing stamped it with a name. Spelled here
+#: rather than imported: `scenes.read` imports this module, so reaching the
+#: other way for `serialize.ROLE_TO_LABEL` would close the cycle
+#: `test_import_guard.py` exists to keep open. `test_appearances_store.py` holds
+#: the two spellings together instead.
+UNSTAMPED_PLAYER_LABEL = "You"
+
+
+def player_label(cid: str, scene_id: str) -> str:
+    """The name an unstamped user post is shown under in this scene.
+
+    A stored user line is `**You:**` -- the transcript format derives the role
+    from the label, so the label cannot be the character's name without the
+    role going with it. That makes this a RENDERING question, answered the same
+    way for the play view, the export and the prompts that quote a transcript
+    back to a model, and answered here so those four cannot drift.
+
+    With several players seated it is the first by `(kind, id)`, which is a
+    deterministic pick and not a derivation: an unstamped post records which
+    side of the table it came from and nothing finer, so with two PCs present
+    this can name the wrong one. Sorted rather than "whoever appeared first" so
+    a second player joining mid-scene does not relabel the posts above them.
+    """
+    names = player_names(cid, scene_id)
+    return names[0] if names else UNSTAMPED_PLAYER_LABEL
+
+
 def scene_cast(cid: str, scene_id: str) -> list[dict]:
     aroot = paths.locked_actor_root(cid)
     out = []

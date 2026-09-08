@@ -122,3 +122,34 @@ def test_transcript_text_no_transition_marker_leaks():
          "speaker": scenes.TRANSITION_SPEAKER},
         {"role": "assistant", "content": "hello"}])
     assert "⁣" not in text
+
+
+def test_transcript_text_names_the_player_when_given_a_label():
+    """An unstamped user post wears the player's name, not the reserved word.
+
+    The stored line is still `**You:**` -- this is the rendering the model and
+    the reader are shown, and it is the same one the play view's plate draws.
+    """
+    text = chronicle.transcript_text(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        player_label="Elara Vane")
+    assert "**Elara Vane:** hi" in text
+    assert "**You:**" not in text
+    assert "**Grimoire:** hello" in text
+
+
+def test_transcript_text_player_label_leaves_stamped_posts_alone():
+    """A stamped post already says who spoke, including one the player typed in
+    character -- relabelling it would overwrite the more specific answer."""
+    text = chronicle.transcript_text(
+        [{"role": "user", "content": "hi", "speaker": "Winifred"}],
+        player_label="Elara Vane")
+    assert "**Winifred:** hi" in text
+    assert "Elara Vane" not in text
+
+
+def test_transcript_text_without_a_label_is_unchanged():
+    """Every existing caller passes nothing and gets exactly what it got."""
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+    assert chronicle.transcript_text(messages) == chronicle.transcript_text(messages, None)
+    assert "**You:** hi" in chronicle.transcript_text(messages)

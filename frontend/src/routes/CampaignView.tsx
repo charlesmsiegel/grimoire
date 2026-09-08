@@ -1022,11 +1022,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (el.scrollTop <= NEAR_TOP_PX) loadOlder();
   }
 
-  // unstamped user lines fall back to the sole player's name on their plate
-  const playerName = useMemo(() => {
-    const players = cast.filter((a) => a.role === "player");
-    return players.length === 1 ? players[0].name : null;
-  }, [cast]);
+  // Unstamped user lines fall back to the seated player's name on their plate.
+  //
+  // With several players present this is the FIRST in cast order, which is a
+  // deterministic pick and not a derivation: an unstamped post records which
+  // side of the table it came from and nothing finer, so it can name the wrong
+  // PC. It used to give up and print the reserved label in that case, which is
+  // strictly less informative and no more honest. The order is the server's
+  // `(kind, id)` sort, so this agrees with `appearances.player_label` -- the
+  // same name the book and every transcript-quoting prompt now use, and one
+  // that does not move when a second player joins mid-scene.
+  const playerName = useMemo(
+    () => cast.find((a) => a.role === "player")?.name ?? null, [cast]);
 
   // The compounding silent failure this closes: one slow-but-healthy extraction
   // can eat the whole shared budget, and the trailing steps then come back with
