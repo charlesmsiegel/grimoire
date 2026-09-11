@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .. import characters, overlay
+from .. import characters, locks, overlay
 from ..campaigns import read as campaigns_read
 
 # Only the read/write/serialize leaves, never the `scenes` facade: `scenes/
@@ -21,11 +21,29 @@ from ..scenes import write as scenes_write
 from . import cast, paths, versions
 
 
+def _start_presence(rec: dict, scene_id: str, position: int | None) -> None:
+    if position is not None:
+        rec.setdefault("presence", {}).setdefault(scene_id, []).append(
+            {"start": position, "end": None})
+
+
 def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str,
            narrate: bool = True) -> None:
+    # Presence offsets and the membership they describe must share the lock
+    # with transcript appends; otherwise arrival could expose an earlier post.
+    with locks.campaign_lock(cid):
+        _appear(cid, scene_id, kind, actor_id, version_id, role, narrate)
+
+
+def _appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str,
+            narrate: bool) -> None:
     data = paths.record(cid)
     ref = paths._ref(kind, actor_id)
     rec = data.get(ref)
+    try:
+        position = len(scenes_read.read_scene(cid, scene_id)["messages"])
+    except scenes_paths.SceneNotFound:
+        position = None
     if rec is not None:
         if rec["version"] != version_id:
             raise paths.AppearError(f"{ref} is locked to version {rec['version']}, not {version_id}")
@@ -33,12 +51,14 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
             raise paths.AppearError(f"{ref} is locked to role {rec['role']}, not {role}")
         if scene_id not in rec["scenes"]:
             rec["scenes"].append(scene_id)
+            _start_presence(rec, scene_id, position)
             paths._write(cid, data)
         else:
             return  # already in this scene: no-op, no narration
     else:
         base = versions._lock(cid, kind, actor_id, version_id)  # lazy pick: first appearance locks
         data[ref] = {"version": version_id, "base": base, "scenes": [scene_id], "role": role}
+        _start_presence(data[ref], scene_id, position)
         paths._write(cid, data)
         campaigns_read.touch(cid)
 
@@ -55,6 +75,11 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
 
 
 def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
+    with locks.campaign_lock(cid):
+        _leave(cid, scene_id, kind, actor_id)
+
+
+def _leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     """Drop `scene_id` from the actor's appearance record. The actor stays
     appeared campaign-wide (other scenes, roster) -- only this scene's cast
     loses them. Narrates a transition line once the scene already has
@@ -71,6 +96,13 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     if rec is None or scene_id not in rec.get("scenes", []):
         return
     version = rec["version"]
+    try:
+        position = len(scenes_read.read_scene(cid, scene_id)["messages"])
+    except scenes_paths.SceneNotFound:
+        position = 0
+    for interval in rec.get("presence", {}).get(scene_id, []):
+        if interval.get("end") is None:
+            interval["end"] = position
     rec["scenes"].remove(scene_id)
     paths._write(cid, data)
     try:

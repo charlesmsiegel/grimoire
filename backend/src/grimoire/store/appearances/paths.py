@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .. import atomic
+from .. import atomic, locks
 from ..campaigns import paths as campaigns_paths
 
 ACTOR_KINDS = ("characters", "pcs")
@@ -88,9 +88,63 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     data = record(cid)
     changed = False
     for rec in data.values():
+        presence = rec.get("presence", {})
+        if any(s in mapping for s in presence):
+            rec["presence"] = {mapping.get(s, s): intervals for s, intervals in presence.items()}
+            changed = True
         scenes_list = rec.get("scenes", [])
         if any(s in mapping for s in scenes_list):
             rec["scenes"] = [mapping.get(s, s) for s in scenes_list]
             changed = True
     if changed:
         _write(cid, data)
+
+
+def remap_presence(cid: str, sid: str, old_to_new: dict[int, int], new_count: int) -> None:
+    """Preserve visibility through transcript deletion/cuts using retained indices.
+
+    New positions without an old source are never granted historical visibility.
+    An open interval remains open at the new end for actors currently present.
+    Call alongside the transcript rewrite under the caller's campaign lock.
+    """
+    with locks.campaign_lock(cid):
+        data = record(cid)
+        changed = False
+        for rec in data.values():
+            intervals = rec.get("presence", {}).get(sid)
+            if not isinstance(intervals, list):
+                continue
+            visible = sorted(new for old, new in old_to_new.items()
+                             if any(r["start"] <= old and
+                                    (r.get("end") is None or old < r["end"])
+                                    for r in intervals))
+            rebuilt: list[dict] = []
+            for index in visible:
+                if rebuilt and rebuilt[-1]["end"] == index:
+                    rebuilt[-1]["end"] = index + 1
+                else:
+                    rebuilt.append({"start": index, "end": index + 1})
+            if sid in rec.get("scenes", []):
+                if rebuilt and rebuilt[-1]["end"] == new_count:
+                    rebuilt[-1]["end"] = None
+                else:
+                    rebuilt.append({"start": new_count, "end": None})
+            rec["presence"][sid] = rebuilt
+            changed = True
+        if changed:
+            _write(cid, data)
+
+
+def forget_presence(cid: str, sid: str) -> None:
+    """A recycled scene ID must not inherit the deleted scene's audience."""
+    with locks.campaign_lock(cid):
+        data = record(cid)
+        changed = False
+        for rec in data.values():
+            if sid in rec.get("scenes", []):
+                rec["scenes"].remove(sid)
+                changed = True
+            if rec.get("presence", {}).pop(sid, None) is not None:
+                changed = True
+        if changed:
+            _write(cid, data)

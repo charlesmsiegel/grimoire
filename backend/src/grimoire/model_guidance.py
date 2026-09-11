@@ -60,7 +60,9 @@ class PreparedMessages(list):
     profile: the record describes which model was actually attempted.
     """
 
-    def __init__(self, primary_model: str, factory: VariantFactory):
+    def __init__(self, primary_model: str, factory: VariantFactory, *,
+                 profiles: dict[str, tuple[list[dict], dict | None]] | None = None):
+        self._frozen_profiles = deepcopy(profiles)
         self._factory = factory
         self._primary_model = primary_model
         messages, breakdown = factory(primary_model)
@@ -85,3 +87,40 @@ class PreparedMessages(list):
                     # usable fallback into another provider failure.
                     _log.exception("Could not record model prompt variant")
         return deepcopy(messages)
+
+    def snapshot(self) -> dict:
+        """Portable historical prompts; no templates or live state are consulted.
+
+        Scene composers supply the entire finite profile set at construction.
+        Generic factories cannot promise that and must not masquerade as durable
+        context: a snapshot is only supported for explicitly frozen factories.
+        """
+        if self._frozen_profiles is None:
+            raise ValueError("Prepared messages have no durable frozen profiles")
+        return deepcopy({"version": 1, "primary_model": self._primary_model,
+                         "unprofiled": self._frozen_profiles[""],
+                         "profiles": {k: v for k, v in self._frozen_profiles.items() if k}})
+
+    @classmethod
+    def from_snapshot(cls, snapshot: dict, model: str) -> PreparedMessages:
+        """Restore a writer without reconstructing the past from current files."""
+        if snapshot.get("version") != 1 or "unprofiled" not in snapshot:
+            raise ValueError("Unsupported frozen prompt snapshot")
+        frozen = deepcopy({"": snapshot["unprofiled"], **snapshot.get("profiles", {})})
+        def select(selected_model):
+            return frozen.get(_ALIASES.get(selected_model, selected_model), frozen[""])
+        return cls(model, select, profiles=frozen)
+
+    def with_appended(self, message: dict) -> PreparedMessages:
+        """Append explicit reroll steering to every frozen historical variant.
+
+        Historical packing is retained: dropped evidence cannot be recovered.
+        The old breakdown no longer measures the sent prompt, so callers get
+        None rather than a falsely precise total. Provider usage remains metered.
+        """
+        snapshot = self.snapshot()
+        def append(variant):
+            return [*deepcopy(variant[0]), deepcopy(message)], None
+        snapshot["unprofiled"] = append(snapshot["unprofiled"])
+        snapshot["profiles"] = {k: append(v) for k, v in snapshot["profiles"].items()}
+        return self.from_snapshot(snapshot, self._primary_model)

@@ -4557,7 +4557,7 @@ def test_cast_blocks_caps_the_anchor_and_the_example(monkeypatch, tmp_path):
          "a" * (voice_anchors.VOICE_ANCHOR_CAP + 200))])
     block = context._assemble(cid, sid)["data"]["cast_blocks"][0]
     assert len(block["anchor"]) == voice_anchors.VOICE_ANCHOR_CAP
-    assert len(block["example"]) == voice_anchors.VOICE_EXAMPLE_CAP
+    assert block["example"] == ""  # a whole oversized exchange cannot fit
 
 
 def test_cast_blocks_resolves_a_campaign_tombstone_to_no_anchor(monkeypatch, tmp_path):
@@ -4654,8 +4654,8 @@ def test_the_packer_can_drop_examples_and_keep_the_policy(monkeypatch, tmp_path)
     much the larger -- and not a property of the tiers.
     """
     _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
-        ("Mara", {"mes_example": "Mara: Fine. " * 400}, "Clipped."),
-        ("Winifred", {"mes_example": "Winifred: Quite. " * 400}, "Dry."),
+        ("Mara", {"mes_example": "Mara: Fine. " * 200}, "Clipped."),
+        ("Winifred", {"mes_example": "Winifred: Quite. " * 150}, "Dry."),
     ])
     rows = {s["label"]: s for s in context.context_sections(cid, sid)}
     after = _squeeze_out(cid, sid, rows["Voice · example dialogue"])

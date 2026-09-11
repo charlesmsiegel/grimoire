@@ -51,7 +51,7 @@ from ..scenes import turns as scenes_turns
 
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
-from . import archive, art, layout, macros, mechanics, pack, speaker, story, world_state
+from . import actor, archive, art, layout, macros, mechanics, pack, speaker, story, world_state
 from . import cast as cast_data
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
@@ -86,7 +86,8 @@ def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> l
 
 
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
-              turn: dict | None = None) -> dict:
+              turn: dict | None = None, actor_ref: str | None = None,
+              eligible_speakers: list[dict] | None = None) -> dict:
     """One pass gathering the template data + projected history + post-history.
     build_* render templates/scene/system.j2 from data; context_sections renders
     the per-section templates for the token breakdown. `wi_seed` folds extra text
@@ -128,6 +129,21 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     cast = [a for a in appearances_cast.scene_cast(cid, sid)
             if f"{a['kind']}:{a['id']}" not in excluded_refs]
 
+    roster = actor.public_roster(cast)
+    public_player_names = [a["name"] for a in cast if a["role"] == "player"]
+    response_actor = None
+    if actor_ref is not None:
+        if actor_ref == "grimoire":
+            response_actor = {"ref": "grimoire", "name": "Grimoire"}
+        else:
+            selected = [a for a in cast if actor.ref(a) == actor_ref and a["role"] == "npc"]
+            if not selected:
+                raise ValueError("Assigned actor is not a present NPC")
+            response_actor = {"ref": actor_ref, "name": selected[0]["name"]}
+            history = actor.observed_history(cid, sid, actor_ref, history)
+            cast = selected
+    actor_scoped = actor_ref is not None and actor_ref != "grimoire"
+
     npc_cards: list[dict] = []
     npc_ids: list[str] = []
     for a in cast:
@@ -143,7 +159,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         npc_ids.append(a["id"])
 
     players: list[dict] = []
-    player_names: list[str] = []
+    player_names: list[str] = public_player_names if actor_scoped else []
     for a in cast:
         if a["role"] != "player":
             continue
@@ -226,8 +242,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             "name": shown,
             "description": "\n".join(p for p in parts if p),
             "anchor": voice_anchors.effective(_expanded(anchor)),
-            "example": voice_anchors.truncate(_expanded(_str(card, "mes_example")),
-                                              voice_anchors.VOICE_EXAMPLE_CAP),
+            "example": actor.select_examples(_expanded(_str(card, "mes_example")),
+                                              voice_anchors.VOICE_EXAMPLE_CAP,
+                                              "\n".join(m["content"] for m in history[-4:])),
         })
     # A COUNT, not a length: reading `len(cast_blocks)` at render time would let
     # a per-block filter move the policy's render condition.
@@ -267,7 +284,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             # be wrong: the alternative is overriding the level the user set
             # because we decided they needed the description more.
             level = entities.normalize_secrecy(loc["meta"].get("secrecy"))
-            if level != entities.GM_ONLY:
+            owners = [v.strip() for v in loc["meta"].get("owners", "").split(",") if v.strip()]
+            visible_setting = (not actor_scoped or actor.known_entries(
+                [{"secrecy": level, "owners": owners}], actor_ref))
+            if level != entities.GM_ONLY and visible_setting:
                 current_setting = loc["body"].strip()
                 current_setting_secret = level == entities.SECRET
         except entities.EntityNotFound:
@@ -295,11 +315,18 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     activated_wi, recalled_wi = world_state._world_info(cid, recent_text, exclude,
                                                        frozenset(present),
                                                        pinned_refs, excluded_refs)
+    if actor_scoped:
+        activated_wi = actor.known_entries(activated_wi, actor_ref)
+        recalled_wi = actor.known_entries(recalled_wi, actor_ref)
     wi_public, wi_secret = world_state.secrecy_split(activated_wi)
     recalled_public, recalled_secret = world_state.secrecy_split(recalled_wi)
     mech = mechanics._mechanics(cid, sid, cast, recent_text)
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
+        "response_actor": response_actor,
+        "response_roster": roster,
+        "response_candidates": [{"ref": e["ref"], "name": e["name"]}
+                                for e in (eligible_speakers or [])],
         "global_system_prompt": cfg.get("system_prompt", ""),
         "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
@@ -376,6 +403,19 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "mechanics_rules": mech["mechanics_rules"], "mechanics_sheets": mech["mechanics_sheets"],
         "mechanics_checks": mech["mechanics_checks"],
     }
+
+    if actor_scoped:
+        # These fields have no actor attribution. In particular a recap or a
+        # group marked public does not make its private campaign state public.
+        for key in ("story_entries", "archive_entries", "plot_lines", "commitment_lines",
+                    "group_states", "secret_group_states", "offscene_active", "offscene_known",
+                    "players", "refs", "ref_names", "available_art"):
+            data[key] = []
+        data["relationship_lines"] = actor.own_relationships(cid, actor_ref, roster)
+        data["speaker"] = None
+        data["today"] = None  # scheduled events have no knowledge attribution
+        data["mechanics_sheets"] = [s for s in data["mechanics_sheets"] if s.get("ref") == actor_ref]
+        data["mechanics_checks"] = [c for c in data["mechanics_checks"] if c.get("ref") == actor_ref]
 
     # The roster is passed as a thunk: it opens one card file per campaign actor,
     # and measure() bails out immediately on a scene with no recorded turns —
@@ -781,6 +821,7 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
                     "pinned": section.id in pinned,
                     "heading": section.heading, "heading_text": head})
         last_heading = section.heading
+    actor.add_contract(out, data)
     return out
 
 
@@ -879,7 +920,7 @@ def _profile_sections(base: list[dict], guidance: str) -> list[dict]:
 def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
              opener: bool = False, before_post: tuple[dict, ...] = (),
              after_post: tuple[dict, ...] = (),
-             extra: tuple[tuple[str, str], ...] = ()) -> tuple[list[dict], dict | None]:
+             extra: tuple[tuple[str, str], ...] = ()) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """Freeze one generation, including each available profile's packed variant.
 
     A fallback is the same scene evidence with different model advice. Reusing
@@ -932,7 +973,8 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     def select(selected_model):
         return frozen[model_guidance.guidance_for(selected_model, profiles)]
 
-    prepared = model_guidance.PreparedMessages(model, select)
+    prepared = model_guidance.PreparedMessages(model, select, profiles={
+        "": frozen[""], **{name: frozen[text] for name, text in profiles.items()}})
     return prepared, prepared.breakdown
 
 
@@ -953,7 +995,8 @@ Appended = tuple[str, str, str]
 
 def compose_turn(cid: str, sid: str, turn: dict | None = None,
                  appended: tuple[Appended, ...] = (),
-                 describe: bool = True, model: str = "") -> tuple[list[dict], dict | None]:
+                 describe: bool = True, model: str = "", actor_ref: str | None = None,
+                 eligible_speakers: list[dict] | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One turn's messages, and the breakdown describing them.
 
     `describe=False` returns `None` for the breakdown and skips building it.
@@ -985,7 +1028,7 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     sent, and the record must report it), and three call sites used to spell
     the first two out separately with nothing holding them together.
     """
-    a = _assemble(cid, sid, turn=turn)
+    a = _assemble(cid, sid, turn=turn, actor_ref=actor_ref, eligible_speakers=eligible_speakers)
     return _prepare(a, cid, sid, model=model, describe=describe,
                     after_post=tuple({"role": role, "content": content}
                                      for _label, role, content in appended),
@@ -1006,7 +1049,8 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
 
 
 def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
-                          describe: bool = True, model: str = "") -> tuple[list[dict], dict | None]:
+                          describe: bool = True, model: str = "", actor_ref: str | None = None,
+                          eligible_speakers: list[dict] | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One director turn: full system + history, then the note as the final user
     message. The note rides only this call — never persisted. `turn` is the same
     one-shot response-preset override as `compose_turn`, and the messages and
@@ -1027,7 +1071,8 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
     # seeds retrieval the same way the opener's prompt does, or naming an old
     # scene in a director note could not recall it (nothing else in the scan
     # window has said the word yet).
-    a = _assemble(cid, sid, wi_seed=note, turn=turn)
+    a = _assemble(cid, sid, wi_seed=note, turn=turn, actor_ref=actor_ref,
+                  eligible_speakers=eligible_speakers)
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
     note_text = macros.expand_macros(note, a["subs"], cid, sid)

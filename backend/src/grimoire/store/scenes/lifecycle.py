@@ -27,6 +27,7 @@ from .. import (
     steering,
     turnstate,
 )
+from ..appearances import paths as appearances_paths
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
@@ -213,6 +214,7 @@ def delete_scene(cid: str, sid: str) -> None:
     # lost its commit-ledger state and its parked alternates for good. Failing at
     # the top costs nothing but the request.
     prompt_log.forget_scene(cid, sid)
+    appearances_paths.forget_presence(cid, sid)
     # A scene id is recycled -- the numbering reuses the highest deleted number,
     # so remaking a scene under the same title can hand it this very id (see
     # _already_absorbed). Retire the commit ledger's state for it, or a review
