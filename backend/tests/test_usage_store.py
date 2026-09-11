@@ -1393,3 +1393,36 @@ def test_an_ordinary_figure_is_still_rounded(home, monkeypatch):
     _seed("2026-08-14", cost_usd=0.2)
 
     assert usage.summary(days=30)["totals"]["cost_usd"] == 0.3
+
+
+def test_character_round_attribution_keeps_selector_responses_and_rerolls_together(home):
+    for task, response_id, status in (
+        ("speaker-selection", "", "ok"),
+        ("chat", "response-mara", "ok"),
+        ("regenerate", "response-mara", "error"),
+        ("chat", "response-winifred", "ok"),
+    ):
+        with usage.meter(task, campaign="saltmarch", scene="001-arrival",
+                         post=0, round_id="round-one", response_id=response_id) as m:
+            m.usage.update(model="local/glm", prompt_tokens=10, completion_tokens=2)
+            m.done(status, "timeout" if status == "error" else "")
+            m.done()  # Context-manager exit must not add another row either.
+
+    rows = _rows(home)
+    assert len(rows) == 4
+    assert {row["round_id"] for row in rows} == {"round-one"}
+    assert {row["post"] for row in rows} == {0}
+    assert "response_id" not in rows[0], "the selector has not written a response"
+    assert rows[1]["response_id"] == rows[2]["response_id"] == "response-mara"
+    assert rows[3]["response_id"] == "response-winifred"
+    totals = usage.summary(days=30)["totals"]
+    assert totals["calls"] == 4
+    assert totals["errors"] == 1
+    assert totals["total_tokens"] == 48
+
+
+def test_optional_character_attribution_does_not_invent_identity_for_other_calls(home):
+    usage.record(task="summary", round_id="", response_id="")
+    row, = _rows(home)
+    assert "round_id" not in row
+    assert "response_id" not in row

@@ -216,7 +216,8 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
            cost_usd: float | None = None, cost_basis: str = "",
            duration_ms: int = 0, status: str = "ok", error: str = "",
            attempts: int = 1, post: int | None = None,
-           ts: str | None = None) -> dict | None:
+           ts: str | None = None, round_id: str = "",
+           response_id: str = "") -> dict | None:
     """Append one call to the ledger. Returns the row, or None if nothing was
     written.
 
@@ -248,7 +249,8 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         # tagline has no campaign and no scene, and `"campaign": ""` in the file
         # reads as a campaign whose id is the empty string.
         for key, value in (("campaign", campaign), ("scene", scene), ("model", model),
-                           ("connection", connection), ("provider", provider)):
+                           ("connection", connection), ("provider", provider),
+                           ("round_id", round_id), ("response_id", response_id)):
             if value:
                 row[key] = value
         # Absent, not zero, when the provider counted nothing -- the same rule
@@ -374,13 +376,16 @@ class Meter:
     """
 
     def __init__(self, task: str, *, kind: str = KIND_LLM, campaign: str = "",
-                 scene: str = "", model: str = "", post: int | None = None):
+                 scene: str = "", model: str = "", post: int | None = None,
+                 round_id: str = "", response_id: str = ""):
         self.task = task
         self.kind = kind
         self.campaign = campaign
         self.scene = scene
         self.model = model
         self.post = post
+        self.round_id = round_id
+        self.response_id = response_id
         self.usage: dict = {}
         self.row: dict | None = None
         self._done = False
@@ -485,19 +490,25 @@ class Meter:
             cost_usd=cost, cost_basis=self.usage.get("cost_basis", ""),
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             status=status, error=error, attempts=self.usage.get("attempts", 1),
-            post=self.post)
+            post=self.post, round_id=self.round_id, response_id=self.response_id)
         return self.row
 
 
 def meter(task: str, *, kind: str = KIND_LLM, campaign: str = "", scene: str = "",
-          model: str = "", post: int | None = None) -> Meter:
+          model: str = "", post: int | None = None,
+          round_id: str = "", response_id: str = "") -> Meter:
     """A `Meter` for one call. `model` is only a fallback: the facade stamps the
     model the request actually ran on, which differs after a fallback route.
 
     `post` is the transcript index of the player post this call is answering,
-    and is passed only by the routes that answer one — see `record`."""
+    and is passed only by the routes that answer one — see `record`.
+
+    A round groups the selector and its character contributions; a response ID
+    groups that contribution and its replacement attempts. These stable optional
+    identities survive transcript index changes without rewriting the ledger.
+    Selectors have no response identity; older callers have neither."""
     return Meter(task, kind=kind, campaign=campaign, scene=scene, model=model,
-                 post=post)
+                 post=post, round_id=round_id, response_id=response_id)
 
 
 # ---- rollups ----
