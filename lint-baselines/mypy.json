@@ -81,7 +81,7 @@
     "assignment": 1
   },
   "backend/src/grimoire/store/context/assemble.py": {
-    "arg-type": 4,
+    "arg-type": 3,
     "var-annotated": 1
   },
   "backend/src/grimoire/store/context/cast.py": {

@@ -39,13 +39,11 @@ What a snapshot is, and is not (both raised in review, both deliberate):
   sections left in it, which is the entire vocabulary of the panel this feeds.
   The composition is the layer that can be explained, so it is the layer that
   is recorded.
-- `model` is the scene's stamped frontmatter, which is what the live
-  `GET .../context` route reports too. It can differ from the model the active
-  connection actually used if the connection changed after the scene was
-  created. Recording the connection's model *here alone* would make the frozen
-  panel and the live panel disagree about the same scene, which is worse than
-  the shared inaccuracy; fixing it belongs wherever that field is fixed for
-  both.
+- `model` names the resolved requested model for that attempt. A distinct
+  fallback attempt records its own prepared composition and model; same-model
+  retries reuse it. The live view resolves the next ordinary scene turn,
+  while a frozen reroll keeps its one-shot override. Provider-reported aliases
+  do not retroactively change which model guidance was selected.
 
 Retention is `prompt_log_depth` in config.md (default 50, 0 = off), counted per
 CAMPAIGN rather than per scene. Per-scene reads better but is unbounded across

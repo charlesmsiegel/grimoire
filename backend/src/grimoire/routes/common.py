@@ -23,7 +23,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import llm, store
+from .. import llm, model_guidance, store
 from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
@@ -394,29 +394,22 @@ def _turn_override(body) -> dict | None:
 
 
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
-                   *, model: str | None = None) -> None:
+                   *, model: str | None = None, messages: list[dict] | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
-    produced the messages being sent — see `store.prompt_log`. The scene's
-    stamped model rides along so a snapshot still names its provider after the
-    scene is repointed at another one.
+    produced the messages being sent — see `store.prompt_log`. The requested
+    model rides along so a snapshot still names that attempt after the standing
+    connection changes.
 
-    `model` overrides that stamp for the one caller that KNOWS the turn did not
-    run on it: a reroll carrying a per-call route override (#77). **None and ""
-    are different answers**, which review caught this defaulting away: None is
-    "I have nothing to say, use the scene's stamp", and "" is "this ran on a
-    route that names no model at all" — a custom endpoint with none configured,
-    which generates perfectly well on the provider's own default. Collapsing
-    the two filed such a reroll under the campaign's model, which is the exact
-    mislabel #77's third bullet exists to prevent. Keyword-only and defaulted
-    to None, so every other caller keeps the shared-inaccuracy rule
-    `store.prompt_log`'s docstring argues for — the frozen panel and the live
-    one agreeing about a scene matters more than either being exactly right.
-    That argument is about a *drifted* stamp, though, and it does not cover a
-    turn the user deliberately sent somewhere else: there the live panel is
-    describing the next turn and this one is describing a turn that happened,
-    and they are simply about different things.
+    Scene callers pass the resolved requested model, including per-call
+    overrides. None retains the legacy scene-stamp default for other callers;
+    an empty string means the endpoint's unnamed default and stays empty.
+
+    `messages` binds an optional best-effort capture for a distinct fallback
+    attempt. The prepared prompt owns frozen variants; this callback only files
+    their existing breakdown, never recomposes campaign context. It is bound
+    here, after the claim, so an unclaimed turn cannot record a fallback either.
 
     Called once the turn is committed to happening — after the stream object
     exists, so the pre-stream claim has already succeeded — but NOT from inside
@@ -430,6 +423,9 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     # off. Nothing to record, and nothing was built to record.
     if breakdown is None:
         return
+    if isinstance(messages, model_guidance.PreparedMessages):
+        messages.on_variant = lambda selected, variant: _record_prompt(
+            cid, sid, task, variant, model=selected)
     # The scene check and the append are ONE critical section, on the same lock
     # `record` uses. Another client can rename or delete the scene between the
     # composition and this call, and its cleanup (`repoint_scenes` /

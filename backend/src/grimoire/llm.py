@@ -11,6 +11,7 @@ import random
 import time
 from collections.abc import AsyncIterator
 
+from . import model_guidance
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
@@ -623,6 +624,11 @@ class LLMClient:
                              if c.get("kind", "openrouter") not in TEXT_ONLY_KINDS]
 
     def _dispatch(self, messages: list[dict], conn: dict, usage: dict | None = None):
+        # Select per ATTEMPT: retries retain the frozen prompt, while a
+        # fallback repacks that same context with its own model's guidance.
+        # Ordinary message lists (JSON extraction, judges, drafts) stay ordinary.
+        if isinstance(messages, model_guidance.PreparedMessages):
+            messages = messages.for_model(effective_model(conn))
         kind = conn.get("kind", "openrouter")
         if kind == "claude":
             return self._claude.stream(messages, effective_model(conn), usage=usage)

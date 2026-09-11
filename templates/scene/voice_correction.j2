@@ -12,10 +12,14 @@
     and costs nothing. Vars: voice_notes (list of {name, note}, non-empty). -#}
 {%- if voice_notes | length == 1 -%}
 {%- set n = voice_notes[0] -%}
-{{ n.name }} has drifted out of voice, and the correction is still outstanding. {{ n.note }} Bring {{ n.name }} back to how they actually speak before anything else in this reply.
+{{ n.name }} has drifted out of voice, and the correction is still outstanding. {{ n.note }} Bring {{ n.name }} back to how they actually speak.
 {%- else -%}
-Some of the cast have drifted out of voice, with corrections still outstanding. Bring each of them back to how they actually speak before anything else in this reply.
+Some of the cast have drifted out of voice, with corrections still outstanding. Bring each of them back to how they actually speak.
 {% for n in voice_notes %}
 - {{ n.name }}: {{ n.note }}
 {%- endfor %}
-{%- endif -%}
+{%- endif %}
+
+Apply these corrections to expression only. Keep current facts, revised
+decisions, the player's control of their character, and knowledge limits
+intact; do not restore an old demand or event to recreate an earlier voice.

@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import prompts, store
-from ..llm import LLMClient
+from ..llm import LLMClient, effective_model
 from . import runs
 from .common import (
     _campaign_root_or_404,
@@ -90,7 +90,8 @@ def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], li
         return on_roll_docs, check_docs
 
 
-def _continuation_messages(cid: str, sid: str, resolution: dict) -> tuple[list[dict], dict | None]:
+def _continuation_messages(cid: str, sid: str, resolution: dict,
+                           model: str = "") -> tuple[list[dict], dict | None]:
     # The roll block is rendered first and named in `appended`: a check can drag
     # in several on-roll rule documents, which is exactly the kind of mandatory
     # bulk that would otherwise be packed around and then appended anyway.
@@ -99,14 +100,15 @@ def _continuation_messages(cid: str, sid: str, resolution: dict) -> tuple[list[d
                            on_roll_docs=on_roll_docs, check_docs=check_docs)
     return store.context.compose_turn(
         cid, sid, appended=(("Roll result", "system", block),),
-        describe=store.prompt_log.capturing())
+        describe=store.prompt_log.capturing(), model=model)
 
 
-def _declined_continuation_messages(cid: str, sid: str) -> tuple[list[dict], dict | None]:
+def _declined_continuation_messages(cid: str, sid: str,
+                                    model: str = "") -> tuple[list[dict], dict | None]:
     block = prompts.render("scene/roll_declined.j2")
     return store.context.compose_turn(
         cid, sid, appended=(("Roll declined", "system", block),),
-        describe=store.prompt_log.capturing())
+        describe=store.prompt_log.capturing(), model=model)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/roll-proposal")
@@ -236,12 +238,11 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
             # brand-new fence/send). Nothing was projected — stop dead, same
             # as any other lost-race case, with a clean done frame.
             return runs.answer_without_running(request.app, run, [_sse({"done": True})])
-        messages, breakdown = _continuation_messages(cid, sid, resolution)
+        messages, breakdown = _continuation_messages(cid, sid, resolution, model=effective_model(conn))
     elif status == "declined":
-        messages, breakdown = _declined_continuation_messages(cid, sid)
+        messages, breakdown = _declined_continuation_messages(cid, sid, model=effective_model(conn))
     else:  # defensive: a race moved the record out from under us
         raise HTTPException(status_code=409, detail="proposal is stale")
-    _record_prompt(cid, sid, "continuation", breakdown)
     outcome = StreamOutcome()
     # DETACHED like every other scene turn. The plan singles this producer out:
     # it is `_continuation_stream`, in a different module, so a migration that
@@ -257,6 +258,8 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
                                   identity=run.scene_identity, outcome=outcome,
                                   after_turn=_follow_up_hook(request.app, cid, sid,
                                                              client))
+    _record_prompt(cid, sid, "continuation", breakdown,
+                   model=effective_model(conn), messages=messages)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))

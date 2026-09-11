@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import store
-from ..llm import LLMClient
+from ..llm import LLMClient, effective_model
 from . import runs
 from .common import (
     THUMB_W,
@@ -373,8 +373,7 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
     _require_scene(cid, sid)
     conn = _require_connection("opener", cid)
     messages, breakdown = store.context.compose_opener(
-        cid, sid, body.prompt, describe=store.prompt_log.capturing())
-    _record_prompt(cid, sid, "opener", breakdown)
+        cid, sid, body.prompt, describe=store.prompt_log.capturing(), model=effective_model(conn))
     run, fresh = runs.reserve_scene_draft(request.app, cid, sid, "opener",
                                           x_grimoire_attempt)
     if not fresh:
@@ -382,6 +381,8 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
         # than spend a second opener-length call on the same prompt.
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
+        _record_prompt(cid, sid, "opener", breakdown,
+                       model=effective_model(conn), messages=messages)
         # The box, not just the frames. `ephemeral_frames` handles an upstream
         # `LLMError` by emitting an error frame and finishing normally, so a
         # runner inferring success from a clean exhaustion would mark the run

@@ -5,6 +5,9 @@
 run off that one dict; its keys are keyword arguments to the templates, so
 their order is immaterial.
 
+`_prepare` freezes the render once, then packs each available model profile;
+the prompt record and outgoing messages are built from that same packed variant.
+
 `SECTIONS` is the prompt's section catalog — the one list, not a mirror of one.
 It used to be a mirror: templates/scene/system.j2 re-`include`d each section
 itself, so the prompt and the token breakdown were two render paths over the
@@ -16,9 +19,10 @@ what it is handed.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import NamedTuple
 
-from ... import prompts
+from ... import model_guidance, prompts
 from .. import (
     characters,
     commitments,
@@ -54,7 +58,7 @@ OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
 
 def compose_opener(cid: str, sid: str, prompt: str,
-                   describe: bool = True) -> tuple[list[dict], dict | None]:
+                   describe: bool = True, model: str = "") -> tuple[list[dict], dict | None]:
     """A full-turn-context opener: the instruction plus every assembled system section
     (cast, plot threads, date, current setting, world-info, a full 5-scene recap, …),
     then the prompt as the user turn. The prompt seeds world-info activation, since a new
@@ -68,20 +72,17 @@ def compose_opener(cid: str, sid: str, prompt: str,
     # reserved: neither is droppable, so neither may go uncounted.
     user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid)
     shape = prompts.render("scene/opener_shape.j2", npc_names=a["npc_names"])
-    p = _packed(a, cid, sid, opener=True, reserve=(user_text, shape))
-    messages = [{"role": "system", "content": _system_text(p["sections"])},
-                {"role": "user", "content": user_text}]
-    if a["post_history"]:  # mirrors build_messages
-        messages.append({"role": "system", "content": a["post_history"]})
-    # the shape rules go last, right before generation, so they outrank everything above
-    messages.append({"role": "system", "content": shape})
     extra = (("Opener prompt", user_text), ("Opener shape rules", shape))
-    return messages, _breakdown(a, p, extra) if describe else None
+    # Shape rules stay last, right before generation, above the earlier framing.
+    return _prepare(a, cid, sid, model=model, describe=describe, opener=True,
+                    before_post=({"role": "user", "content": user_text},),
+                    after_post=({"role": "system", "content": shape},), extra=extra)
 
 
-def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
+
+def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> list[dict]:
     """`compose_opener` without the breakdown — see there."""
-    return compose_opener(cid, sid, prompt, describe=False)[0]
+    return compose_opener(cid, sid, prompt, describe=False, model=model)[0]
 
 
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
@@ -553,6 +554,7 @@ SECTIONS = [
             "scene/sections/global_system_prompt.j2", pack.LOCK_IN),
     Section("prose_style", "Prose style", "scene/sections/prose_style.j2", pack.LOCK_IN),
     Section("natural_prose", "Natural prose", "scene/sections/natural_prose.j2", pack.LOCK_IN),
+    Section("model_guidance", "Model guidance", "scene/sections/model_guidance.j2", pack.LOCK_IN),
     Section("card_system_prompts", "System prompt",
             "scene/sections/card_system_prompts.j2", pack.LOCK_IN),
     Section("character_descriptions", "Character descriptions",
@@ -689,7 +691,8 @@ def _section_template(section: Section, data: dict) -> str:
     return f"{section.template}/{pick(data)}.j2" if pick else section.template
 
 
-def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[dict]:
+def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
+                     keep_guidance_slot: bool = False) -> list[dict]:
     """Every applicable section, rendered and macro-expanded once, in order.
 
     THE render path: `build_messages` joins what survives packing into the
@@ -713,7 +716,7 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
     none. `.get` on the key so a hand-built `a` (several tests) is still
     renderable.
     """
-    data = {**a["data"], "opener": opener}
+    data = {"model_guidance": "", **a["data"], "opener": opener}
     pinned = a.get("pinned_sections") or frozenset()
     out = []
     #: The heading of the last section actually EMITTED, which is what makes
@@ -725,6 +728,14 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
         if section.opener_only and not opener:
             continue
         if section.except_opener and opener:
+            continue
+        # Keep the enabled layout position without rendering a profile yet.
+        # Empty guidance must not split a shared-heading run; a selected profile
+        # can split it later using the already frozen heading text.
+        if section.id == "model_guidance" and keep_guidance_slot:
+            out.append({"id": section.id, "label": section.label, "text": "",
+                        "tier": section.tier, "pinned": False,
+                        "heading": "", "heading_text": ""})
             continue
         body = prompts.render(_section_template(section, data), **data).strip()
         # A shared heading (`Section.heading`) opens each contiguous RUN of the
@@ -839,6 +850,92 @@ def _packed(a: dict, cid: str, sid: str, opener: bool = False,
     return {**packed, "budget": budget}
 
 
+def _profile_sections(base: list[dict], guidance: str) -> list[dict]:
+    """Select guidance in the frozen layout, retaining shared-heading frames.
+
+    The ordinary render's heading copies describe the layout WITHOUT guidance.
+    Inserting it can split an off-scene-cast run. Give the newly separated half
+    its frozen heading before packing, so the added tokens participate in fit.
+    """
+    headings = {s["heading"]: s["heading_text"] for s in base if s["heading_text"]}
+    sections = []
+    last = ""
+    for original in base:
+        section = dict(original)
+        if section["id"] == "model_guidance":
+            section["text"] = guidance
+        if not section["text"]:
+            continue
+        heading = section["heading"]
+        frozen_heading = headings.get(heading, "")
+        if frozen_heading and heading != last and not section["heading_text"]:
+            section["heading_text"] = frozen_heading
+            section["text"] = frozen_heading + "\n\n" + section["text"]
+        sections.append(section)
+        last = heading
+    return sections
+
+
+def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
+             opener: bool = False, before_post: tuple[dict, ...] = (),
+             after_post: tuple[dict, ...] = (),
+             extra: tuple[tuple[str, str], ...] = ()) -> tuple[list[dict], dict | None]:
+    """Freeze one generation, including each available profile's packed variant.
+
+    A fallback is the same scene evidence with different model advice. Reusing
+    `_assemble` or the render pass here would reroll macros and read a newer
+    scene; swapping strings after packing would make the token ceiling a lie.
+    Capture the rendered inputs first, then reuse the existing packer and
+    breakdown over independent section dictionaries. Pack the finite profile
+    set now: a compiled Jinja template can still load includes dynamically,
+    so retaining the template alone would not freeze a later fallback. This
+    costs one packing pass per distinct profile text plus the empty profile;
+    the unbounded, undescribed path still does no token counting.
+    """
+    base = _render_sections(a, cid, sid, opener=opener, keep_guidance_slot=True)
+    profiles = {}
+    if any(s["id"] == "model_guidance" for s in base):
+        data = {**a["data"], "opener": opener}
+        for name, text in model_guidance.freeze_profiles(**data).items():
+            wrapped = prompts.render("scene/sections/model_guidance.j2",
+                                     **{**data, "model_guidance": text})
+            profiles[name] = macros.expand_macros(wrapped, a["subs"], cid, sid).strip()
+    compose = _compose_system
+    history = deepcopy([] if opener else a["history"])
+    post_history = a["post_history"]
+    before_post, after_post = deepcopy(before_post), deepcopy(after_post)
+    budget = pack.budget_tokens()
+    reserved = (tokens.count_tokens(post_history)
+                + sum(tokens.count_tokens(text) for _label, text in extra)) if budget > 0 else 0
+
+    def variant(guidance):
+        sections = _profile_sections(base, guidance)
+        packed = pack.pack(sections, history, reserved, budget, compose=compose)
+        _dedupe_runs(packed["sections"])
+        packed["budget"] = budget
+        system = compose([s["text"] for s in packed["sections"] if not s["dropped"]])
+        messages = [{"role": "system", "content": system}] if system or opener else []
+        messages += packed["history"]
+        messages += before_post
+        if post_history:
+            messages.append({"role": "system", "content": post_history})
+        messages += after_post
+        detail = (_breakdown({"post_history": post_history}, packed, list(extra))
+                  if describe else None)
+        return messages, detail
+
+    # Aliases and profiles with identical text share the same packing work.
+    # Selection and prompt-record notification stay lazy: only a dispatched
+    # fallback is observed, even though every possible payload is ready.
+    frozen = {text: variant(text) for text in dict.fromkeys(["", *profiles.values()])}
+
+    def select(selected_model):
+        return frozen[model_guidance.guidance_for(selected_model, profiles)]
+
+    prepared = model_guidance.PreparedMessages(model, select)
+    return prepared, prepared.breakdown
+
+
 def _compose_system(texts: list[str]) -> str:
     """The system message as it will be sent, from section texts."""
     return prompts.render("scene/system.j2", sections=texts).strip()
@@ -856,7 +953,7 @@ Appended = tuple[str, str, str]
 
 def compose_turn(cid: str, sid: str, turn: dict | None = None,
                  appended: tuple[Appended, ...] = (),
-                 describe: bool = True) -> tuple[list[dict], dict | None]:
+                 describe: bool = True, model: str = "") -> tuple[list[dict], dict | None]:
     """One turn's messages, and the breakdown describing them.
 
     `describe=False` returns `None` for the breakdown and skips building it.
@@ -867,7 +964,7 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     any route while `prompt_log_depth` is 0 -- would put a full tokenizer pass
     on every turn of a feature the user has turned off.
 
-    BOTH out of a single `_assemble` + `_packed` pass, which is what lets a
+    BOTH out of a single `_assemble` + `_prepare` pass, which is what lets a
     snapshot of this turn be trusted later (#157). Running the two entry points
     separately would reintroduce exactly the disagreement `SECTIONS` was
     restructured to remove — and worse across time than within a request, since
@@ -889,22 +986,15 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     the first two out separately with nothing holding them together.
     """
     a = _assemble(cid, sid, turn=turn)
-    p = _packed(a, cid, sid, reserve=tuple(c for _label, _role, c in appended))
-    messages: list[dict] = []
-    system_text = _system_text(p["sections"])
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
-    messages += p["history"]
-    if a["post_history"]:
-        messages.append({"role": "system", "content": a["post_history"]})
-    messages += [{"role": role, "content": content} for _label, role, content in appended]
-    if not describe:
-        return messages, None
-    return messages, _breakdown(a, p, [(label, c) for label, _role, c in appended])
+    return _prepare(a, cid, sid, model=model, describe=describe,
+                    after_post=tuple({"role": role, "content": content}
+                                     for _label, role, content in appended),
+                    extra=tuple((label, content) for label, _role, content in appended))
+
 
 
 def build_messages(cid: str, sid: str, turn: dict | None = None,
-                   appended: tuple[Appended, ...] = ()) -> list[dict]:
+                   appended: tuple[Appended, ...] = (), model: str = "") -> list[dict]:
     """`compose_turn` without the breakdown — see there.
 
     The old `reserve=` parameter is gone. It charged the budget for a message
@@ -912,11 +1002,11 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
     and gave `compose_turn` no way to report the appended block; `appended`
     does all three jobs at once.
     """
-    return compose_turn(cid, sid, turn=turn, appended=appended, describe=False)[0]
+    return compose_turn(cid, sid, turn=turn, appended=appended, describe=False, model=model)[0]
 
 
 def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
-                          describe: bool = True) -> tuple[list[dict], dict | None]:
+                          describe: bool = True, model: str = "") -> tuple[list[dict], dict | None]:
     """One director turn: full system + history, then the note as the final user
     message. The note rides only this call — never persisted. `turn` is the same
     one-shot response-preset override as `compose_turn`, and the messages and
@@ -941,21 +1031,16 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
     note_text = macros.expand_macros(note, a["subs"], cid, sid)
-    p = _packed(a, cid, sid, reserve=(note_text,))
-    messages: list[dict] = []
-    system_text = _system_text(p["sections"])
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
-    messages += p["history"]
-    messages.append({"role": "user", "content": note_text})
-    if a["post_history"]:
-        messages.append({"role": "system", "content": a["post_history"]})
-    return messages, _breakdown(a, p, [("Director note", note_text)]) if describe else None
+    return _prepare(a, cid, sid, model=model, describe=describe,
+                    before_post=({"role": "user", "content": note_text},),
+                    extra=(("Director note", note_text),))
 
 
-def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None) -> list[dict]:
+
+def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None,
+                            model: str = "") -> list[dict]:
     """`compose_director_turn` without the breakdown — see there."""
-    return compose_director_turn(cid, sid, note, turn=turn, describe=False)[0]
+    return compose_director_turn(cid, sid, note, turn=turn, describe=False, model=model)[0]
 
 
 def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> dict:
@@ -1033,17 +1118,18 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
             "budget_tokens": p["budget"]}
 
 
-def context_breakdown(cid: str, sid: str) -> dict:
+def context_breakdown(cid: str, sid: str, model: str = "") -> dict:
     """The LIVE inspector view: compose the turn as it would be sent right now
     and describe it. Runs the same render and pack `compose_turn` runs.
 
     The live view has no appended blocks — those belong to a specific turn
     (regenerate guidance, a roll result), and this composes a hypothetical one.
     """
-    a = _assemble(cid, sid)
-    return _breakdown(a, _packed(a, cid, sid))
+    _messages, detail = compose_turn(cid, sid, model=model)
+    assert detail is not None  # describe=True always builds the inspector
+    return detail
 
 
-def context_sections(cid: str, sid: str) -> list[dict]:
+def context_sections(cid: str, sid: str, model: str = "") -> list[dict]:
     """Just the rows of `context_breakdown` — see there."""
-    return context_breakdown(cid, sid)["sections"]
+    return context_breakdown(cid, sid, model=model)["sections"]

@@ -3741,26 +3741,33 @@ def test_the_breakdown_counts_history_as_the_messages_it_is_sent_as(monkeypatch,
 
 
 def test_the_breakdown_total_is_the_cost_of_the_real_request(monkeypatch, tmp_path):
-    """Not the sum of the rows: the blank lines joining the sections are real
-    tokens, and per-string counts do not add across a join."""
+    """Not the sum of the rows: joins and per-string rounding do not commute."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     _heuristic(monkeypatch)
-    from grimoire.store import config
-    config.write_config(system_prompt="Never speak for the PC.")
+    from grimoire.store import config, styles
     for n in range(6):
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
                               f"Turn {n} on the Saltmarch road.")
-    body = context.context_breakdown(cid, sid)
-    messages = context.build_messages(cid, sid)
-    wire = sum(context.count_tokens(m["content"]) for m in messages)
-    turns = [m for m in messages if m["role"] != "system"]
-    # The content that ships is the floor; the difference is exactly the
-    # per-message framing allowance, charged once per history message.
-    assert body["total_tokens"] == wire + context_pack.MESSAGE_OVERHEAD * len(turns)
-    assert body["total_tokens"] > wire
-    # ...and it is NOT the sum of the rows, which is what it would be if the
-    # total were re-derived from the breakdown. Same vacuity guard as above.
-    assert body["total_tokens"] != sum(r["tokens"] for r in body["sections"] if not r["dropped"])
+    differs_from_rows = []
+    # Exercise all remainders at TWO independent section boundaries. Padding
+    # only one section can leave its rounded cost aligned with the rest of
+    # the prompt for every residue after a harmless template rewording.
+    for style_padding in range(4):
+        style_id = styles.create_style("Plain", body="Use plain prose." + "x" * style_padding)
+        for padding in range(4):
+            config.write_config(system_prompt="Never speak for the PC." + "x" * padding,
+                                default_style_id=style_id)
+            body = context.context_breakdown(cid, sid)
+            messages = context.build_messages(cid, sid)
+            wire = sum(context.count_tokens(m["content"]) for m in messages)
+            turns = [m for m in messages if m["role"] != "system"]
+            # Check real accounting for EVERY variant, including coincidences.
+            assert body["total_tokens"] == wire + context_pack.MESSAGE_OVERHEAD * len(turns)
+            assert body["total_tokens"] > wire
+            rows = sum(r["tokens"] for r in body["sections"] if not r["dropped"])
+            differs_from_rows.append(body["total_tokens"] != rows)
+    # A total incorrectly derived from rows cannot pass vacuously.
+    assert any(differs_from_rows)
 
 
 def test_archive_ignores_a_string_keywords_field(monkeypatch, tmp_path):

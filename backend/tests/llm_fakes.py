@@ -406,9 +406,12 @@ class ScriptedProvider:
         self.chunks = list(chunks)
         self.error = error
         self.calls = 0
+        self.requests: list[dict] = []
 
     async def stream(self, messages, *args, **kwargs):
         self.calls += 1
+        self.requests.append({"messages": [dict(m) for m in messages],
+                              "args": args, "kwargs": kwargs})
         for chunk in self.chunks:
             yield chunk
         if self.error is not None:

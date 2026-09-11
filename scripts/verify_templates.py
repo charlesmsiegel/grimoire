@@ -893,6 +893,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     deliberate two-sided change instead of a silent one. `_SHARED_HEADINGS` is
     the same deal for `Section.heading`.
     """
+    data = {"model_guidance": "", **data}
     names = []
     if opener:
         names.append("scene/opener_instruction/"
@@ -900,6 +901,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     names += ["scene/sections/global_system_prompt.j2",
               "scene/sections/prose_style.j2",
               "scene/sections/natural_prose.j2",
+              "scene/sections/model_guidance.j2",
               "scene/sections/card_system_prompts.j2",
               "scene/sections/character_descriptions.j2",
               # Catalog order: the voice block sits between who a character IS
@@ -1004,6 +1006,13 @@ data = gather(sid, pcless=False)
 # window — so say so here rather than let the check quietly go vacuous.
 assert data["archive_entries"], "fixture no longer exercises the archive section"
 check_messages("chat", context.build_messages(cid, sid), rendered_messages(sid, data))
+profile_data = {**data, "model_guidance": render("scene/model_guidance/glm-5.3.j2", **data)}
+for model_id in ("glm-5.3", "z-ai/glm-5.3"):
+    check_messages("chat model profile " + model_id,
+                   context.build_messages(cid, sid, model=model_id),
+                   rendered_messages(sid, profile_data))
+check_messages("chat unknown model", context.build_messages(cid, sid, model="vendor/unknown"),
+               rendered_messages(sid, data))
 # The fixture's present NPC is both anchored and flagged, so the voice corrective
 # really is inside the post-history the comparison above covers. Asserted rather
 # than assumed: without an anchor the corrective renders "", and comparing "" to

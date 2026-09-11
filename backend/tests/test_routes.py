@@ -4619,12 +4619,9 @@ def test_a_rerolls_snapshot_names_the_model_the_reroll_was_sent_to(client):
     ("regenerate", lambda c, cid, sid: c.post(
         f"/api/campaigns/{cid}/scenes/{sid}/regenerate")),
 ])
-def test_a_turn_with_no_override_still_records_the_scenes_stamped_model(client, task, send):
-    """An explicit override is the ONLY thing that displaces the scene's stamp.
-    `store.prompt_log` argues that the frozen panel and the live one agreeing
-    about a scene beats either being exactly right, and a reroll that ran on the
-    standing configuration is not an exception to that — it is the case the
-    argument is about."""
+def test_a_turn_with_no_override_records_the_resolved_model(client, task, send):
+    """Both panels resolve the current route, so changing the active model
+    cannot mislabel a prompt or choose guidance using historical metadata."""
     _fake, cid, sid = _rerollable(client)
     client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
 
@@ -4632,7 +4629,9 @@ def test_a_turn_with_no_override_still_records_the_scenes_stamped_model(client, 
 
     rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     latest = next(r for r in rows if r["task"] == task)
-    assert latest["model"] == "campaign/model"
+    assert latest["model"] == "repointed/model"
+    live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
+    assert live["model"] == latest["model"]
 
 
 def test_a_rerolls_cost_is_billed_to_the_model_it_ran_on(client):
@@ -4734,10 +4733,8 @@ def test_a_route_with_no_model_is_not_filed_under_the_campaigns(client):
 
 
 def test_naming_the_active_connection_is_not_an_override(client):
-    """`routed` has to mean "this ran somewhere other than where it would have
-    anyway", not "the caller typed something" — otherwise an explicit but
-    identical route displaces the snapshot stamp that `store.prompt_log`
-    reserves for a turn that really did go elsewhere."""
+    """Explicitly choosing the standing connection records the same resolved
+    model as an ordinary reroll, including a change since scene creation."""
     _fake, cid, sid = _rerollable(client)
     client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
 
@@ -4746,7 +4743,7 @@ def test_naming_the_active_connection_is_not_an_override(client):
 
     rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     latest = next(r for r in rows if r["task"] == "regenerate")
-    assert latest["model"] == "campaign/model"   # the scene's stamp, as for any plain reroll
+    assert latest["model"] == "repointed/model"
 
 
 def test_naming_the_active_connection_with_a_different_model_is_an_override(client):
@@ -13614,15 +13611,16 @@ def test_turn_override_with_a_non_string_value_never_500s(client):
 
 def test_turn_override_still_reaches_the_cascade(client):
     """The typing change must not quietly stop the override from applying."""
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret", "model": "glm-5.3"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     captured = {}
     real = store.context.compose_turn
 
-    def spy(cid_, sid_, turn=None, appended=(), describe=True):
+    def spy(cid_, sid_, turn=None, appended=(), describe=True, model=""):
         captured["turn"] = turn
-        return real(cid_, sid_, turn=turn, appended=appended, describe=describe)
+        captured["model"] = model
+        return real(cid_, sid_, turn=turn, appended=appended, describe=describe, model=model)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["ok"])
     store.context.compose_turn = spy
@@ -13632,6 +13630,7 @@ def test_turn_override_still_reaches_the_cascade(client):
     finally:
         store.context.compose_turn = real
     assert captured["turn"] == {"response_preset": "terse"}
+    assert captured["model"] == "glm-5.3"
 
 
 # ---- contention during adjudication (#234) ----

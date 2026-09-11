@@ -205,6 +205,38 @@ here ends or splits a scene — the answer is a suggestion in the inspector.
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).
 
+Model-specific scene guidance is optional. Add or edit a direct-child
+`scene/model_guidance/<model-id>.j2` template to enable an exact model ID.
+IDs must begin with a letter or digit and contain only letters, digits,
+periods, underscores or hyphens. The shipped `glm-5.3.j2` also serves the
+explicit `z-ai/glm-5.3` alias; additional provider-prefixed aliases belong in
+`grimoire/model_guidance.py`. IDs are matched exactly and case-sensitively;
+unknown IDs and empty or missing templates add no instructions. There is no
+automatic family or provider-prefix matching.
+
+Templates use the configured template root (`GRIMOIRE_TEMPLATES` when set),
+with the scene data below plus `opener`. Keep profiles short and subordinate
+to shared continuity, knowledge, player-control and formatting rules. The
+`sections/model_guidance.j2` wrapper receives `model_guidance`, the selected
+profile text. It appears after natural-prose guidance by default as a lock-in
+section, and can be reordered or disabled in the existing context layout.
+
+The actual requested model selects the profile on every scene attempt,
+including reroll overrides and provider fallbacks. Each generation freezes
+its context, macros, templates and budget, then prepares packed variants
+with each profile. A fallback selects its own prepared variant. The live inspector resolves the standing
+scene route; captured attempts retain their own model and profile row.
+Same-model retries reuse the composition. Utility/JSON prompts receive no
+scene profile. No sampling or reasoning API settings are changed.
+Variant preparation performs one packing pass per distinct installed profile
+plus the empty profile before dispatch. This keeps editable Jinja includes
+stable across attempts. Primary capture follows the turn claim; fallback
+variants are captured only when dispatched. With capture off and an unbounded
+context budget, composition still skips token counting.
+
+See [GLM dialogue notes](../docs/glm-dialogue-prompts.md) for the evidence and
+the live evaluation still needed.
+
 Message assembly (code-side, mirrored from `context/assemble.py`):
 1. `system.j2` — one system message; omitted if it renders empty.
 2. The projected history: each stored message through
@@ -213,9 +245,7 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
 3. Director turn only: the note as a user message — the player's text, or
    `scene/director_note.j2` when blank. Opener only: the (substituted)
    opener prompt as the user message (openers include no history).
-4. Regenerate with guidance only: `scene/regenerate_guidance.j2` as an extra
-   system message before the post-history.
-5. `scene/post_history.j2` as a system message, if non-empty. Vars:
+4. `scene/post_history.j2` as a system message, if non-empty. Vars:
    `npc_cards`, `voice_correction` and `length_correction`. The last is
    rendered from `scene/length_correction.j2` (vars: `drift`, `budget`) when
    `length_drift.measure()` finds the last 3 turns over budget, else `""`;
@@ -225,6 +255,8 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
    length: length is about trimming what was written, voice is about who is
    writing it. This is the closest slot to generation, which is why both
    counterweights ride here rather than in the system prompt.
+5. Regenerate guidance or mechanics continuation blocks, when present,
+   as extra system messages after the post-history.
 6. Opener only: `scene/opener_shape.j2` as the final system message (always
    sent — last, right before generation, so it outranks the system prompt).
 
@@ -232,14 +264,14 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
 order, which it joins with blank lines. It used to `include` every section
 itself; that made it a second render path over the same data, disagreeing with
 the inspector's breakdown as soon as anything could be dropped. The order and
-the selectors now live in `context.assemble._SECTIONS`, and
+the selectors now live in `context.assemble.SECTIONS`, and
 `_render_sections` renders it: `opener` (prepend
 `opener_instruction/{standard|offscreen}.j2`), `pcless` (offscreen sections +
 opener variant), `story_full` (`sections/story_so_far/{full|compact}.j2`;
 the opener uses `full` with the last 5 scenes, chat uses `compact` with the
 configured `recap_depth`).
 
-Each `_SECTIONS` entry also carries a packer tier — `lock-in`, `spotlight`,
+Each `SECTIONS` entry also carries a packer tier — `lock-in`, `spotlight`,
 `background` or `archive`. Over the configured `context_budget`, whole sections
 are dropped lowest tier first and the history is trimmed; lock-in never is. See
 `context/pack.py`.
