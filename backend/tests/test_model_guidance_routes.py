@@ -7,6 +7,18 @@ from grimoire.llm_errors import LLMError
 from tests.llm_fakes import FakeLLM, ScriptedProvider
 
 
+@pytest.fixture
+def client(client):
+    """These legacy route assertions describe combined generation.
+
+    Individual speaker selection, response boundaries and isolated knowledge
+    have their own default-mode integration tests in test_character_turns.
+    """
+    response = client.put("/api/config", json={"character_response_mode": "combined"})
+    assert response.status_code == 200
+    return client
+
+
 def _scene(client):
     client.put("/api/llm-connections/openrouter",
                json={"api_key": "sk-test", "model": "vendor/unknown"})

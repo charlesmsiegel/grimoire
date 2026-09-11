@@ -34,6 +34,18 @@ from tests.llm_fakes import (  # the shared gateway fakes (#204)
 )
 
 
+@pytest.fixture
+def client(client):
+    """These legacy route assertions describe combined generation.
+
+    Individual speaker selection, response boundaries and isolated knowledge
+    have their own default-mode integration tests in test_character_turns.
+    """
+    response = client.put("/api/config", json={"character_response_mode": "combined"})
+    assert response.status_code == 200
+    return client
+
+
 def _unfenced_stream(*args, **kw):
     """`_chat_stream` with the publish fence and the outcome box switched off.
 

@@ -48,6 +48,8 @@ def client(home):
     # `with`, so the lifespan runs: producing routes hand their work to a
     # runner that lives on it, and a client without one cannot drive a turn.
     with TestClient(app) as c:
+        # Existing call-count tests exercise the combined compatibility path.
+        c.put("/api/config", json={"character_response_mode": "combined"})
         c.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
         yield c
 

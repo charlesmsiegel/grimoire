@@ -15,6 +15,18 @@ from tests.llm_fakes import FailingOpenRouter
 
 
 @pytest.fixture
+def client(client):
+    """These legacy route assertions describe combined generation.
+
+    Individual speaker selection, response boundaries and isolated knowledge
+    have their own default-mode integration tests in test_character_turns.
+    """
+    response = client.put("/api/config", json={"character_response_mode": "combined"})
+    assert response.status_code == 200
+    return client
+
+
+@pytest.fixture
 def campaign_scene(client):
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)

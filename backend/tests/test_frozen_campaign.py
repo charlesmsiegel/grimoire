@@ -284,6 +284,9 @@ def frozen_client(frozen_home):
 
 
 def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client):
+    # This cassette demonstrates the historical combined-cast prompt.
+    # Individual NPC privacy is exercised separately with actor-owned evidence.
+    frozen_client.put("/api/config", json={"character_response_mode": "combined"})
     before = len(frozen_client.get(f"/api/campaigns/{CAMPAIGN}/scenes/{SCENE}").json()["messages"])
     resp = frozen_client.post(f"/api/campaigns/{CAMPAIGN}/scenes/{SCENE}/chat",
                               json={"content": "I have brought the salt."})
