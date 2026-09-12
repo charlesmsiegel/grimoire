@@ -30,6 +30,7 @@ class ResponseWatcher:
     def __init__(self):
         self.roll = fence.FenceWatcher()
         self.redactor = turnstate.StreamRedactor()
+        self.reasoning = ""
         self.raw = ""
         self.visible = 0
         self.handoff = None

@@ -21,7 +21,7 @@ from .paths import home, now_iso, safe_id, slugify, uniquify
 #: .SUPPORTED_KINDS` for the primary -- and a test partitions THIS roster
 #: between them, so a new kind cannot be added without classifying it.
 KINDS = ("openrouter", "claude", "openai_compatible")
-_FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process")
+_FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reasoning_effort")
 
 
 class ConnectionNotFound(Exception):

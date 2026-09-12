@@ -1,3 +1,4 @@
+import { Thinking, SavedThinking } from "../components/Thinking";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useMatch, useNavigate, useParams } from "react-router-dom";
 import { sceneNumber as numberOf } from "./sceneNumber";
@@ -587,7 +588,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
   const [responseActor, setResponseActor] = useState("");
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; offset: number; ended?: boolean }[]>([]);
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; offset: number; ended?: boolean; thinking?: string }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
@@ -2255,6 +2256,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
+        } else if (e.thinking_reset || e.thinking_delta) {
+          setStreamingSpeakers((prior) => prior.map((part, index) =>
+            index === prior.length - 1 ? { ...part, thinking: e.thinking_reset ? "" : (part.thinking ?? "") + e.thinking_delta } : part));
         } else if (e.response_end) {
           const endedId = e.response_end.id;
           setStreamingSpeakers((prior) => prior.map((part) =>
@@ -2614,6 +2618,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
+        } else if (e.thinking_reset || e.thinking_delta) {
+          setStreamingSpeakers((prior) => prior.map((part, index) =>
+            index === prior.length - 1 ? { ...part, thinking: e.thinking_reset ? "" : (part.thinking ?? "") + e.thinking_delta } : part));
         } else if (e.response_end) {
           const endedId = e.response_end.id;
           setStreamingSpeakers((prior) => prior.map((part) =>
@@ -4734,7 +4741,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                           </div>
                         </div>
                       ) : (
-                        <RenderedMarkdown content={m.content} />
+                        <>
+                          {m.response_id && m.response_thinking && loaded
+                            && !messages.slice(index - firstIndex + 1).some((later) => later.response_id === m.response_id) && <SavedThinking key={`${loaded.cid}:${loaded.sid}:${m.response_thinking}`}
+                            cid={loaded.cid} sid={loaded.sid} responseId={m.response_id} variantId={m.response_thinking} />}
+                          <RenderedMarkdown content={m.content} />
+                        </>
                       )}
                       {m.response_id && m.role === "assistant" && transcriptIsActive
                         && !messages.slice(index - firstIndex + 1).some((later) => later.response_id === m.response_id) && (
@@ -4786,6 +4798,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                       {streamingSpeakers[0].offset > 0 && <RenderedMarkdown content={hideArtHandles(streaming.slice(0, streamingSpeakers[0].offset))} />}
                       {streamingSpeakers.map((part, index) => <div className="streaming-response" key={part.id}>
                         <strong>{part.speaker}</strong>
+                        <Thinking content={part.thinking ?? ""} />
                         <RenderedMarkdown content={hideArtHandles(streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset))} />
                         {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
                           <div className="response-progress" role="status" aria-label={`${part.speaker} is responding`}>

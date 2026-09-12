@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from . import llm_capture, model_guidance
+from . import llm_capture, llm_reasoning, model_guidance
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
@@ -241,7 +241,7 @@ async def _aclose(agen) -> None:
         task.cancel()  # asked to stop; deliberately not awaited
 
 
-async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterator[str]:
+async def _guard(agen, timeout: float, tick: float | None = None, pending=None) -> AsyncIterator[str]:
     """Bound the gap between deltas, whatever the provider underneath.
 
     The wait covers connect + time-to-first-token on the first pull and
@@ -273,7 +273,8 @@ async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterat
     The two clocks are deliberately different, and conflating them was a bug
     caught in review. The idle bound measures *provider* activity, so every
     frame resets it, empty ones included. The tick measures what the *caller*
-    has seen, so it spans pulls and only text resets it. Reset per pull instead
+    has seen, so it spans pulls and prose or queued display reasoning resets
+    it. Content-free provider keepalives do not. Reset per pull instead
     and the adapters defeat it completely: they yield "" for every upstream SSE
     line (see `openrouter.stream`), so a model streaming reasoning fires frames
     far faster than the interval, restarts the clock each time, and the caller's
@@ -313,7 +314,7 @@ async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterat
                 chunk = pull.result()  # re-raises the provider's own LLMError
             except StopAsyncIteration:
                 return
-            if chunk:
+            if chunk or (pending is not None and pending()):
                 next_tick = (time.monotonic() + tick) if tick > 0 else None
                 yield chunk
             elif next_tick is not None and time.monotonic() >= next_tick:
@@ -357,7 +358,11 @@ def _stamp(usage: dict | None, conn: dict, attempts: int) -> None:
     """
     if usage is None:
         return
+    reasoning = usage.get(llm_reasoning.KEY)
     usage.clear()
+    if isinstance(reasoning, llm_reasoning.Buffer):
+        reasoning.begin()
+        usage[llm_reasoning.KEY] = reasoning
     usage.update({"model": effective_model(conn), "connection": _label(conn),
                   "provider": conn.get("kind", "openrouter"), "attempts": attempts,
                   # Which connection is live, for the route that may have to
@@ -409,7 +414,8 @@ async def _resilient(open_stream, routes, timeout: float,
     immediately and hands the generation to the next one, rather than ending
     the whole call.
 
-    **Nothing is ever retried once text has reached the caller.** That is the
+    **Nothing is ever retried once prose has reached the caller.** Display
+    reasoning is separate and explicitly reset at each attempt. That is the
     whole reason this wraps `stream` rather than only `complete`: a retry is
     only safe while the caller has seen nothing, and the facade is the one
     place that knows. For the blocking routes that is the entire call (nothing
@@ -482,7 +488,10 @@ async def _resilient(open_stream, routes, timeout: float,
                     capture, call_id, tries, effective_model(conn), conn.get("kind", "openrouter"))
                 llm_capture.emit(usage, "start", None)
             outcome = "interrupted"
-            agen = _guard(open_stream(conn, usage), timeout, tick)
+            if llm_reasoning.pending(usage):
+                yield ""
+            agen = _guard(open_stream(conn, usage), timeout, tick,
+                          pending=lambda: llm_reasoning.pending(usage))
             try:
                 async for chunk in agen:
                     sent = sent or bool(chunk)
@@ -655,7 +664,8 @@ class LLMClient:
             return self._openai_compatible.stream(
                 messages, conn.get("model", ""), conn.get("api_key", ""),
                 conn.get("base_url", ""), strict=conn.get("post_process") == "strict",
-                usage=usage)
+                usage=usage, **({"reasoning_effort": llm_reasoning.glm_effort(conn)}
+                                if llm_reasoning.glm_effort(conn) else {}))
         return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""),
                                        usage=usage)
 

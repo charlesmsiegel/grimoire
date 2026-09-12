@@ -65,8 +65,12 @@ def _id():
     return uuid.uuid4().hex
 
 
-def _message(record, content, status):
-    return {
+def _message(record, content, status, variant=None):
+    variant = variant or next((v for v in record["variants"] if v["id"] == record["active_variant"]), {})
+    # Only an opaque pointer enters transcript metadata. The reasoning itself
+    # stays in the response ledger and cannot become scene context or mechanics.
+    thinking = {"response_thinking": variant["id"]} if variant.get("reasoning") else {}
+    return {**thinking,
         "role": "assistant",
         "speaker": record["speaker"],
         "content": content,
@@ -250,6 +254,7 @@ def save_variant(
     issue=None,
     activate=True,
     part="",
+    reasoning="",
 ) -> dict:
     with locks.campaign_lock(cid):
         data = _read(cid)
@@ -264,7 +269,12 @@ def save_variant(
             if part
             else []
         )
+        previous: dict = next((v for v in record["variants"] if v["id"] == record["active_variant"]), {})
+        thinking_parts: dict[str, str] = dict(previous.get("reasoning_parts", {})) if part else {}
+        thinking_parts[part] = reasoning
         variant = {
+            "reasoning": "\n\n".join(s for s in thinking_parts.values() if s),
+            "reasoning_parts": thinking_parts,
             "id": _id(),
             "content": "\n\n".join([*prefix, content]),
             "part": part,
@@ -365,7 +375,7 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
             cid, sid, {old: new for new, old in enumerate(retained)}, len(retained)
         )
         messages = [messages[i] for i in retained]
-        messages[index] = _message(record, variant["content"], "complete")
+        messages[index] = _message(record, variant["content"], "complete", variant)
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True

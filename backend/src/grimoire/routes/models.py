@@ -85,6 +85,7 @@ class ConnectionCreate(BaseModel):
     api_key: str = ""
     model: str = ""
     post_process: Literal["none", "strict"] = "none"
+    reasoning_effort: Literal["", "low", "high", "max"] = ""
 
 
 class ConnectionUpdate(BaseModel):
@@ -93,6 +94,7 @@ class ConnectionUpdate(BaseModel):
     api_key: str | None = None
     model: str | None = None
     post_process: Literal["none", "strict"] | None = None
+    reasoning_effort: Literal["", "low", "high", "max"] | None = None
 
 
 class CatalogProbe(BaseModel):

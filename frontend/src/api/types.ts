@@ -36,6 +36,7 @@ export type LLMConnection = {
   id: string; kind: LLMConnectionKind; name: string;
   base_url: string; model: string; effective_model: string;
   post_process: "none" | "strict";
+  reasoning_effort?: "" | "low" | "high" | "max";
   key_set: boolean; rev: string; health: ProviderHealth;
 };
 export type LLMConnectionDetail = LLMConnection & {
@@ -57,6 +58,7 @@ export type ActiveConnection = {
 export type LLMConnectionDraft = {
   kind?: LLMConnectionKind; name?: string; base_url?: string; api_key?: string;
   model?: string; post_process?: "none" | "strict";
+  reasoning_effort?: "" | "low" | "high" | "max";
 };
 export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
 /** A connection described but not saved, for the sake of listing its models. */
@@ -321,11 +323,12 @@ export type SceneMeta = {
   pcless?: boolean; done?: boolean;
 };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string;
+  response_thinking?: string;
   response_id?: string; response_part?: string; response_status?: "complete" | "incomplete";
   context_changed?: boolean; response_can_reroll?: boolean };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
-  variants: { id: string; content: string; status: string; issue?: string | null }[] };
+  variants: { id: string; content: string; reasoning?: string; status: string; issue?: string | null }[] };
 export type PassageCharacterDraft = { name: string; description: string; mes_example: string; quotes: string[] };
 export type PassageCharacterInput = { name: string; passage: string; source_text: string };
 export type PassageCharacterSave = PassageCharacterInput & { description: string; mes_example: string; existing_ref?: string };

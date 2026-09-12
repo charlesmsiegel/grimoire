@@ -1,3 +1,4 @@
+import { Thinking } from "./Thinking";
 import { useState } from "react";
 import { api, type ResponseRecord } from "../api/client";
 import RerollRoutePicker, { NO_REROLL_ROUTE, type RerollRoute } from "./RerollRoute";
@@ -46,6 +47,7 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
       {onCreateCharacter && <button disabled={disabled} onClick={onCreateCharacter}>Create character from this passage</button>}
       {error !== null && <p role="alert"><ErrorNote err={error} /></p>}
       {record?.variants.map((variant, index) => <div key={variant.id}>
+        <Thinking content={variant.reasoning ?? ""} />
         <p>{variant.content}</p>
         {variant.issue && <p className="subtle">Response issue: {variant.issue}</p>}
         <button disabled={disabled || variant.status !== "complete" || record.active_variant === variant.id}

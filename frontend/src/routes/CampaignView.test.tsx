@@ -8021,3 +8021,39 @@ test("speaker progress appears before prose and moves to the next NPC on handoff
   expect(screen.queryByText('"So am I."')).not.toBeInTheDocument();
   expect(screen.queryByRole("status", { name: /is responding/ })).not.toBeInTheDocument();
 });
+
+
+test("streamed thinking is collapsed and follows its NPC across a handoff", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  let emit: Parameters<typeof api.chat>[3] = () => {};
+  let finish: () => void = () => {};
+  vi.mocked(api.chat).mockImplementation((_cid, _sid, _text, onEvent) => new Promise((resolve) => {
+    emit = onEvent; finish = () => { onEvent({ done: true }); resolve(); };
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "I wait." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  act(() => {
+    emit({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+    emit({ thinking_delta: "First thought" });
+  });
+  const thinking = await screen.findByText("Thinking");
+  expect(thinking.closest("details")).not.toHaveAttribute("open");
+  fireEvent.click(thinking);
+  act(() => emit({ thinking_delta: " continues" }));
+  expect(screen.getByText(/First thought continues/).closest("details")).toHaveAttribute("open");
+  act(() => {
+    emit({ thinking_reset: true });
+    emit({ thinking_delta: "Retry thought" });
+    emit({ delta: '"Ready."' });
+    emit({ response_end: { id: "a", status: "complete" } });
+    emit({ response_start: { id: "b", speaker: "Winifred", actor_ref: "characters:winifred" } });
+    emit({ thinking_delta: "Second thought" });
+  });
+  expect(screen.queryByText(/First thought/)).not.toBeInTheDocument();
+  expect(screen.getByText(/Retry thought/).closest(".streaming-response")).toHaveTextContent("Mara");
+  expect(screen.getByText(/Second thought/).closest(".streaming-response")).toHaveTextContent("Winifred");
+  await act(async () => finish());
+});

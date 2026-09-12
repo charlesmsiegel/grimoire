@@ -74,6 +74,8 @@ export type RunHandle = {
 };
 export type ChatEvent = {
   delta?: string; done?: boolean; proposal?: RollProposalPayload;
+  thinking_delta?: string;
+  thinking_reset?: boolean;
   response_start?: { id: string; speaker: string; actor_ref: string };
   response_end?: { id: string; status: "complete" | "incomplete" };
   run?: RunHandle;

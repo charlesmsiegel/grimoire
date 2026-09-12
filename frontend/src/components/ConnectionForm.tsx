@@ -13,10 +13,11 @@ export type ConnectionFormValue = {
   base_url: string;
   model: string;
   post_process: "none" | "strict";
+  reasoning_effort?: "" | "low" | "high" | "max";
 };
 
 export const BLANK_CONNECTION: ConnectionFormValue = {
-  kind: "openrouter", name: "", base_url: "", model: "", post_process: "none",
+  kind: "openrouter", name: "", base_url: "", model: "", post_process: "none", reasoning_effort: "",
 };
 
 /** The kind/name/credentials/model fields of an LLM connection.
@@ -120,6 +121,17 @@ export function ConnectionForm({
                            models={models} error={modelsError} />
           </Field>
           {modelsHint}
+          {["glm-5.3", "glm-5.3-flash"].includes(value.model.toLowerCase().split("/").pop() ?? "") && (
+            <Field label="Reasoning effort" hint="GLM 5.3 defaults to Max. Low asks for less thinking; it is not a fixed token limit. Thinking cannot be disabled for this model.">
+              <select aria-label="Reasoning effort" value={value.reasoning_effort ?? ""}
+                      onChange={(e) => set({ reasoning_effort: e.target.value as ConnectionFormValue["reasoning_effort"] })}>
+                <option value="">Provider default</option>
+                <option value="low">Low</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+              </select>
+            </Field>
+          )}
           <Field label="Prompt post-processing"
                  hint="Strict folds system messages into user turns and forces the sequence to start with a user turn — needed by some coding-style endpoints (e.g. z.ai's GLM) that reject a system message mid-conversation.">
             <select value={value.post_process}

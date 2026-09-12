@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
-from . import llm_capture, llm_usage
+from . import llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError
 
 # claude-agent-sdk lives in the `claude` extra, which Android does not install
@@ -170,6 +170,10 @@ class ClaudeAgentClient:
                 # model can spend minutes on those before its first word (#243).
                 yield ""
                 _capture_usage(message, usage)
+                for block in getattr(message, "content", []) or []:
+                    llm_reasoning.feed(usage, getattr(block, "thinking", None))
+                if llm_reasoning.pending(usage):
+                    yield ""
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):

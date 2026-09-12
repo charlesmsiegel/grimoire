@@ -498,3 +498,18 @@ test("a connection nothing points at says so", async () => {
   const section = heading.closest(".side-section") as HTMLElement;
   expect(within(section).getByText(/nothing is routed here/i)).toBeInTheDocument();
 });
+
+
+test("GLM 5.3 effort can be saved without replacing credentials", async () => {
+  vi.mocked(api.readConnection).mockResolvedValue({ ...CUSTOM, model: "glm-5.3", reasoning_effort: "", models: [], fetched_at: "" } as any);
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(within(rail).getByText("z.ai GLM"));
+  await screen.findByRole("button", { name: /^edit$/i });
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Reasoning effort" }), { target: { value: "low" } });
+  fireEvent.click(screen.getByRole("button", { name: /^Save connection$/i }));
+  await waitFor(() => expect(api.updateConnection).toHaveBeenCalledWith("zai-glm", expect.objectContaining({ reasoning_effort: "low" })));
+  const calls = vi.mocked(api.updateConnection).mock.calls;
+  expect(calls[calls.length - 1][1]).not.toHaveProperty("api_key");
+});

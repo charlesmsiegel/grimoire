@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import catalog, llm_capture, llm_usage
+from . import catalog, llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Bound for the health probe (#146). The client's own 120s default is sized
@@ -114,7 +114,8 @@ class OpenAICompatibleClient:
         return headers
 
     async def stream(self, messages, model: str, key: str, base_url: str,
-                      strict: bool = False, usage: dict | None = None) -> AsyncIterator[str]:
+                      strict: bool = False, usage: dict | None = None,
+                      reasoning_effort: str = "") -> AsyncIterator[str]:
         """`usage` is filled in place when the endpoint volunteers an accounting
         block — see `llm_usage`.
 
@@ -134,6 +135,8 @@ class OpenAICompatibleClient:
         payload_messages = _strict_messages(messages) if strict else messages
         url = base_url.rstrip("/") + "/chat/completions"
         payload = {"model": model, "messages": payload_messages, "stream": True}
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
         try:
             http = self._client()
             async with http.stream(
@@ -171,6 +174,9 @@ class OpenAICompatibleClient:
                     # Ahead of the delta lookup: a usage block rides a chunk
                     # with no choices, so reading it after would skip it.
                     llm_usage.from_openai_chunk(obj, usage)
+                    llm_reasoning.from_chunk(obj, usage)
+                    if llm_reasoning.pending(usage):
+                        yield ""
                     try:
                         delta = obj["choices"][0]["delta"].get("content")
                     except (KeyError, IndexError):

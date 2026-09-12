@@ -85,3 +85,35 @@ Build and verification details are recorded in
 [the branch validation report](superpowers/validation/2026-09-11-character-turns.md).
 Restart Grimoire to load changed backend code. To back out of the code changes,
 switch to `main` and restart; campaign history is stored separately from Git.
+
+
+## Thinking display and GLM effort
+
+New per-character responses show a collapsed **Thinking** section when the
+provider returns reasoning. Expanding it shows plain text inside
+`<thinking>...</thinking>` tags; HTML, roll fences, and handoff text inside it
+are never executed. Thinking updates while the response streams. Retry/fallback
+attempts clear the previous attempt's thinking. Stop and roll boundaries close
+the underlying stream.
+
+Reasoning is stored with each response variant in the response ledger. Only
+an opaque variant pointer enters transcript metadata; the reasoning itself
+is never added to the scene text or subsequent model prompts. Saved thinking
+loads when expanded and follows the selected variant. Roll continuations
+retain earlier thinking and replace the resumed part when it is regenerated.
+This display is independent of Debug logging. Old responses without stored
+reasoning have no panel; raw diagnostic captures are not backfilled into them.
+The display applies to the character-response engine, including narrator
+responses and individual rerolls. Background selectors/drafts and the legacy
+combined response engine still use their existing display paths.
+
+For a Custom (OpenAI-compatible) connection using `glm-5.3` or
+`glm-5.3-flash`, **LLM Connections → Edit → Reasoning effort** offers Provider
+default, Low, High, and Max. Existing connections send no setting. The chosen
+value is sent as `reasoning_effort` on calls through that connection; changing
+the connection to another model stops sending the GLM-specific setting.
+
+[Z.ai's Chat Completion reference](https://docs.z.ai/api-reference/llm/chat-completion)
+documents Max as the default, Low/High/Max as GLM 5.3's supported values, and
+thinking as always enabled for this model. Effort is a qualitative control,
+not a target token count. This feature does not impose an output-token cap.

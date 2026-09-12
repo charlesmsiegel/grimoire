@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import catalog, llm_capture, llm_usage
+from . import catalog, llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Everything this provider is reached at hangs off one root. Spelled once
@@ -152,6 +152,9 @@ class OpenRouterClient:
                     # so reading it inside the same try as the delta would skip
                     # accounting on exactly the frame that carries it.
                     llm_usage.from_openai_chunk(obj, usage)
+                    llm_reasoning.from_chunk(obj, usage)
+                    if llm_reasoning.pending(usage):
+                        yield ""
                     try:
                         delta = obj["choices"][0]["delta"].get("content")
                     except (KeyError, IndexError):

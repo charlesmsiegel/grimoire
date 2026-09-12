@@ -128,7 +128,7 @@ export function ConnectionEditor() {
     openRev.current = d.rev;
     setId(cid);
     setDetail(d);
-    setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process });
+    setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process, reasoning_effort: d.reasoning_effort ?? "" });
     setKey("");
     setMode("view");
     setModels(d.models);
@@ -160,7 +160,7 @@ export function ConnectionEditor() {
     try {
       if (id) {
         const patch: Record<string, unknown> = {
-          name: form.name, base_url: form.base_url, model: form.model, post_process: form.post_process,
+          name: form.name, base_url: form.base_url, model: form.model, post_process: form.post_process, reasoning_effort: form.reasoning_effort ?? "",
         };
         if (key) patch.api_key = key;
         await api.updateConnection(id, patch);

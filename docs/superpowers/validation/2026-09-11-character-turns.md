@@ -164,3 +164,34 @@ large payload reconstruction, opt-in activation, monthly caps, and unchanged
 metered usage. The independent review tools remain unavailable as recorded
 above; this is a root review, not an independent-review claim. No paid model
 call, process restart, or live campaign mutation was used for verification.
+
+
+## Follow-up: collapsible thinking and GLM reasoning effort
+
+Character responses carry a separate reasoning event stream. The optional
+per-call buffer survives gateway accounting resets, clears on each attempt,
+and wakes the display while prose is still unavailable. Closing the response
+stream closes the provider. Reasoning is never fed to roll/handoff watchers.
+Each variant stores its reasoning; transcript metadata holds only a variant
+pointer. The default-collapsed panel renders literal thinking tags and escaped
+text, fetches saved reasoning on expansion, and follows variant selection.
+
+Custom GLM 5.3/5.3-Flash connections expose provider-default/low/high/max effort.
+The field round-trips through connection storage and is omitted from requests
+unless explicitly selected for a supported model. Model switches do not leak
+the setting into another model's request. The provider's documented Max default
+and qualitative, non-token-target semantics are linked from character-responses.
+
+Initial tests failed for missing reasoning delivery/storage and effort fields.
+The gateway/character/capture/connection selection passed 149 tests. Persistence,
+mechanics and architecture checks passed 228 tests; the final frozen-history,
+connection and docs selection passed 95. All 353 CampaignView tests passed;
+Thinking/ConnectionEditor tests passed 31 and ResponseControls passed 4.
+Checks cover delivery before provider completion, retry reset, literal rendering,
+no reasoning in subsequent prompts, and stored reasoning following variants.
+
+Root requirement and diff review checked the optional side-channel, content
+choice matching, cancellation, per-speaker UI boundaries, lazy saved-history
+reads, roll continuation reasoning, setting defaults and provider compatibility.
+Independent review tooling remains unavailable as noted above. No paid LLM calls,
+live campaign mutations, or Grimoire restart were used for this change.

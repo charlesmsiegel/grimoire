@@ -350,7 +350,7 @@ def _append_block(body: str, block: str) -> str:
     return (body.rstrip() + "\n\n" + block) if body.strip() else block
 
 
-RESPONSE_METADATA = ("response_part", "response_id", "response_status", "response_can_reroll",
+RESPONSE_METADATA = ("response_thinking", "response_part", "response_id", "response_status", "response_can_reroll",
                      "context_changed")
 
 

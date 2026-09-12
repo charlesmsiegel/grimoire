@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from contextlib import aclosing
 
 import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import prompts, store
+from .. import llm_reasoning, prompts, store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
@@ -201,6 +202,7 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             handoff=watcher.handoff if status == "complete" else None,
             issue=watcher.issue,
             part=continuation or "",
+            reasoning=watcher.reasoning,
         )
         if continuation and status == "complete":
             if not store.proposals.commit_narration(cid, sid, continuation, saved):
@@ -329,16 +331,26 @@ async def _select(cid, sid, client, round_record):
 
 
 async def _stream_contribution(client, messages, conn, meter, watcher, run):
-    async for delta in client.stream(messages, conn, meter.usage):
-        if run.cancel_requested:
-            raise anyio.get_cancelled_exc_class()()
-        visible = watcher.feed(delta)
-        if visible:
-            yield streaming._sse({"delta": visible})
-        elif not delta:
-            yield streaming._HEARTBEAT
-        if watcher.roll.complete:
-            break
+    async with aclosing(llm_reasoning.stream(client, messages, conn, meter.usage)) as source:
+        async for event in source:
+            if run.cancel_requested:
+                raise anyio.get_cancelled_exc_class()()
+            if event.get("thinking_reset"):
+                watcher.reasoning = ""
+                yield streaming._sse(event)
+                continue
+            if "thinking_delta" in event:
+                watcher.reasoning += event["thinking_delta"]
+                yield streaming._sse(event)
+                continue
+            delta = event["delta"]
+            visible = watcher.feed(delta)
+            if visible:
+                yield streaming._sse({"delta": visible})
+            elif not delta:
+                yield streaming._HEARTBEAT
+            if watcher.roll.complete:
+                break
     visible = watcher.finish()
     if visible:
         yield streaming._sse({"delta": visible})
@@ -826,13 +838,8 @@ async def _reroll_frames(cid, sid, rid, client, conn, run, token, record, messag
                 }
             }
         )
-        async for delta in client.stream(messages, conn, meter.usage):
-            visible = watcher.feed(delta)
-            if visible:
-                yield streaming._sse({"delta": visible})
-        visible = watcher.finish()
-        if visible:
-            yield streaming._sse({"delta": visible})
+        async for frame in _stream_contribution(client, messages, conn, meter, watcher, run):
+            yield frame
         meter.done()
 
         accepted = await run_in_threadpool(
@@ -881,6 +888,7 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher):
             handoff=watcher.handoff,
             issue=watcher.issue,
             activate=False,
+            reasoning=watcher.reasoning,
         )
         store.responses.activate(cid, sid, rid, variant["id"])
         streaming._turn_settled(cid)
