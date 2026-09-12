@@ -343,7 +343,8 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     return LLMClient(timeout=store.config.llm_timeout,
                      retries=store.config.llm_retries,
                      fallback=_fallback_connection,
-                     observer=health.record if health is not None else None)
+                     observer=health.record if health is not None else None,
+                     capture=store.logs.incoming_capture)
 
 
 def build_openai_compatible_client() -> OpenAICompatibleClient:

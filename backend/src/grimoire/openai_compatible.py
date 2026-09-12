@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import catalog, llm_usage
+from . import catalog, llm_capture, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Bound for the health probe (#146). The client's own 120s default is sized
@@ -146,6 +146,7 @@ class OpenAICompatibleClient:
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
+                    llm_capture.emit(usage, "http_error_body", resp.text)
                     # The provider's own window, when it names one. A guessed
                     # backoff is what you use for not knowing; Retry-After is
                     # knowing (#144).
@@ -153,6 +154,7 @@ class OpenAICompatibleClient:
                                                _extract_error(resp.text),
                                                retry_after_seconds(resp.headers))
                 async for line in resp.aiter_lines():
+                    llm_capture.emit(usage, "sse_line", line)
                     # Proof of life for the facade's idle bound, including the
                     # frames dropped below (keep-alives, and deltas carrying
                     # only reasoning_content) — see openrouter.stream (#243).

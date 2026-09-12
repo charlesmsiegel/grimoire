@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import catalog, llm_usage
+from . import catalog, llm_capture, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Everything this provider is reached at hangs off one root. Spelled once
@@ -124,6 +124,7 @@ class OpenRouterClient:
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
+                    llm_capture.emit(usage, "http_error_body", resp.text)
                     # The provider's own window, when it names one. A guessed
                     # backoff is what you use for not knowing; Retry-After is
                     # knowing (#144).
@@ -131,6 +132,7 @@ class OpenRouterClient:
                                          _extract_error(resp.text),
                                          retry_after_seconds(resp.headers))
                 async for line in resp.aiter_lines():
+                    llm_capture.emit(usage, "sse_line", line)
                     # Every frame is proof of life, including the ones this
                     # parser drops: a comment keep-alive, or a delta carrying
                     # only `reasoning`. The facade times the gap between yields,

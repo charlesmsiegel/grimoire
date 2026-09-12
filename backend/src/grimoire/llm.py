@@ -9,9 +9,10 @@ import asyncio
 import logging
 import random
 import time
+import uuid
 from collections.abc import AsyncIterator
 
-from . import model_guidance
+from . import llm_capture, model_guidance
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
@@ -388,7 +389,7 @@ def _observe(observer, conn: dict, error: LLMError | None) -> None:
 async def _resilient(open_stream, routes, timeout: float,
                      tick: float | None = None,
                      usage: dict | None = None,
-                     observer=None) -> AsyncIterator[str]:
+                     observer=None, capture: llm_capture.Sink | None = None) -> AsyncIterator[str]:
     """Run `routes` in order, retrying each for as many attempts as it carries.
 
     `routes` is a list of `(conn, retries)` -- the active connection first,
@@ -440,6 +441,11 @@ async def _resilient(open_stream, routes, timeout: float,
     When both routes fail the caller gets the *primary's* kind, with the
     fallback's failure appended: see the tail of this function.
     """
+    # A holder is needed even for callers uninterested in usage: the adapters
+    # receive their recorder through this existing per-attempt seam.
+    if capture is not None and usage is None:
+        usage = {}
+    call_id = uuid.uuid4().hex if capture is not None else ""
     sent = False
     tries = 0
     first: LLMError | None = None
@@ -471,14 +477,21 @@ async def _resilient(open_stream, routes, timeout: float,
                         yield ""  # still here, waiting the provider out
             tries += 1
             _stamp(usage, conn, tries)
+            if capture is not None and usage is not None:
+                usage[llm_capture.KEY] = llm_capture.Capture(
+                    capture, call_id, tries, effective_model(conn), conn.get("kind", "openrouter"))
+                llm_capture.emit(usage, "start", None)
+            outcome = "interrupted"
             agen = _guard(open_stream(conn, usage), timeout, tick)
             try:
                 async for chunk in agen:
                     sent = sent or bool(chunk)
                     yield chunk
+                outcome = "complete"
                 _observe(observer, conn, None)
                 return
             except LLMError as exc:
+                outcome = "error"
                 _observe(observer, conn, exc)
                 if sent:
                     raise
@@ -493,7 +506,10 @@ async def _resilient(open_stream, routes, timeout: float,
                 # here and this is what still propagates the close down to
                 # `_guard`, and from there to httpx. Without it the provider
                 # connection would wait for the garbage collector.
-                await agen.aclose()
+                try:
+                    await agen.aclose()
+                finally:
+                    llm_capture.emit(usage, "end", {"status": outcome})
             if not retryable:
                 break  # a repeat cannot fix this one; the next route might
         if index + 1 < len(routes):
@@ -533,7 +549,7 @@ class LLMClient:
     """Dispatches each call to the resolved connection's kind."""
 
     def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
-                 retries=None, fallback=None, observer=None):
+                 retries=None, fallback=None, observer=None, capture=None):
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
@@ -559,6 +575,9 @@ class LLMClient:
         #: reason: the registry lives on `app.state` and this module may not
         #: reach into the app any more than it may reach into the store.
         self._observer = observer
+        # Resolver returns a sink, or None when capture is off. Like timeout,
+        # this keeps runtime configuration in the store and out of the gateway.
+        self._capture = capture
 
     def _timeout_seconds(self) -> float:
         if self._timeout is None:
@@ -658,9 +677,13 @@ class LLMClient:
         numbers arrive on the provider's last frame anyway, after the caller has
         consumed every delta. `store.usage.Meter` owns one and files it.
         """
+        try:
+            sink = self._capture() if self._capture is not None else None
+        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
+            sink = None
         return _resilient(lambda route, holder: self._dispatch(messages, route, holder),
                           self._usable_routes(messages, conn), self._timeout_seconds(),
-                          usage=usage, observer=self._observer)
+                          usage=usage, observer=self._observer, capture=sink)
 
     async def complete(self, messages: list[dict], conn: dict,
                        usage: dict | None = None) -> str:

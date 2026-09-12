@@ -623,18 +623,15 @@ export default function ConfigView() {
               files stay small and turning it up is what you do before reproducing a
               bug. <strong>Errors are recorded whatever this says.</strong>
             </p>
-            {/* Said here, where sharing the file is decided. No API key can
-                reach it — only grimoire's own loggers are recorded, never the
-                HTTP client's — but campaign and scene ids are how a failure is
-                located, and a failed character refresh names the character. So
-                it is safe to hand over in the sense that matters for
-                credentials, and not blank about your library. */}
+            {/* The capture boundary is incoming bodies, not request logging.
+                A provider can echo private content, so explain it where the
+                reader chooses the logging level and decides what to share. */}
             <p className="config-copy">
-              It holds <strong>no API keys</strong> — only grimoire's own messages are
-              recorded, never the HTTP client's request URLs. It does name the campaign
-              and scene a failure happened in, and occasionally a character, because
-              that is what makes a failure findable. Worth a read before you attach it
-              to anything.
+              Requests and authorization headers are not captured. At Debug level,
+              logs include complete incoming LLM response bodies, including reasoning
+              text and provider metadata. They also name the campaign and scene a
+              failure happened in, and occasionally a character. Read the log before
+              sharing it; response bodies can contain private campaign content.
             </p>
             <div className="config-fields">
               <div className="config-field">

@@ -133,3 +133,34 @@ used-slot exclusion, roll continuation, historical snapshot preservation and
 missing/invalid control stopping the sequence. This follow-up does not add a
 fallback generation or force every present NPC to speak. Existing review-tool
 availability limits still apply.
+
+
+## Follow-up: incoming provider capture
+
+Debug logging now captures decoded incoming SSE lines before JSON/content/usage
+filtering, HTTP error bodies, and all fields exposed by Claude SDK messages.
+Call IDs group attempts; per-attempt sequence and arrival offsets preserve
+ordering. The existing log writer splits long payloads into numbered parts.
+Scene output and usage accounting continue consuming their existing projections.
+
+Eight capture regressions failed before implementation. After implementation,
+the provider/capture/logging/lifecycle selection passed 251 tests. A final
+capture/accounting/metrics/errors/lock-order selection passed 228 tests,
+including ten capture cases. Architecture guards passed 186 tests. Configuration
+tests and the frontend build passed. Ruff stayed at 1180 and ESLint at 844;
+CI-platform mypy stayed at 180. Native Windows mypy additionally reports five
+findings in unchanged atomic.py/proclock.py platform branches.
+
+The log stress test exposed an existing Windows append race: every append
+reported success but rows were missing. Loading the committed log module into
+an isolated test process reproduced it; serializing its appends passed. The
+diagnostic writer now serializes appends within this process, and a capture
+test reconstructs every part while ordinary logs are written concurrently.
+This does not claim cross-process locking or durable archival capture.
+
+Root diff and requirement review checked unknown nested fields, malformed SSE,
+SDK projection limits, fallback separation, generator closure, sink failure,
+large payload reconstruction, opt-in activation, monthly caps, and unchanged
+metered usage. The independent review tools remain unavailable as recorded
+above; this is a root review, not an independent-review claim. No paid model
+call, process restart, or live campaign mutation was used for verification.

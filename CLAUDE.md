@@ -378,6 +378,15 @@ Four rules that are easy to undo by accident:
   store aggregates on. Sixteen call sites each remembering to pass a `kind` is
   how half of them stop appearing in the per-kind counts.
 
+Incoming LLM response capture also uses this writer, at Debug level. Adapters
+record decoded SSE lines or SDK messages before selecting content and usage
+fields. Long payloads are split into numbered parts rather than clipped; the
+monthly cap still applies. Request bodies, URLs and headers are never passed
+to the sink. Response bodies can include private prose and reasoning, so the
+Configuration page describes that sharing boundary. See
+[`docs/incoming-llm-capture.md`](docs/incoming-llm-capture.md) for reconstruction
+and completeness limits.
+
 The two error counts on `/stats` come from two places **on purpose**: a latency
 bucket's `errors` counts calls that failed (the usage ledger, the only source
 that also knows how many succeeded, so the only one that can give a rate its

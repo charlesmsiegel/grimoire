@@ -59,9 +59,11 @@ obvious version breaks:
   would pull in `httpx`, which logs full request URLs at DEBUG -- and an
   OpenAI-compatible endpoint carries its key in the URL for some providers, and
   in headers `urllib3` will happily render for others. This file is one a user
-  is asked to attach to a bug report. It may not contain their API key, so the
+  is asked to attach to a bug report. Request credentials must stay out, so the
   handler goes on the `grimoire` logger and third-party output stays where it
-  was.
+  was. Debug-level incoming LLM capture records response bodies, including
+  reasoning and arbitrary provider fields. A body can echo private data; the
+  Configuration page explains that these captures need review before sharing.
 
 Retention is deliberately none, the same call `store.usage` makes: the files
 are month-scoped, plain text and trivially deletable by hand, which beats a
@@ -78,6 +80,7 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -190,6 +193,11 @@ _busy = threading.local()
 _written: dict[str, int] = {}
 _capped: set[str] = set()
 _size_guard = threading.Lock()
+# Serialize this process's appenders, including the size-cap marker. On
+# Windows, concurrent O_APPEND writes can overwrite a row without raising;
+# the four-thread log test reproduces it with every write reporting success.
+# The thread-local re-entry latch above prevents recursive acquisition.
+_append_guard = threading.Lock()
 
 
 def _now() -> str:
@@ -343,7 +351,8 @@ def record(level_: str, module: str, message: str, *, kind: str = "",
                 row[name_] = extra
         if trace:
             row["trace"] = _clip(trace, MAX_TRACE, head=False)
-        return _append(row)
+        with _append_guard:
+            return _append(row)
     except (OSError, TypeError, ValueError):
         # OSError is the write. TypeError is a field `json.dumps` refuses --
         # the sort of thing only a test finds, and the sort that would take
@@ -351,6 +360,32 @@ def record(level_: str, module: str, message: str, *, kind: str = "",
         return None
     finally:
         _busy.on = False
+
+
+def incoming_capture() -> Callable[[dict], None] | None:
+    """Full incoming bodies are opt-in through the existing Debug floor.
+
+    Resolved per call, so changing the floor affects the next generation.
+    Requests, URLs and authorization headers are never passed to this sink.
+    Response bodies can contain private prose and reasoning; see Configuration.
+    """
+    return _incoming_event if _floor["rank"] == _RANK["debug"] else None
+
+
+def _incoming_event(event: dict) -> None:
+    # Keep the existing writer, size backstop and readers. Split the serialized
+    # payload BEFORE record clips strings, so a large extension/usage field is
+    # reconstructible: group by call_id/attempt/sequence, order by part, join
+    # payload, then json.loads once. A missing part is detectable via parts.
+    # The monthly cap still applies; log_capped explicitly marks that boundary.
+    payload = json.dumps(event["payload"], ensure_ascii=False, allow_nan=False)
+    parts = max(1, (len(payload) + MAX_MESSAGE - 1) // MAX_MESSAGE)
+    metadata = {key: value for key, value in event.items() if key != "payload"}
+    for index in range(parts):
+        if record("debug", "llm.capture", "Incoming LLM response", kind="llm_incoming",
+                  **metadata, part=index + 1, parts=parts,
+                  payload=payload[index * MAX_MESSAGE:(index + 1) * MAX_MESSAGE]) is None:
+            break
 
 
 def _append(row: dict) -> dict | None:

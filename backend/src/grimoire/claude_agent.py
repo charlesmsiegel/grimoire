@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
-from . import llm_usage
+from . import llm_capture, llm_usage
 from .llm_errors import LLMError
 
 # claude-agent-sdk lives in the `claude` extra, which Android does not install
@@ -164,6 +164,7 @@ class ClaudeAgentClient:
         )
         try:
             async for message in query(prompt=_flatten(turns), options=options):
+                llm_capture.emit(usage, "sdk_message", message)
                 # Proof of life for the facade's idle bound: the SDK sends
                 # messages that carry no text (thinking, tool, result), and a
                 # model can spend minutes on those before its first word (#243).
