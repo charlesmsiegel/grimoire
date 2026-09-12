@@ -179,6 +179,10 @@ licenses, `android/local.properties`), then `make apk` (debug) /
 
 ## Development workflow: Codex review gates
 
+**Keep Git history linear.** Integrate feature branches by rebasing onto the target
+branch when needed, then fast-forwarding it (`git merge --ff-only`). Never create
+merge commits. If the target is already an ancestor, fast-forward directly.
+
 The spec → plan → implementation pipeline (`superpowers:brainstorming` writes
 specs to `docs/superpowers/specs/`; `superpowers:writing-plans` writes plans to
 `docs/superpowers/plans/`) has mandatory Codex checkpoints — do not advance to

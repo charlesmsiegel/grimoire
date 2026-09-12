@@ -229,8 +229,10 @@ historical rerolls continue to use their saved prompt snapshots.
 
 The user requested committing outstanding work and integrating the feature locally.
 After fetching origin, main remained the feature's ancestor with no divergent
-commits. A merge commit preserves the feature history and provides a single
-revert point. The feature branch is retained. No remote push is part of this work.
+commits. Integration therefore fast-forwards main to the feature tip without
+rebasing any commits. History stays linear; merge commits are prohibited by the
+repository workflow. The feature branch is retained. No remote push is part of
+this work.
 
 Fresh verification of the integration tree:
 
