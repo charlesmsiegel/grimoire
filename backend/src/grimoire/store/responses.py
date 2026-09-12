@@ -156,6 +156,10 @@ def new_round(
     cid: str, sid: str, *, eligible, automatic, post, run_id, actor_ref=None, note="", turn=None
 ) -> dict:
     with locks.campaign_lock(cid):
+        messages = read.read_scene(cid, sid)["messages"]
+        observed_from = next((i for i in range(len(messages) - 1, -1, -1)
+                              if messages[i].get("role") == "user"), len(messages))
+        appearance_paths.begin_observing(cid, sid, [a["ref"] for a in eligible], observed_from)
         data = _read(cid)
         scope = _scope(cid, sid, data)
         for previous in scope["rounds"].values():
@@ -174,8 +178,8 @@ def new_round(
             "turn": turn,
             "status": "pending",
             "pending_response": None,
-            "watermark": len(read.read_scene(cid, sid)["messages"]),
-            "transcript_hash": transcript_hash(read.read_scene(cid, sid)["messages"]),
+            "watermark": len(messages),
+            "transcript_hash": transcript_hash(messages),
         }
         scope["rounds"][round_id] = record
         _write(cid, data)

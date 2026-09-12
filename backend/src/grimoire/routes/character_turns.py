@@ -211,7 +211,7 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
                 tracked,
             )
         streaming._turn_settled(cid)
-        return len(store.scenes.read_scene(cid, sid)["messages"])
+        return streaming._tail_length(cid, sid) if text else None
 
 
 def _normalise(cid, sid, record, text):
@@ -373,6 +373,16 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
         return proposal
 
 
+async def _first_actor(cid, sid, client, round_record):
+    actor = round_record.get("actor_ref")
+    if actor is None:
+        actor, issue = await _select(cid, sid, client, round_record)
+        round_record = await run_in_threadpool(
+            _round_state, cid, sid, round_record, actor_ref=actor,
+            status="pending" if actor else "complete", issue=issue)
+    return actor, round_record
+
+
 async def _frames(
     cid,
     sid,
@@ -392,17 +402,7 @@ async def _frames(
     watcher = None
     meter = None
     try:
-        if actor is None:
-            actor, issue = await _select(cid, sid, client, round_record)
-            round_record = await run_in_threadpool(
-                _round_state,
-                cid,
-                sid,
-                round_record,
-                actor_ref=actor,
-                status="pending" if actor else "complete",
-                issue=issue,
-            )
+        actor, round_record = await _first_actor(cid, sid, client, round_record)
         while actor and not run.cancel_requested:
             await anyio.lowlevel.checkpoint()
             current = await run_in_threadpool(roster, cid, sid)
@@ -514,6 +514,11 @@ async def _frames(
             continuation = None
         outcome.land()
         yield streaming._sse({"done": True})
+    except store.responses.ResponseConflict as exc:
+        _abort_meter(meter)
+        # A lost scene/turn fence must never rescue into its replacement.
+        outcome.fail(exc.kind, exc.detail)
+        yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except LLMError as exc:
         await _rescue(
             cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, exc
@@ -529,6 +534,11 @@ async def _frames(
     finally:
         with anyio.CancelScope(shield=True):
             await streaming._fire_follow_up(after_turn, outcome)
+
+
+def _abort_meter(meter):
+    if meter:
+        meter.done("aborted")
 
 
 async def _rescue(

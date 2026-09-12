@@ -11,6 +11,17 @@ import pytest
 from grimoire import routes, store
 
 
+@pytest.fixture
+def client(client):
+    """These capture assertions exercise the retained combined-writer contract.
+
+    Individual actor, selector and reroll captures are covered by
+    test_character_turns.py, with their own call boundaries and saved prompts.
+    """
+    client.put("/api/config", json={"character_response_mode": "combined"})
+    return client
+
+
 def _scene(client):
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]

@@ -96,7 +96,7 @@ def save(cid: str, sid: str, rid: str, *, name: str, description: str,
                          "quotes": quotes(passage, name) if mes_example.strip() else []})
         if aid:
             overlay.materialize_actor(cid, "characters", aid)
-            characters.update_version(campaigns.campaign_root(cid), aid, vid, card)
+            characters.update_version(campaigns.campaign_root(cid), aid, vid, card)  # overlay-ok: materialized immediately above before the campaign-local write
         else:
             aid, vid = overlay.create_character(cid, name.strip(), card=card)
         return {"character": aid, "version": vid, "name": data.get("name", name.strip())}

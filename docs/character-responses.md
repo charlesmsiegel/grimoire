@@ -27,6 +27,10 @@ Older responses have no historical prompt snapshot. They remain deletable, but
 use explicit replay rather than claiming a historical reroll from current
 character knowledge.
 
+For older cast records without presence history, the first new round establishes
+a conservative observation boundary. Characters retain what they witness from
+that point across later player rounds, including when they remain silent.
+
 Dice pauses keep the current character's contribution. Resolving or declining the
 proposal resumes that character, then checks any new handoff. Deleting or rerolling
 prose at or before an applied roll is refused: changing words cannot undo the
@@ -60,3 +64,9 @@ historical variant uses the frozen unprofiled context.
 The automated checks establish routing, persistence, privacy boundaries and UI
 behavior. Voice naturalness still needs comparison during play; no automated
 result here establishes that one model or mode writes better dialogue.
+
+
+Build and verification details are recorded in
+[the branch validation report](superpowers/validation/2026-09-11-character-turns.md).
+Restart Grimoire to load changed backend code. To back out of the code changes,
+switch to `main` and restart; campaign history is stored separately from Git.

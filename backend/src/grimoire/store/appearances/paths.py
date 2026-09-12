@@ -148,3 +148,25 @@ def forget_presence(cid: str, sid: str) -> None:
                 changed = True
         if changed:
             _write(cid, data)
+
+
+def begin_observing(cid: str, sid: str, actor_refs: list[str], start: int) -> None:
+    """Anchor legacy cast's known observation from now, without inventing a past.
+
+    Round creation knows who is present. Keep that first boundary stable across
+    later player posts, including for present NPCs who choose to remain silent.
+    Existing arrival/departure intervals remain authoritative.
+    """
+    with locks.campaign_lock(cid):
+        data = record(cid)
+        changed = False
+        for actor_ref in actor_refs:
+            rec = data.get(actor_ref.replace(":", "/", 1))
+            if rec is None or sid not in rec.get("scenes", []):
+                continue
+            presence = rec.setdefault("presence", {})
+            if sid not in presence:
+                presence[sid] = [{"start": start, "end": None}]
+                changed = True
+        if changed:
+            _write(cid, data)

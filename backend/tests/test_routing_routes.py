@@ -296,6 +296,9 @@ def test_a_misrouted_extraction_still_refuses_the_whole_absorb(client):
 def test_a_scene_turn_and_its_retry_share_the_one_route(client):
     """#142 named the scene turn's retries and director turns as part of ONE
     task, so a reader who sets "Scene turns" gets all of them."""
+    # Legacy retry may regenerate a completed turn. Individual retry requires
+    # an unfinished contribution, covered by the character-turn engine tests.
+    client.put("/api/config", json={"character_response_mode": "combined"})
     _wid, cid, sid = _seed(client)
     routed = _connection(client, "prose")
     client.put("/api/routing", json={"routes": {"scene": routed}})
