@@ -890,7 +890,9 @@ def read_greeting_rev(cid: str, gid: str) -> dict:
 
 def create_greeting(cid: str, name: str, character: str, version: str, body: str = "",
                     requires_tags=None, predecessor_join: str = "all",
-                    present=None, pcless: bool = False, location: str = "") -> str:
+                    present=None, pcless: bool = False, location: str = "",
+                    phase: str = "", sequence: int | None = None,
+                    optional: bool = False) -> str:
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(gid: str) -> bool:
@@ -904,7 +906,8 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
     body = cards.bake_char_token(body, greetings.char_name(char_root(cid, character), character, version))
     gid = greetings.create_greeting(croot_of(cid), name, character, version, body,
                                     requires_tags, predecessor_join, present=present,
-                                    pcless=pcless, location=location, taken=taken)
+                                    pcless=pcless, location=location, phase=phase,
+                                    sequence=sequence, optional=optional, taken=taken)
     return gid
 
 

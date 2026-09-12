@@ -582,3 +582,18 @@ test("a ledger that will not load costs its own group and nothing else", async (
   fireEvent.click(screen.getByText("Reckoning"));
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ source: "greeting" }));
 });
+
+
+test("greeting cards identify direct and same-phase recommendations", async () => {
+  (api.availableGreetings as any).mockResolvedValue([
+    { id: "next", name: "Next", available: true, reasons: [], unlocked: true,
+      recommendation: "successor" },
+    { id: "aside", name: "Aside", available: true, reasons: [], unlocked: false,
+      recommendation: "phase_optional" },
+  ]);
+  renderPicker({ suggestions: [], picks: [] });
+
+  await screen.findByText("Next");
+  expect(screen.getByText("next in story")).toBeInTheDocument();
+  expect(screen.getByText("optional in this phase")).toBeInTheDocument();
+});

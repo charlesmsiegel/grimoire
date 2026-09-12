@@ -23,6 +23,9 @@ class GreetingNotFound(Exception):
     pass
 
 
+UNSET = object()
+
+
 def _greetings_dir(root: Path) -> Path:
     return root / "greetings"
 
@@ -41,6 +44,14 @@ def _tags_list(s: str) -> list[str]:
     # used to read as the literal tag " household", which no player tag can
     # ever match, and the greeting then silently never appeared.
     return [t for t in (x.strip() for x in s.split(",")) if t]
+
+
+def _positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _meta_dict(gid: str, meta: dict) -> dict:
@@ -62,6 +73,9 @@ def _meta_dict(gid: str, meta: dict) -> dict:
         "requires_tags": _tags_list(meta.get("requires_tags", "")),
         "predecessor_join": meta.get("predecessor_join", "all"),
         "pcless": meta.get("pcless") == "true",
+        "phase": meta.get("phase", ""),
+        "sequence": _positive_int(meta.get("sequence")),
+        "optional": meta.get("optional") == "true",
     }
 
 
@@ -106,7 +120,8 @@ def char_name(root: Path, character: str, version: str = "") -> str:
 def create_greeting(root: Path, name: str, character: str, version: str, body: str = "",
                     requires_tags: list[str] | None = None, predecessor_join: str = "all",
                     present: list[str] | None = None, pcless: bool = False,
-                    location: str = "", taken=None) -> str:
+                    location: str = "", phase: str = "", sequence: int | None = None,
+                    optional: bool = False, taken=None) -> str:
     _greetings_dir(root).mkdir(parents=True, exist_ok=True)
 
     def exists(c: str) -> bool:
@@ -123,7 +138,9 @@ def create_greeting(root: Path, name: str, character: str, version: str, body: s
     meta = {"name": name, "character": character, "version": version,
             "present": ",".join(present or []), "location": location,
             "requires_tags": ",".join(requires_tags or []), "predecessor_join": predecessor_join,
-            "pcless": "true" if pcless else ""}
+            "pcless": "true" if pcless else "", "phase": phase,
+            "sequence": str(sequence) if sequence is not None else "",
+            "optional": "true" if optional else ""}
     # #137: {{char}} is the greeting's own associated character, baked at write
     # time -- scene-time substitution is ambiguous once more than one NPC is
     # present, so it's never resolved there.
@@ -201,11 +218,23 @@ def _repoint(meta: dict, character: str | None, version: str | None, vroot: Path
     meta["version"] = new_ver
 
 
+
+def _update_story_meta(meta: dict, phase: str | None, sequence, optional: bool | None) -> None:
+    if phase is not None:
+        meta["phase"] = phase
+    if sequence is not UNSET:
+        meta["sequence"] = "" if sequence is None else str(sequence)
+    if optional is not None:
+        meta["optional"] = "true" if optional else ""
+
+
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,
                     requires_tags: list[str] | None = None, predecessor_join: str | None = None,
                     present: list[str] | None = None, pcless: bool | None = None,
                     location: str | None = None, character: str | None = None,
-                    version: str | None = None, char_root: Path | None = None) -> None:
+                    version: str | None = None, phase: str | None = None,
+                    sequence=UNSET, optional: bool | None = None,
+                    char_root: Path | None = None) -> None:
     """`character`/`version` re-point the greeting at a different character or
     version (#17) -- the id and its plot-map edges stay, which is what delete-
     and-recreate loses. The new pair is validated against `char_root` (the root
@@ -239,6 +268,7 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
         meta["predecessor_join"] = predecessor_join
     if pcless is not None:
         meta["pcless"] = "true" if pcless else ""
+    _update_story_meta(meta, phase, sequence, optional)
     if body is not None:
         # After the re-point above, so a body sent alongside one bakes to the
         # character the greeting now points at; `char_root` resolves the name
@@ -331,6 +361,38 @@ def import_from_character(root: Path, char_id: str, vid: str) -> list[str]:
     return [create_greeting(root, name, char_id, vid, body, present=present_in(body, char_id, roster))
             for name, body in items]
 
+
+
+def recommendations(rows: list[dict], items: list[dict], anchor_id: str,
+                    direct_successors) -> list[dict]:
+    """Annotate and order availability rows without changing startability."""
+    meta_by_id = {item["id"]: item for item in items}
+    anchor = meta_by_id.get(anchor_id, {})
+    phase = anchor.get("phase", "")
+    direct = set(direct_successors)
+    annotated = []
+    for position, row in enumerate(rows):
+        item = meta_by_id.get(row["id"], {})
+        recommendation = None
+        if row.get("available"):
+            if row["id"] in direct:
+                recommendation = "successor"
+            elif phase and item.get("optional") and item.get("phase") == phase:
+                recommendation = "phase_optional"
+        annotated.append({**row, "recommendation": recommendation, "_position": position})
+
+    rank = {None: 2, "phase_optional": 1, "successor": 0}
+    annotated.sort(key=lambda row: (
+        rank[row["recommendation"]],
+        (row["_position"] if row["recommendation"] is None
+         else meta_by_id.get(row["id"], {}).get("sequence") or float("inf")),
+        ([] if row["recommendation"] is None
+         else natural_key(meta_by_id.get(row["id"], {}).get("name", row["id"]))),
+        row["_position"],
+    ))
+    for row in annotated:
+        row.pop("_position")
+    return annotated
 
 def availability(items: list[dict], plotmap: dict, played, player_tags,
                  skipped=frozenset()) -> list[dict]:

@@ -359,3 +359,71 @@ def test_version_with_no_character_is_refused_not_dropped(tmp_path):
     with pytest.raises(characters.CharacterNotFound):
         greetings.update_greeting(root, gid, version="main")
     assert greetings.read_greeting(root, gid)["meta"]["version"] == ""
+
+
+def test_phase_metadata_defaults_for_existing_greeting(tmp_path):
+    root = _world(tmp_path)
+    (root / "greetings" / "legacy.md").write_text(
+        "---\nname: Legacy\ncharacter: \nversion: \n---\n\nOpen.\n",
+        encoding="utf-8",
+    )
+
+    meta = greetings.read_greeting(root, "legacy")["meta"]
+
+    assert meta["phase"] == ""
+    assert meta["sequence"] is None
+    assert meta["optional"] is False
+
+
+def test_phase_metadata_create_and_update_roundtrip(tmp_path):
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(
+        root, "Market Day", "", "", phase="arrival", sequence=2, optional=True,
+        present=["seraphine", "mara"],
+    )
+
+    meta = greetings.read_greeting(root, gid)["meta"]
+    assert (meta["phase"], meta["sequence"], meta["optional"]) == ("arrival", 2, True)
+
+    greetings.update_greeting(root, gid, phase="reckoning", sequence=7, optional=False)
+
+    meta = greetings.read_greeting(root, gid)["meta"]
+    assert (meta["phase"], meta["sequence"], meta["optional"]) == ("reckoning", 7, False)
+
+
+def test_recommendations_are_direct_successors_plus_same_phase_optional_siblings():
+    items = [
+        {"id": "anchor", "name": "Anchor", "phase": "arrival", "sequence": 4, "optional": False},
+        {"id": "earlier", "name": "Earlier aside", "phase": "arrival", "sequence": 2, "optional": True},
+        {"id": "direct", "name": "Direct", "phase": "arrival", "sequence": 5, "optional": False},
+        {"id": "both", "name": "Both", "phase": "arrival", "sequence": 6, "optional": True},
+        {"id": "grandchild", "name": "Grandchild", "phase": "arrival", "sequence": 7, "optional": False},
+        {"id": "later-phase", "name": "Later phase", "phase": "reckoning", "sequence": 1, "optional": True},
+    ]
+    rows = [
+        {"id": item["id"], "available": item["id"] != "anchor"}
+        for item in items
+    ]
+
+    out = greetings.recommendations(rows, items, "anchor", {"direct", "both"})
+
+    assert [(row["id"], row["recommendation"]) for row in out] == [
+        ("direct", "successor"),
+        ("both", "successor"),
+        ("earlier", "phase_optional"),
+        ("anchor", None),
+        ("grandchild", None),
+        ("later-phase", None),
+    ]
+
+
+def test_recommendations_exclude_unavailable_and_have_no_phase_without_anchor():
+    items = [
+        {"id": "anchor", "name": "Anchor", "phase": "", "sequence": None, "optional": False},
+        {"id": "direct", "name": "Direct", "phase": "", "sequence": None, "optional": False},
+    ]
+    rows = [{"id": "anchor", "available": False}, {"id": "direct", "available": False}]
+
+    out = greetings.recommendations(rows, items, "anchor", {"direct"})
+
+    assert [row["recommendation"] for row in out] == [None, None]

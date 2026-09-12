@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveInt
 
 
 # ---- models ----
@@ -755,6 +755,9 @@ class GreetingCreate(BaseModel):
     present: list[str] | None = None
     pcless: bool = False
     location: str = ""      # a location id, "" for none (#218)
+    phase: str = ""
+    sequence: PositiveInt | None = None
+    optional: bool = False
 
 
 class SubjectsBody(BaseModel):
@@ -780,6 +783,9 @@ class GreetingUpdate(BaseModel):
     # and plot-map edges (#17); "" clears the character (narrator-only)
     character: str | None = None
     version: str | None = None
+    phase: str | None = None
+    sequence: PositiveInt | None = None
+    optional: bool | None = None
     rev: str | None = None      # see EntityUpdate.rev (#35)
 
 

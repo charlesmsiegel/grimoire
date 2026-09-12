@@ -220,6 +220,9 @@ def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False
     # answer this never looks at.
     avail = [g for g in playing.available_greetings(cid, after, locations=False)
              if g["available"] and g.get("pcless", False) == pcless]
+    bounded = [g for g in avail if g.get("recommendation")]
+    if bounded:
+        avail = bounded
     if len(avail) <= 2:
         return []
     out: list[dict] = []

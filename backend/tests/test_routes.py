@@ -15412,3 +15412,38 @@ def test_every_world_library_write_route_refuses_an_unknown_world(client):
         r = _write_request(client, method, url, gid="")
         assert (r.status_code, r.json().get("detail")) == (404, "world not found"), \
             f"{method} {url} answered {r.status_code} {r.text[:120]}"
+
+
+def test_greeting_sequence_must_be_positive(client):
+    wid, _cid = _campaign(client)
+
+    response = client.post(f"/api/worlds/{wid}/greetings", json={
+        "name": "Invalid", "character": "", "version": "", "sequence": 0,
+    })
+
+    assert response.status_code == 422
+
+
+def test_greeting_phase_metadata_roundtrips_through_world_and_campaign_routes(client):
+    wid, cid = _campaign(client)
+    world_gid = client.post(f"/api/worlds/{wid}/greetings", json={
+        "name": "Arrival", "character": "", "version": "",
+        "phase": "arrival", "sequence": 2, "optional": True,
+    }).json()["id"]
+    meta = client.get(f"/api/worlds/{wid}/greetings/{world_gid}").json()["meta"]
+    assert (meta["phase"], meta["sequence"], meta["optional"]) == ("arrival", 2, True)
+
+    campaign_gid = client.post(f"/api/campaigns/{cid}/greetings", json={
+        "name": "Reckoning", "character": "", "version": "",
+        "phase": "reckoning", "sequence": 4, "optional": False,
+    }).json()["id"]
+    client.put(f"/api/campaigns/{cid}/greetings/{campaign_gid}", json={
+        "phase": "aftermath", "sequence": 5, "optional": True,
+    })
+    meta = client.get(f"/api/campaigns/{cid}/greetings/{campaign_gid}").json()["meta"]
+    assert (meta["phase"], meta["sequence"], meta["optional"]) == ("aftermath", 5, True)
+
+    client.put(f"/api/campaigns/{cid}/greetings/{campaign_gid}", json={"sequence": None})
+    assert client.get(
+        f"/api/campaigns/{cid}/greetings/{campaign_gid}"
+    ).json()["meta"]["sequence"] is None

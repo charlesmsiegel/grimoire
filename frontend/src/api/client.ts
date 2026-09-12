@@ -1806,6 +1806,7 @@ export const api = {
   updateGreeting: (scope: EntityScope, gid: string,
                    patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[];
                             predecessor_join?: string; pcless?: boolean; location?: string;
+                            phase?: string; sequence?: number | null; optional?: boolean;
                             /** re-point at a different character/version, keeping the
                              *  greeting id and its plot-map edges (#17); "" clears */
                             character?: string; version?: string;

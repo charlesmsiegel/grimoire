@@ -254,7 +254,9 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
         <button className="chooser-card" key={g.id} disabled={inferring}
                 onClick={() => onPicked(greetingDraft(g, latestDate.current, pcless))}>
           <span className="chooser-card-title">{g.name}</span>
-          {g.unlocked && <span className="chip on">unlocked</span>}
+          {g.recommendation === "successor" && <span className="chip on">next in story</span>}
+          {g.recommendation === "phase_optional"
+            && <span className="chip on">optional in this phase</span>}
         </button>
       ))}
 

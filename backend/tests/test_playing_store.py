@@ -795,3 +795,31 @@ def test_start_from_greeting_without_a_location_leaves_the_scene_alone(monkeypat
     cid, sid = _campaign_after_seed(wid)
     sid = playing.start_from_greeting(cid, sid, g)
     assert scenes.get_location_history(cid, sid) == []
+
+
+def test_available_greetings_recommends_successors_and_phase_optionals(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    anchor = greetings.create_greeting(
+        wroot, "Anchor", "", "", phase="arrival", sequence=2,
+    )
+    optional = greetings.create_greeting(
+        wroot, "Aside", "", "", phase="arrival", sequence=1, optional=True,
+    )
+    successor = greetings.create_greeting(
+        wroot, "Next", "", "", phase="arrival", sequence=3,
+    )
+    greetings.create_greeting(
+        wroot, "Later", "", "", phase="reckoning", sequence=1, optional=True,
+    )
+    greetings.set_edges(wroot, anchor, leads_to=[successor])
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, anchor)
+
+    got = playing.available_greetings(cid, after=sid)
+
+    assert [(row["id"], row["recommendation"]) for row in got[:2]] == [
+        (successor, "successor"),
+        (optional, "phase_optional"),
+    ]
+    assert all(row["available"] for row in got[:2])

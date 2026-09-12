@@ -38,6 +38,13 @@ from .streaming import StreamOutcome, _persist_reply, ephemeral_frames
 router = APIRouter()
 
 
+def _provided(model, field: str) -> bool:
+    fields = getattr(model, "model_fields_set", None)
+    if fields is None:  # pydantic 1.x, retained for the Android build
+        fields = model.__fields_set__
+    return field in fields
+
+
 # ---- world greetings ----
 @router.get("/worlds/{wid}/greetings")
 def get_world_greetings(wid: str):
@@ -49,7 +56,9 @@ def post_world_greeting(wid: str, body: GreetingCreate):
     gid = store.greetings.create_greeting(_world_root_or_404(wid), body.name, body.character,
                                           body.version, body.body, body.requires_tags,
                                           body.predecessor_join, present=body.present,
-                                          pcless=body.pcless, location=body.location)
+                                          pcless=body.pcless, location=body.location,
+                                          phase=body.phase, sequence=body.sequence,
+                                          optional=body.optional)
     return {"id": gid}
 
 
@@ -90,7 +99,11 @@ def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
                                         body=body.body, requires_tags=body.requires_tags,
                                         predecessor_join=body.predecessor_join, present=body.present,
                                         pcless=body.pcless, location=body.location,
-                                        character=body.character, version=body.version)
+                                        character=body.character, version=body.version,
+                                        phase=body.phase,
+                                        sequence=(body.sequence if _provided(body, "sequence")
+                                                  else store.greetings.UNSET),
+                                        optional=body.optional)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     except store.characters.CharacterNotFound:
@@ -243,7 +256,9 @@ def post_campaign_greeting(cid: str, body: GreetingCreate):
     gid = store.overlay.create_greeting(cid, body.name, body.character, body.version,
                                        body.body, body.requires_tags,
                                        body.predecessor_join, present=body.present,
-                                       pcless=body.pcless, location=body.location)
+                                       pcless=body.pcless, location=body.location,
+                                       phase=body.phase, sequence=body.sequence,
+                                       optional=body.optional)
     return {"id": gid}
 
 
@@ -270,7 +285,11 @@ def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
                                      predecessor_join=body.predecessor_join,
                                      present=body.present, pcless=body.pcless,
                                      location=body.location,
-                                     character=body.character, version=body.version)
+                                     character=body.character, version=body.version,
+                                     phase=body.phase,
+                                     sequence=(body.sequence if _provided(body, "sequence")
+                                               else store.greetings.UNSET),
+                                     optional=body.optional)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     except store.characters.CharacterNotFound:

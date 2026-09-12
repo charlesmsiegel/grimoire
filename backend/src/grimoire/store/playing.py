@@ -155,7 +155,8 @@ def available_greetings(cid: str, after: str | None = None, *,
     """
     plotmap = overlay.read_plotmap(cid)
     marks = read_marks(cid)
-    out = greetings.availability(overlay.list_greetings(cid), plotmap,
+    items = overlay.list_greetings(cid)
+    out = greetings.availability(items, plotmap,
                                  marks["played"] | marks["completed"],
                                  player_tags(cid), skipped=marks["skipped"])
     mark_of = dict.fromkeys(marks["played"], "played")
@@ -163,16 +164,16 @@ def available_greetings(cid: str, after: str | None = None, *,
     for g in out:
         g["mark"] = mark_of.get(g["id"])
     unlocked: set[str] = set()
+    anchor = ""
     if after:
-        gid = scenes_read.read_scene(cid, after)["meta"].get("greeting", "")
-        if gid:
-            unlocked = set(greetings.edges_of(plotmap, gid)["leads_to"])
+        anchor = scenes_read.read_scene(cid, after)["meta"].get("greeting", "")
+        if anchor:
+            unlocked = set(greetings.edges_of(plotmap, anchor)["leads_to"])
     for g in out:
         g["unlocked"] = g["id"] in unlocked
     if locations:
         _resolve_locations(cid, out)
-    out.sort(key=lambda g: not g["unlocked"])  # stable: unlocked first, rest keep order
-    return out
+    return greetings.recommendations(out, items, anchor, unlocked)
 
 
 def greeting_ideas(cid: str, *, known_locations: set[str] | None = None) -> list[dict]:

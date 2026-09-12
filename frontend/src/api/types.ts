@@ -648,6 +648,9 @@ export type Greeting = {
    *  written before the key existed lacks it in its FRONTMATTER, and the store
    *  reads that back as "". Optional here for the same reason `pcless` is. */
   location?: string;
+  phase: string;
+  sequence: number | null;
+  optional: boolean;
   mark?: GreetingMark;   // campaign lists carry it
 };
 export type Edges = { leads_to: string[]; excludes: string[] };
@@ -664,6 +667,9 @@ export type GreetingDraft = {
   predecessor_join?: "all" | "any";
   pcless?: boolean;
   location?: string;
+  phase?: string;
+  sequence?: number | null;
+  optional?: boolean;
 };
 export type Style = { id: string; name: string; description: string; tags: string[]; built_in: boolean };
 export type StyleDetail = { meta: Style; body: string };
@@ -762,6 +768,7 @@ export type Availability = {
    *  the confirm form's location picker from (#218). */
   location?: string;
   mark?: GreetingMark;
+  recommendation?: "successor" | "phase_optional" | null;
 };
 export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string };
 

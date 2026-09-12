@@ -8,6 +8,8 @@ from grimoire.store import (
     chronicle,
     clock,
     entities,
+    overlay,
+    playing,
     plot,
     scenes,
     suggest,
@@ -577,3 +579,20 @@ def test_a_broken_months_costs_the_month_list_and_not_the_example(monkeypatch, t
     clock.advance(cid, to="5-M03-07", reason="setup")
 
     assert suggest.build_snapshot(cid)["notation"] == {"example": "5-M03-07", "months": []}
+
+
+def test_greeting_candidates_do_not_rank_past_bounded_recommendations(monkeypatch):
+    rows = [
+        {"id": "next-a", "name": "Next A", "available": True, "pcless": False,
+         "recommendation": "successor"},
+        {"id": "next-b", "name": "Next B", "available": True, "pcless": False,
+         "recommendation": "phase_optional"},
+        {"id": "later-a", "name": "Later A", "available": True, "pcless": False,
+         "recommendation": None},
+        {"id": "later-b", "name": "Later B", "available": True, "pcless": False,
+         "recommendation": None},
+    ]
+    monkeypatch.setattr(playing, "available_greetings", lambda *args, **kwargs: rows)
+    monkeypatch.setattr(overlay, "read_greeting", lambda *args: {"body": "Opening."})
+
+    assert suggest.greeting_candidates("run", after="scene") == []

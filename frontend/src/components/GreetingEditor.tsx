@@ -8,7 +8,7 @@ import { StaleRecordBanner } from "./StaleRecordBanner";
 import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
 
-const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false, location: "" };
+const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false, location: "", phase: "", sequence: null as number | null, optional: false };
 
 /** Same edges, order included: these are stored as written, and a reorder is a
  *  change this form has no way to have made by accident. */
@@ -219,7 +219,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
       name: g.meta.name, character: g.meta.character, version: g.meta.version,
       body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
       predecessor_join: g.meta.predecessor_join, pcless: g.meta.pcless ?? false,
-      location: g.meta.location ?? "",
+      location: g.meta.location ?? "", phase: g.meta.phase ?? "",
+      sequence: g.meta.sequence ?? null, optional: g.meta.optional ?? false,
     });
     setEdges(g.edges);
     setLoadedEdges(g.edges);
@@ -245,7 +246,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
         await api.updateGreeting(scope, id, {
           name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
-          pcless: form.pcless, location: form.location,
+          pcless: form.pcless, location: form.location, phase: form.phase,
+          sequence: form.sequence, optional: form.optional,
           // re-point (#17): the id and its plot-map edges survive, which is
           // what delete-and-recreate loses. Unchanged values are a no-op.
           character: form.character, version: form.version,
@@ -687,17 +689,31 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
               )}
             </select>
           </Field>
-          {form.character && (
-            <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
-              <div className="chips">
-                {chars.map((c) => (
-                  <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
-                          onClick={() => togglePresent(c.id)}>{c.name}</button>
-                ))}
-                {chars.length === 0 && <span className="field-hint">No characters in this world yet.</span>}
-              </div>
-            </Field>
-          )}
+          <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
+            <div className="chips">
+              {chars.map((c) => (
+                <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
+                        onClick={() => togglePresent(c.id)}>{c.name}</button>
+              ))}
+              {chars.length === 0 && <span className="field-hint">No characters in this world yet.</span>}
+            </div>
+          </Field>
+          <Field label="Phase" hint="story phase used to keep recommendations near the current arc">
+            <input aria-label="Phase" type="text" value={form.phase}
+                   onChange={(e) => setForm({ ...form, phase: e.target.value })} />
+          </Field>
+          <Field label="Sequence" hint="author order within the phase">
+            <input aria-label="Sequence" type="number" min="1" value={form.sequence ?? ""}
+                   onChange={(e) => setForm({ ...form, sequence: e.target.value ? Number(e.target.value) : null })} />
+          </Field>
+          <Field label="Optional" hint="recommend alongside direct successors while this phase is current">
+            <div className="chips">
+              <button className={"chip" + (form.optional ? " on" : "")}
+                      onClick={() => setForm({ ...form, optional: !form.optional })}>
+                Optional within phase
+              </button>
+            </div>
+          </Field>
           <Field label="Required tags" hint="the greeting unlocks only if a player PC carries these">
             <div className="chips">
               {Object.keys(tags).sort().map((tid) => (

@@ -299,9 +299,9 @@ test("creating a greeting posts the draft then sets edges", async () => {
 test("creating a narrator-only greeting needs no character or version", async () => {
   render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
-  // Version and Present characters stay hidden until a character is picked
+  // A shared greeting needs no primary character, but can still name its full cast.
   expect(screen.queryByLabelText("Version")).toBeNull();
-  expect(screen.queryByText("Present characters")).toBeNull();
+  expect(screen.getByText("Present characters")).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Cold open" } });
   fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
   await waitFor(() =>
@@ -1102,4 +1102,20 @@ test("a graph write rebases a clean draft's chips without touching the form", as
       .toHaveClass("chip", "on");
   });
   expect(screen.getByLabelText("Name")).toHaveValue("Half-written");
+});
+
+
+test("creating a greeting includes phase sequence and optional metadata", async () => {
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Open" } });
+  fireEvent.change(screen.getByLabelText("Phase"), { target: { value: "arrival" } });
+  fireEvent.change(screen.getByLabelText("Sequence"), { target: { value: "3" } });
+  fireEvent.click(screen.getByRole("button", { name: "Optional within phase" }));
+  fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
+
+  await waitFor(() => expect(api.createGreeting).toHaveBeenCalledWith(
+    { kind: "world", id: "w" },
+    expect.objectContaining({ phase: "arrival", sequence: 3, optional: true }),
+  ));
 });
