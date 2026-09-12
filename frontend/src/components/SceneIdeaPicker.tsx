@@ -268,23 +268,20 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
         <input type="text" aria-label="Direction" className="grow"
                placeholder="Steer the generated ideas — e.g. something at sea"
                value={direction} onChange={(e) => onDirectionChange(e.target.value)} />
-        {/* One control and one call: `suggest` ranks until a ranking has
-            landed and regenerates after that, which is a distinction this pane
-            cannot make (it knows a press happened, not that a reply came
-            back). The label is stable while `busy` so it stays the same
-            control to look at -- and disabled, so it cannot be pressed twice. */}
+        {/* `suggest` owns ranking versus regeneration. Keep previous ideas
+            visible while it runs, and show progress even when cards exist. */}
         {/* `inferring` too, not just `busy`: an extraction in flight is a
             draft on its way to the confirm form, and this pane unmounts the
             moment it arrives. A generation started here would be paid for and
             then thrown away with the component -- which is the whole thing
             this button exists to stop. */}
-        <button className="subtle" disabled={!ready || busy || inferring}
+        <button className="subtle" aria-busy={busy} disabled={!ready || busy || inferring}
                 onClick={() => { setError(null); suggest(direction); }}>
-          {asked ? "↻ Regenerate" : "✨ Suggest ideas"}
+          {busy ? (suggestions === null ? "Generating…" : "Regenerating…") : asked ? "↻ Regenerate" : "✨ Suggest ideas"}
         </button>
       </div>
       {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
-      {ready && asked && suggestions === null && <div className="field-hint">Generating…</div>}
+      {busy && <div className="field-hint" role="status">Generating scene ideas…</div>}
       {ready && asked && suggestions !== null && suggestions.length === 0 && !busy && genError == null && (
         <div className="field-hint">No ideas came back — Regenerate, or steer it and try again.</div>
       )}

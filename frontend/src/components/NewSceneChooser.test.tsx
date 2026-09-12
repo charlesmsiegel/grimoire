@@ -515,3 +515,28 @@ test("a late-arriving draft remounts the confirm form instead of mutating it in 
   expect(screen.getByLabelText("Premise")).toHaveValue("fresh premise");
   vi.doUnmock("./SceneIdeaPicker");
 });
+
+
+test.each([false, true])("Regenerate shows progress over existing ideas and clears it after failure=%s", async (fails) => {
+  const previous = { suggestions: [{ title: "At sea", premise: "", cast: [], location: null }],
+    greeting_picks: [], next_date: "2026-01-01" };
+  let finish: () => void = () => { throw new Error("generation did not start"); };
+  vi.mocked(api.sceneSuggestions).mockResolvedValueOnce(previous).mockImplementationOnce(() =>
+    new Promise((resolve, reject) => {
+      finish = () => fails ? reject(new Error("Scene generation failed")) : resolve({ ...previous,
+        suggestions: [{ title: "Back in Saltmarch", premise: "", cast: [], location: null }] });
+    }));
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  await screen.findByText("At sea");
+  fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Generating scene ideas");
+  expect(screen.getByRole("button", { name: /regenerating/i })).toBeDisabled();
+  expect(screen.getByText("At sea")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: /regenerating/i }));
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(2);
+  await act(async () => finish());
+  await waitFor(() => expect(screen.getByRole("button", { name: /regenerate/i })).toBeEnabled());
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(await screen.findByText(fails ? /Scene generation failed/ : "Back in Saltmarch")).toBeVisible();
+});

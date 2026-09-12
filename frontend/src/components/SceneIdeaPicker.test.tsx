@@ -194,8 +194,8 @@ test("an unasked picker does not sit on Choosing… over the greeting cards", as
 test("a ranking in flight shows Generating… and cannot be pressed again", async () => {
   renderPicker({ asked: true, suggestions: null, picks: null, busy: true });
   await screen.findByText("Reckoning");
-  expect(screen.getByText(/generating/i)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /regenerate/i })).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent("Generating scene ideas");
+  expect(screen.getByRole("button", { name: /generating/i })).toBeDisabled();
 });
 
 test("a ranking that came back with nothing says so rather than showing an empty group", async () => {
@@ -369,7 +369,8 @@ test("Cancel calls onCancel and emits nothing", async () => {
 test("Regenerate is disabled while busy, even if ready", async () => {
   renderPicker({ busy: true });
   await screen.findByText("Reckoning");
-  expect(screen.getByRole("button", { name: /regenerate/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /regenerating/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /regenerating/i })).toHaveAttribute("aria-busy", "true");
 });
 
 // ---- the saved half of the ledger (#88) ----
