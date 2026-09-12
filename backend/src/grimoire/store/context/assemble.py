@@ -1050,7 +1050,8 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
 
 def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
                           describe: bool = True, model: str = "", actor_ref: str | None = None,
-                          eligible_speakers: list[dict] | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
+                          eligible_speakers: list[dict] | None = None,
+                          appended: tuple[Appended, ...] = ()) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One director turn: full system + history, then the note as the final user
     message. The note rides only this call — never persisted. `turn` is the same
     one-shot response-preset override as `compose_turn`, and the messages and
@@ -1078,7 +1079,10 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
     note_text = macros.expand_macros(note, a["subs"], cid, sid)
     return _prepare(a, cid, sid, model=model, describe=describe,
                     before_post=({"role": "user", "content": note_text},),
-                    extra=(("Director note", note_text),))
+                    after_post=tuple({"role": role, "content": content}
+                                     for _label, role, content in appended),
+                    extra=(("Director note", note_text),)
+                          + tuple((label, content) for label, _role, content in appended))
 
 
 

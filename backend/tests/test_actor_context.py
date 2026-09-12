@@ -219,3 +219,16 @@ def test_unattributed_campaign_material_never_reaches_writer(cast_scene, monkeyp
     text = str(context.compose_turn(*cast_scene, actor_ref="characters:mara")[0])
     for value in ("PRIVATE_RECAP", "PRIVATE_ARCHIVE", "PRIVATE_PLOT", "PRIVATE_COMMITMENT"):
         assert value not in text
+
+
+def test_director_roll_resolution_is_packed_and_frozen(cast_scene):
+    appended = (("Roll resolution", "system", "The requested roll succeeded."),)
+    messages, detail = context.compose_director_turn(*cast_scene, "Wait for the attempt.",
+        actor_ref="characters:mara", appended=appended, model="glm-5.3")
+    assert "Winifred_CARD_SECRET" not in str(messages)
+    assert messages[-1] == {"role": "system", "content": appended[0][2]}
+    assert any(row["label"] == "Roll resolution" for row in detail["sections"])
+    assert detail["total_tokens"] == sum(context.count_tokens(m["content"]) for m in messages)
+    restored = model_guidance.PreparedMessages.from_snapshot(messages.snapshot(), "unknown")
+    assert restored[-1] == messages[-1]
+    assert any(m["role"] == "user" and m["content"] == "Wait for the attempt." for m in restored)
