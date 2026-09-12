@@ -147,6 +147,7 @@ export type Config = {
   prompt_layout_enabled: string;
   /** "on" renders the active-speaker section in group scenes; "off" default. */
   speaker_turn_taking: string;
+  character_response_mode?: string;
   /** "on" once automatic backups are enabled (#32); "off" on every install
    *  until someone turns them on. */
   backup_enabled: string;
@@ -188,7 +189,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "offscene_known_limit" |
   "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
-  "prompt_layout_enabled" | "speaker_turn_taking" |
+  "prompt_layout_enabled" | "speaker_turn_taking" | "character_response_mode" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
   "replay_fork_threshold" | "advance_fork_threshold" | "log_level">>;
 /** One archive written by `store/backups.py`. */
@@ -319,7 +320,15 @@ export type SceneMeta = {
   place?: string;
   pcless?: boolean; done?: boolean;
 };
-export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
+export type Message = { role: "user" | "assistant"; content: string; speaker?: string;
+  response_id?: string; response_part?: string; response_status?: "complete" | "incomplete";
+  context_changed?: boolean; response_can_reroll?: boolean };
+export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
+  round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
+  variants: { id: string; content: string; status: string }[] };
+export type PassageCharacterDraft = { name: string; description: string; mes_example: string; quotes: string[] };
+export type PassageCharacterInput = { name: string; passage: string; source_text: string };
+export type PassageCharacterSave = PassageCharacterInput & { description: string; mes_example: string; existing_ref?: string };
 export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
 // One stored variant of the generation a reroll replaces. `posts` is how many
 // transcript posts it becomes (one reply can split per speaker), `preview` is

@@ -134,7 +134,8 @@ export function VoiceAnchorSection(
       </> : <>
         <p className="field-hint">
           How they sound. Sent with the scene, and absorb checks each played
-          scene against it; clear it to opt out of both.
+          scene against it; clear it to opt out of both. Anchors and examples are evidence;
+          resolve conflicts here or in Example dialogue. Explicit speech constraints and established facts remain authoritative.
         </p>
         <textarea aria-label="Voice anchor" className="column-draft" value={text} rows={7}
                   disabled={busy}

@@ -26,6 +26,8 @@ import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { PostImagePicker, type PickerTarget } from "../components/PostImagePicker";
 import { ChangesPanel } from "../components/ChangesPanel";
+import { ResponseControls } from "../components/ResponseControls";
+import { PassageCharacterDialog } from "../components/PassageCharacterDialog";
 import { ReplayPanel } from "../components/ReplayPanel";
 import { IncomingReview } from "../components/IncomingReview";
 import { CompositionPanel } from "../components/CompositionPanel";
@@ -584,6 +586,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
+  const [responseActor, setResponseActor] = useState("");
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ speaker: string; offset: number }[]>([]);
+  const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
    *  casefile in the column. Deliberately the only state the swap has —
@@ -2242,10 +2247,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setBusy(true);
     setStreamingId(sid);
     let acc = "";
+    setStreamingSpeakers([]);
     let finished = false;
     try {
       await api.attachRun(cid, sid, runId, registry.resumeFrom(runId), (e) => {
-        if (e.delta) { acc += e.delta; setStreaming(acc); }
+        if (e.response_start) {
+          const boundary = { speaker: e.response_start.speaker, offset: acc.length };
+          setStreamingSpeakers((prior) => [...prior, boundary]);
+        }
+        else if (e.delta) { acc += e.delta; setStreaming(acc); }
         else if (e.error) {
           fail(e.error, true);
           finished = true;
@@ -2565,6 +2575,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           settleOn(controller.signal, null),
         ]);
     let acc = "";
+    setStreamingSpeakers([]);
     // Three separate questions, and none of them is "did the promise resolve".
     // `finished`: a `done` frame arrived, which the backend sends only after
     // finalize has persisted. `errored`: an error frame arrived, so the backend
@@ -2588,7 +2599,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     let refused = false;
     try {
       await start((e) => {
-        if (e.delta) {
+        if (e.response_start) {
+          const boundary = { speaker: e.response_start.speaker, offset: acc.length };
+          setStreamingSpeakers((prior) => [...prior, boundary]);
+        } else if (e.delta) {
           acc += e.delta;
           setStreaming(acc);
         } else if (e.run) {
@@ -2891,7 +2905,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // that answered with a roll proposal instead of narration DID produce
         // something, and its note was spent doing so. The transcript not
         // growing is not "nothing happened" in that case.
-        const finishedWithNothing = ephemeral && finished && !errored
+        const finishedWithNothing = ephemeral && !rerolling && finished && !errored
           && nothingLanded && !proposed;
         // Recorded for the RETURN as well as the recovery (Codex review). This
         // turn reached the provider and came back with nothing at all, so
@@ -3191,6 +3205,50 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  screen can belong to a different scene than `activeId` — which here would
    *  cut an unrelated scene at an index taken from this one.
    */
+  async function openCharacterPassage(rid: string) {
+    if (!activeId || busy || sceneLocked) return;
+    const sid = activeId;
+    try {
+      const response = await api.getResponse(cid, sid, rid);
+      if (cidRef.current === cid && activeIdRef.current === sid)
+        setCharacterPassage({ cid, sid, rid, source: response.content });
+    } catch (err) { fail(err); }
+  }
+
+  async function mutateResponse(id: string, variant?: string) {
+    if (!activeId || busy || rolling || sceneLocked || editing || !transcriptIsActive) return;
+    if (!variant && !window.confirm("Delete only this response? Later messages remain and will be marked as having changed context.")) return;
+    const sid = activeId;
+    const release = takeRollLatch(sid);
+    try {
+      if (variant) await api.activateResponseVariant(cid, sid, id, variant);
+      else await api.deleteResponse(cid, sid, id);
+      if (cidRef.current === cid && activeIdRef.current === sid) await selectScene(sid);
+    } catch (err) { fail(err); }
+    finally { release(); }
+  }
+
+  async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
+    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
+    const sid = activeId;
+    const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
+      api.regenerateResponse(cid, sid, id, onEvent,
+        { guidance, response: pendingResponse ?? undefined, ...route }, signal, attempt, onIndex),
+      undefined, true, "", true);
+    if (landed) setPendingResponse(null);
+  }
+
+  async function respondAs() {
+    if (!activeId || busy || rolling || sceneLocked || renamesInFlight || !transcriptIsActive) return;
+    const actor = cast.find((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor);
+    if (!actor) return;
+    const sid = activeId;
+    const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
+      api.chat(cid, sid, "", onEvent, pendingResponse ?? undefined, signal, attempt, onIndex, false, responseActor),
+      undefined, false, "", true);
+    if (landed) setPendingResponse(null);
+  }
+
   async function deleteMessagesFrom(index: number) {
     if (!activeId || rolling || !transcriptIsActive) return;
     // The window is always the transcript's TAIL, so this is the real total
@@ -3316,6 +3374,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const route = repeat?.route ?? rerollRoute;
     setRerollPrompt(null);
     rerollToRetryRef.current = { sid: activeId, guidance, route };
+    const selectedResponse = messages[rerollAt - firstIndex];
+    if (selectedResponse?.response_id) {
+      rerollToRetryRef.current = null;
+      if (selectedResponse.response_can_reroll) await rerollResponse(selectedResponse.response_id, guidance, route);
+      else setReplayAt(rerollAt);
+      return;
+    }
     // one turn is a run of assistant posts — drop the whole trailing run, but
     // keep any trailing transition lines, which the backend also preserves
     showOptimistically((m) => {
@@ -4503,7 +4568,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                     <span className="msg-gutter">
                       {editing?.index !== index && !busy && (
                         <span className="gutter-icons">
-                          {index === rerollAt && canReroll && (
+                          {index === rerollAt && canReroll && !m.response_id && (
                             <button className="msg-edit" title="Reroll" aria-label="Reroll"
                                     disabled={rolling} onClick={() => {
                                       setRerollPrompt("");
@@ -4514,7 +4579,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                                       setRerollRoute(NO_REROLL_ROUTE);
                                     }}>↻</button>
                           )}
-                          {index === rerollAt && canSwipe && (
+                          {index === rerollAt && canSwipe && !m.response_id && (
                             <span className="swipe-nav">
                               <button className="msg-edit" aria-label="Previous alternate"
                                       disabled={rolling || editing !== null || sceneLocked}
@@ -4654,6 +4719,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                       ) : (
                         <RenderedMarkdown content={m.content} />
                       )}
+                      {m.response_id && m.role === "assistant" && transcriptIsActive
+                        && !messages.slice(index - firstIndex + 1).some((later) => later.response_id === m.response_id) && (
+                        <ResponseControls key={`${m.response_id}:${m.content}`} cid={cid} sid={activeId!}
+                          responseId={m.response_id} canReroll={!!m.response_can_reroll}
+                          status={m.response_status} contextChanged={m.context_changed}
+                          disabled={busy || rolling || sceneLocked || editing !== null || renamesInFlight > 0}
+                          onDelete={(id) => void mutateResponse(id)}
+                          onReroll={(id, guidance, route) => void rerollResponse(id, guidance, route)}
+                          onActivate={(id, variant) => void mutateResponse(id, variant)}
+                          onReplay={() => setReplayAt(index)}
+                          onCreateCharacter={m.speaker === "Grimoire" && m.response_status === "complete"
+                            ? () => void openCharacterPassage(m.response_id!) : undefined} />
+                      )}
                     </div>
                   </div>
                 ))}
@@ -4687,7 +4765,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                         `[[art:...]]` sit in the prose and then turn into a
                         picture. Display only -- nothing here changes what is
                         stored. */}
-                    <RenderedMarkdown content={hideArtHandles(streaming)} />
+                    {streamingSpeakers.length ? <>
+                      {streamingSpeakers[0].offset > 0 && <RenderedMarkdown content={hideArtHandles(streaming.slice(0, streamingSpeakers[0].offset))} />}
+                      {streamingSpeakers.map((part, index) => <div className="streaming-response" key={`${index}:${part.offset}`}>
+                        <strong>{part.speaker}</strong>
+                        <RenderedMarkdown content={hideArtHandles(streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset))} />
+                      </div>)}
+                    </> : <RenderedMarkdown content={hideArtHandles(streaming)} />}
                     <span className="cursor" />
                   </div>
                 </div>
@@ -4966,6 +5050,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
             />
+            {activeId && cast.some((a) => a.role === "npc") && <div className="form-actions">
+              <select aria-label="Respond as character" value={responseActor}
+                disabled={busy || rolling || sceneLocked}
+                onChange={(e) => setResponseActor(e.target.value)}>
+                <option value="">Choose NPC…</option>
+                {cast.filter((a) => a.role === "npc").map((a) =>
+                  <option key={`${a.kind}:${a.id}`} value={`${a.kind}:${a.id}`}>{a.name}</option>)}
+              </select>
+              <button onClick={() => void respondAs()} disabled={busy || rolling || sceneLocked || renamesInFlight > 0
+                || !cast.some((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor)}>Respond as</button>
+            </div>}
             {/* Replaces Send rather than sitting beside it: Send is already
                 disabled for the whole turn, so the slot is dead space at exactly
                 the moment a way out is wanted. */}
@@ -4984,6 +5079,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           )}
           </>)}
         </section>
+        {characterPassage && characterPassage.cid === cid && characterPassage.sid === activeId && (
+          <PassageCharacterDialog key={characterPassage.rid} cid={cid} sid={characterPassage.sid}
+            responseId={characterPassage.rid} sourceText={characterPassage.source}
+            onClose={() => setCharacterPassage(null)} onSaved={() => {
+              const saved = characterPassage;
+              setCharacterPassage(null);
+              if (cidRef.current === saved.cid && activeIdRef.current === saved.sid) void selectScene(saved.sid);
+            }} />
+        )}
         {drawer && activeId && (
           <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />
         )}

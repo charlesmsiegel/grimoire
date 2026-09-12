@@ -7879,3 +7879,95 @@ test("with nobody seated the plate keeps the reserved label", async () => {
   const names = [...container.querySelectorAll(".plate-name")].map((n) => n.textContent);
   expect(names).toEqual(["You"]);
 });
+
+
+test("Continue sends one empty request; Respond as sends the selected present NPC reference", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([
+    { kind: "characters", id: "mara", name: "Mara", role: "npc" },
+    { kind: "pcs", id: "winifred", name: "Winifred", role: "player" },
+  ]);
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(screen.getByRole("button", { name: /Continue ▶/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.chat).mock.calls[0][2]).toBe("");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Respond as" })).toBeDisabled());
+  const picker = screen.getByLabelText("Respond as character");
+  expect(within(picker).queryByRole("option", { name: "Winifred" })).not.toBeInTheDocument();
+  fireEvent.change(picker, { target: { value: "characters:mara" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Respond as" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Respond as" }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(api.chat).mock.calls[1][9]).toBe("characters:mara");
+});
+
+test("individual response deletion uses its stable id and keeps cut-from-here separate", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  const messages = [{ role: "assistant" as const, content: "A response.", speaker: "Mara",
+    response_id: "response-a", response_status: "complete" as const, response_can_reroll: true }];
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages });
+  vi.mocked(api.deleteResponse).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("A response.");
+  fireEvent.click(screen.getByText("Response actions"));
+  fireEvent.click(screen.getByRole("button", { name: "Delete response" }));
+  await waitFor(() => expect(api.deleteResponse).toHaveBeenCalledWith("run", "s1", "response-a"));
+  expect(api.deleteMessagesFrom).not.toHaveBeenCalled();
+});
+
+
+test("individual reroll keeps the old reply until accepted and spends its one-shot override without transcript growth", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  const message = { role: "assistant" as const, content: "The accepted response.", speaker: "Mara",
+    response_id: "response-a", response_status: "complete" as const, response_can_reroll: true };
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [message] });
+  vi.mocked(api.listResponsePresets).mockResolvedValue(RESPONSE_PRESETS);
+  let finish: (() => void) | undefined;
+  vi.mocked(api.regenerateResponse).mockImplementation((_cid, _sid, _rid, onEvent) => new Promise((resolve) => {
+    finish = () => {
+      vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old", response_preset: "cinematic" },
+        messages: [{ ...message, content: "The revised response." }] });
+      onEvent({ done: true }); resolve();
+    };
+  }));
+  renderCampaign();
+  await screen.findByText("The accepted response.");
+  const picker = screen.getByLabelText("Response length");
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));
+  fireEvent.change(picker, { target: { value: "terse" } });
+  fireEvent.click(screen.getByText("Response actions"));
+  fireEvent.change(screen.getByLabelText("Response steer"), { target: { value: "Calmer" } });
+  fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
+  await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.regenerateResponse).mock.calls[0][2]).toBe("response-a");
+  expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual({ guidance: "Calmer", response: { response_preset: "terse" }, connection_id: "", model: "" });
+  expect(screen.getByText("The accepted response.")).toBeInTheDocument();
+  expect(api.regenerate).not.toHaveBeenCalled();
+  await act(async () => finish?.());
+  await screen.findByText("The revised response.");
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));
+});
+
+test("streaming response boundaries display separate speakers and Stop remains the parent-run control", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.chat).mockImplementation((_cid, _sid, _text, onEvent, _response, signal) => new Promise((resolve) => {
+    onEvent({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+    onEvent({ delta: "First reply." });
+    onEvent({ response_end: { id: "a", status: "complete" } });
+    onEvent({ response_start: { id: "b", speaker: "Winifred", actor_ref: "characters:winifred" } });
+    onEvent({ delta: "Second reply." });
+    signal?.addEventListener("abort", () => resolve(), { once: true });
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(screen.getByRole("button", { name: /Continue ▶/ }));
+  await screen.findByText("Second reply.");
+  const first = screen.getByText("First reply.").closest(".streaming-response");
+  const second = screen.getByText("Second reply.").closest(".streaming-response");
+  expect(first).toHaveTextContent("Mara");
+  expect(second).toHaveTextContent("Winifred");
+  expect(first).not.toBe(second);
+  fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
+});

@@ -24,6 +24,7 @@ import {
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkGuards, type ForkReport,
   type CatalogDraft, type CharacterDetail, type ChronicleLineSave,
+  type Scene, type ResponseRecord, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
@@ -1236,9 +1237,9 @@ export const api = {
   // an offscreen scene, or an empty send — still decides those.
   chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void,
          response?: ResponseOverride, signal?: AbortSignal, attempt?: string,
-         onIndex?: (i: number) => void, director?: boolean) =>
+         onIndex?: (i: number) => void, director?: boolean, speakerRef?: string) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`,
-               { content, ...(response ? { response } : {}), ...(director ? { director: true } : {}) },
+               { content, ...(response ? { response } : {}), ...(director ? { director: true } : {}), ...(speakerRef ? { speaker_ref: speakerRef } : {}) },
                onEvent, signal, attempt, onIndex),
   /** Ask a detached run to stop.
    *
@@ -1390,6 +1391,21 @@ export const api = {
   // it joined. A reroll or swap firing while an earlier GET is still open would
   // otherwise attach that older set to the newer transcript: the counter names
   // the wrong active take, and an arrow promotes a still-valid but wrong id.
+  getResponse: (cid: string, sid: string, rid: string) =>
+    request<ResponseRecord>("GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
+  deleteResponse: (cid: string, sid: string, rid: string) =>
+    request<Scene>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
+  activateResponseVariant: (cid: string, sid: string, rid: string, vid: string) =>
+    request<Scene>("POST", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/variants/${vid}/activate`),
+  regenerateResponse: (cid: string, sid: string, rid: string, onEvent: (e: ChatEvent) => void,
+    body?: RegenerateOverrides, signal?: AbortSignal, attempt?: string, onIndex?: (i: number) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/regenerate`, body ?? {}, onEvent, signal, attempt, onIndex),
+  draftPassageCharacter: (cid: string, sid: string, rid: string, body: PassageCharacterInput, signal?: AbortSignal) =>
+    draftRun<PassageCharacterDraft>({ at: "campaign", id: cid }, (attempt) =>
+      request<{ run: RunHandle }>("POST", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/character-draft`,
+        body, { attempt, signal }), { signal }),
+  savePassageCharacter: (cid: string, sid: string, rid: string, body: PassageCharacterSave) =>
+    request<{ character: string; version: string; name: string }>("POST", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/character`, body),
   getAlternates: (cid: string, sid: string) =>
     request<SceneAlternates>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/alternates`, undefined, { fresh: true }),

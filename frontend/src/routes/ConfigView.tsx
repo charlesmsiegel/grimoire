@@ -53,7 +53,7 @@ const DRAFT_FIELDS = [
   "llm_timeout", "absorb_budget", "llm_call_budget",
   "context_budget", "context_scan_depth", "archive_depth",
   "prompt_log_depth", "offscene_known_limit",
-  "speaker_turn_taking", "prompt_layout_enabled",
+  "speaker_turn_taking", "character_response_mode", "prompt_layout_enabled",
   "turnstate_depth", "promote_streak",
   "embeddings_connection_id", "embeddings_model",
   "semantic_recall_depth", "semantic_recall_threshold",
@@ -121,7 +121,7 @@ const SECTIONS: SectionDef[] = [
   { id: "setup", group: "The install", label: "First-run setup", fields: [] },
   { id: "context", group: "What the model sees", label: "Context",
     fields: ["context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
-             "offscene_known_limit", "speaker_turn_taking"] },
+             "offscene_known_limit", "speaker_turn_taking", "character_response_mode"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
   { id: "transient", group: "What the model sees", label: "Transient state",
@@ -875,6 +875,14 @@ export default function ConfigView() {
                         value={draft.offscene_known_limit}
                         onChange={(v) => edit("offscene_known_limit", v)} />
             </div>
+            <label>Scene responses
+              <select aria-label="Scene response mode" value={draft.character_response_mode ?? "individual"}
+                onChange={(e) => edit("character_response_mode", e.target.value as "individual" | "combined")}>
+                <option value="individual">Individual character responses</option>
+                <option value="combined">Combined scene response</option>
+              </select>
+            </label>
+            <p className="config-copy">Individual mode gives each NPC one automatic response per player post. Continue and Respond as each request one additional response. Combined mode keeps the shared scene writer for comparison.</p>
             <label className="checkbox-row">
               <input
                 type="checkbox"

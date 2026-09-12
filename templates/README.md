@@ -449,3 +449,14 @@ declares an `epub:type` (`cover`, `titlepage`, `bodymatter chapter`,
 `backmatter`) so a reading system can label a chapter boundary. Change one and
 change the others — `store/epub.py` builds all three from the same chapter and
 appendix lists.
+
+
+## Character from passage
+
+`character_from_passage/system.j2` drafts a sparse description only.
+`character_from_passage/user.j2` receives `name`, `passage`, and bounded earlier
+observable `context`. The optional detached draft does not create a character.
+Dialogue examples are extracted from explicitly attributed source quotes by the
+server, then reviewed with the description. Saving retains the selected passage
+and full response snapshot in the campaign-local character card's provenance.
+Ambiguous attribution leaves examples empty; no additional closeout call is made.
