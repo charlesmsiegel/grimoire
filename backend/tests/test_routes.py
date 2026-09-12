@@ -511,8 +511,8 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     while writing the key that has it. The values need not be *meaningful*
     (`"systemx"` is not a theme): `write_config` stores strings and
     `_public_config` reports them, so what is under test is the plumbing
-    between the two, and every setting that has a vocabulary is narrowed where
-    it is read, not here.
+    between the two, and most settings narrow their vocabulary on read. The response mode
+    validates its two values at the API boundary, so it uses a valid probe below.
     """
     from grimoire.routes.models import ConfigUpdate
 
@@ -520,7 +520,7 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     # than the string that was stored, so an invented id reads back as "" --
     # correctly. `claude` is the other connection every store is seeded with,
     # which makes this a real round trip rather than an exemption.
-    live = {"active_connection_id": "claude"}
+    live = {"active_connection_id": "claude", "character_response_mode": "individual"}
     writable = sorted(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
 
     for key in writable:

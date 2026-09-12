@@ -62,6 +62,7 @@ def post_scene_roll(cid: str, sid: str, body: RollBody, request: Request):
         entry = store.rolls.append(cid, sid, label, result)
         store.scenes.append_message(cid, sid, "assistant", line,
                                     speaker=store.scenes.ROLL_SPEAKER)
+        store.responses.mark_applied(cid, sid)
     return {"ok": True, "roll": entry, "message": line}
 
 
@@ -286,6 +287,8 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
                 # brand-new fence/send). Nothing was projected — stop dead, same
                 # as any other lost-race case, with a clean done frame.
                 return runs.answer_without_running(request.app, run, [_sse({"done": True})])
+            store.responses.mark_applied(
+                cid, sid, round_record["id"] if round_record is not None else None)
             if round_record is None:
                 messages, breakdown = _continuation_messages(cid, sid, resolution, model=effective_model(conn))
             else:
@@ -365,6 +368,7 @@ def post_scene_check(cid: str, sid: str, body: CheckBody, request: Request):
         line = store.checks.format_check_roll(resolution)
         store.scenes.append_message(cid, sid, "assistant", line,
                                     speaker=store.scenes.ROLL_SPEAKER)
+        store.responses.mark_applied(cid, sid)
     return {"ok": True, "resolution": resolution, "roll": entry, "message": line}
 
 

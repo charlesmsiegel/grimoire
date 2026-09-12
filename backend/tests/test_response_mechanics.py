@@ -70,3 +70,22 @@ def test_changed_paused_round_refuses_accept_before_any_dice_or_provider_call(cl
     assert response.status_code == 409
     assert store.proposals.get(cid, sid)["status"] == "pending"
     assert store.rolls.read(cid) == []
+
+
+@pytest.mark.parametrize("endpoint,body", [
+    ("roll", {"notation": "1d6"}),
+    ("check", {"check": "brawl", "actor": "characters:mara", "difficulty": 6}),
+])
+def test_manual_mechanics_lock_survives_cutting_its_transcript_line(client, paused_round, endpoint, body):
+    cid, sid, _, _ = paused_round
+    store.scenes.append_message(cid, sid, "assistant", "Mara waits.", speaker="Mara")
+    rid = store.responses.migrate(cid, sid)[-1]["id"]
+    at = len(store.scenes.read_scene(cid, sid)["messages"])
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{endpoint}", json=body)
+    assert response.status_code == 200
+    assert store.responses.get(cid, sid, rid, private=True).get("mechanically_locked")
+    store.scenes.delete_from(cid, sid, at)
+    assert store.rolls.read(cid), "the audit still exists after a transcript cut"
+    with pytest.raises(store.responses.ResponseConflict) as error:
+        store.responses.delete(cid, sid, rid)
+    assert error.value.kind == "applied_mechanics"
