@@ -46,3 +46,8 @@ def test_attachment_is_local_preserves_existing_and_records_snapshot(monkeypatch
 def test_comma_in_previous_quote_does_not_give_it_to_the_next_speaker():
     passage = 'Mara said, "Wait," Winifred said, "Go."'
     assert passage_evidence.quotes(passage, "Winifred") == ["Go."]
+
+
+def test_addressee_before_colon_is_not_the_speaker():
+    assert passage_evidence.quotes('Winifred spoke to Mara: "Go."', 'Mara') == []
+    assert passage_evidence.quotes('Mara: "Wait."\nWinifred: "Go."', 'Mara') == ['Wait.']

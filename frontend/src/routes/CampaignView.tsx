@@ -587,7 +587,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
   const [responseActor, setResponseActor] = useState("");
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ speaker: string; offset: number }[]>([]);
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; offset: number }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
@@ -2252,7 +2252,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       await api.attachRun(cid, sid, runId, registry.resumeFrom(runId), (e) => {
         if (e.response_start) {
-          const boundary = { speaker: e.response_start.speaker, offset: acc.length };
+          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
         }
         else if (e.delta) { acc += e.delta; setStreaming(acc); }
@@ -2600,7 +2600,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       await start((e) => {
         if (e.response_start) {
-          const boundary = { speaker: e.response_start.speaker, offset: acc.length };
+          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.delta) {
           acc += e.delta;
@@ -4721,7 +4721,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                       )}
                       {m.response_id && m.role === "assistant" && transcriptIsActive
                         && !messages.slice(index - firstIndex + 1).some((later) => later.response_id === m.response_id) && (
-                        <ResponseControls key={`${m.response_id}:${m.content}`} cid={cid} sid={activeId!}
+                        <ResponseControls key={`${m.response_id}:${m.content}`} cid={cid} sid={activeId}
                           responseId={m.response_id} canReroll={!!m.response_can_reroll}
                           status={m.response_status} contextChanged={m.context_changed}
                           disabled={busy || rolling || sceneLocked || editing !== null || renamesInFlight > 0}
@@ -4767,7 +4767,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                         stored. */}
                     {streamingSpeakers.length ? <>
                       {streamingSpeakers[0].offset > 0 && <RenderedMarkdown content={hideArtHandles(streaming.slice(0, streamingSpeakers[0].offset))} />}
-                      {streamingSpeakers.map((part, index) => <div className="streaming-response" key={`${index}:${part.offset}`}>
+                      {streamingSpeakers.map((part, index) => <div className="streaming-response" key={part.id}>
                         <strong>{part.speaker}</strong>
                         <RenderedMarkdown content={hideArtHandles(streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset))} />
                       </div>)}

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from .. import prompts
 from ..llm import LLMClient
 from ..store import appearances, characters, passage_evidence, responses
+from ..store.scenes import serialize
 from . import runs
 from .common import _require_connection, _require_scene, draft_completion, get_llm
 
@@ -43,6 +44,23 @@ def _source(cid: str, sid: str, rid: str, body: PassageDraft) -> dict:
     return scene
 
 
+def _observable_neighbors(posts: list[dict], index: int | None) -> list[dict]:
+    if index is None:
+        return []
+    return [post for post in posts[:index]
+            if post.get("role") in ("user", "assistant")
+            and post.get("speaker") not in serialize.SYNTHETIC_SPEAKERS
+            and not str(post.get("speaker", "")).startswith("\u2063")][-2:]
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/responses/{rid}/character-evidence")
+def character_evidence(cid: str, sid: str, rid: str, body: PassageDraft):
+    """Deterministic quote review; no connection or model call is needed."""
+    _source(cid, sid, rid, body)
+    return {"mes_example": passage_evidence.examples(body.passage, body.name),
+            "quotes": passage_evidence.quotes(body.passage, body.name)}
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/responses/{rid}/character-draft", status_code=202)
 def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: Request,
                           client: LLMClient = Depends(get_llm),
@@ -51,7 +69,7 @@ def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: R
     conn = _require_connection("character-from-passage", cid)
     posts = scene["messages"]
     index = next((i for i, post in enumerate(posts) if post.get("response_id") == rid), None)
-    neighbors = [] if index is None else posts[max(0, index - 2):index]
+    neighbors = _observable_neighbors(posts, index)
     context = "\n\n".join(str(post.get("speaker", post["role"])) + ": "
                            + post["content"][-2000:] for post in neighbors)
     messages = [{"role": "system", "content": prompts.render("character_from_passage/system.j2")},

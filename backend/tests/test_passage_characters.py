@@ -2,6 +2,7 @@
 import time
 
 from grimoire import routes
+from grimoire.routes import passage_characters
 from grimoire.store import (
     appearances,
     campaigns,
@@ -12,6 +13,7 @@ from grimoire.store import (
     scenes,
     worlds,
 )
+from grimoire.store.scenes import serialize
 from tests.llm_fakes import FakeOpenRouterComplete
 
 
@@ -121,3 +123,22 @@ def test_retry_attachment_does_not_duplicate_reviewed_description(client):
     card = characters.read_card(overlay.char_root(cid, aid), aid, vid)
     assert card["data"]["description"] == body["description"]
     assert len(card["data"]["extensions"]["grimoire"]["passage_evidence"]) == 1
+
+
+def test_quote_review_needs_no_model_connection(client):
+    cid, sid, rid, body = source(client)
+    preview = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/character-evidence", json=body)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["quotes"] == ["Wait."]
+    assert preview.json()["mes_example"] == body["mes_example"]
+    assert overlay.list_characters(cid) == []
+
+
+def test_neighbor_selection_excludes_director_and_nonconversation_entries():
+    posts = [{"role": "user", "content": "Observable earlier speech"},
+             {"role": "assistant", "speaker": serialize.DIRECTOR_SPEAKER, "content": "Private direction"},
+             {"role": "system", "content": "Private instruction"},
+             {"role": "assistant", "speaker": serialize.ROLL_SPEAKER, "content": "Internal roll details"},
+             {"role": "assistant", "speaker": "Winifred", "content": "Observable later speech"},
+             {"role": "assistant", "speaker": "Grimoire", "content": "Source"}]
+    assert passage_characters._observable_neighbors(posts, 5) == [posts[0], posts[4]]

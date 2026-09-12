@@ -19,7 +19,8 @@ def quotes(passage: str, name: str) -> list[str]:
     identity = r"(?<![\w'-])" + re.escape(name) + r"(?![\w'-])"
     verb = r"(?:said|asked|replied|whispered|shouted|answered|murmured|called)"
     speech = r'["“]([^"“”\n]+)["”]'
-    patterns = [identity + r"\s*(?::|" + verb + r"\s*,?)\s*" + speech,
+    patterns = [r"(?m)^[ \t]*" + identity + r"[ \t]*:\s*" + speech,
+                identity + r"\s+" + verb + r"\s*,?\s*" + speech,
                 r'["“]([^"“”\n]*,)["”]\s*(?:' + identity + r"\s+" + verb
                 + r"|" + verb + r"\s+" + identity + r")(?=\s*[.!?](?:\s|$))"]
     found = sorted((m.start(), m.group(1)) for pattern in patterns

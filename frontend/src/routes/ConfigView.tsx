@@ -877,7 +877,7 @@ export default function ConfigView() {
             </div>
             <label>Scene responses
               <select aria-label="Scene response mode" value={draft.character_response_mode ?? "individual"}
-                onChange={(e) => edit("character_response_mode", e.target.value as "individual" | "combined")}>
+                onChange={(e) => edit("character_response_mode", e.target.value)}>
                 <option value="individual">Individual character responses</option>
                 <option value="combined">Combined scene response</option>
               </select>

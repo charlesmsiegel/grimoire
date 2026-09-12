@@ -460,3 +460,9 @@ Dialogue examples are extracted from explicitly attributed source quotes by the
 server, then reviewed with the description. Saving retains the selected passage
 and full response snapshot in the campaign-local character card's provenance.
 Ambiguous attribution leaves examples empty; no additional closeout call is made.
+
+The passage dialog reads deterministic quote evidence through `character-evidence`
+before save, even when no model description is requested. Synthetic director,
+roll and transition messages are excluded from neighboring observable dialogue.
+Colon attribution requires a line-start speaker label; an embedded addressee is
+not treated as a speaker. Exact source snapshots are rechecked on save.

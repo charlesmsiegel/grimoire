@@ -1400,6 +1400,8 @@ export const api = {
   regenerateResponse: (cid: string, sid: string, rid: string, onEvent: (e: ChatEvent) => void,
     body?: RegenerateOverrides, signal?: AbortSignal, attempt?: string, onIndex?: (i: number) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/regenerate`, body ?? {}, onEvent, signal, attempt, onIndex),
+  passageCharacterEvidence: (cid: string, sid: string, rid: string, body: PassageCharacterInput) =>
+    request<Pick<PassageCharacterDraft, "quotes" | "mes_example">>("POST", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/character-evidence`, body),
   draftPassageCharacter: (cid: string, sid: string, rid: string, body: PassageCharacterInput, signal?: AbortSignal) =>
     draftRun<PassageCharacterDraft>({ at: "campaign", id: cid }, (attempt) =>
       request<{ run: RunHandle }>("POST", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/character-draft`,
