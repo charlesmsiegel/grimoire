@@ -516,3 +516,27 @@ def test_explicit_single_response_has_no_successor_candidates(client):
     candidates = fake.requests[0]["messages"][0]["content"].split("Eligible next speakers:\n", 1)[1]
     candidates = candidates.split("\n\n", 1)[0]
     assert "characters:" not in candidates and "grimoire" not in candidates
+
+
+def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client):
+    cid, sid = seed(client)
+    fake = FakeLLM([
+        ['{"next":"characters:mara"}'],
+        ['"Ready."\n```handoff\n{"next":"grimoire"}\n```'],
+        ['The door opens.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                         json={"content": "Is it time?"})
+    assert result.status_code == 200 and fake.calls == 3
+    selector, actor, narrator = [r["messages"][0]["content"] for r in fake.requests]
+    assert "An established NPC's actions or physical reactions belong to that NPC" in selector
+    assert "Do not select Grimoire to extend an established NPC's turn" in actor
+    assert "Do not select Grimoire to extend an established NPC's turn" in narrator
+    assert "Each established NPC owns their speech, actions, physical reactions and decisions" in narrator
+    assert "genuinely new characters" in narrator
+    # Already-used Mara is still protected by the roster, even though she is
+    # no longer offered as a successor; an unused NPC can still respond.
+    roster, candidates = narrator.split("Present people:", 1)[1].split("Eligible next speakers:", 1)
+    assert "characters:mara" in roster and "characters:winifred" in roster
+    assert "characters:mara" not in candidates and "characters:winifred" in candidates

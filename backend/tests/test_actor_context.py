@@ -167,7 +167,11 @@ def test_narrator_retains_scene_scope_and_director_assignment(cast_scene):
     messages, _ = context.compose_director_turn(*cast_scene, "Observe", actor_ref="grimoire")
     assert "Winifred_CARD_SECRET" in str(messages)
     assert "Mara_CARD_SECRET" in str(messages)
-    assert "Do not write any NPC dialogue" in str(messages)
+    text = str(messages)
+    assert "Each established NPC owns their speech, actions, physical reactions and decisions" in text
+    assert "genuinely new characters" in text
+    assert "Do not write any NPC dialogue" not in text
+    assert "Do not write additional characters" not in text
 
 
 @pytest.mark.parametrize("ref", ["characters:absent", "pcs:seraphine", "", "characters/mara"])

@@ -195,3 +195,30 @@ choice matching, cancellation, per-speaker UI boundaries, lazy saved-history
 reads, roll continuation reasoning, setting defaults and provider compatibility.
 Independent review tooling remains unavailable as noted above. No paid LLM calls,
 live campaign mutations, or Grimoire restart were used for this change.
+
+
+## Follow-up: narrator ownership of scene events
+
+The assigned narrator template prohibited NPC dialogue while permitting observable
+reactions. That left established actors' physical reactions within the narrator's
+apparent scope. The revised contract assigns established NPCs their own actions,
+decisions and reactions, preserves environmental consequences and new-character
+introductions, and applies the same distinction to selection and handoffs. The
+length instruction now defers to this scope rather than contradicting permission
+to introduce a character. No routing, transcript or frozen snapshot data changes.
+
+Two regression checks failed before the template change. The final selection
+passed 371 tests covering actor context, character turns, response controls,
+snapshots, offline evals, frozen campaign compatibility and documentation. The
+template harness passed all 126 comparisons; Ruff remained at its 1180 baseline
+and git diff --check passed. The route regression follows a selector, an NPC and
+Grimoire, checking delivery of scope instructions and retention of the used NPC
+in the present roster while excluding them from successor candidates.
+
+Root review checked involuntary reactions, absent established actors, independent
+scene events, new-character speech, brevity, manual responses and frozen rerolls.
+The independent review tools remain unavailable as recorded above. These checks
+verify prompt delivery and orchestration; they do not establish model compliance
+with semantic ownership rules. No paid model calls, campaign writes, or app
+restart were used for verification. Templates reload for newly composed responses;
+historical rerolls continue to use their saved prompt snapshots.

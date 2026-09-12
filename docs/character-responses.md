@@ -5,6 +5,16 @@ current speaker's voice, examples and knowledge. Other cast members contribute
 their names and conversation that the speaker witnessed. Grimoire retains the
 campaign context needed for narration and mechanics.
 
+An established NPC owns their dialogue, actions, decisions and physical reactions,
+including silent or involuntary ones. Grimoire handles general scene information,
+independent environmental events, and the initial actions and speech of genuinely
+new characters. It can acknowledge facts already written and describe their effects
+on the environment; it should not finish or expand an established NPC's turn.
+Speaker selection and handoffs follow the same boundary. An unused narration slot
+does not call for a recap or atmospheric closing paragraph, and cannot give an NPC
+a second automatic turn through the narrator. This is prompt guidance; the engine
+checks speaker references and turn eligibility, not the semantics of arbitrary prose.
+
 A player post can receive a short sequence of responses. Each NPC can respond
 once automatically; Grimoire also has one narration slot. The response proposes
 the next speaker, and the application checks eligibility before starting another

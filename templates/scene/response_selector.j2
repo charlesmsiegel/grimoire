@@ -1,7 +1,13 @@
 Choose at most one initial speaker for the observable conversation below.
 Return only a JSON object with exactly one key: {"next": <stable reference or null>}.
-Choose a listed NPC reference, "grimoire" for observable narration without NPC dialogue,
-or null to return control to the player. Never invent private knowledge or script reactions.
+Choose a listed NPC reference, "grimoire" for general scene information, an independent
+scene event or a genuinely new character's entrance, or null to return control to the player.
+An established NPC's actions or physical reactions belong to that NPC, even without speech.
+Choose their reference for those contributions. Grimoire does not continue their actions
+or provide a closing recap. A character already established in the cast or transcript
+is not new just because they are missing from the available list.
+Choose null when there is no distinct contribution or the player's decision is needed.
+Never invent private knowledge or script reactions.
 Available NPCs: {{ roster | tojson }}
 Observable transcript: {{ conversation | tojson }}
 {% if note %}User direction: {{ note }}{% endif %}
