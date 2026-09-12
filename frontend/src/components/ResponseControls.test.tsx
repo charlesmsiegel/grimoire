@@ -38,11 +38,12 @@ describe("individual response controls", () => {
   it("activates the stable variant id from the selected response", async () => {
     vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
       variants: [{ id: "v1", content: "First", status: "complete" },
-        { id: "v2", content: "Second", status: "complete" }, { id: "v3", content: "Partial", status: "incomplete" }] } as Awaited<ReturnType<typeof api.getResponse>>);
+        { id: "v2", content: "Second", status: "complete" }, { id: "v3", content: "Partial", status: "incomplete", issue: "invalid_handoff" }] } as Awaited<ReturnType<typeof api.getResponse>>);
     const actions = show();
     fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Use variant 2" })).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Use variant 3 (incomplete)" })).toBeDisabled();
+    expect(screen.getByText("Response issue: invalid_handoff")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Use variant 2" }));
     expect(actions.onActivate).toHaveBeenCalledWith("response-a", "v2");
   });

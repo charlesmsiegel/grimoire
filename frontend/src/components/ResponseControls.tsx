@@ -47,6 +47,7 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
       {error !== null && <p role="alert"><ErrorNote err={error} /></p>}
       {record?.variants.map((variant, index) => <div key={variant.id}>
         <p>{variant.content}</p>
+        {variant.issue && <p className="subtle">Response issue: {variant.issue}</p>}
         <button disabled={disabled || variant.status !== "complete" || record.active_variant === variant.id}
           onClick={() => { setRecord(null); onActivate(responseId, variant.id); }}>
           Use variant {index + 1}{variant.status === "incomplete" ? " (incomplete)" : ""}

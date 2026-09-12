@@ -325,7 +325,7 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
   context_changed?: boolean; response_can_reroll?: boolean };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
-  variants: { id: string; content: string; status: string }[] };
+  variants: { id: string; content: string; status: string; issue?: string | null }[] };
 export type PassageCharacterDraft = { name: string; description: string; mes_example: string; quotes: string[] };
 export type PassageCharacterInput = { name: string; passage: string; source_text: string };
 export type PassageCharacterSave = PassageCharacterInput & { description: string; mes_example: string; existing_ref?: string };
