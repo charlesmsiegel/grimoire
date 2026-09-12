@@ -52,10 +52,17 @@ def _fence(cid, sid, run, token):
 
 
 def _compose(cid, sid, round_record, actor, conn, appended=()):
+    # The prompt must offer the same remaining slots that the engine accepts.
+    # Offering the current/used actors teaches an invalid handoff; omitting the
+    # narrator hides a valid slot. Explicit one-response requests have no next.
+    used = {*round_record["used"], actor}
+    candidates = [entry for entry in [*round_record["eligible"],
+                                     {"ref": "grimoire", "name": "Grimoire"}]
+                  if round_record["automatic"] and entry["ref"] not in used]
     kwargs = {
         "turn": round_record.get("turn"),
         "actor_ref": actor,
-        "eligible_speakers": round_record["eligible"],
+        "eligible_speakers": candidates,
         "describe": store.prompt_log.capturing(),
         "model": effective_model(conn),
     }

@@ -108,3 +108,28 @@ from display boundaries; response_end does not release Continue between speakers
 and reconnect/Stop retain the existing parent-run latch. No fresh independent
 review or paid model-quality evaluation was performed for this follow-up. Browser
 visual verification remains unavailable as recorded above.
+
+
+## Follow-up: eligible handoff choices
+
+The handoff prompt previously listed the entire round roster, including the
+current speaker and actors who had already used their slot, while omitting the
+narrator slot accepted by the engine. Explicit single-response requests also
+offered successors that the engine would ignore. Candidate construction now
+matches those constraints. The assigned budget no longer requests a multi-actor
+script, and GLM guidance expressly includes required control blocks. Handoff
+instructions distinguish an actor's prose from the routing decision and show
+both an eligible successor and a deliberate stop.
+
+Four regressions failed before the repair. Afterward, 103 actor/engine/protocol
+tests and 79 model/frozen-history/offline-eval/mechanics/control tests passed.
+The same 103 actor/engine/protocol tests passed under Pydantic 1. The template
+harness passed 126 checks; Ruff remained at 1180 and CI-platform mypy at 180.
+Frozen snapshots did not change. No paid model call was made: these checks prove
+candidate delivery and bounded execution, not improved model compliance.
+
+Root review checked automatic versus explicit requests, the narrator's one slot,
+used-slot exclusion, roll continuation, historical snapshot preservation and
+missing/invalid control stopping the sequence. This follow-up does not add a
+fallback generation or force every present NPC to speak. Existing review-tool
+availability limits still apply.

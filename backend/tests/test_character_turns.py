@@ -484,3 +484,35 @@ def test_stop_on_final_delta_preserves_pending_response_for_retry(client):
     record = store.responses.get(cid, sid, pending["pending_response"])
     assert record["status"] == "incomplete" and record["content"] == "First."
     assert fake.calls == 1
+
+
+def test_handoff_prompt_offers_only_remaining_slots(client):
+    cid, sid = seed(client)
+    fake = FakeLLM([
+        ['"Ready."\n```handoff\n{"next":"characters:winifred"}\n```'],
+        ['"So am I."\n```handoff\n{"next":"grimoire"}\n```'],
+        ['The door opens.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                         json={"content": "Are you both ready?", "speaker_ref": "characters:mara"})
+    assert result.status_code == 200 and fake.calls == 3
+    candidates = [request["messages"][0]["content"].split("Eligible next speakers:\n", 1)[1]
+                  .split("\n\n", 1)[0] for request in fake.requests]
+    assert "characters:mara" not in candidates[0]
+    assert "characters:winifred" in candidates[0] and "grimoire" in candidates[0]
+    assert "characters:mara" not in candidates[1] and "characters:winifred" not in candidates[1]
+    assert "grimoire" in candidates[1]
+    assert not any(ref in candidates[2] for ref in ("characters:mara", "characters:winifred", "grimoire"))
+
+
+def test_explicit_single_response_has_no_successor_candidates(client):
+    cid, sid = seed(client)
+    fake = FakeLLM([['"Ready."\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                         json={"speaker_ref": "characters:mara"})
+    assert result.status_code == 200 and fake.calls == 1
+    candidates = fake.requests[0]["messages"][0]["content"].split("Eligible next speakers:\n", 1)[1]
+    candidates = candidates.split("\n\n", 1)[0]
+    assert "characters:" not in candidates and "grimoire" not in candidates

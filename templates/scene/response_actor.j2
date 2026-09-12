@@ -10,14 +10,36 @@ Do not complete another actor's contribution. These assigned-speaker rules take 
 Present people:
 {% for actor in response_roster %}- {{ actor.name }}: {{ actor.ref }}
 {% endfor %}
-Choose the next speaker only when the scene naturally calls for them; otherwise stop.
+# Handoff after this contribution
+
+Writing only your assigned actor applies to the prose. Separately decide whether
+another eligible actor has a natural response to what just happened. Being
+addressed determines who starts; it does not mean only that person may respond.
+Consider an unanswered remark to another person, something affecting them, or a
+reaction they can offer from their own knowledge. Nominate them instead of writing
+their reaction yourself. Do not rotate through the cast merely to fill slots.
+
+Return control to the player when their choice or action is needed to proceed.
+An unanswered question does not silence another NPC who can react without making
+that choice for the player. Do not manufacture a new test or question to force a
+stop; a brief contribution followed by another actor is a complete response.
+
 Eligible next speakers:
 {% for actor in response_candidates %}- {{ actor.name }}: {{ actor.ref }}
+{% else %}None. Return control to the player.
 {% endfor %}
-End an ordinary completed response with exactly one trailing fenced handoff block:
+The current actor and everyone who has already responded are excluded. Use only
+the references listed here. {% if response_candidates %}For a handoff, use this shape with the chosen eligible reference:
+```handoff
+{"next": {{ response_candidates[0].ref | tojson }}}
+```
+{% endif %}To return control to the player, use:
 ```handoff
 {"next": null}
 ```
-Replace null only with an eligible stable reference above. A player decision needs null.
-Any ordinary state metadata fence must precede the handoff fence.
-If a roll is needed, emit the roll request and stop immediately before any state or handoff block.
+Every ordinary completed response MUST end with exactly one of these fenced
+handoff blocks, including when next is null. The application hides this control
+block; it is required output, not spoken dialogue, narration, or reasoning.
+Any state metadata fence must precede it. Write nothing after the handoff fence.
+If a roll is needed, emit the roll request and stop immediately before any state
+or handoff block; the handoff waits until the roll has been resolved.

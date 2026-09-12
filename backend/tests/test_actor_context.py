@@ -247,3 +247,14 @@ def test_assigned_reply_format_replaces_the_ensemble_script_contract(cast_scene,
     # imitate a whole script despite the one-actor contract appended later.
     assert "**<Name>:**" not in individual_format
     assert "**<Name>:**" in combined_format
+
+
+@pytest.mark.parametrize("actor_ref", ["characters:mara", "grimoire"])
+def test_assigned_budget_does_not_request_ensemble_blocks(cast_scene, actor_ref):
+    _, individual = context.compose_turn(*cast_scene, actor_ref=actor_ref)
+    _, combined = context.compose_turn(*cast_scene)
+    budget = next(row["text"] for row in individual["sections"] if row["id"] == "response_budget")
+    ensemble = next(row["text"] for row in combined["sections"] if row["id"] == "response_budget")
+    assert "**Grimoire:**" not in budget
+    assert "characters act or speak" not in budget
+    assert "**Grimoire:**" in ensemble

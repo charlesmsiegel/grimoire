@@ -10,6 +10,13 @@ once automatically; Grimoire also has one narration slot. The response proposes
 the next speaker, and the application checks eligibility before starting another
 call. Missing or invalid routing metadata ends the sequence.
 
+Addressing one NPC determines who starts, not who alone may speak. Their handoff
+can nominate another NPC with a relevant response, without writing that person's
+contribution. The prompt lists only unused slots, including the narrator when
+available. An explicit Continue or Respond as request lists no successor slots.
+An unanswered question need not prevent another NPC from reacting, provided their
+reaction does not decide or act for the player.
+
 ## During play
 
 Individual responses use prose with quoted speech; the application supplies the
