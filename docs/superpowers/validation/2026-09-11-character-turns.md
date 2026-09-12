@@ -1,6 +1,7 @@
 # Character responses: branch validation
 
-Branch: `feature/character-turns`, based on `main`. Local trial only; no push or merge.
+Branch: `feature/character-turns`, based on `main`. Initial trial and subsequent
+local integration verification are recorded below.
 Usage: [Character responses](../../character-responses.md).
 
 ## Implemented behavior
@@ -222,3 +223,33 @@ verify prompt delivery and orchestration; they do not establish model compliance
 with semantic ownership rules. No paid model calls, campaign writes, or app
 restart were used for verification. Templates reload for newly composed responses;
 historical rerolls continue to use their saved prompt snapshots.
+
+
+## Local integration verification, 2026-09-12
+
+The user requested committing outstanding work and integrating the feature locally.
+After fetching origin, main remained the feature's ancestor with no divergent
+commits. A merge commit preserves the feature history and provides a single
+revert point. The feature branch is retained. No remote push is part of this work.
+
+Fresh verification of the integration tree:
+
+- Full frontend: 2,999 tests in 142 files passed; coverage gates passed
+  (85.09% statements, 80.39% branches, 78.84% functions, 88.02% lines).
+- Production build and TypeScript compilation passed.
+- Full backend: 8,917 passed, 20 skipped, five failed, ten setup errors.
+  Branch coverage reached 93.13%, passing the 93% gate.
+- All five backend failures reproduced in a fresh archive of unchanged main:
+  concurrent append completeness, backup CRLF expectations, and three
+  Windows-invalid filename cases. The same Python environment also reproduced
+  all ten parameter-derived fixture-path setup errors on unchanged main.
+  None of these test files differs between main and the feature. The full
+  Windows backend suite is not claimed green; no new failing test was found.
+- Pydantic 1 compatibility: 148 response, actor-context, reasoning, capture,
+  mechanics and persistence tests passed in the existing isolated environment.
+- Ruff 1,180, ESLint 844 and CI-platform mypy 180 remained at their baselines.
+- All 126 template comparisons passed; git diff --check passed.
+
+Validation used isolated stores and fake model calls. Grimoire was not restarted.
+The final integration documentation is the only addition after these code checks;
+the documentation guard is checked separately before committing it.
