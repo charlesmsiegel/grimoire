@@ -92,6 +92,7 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "archive_depth": cfg.get("archive_depth", store.config.DEFAULT_ARCHIVE_DEPTH),
             "prompt_log_depth": cfg.get("prompt_log_depth",
                                         store.config.DEFAULT_PROMPT_LOG_DEPTH),
+            "character_response_mode": cfg.get("character_response_mode", "individual"),
             "turnstate_depth": cfg.get("turnstate_depth", store.config.DEFAULT_TURNSTATE_DEPTH),
             "promote_streak": cfg.get("promote_streak", store.config.DEFAULT_PROMOTE_STREAK),
             "rolling_summary_every": cfg.get("rolling_summary_every",
@@ -219,6 +220,8 @@ def get_config(registry: health.ProviderHealth = Depends(get_health)):
 @router.put("/config")
 def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(update).items() if v is not None}
+    if fields.get("character_response_mode", "individual") not in ("individual", "combined"):
+        raise HTTPException(400, detail="character_response_mode must be individual or combined")
     saved = store.write_config(**fields)
     # `store.logs` holds the threshold in module state rather than reading the
     # config per row -- `record` is on the path of everything the app does --

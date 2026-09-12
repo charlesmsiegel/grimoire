@@ -197,7 +197,7 @@ DEFAULT_ADVANCE_FORK_THRESHOLD = "30"
 _LENGTH_KEYS = ("response_preset", "length_reply_words", "length_blocks",
                 "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
 
-_CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
+_CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "archive_depth", "context_budget",
                 "user_label", "assistant_label",
                 "default_style_id", "active_connection_id",
@@ -244,6 +244,7 @@ def read_config() -> dict[str, str]:
                 "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
                 "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
+                "character_response_mode": "individual",
                 "promote_streak": DEFAULT_PROMOTE_STREAK,
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
                 "scene_break_every": DEFAULT_SCENE_BREAK_EVERY,

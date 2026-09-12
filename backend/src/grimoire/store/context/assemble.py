@@ -1081,8 +1081,8 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
                     before_post=({"role": "user", "content": note_text},),
                     after_post=tuple({"role": role, "content": content}
                                      for _label, role, content in appended),
-                    extra=(("Director note", note_text),)
-                          + tuple((label, content) for label, _role, content in appended))
+                    extra=(("Director note", note_text),
+                           *((label, content) for label, _role, content in appended)))
 
 
 

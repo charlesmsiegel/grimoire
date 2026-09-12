@@ -53,6 +53,7 @@ from fastapi import APIRouter
 
 from . import (
     campaigns,
+    character_turns,
     characters,
     common,
     config,
@@ -63,6 +64,7 @@ from . import (
     models,
     modules,
     observability,
+    passage_characters,
     runs,
     scenes,
     search,
@@ -97,7 +99,7 @@ router = APIRouter()
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, modules, worlds, characters, world_images, greetings,
-                runs, scenes, weather, mechanics, usage, observability,
+                runs, scenes, character_turns, passage_characters, weather, mechanics, usage, observability,
                 campaigns, ledger, search, shell, todo):
     router.include_router(_domain.router)
 

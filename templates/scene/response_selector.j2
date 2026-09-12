@@ -1,0 +1,7 @@
+Choose at most one initial speaker for the observable conversation below.
+Return only a JSON object with exactly one key: {"next": <stable reference or null>}.
+Choose a listed NPC reference, "grimoire" for observable narration without NPC dialogue,
+or null to return control to the player. Never invent private knowledge or script reactions.
+Available NPCs: {{ roster | tojson }}
+Observable transcript: {{ conversation | tojson }}
+{% if note %}User direction: {{ note }}{% endif %}

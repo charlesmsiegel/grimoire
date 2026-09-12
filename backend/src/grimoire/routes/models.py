@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 # ---- models ----
 class ConfigUpdate(BaseModel):
+    character_response_mode: str | None = None
     theme: str | None = None
     system_prompt: str | None = None
     quote_color: str | None = None
@@ -605,6 +606,7 @@ class ChronicleSave(BaseModel):
 
 
 class ChatTurn(BaseModel):
+    speaker_ref: str | None = None
     content: str = ""
     response: ResponseSettings | None = None
     # #83: send this turn as a director note rather than a player post -- the

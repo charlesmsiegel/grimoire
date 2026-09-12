@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
-from . import runs, streaming
+from . import character_turns, runs, streaming
 from .common import (
     _campaign_root_or_404,
     _dump,
@@ -503,6 +503,8 @@ def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None =
     if before is not None and before < 0:
         raise HTTPException(status_code=400, detail="before must not be negative")
     try:
+        if character_turns.enabled():
+            store.responses.migrate(cid,sid)
         if limit is None:
             return store.scenes.read_scene(cid, sid)
         return store.scenes.read_scene_window(cid, sid, limit, before)
@@ -591,6 +593,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
+    if character_turns.enabled() or turn.speaker_ref:
+        character_turns.validate_actor(cid, sid, turn.speaker_ref)
     conn = _require_connection("chat", cid)
     # RESERVED BEFORE THE FIRST MUTATOR. `heal` can append a line and the
     # sidecar block can retire a proposal, so a 409 raised after them would
@@ -741,6 +745,12 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # transcript -- a duplicate, the recoverable side again.
             with contextlib.suppress(OSError):
                 store.attempts.remember(cid, run.scene_identity, run.attempt_id)
+    if character_turns.enabled() or turn.speaker_ref:
+        return character_turns.start(
+            cid,sid,request,client,conn,run,post=posted_at,
+            note=(content or prompts.render("scene/director_note.j2")) if ephemeral else "",
+            turn=_turn_override(turn),automatic=not ephemeral,
+            actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client))
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
         # model sees exactly what the transcript holds), the template's default
@@ -837,6 +847,9 @@ def _retry_run(cid: str, sid: str, body, request: Request,
                client: LLMClient, conn: dict, run):
     """The body of a retry, once the scene is reserved -- see `_chat_run` for
     why every exit from it has to be wrapped rather than audited."""
+    if character_turns.enabled():
+        return character_turns.retry(cid,sid,request,client,conn,run,
+                                      _follow_up_hook(request.app,cid,sid,client))
     # Same order as the send above, for the same reason — see there. Fenced like
     # it too: a scene replaced between the reservation and here must not collect
     # this turn's heal and retired proposal.
@@ -921,6 +934,14 @@ def post_regenerate(cid: str, sid: str, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
+    if character_turns.enabled():
+        store.responses.migrate(cid,sid)
+        messages = store.scenes.read_scene(cid,sid)["messages"]
+        rid = next((m["response_id"] for m in reversed(messages) if m.get("response_id")),None)
+        if rid is None:
+            raise HTTPException(400,detail="no response to regenerate")
+        return character_turns.regenerate_response(cid,sid,rid,request,body,client,x_grimoire_attempt)
+
     # The one-shot route override (#77), resolved here rather than inside
     # `_regenerate_run`: a body naming a connection that does not exist, or one
     # with no key, must refuse BEFORE the reservation below — past it the route
@@ -4638,6 +4659,12 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
         # for a send to reserve and detach in between, so the edit lands under a
         # turn that started after the check said there was none.
         with runs.scene_held_free(request.app, cid, sid):
+            messages = store.scenes.read_scene(cid,sid)["messages"]
+            if 0 <= index < len(messages) and messages[index].get("response_id"):
+                try:
+                    store.responses.editable(cid,sid,messages[index]["response_id"])
+                except store.responses.ResponseConflict as exc:
+                    raise HTTPException(409,detail={"kind":exc.kind,"detail":exc.detail}) from exc
             store.scenes.edit_message(cid, sid, index, content)
             # Retire the transient-state ledger from this post on (#120). An
             # edit is the one transcript change the tail filter cannot see:
@@ -4871,6 +4898,10 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
         raise HTTPException(status_code=409,
                             detail={"detail": "this replay has no model turn left to run",
                                     "kind": "replay_done"})
+    if character_turns.enabled():
+        return character_turns.start(cid,sid,request,client,conn,run,
+            actor_ref=character_turns.replay_actor(cid,sid),automatic=False,
+            note=prompts.render("scene/director_note.j2"))
     messages, breakdown = store.context.compose_turn(
         cid, sid, describe=store.prompt_log.capturing(), model=effective_model(conn))
     # No `undo_user_post` hook, unlike `post_chat`. The staged posts are not

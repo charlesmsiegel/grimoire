@@ -180,6 +180,9 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # and the record disagree, and a recovery landing in it discards the only
     # surviving copy of what the player typed.
     "store.attempts",
+    "store.responses",
+    "store.response_snapshots",
+    "store.appearances.transitions",
     # `ensure_identity` is a read-modify-write of a whole scene file like every
     # other mutator in the package, and wears the same `@locking._serialized`.
     # Two unserialized callers would each mint an identity and one would win,
@@ -431,7 +434,6 @@ OUTSIDE_DOMAIN: dict[str, str] = {
 #: code now has.
 UNREVIEWED: frozenset[str] = frozenset({
     "store.appearances.paths",         # was store.appearances
-    "store.appearances.transitions",   # was store.appearances
     "store.appearances.versions",      # was store.appearances
     "store.assets",
     "store.campaign_climate",

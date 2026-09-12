@@ -22,6 +22,7 @@ from .. import (
     pins,
     prompt_log,
     relationship_history,
+    responses,
     scene_ids,
     scene_refs,
     steering,
@@ -213,6 +214,7 @@ def delete_scene(cid: str, sid: str) -> None:
     # refusal would report a FAILED delete while the surviving scene had already
     # lost its commit-ledger state and its parked alternates for good. Failing at
     # the top costs nothing but the request.
+    responses.drop_scene(cid,sid)
     prompt_log.forget_scene(cid, sid)
     appearances_paths.forget_presence(cid, sid)
     # A scene id is recycled -- the numbering reuses the highest deleted number,

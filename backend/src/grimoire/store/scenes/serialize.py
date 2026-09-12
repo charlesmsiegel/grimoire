@@ -8,6 +8,7 @@ disk, and `lifecycle.py` is its only caller.
 
 from __future__ import annotations
 
+import json
 import re
 
 from .. import scene_ids
@@ -324,7 +325,17 @@ def _parse_messages(body: str, players: frozenset[str]) -> list[dict]:
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
         speaker, role = _speaker_and_role(m, players)
-        msg = {"role": role, "content": body[start:end].strip()}
+        content = body[start:end].strip()
+        metadata = {}
+        identity = re.match(r"<!-- grimoire-response (\{.*?\}) -->\s*", content)
+        if identity:
+            try:
+                candidate = json.loads(identity.group(1))
+                metadata = {k: v for k, v in candidate.items() if k in RESPONSE_METADATA}
+                content = content[identity.end():]
+            except (ValueError, AttributeError):
+                pass
+        msg = {"role": role, "content": content, **metadata}
         if speaker:
             msg["speaker"] = speaker
         messages.append(msg)
@@ -339,8 +350,20 @@ def _append_block(body: str, block: str) -> str:
     return (body.rstrip() + "\n\n" + block) if body.strip() else block
 
 
+RESPONSE_METADATA = ("response_part", "response_id", "response_status", "response_can_reroll",
+                     "context_changed")
+
+
+def _message_block(m: dict) -> str:
+    metadata = {k: m[k] for k in RESPONSE_METADATA if k in m}
+    content = m["content"]
+    if metadata:
+        content = "<!-- grimoire-response " + json.dumps(metadata) + " -->\n" + content
+    return _block(m["role"], m.get("speaker"), content)
+
+
 def _serialize_messages(messages: list[dict]) -> str:
     body = ""
     for m in messages:
-        body = _append_block(body, _block(m["role"], m.get("speaker"), m["content"]))
+        body = _append_block(body, _message_block(m))
     return body

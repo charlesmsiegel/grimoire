@@ -117,7 +117,8 @@ def _message(m: dict) -> dict:
     """One transcript message as the backlog stores it: what `append_message`
     and `append_reply` need to write it back, and nothing else."""
     return {"role": m.get("role", "assistant"), "speaker": m.get("speaker") or "",
-            "content": m.get("content", "")}
+            "content": m.get("content", ""),
+            **{key:m[key] for key in scenes_serialize.RESPONSE_METADATA if key in m}}
 
 
 def _segment(messages: list[dict], cut: int, sizes: list[int]) -> list[dict]:
@@ -196,7 +197,7 @@ def preview(cid: str, sid: str, index: int) -> dict:
     """
     scene = scenes_read.read_scene(cid, sid)     # raises SceneNotFound
     messages = scene["messages"]
-    if index < 1 or index >= len(messages):
+    if index < 0 or index >= len(messages):
         raise IndexError(index)
     sizes = scenes_turns._parse_turn_sizes(scene["meta"].get("turn_sizes", ""))
     steps = _segment(messages, index, sizes)
@@ -256,7 +257,7 @@ def begin(cid: str, sid: str, index: int) -> dict:
     loss it was written to prevent.
 
     Raises `scenes.SceneNotFound`, `IndexError` for an index that would replay
-    nothing (or would empty the scene), and `ReplayError` for a span this cannot
+    nothing and `ReplayError` for a span this cannot
     honestly rebuild.
     """
     with locks.campaign_lock(cid):
@@ -276,9 +277,7 @@ def begin(cid: str, sid: str, index: int) -> dict:
                               "that one first")
         scene = scenes_read.read_scene(cid, sid)     # raises SceneNotFound
         messages = scene["messages"]
-        if index < 1 or index >= len(messages):
-            # `index < 1` rather than `< 0`: replaying from the first post would
-            # leave an empty transcript with nothing for the model to answer.
+        if index < 0 or index >= len(messages):
             raise IndexError(index)
         if _moves(messages, index):
             raise ReplayError(BLOCKED_TRANSITION)
@@ -315,12 +314,10 @@ def _append_steps(cid: str, sid: str, steps: list[dict]) -> int:
     for step in steps:
         if step.get("kind") == "generation":
             scenes_write.append_reply(
-                cid, sid, [{"speaker": m["speaker"] or None, "content": m["content"]}
-                           for m in step["messages"]])
+                cid, sid, [{**m,"speaker":m["speaker"] or None} for m in step["messages"]])
         else:
             for m in step["messages"]:
-                scenes_write.append_message(cid, sid, m["role"], m["content"],
-                                            speaker=m["speaker"] or None)
+                scenes_write.append_messages(cid,sid,[{**m,"speaker":m["speaker"] or None}])
         written += len(step["messages"])
     return written
 
@@ -348,8 +345,7 @@ def stage(cid: str) -> dict:
                               "try it again before running the next one")
         if not rec.get("staged") and pending[0]["kind"] == "verbatim":
             for m in pending[0]["messages"]:
-                scenes_write.append_message(cid, sid, m["role"], m["content"],
-                                            speaker=m["speaker"] or None)
+                scenes_write.append_messages(cid,sid,[{**m,"speaker":m["speaker"] or None}])
             # The COUNT, not a flag. `accept` has to tell a replayed reply from
             # the originals staged in front of it, and both raise the
             # transcript's length -- so the count is what its guard subtracts.

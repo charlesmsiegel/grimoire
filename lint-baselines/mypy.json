@@ -12,7 +12,6 @@
     "union-attr": 2
   },
   "backend/src/grimoire/routes/mechanics.py": {
-    "assignment": 1,
     "index": 1
   },
   "backend/src/grimoire/routes/scenes.py": {

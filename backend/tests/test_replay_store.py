@@ -98,9 +98,9 @@ def test_a_span_that_moves_the_scene_is_refused_before_anything_is_cut(cid, sid)
     assert replay.state(cid) is None
 
 
-def test_replaying_from_the_first_post_is_refused(cid, sid):
-    """It would leave an empty transcript with nothing for the model to answer."""
-    for index in (0, -1, 4, 99):
+def test_replaying_outside_the_transcript_is_refused(cid, sid):
+    """The opener is replayable; negative and past-end positions are not."""
+    for index in (-1, 4, 99):
         with pytest.raises(IndexError):
             replay.begin(cid, sid, index)
 

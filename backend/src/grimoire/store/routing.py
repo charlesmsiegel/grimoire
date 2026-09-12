@@ -56,7 +56,7 @@ ROUTES: tuple[Route, ...] = (
     Route("scene", "Scene turns",
           "Every streamed turn in play: sends, retries, regenerations, director "
           "turns, replayed turns and mechanics continuations.",
-          ("chat", "retry", "regenerate", "director", "replay", "continuation"), True),
+          ("chat", "retry", "regenerate", "director", "replay", "continuation", "response-selector"), True),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",
@@ -71,7 +71,7 @@ ROUTES: tuple[Route, ...] = (
           ("rolling-summary", "scene-break"), True),
     Route("suggestions", "Scene suggestions",
           "Suggested next scenes, and the metadata read out of a scene description.",
-          ("suggestions", "intent"), True),
+          ("suggestions", "intent", "character-from-passage"), True),
     Route("voice", "Voice anchors & drift",
           "Drafted voice anchors, and the drift check against them. A campaign "
           "override reaches its own cast; a world character's anchor is drafted "

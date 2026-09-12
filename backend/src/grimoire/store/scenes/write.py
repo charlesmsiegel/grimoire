@@ -10,8 +10,11 @@ in a single write — see `turns._set_turn_sizes`.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from .. import atomic, rolling_summary, scene_break, turnstate
 from ..appearances import cast
+from ..appearances import paths as appearance_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id
 from . import locking, paths, read, serialize, turns
@@ -129,7 +132,7 @@ def append_messages(cid: str, sid: str, messages: list[dict],
     # measured 7.8s of pure string copying against 3.8ms for the join, all of
     # it inside the campaign lock. Fixing the I/O without fixing this fixes the
     # smaller half.
-    blocks = [serialize._block(m["role"], m.get("speaker"), m["content"]) for m in messages]
+    blocks = [serialize._message_block(m) for m in messages]
     if blocks:
         tail = "\n\n".join(b.rstrip("\n") for b in blocks) + "\n"
         body = (body.rstrip() + "\n\n" + tail) if body.strip() else tail
@@ -167,7 +170,7 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     for seg in kept:
         body = serialize._append_block(
-            body, serialize._block("assistant", seg.get("speaker"), seg["content"]))
+            body, serialize._message_block({"role": "assistant", **seg}))
     sizes = turns._parse_turn_sizes(meta.get("turn_sizes", "")) + [len(kept)]
     meta["turn_sizes"] = ",".join(str(n) for n in sizes)
     meta["updated"] = now_iso()
@@ -234,6 +237,7 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> dict:
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     messages = read.read_scene(cid, sid)["messages"]
+    presence = _presence_snapshot(cid,sid)
     keep = len(messages) - read.trailing_transitions(messages)
     tail = messages[keep:]          # transitions, preserved verbatim and in order
     messages = messages[:keep]
@@ -263,6 +267,8 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> dict:
         del messages[cut:]
     meta["updated"] = now_iso()
     turns._set_turn_sizes(meta, sizes)
+    retained = {i:i for i in range(cut)} | {keep+j:cut+j for j in range(len(tail))}
+    appearance_paths.remap_presence(cid,sid,retained,len(messages)+len(tail))
     atomic.write_text(p, dump_frontmatter(
         meta, serialize._serialize_messages(messages + tail)))
     # Retire the transient-state ledger from the cut (#120). Here rather than in
@@ -296,7 +302,7 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> dict:
     # is what the restore checks it still sees: anything written since means the
     # tail is no longer the one this took from.
     return {"messages": removed, "size": size, "kept": len(messages),
-            "turnstate": parked}
+            "turnstate": parked, "presence":presence}
 
 
 @locking._serialized
@@ -333,6 +339,8 @@ def restore_trailing_assistant_run(cid: str, sid: str, token: dict) -> bool:
     meta["updated"] = now_iso()
     turns._set_turn_sizes(meta, sizes)
     atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(body)))
+    if "presence" in token:
+        _restore_presence(cid,sid,token["presence"])
     # The transient state the removal parked, back at the indices it held. Safe
     # to re-file at those exact indices because the restore is refused unless
     # the transcript below the trailing transitions is still the one the removal
@@ -394,6 +402,7 @@ def remove_trailing_user_post(cid: str, sid: str, index: int, content: str) -> b
         return False
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["updated"] = now_iso()
+    appearance_paths.remap_presence(cid,sid,{i:i for i in range(len(messages)-1)},len(messages)-1)
     atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(messages[:-1])))
     return True
 
@@ -410,8 +419,9 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     messages = read.read_scene(cid, sid)["messages"]
-    kept = messages[:from_index] + [
-        m for m in messages[from_index:] if m.get("speaker") == serialize.ROLL_SPEAKER]
+    retained = [i for i,m in enumerate(messages) if i < from_index or m.get("speaker") == serialize.ROLL_SPEAKER]
+    kept = [messages[i] for i in retained]
+    appearance_paths.remap_presence(cid,sid,{old:new for new,old in enumerate(retained)},len(kept))
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     # Trimming drops model blocks, so the tracked suffix must shrink to match or
     # segmentation is left describing blocks that no longer exist. Whole
@@ -504,6 +514,7 @@ def delete_from(cid: str, sid: str, index: int) -> int:
     if index < 0 or index >= len(messages):
         raise IndexError(index)
     kept = messages[:index]
+    appearance_paths.remap_presence(cid,sid,{i:i for i in range(index)},len(kept))
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     sizes = turns._parse_turn_sizes(meta.get("turn_sizes", ""))
     prefix = max(len(turns._model_blocks(messages)) - sum(sizes), 0)  # untracked legacy blocks
@@ -591,6 +602,10 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
         raise RollMessageImmutable(index)
     before = turns._model_blocks(messages)
     messages[index]["content"] = content.strip()
+    for later in messages[index+1:]:
+        if later.get("response_id"):
+            later["context_changed"] = True
+    turnstate.supersede(cid,sid,index)
     # Re-parse the body we are about to store rather than reading it back after
     # writing: the edited text is re-split at read time, so the new block count
     # is only knowable from the serialized form — and body and boundaries have
@@ -753,3 +768,35 @@ def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
     meta["done"] = "true"
     meta["updated"] = now_iso()
     atomic.write_text(p, dump_frontmatter(meta, body))
+
+
+@locking._serialized
+def replace_messages(cid: str, sid: str, messages: list[dict], *, preserve_turn_sizes: bool = False) -> None:
+    """Publish an identity-preserving transcript mutation in one atomic write."""
+    p = paths._scene_path(cid, sid)
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["updated"] = now_iso()
+    # Individual response boundaries are authoritative; old combined boundaries
+    # cannot describe arbitrary middle deletion/replacement.
+    if not preserve_turn_sizes:
+        meta.pop("turn_sizes", None)
+    atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(messages)))
+
+
+def _presence_snapshot(cid,sid):
+    return {ref:deepcopy(rec.get("presence",{}).get(sid))
+            for ref,rec in appearance_paths.record(cid).items()}
+
+
+def _restore_presence(cid,sid,snapshot):
+    # Called only from the serialized rollback that restores the same transcript.
+    data = appearance_paths.record(cid)
+    for ref,intervals in snapshot.items():
+        if ref not in data:
+            continue
+        presence = data[ref].setdefault("presence",{})
+        if intervals is None:
+            presence.pop(sid,None)
+        else:
+            presence[sid] = deepcopy(intervals)
+    appearance_paths._write(cid,data)

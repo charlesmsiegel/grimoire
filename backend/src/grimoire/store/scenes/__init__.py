@@ -111,6 +111,7 @@ from .write import (  # noqa: F401
     mark_absorbed,
     remove_trailing_assistant_run,
     remove_trailing_user_post,
+    replace_messages,
     restore_trailing_assistant_run,
     set_pcless,
     set_response,
