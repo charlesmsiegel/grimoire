@@ -1197,7 +1197,7 @@ function hangingChat(deltas: string[] = []) {
   };
 }
 
-test("a turn in flight offers Stop in place of Send", async () => {
+test("a turn in flight offers Stop beside the disabled composer action", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.chat as any).mockImplementation(hangingChat(["The tide "]));
   renderCampaign();
@@ -1209,7 +1209,7 @@ test("a turn in flight offers Stop in place of Send", async () => {
   fireEvent.click(stop);
   // back to a composer that can send again, with no error banner: the player
   // asked for this, and the partial the backend kept arrives with the re-fetch
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   expect(screen.queryByText(/aborted/i)).toBeNull();
   expect(api.getScene).toHaveBeenCalled();
 });
@@ -1244,7 +1244,7 @@ test("Stop tells the run to stop, not just this socket", async () => {
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
 
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   expect(api.cancelRun).toHaveBeenCalledWith("run", "s1", "run-7");
 });
 
@@ -1273,7 +1273,7 @@ test("Stop before the run frame arrives cancels nothing rather than the wrong ru
   fireEvent.change(ta, { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   (api.cancelRun as any).mockClear();
 
   // A second turn whose leading frame never arrives.
@@ -1281,7 +1281,7 @@ test("Stop before the run frame arrives cancels nothing rather than the wrong ru
   fireEvent.change(await screen.findByRole("textbox"), { target: { value: "again?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
 
   expect(api.cancelRun).not.toHaveBeenCalled();
 });
@@ -1302,7 +1302,7 @@ test("Stop cancels a turn whose leading frame never arrived", async () => {
   fireEvent.change(ta, { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
 
   // Cancelled by ATTEMPT, not by looking the run up first. A lookup is a
   // one-shot question and the POST may still be in the server's setup, so it
@@ -1506,7 +1506,7 @@ test("a reattach that could not connect keeps the scene locked", async () => {
 
   // Nothing established what became of that run, so nothing acts as if it had.
   expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /(send ▸|continue ▶)/i })).toBeNull();
+  expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeDisabled();
 });
 
 test("and a later pass that finds nothing running is what releases it", async () => {
@@ -1527,7 +1527,7 @@ test("and a later pass that finds nothing running is what releases it", async ()
     { run: { id: "r-live", attempt_id: "x", state: "landed", next_index: 4 } });
   act(() => { document.dispatchEvent(new Event("visibilitychange")); });
 
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeEnabled());
 });
 
 test("Stop on an adopted run keeps polling by run id, not by an empty attempt", async () => {
@@ -1563,7 +1563,7 @@ test("Stop on an adopted run keeps polling by run id, not by an empty attempt", 
   await screen.findByText(/The tide/);
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
 
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeEnabled());
   // both rounds by id; the empty attempt was never asked about
   expect((api.cancelRun as any).mock.calls.length).toBeGreaterThan(1);
   expect(api.cancelAttempt).not.toHaveBeenCalled();
@@ -1685,7 +1685,7 @@ test("a finished run found by that lookup is left alone", async () => {
 
   renderCampaign();
 
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeEnabled());
   expect(api.attachRun).not.toHaveBeenCalled();
 });
 
@@ -1727,7 +1727,7 @@ test("a Stop confirmed once the request reserves does settle", async () => {
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
 
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeEnabled());
   expect(screen.queryByText(/may still be generating/i)).toBeNull();
 });
 
@@ -1854,9 +1854,9 @@ test("an unstopped turn keeps Stop, so the player can try again", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
 
   expect(await screen.findByText(/may still be generating/i)).toBeInTheDocument();
-  // still Stop, not Send: the run may be alive and the player needs the button
+  // Stop stays available and Send stays disabled while the run may be alive.
   expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /(send ▸|continue ▶)/i })).toBeNull();
+  expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeDisabled();
 });
 
 test("and the recovery pass is what eventually lets go", async () => {
@@ -1877,7 +1877,7 @@ test("and the recovery pass is what eventually lets go", async () => {
     run: { id: "r", attempt_id: "a", state: "landed", next_index: 2 } });
   act(() => { document.dispatchEvent(new Event("visibilitychange")); });
 
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeEnabled());
 });
 
 test("Stop keeps asking while the server says the run is still unwinding", async () => {
@@ -1895,7 +1895,7 @@ test("Stop keeps asking while the server says the run is still unwinding", async
   fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
 
   // three rounds: two that answered `running`, one that answered terminal
   expect((api.cancelAttempt as any).mock.calls).toHaveLength(3);
@@ -1938,11 +1938,11 @@ test("Stop holds the scene until the run is really over", async () => {
   // `busy` alone, so a Send button here IS a send the backend would refuse.
   await waitFor(() => expect(api.cancelRun).toHaveBeenCalled());
   expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /(send ▸|continue ▶)/i })).toBeNull();
+  expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeDisabled();
 
   release!();
   // and once the run really is over, the composer comes back
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeEnabled());
   expect((api.chat as any).mock.calls).toHaveLength(1);
 });
 
@@ -2204,7 +2204,7 @@ test("the scene being generated into cannot be renamed mid-turn", async () => {
   expect(screen.getByRole("button", { name: /rename scene/i })).toBeDisabled();
   expect(screen.getByRole("button", { name: /delete scene/i })).toBeDisabled();
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   flushed = true;                            // the shielded write lands
   await waitFor(() =>
     expect(screen.getByRole("button", { name: /rename scene/i })).not.toBeDisabled());
@@ -2225,7 +2225,7 @@ test("the scene stays locked while the cancelled turn's flush is still coming", 
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   // Send is back — the turn is over as far as the composer is concerned —
   // but the write it is waiting for has not landed, so the scene stays locked.
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   await new Promise((r) => setTimeout(r, 400));   // past the first two poll ticks
   expect(screen.getByRole("button", { name: /rename/i })).toBeDisabled();
 });
@@ -2259,7 +2259,7 @@ test("a manual roll cannot land in the window a cancelled reroll restores into",
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   // Send is back, so `busy` has cleared — but the abort write that restores
   // the deleted reply has not landed yet, and a roll now would defeat it.
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   await new Promise((r) => setTimeout(r, 400));   // past the first two poll ticks
   const roll = screen.getByRole("button", { name: /roll dice/i });
   expect(roll).toBeDisabled();
@@ -2553,7 +2553,7 @@ test("End scene stays disabled while the cancelled turn's flush is still coming"
   fireEvent.change(ta, { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });   // busy is clear
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());   // busy is clear
   await new Promise((r) => setTimeout(r, 400));                 // still flushing
   expect(screen.getByRole("button", { name: /end scene/i })).toBeDisabled();
 });
@@ -2680,7 +2680,7 @@ test("a poll fetch already in flight cannot clear a new turn's preview", async (
   fireEvent.change(ta, { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
 
   releaseFetch = () => {};                       // the next getScene blocks
   const before = (api.getScene as any).mock.calls.length;
@@ -2793,7 +2793,7 @@ test("the refresh right after a cancel cannot wipe the next turn's preview", asy
   holdRefresh = () => {};                       // the post-cancel refresh parks
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   await waitFor(() => expect(holdRefresh).not.toBe(null));
-  await screen.findByRole("button", { name: /continue ▶/i });   // Send is live again
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());   // Send is live again
 
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "again" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
@@ -2835,7 +2835,7 @@ test("Stop after the done frame is a finished turn, not a cancellation", async (
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   // spent by the reply that did land, so it must not ride the next turn
   await waitFor(() => expect(picker).not.toHaveValue("terse"));
 });
@@ -2928,7 +2928,7 @@ test("a cancel after the request landed leaves the composer alone", async () => 
   fireEvent.change(ta, { target: { value: "I draw my blade." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   expect(screen.getByRole("textbox")).toHaveValue("");
 });
 
@@ -3034,7 +3034,7 @@ test("the post-cancel poll stops once a new turn owns the view", async () => {
   fireEvent.change(ta, { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await screen.findByRole("button", { name: /continue ▶/i });   // cancel settled
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());   // cancel settled
   const afterCancel = (api.getScene as any).mock.calls.length;
 
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "again" } });
@@ -7557,13 +7557,14 @@ test("a turn that kept generating while the tab was away is read back on return"
     onEvent({ run: { id: "run-9", attempt_id: "a", state: "running", next_index: 1 } });
     throw new Error("network");
   });
-  (api.findRun as any).mockResolvedValue({
+  (api.findRun as any).mockResolvedValueOnce({ run: null }).mockResolvedValue({
     run: { id: "run-9", attempt_id: "a", state: "running", next_index: 4 } });
   // The transcript grows ONLY once the reattach has actually run, which is
   // what makes this discriminate. Returning the narration unconditionally
   // would let the refetch that follows Stop show it, and the test would pass
   // against an implementation that detects the live run and returns.
   let attached = false;
+  let resume: () => void = () => {};
   (api.getScene as any).mockImplementation(async () => ({
     meta: {},
     messages: attached
@@ -7572,8 +7573,11 @@ test("a turn that kept generating while the tab was away is read back on return"
   }));
   (api.attachRun as any).mockImplementation(async (
     _c: string, _s: string, _r: string, _from: number, onEvent: any) => {
+    onEvent({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+    await new Promise<void>((resolve) => { resume = resolve; });
     attached = true;
     onEvent({ delta: "The lamps are already lit." });
+    onEvent({ response_end: { id: "a", status: "complete" } });
     onEvent({ done: true });
   });
 
@@ -7581,12 +7585,15 @@ test("a turn that kept generating while the tab was away is read back on return"
   fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   await waitFor(() => expect(api.chat).toHaveBeenCalled());
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
 
   act(() => { document.dispatchEvent(new Event("visibilitychange")); });
 
   await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
+  expect(await screen.findByRole("status", { name: "Mara is responding" })).toBeVisible();
+  expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled();
+  await act(async () => resume());
   expect(await screen.findByText(/The lamps are already lit\./)).toBeInTheDocument();
+  expect(screen.queryByRole("status", { name: "Mara is responding" })).not.toBeInTheDocument();
 });
 
 test("the reattach asks from one past what was read, not from the live tail", async () => {
@@ -7616,7 +7623,7 @@ test("the reattach asks from one past what was read, not from the live tail", as
   fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   await waitFor(() => expect(api.chat).toHaveBeenCalled());
-  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  await waitFor(() => expect(screen.getByRole("button", { name: /(send ▸|continue ▶)/i })).toBeEnabled());
 
   act(() => { document.dispatchEvent(new Event("visibilitychange")); });
 
@@ -7970,4 +7977,47 @@ test("streaming response boundaries display separate speakers and Stop remains t
   expect(second).toHaveTextContent("Winifred");
   expect(first).not.toBe(second);
   fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
+});
+
+
+test("speaker progress appears before prose and moves to the next NPC on handoff", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  let emit: Parameters<typeof api.chat>[3] = () => {};
+  let finish: () => void = () => {};
+  vi.mocked(api.chat).mockImplementation((_cid, _sid, _text, onEvent) => new Promise((resolve) => {
+    emit = onEvent;
+    finish = () => { onEvent({ done: true }); resolve(); };
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "I wait." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled());
+  // Selection has not named anyone yet, but a second click must not launch a run.
+  fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+  expect(api.chat).toHaveBeenCalledOnce();
+  act(() => emit({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } }));
+  expect(await screen.findByRole("status", { name: "Mara is responding" })).toBeVisible();
+  expect(screen.getByRole("button", { name: /Stop/ })).toBeEnabled();
+  act(() => {
+    emit({ delta: 'She closes the book. "Ready."' });
+    emit({ response_end: { id: "a", status: "complete" } });
+    emit({ response_start: { id: "b", speaker: "Winifred", actor_ref: "characters:winifred" } });
+  });
+  expect(await screen.findByRole("status", { name: "Winifred is responding" })).toBeVisible();
+  expect(screen.queryByRole("status", { name: "Mara is responding" })).not.toBeInTheDocument();
+  expect(screen.getByText('"Ready."').closest(".streaming-response"))
+    .toHaveTextContent('She closes the book. "Ready."');
+  expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled();
+  act(() => {
+    emit({ delta: '"So am I."' });
+    emit({ response_end: { id: "b", status: "complete" } });
+  });
+  expect(screen.queryByRole("status", { name: "Winifred is responding" })).not.toBeInTheDocument();
+  expect(screen.getByText('"So am I."').closest(".streaming-response")).toHaveTextContent("Winifred");
+  expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled();
+  await act(async () => finish());
+  await waitFor(() => expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled());
+  expect(screen.queryByText('"So am I."')).not.toBeInTheDocument();
+  expect(screen.queryByRole("status", { name: /is responding/ })).not.toBeInTheDocument();
 });

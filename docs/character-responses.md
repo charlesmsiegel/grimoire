@@ -12,6 +12,12 @@ call. Missing or invalid routing metadata ends the sequence.
 
 ## During play
 
+Individual responses use prose with quoted speech; the application supplies the
+speaker name. Combined mode retains labelled script blocks. Continue stays visible
+but disabled while the application selects speakers and generates their replies.
+As each speaker starts, their contribution shows **Name is responding…**, even
+before the first words arrive. Stop remains available alongside Continue.
+
 - **Continue** selects one additional response, then gives control back.
 - **Respond as** requests one response from the selected present NPC. Both
   actions permit a character who already responded to speak again.
@@ -59,7 +65,9 @@ retaining the updated continuity and voice prompts.
 Model guidance remains automatic: the actual dispatched model selects an editable
 profile in `templates/scene/model_guidance/`. Unknown models receive no extra
 profile. Historical rerolls use frozen prompt variants; a model without a saved
-historical variant uses the frozen unprofiled context.
+historical variant uses the frozen unprofiled context. Later prompt edits apply
+to new responses. To change the formatting of a historical reroll, supply a
+response steer such as "Use prose with double quotation marks around speech."
 
 The automated checks establish routing, persistence, privacy boundaries and UI
 behavior. Voice naturalness still needs comparison during play; no automated

@@ -232,3 +232,18 @@ def test_director_roll_resolution_is_packed_and_frozen(cast_scene):
     restored = model_guidance.PreparedMessages.from_snapshot(messages.snapshot(), "unknown")
     assert restored[-1] == messages[-1]
     assert any(m["role"] == "user" and m["content"] == "Wait for the attempt." for m in restored)
+
+
+@pytest.mark.parametrize("actor_ref", ["characters:mara", "grimoire"])
+def test_assigned_reply_format_replaces_the_ensemble_script_contract(cast_scene, actor_ref):
+    _, individual = context.compose_turn(*cast_scene, actor_ref=actor_ref)
+    _, combined = context.compose_turn(*cast_scene)
+    individual_format = next(row["text"] for row in individual["sections"]
+                             if row["id"] == "response_format")
+    combined_format = next(row["text"] for row in combined["sections"]
+                           if row["id"] == "response_format")
+    # Ensemble labels are a serialization requirement only in combined mode.
+    # Keeping that instruction in an assigned writer's prompt invites it to
+    # imitate a whole script despite the one-actor contract appended later.
+    assert "**<Name>:**" not in individual_format
+    assert "**<Name>:**" in combined_format

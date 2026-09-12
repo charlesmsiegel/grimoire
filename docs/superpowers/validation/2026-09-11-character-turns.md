@@ -84,3 +84,27 @@ follow-up behavior.
 Worker provider quota prevented a fresh independent review after the final fixes.
 The controller completed source review, red-to-green reproductions, and final
 verification; no fresh independent post-fix approval is claimed.
+
+
+## Follow-up: dialogue format and speaker progress
+
+Individual writers now receive prose formatting without ensemble script labels,
+and the shared reply format explicitly requires double-quoted speech. Combined
+mode retains the labels its parser requires. The stream preview shows each named
+response before the first delta, retires its progress on response_end, and clears
+speaker boundaries with the preview. Continue remains visible and disabled through
+the existing busy latch; Stop occupies the same action column above it.
+
+Verification: 352 CampaignView tests passed, including initial selection, a second
+speaker with no prose yet, completion, cancellation and a held reattached response.
+22 actor-context tests and 354 context/frozen-campaign/cassette/offline-eval tests
+passed; the template harness passed all 126 checks. Frontend typecheck and production
+build passed; ESLint remained at its 844-finding baseline. Only prompt output changed
+in the deliberately refreshed snapshot; the original frozen home was untouched.
+
+Root diff/spec review checked that speech punctuation is requested in prompts,
+not imposed on narration by a text rewrite; raw streamed content stays separate
+from display boundaries; response_end does not release Continue between speakers;
+and reconnect/Stop retain the existing parent-run latch. No fresh independent
+review or paid model-quality evaluation was performed for this follow-up. Browser
+visual verification remains unavailable as recorded above.

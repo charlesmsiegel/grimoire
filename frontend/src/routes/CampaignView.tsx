@@ -587,7 +587,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
   const [responseActor, setResponseActor] = useState("");
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; offset: number }[]>([]);
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; offset: number; ended?: boolean }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
@@ -1437,6 +1437,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setHasUserPost(scene.has_user_message ?? null);
     setSceneResponsePreset(scene.meta.response_preset ?? "");
     setStreaming("");
+    setStreamingSpeakers([]);
     setCtxKey((n) => n + 1);
     // `total`, not `messages.length`: the fetch is windowed now (#94), so once a
     // transcript is longer than a page the window size is a constant and would
@@ -2254,6 +2255,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
+        } else if (e.response_end) {
+          const endedId = e.response_end.id;
+          setStreamingSpeakers((prior) => prior.map((part) =>
+            part.id === endedId ? { ...part, ended: true } : part));
         }
         else if (e.delta) { acc += e.delta; setStreaming(acc); }
         else if (e.error) {
@@ -2290,7 +2295,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       //
       // `abortRef` alone is cleared, because the adoption pass -- which is what
       // resolves this -- bows out while it is set.
-      if (!isAbortError(err)) setStreaming("");
+      if (!isAbortError(err)) {
+        setStreaming("");
+        setStreamingSpeakers([]);
+      }
       abortRef.current = null;
       // UNLESS a Stop is what aborted it. `runStream`'s finally is where a
       // pending cancel is normally waited on, and an adopted run never goes
@@ -2307,6 +2315,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           runRef.current = null;
           setStreamingId(null);
           setStreaming("");
+          setStreamingSpeakers([]);
           setBusy(false);
         } catch {
           setError({ text: "could not reach the server to stop this turn — it "
@@ -2326,6 +2335,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // Holding the preview means the reader sees the reply either way.
     await selectScene(sid).catch(() => -1);
     setStreaming("");
+    setStreamingSpeakers([]);
     // The REPLAY PANEL does not read the transcript, it reads the replay
     // session -- and it loads that once, on `cid`/`sid`. So an adopted run
     // that happened to be a replay turn refreshes everything the panel does
@@ -2392,6 +2402,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       runRef.current = null;
       setStreamingId(null);
       setStreaming("");
+      setStreamingSpeakers([]);
       setBusy(false);
       return;
     }
@@ -2460,6 +2471,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     runRef.current = null;
     setStreamingId(null);
     setStreaming("");
+    setStreamingSpeakers([]);
     setBusy(false);
     await selectScene(sid).catch(() => -1);
     // FAILED WHILE WE WERE AWAY, and the server knows why. The rest of recovery
@@ -2602,6 +2614,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
+        } else if (e.response_end) {
+          const endedId = e.response_end.id;
+          setStreamingSpeakers((prior) => prior.map((part) =>
+            part.id === endedId ? { ...part, ended: true } : part));
         } else if (e.delta) {
           acc += e.delta;
           setStreaming(acc);
@@ -2780,6 +2796,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // live turn would keep generating with nothing to stop it.
         runRef.current = null;
         setStreaming("");
+        setStreamingSpeakers([]);
         setBusy(false);
         // NOT released with `busy`. Review caught that clearing it here unlocks
         // the scene while `on_abort` may still be writing to it: the poll below
@@ -4746,9 +4763,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 </div>
               </div>
             )}
-            {streaming && (
+            {(streaming || (busy && streamingId === activeId && streamingSpeakers.length > 0)) && (
               <div className="run">
-                {(messages.length === 0 ||
+                {streamingSpeakers.length === 0 && (messages.length === 0 ||
                   speakerOf(messages[messages.length - 1]) !== labels.assistant) && (
                   <div className="plate">
                     <span className="plate-avatar"><Portrait src={null} name={labels.assistant} /></span>
@@ -4770,9 +4787,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                       {streamingSpeakers.map((part, index) => <div className="streaming-response" key={part.id}>
                         <strong>{part.speaker}</strong>
                         <RenderedMarkdown content={hideArtHandles(streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset))} />
+                        {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
+                          <div className="response-progress" role="status" aria-label={`${part.speaker} is responding`}>
+                            <span className="cursor" aria-hidden="true" /> {part.speaker} is responding…
+                          </div>
+                        )}
                       </div>)}
-                    </> : <RenderedMarkdown content={hideArtHandles(streaming)} />}
-                    <span className="cursor" />
+                    </> : <><RenderedMarkdown content={hideArtHandles(streaming)} /><span className="cursor" /></>}
                   </div>
                 </div>
               </div>
@@ -5061,19 +5082,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               <button onClick={() => void respondAs()} disabled={busy || rolling || sceneLocked || renamesInFlight > 0
                 || !cast.some((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor)}>Respond as</button>
             </div>}
-            {/* Replaces Send rather than sitting beside it: Send is already
-                disabled for the whole turn, so the slot is dead space at exactly
-                the moment a way out is wanted. */}
-            {busy ? (
-              <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>
-            ) : (
-              <button className="send" onClick={send} disabled={rolling || renamesInFlight > 0}>
-                {/* Three labels, not two: an empty box is the "next NPC round"
-                    fast path in EITHER mode (and the reason Direct does not
-                    take it away), so it keeps its own word. */}
+            {/* Selection and every handoff share the run's busy latch. Keep
+                Continue visible but unavailable until the entire run settles;
+                the separate Stop still cancels it before any prose arrives. */}
+            <div className="composer-run-actions">
+              {busy && <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>}
+              <button className="send" onClick={send} disabled={busy || rolling || renamesInFlight > 0}>
+                {/* An empty box requests one additional response in either mode. */}
                 {!input.trim() ? "Continue ▶" : directing ? "Direct 🎬" : "Send ▸"}
               </button>
-            )}
+            </div>
           </div>
           </div>
           )}

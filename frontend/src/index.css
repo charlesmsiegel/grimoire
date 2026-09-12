@@ -1005,8 +1005,10 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 }
 .inputbar .send:hover:not(:disabled) { background: var(--accent-strong); }
 .inputbar .send:disabled { background: var(--disabled); color: var(--panel); cursor: default; }
-/* Stop takes Send's slot for the length of a turn, so it has to read as a
-   different action at a glance rather than as Send having changed its label. */
+/* Stack the run actions in one column so adding Stop does not squeeze the
+   text box on a phone. Continue stays visible throughout speaker selection. */
+.composer-run-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.composer-run-actions .send.cancel-turn { min-height: 44px; }
 .inputbar .send.cancel-turn { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
 
 /* ---- response-length one-shot markers (in the composer meta strip) ---- */
@@ -1079,6 +1081,8 @@ button.primary { background: var(--accent); color: var(--on-accent); border: 1px
 .mode-option:hover:not(:disabled) { background: var(--track); color: var(--ink); }
 .mode-option.active { background: var(--accent); color: var(--on-accent); font-weight: 700; }
 .mode-option:disabled { color: var(--disabled); cursor: default; }
+.streaming-response + .streaming-response { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--rule-soft); }
+.response-progress { margin-top: 8px; color: var(--subtle); font-family: var(--fm); font-size: 11px; }
 .cursor { display: inline-block; width: 9px; height: 16px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .row {
