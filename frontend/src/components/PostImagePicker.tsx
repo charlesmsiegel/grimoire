@@ -193,8 +193,9 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
         }
         const scope = { kind: "campaign", id: cid } as const;
         const { kind, id, version } = target;
-        const detail: { versions: { id: string; name: string; images?: string[];
-                                    image_descriptions?: Record<string, string> }[] } =
+        type Shelf = { id: string; name: string; images?: string[];
+                       image_descriptions?: Record<string, string> };
+        const detail: { versions: Shelf[]; base_versions?: Shelf[] } =
           kind === "characters" ? await api.readCharacter(scope, id)
                                 : await api.readPC(scope, id);
         if (!live) return;
@@ -205,16 +206,23 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
         // belongs to an era the roster is not currently in.
         const ordered = [...detail.versions].sort(
           (a, b) => Number(b.id === version) - Number(a.id === version));
-        setGroups(ordered
-          .filter((v) => (v.images ?? []).length > 0)
-          .map((v) => ({
-            key: v.id,
-            label: v.id === version ? `${v.name} — spoke here` : v.name,
-            images: (v.images ?? []).map((name) => ({
-              name, url: api.actorImageUrl(scope, kind, id, v.id, name),
-              description: v.image_descriptions?.[name],
-            })),
-          })));
+        const shelf = (v: Shelf, label: string) => ({
+          key: v.id, label,
+          images: (v.images ?? []).map((name) => ({
+            name, url: api.actorImageUrl(scope, kind, id, v.id, name),
+            description: v.image_descriptions?.[name],
+          })),
+        });
+        const groups = ordered.map((v) =>
+          shelf(v, v.id === version ? `${v.name} — spoke here` : v.name));
+        // Last: the world versions the campaign no longer holds, passed
+        // through in the server's order. The server lists none the campaign
+        // still holds, so nothing is offered twice; the guard is cheap.
+        const held = new Set(detail.versions.map((v) => v.id));
+        for (const base of detail.base_versions ?? []) {
+          if (!held.has(base.id)) groups.push(shelf(base, `${base.name} — from the world`));
+        }
+        setGroups(groups.filter((g) => g.images.length > 0));
       } catch (err: any) {
         // `library` is deliberately left as it was — null on a first failure,
         // which is what closes the Add control (see the state above).

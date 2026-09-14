@@ -325,19 +325,53 @@ def url_for(cid: str, kind: str, rid: str, vid: str, name: str) -> str:
 
 # ---- the candidate pool ----------------------------------------------------
 
+def _base_pass_through(cid: str, kind: str, rid: str, vid: str) -> list[dict]:
+    """The world's versions of a character the campaign lacks, in the order
+    `overlay.base_versions` lists them (default first, then by id).
+
+    Characters only: the pass-through is a read of `overlay.base_versions`,
+    which exists for the character surface, and a PC's versions are the
+    campaign's own. `vid` -- the locked version -- is held by the campaign by
+    construction and so never listed; the guard is belt and braces.
+    """
+    if kind != "characters":
+        return []
+    return [b for b in overlay.base_versions(cid, rid) if b["id"] != vid]
+
+
 def _record_candidates(cid: str, kind: str, rid: str) -> list[dict]:
-    """Every described, visible image of one record, at its locked version."""
+    """Every described, visible image of one record, at its locked version --
+    and, for a character, the art of every world version the campaign lacks,
+    passed through beside it.
+
+    A handle names no version, so the pass-through is further tiers of the
+    same per-name rule the union applies between roots: a picture whose name
+    an earlier tier already uses is shadowed, not offered under a handle that
+    would resolve to the earlier one. The locked version is the first tier and
+    the base versions follow in `overlay.base_versions`' order; `_resolved`
+    walks the same tiers in the same order, which is what keeps an offer and
+    its resolution naming one picture.
+    """
     vid = _version(cid, kind, rid)
     if vid is None:
         return []
+    tiers = [(vid, overlay.read_descriptions(cid, rid, vid, base=kind))]
+    bases = _base_pass_through(cid, kind, rid, vid)
+    if bases:
+        taken = {i["name"] for i in overlay.list_images(cid, rid, vid, base=kind)}
+        for base in bases:
+            tiers.append((base["id"], {n: t for n, t in base["image_descriptions"].items()
+                                       if n not in taken}))
+            taken |= set(base["images"])
     out = []
-    for name, text in sorted(overlay.read_descriptions(cid, rid, vid, base=kind).items()):
-        if not text.strip():
-            continue   # reviewed-empty: deliberately not offered
-        out.append({"kind": kind, "id": rid, "vid": vid, "name": name,
-                    "description": text.strip(),
-                    "handle": handle_for(kind, rid, name),
-                    "url": url_for(cid, kind, rid, vid, name)})
+    for tier_vid, described in tiers:
+        for name, text in sorted(described.items()):
+            if not text.strip():
+                continue   # reviewed-empty: deliberately not offered
+            out.append({"kind": kind, "id": rid, "vid": tier_vid, "name": name,
+                        "description": text.strip(),
+                        "handle": handle_for(kind, rid, name),
+                        "url": url_for(cid, kind, rid, tier_vid, name)})
     return out
 
 
@@ -663,10 +697,20 @@ def _resolved(cid: str, kind: str, rid: str, name: str, sid: str) -> dict | None
     if vid is None:
         return None
     root = overlay.image_root(cid, rid, vid, name, base=kind)
-    if assets.image_path(root, rid, vid, name, base=kind) is None:
-        return None
-    text = overlay.read_description(cid, rid, vid, name, base=kind).strip()
-    return {"url": url_for(cid, kind, rid, vid, name), "description": text} if text else None
+    if assets.image_path(root, rid, vid, name, base=kind) is not None:
+        text = overlay.read_description(cid, rid, vid, name, base=kind).strip()
+        return {"url": url_for(cid, kind, rid, vid, name), "description": text} if text else None
+    # Not the locked version's: the base pass-through, later tiers in the same
+    # order `_record_candidates` offers them -- and only a name the locked
+    # version lacks reaches here, so a collision with it has already resolved
+    # to the tier above. Among the bases, the first that holds the name wins,
+    # which is the tier the offer came from.
+    for base in _base_pass_through(cid, kind, rid, vid):
+        if name not in base["images"]:
+            continue
+        text = base["image_descriptions"].get(name, "").strip()
+        return {"url": url_for(cid, kind, rid, base["id"], name), "description": text} if text else None
+    return None
 
 
 def resolve_handles(cid: str, text: str, sid: str) -> str:

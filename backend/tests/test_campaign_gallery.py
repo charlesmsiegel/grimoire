@@ -123,3 +123,38 @@ def test_entity_art_carries_no_version_segment(monkeypatch, tmp_path):
 def test_an_unknown_campaign_is_a_404(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     assert client.get("/api/campaigns/nope/gallery").status_code == 404
+
+
+# ---- the pass-through is served by the campaign route it is addressed to ----
+
+def test_a_purged_versions_image_is_served_through_the_campaign_route(monkeypatch, tmp_path):
+    """`base_versions` addresses a version the campaign no longer holds through
+    the campaign route; that route must answer with the world's bytes."""
+    from grimoire.store import appearances
+    home(monkeypatch, tmp_path)
+    wid, wroot, aid, vid = _world_with_hero()
+    other = characters.create_version(wroot, aid, "dark", characters.blank_card("Hero"))
+    cid = campaigns.create_campaign("C", wid)
+    appearances.pick_version(cid, "characters", aid, other)
+    detail = client.get(f"/api/campaigns/{cid}/characters/{aid}").json()
+    assert [b["id"] for b in detail["base_versions"]] == [vid]
+    r = client.get(f"/api/campaigns/{cid}/characters/{aid}/versions/{vid}/images/avatar")
+    assert r.status_code == 200
+    assert r.content == b"worldavatar"
+
+
+def test_a_stale_campaign_file_under_a_purged_version_wins_and_is_what_was_advertised(monkeypatch, tmp_path):
+    from grimoire.store import appearances
+    home(monkeypatch, tmp_path)
+    wid, wroot, aid, vid = _world_with_hero()
+    other = characters.create_version(wroot, aid, "dark", characters.blank_card("Hero"))
+    cid = campaigns.create_campaign("C", wid)
+    assets.put_image(campaigns.campaign_root(cid), aid, vid, "avatar", b"stalecopy", "png")
+    appearances.pick_version(cid, "characters", aid, other)
+    base = client.get(f"/api/campaigns/{cid}/characters/{aid}").json()["base_versions"][0]
+    r = client.get(f"/api/campaigns/{cid}/characters/{aid}/versions/{vid}/images/avatar"
+                   f"?v={base['image_v']['avatar']}")
+    assert r.status_code == 200
+    assert r.content == b"stalecopy"
+    assert base["image_v"]["avatar"] == assets.image_version(
+        assets.image_path(campaigns.campaign_root(cid), aid, vid, "avatar"))

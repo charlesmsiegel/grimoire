@@ -10,7 +10,11 @@ the world live. Rules:
 - Actors (characters/pcs): whole-dir, keyed on character.md / pc.md existing in
   the campaign — a materialized actor is authoritative for meta + versions, so
   lock-purged versions stay purged. Sidecars (tagline.md, voice_anchor.md) and
-  assets still overlay per file.
+  assets still overlay per file -- and what the overlay hides is not lost to
+  the campaign: `shadowed_images()` reaches the world's copy under a name the
+  campaign replaced, and `base_versions()` passes the world's versions through
+  when a lock purged them. Both read-only, both shown beside the campaign's
+  own rather than instead of it.
 - sync.md holds base hashes for materialized records only. Tombstones live in
   <campaign>/deleted.json (a sorted JSON list of refs); a tombstoned id counts
   as taken for uniquify, so nothing ever resurrects under a reused id.
@@ -43,6 +47,7 @@ what `forget_world_record` (at the bottom) exists to get in front of.
 
 from __future__ import annotations
 
+import filecmp
 import json
 import logging
 import shutil
@@ -1560,6 +1565,125 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
             add_deleted(cid, _asset_ref(base, aid, vid, name))
 
 
+def base_versions(cid: str, char_id: str) -> list[dict]:
+    """The world's versions of a character this campaign no longer holds, as
+    art it may look at beside the version it shows -- the pass-through.
+
+    `list_images` unions the two roots for ONE version id, which is right for
+    the version it names and blind to every other: a pick purges every sibling
+    version from the campaign (`appearances.versions._lock`), and from then on
+    the union cannot reach a version id the campaign does not have -- yet the
+    character's art is filed per version, and the pictures the player wants are
+    as likely under a purged sibling as under the locked one. This is the read
+    that fills that gap, and it is a READ: nothing here is writable
+    campaign-side.
+
+    Each version is read through the UNION, not off the world root, because the
+    union is what the campaign route serves and a `?v=` URL is cached immutable:
+    a pick unlinks a sibling's card and leaves its assets folder behind, so a
+    campaign-side file can still sit under a version the campaign no longer
+    holds, and `image_root` will serve it first. The token and the caption have
+    to name those bytes, not the world's -- `list_images` and
+    `read_descriptions` already answer for exactly that case.
+
+    Every world version the campaign lacks, the world's default first and the
+    rest by id -- one order, so a consumer that has to break a name tie
+    (`context.art`, whose handles carry no version) breaks it the same way the
+    shelf lists them. A version the campaign still holds is not listed: the
+    union already shows it. A version with no art is not listed either -- an
+    empty pass-through is nothing to show.
+
+    The same three doors close it that close the union. A detached record's
+    world id-mate is a stranger; a tombstoned record has no world; and a
+    per-image tombstone hides that picture here too, so what the campaign
+    removed stays removed. Empty when any of them is shut, or when the world no
+    longer holds the character.
+    """
+    ref = _flat_ref("characters", char_id)
+    gone = deleted(cid)
+    if ref in gone or ref in detached(cid):
+        return []
+    wroot = wroot_of(cid)
+    theirs = characters.version_ids(wroot, char_id)
+    if not theirs:
+        return []
+    held = set(characters.version_ids(char_root(cid, char_id), char_id))
+    default = characters.default_version(wroot, char_id)
+    ordered = ([default] if default in theirs else []) + [v for v in theirs if v != default]
+    out = []
+    for vid in ordered:
+        if vid in held:
+            continue
+        images = list_images(cid, char_id, vid)   # tombstones applied, campaign file first
+        if not images:
+            continue
+        out.append({
+            "id": vid,
+            "name": characters.version_label(wroot, char_id, vid),
+            "images": [i["name"] for i in images],
+            "image_v": {i["name"]: i["v"] for i in images},
+            "image_descriptions": read_descriptions(cid, char_id, vid),
+        })
+    return out
+
+
+def shadowed_images(cid: str, char_id: str, vid: str) -> list[dict]:
+    """The world's copies of one version's pictures that the union HIDES: same
+    version, same name, and a campaign file of its own under that name.
+
+    `list_images` shows one picture per name and the campaign's wins, which is
+    the right rule for a shelf and the wrong one for a reader who wants the
+    picture the campaign replaced -- the world's `gallery_1` is not gone, it is
+    unreachable. This is the read that reaches it. Read-only, like
+    `base_images`: the world's bytes, the world's cache token, the world's
+    description. Serve it from the WORLD route -- the campaign route resolves
+    that name to the campaign's file, by construction.
+
+    Same bytes are not a second picture. A demote copies the campaign's assets
+    up and a promote copies the world's down (and swaps), so same name + same
+    bytes -- under that name or any other the campaign holds in the version --
+    is the common case and is one picture, already on the shelf. A world copy
+    is listed only when NO campaign file in the version has its bytes. Byte
+    comparison rather than the cache token, which is mtime+size and differs
+    for every copy ever made -- bucketed by size first, so a version holding
+    many pictures reads only the pairs that could match.
+
+    The record doors close it as they close the union (detached, tombstoned),
+    and so does a per-image tombstone, though a name the campaign holds a
+    file under cannot normally carry one.
+    """
+    ref = _flat_ref("characters", char_id)
+    gone = deleted(cid)
+    if ref in gone or ref in detached(cid):
+        return []
+    croot = croot_of(cid)
+    mine = [p for i in assets.list_images(croot, char_id, vid)
+            if (p := assets.image_path(croot, char_id, vid, i["name"])) is not None]
+    if not mine:
+        return []
+    wroot = wroot_of(cid)
+    held = {p.stem for p in mine}
+    out = [i for i in assets.list_images(wroot, char_id, vid)
+           if i["name"] in held
+           and _asset_ref("characters", char_id, vid, i["name"]) not in gone
+           and _novel_bytes(assets.image_path(wroot, char_id, vid, i["name"]), mine)]
+    if not out:
+        return []
+    described = image_descriptions.read_all(wroot, char_id, vid, names={i["name"] for i in out})
+    return [{"name": i["name"], "v": i["v"],
+             **({"description": described[i["name"]]} if i["name"] in described else {})}
+            for i in out]
+
+
+def _novel_bytes(theirs: Path | None, mine: list[Path]) -> bool:
+    """True when `theirs` is a real file and none of `mine` holds its bytes.
+    Size first, so only the pairs that could match are read."""
+    if theirs is None:
+        return False
+    size = theirs.stat().st_size
+    return not any(p.stat().st_size == size and filecmp.cmp(theirs, p, shallow=False) for p in mine)
+
+
 # ---- payload patching: asset-derived fields come from the union ----
 
 def read_character(cid: str, char_id: str) -> dict:
@@ -1573,6 +1697,13 @@ def read_character(cid: str, char_id: str) -> dict:
         # caption a campaign-side picture with the world's sentence about a
         # different one. See its docstring.
         v["image_descriptions"] = read_descriptions(cid, char_id, v["id"])
+        # The world's copies this version's own files hide -- shown beside
+        # them, never instead of them. See `shadowed_images`.
+        v["world_shadowed"] = shadowed_images(cid, char_id, v["id"])
+    # The world's versions the campaign no longer holds, passed through beside
+    # the ones it does: a pick purges every other version from the campaign,
+    # and the union above cannot reach a version id the campaign lacks.
+    detail["base_versions"] = base_versions(cid, char_id)
     return detail
 
 

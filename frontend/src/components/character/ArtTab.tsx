@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { api, type Appearance, type EntityScope } from "../../api/client";
+import { api, type Appearance, type BaseVersion, type EntityScope, type ShadowedImage }
+  from "../../api/client";
 import { errorText } from "../../api/errors";
 import { ImageDescriptionField } from "../ImageDescriptionField";
 import { avatarSrc, withToken } from "./shared";
@@ -31,7 +32,8 @@ export function nextImageNames(count: number, hasAvatar: boolean, gallery: strin
  */
 export function ArtTab(
   { scope, wid, cid, vid, hasAvatar, galleryImages, imageTokens, descriptions, appearances,
-    worldScope, localizeProg, localizeMsg, onLocalize, onRefresh, onError, onOpenGreeting }: {
+    worldScope, baseVersions, shadowed, localizeProg, localizeMsg, onLocalize, onRefresh,
+    onError, onOpenGreeting }: {
     scope: EntityScope;
     wid: string;
     cid: string;
@@ -44,6 +46,12 @@ export function ArtTab(
     descriptions: Record<string, string>;
     appearances: Appearance[];
     worldScope: boolean;
+    /** Campaign scope: the world versions the campaign no longer holds, each
+     *  shown read-only beside this version's own. See `BaseVersion`. */
+    baseVersions?: BaseVersion[];
+    /** Campaign scope: the world's copies this version's own files hide,
+     *  shown read-only beside them. See `ShadowedImage`. */
+    shadowed?: ShadowedImage[];
     localizeProg: { done: number; total: number } | null;
     localizeMsg: string | null;
     onLocalize: () => void;
@@ -146,6 +154,67 @@ export function ArtTab(
                multiple hidden aria-label="Add images" onChange={(e) => void onAdd(e)} />
       </div>
     </div>
+
+    {/* The world's originals: pictures this version holds its own file for,
+        under the same name, so the shelf above shows the campaign's and the
+        union cannot reach the world's. Served from the WORLD route, which is
+        the only route that resolves that name to the world's bytes. Read-only
+        for the same reason the pass-through below is. */}
+    {!worldScope && (shadowed ?? []).length > 0 && (
+      <div className="card-field">
+        <div className="card-field-head">
+          <span className="data-label">The world’s originals</span>
+        </div>
+        <span className="field-hint">
+          Pictures this version replaced under the same name. The world’s copies, shown beside yours.
+        </span>
+        <div className="images-shelf">
+          {(shadowed ?? []).map((img) => {
+            const src = withToken(
+              api.actorImageUrl({ kind: "world", id: wid }, "characters", cid, vid, img.name), img.v);
+            return (
+              <figure className="shelf-tile" key={img.name}>
+                <a href={src} target="_blank" rel="noreferrer"><img alt={img.name} src={src} /></a>
+                <figcaption>{img.name}</figcaption>
+                {img.description && <span className="field-hint">{img.description}</span>}
+              </figure>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
+    {/* The pass-through: one shelf per world version the campaign no longer
+        holds, in the server's order. Read-only by design -- the pictures and
+        their descriptions are the world's, and a campaign that wants to change
+        them does it on the world page, so no tile here carries a control that
+        writes. The URLs are still campaign-scoped: the serve route falls
+        through to the world for a version the campaign does not hold. A label
+        that is not the id carries the id too, because a card's own
+        `character_version` can name two versions the same thing. */}
+    {!worldScope && (baseVersions ?? []).filter((b) => b.id !== vid).map((base) => (
+      <div className="card-field" key={base.id}>
+        <div className="card-field-head">
+          <span className="data-label">
+            From the world’s {base.name === base.id ? base.name : `${base.name} (${base.id})`} version
+          </span>
+        </div>
+        <div className="images-shelf">
+          {base.images.map((imgName) => {
+            const src = withToken(
+              api.actorImageUrl(scope, "characters", cid, base.id, imgName), base.image_v[imgName]);
+            const text = base.image_descriptions[imgName];
+            return (
+              <figure className="shelf-tile" key={imgName}>
+                <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
+                <figcaption>{imgName}</figcaption>
+                {text && <span className="field-hint">{text}</span>}
+              </figure>
+            );
+          })}
+        </div>
+      </div>
+    ))}
 
     {appearances.length > 0 && (
       <div className="card-field">

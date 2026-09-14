@@ -1755,3 +1755,185 @@ def test_a_campaign_listing_reads_one_anchor_per_campaign_side_file(monkeypatch,
     assert len(seen) == 3 + 1
     assert seen.count("mara") == 2          # world scan, then its campaign file
     assert seen.count("winifred") == 1 and seen.count("seraphine") == 1
+
+
+# ---- the world's other versions, passed through beside the campaign's ----
+
+def _base_pair(monkeypatch, tmp_path):
+    """`_actor_pair` with art on the world's default version and a description
+    for one picture, so a pass-through read has something to carry."""
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
+    assets.put_image(wroot, aid, "default", "gallery_1", PNG + b"2", "png")
+    from grimoire.store import image_descriptions
+    image_descriptions.set_description(wroot, aid, "default", "gallery_1", "at the tide gate")
+    return wroot, cid, aid
+
+
+def test_base_versions_are_the_world_versions_a_lock_purged(monkeypatch, tmp_path):
+    """Locking `dark` purges `default` from the campaign; its art passes through."""
+    wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    appearances.pick_version(cid, "characters", aid, "dark")
+    got = overlay.base_versions(cid, aid)
+    assert [b["id"] for b in got] == ["default"]
+    base = got[0]
+    assert base["name"] == "default"
+    assert base["images"] == ["avatar", "gallery_1"]
+    assert base["image_v"]["gallery_1"] == assets.image_version(
+        assets.image_path(wroot, aid, "default", "gallery_1"))
+    assert base["image_descriptions"] == {"gallery_1": "at the tide gate"}
+
+
+def test_a_non_default_world_version_passes_through_too(monkeypatch, tmp_path):
+    """The version the campaign is missing need not be the world's default:
+    locked to the default, a sibling's art is what the campaign cannot see."""
+    wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "dark", "avatar", PNG + b"3", "png")
+    appearances.pick_version(cid, "characters", aid, "default")
+    got = overlay.base_versions(cid, aid)
+    assert [(b["id"], b["images"]) for b in got] == [("dark", ["avatar"])]
+
+
+def test_base_versions_list_the_default_first_then_by_id(monkeypatch, tmp_path):
+    wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    characters.create_version(wroot, aid, "alpha", characters.blank_card("Hero"))
+    assets.put_image(wroot, aid, "alpha", "avatar", PNG + b"4", "png")
+    assets.put_image(wroot, aid, "dark", "avatar", PNG + b"3", "png")
+    characters.create_version(wroot, aid, "zed", characters.blank_card("Hero"))
+    assets.put_image(wroot, aid, "zed", "avatar", PNG + b"5", "png")
+    appearances.pick_version(cid, "characters", aid, "zed")
+    assert [b["id"] for b in overlay.base_versions(cid, aid)] == ["default", "alpha", "dark"]
+
+
+def test_a_version_the_campaign_still_holds_is_not_passed_through(monkeypatch, tmp_path):
+    """Unlocked, a thin campaign reads every world version through the
+    overlay already -- passing them through again would list each twice."""
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    assert overlay.base_versions(cid, aid) == []
+    overlay.materialize_actor(cid, "characters", aid)   # every version copied
+    assert overlay.base_versions(cid, aid) == []
+
+
+def test_base_versions_hide_what_the_campaign_tombstoned(monkeypatch, tmp_path):
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    appearances.pick_version(cid, "characters", aid, "dark")
+    overlay.delete_image(cid, aid, "default", "gallery_1")
+    base = overlay.base_versions(cid, aid)[0]
+    assert base["images"] == ["avatar"]
+    assert "gallery_1" not in base["image_descriptions"]
+
+
+def test_base_versions_absent_for_a_detached_record(monkeypatch, tmp_path):
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    appearances.pick_version(cid, "characters", aid, "dark")
+    overlay.add_detached(cid, f"characters/{aid}")
+    assert overlay.base_versions(cid, aid) == []
+
+
+def test_base_versions_absent_for_a_deleted_record(monkeypatch, tmp_path):
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    overlay.delete_actor(cid, "characters", aid)
+    assert overlay.base_versions(cid, aid) == []
+
+
+def test_base_versions_absent_when_the_world_has_no_such_character(monkeypatch, tmp_path):
+    wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    appearances.pick_version(cid, "characters", aid, "dark")
+    import shutil
+    shutil.rmtree(wroot / "characters" / aid)
+    assert overlay.base_versions(cid, aid) == []
+
+
+def test_a_purged_version_with_no_art_is_not_listed(monkeypatch, tmp_path):
+    _wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)   # no art anywhere
+    appearances.pick_version(cid, "characters", aid, "dark")
+    assert overlay.base_versions(cid, aid) == []
+
+
+def test_a_purged_versions_stale_campaign_file_is_what_the_pass_through_reports(monkeypatch, tmp_path):
+    """A pick unlinks the sibling's CARD and leaves its assets folder behind, and
+    the campaign route still serves a campaign-side file first. The token and
+    description the shelf carries must name the bytes that route will serve --
+    the union's -- or a `?v=` URL pins the wrong picture for a year."""
+    wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, "default", "gallery_1", b"stale-campaign-copy", "png")
+    appearances.pick_version(cid, "characters", aid, "dark")
+    assert not (croot / "characters" / aid / "default.json").exists()   # purged
+    base = overlay.base_versions(cid, aid)[0]
+    assert base["id"] == "default"
+    served = overlay.image_root(cid, aid, "default", "gallery_1")
+    assert served == croot
+    assert base["image_v"]["gallery_1"] == assets.image_version(
+        assets.image_path(served, aid, "default", "gallery_1"))
+    assert base["image_v"]["avatar"] == assets.image_version(
+        assets.image_path(wroot, aid, "default", "avatar"))
+    # the campaign-side picture is a different picture: the world's sentence
+    # about gallery_1 does not caption it (the union's own rule)
+    assert "gallery_1" not in base["image_descriptions"]
+
+
+def test_read_character_carries_the_base_versions_after_a_pick(monkeypatch, tmp_path):
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    appearances.pick_version(cid, "characters", aid, "dark")
+    detail = overlay.read_character(cid, aid)
+    assert [v["id"] for v in detail["versions"]] == ["dark"]
+    assert [b["id"] for b in detail["base_versions"]] == ["default"]
+    assert detail["base_versions"][0]["images"] == ["avatar", "gallery_1"]
+
+
+def test_read_character_reports_no_base_for_a_detached_record(monkeypatch, tmp_path):
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    appearances.pick_version(cid, "characters", aid, "dark")
+    overlay.add_detached(cid, f"characters/{aid}")
+    assert overlay.read_character(cid, aid)["base_versions"] == []
+
+
+# ---- the world's copies a same-named campaign file shadows ----
+
+def test_shadowed_images_are_the_worlds_copies_under_names_the_campaign_replaced(monkeypatch, tmp_path):
+    wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, "default", "gallery_1", b"mine-different", "png")
+    # the union shows one gallery_1 -- the campaign's -- and the world's is hidden
+    assert overlay.image_root(cid, aid, "default", "gallery_1") == croot
+    got = overlay.shadowed_images(cid, aid, "default")
+    assert [i["name"] for i in got] == ["gallery_1"]
+    assert got[0]["v"] == assets.image_version(assets.image_path(wroot, aid, "default", "gallery_1"))
+    assert got[0]["description"] == "at the tide gate"
+
+
+def test_a_world_copy_the_campaign_does_not_replace_is_not_shadowed(monkeypatch, tmp_path):
+    """Already on the shelf through the union: listing it here would show it twice."""
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    assert overlay.shadowed_images(cid, aid, "default") == []
+
+
+def test_a_byte_identical_campaign_copy_shadows_nothing_worth_showing(monkeypatch, tmp_path):
+    """A demote copies the campaign's assets up and a promote copies the world's
+    down, so same name + same bytes is the common case and is one picture."""
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, "default", "gallery_1", PNG + b"2", "png")   # the world's bytes
+    assert overlay.shadowed_images(cid, aid, "default") == []
+    # a promote leaves the same two pictures under swapped names: still nothing new
+    overlay.promote_image(cid, aid, "default", "gallery_1")
+    assert overlay.shadowed_images(cid, aid, "default") == []
+    assert assets.image_path(croot, aid, "default", "avatar") is not None
+
+
+def test_shadowed_images_absent_for_a_detached_record(monkeypatch, tmp_path):
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    assets.put_image(campaigns.campaign_root(cid), aid, "default", "gallery_1", b"mine", "png")
+    overlay.add_detached(cid, f"characters/{aid}")
+    assert overlay.shadowed_images(cid, aid, "default") == []
+
+
+def test_read_character_carries_each_versions_shadowed_world_copies(monkeypatch, tmp_path):
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    overlay.materialize_actor(cid, "characters", aid)
+    assets.put_image(campaigns.campaign_root(cid), aid, "default", "gallery_1", b"mine", "png")
+    detail = overlay.read_character(cid, aid)
+    by_id = {v["id"]: v for v in detail["versions"]}
+    assert [i["name"] for i in by_id["default"]["world_shadowed"]] == ["gallery_1"]
+    assert by_id["dark"]["world_shadowed"] == []

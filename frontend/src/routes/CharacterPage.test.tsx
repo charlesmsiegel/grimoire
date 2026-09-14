@@ -613,6 +613,125 @@ test("the art tab shows the avatar tile and offers a description per image", asy
   expect(screen.getByText("a novice at the gate")).toBeTruthy();
 });
 
+/** A campaign locked to `veiled`, whose world default version still holds art. */
+const BASE_VERSION = {
+  id: "default", name: "default", images: ["avatar", "gallery_1"],
+  image_v: { avatar: "wa", gallery_1: "wg" },
+  image_descriptions: { gallery_1: "at the tide gate" },
+};
+const LOCKED_TO_VEILED = {
+  meta: { ...DETAIL.meta, default_version: "veiled" },
+  versions: [{ ...DETAIL.versions[1], images: ["gallery_1"], image_v: { gallery_1: "c1" } }],
+  base_versions: [BASE_VERSION],
+};
+
+test("campaign scope passes the world's default art through beside the version's own", async () => {
+  (api.readCharacter as any).mockResolvedValue(LOCKED_TO_VEILED);
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  await screen.findByText(/from the world’s default version/i);
+  const tiles = screen.getAllByAltText("gallery_1");
+  expect(tiles.map((t) => t.getAttribute("src"))).toEqual([
+    "/img/run/characters/seraphine/veiled/gallery_1?v=c1",
+    "/img/run/characters/seraphine/default/gallery_1?v=wg",
+  ]);
+  expect(screen.getByAltText("avatar").getAttribute("src"))
+    .toBe("/img/run/characters/seraphine/default/avatar?v=wa");
+  expect(screen.getByText("at the tide gate")).toBeTruthy();
+});
+
+test("the passed-through art is read-only: nothing on its tiles writes", async () => {
+  (api.readCharacter as any).mockResolvedValue(LOCKED_TO_VEILED);
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  const shelf = (await screen.findByText(/from the world’s default version/i))
+    .closest(".card-field") as HTMLElement;
+  // the shelf holds pictures and prose and nothing that writes
+  expect(within(shelf).getAllByRole("img")).toHaveLength(2);
+  expect(within(shelf).queryAllByRole("button")).toHaveLength(0);
+  expect(within(shelf).queryByRole("textbox")).toBeNull();
+  // ...while the version's own shelf keeps its controls
+  const own = fieldBlock("Images");
+  expect(within(own).getByRole("button", { name: "Set as avatar" })).toBeTruthy();
+  expect(within(own).getByRole("button", { name: "Description of gallery_1" })).toBeTruthy();
+});
+
+test("campaign scope shows the world's copy beside a same-named file of the version's own", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ ...DETAIL.versions[0], images: ["avatar", "gallery_1"],
+                 image_v: { avatar: "a1", gallery_1: "c1" },
+                 image_descriptions: { gallery_1: "mine, repainted" },
+                 world_shadowed: [{ name: "gallery_1", v: "w1", description: "at the tide gate" }] }],
+    base_versions: [],
+  });
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  await screen.findByText(/the world\u2019s originals/i);
+  // both pictures, under one name: the version's own through the campaign
+  // route, the world's through the WORLD route (the campaign route would
+  // resolve that name to the campaign's file)
+  const tiles = screen.getAllByAltText("gallery_1");
+  expect(tiles.map((t) => t.getAttribute("src"))).toEqual([
+    "/img/run/characters/seraphine/default/gallery_1?v=c1",
+    "/img/realm/characters/seraphine/default/gallery_1?v=w1",
+  ]);
+  expect(screen.getByText("at the tide gate")).toBeTruthy();
+  // the world's copy carries no control that writes
+  const shelf = screen.getByText(/the world’s originals/i).closest(".card-field") as HTMLElement;
+  expect(within(shelf).getAllByRole("img")).toHaveLength(1);
+  expect(within(shelf).queryAllByRole("button")).toHaveLength(0);
+});
+
+test("no shelf for the world's copies when this version replaced nothing", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ ...DETAIL.versions[0], world_shadowed: [] }],
+    base_versions: [],
+  });
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  await screen.findByText("avatar");
+  expect(screen.queryByText(/the world\u2019s originals/i)).toBeNull();
+});
+
+test("the pass-through is absent when the viewed version is the base itself", async () => {
+  // the campaign still holds `default`, so the server lists no base version
+  (api.readCharacter as any).mockResolvedValue({ ...DETAIL, base_versions: [] });
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  await screen.findByText("avatar");
+  expect(screen.queryByText(/from the world’s/i)).toBeNull();
+});
+
+test("every passed-through version gets its own shelf, in the order the server lists them", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...LOCKED_TO_VEILED,
+    base_versions: [BASE_VERSION,
+                    { id: "young", name: "main", images: ["gallery_1"], image_v: { gallery_1: "y1" },
+                      image_descriptions: {} }],
+  });
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  await screen.findByText(/from the world’s default version/i);
+  // a label that is not the id carries the id, so two versions the card
+  // calls the same thing can still be told apart
+  expect(screen.getByText(/from the world’s main \(young\) version/i)).toBeTruthy();
+  expect(screen.getAllByAltText("gallery_1").map((t) => t.getAttribute("src"))).toEqual([
+    "/img/run/characters/seraphine/veiled/gallery_1?v=c1",
+    "/img/run/characters/seraphine/default/gallery_1?v=wg",
+    "/img/run/characters/seraphine/young/gallery_1?v=y1",
+  ]);
+});
+
+test("world scope never shows a pass-through", async () => {
+  (api.readCharacter as any).mockResolvedValue({ ...LOCKED_TO_VEILED });
+  await renderWorld();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  await screen.findByAltText("gallery_1");
+  expect(screen.queryByText(/from the world’s/i)).toBeNull();
+});
+
 const imgFile = (name: string) => new File(["x"], name, { type: "image/png" });
 
 /** Open the art tab on a version whose images are `images`. */

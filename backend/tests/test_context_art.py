@@ -112,6 +112,68 @@ def test_pool_excludes_undescribed_and_reviewed_empty_art(world, sid):
     assert {c["name"] for c in cands} == {"gallery_1", "coastline"}
 
 
+def _lock_to_a_second_version(world, sid):
+    """Cast the character at a version the world's default is NOT, so the
+    locked version's union cannot reach the default's art."""
+    camp, char, wroot = world["cid"], world["char"], world["wroot"]
+    other = characters.create_version(wroot, char, "grim", characters.blank_card("Seraphine"))
+    _cast(camp, char, other, sid)
+    return other
+
+
+def test_pool_passes_the_worlds_default_art_through_beside_the_locked_version(world, sid):
+    camp, char = world["cid"], world["char"]
+    _lock_to_a_second_version(world, sid)
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
+    mine = [c for c in cands if c["kind"] == "characters"]
+    assert [c["name"] for c in mine] == ["gallery_1"]
+    assert mine[0]["vid"] == world["vid"]
+    assert mine[0]["url"].endswith(f"/versions/{world['vid']}/images/gallery_1")
+    assert mine[0]["handle"] == f"[[art:characters:{char}:gallery_1]]"
+
+
+def test_the_locked_version_shadows_a_same_named_base_picture(world, sid):
+    """A handle carries no version id, so on a name collision there is one
+    picture it can mean: the locked version's, the union's own rule one tier
+    up. The base copy is not offered rather than offered under a handle that
+    would resolve to something else."""
+    camp, char, wroot = world["cid"], world["char"], world["wroot"]
+    other = _lock_to_a_second_version(world, sid)
+    assets.put_image(wroot, char, other, "gallery_1", b"png2", "png")
+    image_descriptions.set_description(wroot, char, other, "gallery_1", "Older, scarred, the keep long fallen.")
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
+    mine = [c for c in cands if c["kind"] == "characters"]
+    assert [(c["name"], c["vid"]) for c in mine] == [("gallery_1", other)]
+
+
+def test_every_world_version_the_campaign_lacks_passes_through_in_order(world, sid):
+    """Locked to the world's DEFAULT, a sibling version's art still passes
+    through -- the missing version need not be the default -- and with two
+    missing, the default's tier shadows the sibling's on a name collision."""
+    camp, char, wroot, vid = world["cid"], world["char"], world["wroot"], world["vid"]
+    grim = characters.create_version(wroot, char, "grim", characters.blank_card("Seraphine"))
+    assets.put_image(wroot, char, grim, "gallery_1", b"png2", "png")
+    image_descriptions.set_description(wroot, char, grim, "gallery_1", "Older, scarred.")
+    assets.put_image(wroot, char, grim, "gallery_2", b"png3", "png")
+    image_descriptions.set_description(wroot, char, grim, "gallery_2", "A grey cloak, hood up.")
+    _cast(camp, char, vid, sid)   # locked to `main`, the world's default
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
+    mine = [(c["name"], c["vid"]) for c in cands if c["kind"] == "characters"]
+    assert mine == [("gallery_1", vid), ("gallery_2", grim)]
+    out = art.resolve_handles(camp, f"[[art:characters:{char}:gallery_2]]", sid)
+    assert out == (f"![A grey cloak, hood up.]"
+                   f"(/api/campaigns/{camp}/characters/{char}/versions/{grim}/images/gallery_2)")
+
+
+def test_an_undescribed_base_picture_is_not_passed_through(world, sid):
+    camp, char, wroot, vid = world["cid"], world["char"], world["wroot"], world["vid"]
+    _lock_to_a_second_version(world, sid)
+    assets.put_image(wroot, char, vid, "gallery_2", b"png", "png")   # never reviewed
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
+    assert {c["name"] for c in cands if c["kind"] == "characters"} == {"gallery_1"}
+    assert art.resolve_handles(camp, f"[[art:characters:{char}:gallery_2]]", sid) == ""
+
+
 def test_pool_excludes_an_actor_who_is_not_cast(world, sid):
     """No locked version means no offer: the catalogue only ever shows art of
     actors who are actually on stage."""
@@ -188,6 +250,35 @@ def test_resolve_rewrites_a_valid_handle_with_the_description_as_alt(world, sid)
     assert out == (
         "She turns. ![Half-plate, rain-soaked, a burning keep behind her.]"
         f"(/api/campaigns/{camp}/characters/{char}/versions/{vid}/images/gallery_1) Rain.")
+
+
+def test_resolve_falls_back_to_the_worlds_default_version(world, sid):
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    other = _lock_to_a_second_version(world, sid)
+    assert other != vid
+    out = art.resolve_handles(camp, f"[[art:characters:{char}:gallery_1]]", sid)
+    assert out == (
+        "![Half-plate, rain-soaked, a burning keep behind her.]"
+        f"(/api/campaigns/{camp}/characters/{char}/versions/{vid}/images/gallery_1)")
+
+
+def test_resolve_prefers_the_locked_version_on_a_name_collision(world, sid):
+    camp, char, wroot = world["cid"], world["char"], world["wroot"]
+    other = _lock_to_a_second_version(world, sid)
+    assets.put_image(wroot, char, other, "gallery_1", b"png2", "png")
+    image_descriptions.set_description(wroot, char, other, "gallery_1", "Older, scarred.")
+    out = art.resolve_handles(camp, f"[[art:characters:{char}:gallery_1]]", sid)
+    assert out == (f"![Older, scarred.]"
+                   f"(/api/campaigns/{camp}/characters/{char}/versions/{other}/images/gallery_1)")
+
+
+def test_a_tombstoned_base_picture_neither_offers_nor_resolves(world, sid):
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    _lock_to_a_second_version(world, sid)
+    overlay.delete_image(camp, char, vid, "gallery_1")
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
+    assert not [c for c in cands if c["kind"] == "characters"]
+    assert art.resolve_handles(camp, f"[[art:characters:{char}:gallery_1]]", sid) == ""
 
 
 def test_resolve_rewrites_a_library_handle(world, sid):

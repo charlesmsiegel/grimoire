@@ -303,6 +303,33 @@ def _addressable_default(stored: str, version_ids: list[str]) -> str:
     return stored if stored in version_ids else (version_ids[0] if version_ids else "")
 
 
+def default_version(root: Path, cid: str) -> str:
+    """The version `read_character` reports as the default: the stored one when
+    it is addressable, else the first that is. `""` when no card is.
+
+    Two stats and a frontmatter parse rather than the full read, for a caller
+    that wants ONE version's id and not every version's card."""
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    return _addressable_default(meta.get("default_version", ""), _version_ids(root, cid))
+
+
+def version_label(root: Path, cid: str, vid: str) -> str:
+    """`_version_label` for a stored version, by id."""
+    return _version_label(read_card(root, cid, vid), vid)
+
+
+def version_ids(root: Path, cid: str) -> list[str]:
+    """Every addressable version id of a character, sorted. Empty for a
+    character the root does not hold, rather than raising: the overlay asks
+    this of both roots and an answer of "none here" is a normal one."""
+    try:
+        _require_char(root, cid)
+    except CharacterNotFound:
+        return []
+    return _version_ids(root, cid)
+
+
 def read_character(root: Path, cid: str) -> dict:
     _require_char(root, cid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))

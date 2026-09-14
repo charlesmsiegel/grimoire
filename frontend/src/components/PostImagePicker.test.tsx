@@ -215,6 +215,46 @@ test("a character post is offered that character's art, the version that spoke f
     "![gallery_1](/api/campaigns/run/characters/sera/versions/default/images/gallery_1)");
 });
 
+test("a character post is also offered the world's default version, passed through", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "sera", name: "Seraphine", default_version: "young" },
+    versions: [{ id: "young", name: "Younger", card: {}, images: ["avatar"] }],
+    base_versions: [{ id: "default", name: "Now", images: ["gallery_1"],
+                      image_v: { gallery_1: "g" },
+                      image_descriptions: { gallery_1: "at the tide gate" } },
+                    { id: "bare", name: "No art", images: [], image_v: {}, image_descriptions: {} }],
+  });
+  const onInsert = vi.fn();
+  render(<PostImagePicker cid="run"
+                          target={{ kind: "characters", id: "sera", version: "young",
+                                    name: "Seraphine" }}
+                          onInsert={onInsert} onClose={() => {}} />);
+  const headings = (await screen.findAllByRole("heading", { level: 4 })).map((h) => h.textContent);
+  expect(headings).toEqual(["Younger — spoke here", "Now — from the world"]);   // no empty group
+  fireEvent.click(screen.getByRole("button", { name: "Insert gallery_1" }));
+  expect(onInsert).toHaveBeenCalledWith(
+    "![at the tide gate](/api/campaigns/run/characters/sera/versions/default/images/gallery_1)");
+});
+
+test("the world's copy a same-named campaign file shadows is not offered to a post", async () => {
+  // Export resolves even a world-shaped URL through the campaign overlay, so
+  // an inserted world original would come out of the book as the campaign's
+  // copy. The shelf shows it; a post cannot carry it.
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "sera", name: "Seraphine", default_version: "young" },
+    versions: [{ id: "young", name: "Younger", card: {}, images: ["gallery_1"],
+                 world_shadowed: [{ name: "gallery_1", v: "w1" }, { name: "gallery_9", v: "w9" }] }],
+    base_versions: [],
+  });
+  render(<PostImagePicker cid="run"
+                          target={{ kind: "characters", id: "sera", version: "young",
+                                    name: "Seraphine" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+  await screen.findByRole("button", { name: "Insert gallery_1" });
+  expect(screen.getAllByRole("button", { name: /^Insert / })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Insert gallery_9" })).toBeNull();
+});
+
 test("a PC post reads the PC, not the character, surface", async () => {
   render(<PostImagePicker cid="run"
                           target={{ kind: "pcs", id: "mara", version: "default", name: "Mara" }}

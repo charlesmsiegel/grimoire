@@ -714,6 +714,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                   descriptions={version?.image_descriptions ?? {}}
                   appearances={imageAppearances}
                   worldScope={worldScope}
+                  baseVersions={detail.base_versions ?? []}
+                  shadowed={version?.world_shadowed ?? []}
                   localizeProg={localizeProg} localizeMsg={localizeMsg}
                   onLocalize={() => void runLocalize(vid)}
                   onRefresh={refresh} onError={setError}

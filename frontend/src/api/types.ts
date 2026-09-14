@@ -543,11 +543,29 @@ export type CharacterSummary = {
   has_voice_anchor?: boolean;
   versions: VersionRef[];
 };
+/** A world version of a character the campaign no longer holds (a pick purged
+ *  it), passed through to the campaign page beside the version it shows.
+ *  Read-only there: the pictures are the world's and so are the descriptions.
+ *  Campaign reads only; a world read never carries them, and the list is empty
+ *  when the campaign cannot see the world's (detached or deleted record, world
+ *  gone) or holds every version that has art. Default version first. */
+export type BaseVersion = {
+  id: string; name: string; images: string[];
+  image_v: Record<string, string>;
+  image_descriptions: Record<string, string>;
+};
+/** The world's copy of a picture that a campaign file of the same name hides
+ *  from the version's `images`. Read-only, and served from the WORLD route: the
+ *  campaign route resolves that name to the campaign's own file. */
+export type ShadowedImage = { name: string; v: string; description?: string };
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
+  base_versions?: BaseVersion[];
   versions: { id: string; name: string; card: Card; images?: string[];
               /** Per-image cache token, keyed by the names in `images`. */
               image_v?: Record<string, string>;
+              /** Campaign reads only: see `ShadowedImage`. */
+              world_shadowed?: ShadowedImage[];
               /** What each image DEPICTS, in the author's words, keyed by the
                *  names in `images`. A key is absent while an image has never
                *  been reviewed and `""` once it has been reviewed and left
