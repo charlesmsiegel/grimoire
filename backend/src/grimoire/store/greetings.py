@@ -190,6 +190,28 @@ def greeting_count(root: Path) -> int:
     return sum(1 for p in d.glob("*.md") if safe_id(p.stem)) if d.exists() else 0
 
 
+def add_featuring_counts(rows: list[dict], greeting_rows: list[dict]) -> list[dict]:
+    """Fold the world greetings each character is present at into the roster's
+    `greeting_count`, in place, and return the rows.
+
+    The store's own count is the card's (`characters._greeting_count`: a
+    non-empty first_mes plus the alternates); the character page's Greetings
+    tab shows those AND the world greetings featuring the character, and the
+    grid badge has to say the same number. Being present is what counts, not
+    being the primary: a greeting names its whole cast in `present`, and one
+    that merely stars somebody else is still an opening this character has.
+    Lives here rather than in `characters` because this module imports that
+    one, and the graph stays acyclic.
+    """
+    featuring: dict[str, int] = {}
+    for g in greeting_rows:
+        for c in g.get("present") or []:
+            featuring[c] = featuring.get(c, 0) + 1
+    for row in rows:
+        row["greeting_count"] = row.get("greeting_count", 0) + featuring.get(row["id"], 0)
+    return rows
+
+
 def _repoint(meta: dict, character: str | None, version: str | None, vroot: Path) -> None:
     """Set `meta`'s character/version pointer for `update_greeting` (#17),
     validating the new pair against `vroot`'s characters before anything is

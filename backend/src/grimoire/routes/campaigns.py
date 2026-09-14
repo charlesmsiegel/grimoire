@@ -1966,7 +1966,11 @@ def _campaign_wroot(cid: str):
 @router.get("/campaigns/{cid}/characters")
 def get_campaign_characters(cid: str):
     _campaign_root_or_404(cid)
-    return store.overlay.list_characters(cid)
+    # Same rule as the world roster: the badge counts the world greetings the
+    # character is present at, read through the overlay so a campaign's own
+    # and deleted greetings are respected.
+    return store.greetings.add_featuring_counts(
+        store.overlay.list_characters(cid), store.overlay.list_greetings(cid))
 
 
 @router.post("/campaigns/{cid}/characters")

@@ -65,7 +65,11 @@ def _sse(payload: dict) -> str:
 
 @router.get("/worlds/{wid}/characters")
 def get_world_characters(wid: str):
-    return store.characters.list_characters(_world_root_or_404(wid))
+    root = _world_root_or_404(wid)
+    # The badge count agrees with the character page's Greetings tab, which
+    # lists world greetings featuring the character beneath the card's own.
+    return store.greetings.add_featuring_counts(
+        store.characters.list_characters(root), store.greetings.list_greetings(root))
 
 
 @router.post("/worlds/{wid}/characters")

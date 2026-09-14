@@ -552,6 +552,33 @@ test("the greetings tab shows the first message and each alternate", async () =>
   expect(screen.getByText("Rain on the shutters.")).toBeTruthy();
 });
 
+test("the greetings tab counts and links world greetings featuring the character", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    {
+      id: "tide-watch", name: "Tide Watch", character: "mara", version: "default",
+      present: ["mara", "seraphine"], requires_tags: [], predecessor_join: "all",
+      location: "gate", phase: "", sequence: null, optional: false,
+    },
+    {
+      id: "mara-alone", name: "Mara Alone", character: "mara", version: "default",
+      present: ["mara"], requires_tags: [], predecessor_join: "all",
+      location: "gate", phase: "", sequence: null, optional: false,
+    },
+  ]);
+
+  await renderWorld();
+  const tab = await screen.findByRole("tab", { name: "Greetings 3" });
+  fireEvent.click(tab);
+
+  expect(screen.getByRole("button", { name: "Tide Watch" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Mara Alone" })).toBeNull();
+  expect(screen.queryByText("World greetings")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Card" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Tide Watch" }));
+  await waitFor(() => expect(lastLocation)
+    .toBe("/worlds/realm?section=greetings&id=tide-watch"));
+});
+
 test("a card with no greetings says what a greeting is for", async () => {
   (api.readCharacter as any).mockResolvedValue({
     ...DETAIL,

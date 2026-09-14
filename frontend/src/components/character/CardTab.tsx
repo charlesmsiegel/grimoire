@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  api, type Card, type CharacterDetail, type EntityScope, type Greeting,
+  api, type Card, type CharacterDetail, type EntityScope,
   type LoreEntryDraft, type ModuleDetail,
 } from "../../api/client";
 import { HtmlNote } from "../HtmlNote";
@@ -30,8 +30,8 @@ const labelOf = (key: string) =>
   TEXT_FIELDS.find((f) => f.key === key)?.label ?? EXTRA_LABELS[key] ?? key;
 
 export function CardTab(
-  { scope, wid, cid, vid, card, detail, worldGreetings, module, editing, onEditingChange, busy,
-    onSaveField, onRefresh, onError, galleryProg, setGalleryProg, setImportMsg, onOpenGreeting,
+  { scope, wid, cid, vid, card, detail, module, editing, onEditingChange, busy,
+    onSaveField, onRefresh, onError, galleryProg, setGalleryProg, setImportMsg,
     bookCount, bookReview, bookKinds, bookMsg, onReviewBook, onCommitBook, onPatchBook,
     onCancelBook }: {
     scope: EntityScope;
@@ -40,7 +40,6 @@ export function CardTab(
     vid: string;
     card: Card;
     detail: CharacterDetail;
-    worldGreetings: Greeting[];
     module: ModuleDetail | null;
     editing: string | null;
     onEditingChange: (key: string | null) => void;
@@ -54,7 +53,6 @@ export function CardTab(
     galleryProg: { done: number; total: number } | null;
     setGalleryProg: (p: { done: number; total: number } | null) => void;
     setImportMsg: (m: string | null) => void;
-    onOpenGreeting: (gid: string) => void;
     bookCount: number;
     bookReview: LoreEntryDraft[] | null;
     bookKinds: readonly string[];
@@ -148,12 +146,6 @@ export function CardTab(
     } catch (err: unknown) { onError(err); }
   }
 
-  // World greetings that feature this character: separate world records, not
-  // card content, which is why they do not count toward the Greetings tab. The
-  // ★ marks the ones they are the primary of. Chips that navigate, per the
-  // list/detail rule for metadata referencing other records.
-  const featuring = worldGreetings.filter((g) => (g.present ?? []).includes(cid));
-
   return <>
     <div className="card-field-pair">
       {field("name", { multiline: false })}
@@ -201,19 +193,6 @@ export function CardTab(
         <div className="field-hint">{String(card.data.extensions.sd_prompt)}</div>
       </div>
     ) : null}
-
-    {featuring.length > 0 && (
-      <div className="card-field">
-        <div className="card-field-head"><span className="data-label">World greetings</span></div>
-        <div className="chip-row">
-          {featuring.map((g) => (
-            <button key={g.id} className="chip on" onClick={() => onOpenGreeting(g.id)}>
-              {g.character === cid ? `★ ${g.name}` : g.name}
-            </button>
-          ))}
-        </div>
-      </div>
-    )}
 
     {worldScope && (
       <div className="chub-source-block">

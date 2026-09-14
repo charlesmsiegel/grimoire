@@ -338,3 +338,38 @@ def test_promote_then_edit_in_the_library_then_accept(client):
 
     assert client.get(f"/api/campaigns/{cid}/locations/{eid}"
                       ).json()["body"].strip() == "fog, and a bell somewhere"
+
+
+# ---- greeting counts on the roster ----------------------------------------
+
+def _seed_greeting(client, wid, name, character, present):
+    r = client.post(f"/api/worlds/{wid}/greetings",
+                    json={"name": name, "character": character, "version": "default",
+                          "present": present})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_world_roster_greeting_count_includes_world_greetings_featuring_them(client):
+    """The grid badge and the character page's Greetings tab report the same
+    number: card openings plus the world greetings the character is present
+    at. A greeting they are merely absent from is somebody else's."""
+    wid, _cid = _world_and_campaign(client)
+    mara = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    sera = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    _seed_greeting(client, wid, "Tide Watch", mara, [mara, sera])
+    _seed_greeting(client, wid, "Mara Alone", mara, [mara])
+
+    counts = {c["id"]: c["greeting_count"] for c in client.get(f"/api/worlds/{wid}/characters").json()}
+
+    assert counts == {mara: 2, sera: 1}
+
+
+def test_campaign_roster_greeting_count_sees_inherited_world_greetings(client):
+    wid, cid = _world_and_campaign(client)
+    mara = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    _seed_greeting(client, wid, "Tide Watch", mara, [mara])
+
+    roster = client.get(f"/api/campaigns/{cid}/characters").json()
+
+    assert [(c["id"], c["greeting_count"]) for c in roster] == [(mara, 1)]

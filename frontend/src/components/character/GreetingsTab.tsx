@@ -1,23 +1,26 @@
 import { useState } from "react";
+import type { Greeting } from "../../api/client";
 import { GreetingMarkdown } from "../GreetingMarkdown";
 import { EditableField } from "./EditableField";
 
-/** The card's own greetings: the first message and the alternates.
- *
- *  World greetings that merely *feature* this character are separate records
- *  and live on the Card tab under their own label — they are not on the card,
- *  so they are not counted by this tab either.
+/** The character's openings: editable card greetings followed by linked world
+ *  greetings that feature them. World greetings remain separate records; this
+ *  view collects both kinds without copying world content into the card.
  */
 export function GreetingsTab(
-  { name, firstMes, greetings, editing, onEditingChange, busy, onSaveFirstMes, onSaveGreetings }: {
+  { name, cid, firstMes, greetings, worldGreetings, editing, onEditingChange, busy,
+    onSaveFirstMes, onSaveGreetings, onOpenWorldGreeting }: {
     name: string;
+    cid: string;
     firstMes: string;
     greetings: string[];
+    worldGreetings: Greeting[];
     editing: string | null;
     onEditingChange: (key: string | null) => void;
     busy: boolean;
     onSaveFirstMes: (next: string) => Promise<boolean>;
     onSaveGreetings: (next: string[]) => Promise<boolean>;
+    onOpenWorldGreeting: (gid: string) => void;
   },
 ) {
   /** A greeting being written that the card does not have yet.
@@ -28,7 +31,7 @@ export function GreetingsTab(
    *  and the row would vanish under whatever had been typed into it. The row
    *  lives here until it has content worth storing. */
   const [adding, setAdding] = useState(false);
-  const empty = !firstMes.trim() && greetings.length === 0 && !adding;
+  const empty = !firstMes.trim() && greetings.length === 0 && worldGreetings.length === 0 && !adding;
 
   return <>
     <EditableField
@@ -95,6 +98,19 @@ export function GreetingsTab(
         </button>
       )}
     </div>
+
+    {worldGreetings.length > 0 && (
+      <div className="card-field">
+        <div className="card-field-head"><span className="data-label">World greetings</span></div>
+        <div className="chip-row">
+          {worldGreetings.map((g) => (
+            <button key={g.id} className="chip on" onClick={() => onOpenWorldGreeting(g.id)}>
+              {g.character === cid ? `★ ${g.name}` : g.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    )}
 
     {empty && (
       <p className="empty-state">

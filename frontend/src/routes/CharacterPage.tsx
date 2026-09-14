@@ -529,7 +529,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
   const firstMes = (card.data.first_mes as string) ?? "";
-  const greetingCount = (firstMes.trim() ? 1 : 0) + greetings.length;
+  const featuringGreetings = worldGreetings.filter((g) => (g.present ?? []).includes(eid));
+  const greetingCount = (firstMes.trim() ? 1 : 0) + greetings.length + featuringGreetings.length;
   const artCount = (hasAvatar ? 1 : 0) + galleryImages.length;
   // `scope.id` is a slug and a poor heading, but a heading with the wrong
   // subject would be worse than a plain one, so it stands in only when the
@@ -668,14 +669,11 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       <div className="card-pane-body" role="tabpanel">
         {tab === "card" && (
           <CardTab scope={scope} wid={wid} cid={eid} vid={vid} card={card} detail={detail}
-                   worldGreetings={worldGreetings} module={module}
+                   module={module}
                    editing={editing} onEditingChange={setEditing} busy={saving}
                    onSaveField={saveField} onRefresh={refresh} onError={setError}
                    galleryProg={galleryProg} setGalleryProg={setGalleryProg}
                    setImportMsg={setImportMsg}
-                   onOpenGreeting={(gid) => navigate(
-                     worldScope ? `/worlds/${wid}?section=greetings&id=${gid}`
-                                : `/campaigns/${scope.id}/world?section=greetings&id=${gid}`)}
                    bookCount={version?.importable_lore ?? 0}
                    bookReview={bookReview} bookKinds={bookKinds} bookMsg={bookMsg}
                    onReviewBook={() => void reviewBook()}
@@ -699,10 +697,14 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         )}
 
         {tab === "greetings" && (
-          <GreetingsTab name={name} firstMes={firstMes} greetings={greetings}
+          <GreetingsTab name={name} cid={eid} firstMes={firstMes} greetings={greetings}
+                        worldGreetings={featuringGreetings}
                         editing={editing} onEditingChange={setEditing} busy={saving}
                         onSaveFirstMes={(v) => saveField({ first_mes: v })}
-                        onSaveGreetings={saveGreetings} />
+                        onSaveGreetings={saveGreetings}
+                        onOpenWorldGreeting={(gid) => navigate(
+                          worldScope ? `/worlds/${wid}?section=greetings&id=${gid}`
+                                     : `/campaigns/${scope.id}/world?section=greetings&id=${gid}`)} />
         )}
 
         {tab === "art" && (
