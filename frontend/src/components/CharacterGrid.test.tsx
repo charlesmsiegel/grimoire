@@ -82,6 +82,8 @@ test("a card shows the tagline and its badges, versions included", async () => {
   expect(screen.getByText("2 versions")).toBeTruthy();
   expect(screen.getByText("2 greetings")).toBeTruthy();
   expect(screen.getByText("3 gallery")).toBeTruthy();
+  // All four can show at once; the row wraps rather than dropping one.
+  expect(screen.getByText("1 localized")).toBeTruthy();
 });
 
 test("badges are omitted when they would all read zero", async () => {

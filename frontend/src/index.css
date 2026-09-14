@@ -1451,7 +1451,10 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow-glow);
 }
 .char-card:hover { box-shadow: var(--shadow-pop); }
-.char-card-main { display: flex; flex-direction: column; gap: 0; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--ink); font-family: var(--fb); }
+/* `flex: 1` so a wrapped badge row on one card does not leave the Delete
+   button of its neighbours floating higher: the main area takes the slack and
+   the actions sit on the card's bottom edge across the whole row. */
+.char-card-main { display: flex; flex-direction: column; flex: 1; gap: 0; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--ink); font-family: var(--fb); }
 .char-card-main:hover .char-card-name { color: var(--accent); }
 .char-card-avatar { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; background: var(--panel); }
 .initials-avatar {
@@ -1631,7 +1634,20 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 }
 .pc-head h3 { margin: 4px 0 0; }
 
-.char-card-badges { display: flex; gap: 6px; padding: 6px 14px 4px; }
+/* Four counts can appear at once (versions, greetings, gallery, localized) and
+   a card is ~220px wide at three columns, so the row cannot squeeze them in: a
+   chip that shrinks breaks its own label onto two lines and the last one is
+   clipped by the card edge. A two-column grid instead — each chip fills its
+   cell, so the counts line up in columns across the whole row of cards
+   rather than wrapping ragged. */
+.char-card-badges {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px;
+  padding: 6px 14px 4px;
+}
+.char-card-badges .chip {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  cursor: inherit; font-size: 9.5px; padding: 3px 7px; letter-spacing: 0.06em;
+}
 .char-card-tagline {
   font-family: var(--fb); font-style: italic; font-size: 12.5px; color: var(--muted);
   padding: 0 14px 12px; text-align: left; white-space: nowrap; overflow: hidden;
