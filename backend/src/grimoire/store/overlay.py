@@ -1688,10 +1688,16 @@ def _novel_bytes(theirs: Path | None, mine: list[Path]) -> bool:
 
 def read_character(cid: str, char_id: str) -> dict:
     detail = characters.read_character(char_root(cid, char_id), char_id)
+    croot = croot_of(cid)
     for v in detail["versions"]:
         images = list_images(cid, char_id, v["id"])
         v["images"] = [i["name"] for i in images]
         v["image_v"] = {i["name"]: i["v"] for i in images}
+        # Which of those names the campaign holds no file for -- the Art tab
+        # shelves the campaign's own pictures apart from the world's. Names
+        # only: the token and caption of an inherited picture are the union's.
+        mine = {i["name"] for i in assets.list_images(croot, char_id, v["id"])}
+        v["inherited"] = [n for n in v["images"] if n not in mine]
         v["avatar_focus"] = read_focus(cid, char_id, v["id"])
         # Re-derived per image, not per folder: `read_descriptions` refuses to
         # caption a campaign-side picture with the world's sentence about a

@@ -23,17 +23,67 @@ export function nextImageNames(count: number, hasAvatar: boolean, gallery: strin
                     (_, i) => (i === 0 && !hasAvatar ? "avatar" : `gallery_${++top}`));
 }
 
+/** One tile of the shelf: the picture, and whatever this page may do to it.
+ *
+ *  The same markup for every picture on the page, wherever its bytes live,
+ *  which is what keeps the campaign's shelf and the world's looking like one
+ *  page: a 96px tile, the promote and remove controls when the picture can be
+ *  written to from here, and the description in the same clamped box whether
+ *  it can be edited (`onSave` given, the field) or only read (a plain box).
+ */
+function Tile({ name, src, avatar, caption, description, descKey,
+                onSave, onDraft, onPromote, onRemove }: {
+  name: string;
+  src: string;
+  avatar?: boolean;
+  caption?: string;
+  description: string | undefined;
+  descKey: string;
+  onSave?: (d: string) => Promise<void>;
+  onDraft?: () => Promise<string>;
+  onPromote?: () => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <figure className={"shelf-tile" + (avatar ? " avatar-tile" : "")}>
+      <a href={src} target="_blank" rel="noreferrer"><img alt={name} src={src} /></a>
+      {caption && <figcaption title={caption}>{caption}</figcaption>}
+      {onPromote && (
+        <button className="shelf-promote" type="button" onClick={onPromote}>Set as avatar</button>
+      )}
+      {onSave
+        ? <ImageDescriptionField key={descKey} name={name} value={description}
+                                 onSave={onSave} onDraft={onDraft} />
+        : <div className={"image-description" + (description ? "" : " image-description-empty")}
+               title={description || undefined}>
+            {description || "No description"}
+          </div>}
+      {onRemove && (
+        <button className="shelf-promote" type="button" onClick={onRemove}>Remove</button>
+      )}
+    </figure>
+  );
+}
+
 /** Every image this version has, plus the greeting art it could borrow.
  *
  *  The shelf is a `repeat(auto-fill, minmax(…))` grid rather than the row it
  *  used to be — in a 433px pane a gallery was a horizontal scroll of tiles you
  *  could see two of at a time, and the page it lives on is now wide enough for
  *  the grid to be worth having.
+ *
+ *  In campaign scope the page has two shelves. **Images** holds what the
+ *  campaign has a file of its own for; **World images** holds everything it
+ *  reads from the world: the pictures of this version it inherits (still
+ *  writable through the campaign routes, which handle an inherited picture),
+ *  the world's copies its own same-named files hide, and the versions a pick
+ *  purged. The last two are read-only -- their bytes and captions are the
+ *  world's -- and say so by carrying no control.
  */
 export function ArtTab(
   { scope, wid, cid, vid, hasAvatar, galleryImages, imageTokens, descriptions, appearances,
-    worldScope, baseVersions, shadowed, localizeProg, localizeMsg, onLocalize, onRefresh,
-    onError, onOpenGreeting }: {
+    worldScope, inherited, baseVersions, shadowed, localizeProg, localizeMsg, onLocalize,
+    onRefresh, onError, onOpenGreeting }: {
     scope: EntityScope;
     wid: string;
     cid: string;
@@ -46,6 +96,8 @@ export function ArtTab(
     descriptions: Record<string, string>;
     appearances: Appearance[];
     worldScope: boolean;
+    /** Campaign scope: which of this version's names are the world's. */
+    inherited?: string[];
     /** Campaign scope: the world versions the campaign no longer holds, each
      *  shown read-only beside this version's own. See `BaseVersion`. */
     baseVersions?: BaseVersion[];
@@ -100,52 +152,42 @@ export function ArtTab(
     }
   }
 
+  // The world's side of this version, and the version's own. In world scope
+  // nothing is inherited, so the split is the whole shelf and nothing.
+  const fromWorld = new Set(worldScope ? [] : inherited ?? []);
+  const ownAvatar = hasAvatar && !fromWorld.has("avatar");
+  const ownGallery = galleryImages.filter((n) => !fromWorld.has(n));
+  const worldGallery = galleryImages.filter((n) => fromWorld.has(n));
+  const bases = worldScope ? [] : (baseVersions ?? []).filter((b) => b.id !== vid);
+  const originals = worldScope ? [] : shadowed ?? [];
+  const anyWorld = fromWorld.size > 0 || originals.length > 0 || bases.length > 0;
+
+  /** A tile of THIS version, whichever root holds it: the campaign routes
+   *  resolve the name the way the shelf read it, so the same controls apply. */
+  const versionTile = (name: string, avatar: boolean) => (
+    <Tile key={name} name={name} avatar={avatar} caption={avatar ? "avatar" : undefined}
+          src={avatar ? avatarSrc(scope, cid, vid, imageTokens.avatar)
+                      : withToken(api.actorImageUrl(scope, "characters", cid, vid, name),
+                                  imageTokens[name])}
+          description={descriptions[name]} descKey={`${vid}:${name}`}
+          onSave={(d) => guard(() => api.setCharacterImageDescription(scope, cid, vid, name, d))}
+          onDraft={worldScope
+            ? () => api.draftCharacterImageDescription(wid, cid, vid, name).then((r) => r.description)
+            : undefined}
+          onPromote={avatar ? undefined
+            : () => void guard(() => api.promoteImage(scope, cid, vid, name))}
+          onRemove={avatar ? () => void guard(() => api.deleteImage(scope, cid, vid, "avatar"))
+                           : undefined} />
+  );
+
   return <>
     <div className="card-field">
       <div className="card-field-head"><span className="data-label">Images</span></div>
       <div className="images-shelf">
-        {hasAvatar ? (
-          <figure className="shelf-tile avatar-tile">
-            <a href={avatarSrc(scope, cid, vid, imageTokens.avatar)} target="_blank" rel="noreferrer">
-              <img alt="avatar" src={avatarSrc(scope, cid, vid, imageTokens.avatar)} />
-            </a>
-            <figcaption>avatar</figcaption>
-            <ImageDescriptionField key={`${vid}:avatar`} name="avatar" value={descriptions.avatar}
-                                   onSave={(d) => guard(() =>
-                                     api.setCharacterImageDescription(scope, cid, vid, "avatar", d))}
-                                   onDraft={worldScope
-                                     ? () => api.draftCharacterImageDescription(wid, cid, vid, "avatar")
-                                         .then((r) => r.description)
-                                     : undefined} />
-            <button className="shelf-promote" type="button"
-                    onClick={() => void guard(() => api.deleteImage(scope, cid, vid, "avatar"))}>
-              Remove
-            </button>
-          </figure>
-        ) : (
-          <div className="shelf-tile shelf-empty">no avatar</div>
-        )}
-        {galleryImages.map((imgName) => {
-          const src = withToken(
-            api.actorImageUrl(scope, "characters", cid, vid, imgName), imageTokens[imgName]);
-          return (
-            <div className="shelf-tile" key={imgName}>
-              <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
-              <button className="shelf-promote" type="button"
-                      onClick={() => void guard(() => api.promoteImage(scope, cid, vid, imgName))}>
-                Set as avatar
-              </button>
-              <ImageDescriptionField key={`${vid}:${imgName}`} name={imgName}
-                                     value={descriptions[imgName]}
-                                     onSave={(d) => guard(() =>
-                                       api.setCharacterImageDescription(scope, cid, vid, imgName, d))}
-                                     onDraft={worldScope
-                                       ? () => api.draftCharacterImageDescription(wid, cid, vid, imgName)
-                                           .then((r) => r.description)
-                                       : undefined} />
-            </div>
-          );
-        })}
+        {ownAvatar
+          ? versionTile("avatar", true)
+          : <div className="shelf-tile shelf-empty">{hasAvatar ? "world’s avatar" : "no avatar"}</div>}
+        {ownGallery.map((name) => versionTile(name, false))}
         <button className="shelf-add" disabled={!!adding}
                 onClick={() => shelfFileRef.current?.click()}>
           {adding ? `adding ${adding.done}/${adding.total}…` : "+ add"}
@@ -155,66 +197,36 @@ export function ArtTab(
       </div>
     </div>
 
-    {/* The world's originals: pictures this version holds its own file for,
-        under the same name, so the shelf above shows the campaign's and the
-        union cannot reach the world's. Served from the WORLD route, which is
-        the only route that resolves that name to the world's bytes. Read-only
-        for the same reason the pass-through below is. */}
-    {!worldScope && (shadowed ?? []).length > 0 && (
+    {anyWorld && (
       <div className="card-field">
-        <div className="card-field-head">
-          <span className="data-label">The world’s originals</span>
-        </div>
-        <span className="field-hint">
-          Pictures this version replaced under the same name. The world’s copies, shown beside yours.
-        </span>
+        <div className="card-field-head"><span className="data-label">World images</span></div>
         <div className="images-shelf">
-          {(shadowed ?? []).map((img) => {
-            const src = withToken(
-              api.actorImageUrl({ kind: "world", id: wid }, "characters", cid, vid, img.name), img.v);
-            return (
-              <figure className="shelf-tile" key={img.name}>
-                <a href={src} target="_blank" rel="noreferrer"><img alt={img.name} src={src} /></a>
-                <figcaption>{img.name}</figcaption>
-                {img.description && <span className="field-hint">{img.description}</span>}
-              </figure>
-            );
-          })}
+          {hasAvatar && fromWorld.has("avatar") && versionTile("avatar", true)}
+          {worldGallery.map((name) => versionTile(name, false))}
+          {/* The world's copy under a name this version replaced: served from
+              the WORLD route, the only one that resolves that name to the
+              world's bytes. */}
+          {originals.map((img) => (
+            <Tile key={`shadowed:${img.name}`} name={img.name} caption={`${img.name} · world’s copy`}
+                  src={withToken(
+                    api.actorImageUrl({ kind: "world", id: wid }, "characters", cid, vid, img.name),
+                    img.v)}
+                  description={img.description} descKey={`shadowed:${vid}:${img.name}`} />
+          ))}
+          {/* A version the campaign no longer holds: the campaign route falls
+              through to the world for it. A label that is not the id carries
+              the id too, because a card's own `character_version` can name two
+              versions the same thing. */}
+          {bases.map((base) => base.images.map((name) => (
+            <Tile key={`${base.id}:${name}`} name={name}
+                  caption={`${name} · ${base.name === base.id ? base.name : `${base.name} (${base.id})`}`}
+                  src={withToken(api.actorImageUrl(scope, "characters", cid, base.id, name),
+                                 base.image_v[name])}
+                  description={base.image_descriptions[name]} descKey={`${base.id}:${name}`} />
+          )))}
         </div>
       </div>
     )}
-
-    {/* The pass-through: one shelf per world version the campaign no longer
-        holds, in the server's order. Read-only by design -- the pictures and
-        their descriptions are the world's, and a campaign that wants to change
-        them does it on the world page, so no tile here carries a control that
-        writes. The URLs are still campaign-scoped: the serve route falls
-        through to the world for a version the campaign does not hold. A label
-        that is not the id carries the id too, because a card's own
-        `character_version` can name two versions the same thing. */}
-    {!worldScope && (baseVersions ?? []).filter((b) => b.id !== vid).map((base) => (
-      <div className="card-field" key={base.id}>
-        <div className="card-field-head">
-          <span className="data-label">
-            From the world’s {base.name === base.id ? base.name : `${base.name} (${base.id})`} version
-          </span>
-        </div>
-        <div className="images-shelf">
-          {base.images.map((imgName) => {
-            const src = withToken(
-              api.actorImageUrl(scope, "characters", cid, base.id, imgName), base.image_v[imgName]);
-            const text = base.image_descriptions[imgName];
-            return (
-              <figure className="shelf-tile" key={imgName}>
-                <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
-                <figcaption>{imgName}</figcaption>
-                {text && <span className="field-hint">{text}</span>}
-              </figure>
-            );
-          })}
-        </div>
-      </div>
-    ))}
 
     {appearances.length > 0 && (
       <div className="card-field">

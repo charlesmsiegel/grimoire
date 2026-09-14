@@ -564,6 +564,9 @@ export type CharacterDetail = {
   versions: { id: string; name: string; card: Card; images?: string[];
               /** Per-image cache token, keyed by the names in `images`. */
               image_v?: Record<string, string>;
+              /** Campaign reads only: the names in `images` the campaign holds
+               *  no file for -- the world's, read through the overlay. */
+              inherited?: string[];
               /** Campaign reads only: see `ShadowedImage`. */
               world_shadowed?: ShadowedImage[];
               /** What each image DEPICTS, in the author's words, keyed by the

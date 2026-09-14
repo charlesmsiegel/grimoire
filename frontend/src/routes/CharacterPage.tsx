@@ -714,6 +714,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                   descriptions={version?.image_descriptions ?? {}}
                   appearances={imageAppearances}
                   worldScope={worldScope}
+                  inherited={version?.inherited ?? []}
                   baseVersions={detail.base_versions ?? []}
                   shadowed={version?.world_shadowed ?? []}
                   localizeProg={localizeProg} localizeMsg={localizeMsg}

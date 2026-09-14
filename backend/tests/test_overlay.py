@@ -1929,6 +1929,19 @@ def test_shadowed_images_absent_for_a_detached_record(monkeypatch, tmp_path):
     assert overlay.shadowed_images(cid, aid, "default") == []
 
 
+def test_read_character_says_which_of_a_versions_pictures_are_the_worlds(monkeypatch, tmp_path):
+    """The union lists one name per picture and does not say whose file it is;
+    the Art tab shelves the campaign's own apart from the world's, so it
+    needs to know. Names only -- the tokens and captions are the union's."""
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, "default", "gallery_2", b"mine", "png")
+    assets.put_image(croot, aid, "default", "gallery_1", b"mine-too", "png")   # shadows the world's
+    default = next(v for v in overlay.read_character(cid, aid)["versions"] if v["id"] == "default")
+    assert default["images"] == ["avatar", "gallery_1", "gallery_2"]
+    assert default["inherited"] == ["avatar"]
+
+
 def test_read_character_carries_each_versions_shadowed_world_copies(monkeypatch, tmp_path):
     _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
     overlay.materialize_actor(cid, "characters", aid)
