@@ -1173,6 +1173,11 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 }
 .chip.on { background: var(--accent); color: var(--on-accent); border-color: var(--rule); }
 .chip.solid { background: var(--chrome); color: var(--chrome-text); border-color: var(--chrome); }
+/* `.chip` sets no `text-decoration`, which every `<button class="chip">` and
+   `<span class="chip">` badge already renders without one — an `<a
+   class="chip">` (the unlinked-version row) is the one tag here whose UA
+   default disagrees, so it is the one that needs telling. */
+a.chip { text-decoration: none; }
 
 .editor { display: flex; gap: 16px; align-items: flex-start; }
 /* the rail scrolls on its own so a long greeting list doesn't drag the page */
