@@ -489,3 +489,54 @@ computed-style comparison of `.row` and `.char-card-main` before and after.
 Record-level addressing for module template previews. The `.editor-list`
 rail-versus-grid question `EntityEditor`'s comment files under #437. Any change
 to what a section *shows*.
+
+## Amendments made during implementation
+
+*Added 2026-09-16, after the work shipped.* Five claims above turned out to be
+wrong, and the code follows the amendment rather than the original sentence.
+Recorded here because a spec that contradicts the code it produced misleads the
+next reader faster than no spec at all.
+
+1. **The tail comes off `location.pathname`, not `useParams()["*"]`.** React
+   Router *decodes* a splat param, which destroys the boundary between a slash
+   inside a record id and a slash between segments — `/worlds/w/items/a%2Fb`
+   arrives as `items/a/b` and parses as three segments, so a perfectly good
+   address is rejected. The pathname is raw; `parseWorldTail` does the decoding
+   itself, once.
+
+2. **Canonicalisation compares against `sectionHref`'s own spelling** rather
+   than hunting for the particular ways a tail might be odd. A trailing slash,
+   a doubled one, an over-escaped segment and an id whose escaping differs are
+   then all one case, and no list has to be kept complete.
+
+3. **`?view=graph` is honoured regardless of the record segment**, and the view
+   chips preserve that segment. The original rule — a record segment forces the
+   list — conflicted with this document's own guarantee that `GreetingEditor`
+   stays mounted-but-hidden so a half-written greeting survives the switch:
+   dropping the record segment made `selected` null, which reset the form and
+   destroyed the draft. Nothing renders the record inside the graph, so the
+   rule's stated justification is untouched; following a node on the map still
+   lands on the list, because `openGreeting` builds a record href with no
+   `view`. The cost is that `/greetings/dawn?view=graph` and
+   `/greetings?view=graph` show the same visible screen, so "exactly one
+   address per screen" is approximate for the plot map — the record segment is
+   real state (what is open behind it), not decoration.
+
+4. **`.row`'s font is not pinned.** "Measure the button's computed font and pin
+   it" is not portable: a UA button default is platform-specific, so pinning
+   this machine's value would be right here and wrong on macOS, Linux and
+   Android. The converted controls inherit the app's own font instead. That is
+   a visible change, and the only one in the work — `.check-row` makes the case
+   for it, since its `.static` sibling was already rendering in the app's font,
+   so the checklist disagreed with itself before and matches now.
+
+5. **`loreReset` stays.** It is listed above as something that deletes itself,
+   and that was simply a misreading: `select()` never touched it. It is the
+   lorebook importer's remount signal and always was.
+
+**One deliberate departure that is not an amendment:** the anchors table says
+`+ New <kind>` becomes a link "in `EntityEditor` and siblings". `PCEditor`'s
+`+ New PC` stays a `<button>`, because `newPC` prompts for a name and POSTs a
+record rather than going to a screen — there is no address to put in an href.
+That is the one place the three editors legitimately differ, and it differs
+because the control does.
