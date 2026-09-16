@@ -394,8 +394,8 @@ test("campaign mode passes campaign scope and hides Tags and the Overview", asyn
   renderCampaign();
   await screen.findByText(/World Copy/);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }));
-  expect(screen.queryByRole("button", { name: /^Tags\b/ })).toBeNull();
-  expect(screen.queryByRole("button", { name: /^Overview\b/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: /^Tags\b/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: /^Overview\b/ })).toBeNull();
   // a campaign has no tag vocabulary of its own, so nothing asks for one
   expect(api.listTags).not.toHaveBeenCalled();
   expect(indexRow("Greetings")).toBeInTheDocument();
@@ -531,7 +531,7 @@ test("the index offers Push to campaigns, which lists what each campaign owes", 
 test("a campaign's fork of a world is not offered the push panel", async () => {
   renderCampaign();
   await screen.findByText(/Campaign view/);
-  expect(screen.queryByRole("button", { name: /^Push to campaigns/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /^Push to campaigns/ })).not.toBeInTheDocument();
 });
 
 // ---- Images (#200) ----
@@ -549,7 +549,7 @@ test("the campaign fork has no Images row", async () => {
   // own diverged art in the editor that owns it.
   renderCampaign();
   await screen.findByText(/World Copy/);
-  expect(screen.queryByRole("button", { name: /^Images\b/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: /^Images\b/ })).toBeNull();
 });
 
 test("Images is offered in the command palette, like every other world section", async () => {
@@ -958,6 +958,7 @@ test("an unknown section redirects rather than rendering a page headed Overview"
 test("a campaign is sent to its cast, and cannot address a world-only section", async () => {
   renderCampaignAtUrl("/campaigns/c/world");
   await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
+  cleanup();
   renderCampaignAtUrl("/campaigns/c/world/tags");
   await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
 });

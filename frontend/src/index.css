@@ -2605,9 +2605,9 @@ button.column-link {
   width: 100%; background: none; border: 0; text-align: left; cursor: pointer;
   transition: color 140ms ease-out;
 }
-/* The world shape's back link is a real link (`/worlds`) where the campaign
-   shape's is a button, and `.column-back` was written for the button: an
-   anchor arrives carrying the UA's underline. */
+/* Both shapes' back link are real links now (`/worlds`, `/campaigns/:cid`),
+   and `.column-back` was written for a `<button>` before that: an anchor
+   arrives carrying the UA's underline. */
 a.column-back { text-decoration: none; }
 
 /* ---- the character page (4f) ---- */

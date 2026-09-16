@@ -74,6 +74,14 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const navigate = useNavigate();
   const location = useLocation();
   const shape = campaign ? "campaign" : "world";
+  // The scope this page's addresses are built under. `widParam`, not the
+  // async `wid` state below: for the world shape they are the same value, and
+  // for the campaign shape this needs no world id at all, so it is available
+  // on the very first render -- the redirects further down, and every
+  // cross-navigation callback, depend on that.
+  const scopeForPaths: EntityScope = campaign
+    ? { kind: "campaign", id: cid }
+    : { kind: "world", id: widParam };
   const params = useSearchParams()[0];
   // `location.pathname` is raw. `useParams()["*"]` is not, and an id
   // containing a slash is exactly what the difference loses.
@@ -81,6 +89,31 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const parsed = parseWorldTail(tail, shape);
   const section: Section = parsed.ok ? parsed.section : defaultSection(shape);
   const rid = parsed.ok ? parsed.rid : null;
+  /** `?owner=` is only meaningful on a recordless Lore screen: it pre-owns the
+   *  blank form. Read nowhere else, so it cannot ride along to Items or sit
+   *  beside a record that already has owners of its own. */
+  const newOwner = section === "lore" && !rid ? (params.get("owner") ?? "") : "";
+  /** The nav `EntityEditor` consumes on mount / on the record changing.
+   *  Memoized on the three values that describe it rather than built as a
+   *  fresh object literal every render: `EntityEditor`'s inbound-nav effect
+   *  is keyed on `[nav]` *object identity*
+   *  (`components/EntityEditor.tsx`), and `onNavConsumed` is a no-op here —
+   *  nothing clears this one, because there is no state left to clear. A
+   *  fresh literal every render would re-fire that effect on every unrelated
+   *  re-render of this page (a count landing, a disclosure opening, the
+   *  palette registering its source) and silently overwrite whatever the
+   *  reader was mid-editing with the record's last-saved text. */
+  const navObj = useMemo(
+    () => (rid ? { focusEntry: rid } : newOwner ? { newOwner } : null),
+    // `section` is not read in the body -- `newOwner` already goes blank
+    // outside Lore, so it alone happens to be enough today. Listed anyway:
+    // this object's whole meaning ("the record/owner this SCREEN was handed")
+    // is scoped to a section, and depending on that only indirectly, through
+    // one field's own derivation, is the kind of thing a later edit to
+    // `newOwner` could quietly break.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [section, rid, newOwner],
+  );
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [name, setName] = useState("");
@@ -296,12 +329,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   }, [campaign, cid, widParam, groups, name, navigate]);
   usePaletteSource(paletteSource);
 
-  // What the tail could not name, and the campaign shape's root. The legacy
-  // translation immediately below runs before both, so `?section=` is not
-  // thrown away by a default redirect that also applies at the same address.
-  const scopeForPaths: EntityScope = campaign
-    ? { kind: "campaign", id: cid }
-    : { kind: "world", id: widParam };
   // FIRST: an old `?section=X&id=Y` link, translated once and replaced.
   //
   // Ahead of everything below, and that ordering is the point rather than an
@@ -360,16 +387,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // unknown, and a dash says so where a 0 would claim the section is empty.
   const dash = (n: number | null | undefined) => (n === null || n === undefined ? "—" : n);
 
-  /** `?owner=` is only meaningful on a recordless Lore screen: it pre-owns the
-   *  blank form. Read nowhere else, so it cannot ride along to Items or sit
-   *  beside a record that already has owners of its own. */
-  const newOwner = section === "lore" && !rid ? (params.get("owner") ?? "") : "";
-
-  const navFor = (kind: RecordSection) =>
-    section !== kind ? null
-      : rid ? { kind, focusEntry: rid }
-      : newOwner ? { kind, newOwner }
-      : null;
+  const navFor = (kind: RecordSection) => (section === kind ? navObj : null);
 
   const column = (
     <>
