@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type ProviderHealth } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_MODE } from "./theme/themes";
@@ -34,6 +34,7 @@ import SearchView from "./routes/SearchView";
 import WorldsView from "./routes/WorldsView";
 import WorldView from "./routes/WorldView";
 import CharacterPage from "./routes/CharacterPage";
+import { characterHref } from "./components/character/shared";
 import ModulesView from "./routes/ModulesView";
 import StyleGuidesView from "./routes/StyleGuidesView";
 import ResponsePresetsView from "./routes/ResponsePresetsView";
@@ -233,8 +234,12 @@ function Shell(
         <Route path="/campaigns/:cid/scenes/:sid/wrap-up" element={
           <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
                         ready={ready} />} />
-        <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
-        <Route path="/campaigns/:cid/characters/:eid" element={<CharacterPage campaign />} />
+        {/* A campaign's character used to live here, outside the world copy
+            that holds its other seven record kinds. It moved so the two shapes
+            are one shape; this keeps a link somebody already holds working,
+            and is a redirect rather than a second live route so there is still
+            exactly one address per screen. */}
+        <Route path="/campaigns/:cid/characters/:eid" element={<LegacyCharacterRedirect />} />
         {/* The ledger is a room, not a drawer over the transcript (4e): it is a
             table read top to bottom, and the supersession chains it exists to
             show do not fit in a panel wedged above the scene. */}
@@ -257,11 +262,19 @@ function Shell(
             the back button returns to it after following a hit. */}
         <Route path="/search" element={<SearchView />} />
         <Route path="/worlds" element={<WorldsView />} />
-        <Route path="/worlds/:wid" element={<WorldView />} />
         {/* A character owns a screen rather than a third of one — see
             `CharacterPage`. Both scopes, because a campaign's copy of a
-            character is a different record from the world's. */}
+            character is a different record from the world's. Declared before
+            the splats for a reader; the matcher ranks static segments above a
+            splat on its own. */}
         <Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} />
+        <Route path="/campaigns/:cid/world/characters/:eid" element={<CharacterPage campaign />} />
+        {/* One splat per shape, so every section and record of a world is the
+            same route object and React keeps ONE `WorldView` across all of
+            them. Sibling routes per section would remount the page on every
+            column click and re-read the world and its cover each time. */}
+        <Route path="/worlds/:wid/*" element={<WorldView />} />
+        <Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
         <Route path="/modules" element={<ModulesView />} />
         <Route path="/styles" element={<StyleGuidesView />} />
         <Route path="/response-presets" element={<ResponsePresetsView />} />
@@ -291,6 +304,23 @@ function Shell(
       )}
     </>
   );
+}
+
+/** The address a campaign's character page used to have.
+ *
+ *  Carries the version and whatever `location.state` the link was followed
+ *  with — `CharacterPage`'s own back link passes `{ reveal }` so a campaign
+ *  grid does not swallow an unseated character, and a redirect that dropped it
+ *  would make them read as deleted. */
+export function LegacyCharacterRedirect() {
+  const { cid = "", eid = "" } = useParams();
+  const location = useLocation();
+  const v = new URLSearchParams(location.search).get("v") ?? "";
+  // Through the helper, not a template string: it is the only thing allowed to
+  // know where a character's page lives, and it encodes segments the way the
+  // rest of the app does.
+  return <Navigate replace state={location.state}
+                   to={characterHref({ kind: "campaign", id: cid }, eid, v || undefined)} />;
 }
 
 export default function App() {

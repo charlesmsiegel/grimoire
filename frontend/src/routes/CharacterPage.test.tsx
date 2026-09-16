@@ -1,6 +1,7 @@
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import CharacterPage from "./CharacterPage";
+import { LegacyCharacterRedirect } from "../App";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -135,13 +136,13 @@ async function renderWorld(url = "/worlds/realm/characters/seraphine") {
   await screen.findByRole("heading", { name: "Seraphine", level: 1 });
 }
 
-async function renderCampaign(url = "/campaigns/run/characters/seraphine") {
+async function renderCampaign(url = "/campaigns/run/world/characters/seraphine") {
   lastLocation = "";
   render(
     <MemoryRouter initialEntries={[url]}>
       <Spy />
       <Routes>
-        <Route path="/campaigns/:cid/characters/:eid" element={<CharacterPage campaign />} />
+        <Route path="/campaigns/:cid/world/characters/:eid" element={<CharacterPage campaign />} />
         <Route path="*" element={<div>elsewhere</div>} />
       </Routes>
     </MemoryRouter>,
@@ -902,7 +903,7 @@ test("a character that cannot be read reports the reason instead of hanging", as
 test("back returns to the roster, in this scope", async () => {
   await renderCampaign();
   expect(screen.getByRole("link", { name: /All characters/ }).getAttribute("href"))
-    .toBe("/campaigns/run/world?section=characters");
+    .toBe("/campaigns/run/world/characters");
 });
 
 test("the birthdate picker is world-only and persists a complete date", async () => {
@@ -937,7 +938,7 @@ test("walking to another character remounts rather than reusing the page", async
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "Keeps the ledger." });
   fireEvent.click(screen.getByRole("link", { name: /All characters/ }));  // any nav
   // Re-enter at the other character.
-  await waitFor(() => expect(lastLocation).toContain("section=characters"));
+  await waitFor(() => expect(lastLocation).toContain("/worlds/realm/characters"));
 });
 
 test("a save in flight holds every other field's control", async () => {
@@ -1041,5 +1042,21 @@ test("going back hands the grid the character, so its filter cannot swallow them
   await renderCampaign();
   const back = screen.getByRole("link", { name: /All characters/ });
   fireEvent.click(back);
-  await waitFor(() => expect(lastLocation).toBe("/campaigns/run/world?section=characters"));
+  await waitFor(() => expect(lastLocation).toBe("/campaigns/run/world/characters"));
+});
+
+test("the address a campaign character used to have still lands on them", async () => {
+  let seen = "";
+  function Probe() { seen = useLocation().pathname + useLocation().search; return null; }
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run/characters/seraphine?v=veiled"]}>
+      <Probe />
+      <Routes>
+        <Route path="/campaigns/:cid/characters/:eid" element={<LegacyCharacterRedirect />} />
+        <Route path="/campaigns/:cid/world/characters/:eid" element={<div>landed</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText("landed");
+  expect(seen).toBe("/campaigns/run/world/characters/seraphine?v=veiled");
 });

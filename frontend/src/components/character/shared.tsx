@@ -5,6 +5,7 @@
  *  was a top-level helper in that one file, and is a helper in two now.
  */
 import { api, type Card, type CardFormat, type ChubImportResult, type EntityScope } from "../../api/client";
+import { sectionHref } from "../../worldPaths";
 
 /** The V3 card's prose fields in editing order, with the control each wants.
  *
@@ -123,16 +124,13 @@ export function buildCard(card: Card, greetings: string[]): Card {
 /** Where a character's page lives, per scope. One place, because the grid, the
  *  world index's redirect and every cross-link have to agree on it. */
 export function characterHref(scope: EntityScope, cid: string, vid?: string): string {
-  const base = scope.kind === "world"
-    ? `/worlds/${scope.id}/characters/${cid}`
-    : `/campaigns/${scope.id}/characters/${cid}`;
-  return vid ? `${base}?v=${encodeURIComponent(vid)}` : base;
+  return sectionHref(scope, vid
+    ? { kind: "record", at: "characters", rid: cid, v: vid }
+    : { kind: "record", at: "characters", rid: cid });
 }
 
 /** Where its grid lives — the page a character's `‹ All characters` goes back
  *  to, which is a section of the world view in both scopes. */
 export function charactersHref(scope: EntityScope): string {
-  return scope.kind === "world"
-    ? `/worlds/${scope.id}?section=characters`
-    : `/campaigns/${scope.id}/world?section=characters`;
+  return sectionHref(scope, { kind: "section", at: "characters" });
 }
