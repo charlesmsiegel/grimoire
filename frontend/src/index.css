@@ -1025,8 +1025,11 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 button.primary, a.primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--rule); padding: 8px 14px; cursor: pointer; font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
 /* `<a>`'s UA default underline is not overridden by anything above -- same
    pattern as `a.column-back`, `.campaign-name a` and the other button-styled
-   anchors in this file. */
-a.primary { text-decoration: none; }
+   anchors in this file. `display: inline-block` is `<button>`'s own UA
+   default, restored here because a bare anchor computes `inline`, which
+   makes `.editor-list .new`'s `width: 100%` a no-op -- `.column-back` and
+   `.column-row` carry the same idiom (`block` / `flex`) for the same reason. */
+a.primary { display: inline-block; text-decoration: none; }
 .banner { background: var(--banner-bg); border: 1px solid var(--accent); color: var(--banner-ink); padding: 10px 16px; margin: 12px 22px; font-family: var(--fm); font-size: 11px; flex: none; }
 .banner a { color: var(--banner-ink); }
 .banner.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
