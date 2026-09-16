@@ -1195,8 +1195,13 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 /* `.chip` sets no `text-decoration`, which every `<button class="chip">` and
    `<span class="chip">` badge already renders without one — an `<a
    class="chip">` (the unlinked-version row) is the one tag here whose UA
-   default disagrees, so it is the one that needs telling. */
-a.chip { text-decoration: none; }
+   default disagrees, so it is the one that needs telling. Same story for
+   `text-align`: a `<button>`'s UA default centers its label, an `<a>`'s does
+   not, and most chips are one short word where that never shows -- but a
+   long name (a greeting's predecessor/successor chip) wraps inside the
+   240px sidebar, and only then does an unlinked chip's text sit flush left
+   while every other chip centers (caught by measurement, not by reading). */
+a.chip { text-decoration: none; text-align: center; }
 
 .editor { display: flex; gap: 16px; align-items: flex-start; }
 /* the rail scrolls on its own so a long greeting list doesn't drag the page */

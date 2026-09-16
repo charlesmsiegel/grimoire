@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
@@ -34,6 +34,7 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
      *  no address to point at. */
     recordHref: (rid: string) => string;
     module?: ModuleDetail | null }) {
+  const navigate = useNavigate();
   const worldScope = scope.kind === "world";
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [tags, setTags] = useState<Record<string, string>>({});
@@ -50,6 +51,13 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
   // one, where Edit and Delete act on the NEW scope. Bumped by `select` and by
   // both effects below; every setState after an await is gated on it.
   const selReq = useRef(0);
+  /** Set just before navigating to a record this editor itself just created,
+   *  so the URL-driven `select` that navigation triggers opens straight into
+   *  the form instead of the read-only view every other `select` caller
+   *  wants -- a brand-new PC has nothing to look at yet. Consumed (and reset)
+   *  the moment `select` reads it, so it cannot leak onto some later,
+   *  unrelated selection. */
+  const openInEdit = useRef(false);
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
@@ -95,8 +103,13 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
   // slower read lands and reopens her at an address that names no record.
   useEffect(() => {
     const req = ++selReq.current;
-    if (selected) void select(selected, undefined, req);
-    else { setDetail(null); setVid(""); setPersona(BLANK); setMode("view"); }
+    if (selected) {
+      // A bookmarked/reload address is exactly what this branch made
+      // possible -- so a read that 404s here has to say so rather than
+      // leaving a blank state up with nothing to explain it.
+      void select(selected, undefined, req)
+        .catch((err) => { if (req === selReq.current) setError(errorText(err)); });
+    } else { setDetail(null); setVid(""); setPersona(BLANK); setMode("view"); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, scope.kind, scope.id]);
 
@@ -108,7 +121,8 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
     const v = d.versions.find((x) => x.id === (version ?? d.meta.default_version)) ?? d.versions[0];
     setVid(v?.id ?? "");
     setPersona(v?.persona ?? BLANK);
-    setMode("view");
+    setMode(openInEdit.current ? "edit" : "view");
+    openInEdit.current = false;
     setCropOpen(false);
     // `readPC` already carries this version's image names, but not their
     // cache-busting tokens, and a promote rewrites two files under stable
@@ -143,8 +157,14 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
       ? await api.createPC(wid, { name })
       : await api.createCampaignPC(scope.id, { name });
     await reload();
-    await select(pc);
-    setMode("edit"); // a brand-new PC goes straight to the form
+    // Navigate rather than `select` directly: without this the address bar
+    // stays on the section root while the form shows the new PC -- Back does
+    // nothing, a reload loses it, a copied link sends someone elsewhere. The
+    // URL-driven `selected` effect is what actually opens the record; `openInEdit`
+    // is what keeps that open straight in the form (a brand-new PC has nothing
+    // to view yet) rather than the read-only view every other selection wants.
+    openInEdit.current = true;
+    navigate(recordHref(pc));
   }
 
   async function savePersona() {
@@ -354,8 +374,8 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
                           onDone={async (id) => {
                             setWizardOpen(false);
                             await reload();
-                            await select(id);
-                            setMode("edit");
+                            openInEdit.current = true;
+                            navigate(recordHref(id));
                           }}
                           onCancel={() => setWizardOpen(false)} />
         ) : !detail ? (

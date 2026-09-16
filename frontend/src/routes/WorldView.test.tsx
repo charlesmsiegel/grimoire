@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
 import {
-  MemoryRouter, Routes, Route, useLocation, useNavigate,
+  MemoryRouter, Routes, Route, useLocation, useNavigate, Outlet,
   createMemoryRouter, RouterProvider,
 } from "react-router-dom";
 import WorldView from "./WorldView";
@@ -264,6 +264,11 @@ test("shows the world name and opens on the Overview", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
   expect(indexRow("Overview")).toHaveClass("active");
+  // The column's rows are navigation links now, not tab buttons -- they owe
+  // the same `aria-current` convention `AppRail`/`PhoneTabs` already use, so
+  // the open section is announced, not just colored.
+  expect(indexRow("Overview")).toHaveAttribute("aria-current", "page");
+  expect(indexRow("Push to campaigns")).not.toHaveAttribute("aria-current");
   expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
 });
 
@@ -1000,6 +1005,31 @@ test("an old section link lands on the record's new address, replacing it", asyn
   renderAtUrl("/worlds/w?section=lore&id=the-salt-pact");
   await waitFor(() => expect(lastPath).toBe("/worlds/w/lore/the-salt-pact"));
   expect(lastSearch).toBe("");
+});
+
+test("Back from a legacy link lands outside the world, not bouncing forward through the redirect again", async () => {
+  // The legacy translation (WorldView.tsx) fires a `<Navigate replace>`, not a
+  // plain push -- without `replace` this history stack would read
+  // [/away, "?section=lore&id=..." legacy URL, canonical URL], and stepping
+  // Back from the canonical URL would land back on the legacy one, which
+  // redirects forward again on render: Back would be permanently trapped one
+  // step short of leaving the world.
+  const router = createMemoryRouter(
+    [
+      {
+        element: <><PathSpy /><Outlet /></>,
+        children: [
+          { path: "/worlds/:wid/*", element: <WorldView /> },
+          { path: "*", element: <div>away</div> },
+        ],
+      },
+    ],
+    { initialEntries: ["/away", "/worlds/w?section=lore&id=the-salt-pact"], initialIndex: 1 },
+  );
+  render(<RouterProvider router={router} />);
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/lore/the-salt-pact"));
+  await router.navigate(-1);
+  await waitFor(() => expect(lastPath).toBe("/away"));
 });
 
 test("an old images link keeps the campaign it was narrowed to", async () => {

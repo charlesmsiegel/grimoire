@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
+import { errorText } from "../api/errors";
 import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
@@ -379,6 +380,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   module?: ModuleDetail | null;
 }) {
   const scope: EntityScope = scopeProp ?? { kind: "world", id: wid };
+  const navigate = useNavigate();
   const [items, setItems] = useState<EntitySummary[]>([]);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<string | null>(null); // entity id, or null = new
@@ -547,8 +549,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // lands and reopens A at an address that names no record.
   useEffect(() => {
     const req = ++readReq.current;
-    if (selected) void select(selected, req);
-    else resetForm(newOwner);
+    if (selected) {
+      // A bookmarked/reload address is exactly what this branch made
+      // possible -- so a read that 404s here has to say so rather than
+      // leaving a blank "new" form up with nothing to explain it.
+      void select(selected, req)
+        .catch((err: unknown) => { if (req === readReq.current) setError(errorText(err)); });
+    } else resetForm(newOwner);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, newOwner, scope.kind, scope.id]);
 
@@ -622,7 +629,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
       const { id } = await api.instantiateContent(scope, kind, module.id, contentPreview.id);
       setContentPreview(null);
       await reload();
-      await select(id);
+      // Navigate rather than `select` directly: the address still names the
+      // section root, so `+ New …` (a `Link` to `sectionPath`) would point at
+      // the screen already showing and silently do nothing (#follow-up to
+      // GreetingEditor's own fix for the same defect). The URL-driven
+      // `selected` effect is what actually opens the record read-only.
+      navigate(recordHref(id));
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -968,7 +980,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
           <CreationWizard scope={scope} kind={kind} module={module}
                           createRecord={(n) => api.createEntity(scope, kind, { name: n }).then((r) => r.id)}
                           deleteRecord={(id) => api.deleteEntity(scope, kind, id).then(() => {})}
-                          onDone={async (id) => { setWizardOpen(false); await reload(); await select(id); }}
+                          onDone={async (id) => { setWizardOpen(false); await reload(); navigate(recordHref(id)); }}
                           onCancel={() => setWizardOpen(false)} />
         ) : contentPreview ? (
           <div className="detail-view">

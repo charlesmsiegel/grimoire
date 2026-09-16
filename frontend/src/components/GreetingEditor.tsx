@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
+import { errorText } from "../api/errors";
 import { Field } from "./Field";
 import { DemotePanel } from "./DemotePanel";
 import { GreetingMarkdown } from "./GreetingMarkdown";
@@ -160,8 +161,13 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   const selReq = useRef(0);
   useEffect(() => {
     const req = ++selReq.current;
-    if (selected) void select(selected, () => req === selReq.current);
-    else resetForm();
+    if (selected) {
+      // A bookmarked/reload address is exactly what this branch made
+      // possible -- so a read that 404s here has to say so rather than
+      // leaving a blank "new greeting" form up with nothing to explain it.
+      void select(selected, () => req === selReq.current)
+        .catch((err: unknown) => { if (req === selReq.current) setError(errorText(err)); });
+    } else resetForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, scope.kind, scope.id]);
 
@@ -434,15 +440,23 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     setPicking(null);
   }
 
+  /** `href`, when given, is the only case that means "another record in THIS
+   *  section" -- Unlocks/Excludes chip to a sibling greeting, addressable by
+   *  `recordHref` alone. `onItem` stays for a chip that opens a record in a
+   *  DIFFERENT section (the location chip, via the parent's `onOpenLocation`),
+   *  which this editor cannot turn into a `Link` because it does not know that
+   *  section's address -- the callback is what asks the parent to navigate. */
   function sideList(label: string, items: string[], render: (id: string) => string,
-                    onItem?: (id: string) => void) {
+                    opts?: { onItem?: (id: string) => void; href?: (id: string) => string }) {
     if (items.length === 0) return null;
     return (
       <div className="side-section">
         <h4>{label}</h4>
-        <div className="chips">{items.map((id) => onItem
-          ? <button key={id} className="chip on" onClick={() => onItem(id)}>{render(id)}</button>
-          : <span key={id} className="chip on">{render(id)}</span>)}</div>
+        <div className="chips">{items.map((id) => opts?.href
+          ? <Link key={id} to={opts.href(id)} className="chip on">{render(id)}</Link>
+          : opts?.onItem
+            ? <button key={id} className="chip on" onClick={() => opts.onItem!(id)}>{render(id)}</button>
+            : <span key={id} className="chip on">{render(id)}</span>)}</div>
       </div>
     );
   }
@@ -585,7 +599,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
                   labelled only once it has. */}
               {sideList("Location", form.location ? [form.location] : [],
                         (id) => (locationsRead && !locationKnown ? `${id} (missing)` : locName(id)),
-                        locationKnown ? onOpenLocation : undefined)}
+                        { onItem: locationKnown ? onOpenLocation : undefined })}
               {form.present.length > 0 && (
                 <div className="side-section">
                   <h4>Present characters</h4>
@@ -606,12 +620,12 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
                     {form.predecessor_join === "all" ? "all must be played" : "any unlocks it"}
                   </div>
                   <div className="chips">{predecessors.map((id) => (
-                    <button key={id} className="chip on" onClick={() => select(id)}>{greetName(id)}</button>
+                    <Link key={id} to={recordHref(id)} className="chip on">{greetName(id)}</Link>
                   ))}</div>
                 </div>
               )}
-              {sideList("Unlocks", edges.leads_to, greetName, select)}
-              {sideList("Excludes", edges.excludes, greetName, select)}
+              {sideList("Unlocks", edges.leads_to, greetName, { href: recordHref })}
+              {sideList("Excludes", edges.excludes, greetName, { href: recordHref })}
               {sideList("Requires tags", form.requires_tags, (t) => tags[t] ?? t)}
             </aside>
           </div>

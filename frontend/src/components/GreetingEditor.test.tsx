@@ -108,6 +108,12 @@ test("a greeting row is a link", async () => {
     .toHaveAttribute("href", "/worlds/realm/greetings/tide-watch");
 });
 
+test("a bookmarked address that fails to read reports the failure instead of leaving a blank form", async () => {
+  (api.readGreeting as any).mockRejectedValueOnce(new Error("not found"));
+  renderGreetings({ selected: "ghost" });
+  await screen.findByText("Error: not found");
+});
+
 test("leaving a greeting for the section root survives its own late read", async () => {
   const slow = deferred<any>();
   (api.readGreeting as any).mockImplementationOnce(() => slow.promise);
@@ -437,21 +443,24 @@ test("the view sidebar shows the full dependency picture", async () => {
   expect(within(within(side).getByText("Requires tags").closest(".side-section") as HTMLElement).getByText("VIP")).toBeInTheDocument();
 });
 
-test("clicking a Depends-on scene navigates to that greeting", async () => {
+test("a Depends-on chip is a link to that greeting's own address, not a same-page select", async () => {
+  // A `<button onClick={() => select(id)}>` here used to leave the address
+  // bar naming the greeting the reader started from -- Back did nothing, a
+  // reload showed the wrong record, and a copied link sent someone else
+  // elsewhere. It has to be a real `Link` to the predecessor's own address.
   (api.listGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
     { id: "prologue", name: "Prologue", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
   ]);
-  (api.readGreeting as any).mockImplementation((_w: string, id: string) => Promise.resolve({
-    meta: { id, name: id === "prologue" ? "Prologue" : "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
-    body: "x", edges: { leads_to: [], excludes: [] }, predecessors: id === "open" ? ["prologue"] : [],
-  }));
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
+    body: "x", edges: { leads_to: [], excludes: [] }, predecessors: ["prologue"],
+  });
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const dep = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Depends on").closest(".side-section") as HTMLElement;
-  fireEvent.click(within(dep).getByRole("button", { name: "Prologue" }));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "prologue"));
+  expect(within(dep).getByRole("link", { name: "Prologue" })).toHaveAttribute("href", "/section/prologue");
 });
 
 test("editing a greeting toggles present characters and saves them", async () => {

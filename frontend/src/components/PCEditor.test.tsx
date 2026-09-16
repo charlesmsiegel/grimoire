@@ -1,7 +1,14 @@
 import type { ComponentProps } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useParams, useLocation } from "react-router-dom";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { PCEditor } from "./PCEditor";
+
+// Spies the address `useNavigate` actually lands the router on.
+let lastPath = "";
+function PathSpy() {
+  lastPath = useLocation().pathname;
+  return null;
+}
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -106,6 +113,29 @@ const pcsWith = (over: Partial<Props> = {}) => (
 );
 const renderPCs = (over: Partial<Props> = {}) => render(pcsWith(over));
 
+/** A real route, `selected` driven from `:pid` -- what `pcsWith` deliberately
+ *  is not (its `selected` is a static prop, so nothing here reads the URL
+ *  back). The create paths (`+ New PC`, its sheet wizard) now `navigate`
+ *  rather than `select` directly, so proving they open the record at all
+ *  needs the router to actually feed that address back in as `selected`,
+ *  the way `WorldView` does for real. */
+function RoutedPCScreen(over: Partial<Props> = {}) {
+  const { pid } = useParams();
+  return <PCEditor {...DEFAULTS} {...over} selected={pid ?? null} />;
+}
+function renderRoutedPCs(over: Partial<Props> = {}) {
+  lastPath = "";
+  return render(
+    <MemoryRouter initialEntries={["/worlds/realm/pcs"]}>
+      <PathSpy />
+      <Routes>
+        <Route path="/worlds/realm/pcs" element={<RoutedPCScreen {...over} />} />
+        <Route path="/worlds/realm/pcs/:pid" element={<RoutedPCScreen {...over} />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 /** A promise this test resolves on its own schedule, for proving which of two
  *  overlapping `select`s wins when they land out of order. */
 function deferred<T>() {
@@ -113,6 +143,12 @@ function deferred<T>() {
   const promise = new Promise<T>((r) => { resolve = r; });
   return { promise, resolve };
 }
+
+test("a bookmarked address that fails to read reports the failure instead of leaving a blank form", async () => {
+  (api.readPC as any).mockRejectedValueOnce(new Error("not found"));
+  renderPCs({ selected: "ghost" });
+  await screen.findByText("Error: not found");
+});
 
 test("a PC row is a link to that PC's address", async () => {
   renderPCs({ selected: null });
@@ -176,12 +212,17 @@ test("saving the persona returns to the read-only view", async () => {
   await waitFor(() => expect(container.querySelector("textarea")).toBeNull());
 });
 
-test("creating a PC prompts for a name and opens the form directly", async () => {
+test("creating a PC prompts for a name, navigates to its own address, and opens the form directly", async () => {
+  // Without the `navigate`, the address bar stays on the section root while
+  // the form shows the new PC -- Back does nothing, a reload loses it, a
+  // copied link sends someone else elsewhere. Routed for real (not the bare
+  // `renderPCs` harness) so the round trip through `selected` is genuine.
   vi.spyOn(window, "prompt").mockReturnValue("Rook");
-  const { container } = renderPCs();
+  const { container } = renderRoutedPCs();
   await screen.findByText("Elara");
   fireEvent.click(screen.getByRole("button", { name: /new pc/i }));
   await waitFor(() => expect(api.createPC).toHaveBeenCalledWith("realm", { name: "Rook" }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/realm/pcs/rook"));
   await waitFor(() => expect(container.querySelector("textarea")).not.toBeNull()); // straight to the form
 });
 
@@ -294,6 +335,27 @@ it("wizard trigger opens the wizard, finds the characters sheet type, and create
   fireEvent.click(screen.getByText("Create"));
   await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalledWith(
     { kind: "world", id: "w1" }, "testmod", "pcs", "elara", { sheet_type: "hero", spends: {}, expected: null }));
+});
+
+test("the sheet wizard navigates to the new PC's own address on Create", async () => {
+  // Same desync as plain `+ New PC` (above), second call site: the wizard's
+  // own `onDone` used to finish with `select(id)` alone.
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.createPC as any).mockResolvedValue({ pc: "elara" });
+  (api.putSheetCreation as any).mockResolvedValue({ sheet: { sheet_type: "hero", fields: {}, derived: {}, errors: [] } });
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  renderRoutedPCs({ module });
+  fireEvent.click(await screen.findByText("+ New PC with sheet…"));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Elara" } });
+  fireEvent.click(screen.getByText("Next"));
+  fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
+  fireEvent.click(screen.getByText("Create"));
+  await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalled());
+  await waitFor(() => expect(lastPath).toBe("/worlds/realm/pcs/elara"));
 });
 
 it("world scope: wires the wizard's deleteRecord to api.deletePC so a failed sheet write rolls back", async () => {

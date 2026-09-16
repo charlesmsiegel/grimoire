@@ -386,6 +386,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
 
       {!campaign && (
         <Link className={"column-row" + (section === "overview" ? " active" : "")}
+              aria-current={section === "overview" ? "page" : undefined}
               to={hrefFor("overview")}>
           <span className="column-row-label">Overview</span>
           <span className="column-row-count" aria-hidden>→</span>
@@ -396,6 +397,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           own pending changes are reviewed in the campaign, not here. */}
       {!campaign && (
         <Link className={"column-row" + (section === "push" ? " active" : "")}
+              aria-current={section === "push" ? "page" : undefined}
               to={hrefFor("push")}>
           <span className="column-row-label">Push to campaigns</span>
           <span className="column-row-count">{dash(campaignCount)}</span>
@@ -409,6 +411,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           reads behind it are the ones this view exists to make once. */}
       {!campaign && (
         <Link className={"column-row" + (section === "images" ? " active" : "")}
+              aria-current={section === "images" ? "page" : undefined}
               to={hrefFor("images")}>
           <span className="column-row-label">Images</span>
         </Link>
@@ -419,6 +422,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           {g.rows.map((r) => (
             <Link key={r.key}
                   className={"column-row" + (section === r.key ? " active" : "")}
+                  aria-current={section === r.key ? "page" : undefined}
                   to={hrefFor(r.key)}>
               <span className="column-row-label">{r.label}</span>
               <span className="column-row-count">{dash(counts[r.key])}</span>

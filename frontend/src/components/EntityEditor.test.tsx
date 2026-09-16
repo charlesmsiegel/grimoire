@@ -1,7 +1,17 @@
 import type { ComponentProps } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { EntityEditor } from "./EntityEditor";
+
+// Spies the address `useNavigate` actually lands the router on -- the create
+// paths (instantiate, the sheet wizard) fix a bug where the record was opened
+// with the URL still naming the section root, so these are read back rather
+// than assumed.
+let lastPath = "";
+function PathSpy() {
+  lastPath = useLocation().pathname;
+  return null;
+}
 
 vi.mock("../api/client", () => ({
   // The editor branches on `instanceof ApiError` to tell a stale-record 409
@@ -115,6 +125,7 @@ type Props = ComponentProps<typeof EntityEditor>;
 function Wrap(props: Partial<Props> & { kind: Props["kind"]; wid: string }) {
   return (
     <MemoryRouter>
+      <PathSpy />
       <EntityEditor sectionPath="/section" recordHref={(r) => `/section/${r}`} {...props} />
     </MemoryRouter>
   );
@@ -130,6 +141,12 @@ const editorWith = (p: Partial<Props> & { kind: Props["kind"] }) => (
 const renderEditor = (p: Partial<Props> & { kind: Props["kind"] }) => render(editorWith(p));
 
 const entityFixture = (id: string, name: string) => ({ meta: { id, name }, body: "x", rev: "r1" });
+
+test("a bookmarked address that fails to read reports the failure instead of leaving a blank form", async () => {
+  (api.readEntity as any).mockRejectedValueOnce(new Error("not found"));
+  render(<Wrap wid="w" kind="lore" selected="ghost" />);
+  await screen.findByText("Error: not found");
+});
 
 test("lists entities and creates one with keys", async () => {
   render(<Wrap wid="w" kind="lore" />);
@@ -477,7 +494,11 @@ test("merges module content into the rail as templates and previews on click", a
   expect(screen.queryByText("Edit")).not.toBeInTheDocument();
 });
 
-test("instantiate creates a real record and selects it", async () => {
+test("instantiate creates a real record and navigates to its own address", async () => {
+  // Reproduces the reviewer's proof: mount, instantiate a template, and the
+  // address bar has to move off the section root -- otherwise a subsequent
+  // "+ New" (a `Link` to that same root) points at the screen already
+  // showing and silently does nothing.
   const module = {
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
@@ -493,12 +514,13 @@ test("instantiate creates a real record and selects it", async () => {
     kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
     keys: "", sheet_type: null, fields: {},
   });
+  lastPath = "";
   render(<Wrap wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("Lantern of Winnowing"));
   fireEvent.click(await screen.findByText("Instantiate"));
   await waitFor(() => expect(api.instantiateContent).toHaveBeenCalledWith(
     { kind: "world", id: "w1" }, "items", "testmod", "lantern"));
-  await screen.findByText("Edit"); // back to a normal read-only view of the new record
+  await waitFor(() => expect(lastPath).toBe("/section/lantern"));
 });
 
 test("a route change to a pre-owned form clears a stale content preview", async () => {
@@ -568,6 +590,33 @@ it("wires the wizard's deleteRecord to api.deleteEntity so a failed sheet write 
   fireEvent.click(screen.getByText("Create"));
 
   await waitFor(() => expect(api.deleteEntity).toHaveBeenCalledWith({ kind: "world", id: "w1" }, "items", "e1"));
+});
+
+test("the sheet wizard navigates to the new record's own address on Create", async () => {
+  // Same defect, second call site: `CreationWizard`'s own `onDone` used to
+  // finish with `select(id)` alone, leaving the address bar on the section
+  // root once the wizard closed.
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  (api.createEntity as any).mockResolvedValue({ id: "sword-id" });
+  // A prior test in this file (deliberately) rejects this call; `beforeEach`
+  // only clears call history, not a stubbed implementation, so this one has
+  // to restate its own success rather than inherit that failure.
+  (api.putSheetCreation as any).mockResolvedValue({ sheet: null });
+  lastPath = "";
+  render(<Wrap wid="w1" kind="items" module={module} />);
+  fireEvent.click(await screen.findByText("+ New item with sheet…"));
+  await screen.findByText("New item (with sheet)");
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Sword" } });
+  fireEvent.click(screen.getByText("Next"));
+  fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
+  fireEvent.click(screen.getByText("Create"));
+  await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalled());
+  await waitFor(() => expect(lastPath).toBe("/section/sword-id"));
 });
 
 it("hides the wizard trigger when the module has no sheet type for this kind", async () => {
