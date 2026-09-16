@@ -1,4 +1,6 @@
-﻿import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+﻿import type { ComponentProps } from "react";
+import { MemoryRouter } from "react-router-dom";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { GreetingEditor } from "./GreetingEditor";
 
 vi.mock("../api/client", () => ({
@@ -55,6 +57,67 @@ beforeEach(() => {
   (api.updateGreeting as any).mockResolvedValue({ ok: true });
 });
 
+type Props = ComponentProps<typeof GreetingEditor>;
+
+/** The generic harness the bulk of this suite renders through now that
+ *  selection is a prop rather than internal click state -- the same shape as
+ *  `EntityEditor`'s `Wrap`. `sectionPath` and `recordHref` are dummy
+ *  placeholders here on purpose: these tests assert on what the editor does
+ *  with a record already selected (or with a route change simulated via
+ *  `rerender`), never on where its links point. The two tests about the
+ *  links themselves render through `renderGreetings` below instead, which
+ *  carries real values. */
+function Wrap(props: Partial<Props> & { scope: Props["scope"]; wid: string }) {
+  return (
+    <MemoryRouter>
+      <GreetingEditor sectionPath="/section" recordHref={(r) => `/section/${r}`} {...props} />
+    </MemoryRouter>
+  );
+}
+
+const GREETINGS_DEFAULTS = {
+  wid: "realm", scope: { kind: "world" as const, id: "realm" },
+  sectionPath: "/worlds/realm/greetings",
+  recordHref: (r: string) => `/worlds/realm/greetings/${r}`,
+};
+const greetingsWith = (p: Partial<Props> = {}) => (
+  <MemoryRouter><GreetingEditor {...GREETINGS_DEFAULTS} {...p} /></MemoryRouter>);
+const renderGreetings = (p: Partial<Props> = {}) => render(greetingsWith(p));
+
+const greetingFixture = (id: string, name: string) => ({
+  meta: { id, name, character: "", version: "", present: [] as string[], requires_tags: [] as string[],
+          predecessor_join: "all" as const },
+  body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
+});
+
+/** A promise plus the handle to settle it later, so a test can hold one
+ *  scope's read open while another lands. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+test("a greeting row is a link", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "tide-watch", name: "Tide Watch", character: "", version: "", present: [],
+      requires_tags: [], predecessor_join: "all" },
+  ]);
+  renderGreetings({ selected: null });
+  expect(await screen.findByRole("link", { name: /Tide Watch/ }))
+    .toHaveAttribute("href", "/worlds/realm/greetings/tide-watch");
+});
+
+test("leaving a greeting for the section root survives its own late read", async () => {
+  const slow = deferred<any>();
+  (api.readGreeting as any).mockImplementationOnce(() => slow.promise);
+  const { rerender } = renderGreetings({ selected: "tide-watch" });
+  rerender(greetingsWith({ selected: null }));
+  slow.resolve(greetingFixture("tide-watch", "Tide Watch"));
+  await screen.findByRole("link", { name: /New greeting/ });
+  expect(screen.queryByRole("heading", { name: "Tide Watch" })).toBeNull();
+});
+
 // --- rail search and mark filters ------------------------------------------
 
 const CAST = [
@@ -78,7 +141,7 @@ const railOf = (c: HTMLElement) => c.querySelector(".editor-list") as HTMLElemen
 test("mark chips hide their group, and are absent in world scope", async () => {
   (api.listGreetings as any).mockResolvedValue(RAIL);
   (api.listCharacters as any).mockResolvedValue(CAST);
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
 
@@ -101,7 +164,7 @@ test("world scope has no mark chips, since a world has no play history", async (
   (api.listGreetings as any).mockResolvedValue(
     RAIL.map(({ mark, ...g }) => g));   // a world list carries no marks
   (api.listCharacters as any).mockResolvedValue(CAST);
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
   expect(within(rail).queryByRole("button", { name: /^played/ })).toBeNull();
@@ -113,7 +176,7 @@ test("world scope has no mark chips, since a world has no play history", async (
 test("search matches the greeting name, its source character, and present characters", async () => {
   (api.listGreetings as any).mockResolvedValue(RAIL);
   (api.listCharacters as any).mockResolvedValue(CAST);
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
 
@@ -140,7 +203,7 @@ test("search and mark filters reset when the scope changes", async () => {
   (api.listGreetings as any).mockResolvedValue(RAIL);
   (api.listCharacters as any).mockResolvedValue(CAST);
   const { container, rerender } = render(
-    <GreetingEditor scope={{ kind: "campaign", id: "a" }} wid="w" />);
+    <Wrap scope={{ kind: "campaign", id: "a" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
 
@@ -148,7 +211,7 @@ test("search and mark filters reset when the scope changes", async () => {
   fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: "ledger" } });
   await waitFor(() => expect(within(rail).queryByText("Saltmarch Dawn")).toBeNull());
 
-  rerender(<GreetingEditor scope={{ kind: "campaign", id: "b" }} wid="w" />);
+  rerender(<Wrap scope={{ kind: "campaign", id: "b" }} wid="w" />);
   // campaign b opens on its whole list, with nothing carried over
   await waitFor(() => expect(within(rail).getByText("Saltmarch Dawn")).toBeInTheDocument());
   expect(within(rail).getByText("A Quiet Word")).toBeInTheDocument();
@@ -169,7 +232,7 @@ test("search matches a decomposed name typed in composed form", async () => {
     greeting("cafe", decomposed, "seraphine", []),
   ]);
   (api.listCharacters as any).mockResolvedValue(CAST);
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await waitFor(() => expect(rail.querySelectorAll(".row")).toHaveLength(1));
 
@@ -185,7 +248,7 @@ test("the status line says nothing until both lists have loaded", async () => {
   let releaseChars: (v: any) => void = () => {};
   (api.listGreetings as any).mockReturnValue(new Promise((r) => { releaseGreetings = r; }));
   (api.listCharacters as any).mockReturnValue(new Promise((r) => { releaseChars = r; }));
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   const status = within(rail).getByRole("status");
 
@@ -205,7 +268,7 @@ test("the status line says nothing until both lists have loaded", async () => {
 test("the result count is a live region", async () => {
   (api.listGreetings as any).mockResolvedValue(RAIL);
   (api.listCharacters as any).mockResolvedValue(CAST);
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
 
@@ -226,9 +289,8 @@ test("the open greeting stays listed even when the filters would hide it", async
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
   (api.updateGreeting as any).mockResolvedValue({ ok: true });
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="word" />);
   const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("A Quiet Word"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
 
   fireEvent.click(within(rail).getByRole("button", { name: /^skip 1$/ }));   // would hide it
@@ -247,9 +309,7 @@ test("clicking a greeting shows a read-only rendered view; Edit reveals the form
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "Hello **world**", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   // read-only: markdown rendered, no editable textarea
   expect(screen.getByText("world")).toBeInTheDocument();
@@ -269,9 +329,7 @@ test("greeting body demotes scene-label headings and keeps single newlines", asy
     body: "#Rooftop Setting#\n\nFirst line\nSecond line",
     edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await screen.findByText("Rooftop Setting");
   expect(screen.queryByRole("heading", { name: /rooftop setting/i })).toBeNull();
   expect(container.querySelector(".detail-rendered br")).not.toBeNull();
@@ -279,7 +337,7 @@ test("greeting body demotes scene-label headings and keeps single newlines", asy
 
 
 test("creating a greeting posts the draft then sets edges", async () => {
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Open" } });
   fireEvent.change(screen.getByLabelText("Character"), { target: { value: "seraphine" } });
@@ -297,7 +355,7 @@ test("creating a greeting posts the draft then sets edges", async () => {
 });
 
 test("creating a narrator-only greeting needs no character or version", async () => {
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   // A shared greeting needs no primary character, but can still name its full cast.
   expect(screen.queryByLabelText("Version")).toBeNull();
@@ -312,7 +370,7 @@ test("creating a narrator-only greeting needs no character or version", async ()
 });
 
 test("version options follow the selected character", async () => {
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Character"), { target: { value: "seraphine" } });
   // the version select now offers 'default'
@@ -321,7 +379,7 @@ test("version options follow the selected character", async () => {
 });
 
 test("import-from-character posts the selected character + version", async () => {
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Character"), { target: { value: "seraphine" } });
   fireEvent.change(screen.getByLabelText("Version"), { target: { value: "default" } });
@@ -345,9 +403,7 @@ test("clicking a present character opens that character at the right version", a
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
   (api.updateGreeting as any).mockResolvedValue({ ok: true });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenCharacter={onOpenCharacter} />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" onOpenCharacter={onOpenCharacter} selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const present = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Present characters").closest(".side-section") as HTMLElement;
@@ -370,9 +426,7 @@ test("the view sidebar shows the full dependency picture", async () => {
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: ["vip"], predecessor_join: "any" },
     body: "hi", edges: { leads_to: ["finale"], excludes: ["secret"] }, predecessors: ["prologue"],
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   const dep = within(side).getByText("Depends on").closest(".side-section") as HTMLElement;
@@ -392,9 +446,7 @@ test("clicking a Depends-on scene navigates to that greeting", async () => {
     meta: { id, name: id === "prologue" ? "Prologue" : "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
     body: "x", edges: { leads_to: [], excludes: [] }, predecessors: id === "open" ? ["prologue"] : [],
   }));
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const dep = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Depends on").closest(".side-section") as HTMLElement;
@@ -415,9 +467,7 @@ test("editing a greeting toggles present characters and saves them", async () =>
     body: "hi", edges: { leads_to: [], excludes: [] },
   });
   (api.updateGreeting as any).mockResolvedValue({ ok: true });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   const present = screen.getByText("Present characters").closest(".field") as HTMLElement;
@@ -441,9 +491,7 @@ test("editing a greeting can re-point its character and version (#17)", async ()
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, rev: "r1",
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 
@@ -480,9 +528,7 @@ test("re-pointing adds the new primary to a cast that lacks the old one", async 
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["winifred"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, rev: "r1",
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Character"), { target: { value: "rowan" } });
@@ -499,9 +545,7 @@ test("editing a greeting sets leads_to edges", async () => {
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     { id: "reckoning", name: "Reckoning", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
   ]);
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   const leadsTo = screen.getByText("Leads to").closest(".field") as HTMLElement;
@@ -527,9 +571,7 @@ function mockOpenWithImage(subjects: Record<string, string[]> = {}) {
 
 test("greeting image shows subject chips and opens the picker", async () => {
   mockOpenWithImage({ "embed-aaa111bbb222": ["seraphine"] });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.getGreetingSubjects).toHaveBeenCalledWith("w", "open"));
   const extras = await waitFor(() => {
     const el = container.querySelector(".img-extras");
@@ -543,9 +585,7 @@ test("greeting image shows subject chips and opens the picker", async () => {
 
 test("saving the picker PUTs subjects and refreshes", async () => {
   mockOpenWithImage({});
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.getGreetingSubjects).toHaveBeenCalledWith("w", "open"));
   // click-and-verify atomically: a subjects re-render can rebuild the markdown
   // DOM, detaching a button grabbed earlier
@@ -561,9 +601,9 @@ test("saving the picker PUTs subjects and refreshes", async () => {
     "w", "open", "embed-aaa111bbb222", ["seraphine"]));
 });
 
-test("focus prop opens that greeting in view mode", async () => {
+test("the route's record opens that greeting in view mode", async () => {
   mockOpenWithImage({});
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" focus="open" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   expect(await screen.findByRole("button", { name: /^edit$/i })).toBeInTheDocument();
 });
@@ -578,7 +618,7 @@ test("rail button opens the tagging queue; save/no-subjects advance it", async (
   (api.listGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
   ]);
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
   await screen.findByText(/tagging 1 \/ 2/i);
   fireEvent.click(screen.getByRole("button", { name: "Seraphine" }));
@@ -592,14 +632,14 @@ test("rail button opens the tagging queue; save/no-subjects advance it", async (
 
 test("skip advances without a PUT and close leaves the queue", async () => {
   (api.listUntaggedImages as any).mockResolvedValue(UNTAGGED);
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
   await screen.findByText(/tagging 1 \/ 2/i);
   fireEvent.click(screen.getByRole("button", { name: /^skip$/i }));
   await screen.findByText(/tagging 2 \/ 2/i);
   expect(api.setImageSubjects).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
-  expect(await screen.findByRole("button", { name: /new greeting/i })).toBeInTheDocument();
+  expect(await screen.findByRole("link", { name: /new greeting/i })).toBeInTheDocument();
 });
 
 
@@ -614,9 +654,7 @@ test("campaign scope: marks a greeting as won't-do from the sidebar", async () =
     body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
   (api.markGreeting as any).mockResolvedValue({ ok: true });
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Gala"));
+  render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   fireEvent.click(await screen.findByRole("button", { name: "Won't do" }));
   await waitFor(() => expect(api.markGreeting).toHaveBeenCalledWith("run", "g1", "skipped"));
 });
@@ -631,9 +669,7 @@ test("campaign scope: played greetings show a disabled status control", async ()
             requires_tags: [], predecessor_join: "all" },
     body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Gala"));
+  render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   expect(await screen.findByRole("button", { name: "Mark complete" })).toBeDisabled();
   expect(screen.getByText(/started this greeting in a scene/i)).toBeInTheDocument();
 });
@@ -649,9 +685,7 @@ test("campaign scope: a played greeting's Clear is enabled and clears an orphane
     body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
   (api.markGreeting as any).mockResolvedValue({ ok: true });
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Gala"));
+  render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   const clearBtn = await screen.findByRole("button", { name: /^clear$/i });
   expect(clearBtn).not.toBeDisabled();          // #315: the only in-app way back from a burned greeting
   fireEvent.click(clearBtn);
@@ -670,17 +704,15 @@ test("campaign scope: clearing a played greeting that IS still stamped surfaces 
   });
   (api.markGreeting as any).mockRejectedValue(
     { detail: "greeting was played in a scene; its mark cannot be changed" });
-  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Gala"));
+  render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   fireEvent.click(await screen.findByRole("button", { name: /^clear$/i }));
   expect(await screen.findByText(/mark cannot be changed/i)).toBeInTheDocument();
 });
 
 test("campaign scope: hides the tagging queue and never fetches untagged images", async () => {
   (api.listGreetings as any).mockResolvedValue([]);
-  render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  await screen.findByRole("button", { name: "+ New greeting" });
+  render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await screen.findByRole("link", { name: "+ New greeting" });
   expect(api.listUntaggedImages).not.toHaveBeenCalled();
 });
 
@@ -692,9 +724,7 @@ test("view shows the Offscreen chip for a pcless greeting", async () => {
     meta: { id: "cabal", name: "Cabal", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all", pcless: true },
     body: "The cult meets.", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Cabal"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="cabal" />);
   await screen.findByText("NPC-only opener");
 });
 
@@ -702,9 +732,7 @@ test("the form's Offscreen toggle is sent on save", async () => {
   (api.listGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
   ]);
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.click(screen.getByRole("button", { name: /offscreen \(no pc\)/i }));
   fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
@@ -719,9 +747,7 @@ async function openGreetingForEdit() {
     { id: "open", name: "Open", character: "seraphine", version: "default",
       present: [], requires_tags: [], predecessor_join: "all" },
   ]);
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 }
@@ -779,9 +805,7 @@ test("the view sidebar shows the location as a chip that navigates to it", async
   withLocation("counting-house");
   const onOpenLocation = vi.fn();
   const { container } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenLocation={onOpenLocation} />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" onOpenLocation={onOpenLocation} selected="open" />);
 
   // the read-only view has arrived once its Edit button has
   await screen.findByRole("button", { name: /^edit$/i });
@@ -796,9 +820,7 @@ test("a greeting with no location gets no Location section", async () => {
     { id: "open", name: "Open", character: "seraphine", version: "default",
       present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
   ]);
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await screen.findByRole("button", { name: /^edit$/i });
   const aside = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(aside).queryByText("Location")).toBeNull();
@@ -806,11 +828,9 @@ test("a greeting with no location gets no Location section", async () => {
 
 test("the form picks a location from the scope's own list and saves it", async () => {
   withLocation("");
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   // the picker is scoped, not world-only: a campaign's own locations must show
   expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w" }, "locations");
-  fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 
@@ -824,9 +844,7 @@ test("the form picks a location from the scope's own list and saves it", async (
 
 test("the form can clear a location back to none", async () => {
   withLocation("counting-house");
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 
@@ -844,9 +862,7 @@ test("a location the picker cannot offer is shown rather than silently blanked",
   // controlled <select> would otherwise render blank while the field still
   // holds the id, and the next save would carry it through unseen.
   withLocation("the-drowned-library");
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 
@@ -862,9 +878,7 @@ test("a deleted location is labelled, not offered as a link to nowhere", async (
   withLocation("the-drowned-library");
   const onOpenLocation = vi.fn();
   const { container } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenLocation={onOpenLocation} />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" onOpenLocation={onOpenLocation} selected="open" />);
   await screen.findByRole("button", { name: /^edit$/i });
 
   const aside = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -879,9 +893,7 @@ test("a failed locations read shows the stored id without calling it missing", a
   // this greeting's location. Saying "missing" on the others invents a fact.
   (api.listEntities as any).mockRejectedValue(new Error("offline"));
   withLocation("counting-house");
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Open"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 
@@ -899,9 +911,7 @@ test("a demoted world greeting is cleared, not left as a pre-filled new draft", 
   (api.listCharacters as any).mockResolvedValue(CAST);
   (api.libraryDependents as any).mockResolvedValue([]);
   (api.demoteFromLibrary as any).mockResolvedValue({ copied_down: [], dependents: [] });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn" />);
   await screen.findByRole("button", { name: "Remove from library…" });
 
   fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
@@ -925,9 +935,7 @@ test("a save whose chips were never touched does not resend the edges", async ()
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: ["vow"], excludes: [] }, predecessors: [], rev: "r1",
   });
-  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Saltmarch Dusk" } });
   fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
@@ -957,15 +965,13 @@ test("a refresh that lands after the reader starts editing is discarded", async 
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   };
   (api.readGreeting as any).mockResolvedValue(detail);
-  const { container, rerender } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  const { rerender } = render(
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} selected="dawn" />);
   await screen.findByRole("button", { name: /^edit$/i });
 
   // the other view writes; this refresh read is slow
   (api.readGreeting as any).mockImplementation(() => new Promise((res) => { land = res; }));
-  rerender(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} />);
+  rerender(<Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} selected="dawn" />);
 
   // ...and while it is out, the reader starts a draft
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -985,11 +991,9 @@ test("the editor holds still while the map's own write is on the wire", async ()
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
-  const { container } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w"
+  render(
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn"
                     hold="The plot map is still writing these links." />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
 
   // Both writers send whole arrays, so two overlapping saves can each discard
@@ -1009,10 +1013,8 @@ test("an unsaved edge change is reported, so the map can hold still for it", asy
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
   const onEdgeDraft = vi.fn();
-  const { container } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onEdgeDraft={onEdgeDraft} />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  render(
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" onEdgeDraft={onEdgeDraft} selected="dawn" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   await waitFor(() => expect(onEdgeDraft).toHaveBeenLastCalledWith(false));
 
@@ -1030,11 +1032,9 @@ test("Delete is held while the map is writing, as Save is", async () => {
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
-  const { container } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w"
+  render(
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn"
                     hold="The plot map is still writing these links." />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
 
   // `delete_greeting` sweeps this id out of every other greeting's edges, so
@@ -1053,10 +1053,8 @@ test("busy stays true until the second of two overlapping saves settles", async 
   const gate: (() => void)[] = [];
   (api.updateGreeting as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
   const onBusy = vi.fn();
-  const { container } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onBusy={onBusy} />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  render(
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" onBusy={onBusy} selected="dawn" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
 
   const save = screen.getByRole("button", { name: "Save greeting" });
@@ -1081,10 +1079,8 @@ test("a graph write rebases a clean draft's chips without touching the form", as
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   };
   (api.readGreeting as any).mockResolvedValue(before);
-  const { container, rerender } = render(
-    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} />);
-  const rail = await waitFor(() => railOf(container));
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  const { rerender } = render(
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} selected="dawn" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Half-written" } });
 
@@ -1092,7 +1088,7 @@ test("a graph write rebases a clean draft's chips without touching the form", as
   (api.readGreeting as any).mockResolvedValue({
     ...before, edges: { leads_to: ["vow"], excludes: [] },
   });
-  rerender(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} />);
+  rerender(<Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} selected="dawn" />);
 
   // The typing survives -- and the chips catch up, so touching one later does
   // not send a pre-map array back over the edge that was just drawn.
@@ -1104,9 +1100,29 @@ test("a graph write rebases a clean draft's chips without touching the form", as
   expect(screen.getByLabelText("Name")).toHaveValue("Half-written");
 });
 
+// The route can never show the graph while a record segment is selected
+// (`WorldView` forces the list), so a VIEWED record and a live-writing map
+// no longer coexist through routing -- this exercises the `mode === "view"`
+// half of the refresh directly, the way the map would have reached it before.
+test("a refresh re-reads a viewed record's whole detail, not merely its chips", async () => {
+  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
+            present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
+  });
+  const { rerender } = render(
+    <Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} selected="dawn" />);
+  await screen.findByRole("button", { name: /^edit$/i });   // arrived read-only, no draft started
+  const readsBefore = (api.readGreeting as any).mock.calls.length;
+
+  rerender(<Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} selected="dawn" />);
+  await waitFor(() =>
+    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
+});
 
 test("creating a greeting includes phase sequence and optional metadata", async () => {
-  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Open" } });
   fireEvent.change(screen.getByLabelText("Phase"), { target: { value: "arrival" } });

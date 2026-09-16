@@ -586,17 +586,17 @@ test("Greetings switches between the chip list and the plot map, and a node open
   fireEvent.click(indexRow("Greetings"));
 
   // the chip-list editor is what a section opens on; the graph is the alternate
-  await screen.findByRole("button", { name: /new greeting/i });
+  await screen.findByRole("link", { name: /new greeting/i });
   fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
 
   const node = await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
   expect(screen.getByRole("button", { name: "Unlocks: Saltmarch Dawn → SoL 2" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /new greeting/i })).toBeNull();
+  expect(screen.queryByRole("link", { name: /new greeting/i })).toBeNull();
 
   // a node is a way into the editor, so it lands back on the list with that
   // greeting open rather than opening a second detail pane on the graph
   fireEvent.click(node);
-  await screen.findByRole("button", { name: /new greeting/i });
+  await screen.findByRole("link", { name: /new greeting/i });
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "dawn"));
 });
 
@@ -613,7 +613,7 @@ test("switching to the plot map keeps a half-written greeting, and a save reload
   fireEvent.click(indexRow("Greetings"));
 
   // start a new greeting, then look at the graph without saving
-  fireEvent.click(await screen.findByRole("button", { name: /new greeting/i }));
+  await screen.findByRole("link", { name: /new greeting/i });
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Half-written" } });
   fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
@@ -691,34 +691,14 @@ test("the map holds still while a list save is in flight", async () => {
     expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeEnabled());
 });
 
-test("a graph edit re-reads the chip list behind it", async () => {
-  (api.listGreetings as any).mockResolvedValue([
-    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
-    meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
-  }));
-  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
-  renderAt();
-  await screen.findByText("Drowned Realm");
-  fireEvent.click(indexRow("Greetings"));
-
-  const rail = await waitFor(() => document.querySelector(".editor-list") as HTMLElement);
-  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));   // open it in the list
-  fireEvent.click(await screen.findByRole("button", { name: "Plot map" }));
-  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
-  const readsBefore = (api.readGreeting as any).mock.calls.length;
-
-  fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
-  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to Vow of Silence" }));
-
-  // The chip list is still mounted with this greeting's edges as they were.
-  // Left alone, Edit-then-Save there would send that stale array back.
-  await waitFor(() =>
-    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
-});
+// A greeting's own address forces the list (#9's map has no detail pane), so
+// opening one and then switching to the graph now navigates AWAY from it --
+// the address drops the record segment, `selected` goes back to null, and the
+// hidden chip-list editor resets to its blank draft. A viewed (not merely
+// drafted) record can therefore never sit open behind the graph any more; the
+// re-read this used to cover -- `GreetingEditor`'s `mode === "view"` branch of
+// its `refreshKey` effect -- is exercised directly, with the record selected
+// by prop rather than by route, in `GreetingEditor.test.tsx`.
 
 test("a map remounted mid-write is held behind the write the last one left", async () => {
   (api.listGreetings as any).mockResolvedValue([
@@ -750,6 +730,39 @@ test("a map remounted mid-write is held behind the write the last one left", asy
   gate.forEach((res) => res());
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeEnabled());
+});
+
+test("the plot map is an address, and Back returns to the list", async () => {
+  const router = renderWithRouter("/worlds/w/greetings");
+  fireEvent.click(await screen.findByRole("button", { name: "Plot map" }));
+  await waitFor(() => expect(lastPath + lastSearch).toBe("/worlds/w/greetings?view=graph"));
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  await waitFor(() => expect(lastSearch).toBe(""));
+  await router.navigate(-1);
+  await waitFor(() => expect(lastSearch).toBe("?view=graph"));
+  expect(await screen.findByTestId("plot-map")).toBeInTheDocument();
+});
+
+test("a greeting's own address shows the list, which is the only view with a detail pane", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "tide-watch", name: "Tide Watch", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "tide-watch", name: "Tide Watch", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  });
+  renderAtUrl("/worlds/w/greetings/tide-watch?view=graph");
+  await screen.findByRole("heading", { name: "Tide Watch" });
+  expect(screen.queryByTestId("plot-map")).toBeNull();
+});
+
+test("switching to the map and back does not lose a half-written greeting", async () => {
+  renderAtUrl("/worlds/w/greetings");
+  fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "Half written" } });
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+  await waitFor(() => expect(lastSearch).toBe("?view=graph"));
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  expect(await screen.findByLabelText(/Name/)).toHaveValue("Half written");
 });
 
 test("a ref chip naming a PC opens that PC, and picking PCs from the index clears it", async () => {

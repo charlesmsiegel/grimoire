@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { Field } from "./Field";
 import { DemotePanel } from "./DemotePanel";
@@ -17,15 +18,21 @@ const sameEdges = (a: Edges, b: Edges) =>
   && a.excludes.join("\u0000") === b.excludes.join("\u0000");
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus, focusNonce = 0,
+export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, selected, sectionPath, recordHref,
                                  onChanged, onBusy, onEdgeDraft, hold = null, refreshKey = 0 }:
   { scope: EntityScope; wid: string;
     onOpenCharacter?: (cid: string, vid: string) => void;
-    onOpenLocation?: (eid: string) => void; focus?: string | null;
-    /** Bumped per navigation, so opening the same greeting twice is two
-     *  events rather than one no-op (a node on the plot map can be reopened
-     *  after the reader picked something else in the rail). */
-    focusNonce?: number;
+    onOpenLocation?: (eid: string) => void;
+    /** The record the URL names, or null for the section's own screen --
+     *  which is the blank new-greeting form this editor already opens on. */
+    selected?: string | null;
+    /** This section's own address, for `+ New`. */
+    sectionPath: string;
+    /** ...and one record's, for a rail row. A CALLBACK rather than a string
+     *  this file concatenates onto `sectionPath`: `sectionHref` is the only
+     *  thing allowed to build these paths, and an id containing a slash or a
+     *  space is exactly what hand-joining gets wrong. */
+    recordHref: (rid: string) => string;
     /** Fired once a write here has landed, so a second view of the same
      *  records can re-read (#9: the plot map draws these greetings' edges,
      *  and a save that lands while it is open would leave it holding a
@@ -145,14 +152,17 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     if (savedGid === gid) api.getGreetingSubjects(wid, savedGid).then(setSubjects).catch(() => {});
   }
 
-  // arrived via a character page's world-greeting link: open that greeting
+  /** Bumped on every selection change, the null one included. Without that,
+   *  navigating `/greetings/tide-watch` -> `/greetings` resets the form and
+   *  then Tide Watch's slower read lands and reopens it at an address naming
+   *  no greeting. */
+  const selReq = useRef(0);
   useEffect(() => {
-    if (focus) void select(focus);
-    // `focusNonce` is what makes opening the SAME greeting twice two events:
-    // the id alone does not change, so a reader who wandered off to another
-    // record and came back to this node would be sent nowhere.
+    const req = ++selReq.current;
+    if (selected) void select(selected, () => req === selReq.current);
+    else resetForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, focusNonce, wid]);
+  }, [selected, scope.kind, scope.id]);
 
   // The other view of these records wrote (#9). A greeting being READ is
   // re-read, so its chips say what the store now says; a greeting being
@@ -429,7 +439,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
   return (
     <div className="editor">
       <div className="editor-list">
-        <button className="primary new" onClick={resetForm}>+ New greeting</button>
+        <Link className="primary new" to={sectionPath}>+ New greeting</Link>
         {worldScope && untagged.length > 0 && (
           <button className="subtle new" onClick={() => setQueueOpen(true)}>
             ▶ Tag images ({untagged.length})
@@ -451,10 +461,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
           </div>
         )}
         {shownGreetings.map((g) => (
-          <button
+          <Link
             key={g.id}
             className={"row" + (gid === g.id ? " active" : "")}
-            onClick={() => select(g.id)}
+            to={recordHref(g.id)}
           >
             {g.name}
             {!worldScope && g.mark && (
@@ -462,7 +472,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
                 {MARK_LABEL[g.mark]}
               </span>
             )}
-          </button>
+          </Link>
         ))}
         {/* One status line, always in the DOM rather than mounted on demand:
             filtering happens while focus is still in the search box, so a

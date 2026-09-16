@@ -545,7 +545,7 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, onBusy, reload
   const height = PAD + Math.max(...placed.map((p) => p.y + NODE_H), NODE_H);
 
   return (
-    <div className="plotmap">
+    <div className="plotmap" data-testid="plot-map">
       <div className="plotmap-bar">
         <div className="chips" role="group" aria-label="New link kind">
           {(["leads_to", "excludes"] as Kind[]).map((k) => (

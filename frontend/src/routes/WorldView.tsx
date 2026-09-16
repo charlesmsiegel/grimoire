@@ -111,11 +111,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  count rather than leave the index reading the world as it was. */
   const [populated, setPopulated] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
-  /** Which way the Greetings section is showing its records: the chip-list
-   *  editor, or the same edges as a graph (#9). A view of one set of records
-   *  rather than a second place to keep them -- both write through
-   *  `api.setEdges`, so neither is the source of truth for the other. */
-  const [greetingView, setGreetingView] = useState<"list" | "graph">("list");
   /** Bumped when the chip-list editor writes, so the graph re-reads. The two
    *  views draw the same records, and the switch does not wait for a save. */
   const [greetingEpoch, setGreetingEpoch] = useState(0);
@@ -236,10 +231,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   }
 
   // a world-greeting link from a character page jumps to that greeting -- as
-  // does a node on the plot map, which is why this also drops back to the list:
-  // opening a greeting means its editor, and the graph has no detail pane.
+  // does a node on the plot map. A record segment forces the list view (the
+  // graph has no detail pane), so navigating here is the whole story.
   function openGreeting(gid: string) {
-    setGreetingView("list"); // opening a greeting means its editor, not the graph
     navigate(sectionHref(scopeForPaths, { kind: "record", at: "greetings", rid: gid }));
   }
 
@@ -350,6 +344,16 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   if (location.pathname !== canonicalPath) {
     return <Navigate replace to={canonicalPath + location.search} />;
   }
+
+  /** Which rendering of the greetings the route asks for.
+   *
+   *  A record segment forces the list: the graph has no detail pane, so
+   *  `/greetings/tide-watch?view=graph` would be a URL contradicting what it
+   *  renders. Derived rather than held, or the chips and the Back button
+   *  disagree within three clicks -- push ?view=graph, click List, press Back,
+   *  and a graph URL renders the list. */
+  const greetingView: "list" | "graph" =
+    !rid && params.get("view") === "graph" ? "graph" : "list";
 
   if (campaign && !wid) return null;
 
@@ -559,7 +563,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               {([["list", "List"], ["graph", "Plot map"]] as const).map(([key, label]) => (
                 <button key={key} className={"chip" + (greetingView === key ? " on" : "")}
                         aria-pressed={greetingView === key}
-                        onClick={() => setGreetingView(key)}>{label}</button>
+                        onClick={() => navigate(sectionHref(scopeForPaths,
+                          key === "graph" ? { kind: "section", at: "greetings", view: "graph" }
+                                          : { kind: "section", at: "greetings" }))}>{label}</button>
               ))}
             </div>
             {/* Hidden rather than unmounted: the editor holds a half-written
@@ -568,7 +574,10 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             <div hidden={greetingView !== "list"}>
               <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
                               onOpenLocation={(id) => openEntity("locations", id)}
-                              focus={rid} focusNonce={0}
+                              selected={section === "greetings" ? rid : null}
+                              sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "greetings" })}
+                              recordHref={(r) => sectionHref(scopeForPaths,
+                                                             { kind: "record", at: "greetings", rid: r })}
                               onChanged={() => setGreetingEpoch((n) => n + 1)}
                               onBusy={setListSaving} onEdgeDraft={setListEdgeDraft}
                               hold={mapWriting ? "The plot map is still writing these links. Wait for it before saving." : null}
