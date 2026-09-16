@@ -1461,7 +1461,7 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 /* `flex: 1` so a wrapped badge row on one card does not leave the Delete
    button of its neighbours floating higher: the main area takes the slack and
    the actions sit on the card's bottom edge across the whole row. */
-.char-card-main { display: flex; flex-direction: column; flex: 1; gap: 0; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--ink); font-family: var(--fb); }
+.char-card-main { display: flex; flex-direction: column; flex: 1; gap: 0; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--ink); font-family: var(--fb); text-decoration: none; }
 .char-card-main:hover .char-card-name { color: var(--accent); }
 .char-card-avatar { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; background: var(--panel); }
 .initials-avatar {
@@ -4602,8 +4602,9 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   .primary { min-height: 44px; }
   /* `.chip` doubles as a read-only badge (a tag, a count, a status pill) far
      more often than as a control — those stay pill-sized on purpose. Only
-     the clickable half, an actual `<button class="chip">`, owes the floor. */
-  button.chip { min-height: 44px; }
+     the clickable half — a `<button class="chip">`, or the unlinked-version
+     row's `<a class="chip">` — owes the floor. */
+  button.chip, a.chip { min-height: 44px; }
   /* Chrome-coloured buttons (the stream's Reroll) never got swept up with
      `.btn-accent` / `.btn-outline` above because they are a third skin, not
      a state of the same one. */

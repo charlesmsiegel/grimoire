@@ -99,6 +99,23 @@ test("clicking a card goes to that character's page", async () => {
   await waitFor(() => expect(lastLocation).toBe("/worlds/realm/characters/seraphine"));
 });
 
+test("a character card is a link, which is what lets it open in a new tab", async () => {
+  renderGrid();
+  expect(await screen.findByRole("link", { name: /Seraphine/ }))
+    .toHaveAttribute("href", "/worlds/realm/characters/seraphine");
+});
+
+test("a campaign's card points inside that campaign's world copy", async () => {
+  // Filtered to the cast that has appeared by default (see the "appeared
+  // filter" tests below) — give Seraphine a scene so the card renders at all.
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", version: "default", scenes: ["001--x"] },
+  ]);
+  renderGrid({ scope: CAMPAIGN });
+  expect(await screen.findByRole("link", { name: /Seraphine/ }))
+    .toHaveAttribute("href", "/campaigns/run/world/characters/seraphine");
+});
+
 test("a card's Delete removes the character and says which library", async () => {
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderGrid();
@@ -389,7 +406,7 @@ test("checking chub links lists the unlinked versions and opens one on click", a
   fireEvent.click(await screen.findByRole("button", { name: "Check chub.ai links" }));
   // `version_name` is the version's own label now, so this no longer reads
   // "Mara (Mara)" as it did when the label fell back to the card's name.
-  fireEvent.click(await screen.findByRole("button", { name: "Mara (futa)" }));
+  fireEvent.click(await screen.findByRole("link", { name: "Mara (futa)" }));
   await waitFor(() => expect(lastLocation).toBe("/worlds/realm/characters/mara?v=futa"));
 });
 

@@ -512,7 +512,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             indefinitely if one stalls. */}
         {!campaign && section === "images"
           && <ImagesView key={wid} wid={wid} forCampaign={params.get("for")} />}
-        {section === "characters" && <CharacterGrid scope={scope} wid={wid} resetSignal={0} reveal={reveal} module={moduleCtx} />}
+        {section === "characters" && <CharacterGrid scope={scope} wid={wid} reveal={reveal} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
                                        selected={rid}
                                        recordHref={(r) => sectionHref(scopeForPaths,

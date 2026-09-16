@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   api, type ChubImportResult, type CharacterSummary, type ChubUnlinkedVersion,
   type EntityScope, type ModuleDetail, type UndescribedImage,
@@ -29,10 +29,9 @@ import { characterHref, focusStyle, formatOf, initialsOf } from "./character/sha
  *  which is the same fact travelling by a route rather than by a ref.
  */
 export function CharacterGrid(
-  { scope, wid, resetSignal, reveal, module = null }: {
+  { scope, wid, reveal, module = null }: {
     scope: EntityScope;
     wid: string;
-    resetSignal?: number;
     /** A character to keep visible even if the appeared filter would hide it —
      *  handed back by their page on close. */
     reveal?: string | null;
@@ -112,8 +111,7 @@ export function CharacterGrid(
   // character, is the one outcome worse than having to click Derive again.
   useEffect(() => () => taglineAbort.current?.abort(), []);
 
-  // Who is actually in a scene here. Re-read on `resetSignal` too, so returning
-  // after playing picks up the actors that scene introduced.
+  // Who is actually in a scene here.
   useEffect(() => {
     let alive = true;
     setAppeared(null);
@@ -135,7 +133,7 @@ export function CharacterGrid(
       // loading" so the grid can wait for one and not the other.
       .catch(() => { if (alive) setRosterFailed(true); });
     return () => { alive = false; };
-  }, [scope.kind, scope.id, resetSignal]);
+  }, [scope.kind, scope.id]);
 
   // A character handed back by their own page has to survive the filter, or
   // landing on a grid that hides them reads as the record having been deleted.
@@ -478,10 +476,10 @@ export function CharacterGrid(
             </div>
             <div className="chips">
               {unlinkedVersions.map((u) => (
-                <button key={`${u.character}:${u.version}`} className="chip"
-                        onClick={() => navigate(characterHref(scope, u.character, u.version))}>
+                <Link key={`${u.character}:${u.version}`} className="chip"
+                      to={characterHref(scope, u.character, u.version)}>
                   {u.character_name} ({u.version_name})
-                </button>
+                </Link>
               ))}
             </div>
           </>}
@@ -500,7 +498,7 @@ export function CharacterGrid(
         <div className="char-grid">
           {shown.map((c) => (
             <div key={c.id} className="char-card">
-              <button className="char-card-main" onClick={() => navigate(characterHref(scope, c.id))}>
+              <Link className="char-card-main" to={characterHref(scope, c.id)}>
                 {c.has_avatar
                   ? <img className="char-card-avatar" alt="" style={focusStyle(c.avatar_focus)}
                          src={api.actorImageUrl(scope, "characters", c.id, c.default_version, "avatar")
@@ -521,7 +519,7 @@ export function CharacterGrid(
                     {(c.localized_count ?? 0) > 0 && <span className="chip">{c.localized_count} localized</span>}
                   </span>
                 )}
-              </button>
+              </Link>
               <div className="char-card-actions">
                 {/* Both scopes since #60: in campaign scope this removes the
                     character from THIS campaign and leaves the library's alone.
