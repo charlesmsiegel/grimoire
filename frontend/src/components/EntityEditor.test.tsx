@@ -1,3 +1,5 @@
+import type { ComponentProps } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { EntityEditor } from "./EntityEditor";
 
@@ -99,8 +101,38 @@ beforeEach(() => {
   (api.instantiateContent as any).mockResolvedValue({ id: "e1" });
 });
 
+type Props = ComponentProps<typeof EntityEditor>;
+
+/** The generic harness the bulk of this suite renders through now that
+ *  selection is a prop rather than internal click state. `sectionPath` and
+ *  `recordHref` are dummy placeholders here on purpose -- these tests assert
+ *  on what the editor does with a record already selected (or with a route
+ *  change simulated via `rerender`), never on where its links point. The two
+ *  tests about the links themselves supply their own values below. A bare
+ *  `MemoryRouter` is enough: nothing here reads the URL back, so there is no
+ *  need for the `Routes`/`useParams` machinery a real click-driven navigation
+ *  would require. */
+function Wrap(props: Partial<Props> & { kind: Props["kind"]; wid: string }) {
+  return (
+    <MemoryRouter>
+      <EntityEditor sectionPath="/section" recordHref={(r) => `/section/${r}`} {...props} />
+    </MemoryRouter>
+  );
+}
+
+const DEFAULTS = {
+  wid: "realm", scope: { kind: "world" as const, id: "realm" },
+  sectionPath: "/worlds/realm/items",
+  recordHref: (r: string) => `/worlds/realm/items/${r}`,
+};
+const editorWith = (p: Partial<Props> & { kind: Props["kind"] }) => (
+  <MemoryRouter><EntityEditor {...DEFAULTS} {...p} /></MemoryRouter>);
+const renderEditor = (p: Partial<Props> & { kind: Props["kind"] }) => render(editorWith(p));
+
+const entityFixture = (id: string, name: string) => ({ meta: { id, name }, body: "x", rev: "r1" });
+
 test("lists entities and creates one with keys", async () => {
-  render(<EntityEditor wid="w" kind="lore" />);
+  render(<Wrap wid="w" kind="lore" />);
   await waitFor(() => expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore"));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Salt Pact" } });
   fireEvent.change(screen.getByLabelText("Body"), { target: { value: "binds" } });
@@ -116,8 +148,7 @@ test("lists entities and creates one with keys", async () => {
 test("clicking an entity shows a read-only view; Edit reveals the form", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
   (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact,brine" }, body: "Binds **all**" });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(screen.getByText("all")).toBeInTheDocument();          // markdown rendered
   expect(container.querySelector("textarea")).toBeNull();        // read-only
@@ -133,8 +164,7 @@ test("detail sidebar shows the suggested image prompt when set", async () => {
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "the-crypt", name: "The Crypt", keys: "crypt", sd_prompt: "a dark crypt, torchlight" },
     body: "cold" });
-  const { container } = render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("The Crypt"));
+  const { container } = render(<Wrap wid="w" kind="locations" selected="the-crypt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Image prompt")).toBeInTheDocument();
@@ -144,8 +174,7 @@ test("detail sidebar shows the suggested image prompt when set", async () => {
 test("detail sidebar omits the image prompt section when unset", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   // default readEntity mock (from beforeEach) has no sd_prompt
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).queryByText("Image prompt")).toBeNull();
@@ -153,8 +182,7 @@ test("detail sidebar omits the image prompt section when unset", async () => {
 
 test("editing an entity saves with updated keys", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Keys"), { target: { value: "pact,brine" } });
@@ -166,8 +194,8 @@ test("editing an entity saves with updated keys", async () => {
 });
 
 test("creates a lore entry with a selected owner", async () => {
-  render(<EntityEditor wid="w" kind="lore" />);
-  await screen.findByRole("button", { name: /\+ new lore entry/i });
+  render(<Wrap wid="w" kind="lore" />);
+  await screen.findByRole("link", { name: /\+ new lore entry/i });
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Exile" } });
   fireEvent.click(await screen.findByLabelText("Tanaka")); // owner checkbox
   fireEvent.click(screen.getByRole("button", { name: /create lore entry/i }));
@@ -183,7 +211,7 @@ test("groups the rail by owner with an Unowned group", async () => {
       { id: "a", name: "Owned A", owners: "characters:tanaka" },
       { id: "b", name: "World B" },
     ]));
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  const { container } = render(<Wrap wid="w" kind="lore" />);
   expect(await screen.findByText("Unowned (world)")).toBeInTheDocument();
   const rail = container.querySelector(".editor-list") as HTMLElement;
   // "Owned A" sits under the Tanaka group; "World B" under Unowned
@@ -194,26 +222,26 @@ test("groups the rail by owner with an Unowned group", async () => {
   expect(within(unownedGroup).getByText("World B")).toBeInTheDocument();
 });
 
-test("nav.newOwner pre-checks the owner for a new entry", async () => {
-  render(<EntityEditor wid="w" kind="lore" nav={{ newOwner: "characters:tanaka" }} onNavConsumed={vi.fn()} />);
+test("?owner= pre-checks the owner for a new entry", async () => {
+  render(<Wrap wid="w" kind="lore" selected={null} newOwner="characters:tanaka" />);
   const tanaka = await screen.findByLabelText("Tanaka");
   expect((tanaka as HTMLInputElement).checked).toBe(true);
 });
 
-test("nav.focusEntry opens that entry in the read-only view", async () => {
+test("the route's record opens that entry in the read-only view", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "a", name: "Owned A", owners: "characters:tanaka" }]);
   (api.readEntity as any).mockResolvedValue({ meta: { id: "a", name: "Owned A", owners: "characters:tanaka" }, body: "hi" });
-  const { container } = render(<EntityEditor wid="w" kind="lore" nav={{ focusEntry: "a" }} onNavConsumed={vi.fn()} />);
+  const { container } = render(<Wrap wid="w" kind="lore" selected="a" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "a"));
   expect(await screen.findByText("hi")).toBeInTheDocument();
   expect(container.querySelector("textarea")).toBeNull(); // read-only view, not the form
 });
 
-test("manual '+ New' after a nav.newOwner does NOT inherit the stale owner", async () => {
+test("a route change away from a pre-owned form clears the owner", async () => {
   // guards the loreNav-never-cleared regression: starting a world-level entry must be unowned
-  render(<EntityEditor wid="w" kind="lore" nav={{ newOwner: "characters:tanaka" }} onNavConsumed={vi.fn()} />);
+  const { rerender } = render(<Wrap wid="w" kind="lore" selected={null} newOwner="characters:tanaka" />);
   expect((await screen.findByLabelText("Tanaka") as HTMLInputElement).checked).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
+  rerender(<Wrap wid="w" kind="lore" selected={null} />);
   expect((screen.getByLabelText("Tanaka") as HTMLInputElement).checked).toBe(false);
 });
 
@@ -222,8 +250,7 @@ test("owner chip in the read-only view calls onOpenOwner", async () => {
     Promise.resolve(kind === "locations" ? [] : [{ id: "a", name: "Owned A", owners: "characters:tanaka" }]));
   (api.readEntity as any).mockResolvedValue({ meta: { id: "a", name: "Owned A", owners: "characters:tanaka" }, body: "x" });
   const onOpenOwner = vi.fn();
-  render(<EntityEditor wid="w" kind="lore" onOpenOwner={onOpenOwner} />);
-  fireEvent.click(await screen.findByText("Owned A"));
+  render(<Wrap wid="w" kind="lore" selected="a" onOpenOwner={onOpenOwner} />);
   // the only button labelled exactly "Tanaka" is the owner chip in the sidebar
   fireEvent.click(await screen.findByRole("button", { name: "Tanaka" }));
   expect(onOpenOwner).toHaveBeenCalledWith("characters:tanaka");
@@ -234,7 +261,7 @@ test("location rail rows show the primary image when one exists", async () => {
     { id: "warehouse", name: "Warehouse Nine", has_image: true },
     { id: "reeds", name: "The Reeds", has_image: false },
   ]);
-  const { container } = render(<EntityEditor wid="w" kind="locations" />);
+  const { container } = render(<Wrap wid="w" kind="locations" />);
   await screen.findByText("Warehouse Nine");
   expect(container.querySelectorAll(".loc-row-img")).toHaveLength(1);
 });
@@ -245,8 +272,7 @@ test("location detail shows the primary image header and Images shelf with promo
   (api.listEntityImages as any).mockResolvedValue([
     { name: "avatar", ext: "png" }, { name: "gallery_1", ext: "png" },
   ]);
-  render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Warehouse Nine"));
+  render(<Wrap wid="w" kind="locations" selected="warehouse" />);
   await screen.findByText("Images");
   expect(await screen.findByText("primary")).toBeInTheDocument();           // shelf caption
   expect(screen.getByAltText("Warehouse Nine primary")).toBeInTheDocument(); // header image
@@ -264,8 +290,7 @@ test("an entity image carries its description, and unreviewed art says so", asyn
     { name: "avatar", ext: "png", description: "A grey quay.", described: true },
     { name: "gallery_1", ext: "png", description: "", described: false },
   ]);
-  render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Warehouse Nine"));
+  render(<Wrap wid="w" kind="locations" selected="warehouse" />);
   await screen.findByText("Images");
 
   expect(screen.getByRole("button", { name: /Description of avatar/ }))
@@ -284,8 +309,7 @@ test("an entity image carries its description, and unreviewed art says so", asyn
 test("location detail without images shows the add tile only", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "reeds", name: "The Reeds", has_image: false }]);
   (api.readEntity as any).mockResolvedValue({ meta: { id: "reeds", name: "The Reeds" }, body: "marsh" });
-  render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("The Reeds"));
+  render(<Wrap wid="w" kind="locations" selected="reeds" />);
   await screen.findByText("no image");
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
 });
@@ -299,7 +323,7 @@ test("lore rows stack owner avatars; owners without avatars are omitted", async 
     Promise.resolve(kind === "locations" ? [] : [
       { id: "smuggling", name: "Smuggling", owners: "characters:maren, characters:hedde" },
     ]));
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  const { container } = render(<Wrap wid="w" kind="lore" />);
   await screen.findAllByText("Smuggling");
   await waitFor(() => expect(container.querySelectorAll(".owner-stack-img")).toHaveLength(2));
   expect(container.querySelector(".owner-stack-img")).toHaveAttribute("title", "Maren");
@@ -315,8 +339,7 @@ test("lore detail owner chips include an avatar or initials", async () => {
     ]));
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "smuggling", name: "Smuggling", owners: "characters:maren" }, body: "quiet boats" });
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click((await screen.findAllByText("Smuggling"))[0]);
+  render(<Wrap wid="w" kind="lore" selected="smuggling" />);
   await screen.findByText("quiet boats");
   expect(await screen.findByText("MV")).toBeInTheDocument(); // initials inside the owner chip
 });
@@ -324,8 +347,7 @@ test("lore detail owner chips include an avatar or initials", async () => {
 test("deletes after confirm", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
@@ -340,11 +362,11 @@ test("image urls carry per-record version tokens for immutable caching", async (
   (api.listEntityImages as any).mockResolvedValue([
     { name: "avatar", ext: "png", v: "aaa1" }, { name: "gallery_1", ext: "png", v: "bbb2" },
   ]);
-  const { container } = render(<EntityEditor wid="w" kind="locations" />);
+  const { container, rerender } = render(<Wrap wid="w" kind="locations" />);
   await screen.findByText("Warehouse Nine");
   expect(container.querySelector(".loc-row-img")!.getAttribute("src"))
     .toBe("/img/locations/warehouse/avatar?v=aaa1");
-  fireEvent.click(screen.getByText("Warehouse Nine"));
+  rerender(<Wrap wid="w" kind="locations" selected="warehouse" />);
   await screen.findByText("Images");
   expect(screen.getByAltText("Warehouse Nine primary").getAttribute("src"))
     .toBe("/img/locations/warehouse/avatar?v=aaa1");
@@ -360,9 +382,9 @@ test("new kinds render the list/detail pattern with their own label", async () =
     Promise.resolve(kind === "groups" ? [{ id: "salt-circle", name: "Salt Circle" }] : []));
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt-circle", name: "Salt Circle" }, body: "A quiet **cabal**" });
-  const { container } = render(<EntityEditor wid="w" kind="groups" />);
-  expect(await screen.findByRole("button", { name: /\+ new group/i })).toBeInTheDocument();
-  fireEvent.click(screen.getByText("Salt Circle"));
+  const { container, rerender } = render(<Wrap wid="w" kind="groups" />);
+  expect(await screen.findByRole("link", { name: /\+ new group/i })).toBeInTheDocument();
+  rerender(<Wrap wid="w" kind="groups" selected="salt-circle" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups", "salt-circle"));
   expect(screen.getByText("cabal")).toBeInTheDocument();       // markdown rendered, read-only
   expect(container.querySelector("textarea")).toBeNull();
@@ -374,15 +396,14 @@ test("image shelf renders for non-location kinds", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt-knife", name: "Salt Knife", has_image: true }]);
   (api.readEntity as any).mockResolvedValue({ meta: { id: "salt-knife", name: "Salt Knife" }, body: "sharp" });
   (api.listEntityImages as any).mockResolvedValue([{ name: "avatar", v: "1" }]);
-  const { container } = render(<EntityEditor wid="w" kind="items" />);
-  fireEvent.click(await screen.findByText("Salt Knife"));
+  const { container } = render(<Wrap wid="w" kind="items" selected="salt-knife" />);
   await waitFor(() => expect(api.listEntityImages).toHaveBeenCalledWith({ kind: "world", id: "w" }, "items", "salt-knife"));
   expect(screen.getByText("Images")).toBeInTheDocument();            // shelf present
   expect(container.querySelector(".loc-row-img")).not.toBeNull();    // rail thumbnail
 });
 
 test("typed fields render in the form and are sent on create", async () => {
-  render(<EntityEditor wid="w" kind="items" />);
+  render(<Wrap wid="w" kind="items" />);
   fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Salt Knife" } });
   fireEvent.change(screen.getByLabelText("Type"), { target: { value: "weapon" } });
   fireEvent.change(screen.getByLabelText("Rarity"), { target: { value: "rare" } });
@@ -399,8 +420,7 @@ test("typed field values show as chips in the detail sidebar", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "marsh-wyrm", name: "Marsh Wyrm" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "marsh-wyrm", name: "Marsh Wyrm", creature_type: "wyrm", threat: "apex" }, body: "old" });
-  const { container } = render(<EntityEditor wid="w" kind="creatures" />);
-  fireEvent.click(await screen.findByText("Marsh Wyrm"));
+  const { container } = render(<Wrap wid="w" kind="creatures" selected="marsh-wyrm" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText(/Type: wyrm/)).toBeInTheDocument();
@@ -417,9 +437,8 @@ test("campaign scope with a module mounts SheetPanel with a Sheet side-section",
     checks: {}, rules: [], content: [], errors: [],
   } as any;
   const { container } = render(
-    <EntityEditor wid="w" kind="items" scope={{ kind: "campaign", id: "run" }} module={module} />,
+    <Wrap wid="w" kind="items" scope={{ kind: "campaign", id: "run" }} module={module} selected="salt-knife" />,
   );
-  fireEvent.click(await screen.findByText("Salt Knife"));
   await waitFor(() => expect(api.getSheet).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "mod1", "items", "salt-knife"));
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -438,7 +457,7 @@ test("merges module content into the rail as templates and previews on click", a
     kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
     keys: "", sheet_type: null, fields: {},
   });
-  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  render(<Wrap wid="w1" kind="items" module={module} />);
   await screen.findByText("Sword");
   const templateRow = await screen.findByText("Lantern of Winnowing");
   fireEvent.click(templateRow);
@@ -463,7 +482,7 @@ test("instantiate creates a real record and selects it", async () => {
     kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
     keys: "", sheet_type: null, fields: {},
   });
-  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  render(<Wrap wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("Lantern of Winnowing"));
   fireEvent.click(await screen.findByText("Instantiate"));
   await waitFor(() => expect(api.instantiateContent).toHaveBeenCalledWith(
@@ -471,7 +490,7 @@ test("instantiate creates a real record and selects it", async () => {
   await screen.findByText("Edit"); // back to a normal read-only view of the new record
 });
 
-test("nav.newOwner clears stale contentPreview to show the new-entry form", async () => {
+test("a route change to a pre-owned form clears a stale content preview", async () => {
   const module = {
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
@@ -483,19 +502,18 @@ test("nav.newOwner clears stale contentPreview to show the new-entry form", asyn
     kind: "lore", id: "pact", name: "Salt Pact", body: "Binds all salt-related magic.",
     keys: "", sheet_type: null, fields: {},
   });
-  const onNavConsumed = vi.fn();
   const { rerender } = render(
-    <EntityEditor wid="w" kind="lore" module={module} onNavConsumed={onNavConsumed} />
+    <Wrap wid="w" kind="lore" module={module} selected={null} />
   );
   // First, click the template to populate contentPreview
   fireEvent.click(await screen.findByText("Salt Pact"));
   await screen.findByText("Binds all salt-related magic.");
   expect(screen.getByText("Instantiate")).toBeInTheDocument();
 
-  // Now rerender with nav.newOwner, simulating navigation from OwnedLorePanel
+  // Now rerender with a pre-owned route, simulating navigation from OwnedLorePanel
   rerender(
-    <EntityEditor wid="w" kind="lore" module={module}
-      nav={{ newOwner: "locations:some-location" }} onNavConsumed={onNavConsumed} />
+    <Wrap wid="w" kind="lore" module={module}
+      selected={null} newOwner="locations:some-location" />
   );
 
   // The form should now show (new entry, not template preview)
@@ -514,7 +532,7 @@ it("shows a wizard trigger only when the module has a sheet type for this kind, 
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  render(<Wrap wid="w1" kind="items" module={module} />);
   const trigger = await screen.findByText("+ New item with sheet…");
   fireEvent.click(trigger);
   await screen.findByText("New item (with sheet)");
@@ -529,7 +547,7 @@ it("wires the wizard's deleteRecord to api.deleteEntity so a failed sheet write 
   } as any;
   (api.createEntity as any).mockResolvedValue({ id: "e1" });
   (api.putSheetCreation as any).mockRejectedValue({ detail: "nope" });
-  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  render(<Wrap wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("+ New item with sheet…"));
   await screen.findByText("New item (with sheet)");
 
@@ -548,7 +566,7 @@ it("hides the wizard trigger when the module has no sheet type for this kind", a
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  render(<Wrap wid="w1" kind="items" module={module} />);
   await screen.findByText("+ New item");
   expect(screen.queryByText("+ New item with sheet…")).not.toBeInTheDocument();
 });
@@ -556,7 +574,7 @@ it("hides the wizard trigger when the module has no sheet type for this kind", a
 // ---- secrecy (#49) ---------------------------------------------------------
 
 test("creates an entry with a chosen secrecy level", async () => {
-  render(<EntityEditor wid="w" kind="lore" />);
+  render(<Wrap wid="w" kind="lore" />);
   fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "The Twist" } });
   fireEvent.click(screen.getByRole("radio", { name: "Secret" }));
   fireEvent.click(screen.getByRole("button", { name: /create lore entry/i }));
@@ -567,7 +585,7 @@ test("creates an entry with a chosen secrecy level", async () => {
 });
 
 test("the secrecy picker offers all three levels and starts on public", async () => {
-  render(<EntityEditor wid="w" kind="lore" />);
+  render(<Wrap wid="w" kind="lore" />);
   await screen.findByLabelText("Name");
   const group = screen.getByRole("radiogroup", { name: "Secrecy" });
   expect(within(group).getAllByRole("radio").map((r) => r.getAttribute("value")))
@@ -579,8 +597,7 @@ test("the detail sidebar badges a secret entry and the form opens on its level",
   (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "the harbourmaster did it" });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Twist"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Secrecy")).toBeInTheDocument();
@@ -593,8 +610,7 @@ test("the detail sidebar badges a secret entry and the form opens on its level",
 test("an unmarked entry reads as public in the sidebar", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt" }, body: "x" });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Public")).toBeInTheDocument();
@@ -607,7 +623,7 @@ test("the rail badges non-public rows only", async () => {
       { id: "b", name: "Twist", secrecy: "secret" },
       { id: "c", name: "Note", secrecy: "gm-only" },
     ]));
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  const { container } = render(<Wrap wid="w" kind="lore" />);
   await screen.findByText("Twist");
   const rail = container.querySelector(".editor-list") as HTMLElement;
   expect(within(rail).getByText("Secret")).toBeInTheDocument();
@@ -619,8 +635,7 @@ test("switching a viewed entry back to public sends 'public', clearing the level
   (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "gm-only" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "twist", name: "Twist", secrecy: "gm-only" }, body: "x" });
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Twist"));
+  render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.click(screen.getByRole("radio", { name: "Public" }));
@@ -635,10 +650,9 @@ test("'+ New' after viewing a secret entry does not inherit its level", async ()
   (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "x" });
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Twist"));
+  const { rerender } = render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
+  rerender(<Wrap wid="w" kind="lore" selected={null} />);
   expect(screen.getByRole("radio", { name: "Public" })).toBeChecked();
 });
 
@@ -650,8 +664,7 @@ test("a hand-edited secrecy value is read the way the backend reads it", async (
   (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: " Secret " }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "twist", name: "Twist", secrecy: " Secret " }, body: "x" });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Twist"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Secret")).toBeInTheDocument();
@@ -672,8 +685,7 @@ test("an unrecognised secrecy value still reads as public", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "typo", name: "Typo", secrecy: "sercet" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "typo", name: "Typo", secrecy: "sercet" }, body: "x" });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Typo"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="typo" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Public")).toBeInTheDocument();
@@ -686,13 +698,13 @@ test("rail rows carry the record's token count", async () => {
     { id: "salt", name: "Salt", tokens: 1240 },
     { id: "brine", name: "Brine", tokens: 7 },
   ]);
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  const { container } = render(<Wrap wid="w" kind="lore" />);
   await screen.findByText("Salt");
   const counts = Array.from(container.querySelectorAll(".row-tokens")).map((n) => n.textContent);
   expect(counts).toEqual(["1,240", "7"]);
   // the rail drops the unit for width, so the row's accessible name carries it
-  expect(screen.getByRole("button", { name: /Salt 1,240 tokens/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Brine 7 tokens/ })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Salt 1,240 tokens/ })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Brine 7 tokens/ })).toBeInTheDocument();
 });
 
 test("a zero-token record still shows its count, in the rail and the detail", async () => {
@@ -701,8 +713,10 @@ test("a zero-token record still shows its count, in the rail and the detail", as
   (api.listEntities as any).mockResolvedValue([{ id: "stub", name: "Stub", tokens: 0 }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "stub", name: "Stub" }, body: "", tokens: 0 });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Stub"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="stub" />);
+  // Selection is immediate now (a prop, not a click), so the rail row and the
+  // detail view both show "Stub" from the start -- scope the wait to the rail.
+  await within(container.querySelector(".editor-list") as HTMLElement).findByText("Stub");
   expect(container.querySelector(".row-tokens")!.textContent).toBe("0");
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".token-badge")!.textContent).toBe("0 tokens");
@@ -711,7 +725,7 @@ test("a zero-token record still shows its count, in the rail and the detail", as
 test("a row with no token count renders no badge", async () => {
   // a payload from before the field existed must not render "undefined" or 0
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  const { container } = render(<Wrap wid="w" kind="lore" />);
   await screen.findByText("Salt");
   expect(container.querySelector(".row-tokens")).toBeNull();
 });
@@ -720,8 +734,7 @@ test("the detail header and sidebar report the cost, keyed as per-activation", a
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt", name: "Salt", keys: "pact" }, body: "Binds", tokens: 42 });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".detail-main h3 .token-badge")!.textContent).toBe("42 tokens");
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -734,8 +747,7 @@ test("a keyless lore entry is described as always-on, a keyless location as the 
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 3 }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 3 });
-  const lore = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  const lore = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const loreSide = lore.container.querySelector(".detail-sidebar") as HTMLElement;
   // "always-on" alone also matches the Keys hint above it, so match the sentence
@@ -744,8 +756,7 @@ test("a keyless lore entry is described as always-on, a keyless location as the 
   lore.unmount();
 
   // a keyless LOCATION never joins world info; it is charged as the setting
-  const loc = render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  const loc = render(<Wrap wid="w" kind="locations" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const locSide = loc.container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(locSide).getByText(/current setting/i)).toBeInTheDocument();
@@ -756,10 +767,9 @@ test("the header badge clears when the form is reset for a new record", async ()
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 42 });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  const { container, rerender } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(container.querySelector(".token-badge")).not.toBeNull());
-  fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
+  rerender(<Wrap wid="w" kind="lore" selected={null} />);
   expect(container.querySelector(".token-badge")).toBeNull();
 });
 
@@ -769,17 +779,16 @@ test("a GM-only record's count is marked as never charged, not as a live cost", 
   (api.listEntities as any).mockResolvedValue([{ id: "vault", name: "Vault", tokens: 88, secrecy: "gm-only" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "vault", name: "Vault", secrecy: "gm-only" }, body: "Behind the seawall.", tokens: 88 });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  const { container } = render(<Wrap wid="w" kind="lore" selected="vault" />);
   // by role, not by text: the same mock feeds `loreOwnerOptions`, so "Vault"
   // is also an owner checkbox label further down the form
-  const railRow = await screen.findByRole("button", { name: /Vault.*88 tokens/ });
+  await screen.findByRole("link", { name: /Vault.*88 tokens/ });
   expect(container.querySelector(".row-tokens")!.className).toContain("never-charged");
   // Struck-through text does not announce as struck, so the name has to say it.
   // The row also carries #49's own GM-only tag, hence the gap in the middle --
   // asserted loosely so that tag's wording stays that feature's business.
-  expect(screen.getByRole("button", { name: /Vault.*88 tokens, never charged/ })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Vault.*88 tokens, never charged/ })).toBeInTheDocument();
 
-  fireEvent.click(railRow);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".token-badge")!.className).toContain("never-charged");
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -790,8 +799,8 @@ test("a public record's count carries no never-charged marking", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 88 }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 88 });
-  const { container } = render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByRole("button", { name: /Salt.*88 tokens/ }));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByRole("link", { name: /Salt.*88 tokens/ });
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".row-tokens")!.className).not.toContain("never-charged");
   expect(container.querySelector(".token-badge")!.className).not.toContain("never-charged");
@@ -801,8 +810,7 @@ test("a public record's count carries no never-charged marking", async () => {
 
 async function openForEdit() {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
 }
@@ -882,8 +890,7 @@ test("a failure that is not a conflict still reaches the error banner", async ()
 
 test("the detail sidebar offers every kind but this one", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const picker = screen.getByLabelText<HTMLSelectElement>("Reclassify as");
   expect([...picker.options].map((o) => o.value))
@@ -894,8 +901,7 @@ test("reclassifying sends the record's rev and reports where it went", async () 
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
-  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" onReclassified={onReclassified} />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
   await waitFor(() =>
@@ -909,8 +915,7 @@ test("the id the server hands back is the one navigated to", async () => {
   (api.reclassifyEntity as any).mockResolvedValue({ id: "salt-2", campaigns: [] });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
-  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" onReclassified={onReclassified} />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
   await waitFor(() => expect(onReclassified).toHaveBeenCalledWith("locations", "salt-2"));
@@ -919,8 +924,7 @@ test("the id the server hands back is the one navigated to", async () => {
 test("declining the confirm reclassifies nothing", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(false);
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
   await waitFor(() => expect(api.reclassifyEntity).not.toHaveBeenCalled());
@@ -932,8 +936,7 @@ test("a stale record refuses the move and offers to make it anyway", async () =>
     fail(409, "record changed", "stale_record", { rev: "r2" }));
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
-  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" onReclassified={onReclassified} />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
   const anyway = await screen.findByRole("button", { name: /reclassify anyway/i });
@@ -955,8 +958,7 @@ test("a refused move reports the error and leaves the record where it is", async
   (api.reclassifyEntity as any).mockRejectedValue(fail(400, "already a lore record"));
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
-  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" onReclassified={onReclassified} />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
   expect(await screen.findByText("already a lore record")).toBeInTheDocument();
@@ -966,8 +968,7 @@ test("a refused move reports the error and leaves the record where it is", async
 test("the campaign hint says the world keeps its own copy", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   const { container } = render(
-    <EntityEditor wid="w" scope={{ kind: "campaign", id: "c1" }} kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+    <Wrap wid="w" scope={{ kind: "campaign", id: "c1" }} kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText(/the world keeps its own/i)).toBeInTheDocument();
@@ -976,8 +977,7 @@ test("the campaign hint says the world keeps its own copy", async () => {
 test("moving out of locations warns that scenes lose their setting", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="locations" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "lore" } });
   expect(confirm.mock.calls[0][0]).toMatch(/no longer show a setting/);
@@ -986,8 +986,7 @@ test("moving out of locations warns that scenes lose their setting", async () =>
 test("moving into locations says nothing about settings", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  render(<EntityEditor wid="w" kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
   expect(confirm.mock.calls[0][0]).not.toMatch(/setting/);
@@ -1002,7 +1001,7 @@ test("a long roster can be filtered, and says how much of it is showing", async 
     secrecy: "public", tokens: 10,
   }));
   (api.listEntities as any).mockResolvedValue(many);
-  render(<EntityEditor wid="w" kind="lore" />);
+  render(<Wrap wid="w" kind="lore" />);
   await screen.findByText("Record 0");
   expect(screen.getByText(/12 lores?/)).toBeInTheDocument();
 
@@ -1022,7 +1021,7 @@ test("a filter matching nothing is not an empty world", async () => {
     id: `e${i}`, name: `Record ${i}`, secrecy: "public", tokens: 10,
   }));
   (api.listEntities as any).mockResolvedValue(many);
-  render(<EntityEditor wid="w" kind="lore" />);
+  render(<Wrap wid="w" kind="lore" />);
   await screen.findByText("Record 0");
   fireEvent.change(screen.getByLabelText(/search lore/i), { target: { value: "zzz" } });
   expect(screen.getByText(/nothing matches/i)).toBeInTheDocument();
@@ -1036,7 +1035,7 @@ test("a single-valued ref field offers only its own kinds, and sends the pick", 
   (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     Promise.resolve(kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
-  render(<EntityEditor wid="w" kind="groups" />);
+  render(<Wrap wid="w" kind="groups" />);
   fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "The Watch" } });
   const leader = await screen.findByRole("radiogroup", { name: "Leader" });
   const hq = screen.getByRole("radiogroup", { name: "Headquarters" });
@@ -1058,8 +1057,7 @@ test("a single-valued ref field can be cleared back to none", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
-  render(<EntityEditor wid="w" kind="groups" />);
-  fireEvent.click(await screen.findByText("The Watch"));
+  render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   const leader = await screen.findByRole("radiogroup", { name: "Leader" });
@@ -1075,7 +1073,7 @@ test("a multi-valued ref field is a checkbox picker and sends a comma-joined lis
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     Promise.resolve(kind === "locations"
       ? [{ id: "saltmarch", name: "Saltmarch" }, { id: "realm", name: "Realm" }] : []));
-  render(<EntityEditor wid="w" kind="creatures" />);
+  render(<Wrap wid="w" kind="creatures" />);
   fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Marsh Wyrm" } });
   const habitat = await screen.findByRole("group", { name: "Habitat" });
   fireEvent.click(within(habitat).getByLabelText("Saltmarch"));
@@ -1094,8 +1092,7 @@ test("a ref shows in the sidebar as a chip that navigates to the record", async 
   (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
-  const { container } = render(<EntityEditor wid="w" kind="groups" onOpenOwner={onOpenOwner} />);
-  fireEvent.click(await screen.findByText("The Watch"));
+  const { container } = render(<Wrap wid="w" kind="groups" selected="watch" onOpenOwner={onOpenOwner} />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Leader")).toBeInTheDocument();
@@ -1110,8 +1107,7 @@ test("a ref whose record is gone renders as a dangling chip rather than disappea
   (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
-  const { container } = render(<EntityEditor wid="w" kind="groups" />);
-  fireEvent.click(await screen.findByText("The Watch"));
+  const { container } = render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   const chip = within(side).getByText("characters:mara");
@@ -1123,12 +1119,12 @@ test("a ref field with no candidates says so instead of rendering an empty picke
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
-  render(<EntityEditor wid="w" kind="groups" />);
+  render(<Wrap wid="w" kind="groups" />);
   expect(await screen.findByText(/No characters or PCs yet/i)).toBeInTheDocument();
 });
 
 test("kinds with no ref fields fetch no candidate lists", async () => {
-  render(<EntityEditor wid="w" kind="locations" />);
+  render(<Wrap wid="w" kind="locations" />);
   await waitFor(() => expect(api.listEntities).toHaveBeenCalled());
   expect(api.listCharacters).not.toHaveBeenCalled();
   expect(api.listPCs).not.toHaveBeenCalled();
@@ -1141,8 +1137,7 @@ test("a dangling ref is visible in the form and can be cleared", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
-  render(<EntityEditor wid="w" kind="groups" />);
-  fireEvent.click(await screen.findByText("The Watch"));
+  render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   const leader = await screen.findByRole("radiogroup", { name: "Leader" });
@@ -1165,8 +1160,7 @@ test("an untouched dangling ref is left alone rather than scrubbed", async () =>
   (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
-  render(<EntityEditor wid="w" kind="groups" />);
-  fireEvent.click(await screen.findByText("The Watch"));
+  render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.click(await screen.findByRole("button", { name: /^save$/i }));
@@ -1185,8 +1179,7 @@ test("a legacy free-text value in a newly-claimed key does not block an unrelate
     Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", holder: "Mara" }, body: "sharp", rev: "r1" });
-  render(<EntityEditor wid="w" kind="items" />);
-  fireEvent.click(await screen.findByText("Salt Knife"));
+  render(<Wrap wid="w" kind="items" selected="knife" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Body"), { target: { value: "very sharp" } });
@@ -1205,8 +1198,7 @@ test("changing one field sends only that field", async () => {
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", item_type: "weapon", rarity: "rare" },
     body: "sharp", rev: "r1" });
-  render(<EntityEditor wid="w" kind="items" />);
-  fireEvent.click(await screen.findByText("Salt Knife"));
+  render(<Wrap wid="w" kind="items" selected="knife" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Rarity"), { target: { value: "common" } });
@@ -1234,11 +1226,11 @@ test("a scope change clears the ref candidates before the new ones arrive", asyn
     return s.id === "w1" ? Promise.resolve([{ id: "saltmarch", name: "Saltmarch" }]) : w2.promise;
   });
   const { rerender } = render(
-    <EntityEditor wid="w1" scope={{ kind: "world", id: "w1" }} kind="creatures" />);
+    <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="creatures" />);
   expect(within(await screen.findByRole("group", { name: "Habitat" }))
     .getByLabelText("Saltmarch")).toBeInTheDocument();
   // w2's listing is still in flight at this point, deliberately.
-  rerender(<EntityEditor wid="w2" scope={{ kind: "world", id: "w2" }} kind="creatures" />);
+  rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="creatures" />);
   expect(within(screen.getByRole("group", { name: "Habitat" }))
     .queryByLabelText("Saltmarch")).toBeNull();
   w2.resolve([{ id: "realm", name: "Realm" }]);
@@ -1255,8 +1247,8 @@ test("a slow listing from the previous scope cannot land on top of the current o
     return s.id === "w1" ? w1.promise : Promise.resolve([{ id: "realm", name: "Realm" }]);
   });
   const { rerender } = render(
-    <EntityEditor wid="w1" scope={{ kind: "world", id: "w1" }} kind="creatures" />);
-  rerender(<EntityEditor wid="w2" scope={{ kind: "world", id: "w2" }} kind="creatures" />);
+    <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="creatures" />);
+  rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="creatures" />);
   const habitat = await screen.findByRole("group", { name: "Habitat" });
   expect(await within(habitat).findByLabelText("Realm")).toBeInTheDocument();
   w1.resolve([{ id: "saltmarch", name: "Saltmarch" }]);
@@ -1271,7 +1263,7 @@ test("a record whose id carries the list delimiter is not offered as a candidate
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     Promise.resolve(kind === "locations"
       ? [{ id: "salt,march", name: "Salt March" }, { id: "realm", name: "Realm" }] : []));
-  render(<EntityEditor wid="w" kind="creatures" />);
+  render(<Wrap wid="w" kind="creatures" />);
   const habitat = await screen.findByRole("group", { name: "Habitat" });
   expect(within(habitat).getByLabelText("Realm")).toBeInTheDocument();
   expect(within(habitat).queryByLabelText("Salt March")).toBeNull();
@@ -1286,7 +1278,7 @@ test("same-named candidates across kinds are told apart by kind", async () => {
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     Promise.resolve(kind === "groups" ? [{ id: "mara-company", name: "Mara" }]
       : kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
-  render(<EntityEditor wid="w" kind="items" />);
+  render(<Wrap wid="w" kind="items" />);
   const holder = await screen.findByRole("radiogroup", { name: "Held by" });
   expect(within(holder).getByLabelText("Mara (character)")).toBeInTheDocument();
   expect(within(holder).getByLabelText("Mara (group)")).toBeInTheDocument();
@@ -1300,7 +1292,7 @@ test("same-named candidates of the SAME kind fall back to the ref", async () => 
     { id: "mara", name: "Mara" }, { id: "mara-2", name: "Mara" }]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
-  render(<EntityEditor wid="w" kind="items" />);
+  render(<Wrap wid="w" kind="items" />);
   const holder = await screen.findByRole("radiogroup", { name: "Held by" });
   expect(within(holder).getByLabelText("Mara (characters:mara)")).toBeInTheDocument();
   expect(within(holder).getByLabelText("Mara (characters:mara-2)")).toBeInTheDocument();
@@ -1311,7 +1303,7 @@ test("one kind failing to load does not empty the whole picker", async () => {
   (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     Promise.resolve(kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
-  render(<EntityEditor wid="w" kind="items" />);
+  render(<Wrap wid="w" kind="items" />);
   const holder = await screen.findByRole("radiogroup", { name: "Held by" });
   expect(within(holder).getByLabelText("Winifred")).toBeInTheDocument();
   expect(within(holder).getByLabelText("Saltmarch")).toBeInTheDocument();
@@ -1326,8 +1318,7 @@ test("a failed candidate load does not report existing refs as deleted", async (
     Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", holder: "characters:mara" }, body: "x", rev: "r1" });
-  const { container } = render(<EntityEditor wid="w" kind="items" />);
-  fireEvent.click(await screen.findByText("Salt Knife"));
+  const { container } = render(<Wrap wid="w" kind="items" selected="knife" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   const chip = within(side).getByText("characters:mara");
@@ -1344,8 +1335,7 @@ test("a ref really is reported as deleted once the lists have loaded", async () 
     Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", holder: "characters:mara" }, body: "x", rev: "r1" });
-  const { container } = render(<EntityEditor wid="w" kind="items" />);
-  fireEvent.click(await screen.findByText("Salt Knife"));
+  const { container } = render(<Wrap wid="w" kind="items" selected="knife" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("characters:mara").getAttribute("title"))
@@ -1358,7 +1348,7 @@ test("an empty picker whose listing failed says so instead of claiming the store
   // empty library, with no error and nothing to retry.
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     kind === "locations" ? Promise.reject(new Error("network")) : Promise.resolve([]));
-  render(<EntityEditor wid="w" kind="creatures" />);
+  render(<Wrap wid="w" kind="creatures" />);
   expect(await screen.findByText(/could not load the list of records/i)).toBeInTheDocument();
   expect(screen.queryByText(/No locations yet/i)).toBeNull();
 });
@@ -1367,7 +1357,7 @@ test("an empty picker whose listing succeeded still says the store is empty", as
   // The claim is legitimate when a listing actually arrived, so the fix must
   // not turn every empty picker into a fake error.
   (api.listEntities as any).mockResolvedValue([]);
-  render(<EntityEditor wid="w" kind="creatures" />);
+  render(<Wrap wid="w" kind="creatures" />);
   expect(await screen.findByText(/No locations yet/i)).toBeInTheDocument();
 });
 
@@ -1379,7 +1369,7 @@ test("a record whose id carries a line separator is not offered as a candidate",
       ? [...seps.map((c, i) => ({ id: `a${c}b${i}`, name: `Bad ${i}` })),
          { id: "realm", name: "Realm" }]
       : []));
-  render(<EntityEditor wid="w" kind="creatures" />);
+  render(<Wrap wid="w" kind="creatures" />);
   const habitat = await screen.findByRole("group", { name: "Habitat" });
   expect(within(habitat).getByLabelText("Realm")).toBeInTheDocument();
   seps.forEach((_c, i) =>
@@ -1401,8 +1391,7 @@ test("a sidebar ref of a kind the field cannot name reads as unresolved", async 
     meta: { id: "watch", name: "The Watch", leader: "locations:realm",
             headquarters: "locations:realm" },
     body: "x", rev: "r1" });
-  const { container } = render(<EntityEditor wid="w" kind="groups" />);
-  fireEvent.click(await screen.findByText("The Watch"));
+  const { container } = render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   // ...the same value, under two fields, told apart by what each may name
@@ -1416,18 +1405,22 @@ test("a sidebar ref of a kind the field cannot name reads as unresolved", async 
 
 test("a record read still in flight when the scope changes does not land under the new scope", async () => {
   // The same exposure PCEditor.select had: this editor stays mounted across a
-  // world-to-world navigation, so without a token the previous scope's record
-  // lands under the new one — where Save and Delete act on the new scope.
-  let resolveRead!: (v: unknown) => void;
+  // world-to-world navigation, and the SAME id staying selected across it is
+  // now the intended behaviour (it is re-read under the new scope) -- but a
+  // slow read the OLD scope started must still never land, no matter how late
+  // it resolves.
+  let resolveW1!: (v: unknown) => void;
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.readEntity as any).mockReturnValue(new Promise((r) => { resolveRead = r; }));
+  (api.readEntity as any)
+    .mockImplementationOnce(() => new Promise((r) => { resolveW1 = r; }))
+    .mockResolvedValue({ meta: { id: "salt", name: "Salt" }, body: "new scope body", rev: "r2" });
   const { rerender } = render(
-    <EntityEditor wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" />);
-  fireEvent.click(await screen.findByText("Salt"));
-  rerender(<EntityEditor wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+    <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" selected="salt" />);
+  rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" selected="salt" />);
   await waitFor(() =>
     expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w2" }, "lore"));
-  resolveRead({ meta: { id: "salt", name: "Salt" }, body: "old scope body", rev: "r1" });
+  await screen.findByText("new scope body");
+  resolveW1({ meta: { id: "salt", name: "Salt" }, body: "old scope body", rev: "r1" });
   await waitFor(() => expect(api.listEntities).toHaveBeenCalled());
   expect(screen.queryByText("old scope body")).toBeNull();
 });
@@ -1435,7 +1428,7 @@ test("a record read still in flight when the scope changes does not land under t
 // ---- choice and number widgets (#221) --------------------------------------
 
 test("a choice field is a picker over its source's options and sends the chosen id", async () => {
-  render(<EntityEditor wid="w" kind="locations" />);
+  render(<Wrap wid="w" kind="locations" />);
   const picker = await screen.findByLabelText("Climate");
   expect(picker.tagName).toBe("SELECT");
   await waitFor(() => expect(within(picker).getByText("Saltmarch fog")).toBeInTheDocument());
@@ -1451,7 +1444,7 @@ test("a choice field is a picker over its source's options and sends the chosen 
 });
 
 test("a number field is a bounded number input", async () => {
-  render(<EntityEditor wid="w" kind="locations" />);
+  render(<Wrap wid="w" kind="locations" />);
   const input = await screen.findByLabelText<HTMLInputElement>("Weather persistence");
   expect(input.type).toBe("number");
   expect(input.min).toBe("0");
@@ -1467,8 +1460,7 @@ test("a stored choice value outside the options is shown, not blanked", async ()
   (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "fogbank", name: "Fogbank", climate: "temperate-costal" }, body: "grey" });
-  render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Fogbank"));
+  render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const picker = await screen.findByLabelText<HTMLSelectElement>("Climate");
   await waitFor(() => expect(within(picker).getByText("Saltmarch fog")).toBeInTheDocument());
@@ -1483,8 +1475,7 @@ test("a stored choice value is not called 'not an option' while the list has not
   (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "fogbank", name: "Fogbank", climate: "temperate-interior" }, body: "grey" });
-  render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Fogbank"));
+  render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const picker = await screen.findByLabelText<HTMLSelectElement>("Climate");
   expect(picker.value).toBe("temperate-interior");
@@ -1501,8 +1492,7 @@ test("a stored number field value the number input cannot show gets a text box",
   (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "fogbank", name: "Fogbank", persistence: "wet" }, body: "grey" });
-  render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Fogbank"));
+  render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const input = await screen.findByLabelText<HTMLInputElement>("Weather persistence");
   expect(input.type).toBe("text");
@@ -1520,10 +1510,100 @@ test("the sidebar names a chosen option by its label", async () => {
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "fogbank", name: "Fogbank", climate: "temperate-interior", persistence: "0.4" },
     body: "grey" });
-  const { container } = render(<EntityEditor wid="w" kind="locations" />);
-  fireEvent.click(await screen.findByText("Fogbank"));
+  const { container } = render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText(/Climate: Temperate interior/)).toBeInTheDocument();
   expect(within(side).getByText(/Weather persistence: 0.4/)).toBeInTheDocument();
 });
+
+// ---- selecting from the route (world-section-routes, task 4) --------------
+
+describe("selecting from the route", () => {
+  // A fixture shared by most of these: an "items" listing that resolves the
+  // same record the read-only-view and row-link tests both need, so each test
+  // states only what it is actually about. `entityFixture` mirrors this shape.
+  beforeEach(() => {
+    (api.listEntities as any).mockResolvedValue([{ id: "the-salt-pact", name: "Salt Pact" }]);
+    (api.readEntity as any).mockResolvedValue(entityFixture("the-salt-pact", "The Salt Pact"));
+  });
+
+test("a record row is a link to that record's address", async () => {
+  renderEditor({ kind: "items", selected: null });
+  const row = await screen.findByRole("link", { name: /Salt Pact/ });
+  expect(row).toHaveAttribute("href", "/worlds/realm/items/the-salt-pact");
+});
+
+test("an unowned blank form can be pre-owned by the chip that opened it", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
+  renderEditor({ kind: "lore", selected: null, newOwner: "characters:seraphine" });
+  expect(await screen.findByLabelText(/Seraphine/)).toBeInTheDocument();
+});
+
+test("leaving a record for the section root does not get reopened by its own late read", async () => {
+  const slow = deferred();
+  (api.readEntity as any).mockImplementationOnce(() => slow.promise);
+  const { rerender } = renderEditor({ kind: "items", selected: "the-salt-pact" });
+  rerender(editorWith({ kind: "items", selected: null }));
+  slow.resolve(entityFixture("the-salt-pact", "The Salt Pact"));
+  await screen.findByRole("link", { name: /New item/ });
+  expect(screen.queryByRole("heading", { name: "The Salt Pact" })).toBeNull();
+});
+
+test("+ New is a link back to the section root", async () => {
+  renderEditor({ kind: "items", selected: "the-salt-pact" });
+  expect(await screen.findByRole("link", { name: /New item/ }))
+    .toHaveAttribute("href", "/worlds/realm/items");
+});
+
+test("the selected record opens read-only", async () => {
+  renderEditor({ kind: "items", selected: "the-salt-pact" });
+  await screen.findByRole("heading", { name: "The Salt Pact" });
+  expect(screen.queryByRole("textbox")).toBeNull();
+});
+
+test("a later selection wins even when the earlier read lands last", async () => {
+  const slow = deferred(); const fast = deferred();
+  (api.readEntity as any)
+    .mockImplementationOnce(() => slow.promise)
+    .mockImplementationOnce(() => fast.promise);
+  const { rerender } = renderEditor({ kind: "items", selected: "a" });
+  rerender(editorWith({ kind: "items", selected: "b" }));
+  fast.resolve(entityFixture("b", "Bee"));
+  slow.resolve(entityFixture("a", "Ay"));
+  await screen.findByRole("heading", { name: "Bee" });
+  expect(screen.queryByRole("heading", { name: "Ay" })).toBeNull();
+});
+
+test("the same id under a changed scope reads the new scope's record", async () => {
+  const { rerender } = renderEditor({ kind: "items", selected: "the-salt-pact" });
+  await screen.findByRole("heading", { name: "The Salt Pact" });
+  rerender(editorWith({ kind: "items", selected: "the-salt-pact",
+                        scope: { kind: "campaign", id: "run" } }));
+  await waitFor(() => expect((api.readEntity as any).mock.calls.at(-1)[0])
+    .toEqual({ kind: "campaign", id: "run" }));
+});
+
+test("re-selecting the record already open leaves an unsaved draft alone", async () => {
+  const props = { kind: "items" as const, selected: "the-salt-pact" };
+  const { rerender } = renderEditor(props);
+  await screen.findByRole("heading", { name: "The Salt Pact" });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "Half written" } });
+  const reads = (api.readEntity as any).mock.calls.length;
+  rerender(editorWith(props));              // the same address, asked for again
+  expect((api.readEntity as any).mock.calls.length).toBe(reads);
+  expect(screen.getByLabelText(/Name/)).toHaveValue("Half written");
+});
+
+test("...and Cancel is still the control that discards it", async () => {
+  renderEditor({ kind: "items", selected: "the-salt-pact" });
+  await screen.findByRole("heading", { name: "The Salt Pact" });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "Half written" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await screen.findByRole("heading", { name: "The Salt Pact" });
+  expect(screen.queryByDisplayValue("Half written")).toBeNull();
+});
+
+}); // describe("selecting from the route")

@@ -93,27 +93,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  blank form. Read nowhere else, so it cannot ride along to Items or sit
    *  beside a record that already has owners of its own. */
   const newOwner = section === "lore" && !rid ? (params.get("owner") ?? "") : "";
-  /** The nav `EntityEditor` consumes on mount / on the record changing.
-   *  Memoized on the three values that describe it rather than built as a
-   *  fresh object literal every render: `EntityEditor`'s inbound-nav effect
-   *  is keyed on `[nav]` *object identity*
-   *  (`components/EntityEditor.tsx`), and `onNavConsumed` is a no-op here —
-   *  nothing clears this one, because there is no state left to clear. A
-   *  fresh literal every render would re-fire that effect on every unrelated
-   *  re-render of this page (a count landing, a disclosure opening, the
-   *  palette registering its source) and silently overwrite whatever the
-   *  reader was mid-editing with the record's last-saved text. */
-  const navObj = useMemo(
-    () => (rid ? { focusEntry: rid } : newOwner ? { newOwner } : null),
-    // `section` is not read in the body -- `newOwner` already goes blank
-    // outside Lore, so it alone happens to be enough today. Listed anyway:
-    // this object's whole meaning ("the record/owner this SCREEN was handed")
-    // is scoped to a section, and depending on that only indirectly, through
-    // one field's own derivation, is the kind of thing a later edit to
-    // `newOwner` could quietly break.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [section, rid, newOwner],
-  );
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [name, setName] = useState("");
@@ -387,8 +366,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // unknown, and a dash says so where a 0 would claim the section is empty.
   const dash = (n: number | null | undefined) => (n === null || n === undefined ? "—" : n);
 
-  const navFor = (kind: RecordSection) => (section === kind ? navObj : null);
-
   const column = (
     <>
       {campaign ? (
@@ -530,8 +507,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                                        focus={rid} focusNonce={0}
                                        module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
-        {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" nav={navFor("locations")}
-                                          onNavConsumed={() => {}} onReclassified={openEntity} onOpenLore={openLore} module={moduleCtx} />}
+        {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations"
+                                          selected={section === "locations" ? rid : null}
+                                          sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "locations" })}
+                                          recordHref={(r) => sectionHref(scopeForPaths,
+                                                                         { kind: "record", at: "locations", rid: r })}
+                                          onReclassified={openEntity} onOpenLore={openLore} module={moduleCtx} />}
         {section === "lore" && (
           <>
             {/* Controlled so the column's pinned import row can open it: the
@@ -542,18 +523,35 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               <summary>Import lorebook / world-info</summary>
               <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
             </details>}
-            <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={navFor("lore")}
-                          onNavConsumed={() => {}} onReclassified={openEntity} onOpenOwner={openOwner} module={moduleCtx} />
+            <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore"
+                          selected={section === "lore" ? rid : null}
+                          newOwner={newOwner}
+                          sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "lore" })}
+                          recordHref={(r) => sectionHref(scopeForPaths,
+                                                         { kind: "record", at: "lore", rid: r })}
+                          onReclassified={openEntity} onOpenOwner={openOwner} module={moduleCtx} />
           </>
         )}
-        {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items" nav={navFor("items")}
-                                          onNavConsumed={() => {}} onReclassified={openEntity}
+        {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items"
+                                          selected={section === "items" ? rid : null}
+                                          sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "items" })}
+                                          recordHref={(r) => sectionHref(scopeForPaths,
+                                                                         { kind: "record", at: "items", rid: r })}
+                                          onReclassified={openEntity}
                                           onOpenOwner={openOwner} module={moduleCtx} />}
-        {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" nav={navFor("groups")}
-                                          onNavConsumed={() => {}} onReclassified={openEntity}
+        {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups"
+                                          selected={section === "groups" ? rid : null}
+                                          sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "groups" })}
+                                          recordHref={(r) => sectionHref(scopeForPaths,
+                                                                         { kind: "record", at: "groups", rid: r })}
+                                          onReclassified={openEntity}
                                           onOpenOwner={openOwner} module={moduleCtx} />}
-        {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" nav={navFor("creatures")}
-                                          onNavConsumed={() => {}} onReclassified={openEntity}
+        {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures"
+                                          selected={section === "creatures" ? rid : null}
+                                          sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "creatures" })}
+                                          recordHref={(r) => sectionHref(scopeForPaths,
+                                                                         { kind: "record", at: "creatures", rid: r })}
+                                          onReclassified={openEntity}
                                           onOpenOwner={openOwner} module={moduleCtx} />}
         {section === "greetings" && (
           <>

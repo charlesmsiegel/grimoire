@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
@@ -351,12 +352,24 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
   );
 }
 
-export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, onReclassified, module = null }: {
+export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, sectionPath, recordHref, onOpenOwner, onOpenLore, onReclassified, module = null }: {
   wid: string;
   kind: EntityKind;
   scope?: EntityScope;
-  nav?: { focusEntry?: string; newOwner?: string } | null;
-  onNavConsumed?: () => void;
+  /** The record the URL names, or null for the section's own screen — which
+   *  is the blank new-record form this editor already opens on. */
+  selected?: string | null;
+  /** An owner to pre-fill a blank form with (`characters:seraphine`), from
+   *  `?owner=`. Only ever set when `selected` is null: it belongs to the form,
+   *  not to a record that has owners of its own. */
+  newOwner?: string;
+  /** This section's own address, for `+ New`. */
+  sectionPath: string;
+  /** ...and one record's, for a rail row. A CALLBACK rather than a string this
+   *  file concatenates onto `sectionPath`: `sectionHref` is the only thing
+   *  allowed to build these paths, and an id containing a slash or a space is
+   *  exactly what hand-joining gets wrong. */
+  recordHref: (rid: string) => string;
   onOpenOwner?: (ref: string) => void;
   onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
   // A reclassified record leaves this editor's list entirely, so the parent is
@@ -527,27 +540,17 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     [ownerOpts],
   );
 
-  // inbound navigation from an owner editor: open an entry, or start a new pre-owned entry.
-  // Clear it via onNavConsumed so it doesn't leak into later manual "+ New" / re-entry.
+  // Whatever the route names.
+  //
+  // The token is bumped on EVERY change, the null one included. Without that,
+  // navigating /items/a -> /items resets the form and then A's slower read
+  // lands and reopens A at an address that names no record.
   useEffect(() => {
-    if (!nav) return;
-    if (nav.focusEntry) {
-      select(nav.focusEntry);
-    } else {
-      setEditing(null);
-      setName("");
-      setBody("");
-      setKeys("");
-      setFields({});
-      setLoadedFields({});
-      setOwners(nav.newOwner ? [nav.newOwner] : []);
-      setSecrecy("public");
-      setMode("edit");
-      setContentPreview(null);
-    }
-    onNavConsumed?.();
+    const req = ++readReq.current;
+    if (selected) void select(selected, req);
+    else resetForm(newOwner);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nav]);
+  }, [selected, newOwner, scope.kind, scope.id]);
 
   const reloadImages = useCallback((id: string) => {
     const req = readReq.current;   // whichever select or refresh asked for these
@@ -560,7 +563,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, scope.kind, scope.id]);
 
-  function resetForm() {
+  function resetForm(owner = "") {
     setEditing(null);
     setRev(null);
     setStale(null);
@@ -569,7 +572,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setKeys("");
     setFields({});
     setLoadedFields({});
-    setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
+    setOwners(owner ? [owner] : []);
     setSecrecy("public");
     setSdPrompt("");
     setTokenCost(null);
@@ -579,12 +582,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setMode("edit"); // a brand-new entry goes straight to the form
   }
 
-  async function select(id: string) {
+  async function select(id: string, req = ++readReq.current) {
     setError(null);
     setStale(null);
     setContentPreview(null);
     setWizardOpen(false);
-    const req = ++readReq.current;
     const e = await api.readEntity(scope, kind, id);
     if (req !== readReq.current) return;   // the scope moved on, or a later select won
     setEditing(id);
@@ -854,9 +856,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }
 
   const row = (e: EntitySummary) => (
-    <button key={e.id}
-            className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
-            onClick={() => select(e.id)}>
+    <Link key={e.id}
+          className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
+          to={recordHref(e.id)}>
       {e.has_image && (
         <img className="loc-row-img" alt=""
              src={`${api.entityImageUrl(scope, kind, e.id, "avatar")}${e.image_v ? `?v=${e.image_v}` : ""}`}
@@ -890,7 +892,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
           {e.tokens.toLocaleString()}
         </span>
       )}
-    </button>
+    </Link>
   );
 
   return (
@@ -910,7 +912,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
           should describe is a decision with an owner, not an implementation
           detail to settle here. */}
       <div className="editor-list">
-        <button className="primary new" onClick={resetForm}>+ New {label}</button>
+        <Link className="primary new" to={sectionPath}>+ New {label}</Link>
         {/* Shown once there is enough to lose something in. Below that the
             filter is a control that costs a row and saves nothing. */}
         {items.length > 8 && (
