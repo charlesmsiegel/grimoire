@@ -67,21 +67,28 @@ is genuinely a *modifier* of the screen rather than the identity of it.
 /worlds/:wid/tags                 no record segment — tags have no detail pane
 ```
 
-The campaign's fork of a world mirrors it under `/campaigns/:cid/world/…`,
-carrying every index row except Tags — which is the filter the column already
+The campaign's fork of a world mirrors it under `/campaigns/:cid/world/…`
+*exactly*, record segments included — `/campaigns/run/world/characters/mira`,
+`/campaigns/run/world/items/the-salt-pact`. It carries every index row except
+Tags — which is the filter the column already
 applies, because the tag vocabulary is a world concern. Overview, Push and
 Images stay world-only for the same reason, exactly as the column already
 renders them. `/campaigns/:cid/world` redirects (`replace`) to
 `/campaigns/:cid/world/characters`, which is the section that shape already
 defaults to — so every screen has exactly one address rather than two.
 
-**A campaign's character record keeps its existing address**,
-`/campaigns/:cid/characters/:eid`, and is deliberately *not* moved under
-`/world/`. It is a route that already exists and is already linked from the
-campaign rail and from `CharacterPage`'s own back link; moving it would churn
-both for no reader-visible gain. The asymmetry is worth one sentence in the
-code: a campaign's copy of a character is a record of the campaign, and the
-world page is where you browse them, not where they live.
+**A campaign's character record moves** from `/campaigns/:cid/characters/:eid`
+to `/campaigns/:cid/world/characters/:eid`, so the two shapes are the same
+shape. The alternative was leaving it where it is and writing a paragraph
+explaining why one record kind addresses differently from the other seven; a
+rule with one exception is two rules, and the exception would have had to be
+carried in `sectionHref`, in the legacy translator and in every reader's head.
+
+The move is cheaper than it looks. `characterHref` is already the single
+producer — `CharacterGrid`, `CharacterPage` and `WorldView` all go through it
+and none of them spells the path — so the change is one branch in that helper,
+one route declaration in `App.tsx`, and `CharacterPage.test.tsx`'s campaign
+harness. The old address does not simply vanish: see **Old links** below.
 
 ### A section root is the new-record screen
 
@@ -103,8 +110,10 @@ modifies the blank form; it does not identify a record.
 One splat route per shape, not a family of sibling routes:
 
 ```tsx
-<Route path="/worlds/:wid/*" element={<WorldView />} />
-<Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
+<Route path="/worlds/:wid/characters/:eid"          element={<CharacterPage />} />
+<Route path="/campaigns/:cid/world/characters/:eid" element={<CharacterPage campaign />} />
+<Route path="/worlds/:wid/*"                        element={<WorldView />} />
+<Route path="/campaigns/:cid/world/*"               element={<WorldView campaign />} />
 ```
 
 A splat matches an empty tail, so `/worlds/realm` and `/worlds/realm/items/the-salt-pact`
@@ -113,9 +122,10 @@ section. Sibling routes would give React a different element identity per
 section and remount the page on every column click, re-fetching the world and
 its cover each time. One instance across every section is the point.
 
-`/worlds/:wid/characters/:eid` stays its own top-level route rendering
-`CharacterPage`. React Router ranks static segments above dynamic ones and both
-above a splat, so it wins without any ordering care.
+A character's page stays its own top-level route in both shapes. React Router
+ranks static segments above dynamic ones and both above a splat, so those two
+win over the splats without any ordering care — the declaration order above is
+for a reader, not for the matcher.
 
 **`WorldView` parses the tail itself, and validates it.** `useParams()["*"]`
 gives `"items/the-salt-pact"`. Splitting drops empty segments, so a trailing
@@ -203,12 +213,13 @@ The campaign shape's forbidden sections (`overview`, `push`, `images`, `tags`)
 are refused at **runtime**, because `scope` and `at` are independent parameters
 and the type system cannot pair them.
 
-`sectionHref` is the **only** authority on these paths, the campaign-character
-exception included — so the exception lives inside it, as the one branch where
-`{ kind: "record", at: "characters" }` on a campaign scope answers
-`/campaigns/:cid/characters/:eid` rather than a path under `/world/`. The two
-existing helpers become thin wrappers rather than a second implementation of
-that knowledge: `charactersHref(scope)` is
+`sectionHref` is the **only** authority on these paths, and because a campaign's
+character record moves under `/world/` it has no special case to carry: every
+target is `<base>/<section>[/<rid>]`, where `base` is the one thing that differs
+between the two shapes. That is the whole reason for taking the churn.
+
+The two existing helpers become thin wrappers rather than a second
+implementation of that knowledge: `charactersHref(scope)` is
 `sectionHref(scope, { kind: "section", at: "characters" })` and
 `characterHref(scope, cid, vid)` is
 `sectionHref(scope, { kind: "record", at: "characters", rid: cid, v: vid })`.
@@ -352,6 +363,14 @@ Four rules, because a loose version of this rewrite is worse than none:
    Lore root — and `owner` is never combined with a legacy `id`, because one
    asks for a blank pre-owned form and the other for an existing record.
 
+**The moved campaign character page is the fifth legacy address**, and the only
+one that is a path rather than a query. `/campaigns/:cid/characters/:eid` keeps
+a route of its own whose whole body is a `<Navigate replace>` to
+`/campaigns/:cid/world/characters/:eid`, carrying `?v=` and any
+`location.state` through. It is three lines and it is what stops the move from
+breaking a link somebody already has — and it is a redirect rather than a
+second live route, so there is still exactly one address per screen.
+
 `location.state` is untouched by any of this. `CharacterPage`'s `‹ All
 characters` link already carries `state={{ reveal: eid }}` so a campaign grid
 does not swallow an unseated character on the way back; only the `to` string
@@ -445,6 +464,10 @@ change actually breaks:
   translated
 - `?for=`, `?v=`, `?owner=` each survive to their own destination and nowhere
   else; `state: { reveal }` survives the character back-link
+- `/campaigns/:cid/characters/:eid` redirects to the same character under
+  `/world/`, `?v=` and `location.state` intact — including the back link out of
+  it, which must land on the campaign grid and still reveal an unseated
+  character
 - a record → section-root move blanks the form (`+ New` works as a link)
 - a trailing or doubled slash resolves to the section root rather than a second
   address for it
