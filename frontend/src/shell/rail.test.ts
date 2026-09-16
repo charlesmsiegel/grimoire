@@ -150,8 +150,7 @@ describe("Images points at the world section that holds it", () => {
   const images = () => CAMPAIGN_ROWS.find((r) => r.id === "images")!;
 
   test("the id, not the name: `world_name` cannot address anything", () => {
-    expect(images().to(ctx, WITH_WORLD))
-      .toBe(`/worlds/saltmarch?section=images&for=${WITH_WORLD.campaign.id}`);
+    expect(images().to(ctx, WITH_WORLD)).toBe("/worlds/saltmarch/images?for=c1");
   });
 
   test("the campaign rides along, so the gallery can offer its cast as a filter", () => {
@@ -167,7 +166,7 @@ describe("Images points at the world section that holds it", () => {
     // An empty `for=` would reach the gallery as a campaign to look up, and
     // the appearance read behind it would 404 rather than simply not happen.
     const anon = { ...WITH_WORLD, campaign: { ...WITH_WORLD.campaign, id: "" } };
-    expect(images().to(ctx, anon)).toBe("/worlds/saltmarch?section=images");
+    expect(images().to(ctx, anon)).toBe("/worlds/saltmarch/images");
   });
 
   test("the backlog rides along", () => {
@@ -182,13 +181,17 @@ describe("Images points at the world section that holds it", () => {
     expect(images().tail!(zero)).toBe("0");
   });
 
-  test("it never lights, because the section is in the query string", () => {
-    // `match` is handed the pathname alone. Lighting on `/worlds/saltmarch`
-    // would mean lighting while the reader is in that world's Characters or
-    // Lore, which is a worse lie than never lighting at all.
-    for (const p of ["/worlds/saltmarch", "/worlds/saltmarch?section=images", "/campaigns/c1"]) {
-      expect(images().match(p, ctx)).toBe(false);
-    }
+  test("the Images row lights on the screen it points at, now that it is one", () => {
+    // `match` needs the world's id to know which world's Images it is
+    // watching for -- the same payload `to` already reads it from. Compared
+    // through the helper rather than a template string, so an id needing
+    // encoding matches the href the row itself emitted.
+    expect(images().match("/worlds/saltmarch/images", ctx, WITH_WORLD)).toBe(true);
+    expect(images().match("/worlds/saltmarch/lore", ctx, WITH_WORLD)).toBe(false);
+    // No payload, or a payload naming no world, is the same "nowhere lit" the
+    // row always was before it had a route.
+    expect(images().match("/worlds/saltmarch/images", ctx)).toBe(false);
+    expect(images().match("/campaigns/c1", ctx, WITH_WORLD)).toBe(false);
   });
 });
 

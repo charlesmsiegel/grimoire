@@ -11,6 +11,7 @@ import { MoneyColumns, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
+import { sectionHref } from "../worldPaths";
 
 /** The campaign's front door.
  *
@@ -290,7 +291,10 @@ export default function CampaignHub() {
         {camp?.sheets && (
           <Link className="column-row" to={`/campaigns/${cid}/sheets`}>Sheets</Link>
         )}
-        <Link className="column-row" to={`/campaigns/${cid}/world`}>World</Link>
+        <Link className="column-row"
+              to={sectionHref({ kind: "campaign", id: cid }, { kind: "section", at: "characters" })}>
+          World
+        </Link>
       </ColumnSection>
       <ColumnSection label="Settings">
         {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
@@ -542,7 +546,8 @@ export default function CampaignHub() {
               which is a different question and says so. */}
           <Card title="Cast"
                 tail={cast ? String(cast.chars.length + cast.pcs.length) : undefined}
-                foot={<Link to={`/campaigns/${cid}/world?section=characters`}>
+                foot={<Link to={sectionHref({ kind: "campaign", id: cid },
+                                            { kind: "section", at: "characters" })}>
                         Everyone →
                       </Link>}>
             {castFailed ? (
@@ -568,8 +573,8 @@ export default function CampaignHub() {
                   <Link key={who.key} title={who.name}
                         aria-label={who.kind === "pcs" ? `${who.name} (PC)` : who.name}
                         className={"hub-face" + (who.kind === "pcs" ? " pc" : "")}
-                        to={`/campaigns/${cid}/world`
-                            + `?section=${who.kind}&id=${who.id}`}>
+                        to={sectionHref({ kind: "campaign", id: cid },
+                                        { kind: "record", at: who.kind, rid: who.id })}>
                     {who.avatar
                       ? <img className="hub-face-avatar" alt=""
                              src={api.actorImageUrl({ kind: "campaign", id: cid },

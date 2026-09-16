@@ -25,6 +25,7 @@ import {
   avatarSrc, buildCard, characterHref, charactersHref,
   ExportMenu, focusStyle, formatOf, initialsOf,
 } from "../components/character/shared";
+import { sectionHref } from "../worldPaths";
 
 type CardTabKey = "card" | "lore" | "greetings" | "art";
 
@@ -75,6 +76,12 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     ? { kind: "campaign", id: cidParam }
     : { kind: "world", id: widParam };
   const worldScope = !campaign;
+  const loreHref = (id: string) =>
+    sectionHref(scope, { kind: "record", at: "lore", rid: id });
+  const newLoreHref = () =>
+    sectionHref(scope, { kind: "section", at: "lore", newOwner: `characters:${eid}` });
+  const greetingHref = (gid: string) =>
+    sectionHref(scope, { kind: "record", at: "greetings", rid: gid });
 
   /** The world behind the record — the same id in world scope, and the
    *  campaign's world in campaign scope. Several routes (export, localize,
@@ -687,12 +694,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
           <OwnedLorePanel
             scope={scope}
             ownerRef={`characters:${eid}`}
-            onOpenEntry={(id) => navigate(worldScope
-              ? `/worlds/${wid}?section=lore&id=${id}`
-              : `/campaigns/${scope.id}/world?section=lore&id=${id}`)}
-            onNewEntry={() => navigate(worldScope
-              ? `/worlds/${wid}?section=lore&owner=characters:${eid}`
-              : `/campaigns/${scope.id}/world?section=lore&owner=characters:${eid}`)}
+            onOpenEntry={(id) => navigate(loreHref(id))}
+            onNewEntry={() => navigate(newLoreHref())}
           />
         )}
 
@@ -702,9 +705,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                         editing={editing} onEditingChange={setEditing} busy={saving}
                         onSaveFirstMes={(v) => saveField({ first_mes: v })}
                         onSaveGreetings={saveGreetings}
-                        onOpenWorldGreeting={(gid) => navigate(
-                          worldScope ? `/worlds/${wid}?section=greetings&id=${gid}`
-                                     : `/campaigns/${scope.id}/world?section=greetings&id=${gid}`)} />
+                        onOpenWorldGreeting={(gid) => navigate(greetingHref(gid))} />
         )}
 
         {tab === "art" && (
@@ -720,9 +721,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                   localizeProg={localizeProg} localizeMsg={localizeMsg}
                   onLocalize={() => void runLocalize(vid)}
                   onRefresh={refresh} onError={setError}
-                  onOpenGreeting={(gid) => navigate(worldScope
-                    ? `/worlds/${wid}?section=greetings&id=${gid}`
-                    : `/campaigns/${scope.id}/world?section=greetings&id=${gid}`)} />
+                  onOpenGreeting={(gid) => navigate(greetingHref(gid))} />
         )}
       </div>
     </PageShell>

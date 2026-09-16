@@ -44,7 +44,7 @@ function Row({ row, ctx, payload, onPick }: {
   const { pathname } = useLocation();
   const to = row.to(ctx, payload);
   if (to === null) return null;
-  const active = row.match(pathname, ctx);
+  const active = row.match(pathname, ctx, payload);
   const { text, label } = tailOf(row, payload);
   // `Link`, not `NavLink`, and that is the point rather than a preference.
   // NavLink decides "active" for itself with a prefix match, so it would mark

@@ -67,8 +67,8 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
   // agrees it is *a world's* images; what a library-level one would be is the
   // question that has to be answered before the row can exist.
   //
-  // Reachable meanwhile from the campaign rail (`?section=images`) and from
-  // the world itself, which is where the records are.
+  // Reachable meanwhile from the campaign rail (a real `/worlds/:wid/images`
+  // route now) and from the world itself, which is where the records are.
 ];
 
 /** Segment-aware, so /modules-of-my-own is not mistaken for a child of

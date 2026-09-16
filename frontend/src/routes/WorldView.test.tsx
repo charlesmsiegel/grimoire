@@ -959,21 +959,24 @@ test("the world root is the overview", async () => {
 
 test("a column row is a link, which is what lets it open in a new tab", async () => {
   renderAtUrl("/worlds/w");
-  const row = await screen.findByRole("link", { name: /Items/ });
+  const column = within(await screen.findByRole("complementary"));
+  const row = column.getByRole("link", { name: /Items/ });
   expect(row).toHaveAttribute("href", "/worlds/w/items");
 });
 
 test("clicking a column row changes the address", async () => {
   renderAtUrl("/worlds/w");
-  fireEvent.click(await screen.findByRole("link", { name: /Lore/ }));
+  const column = within(await screen.findByRole("complementary"));
+  fireEvent.click(column.getByRole("link", { name: /Lore/ }));
   await waitFor(() => expect(lastPath).toBe("/worlds/w/lore"));
 });
 
 test("back steps through sections rather than leaving the world", async () => {
   const router = renderWithRouter("/worlds/w");
-  fireEvent.click(await screen.findByRole("link", { name: /Lore/ }));
+  const column = within(await screen.findByRole("complementary"));
+  fireEvent.click(column.getByRole("link", { name: /Lore/ }));
   await waitFor(() => expect(lastPath).toBe("/worlds/w/lore"));
-  fireEvent.click(await screen.findByRole("link", { name: /Items/ }));
+  fireEvent.click(column.getByRole("link", { name: /Items/ }));
   await waitFor(() => expect(lastPath).toBe("/worlds/w/items"));
   await router.navigate(-1);
   await waitFor(() => expect(lastPath).toBe("/worlds/w/lore"));
@@ -1052,7 +1055,8 @@ test("the world is read once across a section change, while the counts re-read",
   await screen.findByRole("heading", { level: 1 });
   const worldReads = (api.getWorld as any).mock.calls.length;
   const countReads = (api.listEntities as any).mock.calls.length;
-  fireEvent.click(await screen.findByRole("link", { name: /Lore/ }));
+  const column = within(await screen.findByRole("complementary"));
+  fireEvent.click(column.getByRole("link", { name: /Lore/ }));
   // The counts are started inside a promise, so they land a microtask after the
   // pathname changes -- assert them through waitFor, not on the next line.
   await waitFor(() =>

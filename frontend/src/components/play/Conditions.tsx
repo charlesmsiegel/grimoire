@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import type { SceneDatetime, SceneLocation, SceneWeather } from "../../api/client";
+import { sectionHref } from "../../worldPaths";
 
 function Line({ label, value }: { label: string; value: string }) {
   return (
@@ -49,7 +50,8 @@ export default function Conditions(
       {/* The campaign's own copy of the world, not the world itself — editing
           here reaches this campaign only, and the label is where that gets
           said before the click rather than after. */}
-      <Link className="world-copy" to={`/campaigns/${cid}/world`}>
+      <Link className="world-copy"
+            to={sectionHref({ kind: "campaign", id: cid }, { kind: "section", at: "characters" })}>
         <span className="section-label">World copy</span>
         <span className="world-copy-name">
           {worldName || "this campaign"} · this campaign's

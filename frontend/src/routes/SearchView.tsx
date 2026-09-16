@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, type SearchHit, type SearchMode, type SearchResult } from "../api/client";
+import type { EntityScope } from "../api/types";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { sectionHref, type SectionTarget } from "../worldPaths";
 
 /** How the kinds are grouped in the filter column, in the order they are
  *  offered. Content before facts, because a reader who types a name is looking
@@ -68,13 +70,20 @@ export function hitTo(hit: SearchHit): string {
   if (hit.kind === "campaign") return `/campaigns/${hit.root}`;
   if (hit.kind === "scenes") return `/campaigns/${hit.root}/scenes/${hit.id}`;
   if (LEDGER_KINDS.has(hit.kind)) return `/campaigns/${hit.root}/ledger`;
+  const scope: EntityScope = hit.scope === "world"
+    ? { kind: "world", id: hit.root } : { kind: "campaign", id: hit.root };
   const section = hit.kind === "state" || hit.kind === "dossier" ? "characters" : hit.kind;
   if (!INDEX_SECTIONS.has(section)) return base;
-  const params = new URLSearchParams({ section, id: hit.id });
-  // A card version only means anything for a character, and only when the hit
-  // named one: an empty `v` would ask the editor to open a version called "".
-  if (section === "characters" && hit.sub) params.set("v", hit.sub);
-  return `${base}?${params}`;
+  // A hit is a record, so it points AT the record — a section carrying an id
+  // was the nearest the old vocabulary could get.
+  //
+  // The cast is on the whole object, not on `at`. `SectionTarget` splits
+  // characters (which may carry `v`) from every other kind, so an `at` that is
+  // still the union matches neither member; narrowing the property alone does
+  // not narrow which member was meant.
+  return section === "characters" && hit.sub
+    ? sectionHref(scope, { kind: "record", at: "characters", rid: hit.id, v: hit.sub })
+    : sectionHref(scope, { kind: "record", at: section, rid: hit.id } as SectionTarget);
 }
 
 /** The snippet with every matched term wrapped in a `<mark>`.
@@ -157,7 +166,6 @@ const SETTLE_MS = 250;
  *  following a hit, which is the single most common thing to want here. */
 export default function SearchView() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
   const q = params.get("q") ?? "";
   const scope = params.get("scope") ?? "";
   const kind = params.get("kind") ?? "";
@@ -416,7 +424,7 @@ export default function SearchView() {
           <ul className="search-results">
             {hits.map((hit) => (
               <li key={`${hit.scope}/${hit.root}/${hit.kind}/${hit.id}/${hit.sub}`}>
-                <button className="search-hit" onClick={() => navigate(hitTo(hit))}>
+                <Link className="search-hit" to={hitTo(hit)}>
                   <span className="search-hit-head">
                     <span className="search-hit-name">{markTerms(hit.name, shown.terms)}</span>
                     <span className="search-hit-where">
@@ -433,7 +441,7 @@ export default function SearchView() {
                       {markTerms(hit.snippet, shown.terms)}
                     </span>
                   )}
-                </button>
+                </Link>
               </li>
             ))}
           </ul>

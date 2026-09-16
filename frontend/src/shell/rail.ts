@@ -2,6 +2,7 @@ import { money } from "../components/cost";
 import { formatChord } from "../shortcuts/keys";
 import { LIBRARY_SECTIONS, inLibrary, isUnder } from "../librarySections";
 import type { ShellPayload } from "../api/types";
+import { sectionHref } from "../worldPaths";
 
 /** Below this the rail and a page's context column cannot share a row.
  *
@@ -65,7 +66,7 @@ export type RailRow = {
    *  `/worlds`, so a prefix test on `/library` goes dark the moment you use it.
    *  And `/campaigns/:cid/ledger` sits under `/campaigns/:cid` too, so a prefix
    *  test would light Play and Ledger at once. */
-  match: (pathname: string, ctx: RailCtx) => boolean;
+  match: (pathname: string, ctx: RailCtx, payload?: ShellPayload | null) => boolean;
   /** The right-hand tail, or `undefined` for none. `undefined` and `0` are
    *  different answers: `0` means nothing is waiting, `undefined` means nobody
    *  computed it. */
@@ -266,10 +267,9 @@ export const CAMPAIGN_ROWS: RailRow[] = [
   },
   {
     id: "images", label: "Images", icon: "▨",
-    // `ImagesView` is a section of `WorldView` rather than a route of its own,
-    // but the section is addressable — `WorldView` opens whatever
-    // `?section=` names — so the row has somewhere real to go after all. It
-    // needs the world's id, not its name, which is why `world` travels beside
+    // `ImagesView` is a section of `WorldView` addressed by `sectionHref`
+    // like any other, so the row has somewhere real to go. It needs the
+    // world's id, not its name, which is why `world` travels beside
     // `world_name` in the payload.
     // `for=` carries the campaign this row belongs to, so the world's gallery
     // can offer to narrow itself to the cast that campaign has actually
@@ -278,16 +278,22 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     // shareable, survives a reload, and cannot disagree with the row that
     // produced it.
     to: (_ctx, s) => (s?.campaign?.world
-      ? `/worlds/${s.campaign.world}?section=images`
-        + (s.campaign.id ? `&for=${encodeURIComponent(s.campaign.id)}` : "")
+      ? sectionHref({ kind: "world", id: s.campaign.world },
+                    s.campaign.id
+                      ? { kind: "section", at: "images", forCampaign: s.campaign.id }
+                      : { kind: "section", at: "images" })
       : null),
-    // Never lit, deliberately. `match` is given the pathname alone, and the
-    // section this row points at lives in the query string — so the honest
-    // options are "never active" or "active on every screen of that world,
-    // including its Characters and its Lore". A row that lights while you are
-    // somewhere else is worse than one that never lights, and the day Images
-    // earns a real route this becomes a one-line `isUnder`.
-    match: () => false,
+    // Lit now that Images has a route of its own -- the day this comment's
+    // predecessor said would come once the section stopped living in a query
+    // string alone.
+    match: (p, _ctx, s) => {
+      const w = s?.campaign?.world;
+      // Through the helper rather than a template string, so an id needing
+      // encoding matches the href the row itself emitted. Compared on the
+      // pathname alone -- `?for=` is part of the question, not the screen.
+      return !!w && isUnder(p, sectionHref({ kind: "world", id: w },
+                                           { kind: "section", at: "images" }));
+    },
     tail: (s) => num(s?.campaign?.images_undescribed),
     tailLabel: (s) => lbl(s?.campaign?.images_undescribed, "images undescribed"),
   },

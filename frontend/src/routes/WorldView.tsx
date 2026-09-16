@@ -501,7 +501,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               <summary>Import scenario card</summary>
               <ScenarioImport wid={wid} onImported={() => setPopulated((n) => n + 1)} />
             </details>
-            <WorldOverview key={populated} wid={wid} onNavigate={(t) => navigate(hrefFor(t as Section))}
+            <WorldOverview key={populated} wid={wid} hrefFor={(t) => hrefFor(t as Section)}
                            worldMid={worldMid} onPickMid={setWorldMid} />
           </>
         )}

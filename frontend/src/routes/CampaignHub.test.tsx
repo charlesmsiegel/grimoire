@@ -424,6 +424,29 @@ test("the cast card names faces and marks the PCs", async () => {
   expect(within(card).getByText("2")).toBeInTheDocument();
 });
 
+test("the cast card points at the campaign's own world copy", async () => {
+  renderHub();
+  expect(await screen.findByRole("link", { name: /Everyone/ }))
+    .toHaveAttribute("href", "/campaigns/run/world/characters");
+});
+
+test("a face points at that character inside it", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "v1", versions: [],
+      has_avatar: false },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([appeared("characters", "seraphine")]);
+  renderHub();
+  expect(await screen.findByRole("link", { name: "Seraphine" }))
+    .toHaveAttribute("href", "/campaigns/run/world/characters/seraphine");
+});
+
+test("the sidebar's World row lands directly on the cast rather than a redirect hop", async () => {
+  renderHub();
+  expect(await screen.findByRole("link", { name: "World" }))
+    .toHaveAttribute("href", "/campaigns/run/world/characters");
+});
+
 test("a cast that could not be read is not an empty cast", async () => {
   // Opposite answers, and they must never render the same way.
   (api.listCharacters as any).mockRejectedValue(new Error("nope"));

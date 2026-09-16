@@ -577,7 +577,7 @@ test("the greetings tab counts and links world greetings featuring the character
   expect(screen.queryByRole("tab", { name: "Card" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Tide Watch" }));
   await waitFor(() => expect(lastLocation)
-    .toBe("/worlds/realm?section=greetings&id=tide-watch"));
+    .toBe("/worlds/realm/greetings/tide-watch"));
 });
 
 test("a card with no greetings says what a greeting is for", async () => {
@@ -830,6 +830,24 @@ test("the lore tab is counted from the entries that name this character as owner
   await screen.findByRole("tab", { name: /Lore 1/ });
 });
 
+test("a lore chip points at the entry, and the new-entry chip pre-owns the form", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "the-salt-pact", name: "The Salt Pact", owners: "characters:seraphine" },
+  ]);
+  await renderWorld();
+  fireEvent.click(await screen.findByRole("tab", { name: /Lore 1/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "The Salt Pact" }));
+  await waitFor(() => expect(lastLocation).toBe("/worlds/realm/lore/the-salt-pact"));
+});
+
+test("the new-lore chip pre-owns the form", async () => {
+  (api.listEntities as any).mockResolvedValue([]);
+  await renderWorld();
+  fireEvent.click(await screen.findByRole("tab", { name: /Lore/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /New lore/ }));
+  await waitFor(() => expect(lastLocation).toBe("/worlds/realm/lore?owner=characters%3Aseraphine"));
+});
+
 // ------------------------------------------------------------ embedded lore
 
 test("the embedded book opens a review table and commits with per-entry categories", async () => {
@@ -1059,4 +1077,25 @@ test("the address a campaign character used to have still lands on them", async 
   );
   await screen.findByText("landed");
   expect(seen).toBe("/campaigns/run/world/characters/seraphine?v=veiled");
+});
+
+test("the redirect carries location.state along, not just the address", async () => {
+  // `reveal` is what stops a campaign grid's filter from swallowing an
+  // unseated character -- losing it on the way through this redirect would
+  // make that character read as deleted.
+  let seenState: unknown;
+  function Probe() { seenState = useLocation().state; return null; }
+  render(
+    <MemoryRouter initialEntries={[
+      { pathname: "/campaigns/run/characters/seraphine", state: { reveal: "seraphine" } },
+    ]}>
+      <Probe />
+      <Routes>
+        <Route path="/campaigns/:cid/characters/:eid" element={<LegacyCharacterRedirect />} />
+        <Route path="/campaigns/:cid/world/characters/:eid" element={<div>landed</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText("landed");
+  expect(seenState).toEqual({ reveal: "seraphine" });
 });

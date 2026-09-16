@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { CalendarConfig } from "./CalendarConfig";
 import WorldMechanics from "./WorldMechanics";
@@ -21,8 +22,8 @@ const TILES = [
 type Check = { label: string; ok: boolean; tab?: string };
 
 export function WorldOverview({
-  wid, onNavigate, worldMid = "", onPickMid = () => {},
-}: { wid: string; onNavigate: (tab: string) => void; worldMid?: string; onPickMid?: (mid: string) => void }) {
+  wid, hrefFor, worldMid = "", onPickMid = () => {},
+}: { wid: string; hrefFor: (tab: string) => string; worldMid?: string; onPickMid?: (mid: string) => void }) {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [checks, setChecks] = useState<Check[]>([]);
   // Reported by the Calendar section below rather than read here: it fetches
@@ -76,10 +77,10 @@ export function WorldOverview({
     <div className="world-overview">
       <div className="overview-tiles">
         {TILES.map((t) => (
-          <button key={t.key} className="overview-tile" onClick={() => onNavigate(t.tab)}>
+          <Link key={t.key} className="overview-tile" to={hrefFor(t.tab)}>
             <span className="overview-count">{counts[t.key] ?? 0}</span>
             <span className="overview-label">{t.label}</span>
-          </button>
+          </Link>
         ))}
       </div>
       <div className="side-section">
@@ -88,9 +89,9 @@ export function WorldOverview({
           {rows.map((c) => (
             <li key={c.label}>
               {c.tab ? (
-                <button className={"check-row" + (c.ok ? " ok" : "")} onClick={() => onNavigate(c.tab!)}>
+                <Link className={"check-row" + (c.ok ? " ok" : "")} to={hrefFor(c.tab)}>
                   {c.ok ? "✓" : "○"} {c.label}
-                </button>
+                </Link>
               ) : (
                 <span className={"check-row static" + (c.ok ? " ok" : "")}>
                   {c.ok ? "✓" : "○"} {c.label}

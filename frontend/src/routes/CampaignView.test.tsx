@@ -90,7 +90,7 @@ test("the pinned conditions block names where, when and the campaign's world cop
   // The campaign's own copy of the world, said before the click rather than
   // after: edits there reach this campaign only.
   expect(column.getByRole("link", { name: /this campaign/i }))
-    .toHaveAttribute("href", "/campaigns/run/world");
+    .toHaveAttribute("href", "/campaigns/run/world/characters");
 });
 
 test("the scene heading counts the scene and its turns", async () => {

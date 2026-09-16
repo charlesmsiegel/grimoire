@@ -43,12 +43,12 @@ test("a scene with nothing set at all says so", () => {
 test("the world link says it is the campaign's own copy before the click", () => {
   renderConditions();
   const link = screen.getByRole("link", { name: /this campaign/i });
-  expect(link).toHaveAttribute("href", "/campaigns/saltmarch/world");
+  expect(link).toHaveAttribute("href", "/campaigns/saltmarch/world/characters");
   expect(link).toHaveTextContent("Saltmarch · this campaign's");
 });
 
 test("a campaign with no world name still offers the link", () => {
   renderConditions({ worldName: "" });
   expect(screen.getByRole("link", { name: /this campaign/i }))
-    .toHaveAttribute("href", "/campaigns/saltmarch/world");
+    .toHaveAttribute("href", "/campaigns/saltmarch/world/characters");
 });

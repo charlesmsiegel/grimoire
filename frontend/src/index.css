@@ -1244,6 +1244,8 @@ a.chip { text-decoration: none; }
   background: transparent; color: var(--ink); border: 1px solid var(--rule);
   padding: 10px 12px; cursor: pointer; text-align: left;
 }
+/* A tile is a Link now, not a button -- suppress the anchor default underline. */
+a.overview-tile { text-decoration: none; }
 .overview-tile:hover { border-color: var(--accent); }
 .overview-count { font-family: var(--fd); font-size: 24px; font-weight: 700; }
 .overview-label { font-family: var(--fm); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
@@ -1252,6 +1254,12 @@ a.chip { text-decoration: none; }
   width: 100%; text-align: left; background: none; border: none; color: var(--ink);
   padding: 6px 0; cursor: pointer; font-size: 13px;
 }
+/* A row with a fix is a Link now, not a button -- a `<button>`'s default
+   inline-block display made `width: 100%` and the vertical padding behave the
+   way `.check-row.static`'s comment below describes; an `<a>` defaults to
+   inline instead, so it needs the same explicit block along with suppressing
+   the anchor's default underline. */
+a.check-row { display: block; text-decoration: none; }
 /* `:not(.static)` rather than a second rule overriding this one: `color:
    inherit` on a static hover would have fought `.ok` below and BRIGHTENED a
    ticked row, which is a hover shift in the other direction, not none. */
@@ -3510,6 +3518,9 @@ a.column-back { text-decoration: none; }
   padding: 14px 12px 14px 0; background: transparent; border: 0;
   border-bottom: 1px solid var(--line); cursor: pointer;
 }
+/* A hit is a Link now, not a button, so the anchor default underline needs
+   suppressing -- everything inside already carries its own color. */
+a.search-hit { text-decoration: none; }
 .search-results li:last-child .search-hit { border-bottom: 0; }
 .search-hit:hover .search-hit-name { color: var(--accent); }
 /* Name and provenance on one line: which record, and which world or campaign

@@ -1,9 +1,13 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import SearchView, { hitTo, markTerms } from "./SearchView";
+import { characterHref, charactersHref } from "../components/character/shared";
+import type { EntityScope } from "../api/types";
 
 vi.mock("../api/client", () => ({ api: { search: vi.fn() } }));
 import { api } from "../api/client";
+
+const W: EntityScope = { kind: "world", id: "realm" };
 
 const hit = (over: Partial<Record<string, unknown>> = {}) => ({
   scope: "world", root: "realm", root_name: "Realm", kind: "lore",
@@ -46,7 +50,7 @@ test("a query in the URL is searched for and its hits are listed", async () => {
   show();
   // Queried by role, not by text: the matched term is wrapped in a <mark>, so
   // the name is three nodes rather than one.
-  expect(await screen.findByRole("button", { name: /the salt pact/i })).toBeInTheDocument();
+  expect(await screen.findByRole("link", { name: /the salt pact/i })).toBeInTheDocument();
   expect(api.search).toHaveBeenCalledWith("salt", { scope: "", kinds: [], mode: "keyword" });
   // The box is seeded from the URL, so the page is a link rather than a state
   // someone has to retype into.
@@ -56,7 +60,7 @@ test("a query in the URL is searched for and its hits are listed", async () => {
 test("the matched terms are marked in the name and the snippet", async () => {
   (api.search as any).mockResolvedValue(result([hit()]));
   show();
-  await screen.findByRole("button", { name: /the salt pact/i });
+  await screen.findByRole("link", { name: /the salt pact/i });
   const marks = document.querySelectorAll(".search-hit mark");
   expect(marks.length).toBe(2);          // once in the name, once in the snippet
   expect([...marks].every((m) => m.textContent?.toLowerCase() === "salt")).toBe(true);
@@ -86,16 +90,16 @@ test("a hit says which world or campaign holds it", async () => {
     hit({ scope: "campaign", root: "the-long-run", root_name: "The Long Run" }),
   ]));
   show();
-  const rows = await screen.findAllByRole("button", { name: /the salt pact/i });
+  const rows = await screen.findAllByRole("link", { name: /the salt pact/i });
   expect(within(rows[0]).getByText(/Lore · Realm/)).toBeInTheDocument();
   expect(within(rows[1]).getByText(/Lore · The Long Run · campaign/)).toBeInTheDocument();
 });
 
 test("following a hit opens the record it names", async () => {
   show();
-  fireEvent.click(await screen.findByRole("button", { name: /the salt pact/i }));
+  fireEvent.click(await screen.findByRole("link", { name: /the salt pact/i }));
   await waitFor(() => expect(screen.getByTestId("where"))
-    .toHaveTextContent("/worlds/realm?section=lore&id=the-salt-pact"));
+    .toHaveTextContent("/worlds/realm/lore/the-salt-pact"));
 });
 
 test("the kind column filters, and clicking the live filter clears it", async () => {
@@ -143,15 +147,15 @@ test("a failed search degrades to a message rather than a stuck spinner", async 
 });
 
 test("hitTo sends every kind of hit somewhere it can actually be read", () => {
-  expect(hitTo(hit() as any)).toBe("/worlds/realm?section=lore&id=the-salt-pact");
+  expect(hitTo(hit() as any)).toBe("/worlds/realm/lore/the-salt-pact");
   // A campaign's fork opens in that campaign's world view, never in the world
   // it forked from: they are two records with one id.
   expect(hitTo(hit({ scope: "campaign", root: "run" }) as any))
-    .toBe("/campaigns/run/world?section=lore&id=the-salt-pact");
+    .toBe("/campaigns/run/world/lore/the-salt-pact");
   expect(hitTo(hit({ kind: "characters", id: "seraphine", sub: "veiled" }) as any))
-    .toBe("/worlds/realm?section=characters&id=seraphine&v=veiled");
+    .toBe("/worlds/realm/characters/seraphine?v=veiled");
   expect(hitTo(hit({ kind: "characters", id: "seraphine", sub: "" }) as any))
-    .toBe("/worlds/realm?section=characters&id=seraphine");
+    .toBe("/worlds/realm/characters/seraphine");
   expect(hitTo(hit({ scope: "campaign", root: "run", kind: "scenes", id: "001" }) as any))
     .toBe("/campaigns/run/scenes/001");
   expect(hitTo(hit({ scope: "campaign", root: "run", kind: "plot" }) as any))
@@ -160,7 +164,13 @@ test("hitTo sends every kind of hit somewhere it can actually be read", () => {
     .toBe("/campaigns/run");
   // A dossier is filed under a character, so it opens the character.
   expect(hitTo(hit({ scope: "campaign", root: "run", kind: "dossier", id: "seraphine" }) as any))
-    .toBe("/campaigns/run/world?section=characters&id=seraphine");
+    .toBe("/campaigns/run/world/characters/seraphine");
+});
+
+test("nothing in the app mints a ?section= link any more", () => {
+  for (const href of [hitTo(hit() as any), charactersHref(W), characterHref(W, "mira")]) {
+    expect(href).not.toContain("section=");
+  }
 });
 
 test("markTerms prefers the longer of two overlapping terms", () => {
@@ -192,7 +202,7 @@ test("the result count is announced, not just shown", async () => {
   // It is the one thing on this page that changes without the reader moving
   // focus -- typing leaves focus in the box and the answer arrives elsewhere.
   show();
-  await screen.findByRole("button", { name: /the salt pact/i });
+  await screen.findByRole("link", { name: /the salt pact/i });
   expect(screen.getByRole("status")).toHaveTextContent(/1 result/i);
 });
 
@@ -211,19 +221,19 @@ test("a slow answer for an old query never lands on top of a newer one", async (
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
   fireEvent.change(screen.getByRole("searchbox", { name: /search the library/i }),
                    { target: { value: "salt" } });
-  await screen.findByRole("button", { name: /the tide table/i });
+  await screen.findByRole("link", { name: /the tide table/i });
 
   releaseStale(result([hit()]));                       // the stale answer, late
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(2));
-  expect(screen.queryByRole("button", { name: /the salt pact/i })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /the tide table/i })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /the salt pact/i })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /the tide table/i })).toBeInTheDocument();
 });
 
 // ---- mode: keywords or meaning (#34) --------------------------------------
 
 test("the mode is part of the query and lives in the URL like every other filter", async () => {
   show();
-  await screen.findByRole("button", { name: /the salt pact/i });
+  await screen.findByRole("link", { name: /the salt pact/i });
   fireEvent.click(screen.getByRole("button", { name: /meaning/i }));
   await waitFor(() =>
     expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "semantic" }));
@@ -238,7 +248,7 @@ test("an answer that fell back to keywords says so, and why", async () => {
   show("/search?q=salt&mode=semantic");
   expect(await screen.findByText(/needs an embeddings connection/i)).toBeInTheDocument();
   // And the results are still there — a degraded answer is an answer.
-  expect(screen.getByRole("button", { name: /the salt pact/i })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /the salt pact/i })).toBeInTheDocument();
 });
 
 test("a semantic answer says how much of the library has been indexed", async () => {
@@ -256,7 +266,7 @@ test("a fully indexed semantic answer does not nag about indexing", async () => 
     indexed: 100, corpus: 100,
   }));
   show("/search?q=salt&mode=semantic");
-  await screen.findByRole("button", { name: /the salt pact/i });
+  await screen.findByRole("link", { name: /the salt pact/i });
   expect(screen.queryByText(/of 100 passages/i)).not.toBeInTheDocument();
 });
 
@@ -307,14 +317,14 @@ test("a character hit names the version it matched, so two versions are two rows
     hit({ kind: "characters", id: "seraphine", sub: "veiled", name: "Seraphine" }),
   ]));
   show();
-  await screen.findAllByRole("button", { name: /seraphine/i });
+  await screen.findAllByRole("link", { name: /seraphine/i });
   expect(screen.getByText(/veiled/)).toBeInTheDocument();
   expect(screen.getByText(/default/)).toBeInTheDocument();
 });
 
 test("meaning mode says the box is ahead of the results rather than looking stale", async () => {
   show("/search?q=salt&mode=semantic");
-  await screen.findByRole("button", { name: /the salt pact/i });
+  await screen.findByRole("link", { name: /the salt pact/i });
   fireEvent.change(screen.getByRole("searchbox", { name: /search the library/i }),
                    { target: { value: "brine" } });
   expect(await screen.findByText(/press enter to search for “brine”/i)).toBeInTheDocument();
@@ -325,11 +335,11 @@ test("switching mode drops the other mode's results rather than showing them und
   // page on screen under an active "Meaning" row for that long presents one
   // ranking as the other's answer.
   show();
-  await screen.findByRole("button", { name: /the salt pact/i });
+  await screen.findByRole("link", { name: /the salt pact/i });
   (api.search as any).mockReturnValue(new Promise(() => {}));   // never resolves
   fireEvent.click(screen.getByRole("button", { name: /meaning/i }));
   await waitFor(() =>
-    expect(screen.queryByRole("button", { name: /the salt pact/i })).not.toBeInTheDocument());
+    expect(screen.queryByRole("link", { name: /the salt pact/i })).not.toBeInTheDocument());
   expect(screen.getByText(/reading the library/i)).toBeInTheDocument();
 });
 
