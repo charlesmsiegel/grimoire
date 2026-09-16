@@ -1028,8 +1028,12 @@ button.primary, a.primary { background: var(--accent); color: var(--on-accent); 
    anchors in this file. `display: inline-block` is `<button>`'s own UA
    default, restored here because a bare anchor computes `inline`, which
    makes `.editor-list .new`'s `width: 100%` a no-op -- `.column-back` and
-   `.column-row` carry the same idiom (`block` / `flex`) for the same reason. */
-a.primary { display: inline-block; text-decoration: none; }
+   `.column-row` carry the same idiom (`block` / `flex`) for the same reason.
+   `text-align: center` is the same story one property over: a `<button>`'s
+   UA default centres its label and nothing above overrides that, but an
+   `<a>` inherits `start` -- on `.editor-list .new`'s full-width "+ New …"
+   control the label visibly jumps to the left edge without it. */
+a.primary { display: inline-block; text-decoration: none; text-align: center; }
 .banner { background: var(--banner-bg); border: 1px solid var(--accent); color: var(--banner-ink); padding: 10px 16px; margin: 12px 22px; font-family: var(--fm); font-size: 11px; flex: none; }
 .banner a { color: var(--banner-ink); }
 .banner.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -1097,6 +1101,15 @@ a.primary { display: inline-block; text-decoration: none; }
   border: 1px solid var(--rule-soft); padding: 8px 10px; margin-bottom: 6px;
   background: var(--surface); color: var(--ink);
 }
+/* The rail row is a Link now (EntityEditor, GreetingEditor, PCEditor), not a
+   button -- same pattern as `a.column-back` and the other button-styled
+   anchors in this file: `display: flex` and `color` above already came from
+   the unscoped `.row` rule, so the one thing an `<a>` still disagrees with a
+   `<button>` on is the UA default underline. Font family/size are the one
+   accepted gap here (see CLAUDE.md) -- pinning `.row` to a `<button>`'s
+   platform-specific UA font would fix this machine and be wrong on every
+   other one this app ships to, so the row takes the app's own font instead. */
+a.row { text-decoration: none; }
 .row.active { border-color: var(--accent); border-left: 4px solid var(--accent); }
 .row-label { flex: 1; cursor: pointer; overflow: hidden; }
 /* A row of [title][mark] rather than one clipped run: the ellipsis has to
@@ -4639,6 +4652,14 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   /* `.primary` is the one class every editor's Save/Create/Add button
      reaches for, in this file and in every editor that isn't in it. */
   .primary { min-height: 44px; }
+  /* The floor above makes the box taller than a "+ New …" link's one line of
+     text (`EntityEditor`, `GreetingEditor`) -- same shape as `a.check-row`
+     above `.check-row`'s own floor. A `<button>` centres that overflow
+     vertically by itself; an `<a>` does not, and `display: inline-block`
+     above (desktop's own fix, for `width: 100%`) does not either -- `flex`
+     centres both axes at once, so `text-align: center` above becomes
+     redundant here rather than fought. */
+  a.primary { display: flex; align-items: center; justify-content: center; }
   /* `.chip` doubles as a read-only badge (a tag, a count, a status pill) far
      more often than as a control — those stay pill-sized on purpose. Only
      the clickable half — a `<button class="chip">`, or the unlinked-version
