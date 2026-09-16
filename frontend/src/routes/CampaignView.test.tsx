@@ -245,6 +245,15 @@ test("⌘K numbers a scene by its id's own number, not by list position", async 
   expect(screen.getByRole("option", { name: /Froot Loops.*scene 36/i })).toBeInTheDocument();
 });
 
+test("the palette's campaign-world entry lands directly on the cast, not the redirect root", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByRole("heading", { name: /Old/ });
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.click(await screen.findByRole("option", { name: /This campaign's world/i }));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/world/characters"));
+});
+
 test("plates mark PC speakers and show avatars from the roster", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getCast as any).mockResolvedValue([

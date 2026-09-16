@@ -694,8 +694,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
           <OwnedLorePanel
             scope={scope}
             ownerRef={`characters:${eid}`}
-            onOpenEntry={(id) => navigate(loreHref(id))}
-            onNewEntry={() => navigate(newLoreHref())}
+            hrefFor={loreHref}
+            newHref={newLoreHref()}
           />
         )}
 
@@ -705,7 +705,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                         editing={editing} onEditingChange={setEditing} busy={saving}
                         onSaveFirstMes={(v) => saveField({ first_mes: v })}
                         onSaveGreetings={saveGreetings}
-                        onOpenWorldGreeting={(gid) => navigate(greetingHref(gid))} />
+                        worldGreetingHref={greetingHref} />
         )}
 
         {tab === "art" && (
@@ -721,7 +721,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                   localizeProg={localizeProg} localizeMsg={localizeMsg}
                   onLocalize={() => void runLocalize(vid)}
                   onRefresh={refresh} onError={setError}
-                  onOpenGreeting={(gid) => navigate(greetingHref(gid))} />
+                  greetingHref={greetingHref} />
         )}
       </div>
     </PageShell>

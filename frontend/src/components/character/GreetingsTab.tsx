@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import type { Greeting } from "../../api/client";
 import { GreetingMarkdown } from "../GreetingMarkdown";
 import { EditableField } from "./EditableField";
@@ -9,7 +10,7 @@ import { EditableField } from "./EditableField";
  */
 export function GreetingsTab(
   { name, cid, firstMes, greetings, worldGreetings, editing, onEditingChange, busy,
-    onSaveFirstMes, onSaveGreetings, onOpenWorldGreeting }: {
+    onSaveFirstMes, onSaveGreetings, worldGreetingHref }: {
     name: string;
     cid: string;
     firstMes: string;
@@ -20,7 +21,7 @@ export function GreetingsTab(
     busy: boolean;
     onSaveFirstMes: (next: string) => Promise<boolean>;
     onSaveGreetings: (next: string[]) => Promise<boolean>;
-    onOpenWorldGreeting: (gid: string) => void;
+    worldGreetingHref: (gid: string) => string;
   },
 ) {
   /** A greeting being written that the card does not have yet.
@@ -104,9 +105,9 @@ export function GreetingsTab(
         <div className="card-field-head"><span className="data-label">World greetings</span></div>
         <div className="chip-row">
           {worldGreetings.map((g) => (
-            <button key={g.id} className="chip on" onClick={() => onOpenWorldGreeting(g.id)}>
+            <Link key={g.id} className="chip on" to={worldGreetingHref(g.id)}>
               {g.character === cid ? `★ ${g.name}` : g.name}
-            </button>
+            </Link>
           ))}
         </div>
       </div>

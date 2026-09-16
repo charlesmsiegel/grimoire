@@ -15,6 +15,10 @@ vi.mock("../api/client", async () => {
         { in_library: true, diverged: false, can_promote: false, can_push: false }),
       promoteToLibrary: vi.fn(), pushToLibrary: vi.fn(),
       listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(), createCampaignPC: vi.fn(),
+      // The PC's OwnedLorePanel (#8) -- unconditional now that it addresses
+      // Lore by its own href rather than through a callback, so every test
+      // that opens a PC's detail view hits it.
+      listEntities: vi.fn().mockResolvedValue([]),
       listPCs: vi.fn(), listTags: vi.fn(), readPC: vi.fn(), createPC: vi.fn(),
       updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),
       getCalendarMonths: vi.fn(), putSheetCreation: vi.fn(), getSheet: vi.fn(),

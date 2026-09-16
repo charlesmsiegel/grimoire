@@ -240,19 +240,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     navigate(sectionHref(scopeForPaths, { kind: "record", at: "greetings", rid: gid }));
   }
 
-  // an owner editor's lore panel routes to Lore (open an entry, or start a pre-owned one)
-  function openLore(nav: { focusEntry?: string; newOwner?: string }) {
-    if (nav.focusEntry) {
-      navigate(sectionHref(scopeForPaths, { kind: "record", at: "lore", rid: nav.focusEntry }));
-    } else {
-      // Branched rather than passing a possibly-undefined `newOwner`: the two
-      // are different addresses, and one of them has no query string at all.
-      navigate(sectionHref(scopeForPaths, nav.newOwner
-        ? { kind: "section", at: "lore", newOwner: nav.newOwner }
-        : { kind: "section", at: "lore" }));
-    }
-  }
-
   // a search hit, or any other deep link, opens the record it names
   function openEntity(kind: RecordSection, id: string) {
     navigate(sectionHref(scopeForPaths, { kind: "record", at: kind, rid: id }));
@@ -513,7 +500,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {!campaign && section === "images"
           && <ImagesView key={wid} wid={wid} forCampaign={params.get("for")} />}
         {section === "characters" && <CharacterGrid scope={scope} wid={wid} reveal={reveal} module={moduleCtx} />}
-        {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
+        {section === "pcs" && <PCEditor scope={scope} wid={wid}
                                        selected={rid}
                                        recordHref={(r) => sectionHref(scopeForPaths,
                                                                       { kind: "record", at: "pcs", rid: r })}
@@ -524,7 +511,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "locations" })}
                                           recordHref={(r) => sectionHref(scopeForPaths,
                                                                          { kind: "record", at: "locations", rid: r })}
-                                          onReclassified={openEntity} onOpenLore={openLore} module={moduleCtx} />}
+                                          onReclassified={openEntity} module={moduleCtx} />}
         {section === "lore" && (
           <>
             {/* Controlled so the column's pinned import row can open it: the

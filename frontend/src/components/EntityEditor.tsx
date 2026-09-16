@@ -14,6 +14,7 @@ import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
 import { StaleRecordBanner } from "./StaleRecordBanner";
+import { sectionHref } from "../worldPaths";
 
 export const KIND_LABELS: Record<EntityKind, string> = {
   locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
@@ -352,7 +353,7 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
   );
 }
 
-export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, sectionPath, recordHref, onOpenOwner, onOpenLore, onReclassified, module = null }: {
+export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, sectionPath, recordHref, onOpenOwner, onReclassified, module = null }: {
   wid: string;
   kind: EntityKind;
   scope?: EntityScope;
@@ -371,7 +372,6 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
    *  exactly what hand-joining gets wrong. */
   recordHref: (rid: string) => string;
   onOpenOwner?: (ref: string) => void;
-  onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
   // A reclassified record leaves this editor's list entirely, so the parent is
   // told where it went rather than being left showing a section it is no longer
   // in. Without it the move looks exactly like a delete.
@@ -1141,12 +1141,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                   )}
                 </div>
               )}
-              {kind === "locations" && editing && onOpenLore && (
+              {kind === "locations" && editing && (
                 <OwnedLorePanel
                   scope={scope}
                   ownerRef={`locations:${editing}`}
-                  onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
-                  onNewEntry={() => onOpenLore({ newOwner: `locations:${editing}` })}
+                  hrefFor={(id) => sectionHref(scope, { kind: "record", at: "lore", rid: id })}
+                  newHref={sectionHref(scope,
+                                       { kind: "section", at: "lore", newOwner: `locations:${editing}` })}
                 />
               )}
               {kind === "groups" && scope.kind === "campaign" && editing && (

@@ -65,6 +65,12 @@ const LEDGER_KINDS = new Set(["chronicle", "timeline", "plot", "facts", "relatio
  *  forked from. `state` and `dossier` are filed under a character and open the
  *  character, since that is the record they describe. */
 export function hitTo(hit: SearchHit): string {
+  // The fallback for a kind this function does not otherwise index (the
+  // `!INDEX_SECTIONS.has(section)` return below) -- not a missed producer.
+  // Every branch in this function, `base` included, builds off `hit.root`
+  // (a world/campaign slug) by hand rather than through `sectionHref`: a
+  // search hit addresses the root the server already named, not a record id
+  // this function itself would need to `encodeSegment`.
   const base = hit.scope === "world" ? `/worlds/${hit.root}` : `/campaigns/${hit.root}/world`;
   if (hit.kind === "world") return `/worlds/${hit.root}`;
   if (hit.kind === "campaign") return `/campaigns/${hit.root}`;

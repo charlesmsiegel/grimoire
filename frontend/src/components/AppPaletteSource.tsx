@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type CampaignMeta, type WorldMeta } from "../api/client";
 import { LIBRARY_SECTIONS } from "../librarySections";
 import { byName } from "../sortByName";
+import { sectionHref } from "../worldPaths";
 import { useFocus } from "./focus";
 import { usePalette, usePaletteSource, type PaletteItem } from "./palette";
 
@@ -44,7 +45,8 @@ export default function AppPaletteSource() {
     for (const w of byName(worlds)) {
       out.push({
         id: `world:${w.id}`, group: "ELSEWHERE", label: w.name,
-        meta: "world", to: `/worlds/${w.id}`,
+        meta: "world",
+        to: sectionHref({ kind: "world", id: w.id }, { kind: "section", at: "overview" }),
       });
     }
     // Home. Named as a place rather than left implicit behind the brand mark:

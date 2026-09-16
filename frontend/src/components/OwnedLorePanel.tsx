@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, type EntityScope, type EntitySummary } from "../api/client";
 
 /** Lists the world lore entries owned by `ownerRef`, with a shortcut to create a new one.
- *  Editing happens in the Lore tab — the callbacks route there. */
-export function OwnedLorePanel({ scope, ownerRef, onOpenEntry, onNewEntry }: {
+ *  Editing happens in the Lore tab — these are real addresses now, so both
+ *  open in a new tab like any other record link. */
+export function OwnedLorePanel({ scope, ownerRef, hrefFor, newHref }: {
   scope: EntityScope; ownerRef: string;
-  onOpenEntry: (id: string) => void; onNewEntry: () => void;
+  hrefFor: (id: string) => string; newHref: string;
 }) {
   const [owned, setOwned] = useState<EntitySummary[]>([]);
   useEffect(() => {
@@ -21,13 +23,13 @@ export function OwnedLorePanel({ scope, ownerRef, onOpenEntry, onNewEntry }: {
       {owned.length > 0 ? (
         <div className="chips">
           {owned.map((e) => (
-            <button key={e.id} className="chip" onClick={() => onOpenEntry(e.id)}>{e.name}</button>
+            <Link key={e.id} className="chip" to={hrefFor(e.id)}>{e.name}</Link>
           ))}
         </div>
       ) : (
         <div className="field-hint">No lore yet.</div>
       )}
-      <button className="subtle" onClick={onNewEntry}>+ New lore</button>
+      <Link className="subtle" to={newHref}>+ New lore</Link>
     </div>
   );
 }

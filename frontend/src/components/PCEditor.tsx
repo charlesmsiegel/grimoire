@@ -12,13 +12,13 @@ import { ImageDescriptionField } from "./ImageDescriptionField";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
+import { sectionHref } from "../worldPaths";
 
 import { errorText } from "../api/errors";
 const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
 
-export function PCEditor({ scope, wid, onOpenLore, selected, recordHref, module = null }:
+export function PCEditor({ scope, wid, selected, recordHref, module = null }:
   { scope: EntityScope; wid: string;
-    onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
     /** The PC the URL names, or null for the section's own screen. Covers a
      *  rail row's own address as much as a `pcs:` chip beside a lore entry or
      *  the holder or leader named by a ref field (#222) — every one of those
@@ -505,14 +505,13 @@ export function PCEditor({ scope, wid, onOpenLore, selected, recordHref, module 
                    yet from a character/PC sheet's ref chips (entity-form refs only; module-content
                    ref chips still preview correctly without it) */
               )}
-              {onOpenLore && (
-                <OwnedLorePanel
-                  scope={scope}
-                  ownerRef={`pcs:${detail.meta.id}`}
-                  onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
-                  onNewEntry={() => onOpenLore({ newOwner: `pcs:${detail.meta.id}` })}
-                />
-              )}
+              <OwnedLorePanel
+                scope={scope}
+                ownerRef={`pcs:${detail.meta.id}`}
+                hrefFor={(id) => sectionHref(scope, { kind: "record", at: "lore", rid: id })}
+                newHref={sectionHref(scope,
+                                     { kind: "section", at: "lore", newOwner: `pcs:${detail.meta.id}` })}
+              />
             </aside>
           </div>
         ) : (

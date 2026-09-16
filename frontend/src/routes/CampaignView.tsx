@@ -48,6 +48,7 @@ import { usePublishSceneModel, usePublishSceneSpend, usePublishShellContext }
   from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
 import { PageShell } from "../components/PageShell";
+import { sectionHref } from "../worldPaths";
 import { useFocus } from "../components/focus";
 import CastColumn from "../components/play/CastColumn";
 import ReviewColumn from "../components/review/ReviewColumn";
@@ -1684,7 +1685,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     out.push({ id: "action:new-scene", group: "SCENES", label: "New scene",
                meta: "in this campaign", action: true, run: newScene });
     out.push({ id: "action:campaign-world", group: "ELSEWHERE", label: "This campaign's world",
-               meta: "locations, lore, cast", to: `/campaigns/${cid}/world` });
+               meta: "locations, lore, cast",
+               to: sectionHref({ kind: "campaign", id: cid }, { kind: "section", at: "characters" }) });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid, cast, briefing, scenes]);

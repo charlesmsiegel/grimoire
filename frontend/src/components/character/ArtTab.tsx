@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, type Appearance, type BaseVersion, type EntityScope, type ShadowedImage }
   from "../../api/client";
 import { errorText } from "../../api/errors";
@@ -83,7 +84,7 @@ function Tile({ name, src, avatar, caption, description, descKey,
 export function ArtTab(
   { scope, wid, cid, vid, hasAvatar, galleryImages, imageTokens, descriptions, appearances,
     worldScope, inherited, baseVersions, shadowed, localizeProg, localizeMsg, onLocalize,
-    onRefresh, onError, onOpenGreeting }: {
+    onRefresh, onError, greetingHref }: {
     scope: EntityScope;
     wid: string;
     cid: string;
@@ -109,7 +110,7 @@ export function ArtTab(
     onLocalize: () => void;
     onRefresh: () => Promise<void>;
     onError: (err: unknown) => void;
-    onOpenGreeting: (gid: string) => void;
+    greetingHref: (gid: string) => string;
   },
 ) {
   const shelfFileRef = useRef<HTMLInputElement>(null);
@@ -245,9 +246,9 @@ export function ArtTab(
                 api.copyGreetingImage(scope, cid, vid, { gid: a.gid, name: a.name, slot: "gallery" }))}>
                 Add to gallery
               </button>
-              <button className="shelf-promote" onClick={() => onOpenGreeting(a.gid)}>
+              <Link className="shelf-promote" to={greetingHref(a.gid)}>
                 {a.greeting_name}
-              </button>
+              </Link>
             </div>
           ))}
         </div>

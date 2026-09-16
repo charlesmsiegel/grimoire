@@ -4,6 +4,7 @@ import { api, type WorldMeta } from "../api/client";
 import { errorText } from "../api/errors";
 import LibraryPage from "../components/LibraryPage";
 import { byName } from "../sortByName";
+import { sectionHref } from "../worldPaths";
 
 function footerLabel(counts: Record<string, number> | undefined): string {
   const c = counts ?? {};
@@ -148,7 +149,7 @@ export default function WorldsView() {
     } catch {
       /* the grid is stale; navigating to the new world is what matters */
     }
-    navigate(`/worlds/${imported}`);
+    navigate(sectionHref({ kind: "world", id: imported }, { kind: "section", at: "overview" }));
   }
 
   return (
@@ -189,7 +190,9 @@ export default function WorldsView() {
                   onKeyDown={(e) => { if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }}
                 />
               ) : (
-                <button className="world-card-main" onClick={() => navigate(`/worlds/${w.id}`)}>
+                <button className="world-card-main"
+                        onClick={() => navigate(sectionHref({ kind: "world", id: w.id },
+                                                            { kind: "section", at: "overview" }))}>
                   <div className="shelf-cover">
                     {w.cover && !brokenCover[`${w.id}:${w.cover}`] ? (
                       // w=208 for a box index.css sizes at 104px wide: 2x of

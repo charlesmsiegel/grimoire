@@ -1298,7 +1298,12 @@ a.check-row { display: block; text-decoration: none; }
 
 /* owned-lore panel on character / PC / location editors */
 .owned-lore .chip { cursor: pointer; }
-.owned-lore button.subtle { margin-top: 8px; }
+/* The "+ New lore" control is a Link now, not a button, and its parent is a
+   plain block -- not one of the flex rows (`.chips`, `.chip-row`) that
+   blockify a `.chip` for free. Without `display: inline-block` an anchor's
+   default `inline` ignores `margin-top` outright, not just this rule's own
+   value of it. */
+.owned-lore a.subtle { margin-top: 8px; display: inline-block; text-decoration: none; }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td {
@@ -1550,6 +1555,11 @@ a.check-row { display: block; text-decoration: none; }
   padding: 3px 6px; cursor: pointer;
 }
 .shelf-promote:hover { color: var(--accent); border-color: var(--accent); }
+/* The "open greeting" tile is a Link now; "Set as avatar" and "Add to
+   gallery" stay buttons. All three are direct children of `.shelf-tile`
+   (`display: flex`), which blockifies a link the same as a button, so only
+   the anchor default underline needs suppressing. */
+a.shelf-promote { text-decoration: none; }
 .shelf-empty, .shelf-add {
   width: 96px; height: 96px; display: flex; align-items: center; justify-content: center;
   border: 1px dashed var(--rule-soft); background: none; color: var(--muted);
@@ -3518,9 +3528,13 @@ a.column-back { text-decoration: none; }
   padding: 14px 12px 14px 0; background: transparent; border: 0;
   border-bottom: 1px solid var(--line); cursor: pointer;
 }
-/* A hit is a Link now, not a button, so the anchor default underline needs
-   suppressing -- everything inside already carries its own color. */
-a.search-hit { text-decoration: none; }
+/* A hit is a Link now, not a button. `text-decoration: none` suppresses the
+   anchor default underline; `color: inherit` suppresses its default link
+   colour too -- latent today, since every text node here sits in a span with
+   its own explicit colour, but the first direct text child added to this
+   element would otherwise render in browser-default blue on a page with no
+   other blue. */
+a.search-hit { text-decoration: none; color: inherit; }
 .search-results li:last-child .search-hit { border-bottom: 0; }
 .search-hit:hover .search-hit-name { color: var(--accent); }
 /* Name and provenance on one line: which record, and which world or campaign

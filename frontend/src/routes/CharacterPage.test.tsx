@@ -571,11 +571,12 @@ test("the greetings tab counts and links world greetings featuring the character
   const tab = await screen.findByRole("tab", { name: "Greetings 3" });
   fireEvent.click(tab);
 
-  expect(screen.getByRole("button", { name: "Tide Watch" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Mara Alone" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Tide Watch" }))
+    .toHaveAttribute("href", "/worlds/realm/greetings/tide-watch");
+  expect(screen.queryByRole("link", { name: "Mara Alone" })).toBeNull();
   expect(screen.queryByText("World greetings")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "Card" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Tide Watch" }));
+  fireEvent.click(screen.getByRole("link", { name: "Tide Watch" }));
   await waitFor(() => expect(lastLocation)
     .toBe("/worlds/realm/greetings/tide-watch"));
 });
@@ -836,16 +837,10 @@ test("a lore chip points at the entry, and the new-entry chip pre-owns the form"
   ]);
   await renderWorld();
   fireEvent.click(await screen.findByRole("tab", { name: /Lore 1/ }));
-  fireEvent.click(await screen.findByRole("button", { name: "The Salt Pact" }));
-  await waitFor(() => expect(lastLocation).toBe("/worlds/realm/lore/the-salt-pact"));
-});
-
-test("the new-lore chip pre-owns the form", async () => {
-  (api.listEntities as any).mockResolvedValue([]);
-  await renderWorld();
-  fireEvent.click(await screen.findByRole("tab", { name: /Lore/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /New lore/ }));
-  await waitFor(() => expect(lastLocation).toBe("/worlds/realm/lore?owner=characters%3Aseraphine"));
+  expect(await screen.findByRole("link", { name: /The Salt Pact/ }))
+    .toHaveAttribute("href", "/worlds/realm/lore/the-salt-pact");
+  expect(screen.getByRole("link", { name: /New lore/ }))
+    .toHaveAttribute("href", "/worlds/realm/lore?owner=characters%3Aseraphine");
 });
 
 // ------------------------------------------------------------ embedded lore
