@@ -1108,8 +1108,14 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
    `<button>` on is the UA default underline. Font family/size are the one
    accepted gap here (see CLAUDE.md) -- pinning `.row` to a `<button>`'s
    platform-specific UA font would fix this machine and be wrong on every
-   other one this app ships to, so the row takes the app's own font instead. */
-a.row { text-decoration: none; }
+   other one this app ships to, so the row takes the app's own font instead.
+   Scoped to `.editor-list`, not bare `a.row`: `.row` is reused well beyond
+   these three rail editors (module/preset/climate pickers and more, all
+   still `<button class="row">`), and `ModulesView.tsx`'s Export control is a
+   pre-existing `<a className="row" download>` that sits among `.subtle`
+   buttons in a `.form-actions` block, nowhere near a rail -- an unscoped
+   rule would have silently dropped its underline too. */
+.editor-list a.row { text-decoration: none; }
 .row.active { border-color: var(--accent); border-left: 4px solid var(--accent); }
 .row-label { flex: 1; cursor: pointer; overflow: hidden; }
 /* A row of [title][mark] rather than one clipped run: the ellipsis has to
