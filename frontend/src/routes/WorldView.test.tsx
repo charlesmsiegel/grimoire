@@ -1,9 +1,33 @@
 import { useEffect } from "react";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
+import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
+import {
+  MemoryRouter, Routes, Route, useLocation, useNavigate,
+  createMemoryRouter, RouterProvider,
+} from "react-router-dom";
 import WorldView from "./WorldView";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 import { PaletteProvider, usePalette, type PaletteItem } from "../components/palette";
+
+// `createMemoryRouter`'s data-router navigation builds a `Request` per
+// navigation, signal included. jsdom's `AbortController`/`AbortSignal` are a
+// different class than the one Node's global `Request` validates a signal
+// against, so that construction throws in this test environment alone -- the
+// built app runs in a real browser, where there is no such split, and every
+// other test in this file uses the plain (non-data) `MemoryRouter`, which
+// never builds a `Request` at all. Patched once, file-wide, for the one test
+// that needs a data router (to drive `router.navigate(-1)` for Back): build
+// the `Request` without the offending `signal`, then reattach the original
+// object afterwards, since nothing downstream reads it before the native
+// constructor's typecheck would otherwise fire.
+const RealRequest = globalThis.Request;
+class TestRequest extends RealRequest {
+  constructor(input: RequestInfo | URL, init?: RequestInit) {
+    const { signal, ...rest } = init ?? {};
+    super(input, rest);
+    if (signal) Object.defineProperty(this, "signal", { value: signal, configurable: true });
+  }
+}
+globalThis.Request = TestRequest;
 
 vi.mock("../api/client", () => ({
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
@@ -148,21 +172,26 @@ beforeEach(() => {
 /** Where the router ended up. A character is a page of its own now, so several
  *  of this page's records LEAVE it, and "did the click go to the right place"
  *  is the assertion those tests can still make here — what happens on arrival
- *  belongs to `CharacterPage.test.tsx`. */
+ *  belongs to `CharacterPage.test.tsx`. Pathname and search are tracked
+ *  separately: a redirect can carry a query string through unchanged, and a
+ *  test asserting on the combined string could not tell that apart from one
+ *  that dropped it. */
 let lastPath = "";
+let lastSearch = "";
 function PathSpy() {
   const loc = useLocation();
-  lastPath = loc.pathname + loc.search;
+  lastPath = loc.pathname;
+  lastSearch = loc.search;
   return null;
 }
 
 function renderAt() {
-  lastPath = "";
+  lastPath = ""; lastSearch = "";
   render(
     <MemoryRouter initialEntries={["/worlds/w"]}>
       <PathSpy />
       <Routes>
-        <Route path="/worlds/:wid" element={<WorldView />} />
+        <Route path="/worlds/:wid/*" element={<WorldView />} />
         <Route path="*" element={<div>away</div>} />
       </Routes>
     </MemoryRouter>,
@@ -178,12 +207,12 @@ function GoTo({ to }: { to: string }) {
 }
 
 function renderAtUrl(url: string) {
-  lastPath = "";
+  lastPath = ""; lastSearch = "";
   render(
     <MemoryRouter initialEntries={[url]}>
       <PathSpy />
       <Routes>
-        <Route path="/worlds/:wid" element={<WorldView />} />
+        <Route path="/worlds/:wid/*" element={<WorldView />} />
         <Route path="*" element={<div>away</div>} />
       </Routes>
     </MemoryRouter>,
@@ -191,20 +220,44 @@ function renderAtUrl(url: string) {
 }
 
 function renderCampaign() {
-  lastPath = "";
+  lastPath = ""; lastSearch = "";
   render(
     <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
       <PathSpy />
-      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
+      <Routes><Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
         <Route path="*" element={<div>away</div>} /></Routes>
     </MemoryRouter>,
   );
 }
 
+function renderCampaignAtUrl(url: string) {
+  lastPath = ""; lastSearch = "";
+  render(
+    <MemoryRouter initialEntries={[url]}>
+      <PathSpy />
+      <Routes><Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
+        <Route path="*" element={<div>away</div>} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
+/** `window.history.back()` does not drive a `MemoryRouter` -- it has its own
+ *  in-memory stack and ignores the browser's -- so the one test that steps
+ *  Back needs the data router instead, which exposes `router.navigate(-1)`. */
+function renderWithRouter(url: string) {
+  const router = createMemoryRouter(
+    [{ path: "/worlds/:wid/*", element: <><PathSpy /><WorldView /></> }],
+    { initialEntries: [url] },
+  );
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
 /** The column's row for a section. Its accessible name is the label and its
- *  count, so every lookup here is a prefix match rather than an exact one. */
+ *  count, so every lookup here is a prefix match rather than an exact one.
+ *  The rows are links now, which is what lets one open in a new tab. */
 function indexRow(label: string) {
-  return screen.getByRole("button", { name: new RegExp(`^${label}\\b`) });
+  return screen.getByRole("link", { name: new RegExp(`^${label}\\b`) });
 }
 
 test("shows the world name and opens on the Overview", async () => {
@@ -382,7 +435,7 @@ test("editing a campaign's world keeps the campaign in the status bar", async ()
     <ShellStatusProvider>
       <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
         <Routes>
-          <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
+          <Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
         </Routes>
       </MemoryRouter>
       <Probe />
@@ -401,7 +454,7 @@ test("the standalone world route publishes no campaign — there isn't one", asy
   render(
     <ShellStatusProvider>
       <MemoryRouter initialEntries={["/worlds/w"]}>
-        <Routes><Route path="/worlds/:wid" element={<WorldView />} /></Routes>
+        <Routes><Route path="/worlds/:wid/*" element={<WorldView />} /></Routes>
       </MemoryRouter>
       <Probe />
     </ShellStatusProvider>,
@@ -449,20 +502,20 @@ test("reclassifying a record opens it in the section it moved to", async () => {
 });
 
 
-test("?section=characters&id= redirects to that character's page, version and all", async () => {
+test("an old character link keeps its version", async () => {
   // Kept working rather than chased down: SearchView builds these links
   // generically, and the hub and the palette carry them too.
   (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);
   renderAtUrl("/worlds/w?section=characters&id=mira&v=main");
-  await waitFor(() => expect(lastPath).toBe("/worlds/w/characters/mira?v=main"));
+  await waitFor(() => expect(lastPath + lastSearch).toBe("/worlds/w/characters/mira?v=main"));
 });
 
-test("?section=characters with no id is a request for the grid, not for nobody", async () => {
+test("section=characters with no id is still the grid, not an empty character", async () => {
   (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);
   renderAtUrl("/worlds/w?section=characters");
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/characters"));
   await screen.findByText("Mira");
   expect(indexRow("Characters")).toHaveClass("active");
-  expect(lastPath).toBe("/worlds/w?section=characters");
 });
 
 test("the index offers Push to campaigns, which lists what each campaign owes", async () => {
@@ -507,7 +560,7 @@ test("Images is offered in the command palette, like every other world section",
     <PaletteProvider>
       <PaletteSpy onItems={(got) => items.splice(0, items.length, ...got)} />
       <MemoryRouter initialEntries={["/worlds/w"]}>
-        <Routes><Route path="/worlds/:wid" element={<WorldView />} /></Routes>
+        <Routes><Route path="/worlds/:wid/*" element={<WorldView />} /></Routes>
       </MemoryRouter>
     </PaletteProvider>,
   );
@@ -737,11 +790,10 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
 });
 
 test("a focused PC is not carried into another scope's render", async () => {
-  // Child effects run before the parent's, so clearing the focus in an effect
-  // is a render too late: PCEditor would already have been handed the stale id
-  // and already have scheduled select() against the NEW scope — opening a
-  // stranger who happens to share the id. Deriving it during render is what
-  // makes the scope change atomic.
+  // The record now comes off the URL rather than out of React state keyed to
+  // a captured scope, so there is nothing left to carry: a plain navigation to
+  // another world's PCs section names no record at all, and the editor there
+  // has nothing to focus.
   (api.listPCs as any).mockResolvedValue([
     { id: "winifred", name: "Winifred", tags: [], default_version: "main", versions: [] }]);
   (api.readPC as any).mockResolvedValue({
@@ -759,7 +811,7 @@ test("a focused PC is not carried into another scope's render", async () => {
   render(
     <MemoryRouter initialEntries={["/worlds/w"]}>
       <Routes>
-        <Route path="/worlds/:wid" element={<><WorldView /><GoTo to="/worlds/w2" /></>} />
+        <Route path="/worlds/:wid/*" element={<><WorldView /><GoTo to="/worlds/w2/pcs" /></>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -805,4 +857,128 @@ test("a world with no cover renders no header thumbnail", async () => {
   // unambiguous rather than the name itself.
   await screen.findByRole("heading", { level: 1 });
   expect(screen.queryByAltText("Drowned Realm cover")).toBeNull();
+});
+
+// ---- a section is a route (#addresses): the column's rows are links, an
+// unknown or malformed tail redirects, and an old ?section= link is
+// translated once, ahead of every other redirect.
+
+test("each section has its own address", async () => {
+  renderAtUrl("/worlds/w/items");
+  expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("Items");
+});
+
+test("the world root is the overview", async () => {
+  renderAtUrl("/worlds/w");
+  expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("Overview");
+});
+
+test("a column row is a link, which is what lets it open in a new tab", async () => {
+  renderAtUrl("/worlds/w");
+  const row = await screen.findByRole("link", { name: /Items/ });
+  expect(row).toHaveAttribute("href", "/worlds/w/items");
+});
+
+test("clicking a column row changes the address", async () => {
+  renderAtUrl("/worlds/w");
+  fireEvent.click(await screen.findByRole("link", { name: /Lore/ }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/lore"));
+});
+
+test("back steps through sections rather than leaving the world", async () => {
+  const router = renderWithRouter("/worlds/w");
+  fireEvent.click(await screen.findByRole("link", { name: /Lore/ }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/lore"));
+  fireEvent.click(await screen.findByRole("link", { name: /Items/ }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/items"));
+  await router.navigate(-1);
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/lore"));
+});
+
+test("a tail spelled any other way is replaced with the one address the screen has", async () => {
+  for (const odd of ["/worlds/w/items/", "/worlds/w//items", "/worlds/w/it%65ms"]) {
+    renderAtUrl(odd);
+    await waitFor(() => expect(lastPath).toBe("/worlds/w/items"));
+    cleanup();
+  }
+});
+
+test("...and the redirect keeps the modifiers the link was carrying", async () => {
+  renderAtUrl("/worlds/w/lore/?owner=characters%3Asera");
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/lore"));
+  expect(lastSearch).toBe("?owner=characters%3Asera");
+});
+
+test("an old section link lands on the record's new address, replacing it", async () => {
+  renderAtUrl("/worlds/w?section=lore&id=the-salt-pact");
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/lore/the-salt-pact"));
+  expect(lastSearch).toBe("");
+});
+
+test("an old images link keeps the campaign it was narrowed to", async () => {
+  renderAtUrl("/worlds/w?section=images&for=run");
+  await waitFor(() => expect(lastPath + lastSearch).toBe("/worlds/w/images?for=run"));
+});
+
+test("a modern record path ignores a stray section param rather than obeying it", async () => {
+  renderAtUrl("/worlds/w/lore/current?section=items&id=old");
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/lore/current"));
+});
+
+test("a legacy section this shape does not have is ignored, not translated", async () => {
+  renderCampaignAtUrl("/campaigns/c/world?section=tags");
+  await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
+});
+
+test("legacy translation beats the campaign root's default redirect", async () => {
+  // The whole reason this task is not two tasks: a split leaves a commit in
+  // which this URL lands on Characters and the lore entry is lost.
+  renderCampaignAtUrl("/campaigns/c/world?section=lore&id=x");
+  await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/lore/x"));
+});
+
+test("an id containing a slash survives the round trip", async () => {
+  // The one case a decoded splat param cannot express: react-router hands
+  // `useParams()["*"]` back as `items/a/b`, which reads as three segments and
+  // is not an address at all. Rendered rather than unit-tested, because the
+  // decoding this guards against happens in the router, not in the parser.
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "a/b", name: "A slash B", keys: "", owners: "" }, body: "Sliced clean.",
+  });
+  renderAtUrl("/worlds/w/items/a%2Fb");
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/items/a%2Fb"));
+  await screen.findByRole("heading", { name: "A slash B" });
+});
+
+test("an unknown section redirects rather than rendering a page headed Overview", async () => {
+  renderAtUrl("/worlds/w/garbage");
+  await waitFor(() => expect(lastPath).toBe("/worlds/w"));
+});
+
+test("a campaign is sent to its cast, and cannot address a world-only section", async () => {
+  renderCampaignAtUrl("/campaigns/c/world");
+  await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
+  renderCampaignAtUrl("/campaigns/c/world/tags");
+  await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
+});
+
+test("the world is read once across a section change, while the counts re-read", async () => {
+  renderAtUrl("/worlds/w");
+  await screen.findByRole("heading", { level: 1 });
+  const worldReads = (api.getWorld as any).mock.calls.length;
+  const countReads = (api.listEntities as any).mock.calls.length;
+  fireEvent.click(await screen.findByRole("link", { name: /Lore/ }));
+  // The counts are started inside a promise, so they land a microtask after the
+  // pathname changes -- assert them through waitFor, not on the next line.
+  await waitFor(() =>
+    expect((api.listEntities as any).mock.calls.length).toBeGreaterThan(countReads));
+  expect(lastPath).toBe("/worlds/w/lore");
+  expect((api.getWorld as any).mock.calls.length).toBe(worldReads);
+});
+
+test("a campaign is redirected before its world id has arrived", async () => {
+  // getCampaign never settles: the redirect must not be waiting on it.
+  (api.getCampaign as any).mockReturnValue(new Promise(() => {}));
+  renderCampaignAtUrl("/campaigns/c/world");
+  await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
 });

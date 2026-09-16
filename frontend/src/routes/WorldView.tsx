@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, ENTITY_KINDS, type EntityKind, type EntityScope, type ModuleDetail } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
@@ -16,19 +16,15 @@ import { ScenarioImport } from "../components/ScenarioImport";
 import { WorldOverview } from "../components/WorldOverview";
 import { WorldPushPanel } from "../components/WorldPushPanel";
 import { ImagesView } from "../components/ImagesView";
+import {
+  defaultSection, legacyTarget, parseWorldTail, sectionHref,
+  type RecordSection, type Section,
+} from "../worldPaths";
 
 type IndexKey =
   | "characters" | "pcs" | "creatures" | "groups"
   | "locations" | "items"
   | "lore" | "greetings" | "tags";
-
-/** Overview is not a kind of record, so it is not in the index: it sits above
- *  the groups, as the world itself rather than as something inside it. Push is
- *  the other one: the campaigns fed by this world are not records in it either,
- *  and it is the only screen here that looks outward. Images is a third: art
- *  hangs off a record of one of eight kinds rather than being a kind of its own,
- *  so it cuts across the index instead of sitting in it (#200). */
-type SectionKey = IndexKey | "overview" | "push" | "images";
 
 /** The index that replaced the ten-tab strip.
  *
@@ -77,6 +73,14 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const { wid: widParam = "", cid = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const shape = campaign ? "campaign" : "world";
+  const params = useSearchParams()[0];
+  // `location.pathname` is raw. `useParams()["*"]` is not, and an id
+  // containing a slash is exactly what the difference loses.
+  const tail = location.pathname.split("/").filter(Boolean).slice(campaign ? 3 : 2).join("/");
+  const parsed = parseWorldTail(tail, shape);
+  const section: Section = parsed.ok ? parsed.section : defaultSection(shape);
+  const rid = parsed.ok ? parsed.rid : null;
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [name, setName] = useState("");
@@ -86,7 +90,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // worth a second request on a path that deliberately avoids one.
   const [cover, setCover] = useState("");
   const [coverBroken, setCoverBroken] = useState(false);
-  const [section, setSection] = useState<SectionKey>(campaign ? "characters" : "overview");
   const [counts, setCounts] = useState<Record<string, number | null>>({});
   const [campaignCount, setCampaignCount] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -95,26 +98,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  records in half a dozen sections at once — so it has to re-ask for every
    *  count rather than leave the index reading the world as it was. */
   const [populated, setPopulated] = useState(0);
-  const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
-  /** The greeting a cross-navigation asked for, with a nonce: opening the same
-   *  node twice has to reach the editor twice. */
-  const [focusGreeting, setFocusGreeting] = useState<{ gid: string; n: number } | null>(null);
-  /** A PC to open once the PC section is showing — see `openOwner`. Nonce'd
-   *  for GreetingEditor's reason: following the same chip twice is two events.
-   *
-   *  Carries the scope it was captured in, and the prop below is DERIVED from
-   *  that rather than cleared by an effect. An effect would be a render too
-   *  late: child effects run before the parent's, so `PCEditor` would already
-   *  have been handed the stale id and already have scheduled `select` against
-   *  the new scope — opening a stranger who happens to share the id, or
-   *  leaving the previous scope's PC on screen. Deciding it during render is
-   *  what makes the scope change atomic.
-   *
-   *  `select` still clears it outright: choosing PCs from the column means the
-   *  list, not whoever a chip pointed at earlier. */
-  const [focusPC, setFocusPC] =
-    useState<{ pid: string; n: number; scope: string } | null>(null);
   /** Which way the Greetings section is showing its records: the chip-list
    *  editor, or the same edges as a graph (#9). A view of one set of records
    *  rather than a second place to keep them -- both write through
@@ -136,20 +120,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   /** ...and the mirror image: the map's own write may still be on the wire
    *  after the reader has switched back to the list. */
   const [mapWriting, setMapWriting] = useState(false);
-  /** A pending "open this entity" for whichever EntityEditor is mounted. Keyed
-   *  by kind so a nav aimed at Lore cannot be consumed by Items: all six
-   *  editors are the same component, and only the kind tells them apart. */
-  const [entityNav, setEntityNav] =
-    useState<{ kind: IndexKey; focusEntry?: string; newOwner?: string } | null>(null);
   const [moduleCtx, setModuleCtx] = useState<ModuleDetail | null>(null);
   const [worldMid, setWorldMid] = useState("");
-  const [params] = useSearchParams();
-
-  /** The pending nav, but only for the editor that was aimed at. Every
-   *  EntityEditor gets this rather than the raw state, so the first one to
-   *  mount cannot swallow a nav meant for another kind. */
-  const navFor = (kind: IndexKey) =>
-    (entityNav && entityNav.kind === kind ? entityNav : null);
 
   // Editing a campaign's world is still being in that campaign, but it is a
   // different route: CampaignView unmounts and clears the context, so without
@@ -194,10 +166,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  vanish on the way back and read as deleted — the page hands their id over
    *  in `location.state` and the grid widens the filter for them. */
   const reveal = (location.state as { reveal?: string } | null)?.reveal ?? null;
-  const scopeKey = `${scope.kind}:${scope.id}`;
-  // A focused PC id belongs to the scope it was read in, so it is offered only
-  // back in that scope. See `focusPC` on why this is derived, not cleared.
-  const pcFocus = focusPC?.scope === scopeKey ? focusPC : null;
   // The tag vocabulary is a world concern (campaign PC tags are free strings)
   // and the overview is a world's setup checklist -- neither is something a
   // campaign's fork of the world has, so neither is offered on that shape.
@@ -247,23 +215,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     return () => { live = false; };
   }, [campaign, wid]);
 
-  /** Picking a section out of the index. Distinct from the cross-navigation
-   *  callbacks below, which arrive at a section *carrying* a record to focus:
-   *  choosing Characters from the column means the grid, not whoever happened
-   *  to be open in it last. */
-  function select(key: SectionKey) {
-    setSection(key);
-    if (key === "characters") setCharReset((n) => n + 1);
-    if (key === "greetings") setFocusGreeting(null);
-    if (key === "pcs") setFocusPC(null);
-    // ...and any entity nav, for the same reason the two above are cleared:
-    // choosing a section from the column means the list, not whoever happened
-    // to be open in it. No path reaching here today leaves one pending -- every
-    // setter sets the section in the same breath, and the editor consumes it on
-    // mount -- so this is the invariant stated rather than a hole plugged.
-    setEntityNav(null);
-  }
-
   // A present-character link from the greeting view, an owner chip, or a search
   // hit. A character has a page of its own now, so this LEAVES this route
   // rather than opening a pane inside it -- `characterHref` is the one place
@@ -276,21 +227,26 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // does a node on the plot map, which is why this also drops back to the list:
   // opening a greeting means its editor, and the graph has no detail pane.
   function openGreeting(gid: string) {
-    setFocusGreeting((prev) => ({ gid, n: (prev?.n ?? 0) + 1 }));
-    setGreetingView("list");
-    setSection("greetings");
+    setGreetingView("list"); // opening a greeting means its editor, not the graph
+    navigate(sectionHref(scopeForPaths, { kind: "record", at: "greetings", rid: gid }));
   }
 
   // an owner editor's lore panel routes to Lore (open an entry, or start a pre-owned one)
   function openLore(nav: { focusEntry?: string; newOwner?: string }) {
-    setEntityNav({ kind: "lore", ...nav });
-    setSection("lore");
+    if (nav.focusEntry) {
+      navigate(sectionHref(scopeForPaths, { kind: "record", at: "lore", rid: nav.focusEntry }));
+    } else {
+      // Branched rather than passing a possibly-undefined `newOwner`: the two
+      // are different addresses, and one of them has no query string at all.
+      navigate(sectionHref(scopeForPaths, nav.newOwner
+        ? { kind: "section", at: "lore", newOwner: nav.newOwner }
+        : { kind: "section", at: "lore" }));
+    }
   }
 
   // a search hit, or any other deep link, opens the record it names
-  function openEntity(kind: IndexKey, id: string) {
-    setEntityNav({ kind, focusEntry: id });
-    setSection(kind);
+  function openEntity(kind: RecordSection, id: string) {
+    navigate(sectionHref(scopeForPaths, { kind: "record", at: kind, rid: id }));
   }
 
   // A `<kind>:<id>` chip — a lore owner, or the target of a ref-valued entity
@@ -301,61 +257,17 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     const kind = ref.slice(0, i);
     const id = ref.slice(i + 1);
     if (kind === "characters") openCharacter(id, ""); // "" -> the page opens the default version
-    else if (kind === "pcs") {
-      setFocusPC((p) => ({ pid: id, n: (p?.n ?? 0) + 1, scope: scopeKey }));
-      setSection("pcs");
-    }
+    else if (kind === "pcs") openEntity("pcs", id);
     // The entity kinds land on the record itself, not merely its section: a
     // ref names one record, and dropping the reader in a list to find it again
     // would be answering the question with the index.
-    else if (ENTITY_KINDS.includes(kind as EntityKind)) openEntity(kind as IndexKey, id);
+    else if (ENTITY_KINDS.includes(kind as EntityKind)) openEntity(kind as RecordSection, id);
   }
 
-  /** Open what the URL names: `?section=lore&id=the-salt-pact`, plus `&v=` for
-   *  a character's card version.
-   *
-   *  This is what makes a search hit followable — a result is a record, and
-   *  landing on the section it lives in and leaving the reader to find it
-   *  again would be answering a question with the index. Query params rather
-   *  than path segments because the section and the open record are this
-   *  page's *state*, not a deeper resource: everything else here changes them
-   *  without moving the route, and a deep link has to arrive at the same
-   *  place, not at a second one.
-   *
-   *  Re-runs when the params change, and only then: picking a section from the
-   *  column leaves the URL alone, so nothing here undoes it. */
-  useEffect(() => {
-    const section = params.get("section") ?? "";
-    const id = params.get("id") ?? "";
-    if (!section) return;
-    // `?section=characters` alone is a request for the GRID — the rail's own
-    // row, and the link the hub's cast card carries. Only an `id` is a request
-    // for one character, and only that redirects to their page; without this
-    // guard the bare section navigated to an empty character id.
-    if (section === "characters") {
-      if (id) openCharacter(id, params.get("v") ?? "");
-      else setSection("characters");
-      return;
-    }
-    if (section === "greetings") { openGreeting(id); return; }
-    // Images is a section like any other to the column, but it is not in
-    // `INDEX` -- that list is the world's record kinds, and images are a view
-    // across all of them rather than one more kind. Without this branch
-    // `?section=images` fell through and did nothing, which is what the rail's
-    // Images row addresses.
-    if (section === "images") { setSection("images"); return; }
-    if (INDEX.some((g) => g.rows.some((r) => r.key === section && r.key !== "tags"))) {
-      // `pcs` has no per-record focus of its own yet; the section is as close
-      // as this can land, which is still nearer than the page it started on.
-      if (section === "pcs") setSection("pcs");
-      else openEntity(section as IndexKey, id);
-    }
-    // The openers are redeclared every render and close over nothing that
-    // outlives one -- `params` is the only real dependency. Listing them would
-    // re-run this on every render, which for `openCharacter` means navigating
-    // to the character named in the URL again after the reader has left them.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params]);
+  /** Where a row, a tile or a palette item points. The scope this page is
+   *  *about* — a campaign's fork addresses under its own base. */
+  const hrefFor = (at: Section) =>
+    sectionHref(scopeForPaths, { kind: "section", at });
 
   /** What this page contributes to ⌘K: its own index, so a section can be
    *  reached by name from anywhere in the world rather than only by finding
@@ -364,30 +276,81 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     const out: PaletteItem[] = [];
     if (!campaign) {
       out.push({ id: "world-section:overview", group: "IN THIS WORLD", label: "Overview",
-                 meta: `${name} · setup`, run: () => select("overview") });
+                 meta: `${name} · setup`, run: () => navigate(hrefFor("overview")) });
       out.push({ id: "world-section:push", group: "IN THIS WORLD", label: "Push to campaigns",
-                 meta: `${name} · pending changes`, run: () => select("push") });
+                 meta: `${name} · pending changes`, run: () => navigate(hrefFor("push")) });
       out.push({ id: "world-section:images", group: "IN THIS WORLD", label: "Images",
-                 meta: `${name} · art`, run: () => select("images") });
+                 meta: `${name} · art`, run: () => navigate(hrefFor("images")) });
     }
     for (const g of groups) {
       for (const r of g.rows) {
         out.push({ id: `world-section:${r.key}`, group: "IN THIS WORLD", label: r.label,
-                   meta: `${name} · ${g.group.toLowerCase()}`, run: () => select(r.key) });
+                   meta: `${name} · ${g.group.toLowerCase()}`, run: () => navigate(hrefFor(r.key)) });
       }
     }
     return out;
-    // `select` is redeclared every render and closes over nothing that outlives
-    // one, so it is deliberately not a dependency.
-  }, [campaign, groups, name]);
+    // `hrefFor` is redeclared every render; `scopeForPaths` -- the thing it
+    // closes over -- is rebuilt from these same primitives, so depending on
+    // them is depending on it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign, cid, widParam, groups, name, navigate]);
   usePaletteSource(paletteSource);
+
+  // What the tail could not name, and the campaign shape's root. The legacy
+  // translation immediately below runs before both, so `?section=` is not
+  // thrown away by a default redirect that also applies at the same address.
+  const scopeForPaths: EntityScope = campaign
+    ? { kind: "campaign", id: cid }
+    : { kind: "world", id: widParam };
+  // FIRST: an old `?section=X&id=Y` link, translated once and replaced.
+  //
+  // Ahead of everything below, and that ordering is the point rather than an
+  // accident of where it was written. `/campaigns/:cid/world?section=lore&id=x`
+  // satisfies the campaign root's default redirect too, and firing that one
+  // would throw the destination away and land on Characters.
+  //
+  // Only at the legacy roots. A URL that already names a record by path is
+  // addressing it, and a stray `?section=` riding along does not outrank the
+  // path -- obeying it would send a reader somewhere they did not ask to go.
+  const legacy = tail === "" ? legacyTarget(params, shape) : null;
+  if (legacy) {
+    return <Navigate replace to={sectionHref(scopeForPaths, legacy)} />;
+  }
+
+  if (!parsed.ok) {
+    return <Navigate replace
+                     to={sectionHref(scopeForPaths,
+                                     { kind: "section", at: defaultSection(shape) })} />;
+  }
+  if (campaign && tail === "") {
+    return <Navigate replace
+                     to={sectionHref(scopeForPaths, { kind: "section", at: "characters" })} />;
+  }
+  // `/worlds/w/items/` means Items and so does `/worlds/w/it%65ms` -- but
+  // neither is how `sectionHref` spells it, and "exactly one address per
+  // screen" is the rule this page is being rebuilt around. So the canonical
+  // string is BUILT and compared, rather than the tail being inspected for the
+  // particular ways it might be odd: a trailing slash, a doubled one, an
+  // over-escaped segment and an id whose own escaping differs all come out the
+  // same way, and no list of cases has to be kept complete.
+  //
+  // Loop-safe by construction: the destination's pathname IS `canonicalPath`,
+  // so the next render's comparison succeeds. The query is carried through
+  // verbatim -- `?owner=` and `?v=` are the screen's modifiers and dropping
+  // them here would be a redirect that loses what the link asked for.
+  const canonicalPath = rid
+    ? sectionHref(scopeForPaths, { kind: "record", at: section as RecordSection, rid })
+    : sectionHref(scopeForPaths, { kind: "section", at: section });
+  if (location.pathname !== canonicalPath) {
+    return <Navigate replace to={canonicalPath + location.search} />;
+  }
 
   if (campaign && !wid) return null;
 
   const rows = groups.flatMap((g) => g.rows);
-  const groupOf = (key: SectionKey) =>
+  const groupOf = (key: Section) =>
     groups.find((g) => g.rows.some((r) => r.key === key))?.group ?? "World";
-  const labelOf = (key: SectionKey) => {
+  const labelOf = (key: Section) => {
     const row = rows.find((r) => r.key === key)?.label;
     if (row) return row;
     if (key === "push") return "Push to campaigns";
@@ -397,12 +360,23 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // unknown, and a dash says so where a 0 would claim the section is empty.
   const dash = (n: number | null | undefined) => (n === null || n === undefined ? "—" : n);
 
+  /** `?owner=` is only meaningful on a recordless Lore screen: it pre-owns the
+   *  blank form. Read nowhere else, so it cannot ride along to Items or sit
+   *  beside a record that already has owners of its own. */
+  const newOwner = section === "lore" && !rid ? (params.get("owner") ?? "") : "";
+
+  const navFor = (kind: RecordSection) =>
+    section !== kind ? null
+      : rid ? { kind, focusEntry: rid }
+      : newOwner ? { kind, newOwner }
+      : null;
+
   const column = (
     <>
       {campaign ? (
-        <button className="column-back" onClick={() => navigate(`/campaigns/${cid}`)}>
+        <Link className="column-back" to={`/campaigns/${cid}`}>
           ‹ {campaignName} / World Copy
-        </button>
+        </Link>
       ) : (
         <Link className="column-back" to="/worlds">‹ All worlds</Link>
       )}
@@ -419,21 +393,21 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       </div>
 
       {!campaign && (
-        <button className={"column-row" + (section === "overview" ? " active" : "")}
-                onClick={() => select("overview")}>
+        <Link className={"column-row" + (section === "overview" ? " active" : "")}
+              to={hrefFor("overview")}>
           <span className="column-row-label">Overview</span>
           <span className="column-row-count" aria-hidden>→</span>
-        </button>
+        </Link>
       )}
 
       {/* World shape only: a campaign's fork of a world feeds nothing, and its
           own pending changes are reviewed in the campaign, not here. */}
       {!campaign && (
-        <button className={"column-row" + (section === "push" ? " active" : "")}
-                onClick={() => select("push")}>
+        <Link className={"column-row" + (section === "push" ? " active" : "")}
+              to={hrefFor("push")}>
           <span className="column-row-label">Push to campaigns</span>
           <span className="column-row-count">{dash(campaignCount)}</span>
-        </button>
+        </Link>
       )}
 
       {/* World shape only, for the same reason the greeting tagger it carries
@@ -442,21 +416,21 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           "how many pictures" is not a number anyone navigates by, and the two
           reads behind it are the ones this view exists to make once. */}
       {!campaign && (
-        <button className={"column-row" + (section === "images" ? " active" : "")}
-                onClick={() => select("images")}>
+        <Link className={"column-row" + (section === "images" ? " active" : "")}
+              to={hrefFor("images")}>
           <span className="column-row-label">Images</span>
-        </button>
+        </Link>
       )}
 
       {groups.map((g) => (
         <ColumnSection key={g.group} label={g.group}>
           {g.rows.map((r) => (
-            <button key={r.key}
-                    className={"column-row" + (section === r.key ? " active" : "")}
-                    onClick={() => select(r.key)}>
+            <Link key={r.key}
+                  className={"column-row" + (section === r.key ? " active" : "")}
+                  to={hrefFor(r.key)}>
               <span className="column-row-label">{r.label}</span>
               <span className="column-row-count">{dash(counts[r.key])}</span>
-            </button>
+            </Link>
           ))}
         </ColumnSection>
       ))}
@@ -465,16 +439,16 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
 
   const footer = campaign ? (
     // A fork's way back to what it forked from.
-    <Link className="column-link" to={`/worlds/${wid}`}>
+    <Link className="column-link" to={sectionHref({ kind: "world", id: wid }, { kind: "section", at: "overview" })}>
       The source world <span aria-hidden>→</span>
     </Link>
   ) : (
     <>
-      <button className="column-link" onClick={() => { setImportOpen(true); setSection("lore"); }}>
+      <button className="column-link" onClick={() => { setImportOpen(true); navigate(hrefFor("lore")); }}>
         Import lorebook <span aria-hidden>→</span>
       </button>
       <button className="column-link"
-              onClick={() => { setScenarioOpen(true); setSection("overview"); }}>
+              onClick={() => { setScenarioOpen(true); navigate(hrefFor("overview")); }}>
         Import scenario card <span aria-hidden>→</span>
       </button>
     </>
@@ -522,7 +496,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               <summary>Import scenario card</summary>
               <ScenarioImport wid={wid} onImported={() => setPopulated((n) => n + 1)} />
             </details>
-            <WorldOverview key={populated} wid={wid} onNavigate={(t) => select(t as SectionKey)}
+            <WorldOverview key={populated} wid={wid} onNavigate={(t) => navigate(hrefFor(t as Section))}
                            worldMid={worldMid} onPickMid={setWorldMid} />
           </>
         )}
@@ -533,13 +507,13 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             indefinitely if one stalls. */}
         {!campaign && section === "images"
           && <ImagesView key={wid} wid={wid} forCampaign={params.get("for")} />}
-        {section === "characters" && <CharacterGrid scope={scope} wid={wid} resetSignal={charReset} reveal={reveal} module={moduleCtx} />}
+        {section === "characters" && <CharacterGrid scope={scope} wid={wid} resetSignal={0} reveal={reveal} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
-                                       focus={pcFocus?.pid ?? null} focusNonce={pcFocus?.n ?? 0}
+                                       focus={rid} focusNonce={0}
                                        module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" nav={navFor("locations")}
-                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} onOpenLore={openLore} module={moduleCtx} />}
+                                          onNavConsumed={() => {}} onReclassified={openEntity} onOpenLore={openLore} module={moduleCtx} />}
         {section === "lore" && (
           <>
             {/* Controlled so the column's pinned import row can open it: the
@@ -551,17 +525,17 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
             </details>}
             <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={navFor("lore")}
-                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} onOpenOwner={openOwner} module={moduleCtx} />
+                          onNavConsumed={() => {}} onReclassified={openEntity} onOpenOwner={openOwner} module={moduleCtx} />
           </>
         )}
         {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items" nav={navFor("items")}
-                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity}
+                                          onNavConsumed={() => {}} onReclassified={openEntity}
                                           onOpenOwner={openOwner} module={moduleCtx} />}
         {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" nav={navFor("groups")}
-                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity}
+                                          onNavConsumed={() => {}} onReclassified={openEntity}
                                           onOpenOwner={openOwner} module={moduleCtx} />}
         {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" nav={navFor("creatures")}
-                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity}
+                                          onNavConsumed={() => {}} onReclassified={openEntity}
                                           onOpenOwner={openOwner} module={moduleCtx} />}
         {section === "greetings" && (
           <>
@@ -578,7 +552,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             <div hidden={greetingView !== "list"}>
               <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
                               onOpenLocation={(id) => openEntity("locations", id)}
-                              focus={focusGreeting?.gid ?? null} focusNonce={focusGreeting?.n ?? 0}
+                              focus={rid} focusNonce={0}
                               onChanged={() => setGreetingEpoch((n) => n + 1)}
                               onBusy={setListSaving} onEdgeDraft={setListEdgeDraft}
                               hold={mapWriting ? "The plot map is still writing these links. Wait for it before saving." : null}
