@@ -319,7 +319,7 @@ export function LegacyCharacterRedirect() {
   // Through the helper, not a template string: it is the only thing allowed to
   // know where a character's page lives, and it encodes segments the way the
   // rest of the app does.
-  return <Navigate replace state={location.state}
+  return <Navigate replace state={location.state as unknown}
                    to={characterHref({ kind: "campaign", id: cid }, eid, v || undefined)} />;
 }
 

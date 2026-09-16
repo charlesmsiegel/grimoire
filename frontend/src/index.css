@@ -1022,7 +1022,11 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   font-family: var(--fm); font-size: 13px; line-height: 1; color: var(--page-muted);
 }
 .chip-clear:hover { color: var(--accent); }
-button.primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--rule); padding: 8px 14px; cursor: pointer; font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+button.primary, a.primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--rule); padding: 8px 14px; cursor: pointer; font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+/* `<a>`'s UA default underline is not overridden by anything above -- same
+   pattern as `a.column-back`, `.campaign-name a` and the other button-styled
+   anchors in this file. */
+a.primary { text-decoration: none; }
 .banner { background: var(--banner-bg); border: 1px solid var(--accent); color: var(--banner-ink); padding: 10px 16px; margin: 12px 22px; font-family: var(--fm); font-size: 11px; flex: none; }
 .banner a { color: var(--banner-ink); }
 .banner.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -1174,7 +1178,7 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
    window, so a bare 100vh would run it off the bottom. */
 .editor-list { width: 220px; flex: none; position: sticky; top: 12px;
   max-height: calc(100vh - 24px - 52px); overflow-y: auto; }
-.editor-list button.new { width: 100%; margin-bottom: 8px; position: sticky; top: 0; z-index: 1; }
+.editor-list .new { width: 100%; margin-bottom: 8px; position: sticky; top: 0; z-index: 1; }
 /* Rail filters. `box-sizing` is load-bearing on the search box: the rail is a
    fixed 220px and the input carries padding and a border, so content-box would
    put it over the edge and give the whole page a sideways scroll. */

@@ -1537,7 +1537,8 @@ test("a record row is a link to that record's address", async () => {
 test("an unowned blank form can be pre-owned by the chip that opened it", async () => {
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
   renderEditor({ kind: "lore", selected: null, newOwner: "characters:seraphine" });
-  expect(await screen.findByLabelText(/Seraphine/)).toBeInTheDocument();
+  const seraphine = await screen.findByLabelText(/Seraphine/);
+  expect((seraphine as HTMLInputElement).checked).toBe(true);
 });
 
 test("leaving a record for the section root does not get reopened by its own late read", async () => {

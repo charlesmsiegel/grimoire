@@ -882,7 +882,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         </span>
       )}
       {/* The unit is dropped for width -- the rail is a fixed 220px -- so the
-          accessible name carries it instead. The row is a button named from
+          accessible name carries it instead. The row is a link named from
           its contents, so without this a screen reader reads "Salt 1,240" and
           the number could be anything; `title` alone is not announced. */}
       {typeof e.tokens === "number" && (
