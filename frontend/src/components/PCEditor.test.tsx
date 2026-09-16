@@ -1,3 +1,5 @@
+import type { ComponentProps } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { PCEditor } from "./PCEditor";
 
@@ -47,11 +49,33 @@ const DETAIL = {
   versions: [{ id: "default", name: "default", persona: { name: "Elara", pronouns: "she/her", summary: "scholar", birthdate: "", description: "a wanderer" } }],
 };
 
+/** A minimal PC detail for a placeholder id/name, used by the route-selection
+ *  tests below -- they need more than one addressable PC, and `DETAIL` above
+ *  stays the fixture the rest of this suite already keys its assertions off. */
+function pcFixture(id: string, name: string) {
+  return {
+    meta: { id, name, tags: [] as string[], default_version: "default" },
+    versions: [{ id: "default", name: "default",
+                 persona: { name, pronouns: "", summary: "", birthdate: "", description: `${name} description` } }],
+  };
+}
+
+const PC_FIXTURES: Record<string, ReturnType<typeof pcFixture> | typeof DETAIL> = {
+  elara: DETAIL,
+  winifred: pcFixture("winifred", "Winifred"),
+  mara: pcFixture("mara", "Mara"),
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
+  (api.listPCs as any).mockResolvedValue([
+    { id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] },
+    { id: "winifred", name: "Winifred", tags: [], default_version: "default", versions: [] },
+    { id: "mara", name: "Mara", tags: [], default_version: "default", versions: [] },
+  ]);
   (api.listTags as any).mockResolvedValue({ student: "Student" });
-  (api.readPC as any).mockResolvedValue(DETAIL);
+  (api.readPC as any).mockImplementation(async (_scope: unknown, pid: string) =>
+    PC_FIXTURES[pid] ?? pcFixture(pid, pid));
   (api.createPC as any).mockResolvedValue({ pc: "rook", version: "default" });
   (api.updatePC as any).mockResolvedValue({ ok: true });
   (api.updatePCVersion as any).mockResolvedValue({ ok: true });
@@ -66,9 +90,60 @@ beforeEach(() => {
   (api.setPCAvatarFocus as any).mockResolvedValue({ ok: true });
 });
 
-test("clicking a PC shows a read-only view; Edit reveals the form", async () => {
-  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+type Props = ComponentProps<typeof PCEditor>;
+
+const DEFAULTS = {
+  scope: { kind: "world" as const, id: "realm" },
+  wid: "realm",
+  recordHref: (r: string) => `/worlds/realm/pcs/${r}`,
+};
+const pcsWith = (over: Partial<Props> = {}) => (
+  <MemoryRouter><PCEditor {...DEFAULTS} {...over} /></MemoryRouter>
+);
+const renderPCs = (over: Partial<Props> = {}) => render(pcsWith(over));
+
+/** A promise this test resolves on its own schedule, for proving which of two
+ *  overlapping `select`s wins when they land out of order. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+test("a PC row is a link to that PC's address", async () => {
+  renderPCs({ selected: null });
+  expect(await screen.findByRole("link", { name: /Winifred/ }))
+    .toHaveAttribute("href", "/worlds/realm/pcs/winifred");
+});
+
+test("the selected PC opens", async () => {
+  renderPCs({ selected: "winifred" });
+  await screen.findByRole("heading", { name: "Winifred" });
+});
+
+test("the section root closes whoever was open", async () => {
+  const { rerender } = renderPCs({ selected: "winifred" });
+  await screen.findByRole("heading", { name: "Winifred" });
+  rerender(pcsWith({ selected: null }));
+  await screen.findByRole("button", { name: /New PC/ });
+  expect(screen.queryByRole("heading", { name: "Winifred" })).toBeNull();
+});
+
+test("a later selection wins even when the earlier read lands last", async () => {
+  const slow = deferred(); const fast = deferred();
+  (api.readPC as any)
+    .mockImplementationOnce(() => slow.promise)
+    .mockImplementationOnce(() => fast.promise);
+  const { rerender } = renderPCs({ selected: "winifred" });
+  rerender(pcsWith({ selected: "mara" }));
+  fast.resolve(pcFixture("mara", "Mara"));
+  slow.resolve(pcFixture("winifred", "Winifred"));
+  await screen.findByRole("heading", { name: "Mara" });
+  expect(screen.queryByRole("heading", { name: "Winifred" })).toBeNull();
+});
+
+test("a selected PC shows a read-only view; Edit reveals the form", async () => {
+  const { container } = renderPCs({ selected: "elara" });
   await screen.findByText("a wanderer");                         // rendered description
   expect(container.querySelector("textarea")).toBeNull();        // read-only
   expect(screen.getByText("she/her")).toBeInTheDocument();       // sidebar metadata
@@ -80,8 +155,7 @@ test("clicking a PC shows a read-only view; Edit reveals the form", async () => 
 });
 
 test("saving the persona returns to the read-only view", async () => {
-  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  const { container } = renderPCs({ selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
   await waitFor(() => expect(container.querySelector("textarea")).toBeNull());
@@ -89,29 +163,27 @@ test("saving the persona returns to the read-only view", async () => {
 
 test("creating a PC prompts for a name and opens the form directly", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("Rook");
-  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const { container } = renderPCs();
   await screen.findByText("Elara");
   fireEvent.click(screen.getByRole("button", { name: /new pc/i }));
-  await waitFor(() => expect(api.createPC).toHaveBeenCalledWith("w", { name: "Rook" }));
+  await waitFor(() => expect(api.createPC).toHaveBeenCalledWith("realm", { name: "Rook" }));
   await waitFor(() => expect(container.querySelector("textarea")).not.toBeNull()); // straight to the form
 });
 
 test("editing persona saves the selected version", async () => {
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByLabelText("Description");
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "a sage" } });
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
   await waitFor(() =>
-    expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara", "default",
+    expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "elara", "default",
       expect.objectContaining({ description: "a sage" })),
   );
 });
 
 test("editing the birthdate saves it on the persona", async () => {
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(await screen.findByLabelText("Birthdate year"), { target: { value: "1990" } });
   const monthSelect = await screen.findByLabelText("Birthdate month");
@@ -122,28 +194,26 @@ test("editing the birthdate saves it on the persona", async () => {
   fireEvent.change(daySelect, { target: { value: "29" } });
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
   await waitFor(() =>
-    expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara", "default",
+    expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "elara", "default",
       expect.objectContaining({ birthdate: "1990-06-29" })),
   );
 });
 
 test("toggling a tag chip in the form updates the PC tags", async () => {
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(await screen.findByRole("button", { name: "Student" }));
-  await waitFor(() => expect(api.updatePC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara", { tags: [] }));
+  await waitFor(() => expect(api.updatePC).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "elara", { tags: [] }));
 });
 
 test("adding a version prompts and posts the current persona", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("Young");
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByLabelText("Description");
   fireEvent.click(screen.getByRole("button", { name: /\+ version/i }));
   await waitFor(() =>
-    expect(api.createPCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara",
+    expect(api.createPCVersion).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "elara",
       expect.objectContaining({ name: "Young" })),
   );
 });
@@ -164,8 +234,7 @@ test("campaign scope: picking a version confirms and calls pickVersion", async (
   (api.listAppearances as any).mockResolvedValue([]);          // unlocked
   (api.pickVersion as any).mockResolvedValue({ ok: true });
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Elara" }));
+  renderPCs({ scope: { kind: "campaign", id: "run" }, selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Pick this version" }));
   await waitFor(() => expect(api.pickVersion).toHaveBeenCalledWith("run", "pcs", "elara", "young"));
 });
@@ -180,8 +249,7 @@ test("campaign scope: a locked PC offers import from world", async () => {
   ]);
   (api.importVersion as any).mockResolvedValue({ ok: true });
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Elara" }));
+  renderPCs({ scope: { kind: "campaign", id: "run" }, selected: "elara" });
   expect(await screen.findByText(/locked to/i)).toBeInTheDocument();
   fireEvent.change(await screen.findByLabelText("Import version"), { target: { value: "older" } });
   fireEvent.click(screen.getByRole("button", { name: "Import from world" }));
@@ -201,7 +269,7 @@ it("wizard trigger opens the wizard, finds the characters sheet type, and create
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  render(<PCEditor scope={{ kind: "world", id: "w1" }} wid="w1" module={module} />);
+  renderPCs({ scope: { kind: "world", id: "w1" }, wid: "w1", module });
   fireEvent.click(await screen.findByText("+ New PC with sheet…"));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Elara" } });
   fireEvent.click(screen.getByText("Next"));
@@ -222,7 +290,7 @@ it("world scope: wires the wizard's deleteRecord to api.deletePC so a failed she
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  render(<PCEditor scope={{ kind: "world", id: "w1" }} wid="w1" module={module} />);
+  renderPCs({ scope: { kind: "world", id: "w1" }, wid: "w1", module });
   fireEvent.click(await screen.findByText("+ New PC with sheet…"));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Elara" } });
   fireEvent.click(screen.getByText("Next"));
@@ -239,7 +307,7 @@ it("campaign scope: hides the sheet-creation wizard trigger (no campaign-scoped 
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w1" module={module} />);
+  renderPCs({ scope: { kind: "campaign", id: "run" }, wid: "w1", module });
   await screen.findByRole("button", { name: "+ New PC" });
   expect(screen.queryByText("+ New PC with sheet…")).toBeNull();
 });
@@ -257,11 +325,11 @@ it("a wizard opened at world scope closes (not just its trigger) when the same i
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  const { rerender } = render(<PCEditor scope={{ kind: "world", id: "w1" }} wid="w1" module={module} />);
+  const { rerender } = render(pcsWith({ scope: { kind: "world", id: "w1" }, wid: "w1", module }));
   fireEvent.click(await screen.findByText("+ New PC with sheet…"));
   expect(await screen.findByText("New pc (with sheet)")).toBeInTheDocument();     // wizard open
 
-  rerender(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w1" module={module} />);
+  rerender(pcsWith({ scope: { kind: "campaign", id: "run" }, wid: "w1", module }));
   await waitFor(() => expect(screen.queryByText("New pc (with sheet)")).toBeNull()); // wizard closed
   expect(screen.getByText("Select or create a PC.")).toBeInTheDocument();        // plain view instead
 });
@@ -270,8 +338,7 @@ it("a wizard opened at world scope closes (not just its trigger) when the same i
 const FILE = new File([new Uint8Array([1, 2, 3])], "art.png", { type: "image/png" });
 
 it("a PC with no images shows the initials fallback and an empty shelf", async () => {
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   await screen.findByText("a wanderer");
   expect(screen.getByText("no avatar")).toBeInTheDocument();
   expect(screen.queryByLabelText("Adjust avatar crop")).toBeNull();
@@ -283,49 +350,53 @@ it("the shelf renders the avatar and gallery, cache-busted by the listing's toke
     { name: "gallery_10", ext: "png", v: "g10" },
     { name: "gallery_2", ext: "png", v: "g2" },
   ]);
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
 
   const avatar = await screen.findByAltText("avatar");
-  expect(avatar.getAttribute("src")).toBe("/img/w/pcs/elara/default/avatar?v=a1");
+  expect(avatar.getAttribute("src")).toBe("/img/realm/pcs/elara/default/avatar?v=a1");
   // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
   const gallery = [screen.getByAltText("gallery_2"), screen.getByAltText("gallery_10")];
   expect(gallery.map((g) => g.getAttribute("src"))).toEqual([
-    "/img/w/pcs/elara/default/gallery_2?v=g2",
-    "/img/w/pcs/elara/default/gallery_10?v=g10",
+    "/img/realm/pcs/elara/default/gallery_2?v=g2",
+    "/img/realm/pcs/elara/default/gallery_10?v=g10",
   ]);
 });
 
 it("the first upload becomes the avatar; the next queues into the gallery", async () => {
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  // Two staged listings rather than a click-driven re-select (the rail's rows
+  // are now links to a route this suite never navigates): the first stands
+  // for what the shelf holds when the PC opens, the second for what the
+  // server reports once the upload below has landed -- `onShelfAdd` already
+  // reloads the shelf itself after a write, with no user action to force it.
+  (api.listPCImages as any)
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([
+      { name: "avatar", ext: "png", v: "a1" }, { name: "gallery_3", ext: "png", v: "g3" },
+    ]);
+  renderPCs({ selected: "elara" });
   await screen.findByText("no avatar");
 
   fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
   await waitFor(() => expect(api.putPCImage).toHaveBeenCalledWith(
-    { kind: "world", id: "w" }, "elara", "default", "avatar", FILE));
+    { kind: "world", id: "realm" }, "elara", "default", "avatar", FILE));
+  await screen.findByAltText("gallery_3");   // the reload after the write picked up the staged listing
 
-  (api.listPCImages as any).mockResolvedValue([
-    { name: "avatar", ext: "png", v: "a1" }, { name: "gallery_3", ext: "png", v: "g3" },
-  ]);
-  fireEvent.click(screen.getByRole("button", { name: "Elara" }));   // re-select: shelf reloads
-  await screen.findByAltText("gallery_3");
   fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
   // next free slot is one past the HIGHEST gallery_N, not the count
   await waitFor(() => expect(api.putPCImage).toHaveBeenLastCalledWith(
-    { kind: "world", id: "w" }, "elara", "default", "gallery_4", FILE));
+    { kind: "world", id: "realm" }, "elara", "default", "gallery_4", FILE));
 });
 
 it("a gallery image can be promoted to avatar, and either can be removed", async () => {
   (api.listPCImages as any).mockResolvedValue([
     { name: "avatar", ext: "png", v: "a1" }, { name: "gallery_1", ext: "png", v: "g1" },
   ]);
-  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  const { container } = renderPCs({ selected: "elara" });
+  await screen.findByAltText("avatar");
 
   fireEvent.click(await screen.findByRole("button", { name: "Set as avatar" }));
   await waitFor(() => expect(api.promotePCImage).toHaveBeenCalledWith(
-    { kind: "world", id: "w" }, "elara", "default", "gallery_1"));
+    { kind: "world", id: "realm" }, "elara", "default", "gallery_1"));
 
   // Scoped to each tile rather than picked out of a flat list by index: both
   // tiles carry a button reading "Remove", so a positional query would keep
@@ -333,21 +404,20 @@ it("a gallery image can be promoted to avatar, and either can be removed", async
   const tile = (sel: string) => within(container.querySelector(sel) as HTMLElement);
   fireEvent.click(tile(".avatar-tile").getByRole("button", { name: "Remove" }));
   await waitFor(() => expect(api.deletePCImage).toHaveBeenCalledWith(
-    { kind: "world", id: "w" }, "elara", "default", "avatar"));
+    { kind: "world", id: "realm" }, "elara", "default", "avatar"));
 
   const gallery = [...container.querySelectorAll(".shelf-tile")]
     .find((t) => t.querySelector('img[alt="gallery_1"]')) as HTMLElement;
   fireEvent.click(within(gallery).getByRole("button", { name: "Remove" }));
   await waitFor(() => expect(api.deletePCImage).toHaveBeenLastCalledWith(
-    { kind: "world", id: "w" }, "elara", "default", "gallery_1"));
+    { kind: "world", id: "realm" }, "elara", "default", "gallery_1"));
 });
 
 it("a failed image write is reported in the banner, not swallowed", async () => {
   // Every WRITE on this shelf reports; only the listing is allowed to fail
   // quietly. `errorText` is what turns the rejection into the sentence shown.
   (api.putPCImage as any).mockRejectedValue(new ApiError(400, "unsupported image type"));
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   await screen.findByText("no avatar");
 
   fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
@@ -356,8 +426,7 @@ it("a failed image write is reported in the banner, not swallowed", async () => 
 
 it("a listing that fails leaves the persona readable instead of a banner", async () => {
   (api.listPCImages as any).mockRejectedValue(new ApiError(500, "disk gone"));
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   await screen.findByText("a wanderer");            // the record still reads
   expect(screen.getByText("no avatar")).toBeInTheDocument();
   expect(screen.queryByText("disk gone")).toBeNull();
@@ -365,15 +434,14 @@ it("a listing that fails leaves the persona readable instead of a banner", async
 
 it("clicking the portrait opens the crop picker and saves a focus", async () => {
   (api.listPCImages as any).mockResolvedValue([{ name: "avatar", ext: "png", v: "a1" }]);
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
 
   fireEvent.click(await screen.findByLabelText("Adjust avatar crop"));
   const slider = await screen.findByLabelText("Crop position");
   fireEvent.change(slider, { target: { value: "70" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setPCAvatarFocus).toHaveBeenCalledWith(
-    { kind: "world", id: "w" }, "elara", "default", 70));
+    { kind: "world", id: "realm" }, "elara", "default", 70));
 });
 
 it("images follow the viewed version, not the PC", async () => {
@@ -384,14 +452,13 @@ it("images follow the viewed version, not the PC", async () => {
       { id: "older", name: "older", persona: { ...DETAIL.versions[0].persona, description: "grey now" } },
     ],
   });
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ selected: "elara" });
   await waitFor(() => expect(api.listPCImages).toHaveBeenCalledWith(
-    { kind: "world", id: "w" }, "elara", "default"));
+    { kind: "world", id: "realm" }, "elara", "default"));
 
   fireEvent.change(screen.getAllByLabelText("Version")[0], { target: { value: "older" } });
   await waitFor(() => expect(api.listPCImages).toHaveBeenLastCalledWith(
-    { kind: "world", id: "w" }, "elara", "older"));
+    { kind: "world", id: "realm" }, "elara", "older"));
 });
 
 it("the rail draws each PC's portrait from its summary, at its own crop", async () => {
@@ -401,10 +468,10 @@ it("the rail draws each PC's portrait from its summary, at its own crop", async 
     { id: "rook", name: "Rook", tags: [], default_version: "default", has_avatar: false,
       avatar_focus: null, versions: [] },
   ]);
-  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const { container } = renderPCs();
   await screen.findByText("Rook");
   const thumb = container.querySelector(".pc-row-portrait img") as HTMLImageElement;
-  expect(thumb.getAttribute("src")).toBe("/img/w/pcs/elara/v2/avatar");
+  expect(thumb.getAttribute("src")).toBe("/img/realm/pcs/elara/v2/avatar");
   expect(thumb.style.objectPosition).toBe("20% 20%");
   // the one with no avatar falls back to initials rather than a broken img
   expect(container.querySelectorAll(".pc-row-portrait img")).toHaveLength(1);
@@ -414,8 +481,7 @@ it("the rail draws each PC's portrait from its summary, at its own crop", async 
 it("campaign scope addresses the campaign's own copy of the art", async () => {
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listPCImages as any).mockResolvedValue([{ name: "avatar", ext: "png", v: "a1" }]);
-  render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  renderPCs({ scope: { kind: "campaign", id: "run" }, selected: "elara" });
   const avatar = await screen.findByAltText("avatar");
   expect(avatar.getAttribute("src")).toBe("/img/run/pcs/elara/default/avatar?v=a1");
   fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
@@ -435,8 +501,7 @@ test("a PC's art carries its description, and saving one names that image", asyn
   (api.listPCImages as any).mockResolvedValue([
     { name: "avatar", v: "1" }, { name: "gallery_1", v: "1" },
   ]);
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Elara" }));
+  renderPCs({ selected: "elara" });
   await screen.findByText("Images");
 
   expect(screen.getByRole("button", { name: /Description of avatar/ }))
@@ -449,30 +514,19 @@ test("a PC's art carries its description, and saving one names that image", asyn
   fireEvent.change(box, { target: { value: "On the road north." } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setPCImageDescription).toHaveBeenCalledWith(
-    { kind: "world", id: "w" }, "elara", "default", "gallery_1", "On the road north."));
+    { kind: "world", id: "realm" }, "elara", "default", "gallery_1", "On the road north."));
 });
 
-test("a focus prop opens that PC on arrival", async () => {
+test("a selected id opens that PC on arrival", async () => {
   // A `pcs:` chip — a lore owner, or an item's holder / a group's leader
   // (#222) — has to land on the record, not merely on the PC section.
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" focus="elara" focusNonce={1} />);
+  renderPCs({ selected: "elara" });
   await screen.findByText("a wanderer");
-  expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara");
+  expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "elara");
 });
 
-test("re-following the same chip re-opens it, via the nonce", async () => {
-  // The id alone does not change, so a reader who wandered off to another PC
-  // and came back would otherwise be sent nowhere.
-  const { rerender } = render(
-    <PCEditor scope={{ kind: "world", id: "w" }} wid="w" focus="elara" focusNonce={1} />);
-  await screen.findByText("a wanderer");
-  (api.readPC as any).mockClear();
-  rerender(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" focus="elara" focusNonce={2} />);
-  await waitFor(() => expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara"));
-});
-
-test("no focus prop selects nothing", async () => {
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+test("no selected prop selects nothing", async () => {
+  renderPCs();
   await screen.findByText("Elara");            // the rail is populated
   expect(api.readPC).not.toHaveBeenCalled();   // ...but nothing is open
 });
@@ -481,10 +535,9 @@ test("a scope change closes the open PC rather than leaving it under the new sco
   // Reloading only the rail left the previous scope's PC on screen, where its
   // Save and Delete act on the NEW scope — writing to whatever unrelated PC
   // shares the id there, or to nothing.
-  const { rerender } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
+  const { rerender } = renderPCs({ selected: "elara" });
   await screen.findByText("a wanderer");                       // the record is open
-  rerender(<PCEditor scope={{ kind: "world", id: "w2" }} wid="w2" />);
+  rerender(pcsWith({ scope: { kind: "world", id: "w2" }, wid: "w2", selected: null }));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith({ kind: "world", id: "w2" }));
   expect(screen.queryByText("a wanderer")).toBeNull();
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
@@ -497,9 +550,9 @@ test("a read still in flight when the scope changes does not land under the new 
   // the NEW scope.
   let resolveRead!: (v: unknown) => void;
   (api.readPC as any).mockReturnValue(new Promise((r) => { resolveRead = r; }));
-  const { rerender } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Elara"));
-  rerender(<PCEditor scope={{ kind: "world", id: "w2" }} wid="w2" />);
+  const { rerender } = renderPCs({ selected: "elara" });
+  await screen.findByText("Elara");   // the rail is populated; elara's read is still pending
+  rerender(pcsWith({ scope: { kind: "world", id: "w2" }, wid: "w2", selected: null }));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith({ kind: "world", id: "w2" }));
   resolveRead(DETAIL);                       // the old scope's read finally lands
   await waitFor(() => expect(api.listPCs).toHaveBeenCalled());

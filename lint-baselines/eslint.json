@@ -203,7 +203,7 @@
   },
   "frontend/src/components/PCEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 3,
-    "@typescript-eslint/no-misused-promises": 17
+    "@typescript-eslint/no-misused-promises": 16
   },
   "frontend/src/components/PostImagePicker.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 2

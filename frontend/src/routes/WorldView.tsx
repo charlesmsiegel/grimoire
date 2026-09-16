@@ -514,7 +514,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           && <ImagesView key={wid} wid={wid} forCampaign={params.get("for")} />}
         {section === "characters" && <CharacterGrid scope={scope} wid={wid} resetSignal={0} reveal={reveal} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore}
-                                       focus={rid} focusNonce={0}
+                                       selected={rid}
+                                       recordHref={(r) => sectionHref(scopeForPaths,
+                                                                      { kind: "record", at: "pcs", rid: r })}
                                        module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations"

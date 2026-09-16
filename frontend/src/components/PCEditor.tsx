@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
@@ -15,17 +16,23 @@ import SheetPanel from "./SheetPanel";
 import { errorText } from "../api/errors";
 const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
 
-export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module = null }:
+export function PCEditor({ scope, wid, onOpenLore, selected, recordHref, module = null }:
   { scope: EntityScope; wid: string;
     onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
-    /** A PC to open on arrival — a `pcs:` chip beside a lore entry, or the
-     *  holder or leader named by a ref field (#222). Without it those chips
-     *  landed on the PC section and left the reader to find the record again,
-     *  which is answering the question with the index. */
-    focus?: string | null;
-    /** Bumped per navigation, so following the same chip twice is two events
-     *  rather than one no-op — same reason `GreetingEditor` carries one. */
-    focusNonce?: number;
+    /** The PC the URL names, or null for the section's own screen. Covers a
+     *  rail row's own address as much as a `pcs:` chip beside a lore entry or
+     *  the holder or leader named by a ref field (#222) — every one of those
+     *  now lands here by navigating rather than by this editor reaching out
+     *  for a focus id of its own. */
+    selected?: string | null;
+    /** One PC's address, for a rail row. A CALLBACK rather than a string this
+     *  file concatenates onto some section path: `sectionHref` is the only
+     *  thing allowed to build these paths, and an id containing a slash or a
+     *  space is exactly what hand-joining gets wrong. There is no
+     *  `sectionPath` prop here — `+ New PC` prompts for a name and creates a
+     *  record rather than going to a screen, so it stays a plain button with
+     *  no address to point at. */
+    recordHref: (rid: string) => string;
     module?: ModuleDetail | null }) {
   const worldScope = scope.kind === "world";
   const [pcs, setPCs] = useState<PCSummary[]>([]);
@@ -38,10 +45,10 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
   const [wizardOpen, setWizardOpen] = useState(false);
   const lockReq = useRef(0);
   // Token for the in-flight `select`. A read is not instant, so a scope change
-  // (or a second click) landing while one is out has to be able to discard its
-  // result — otherwise the previous scope's PC reappears under the new one,
-  // where Edit and Delete act on the NEW scope. Bumped by `select` and by the
-  // scope effect; every setState after an await is gated on it.
+  // (or a later selection) landing while one is out has to be able to discard
+  // its result — otherwise the previous scope's PC reappears under the new
+  // one, where Edit and Delete act on the NEW scope. Bumped by `select` and by
+  // both effects below; every setState after an await is gated on it.
   const selReq = useRef(0);
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
@@ -81,15 +88,20 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
     setCropOpen(false);
   }, [wid, worldScope, reload]);
 
-  // arrived via an owner chip or a ref field: open that PC
+  // Whatever the route names.
+  //
+  // The token is bumped on EVERY change, the null one included. Without that,
+  // navigating /pcs/winifred -> /pcs resets the form and then Winifred's
+  // slower read lands and reopens her at an address that names no record.
   useEffect(() => {
-    if (focus) void select(focus);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, focusNonce, scope.kind, scope.id]);
-
-  async function select(pid: string, version?: string) {
-    setError(null);
     const req = ++selReq.current;
+    if (selected) void select(selected, undefined, req);
+    else { setDetail(null); setVid(""); setPersona(BLANK); setMode("view"); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, scope.kind, scope.id]);
+
+  async function select(pid: string, version?: string, req = ++selReq.current) {
+    setError(null);
     const d = await api.readPC(scope, pid);
     if (req !== selReq.current) return;   // the scope moved on, or a later select won
     setDetail(d);
@@ -312,12 +324,12 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
           <button className="subtle" onClick={() => setWizardOpen(true)}>+ New PC with sheet…</button>
         )}
         {pcs.map((p) => (
-          <button
+          <Link
             key={p.id}
             className={"row" + (detail?.meta.id === p.id ? " active" : "")}
-            onClick={() => select(p.id)}
+            to={recordHref(p.id)}
           >
-            {/* aria-hidden: the row is a button named from its contents, and a
+            {/* aria-hidden: the row is a link named from its contents, and a
                 PC is picked by name -- a second reading of it as alt text is
                 noise. `Portrait` falls back to initials on its own. */}
             <span className="pc-row-portrait" aria-hidden>
@@ -327,7 +339,7 @@ export function PCEditor({ scope, wid, onOpenLore, focus, focusNonce = 0, module
                           : null} />
             </span>
             <span className="row-name">{p.name}</span>
-          </button>
+          </Link>
         ))}
       </div>
 
