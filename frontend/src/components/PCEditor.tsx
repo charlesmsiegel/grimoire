@@ -114,6 +114,11 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
   }, [selected, scope.kind, scope.id]);
 
   async function select(pid: string, version?: string, req = ++selReq.current) {
+    // Captured and cleared unconditionally, up front: a read that fails or is
+    // superseded still has to consume the flag, or it survives to open the
+    // NEXT PC clicked in edit mode -- records are never editable by default.
+    const asEdit = openInEdit.current;
+    openInEdit.current = false;
     setError(null);
     const d = await api.readPC(scope, pid);
     if (req !== selReq.current) return;   // the scope moved on, or a later select won
@@ -121,8 +126,7 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
     const v = d.versions.find((x) => x.id === (version ?? d.meta.default_version)) ?? d.versions[0];
     setVid(v?.id ?? "");
     setPersona(v?.persona ?? BLANK);
-    setMode(openInEdit.current ? "edit" : "view");
-    openInEdit.current = false;
+    setMode(asEdit ? "edit" : "view");
     setCropOpen(false);
     // `readPC` already carries this version's image names, but not their
     // cache-busting tokens, and a promote rewrites two files under stable

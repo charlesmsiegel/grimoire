@@ -150,6 +150,52 @@ test("a bookmarked address that fails to read reports the failure instead of lea
   await screen.findByText("Error: not found");
 });
 
+test("a read that fails does not leave the NEXT PC selected stuck open in edit", async () => {
+  // `+ New PC` is the one path that sets `openInEdit` -- it's how a
+  // brand-new PC opens straight into the form. If a read fails, that flag
+  // has to be consumed anyway, or it survives to open the next unrelated
+  // selection in edit mode too, which violates "records are never editable
+  // by default" (CLAUDE.md).
+  vi.spyOn(window, "prompt").mockReturnValue("Rook");
+  (api.readPC as any).mockImplementation(async (_scope: unknown, pid: string) => {
+    if (pid === "rook") throw new Error("boom");
+    return PC_FIXTURES[pid] ?? pcFixture(pid, pid);
+  });
+  const { container } = renderRoutedPCs();
+  await screen.findByText("Elara");
+  fireEvent.click(screen.getByRole("button", { name: /new pc/i }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/realm/pcs/rook"));
+  await screen.findByText("Error: boom");           // the failed read's banner
+
+  fireEvent.click(screen.getByRole("link", { name: /Winifred/ }));
+  await screen.findByRole("heading", { name: "Winifred" });
+  expect(container.querySelector("textarea")).toBeNull();   // read-only, not stuck in edit
+});
+
+test("a superseded select (picking another PC before a new one's read lands) also does not leak edit mode", async () => {
+  // Same flag, the other early-return: `select` bails out with
+  // `if (req !== selReq.current) return;` before it ever reaches the line
+  // that used to clear `openInEdit`. A pending create's read landing late
+  // must not leave the flag around for whichever PC got picked in the
+  // meantime.
+  vi.spyOn(window, "prompt").mockReturnValue("Rook");
+  const slow = deferred();
+  (api.readPC as any).mockImplementation(async (_scope: unknown, pid: string) => {
+    if (pid === "rook") return slow.promise;
+    return PC_FIXTURES[pid] ?? pcFixture(pid, pid);
+  });
+  const { container } = renderRoutedPCs();
+  await screen.findByText("Elara");
+  fireEvent.click(screen.getByRole("button", { name: /new pc/i }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/realm/pcs/rook"));   // rook's read is still pending
+
+  fireEvent.click(screen.getByRole("link", { name: /Winifred/ }));
+  await screen.findByRole("heading", { name: "Winifred" });
+  expect(container.querySelector("textarea")).toBeNull();   // read-only, not stuck in edit
+
+  slow.resolve(pcFixture("rook", "Rook"));   // let the superseded read land, harmlessly
+});
+
 test("a PC row is a link to that PC's address", async () => {
   renderPCs({ selected: null });
   expect(await screen.findByRole("link", { name: /Winifred/ }))

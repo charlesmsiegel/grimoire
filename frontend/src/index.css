@@ -1100,15 +1100,17 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
   display: flex; align-items: center; gap: 6px; width: 100%;
   border: 1px solid var(--rule-soft); padding: 8px 10px; margin-bottom: 6px;
   background: var(--surface); color: var(--ink);
+  /* A <button> takes the browser's own UA font by default; an <a> inherits
+     the page's. Pinned here so every `.row` agrees regardless of which tag
+     renders it, instead of the tag silently deciding. */
+  font-family: var(--fb);
 }
 /* The rail row is a Link now (EntityEditor, GreetingEditor, PCEditor), not a
    button -- same pattern as `a.column-back` and the other button-styled
-   anchors in this file: `display: flex` and `color` above already came from
-   the unscoped `.row` rule, so the one thing an `<a>` still disagrees with a
-   `<button>` on is the UA default underline. Font family/size are the one
-   accepted gap here (see CLAUDE.md) -- pinning `.row` to a `<button>`'s
-   platform-specific UA font would fix this machine and be wrong on every
-   other one this app ships to, so the row takes the app's own font instead.
+   anchors in this file: `display: flex`, `color` and (as pinned above)
+   `font-family` all already came from the unscoped `.row` rule, so the one
+   thing an `<a>` still disagrees with a `<button>` on is the UA default
+   underline.
    Scoped to `.editor-list`, not bare `a.row`: `.row` is reused well beyond
    these three rail editors (module/preset/climate pickers and more, all
    still `<button class="row">`), and `ModulesView.tsx`'s Export control is a
@@ -1277,6 +1279,10 @@ a.overview-tile { text-decoration: none; }
 .check-row {
   width: 100%; text-align: left; background: none; border: none; color: var(--ink);
   padding: 6px 0; cursor: pointer; font-size: 13px;
+  /* A <button> takes the browser's own UA font by default; an <a> inherits
+     the page's -- pinned here so the checklist's button and Link variants
+     (WorldOverview) agree regardless of which tag renders a row. */
+  font-family: var(--fb);
 }
 /* A row with a fix is a Link now, not a button -- a `<button>`'s default
    inline-block display made `width: 100%` and the vertical padding behave the
