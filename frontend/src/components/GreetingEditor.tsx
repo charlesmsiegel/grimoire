@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { Field } from "./Field";
 import { DemotePanel } from "./DemotePanel";
@@ -52,6 +52,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     /** Bumped when that other view writes. A greeting open in `view` mode is
      *  re-read; a draft in `edit` mode is never touched. */
     refreshKey?: number }) {
+  const navigate = useNavigate();
   const worldScope = scope.kind === "world";
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -279,7 +280,17 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         await api.setEdges(scope, id, { leads_to: edges.leads_to, excludes: edges.excludes });
       }
       await reload();
-      await select(id);
+      if (gid) {
+        await select(id);
+      } else {
+        // A create leaves the address on the section root, so `+ New
+        // greeting` (a `Link` to `sectionPath`) would point at the screen
+        // already showing and do nothing. Navigating to the new record's own
+        // address instead keeps the two in agreement -- the URL-driven
+        // `selected` effect is what actually opens it read-only, the same
+        // way a rail-row click does.
+        navigate(recordHref(id));
+      }
       onChanged?.();
     } catch (err: any) {
       if (err instanceof ApiError && err.kind === "stale_record") {

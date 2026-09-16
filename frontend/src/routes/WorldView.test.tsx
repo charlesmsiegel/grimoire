@@ -691,14 +691,34 @@ test("the map holds still while a list save is in flight", async () => {
     expect(screen.getByRole("button", { name: "Link from Vow of Silence" })).toBeEnabled());
 });
 
-// A greeting's own address forces the list (#9's map has no detail pane), so
-// opening one and then switching to the graph now navigates AWAY from it --
-// the address drops the record segment, `selected` goes back to null, and the
-// hidden chip-list editor resets to its blank draft. A viewed (not merely
-// drafted) record can therefore never sit open behind the graph any more; the
-// re-read this used to cover -- `GreetingEditor`'s `mode === "view"` branch of
-// its `refreshKey` effect -- is exercised directly, with the record selected
-// by prop rather than by route, in `GreetingEditor.test.tsx`.
+test("a graph edit re-reads the chip list behind it", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+    meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  }));
+  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+
+  const rail = await waitFor(() => document.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));   // open it in the list
+  fireEvent.click(await screen.findByRole("button", { name: "Plot map" }));
+  await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
+  const readsBefore = (api.readGreeting as any).mock.calls.length;
+
+  fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
+  fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to Vow of Silence" }));
+
+  // The chip list is still mounted with this greeting's edges as they were.
+  // Left alone, Edit-then-Save there would send that stale array back.
+  await waitFor(() =>
+    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
+});
 
 test("a map remounted mid-write is held behind the write the last one left", async () => {
   (api.listGreetings as any).mockResolvedValue([
@@ -743,7 +763,7 @@ test("the plot map is an address, and Back returns to the list", async () => {
   expect(await screen.findByTestId("plot-map")).toBeInTheDocument();
 });
 
-test("a greeting's own address shows the list, which is the only view with a detail pane", async () => {
+test("a greeting's own address honours ?view=graph, and the record stays selected behind it", async () => {
   (api.listGreetings as any).mockResolvedValue([
     { id: "tide-watch", name: "Tide Watch", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
   ]);
@@ -752,8 +772,14 @@ test("a greeting's own address shows the list, which is the only view with a det
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
   });
   renderAtUrl("/worlds/w/greetings/tide-watch?view=graph");
+  // the graph has no detail pane -- the record is hidden, not rendered here
+  expect(await screen.findByTestId("plot-map")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Tide Watch" })).toBeNull();
+
+  // switching back to List does not lose it -- unlike a fresh navigation to
+  // the section root, the address kept naming this record the whole time
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
   await screen.findByRole("heading", { name: "Tide Watch" });
-  expect(screen.queryByTestId("plot-map")).toBeNull();
 });
 
 test("switching to the map and back does not lose a half-written greeting", async () => {
@@ -763,6 +789,51 @@ test("switching to the map and back does not lose a half-written greeting", asyn
   await waitFor(() => expect(lastSearch).toBe("?view=graph"));
   fireEvent.click(screen.getByRole("button", { name: "List" }));
   expect(await screen.findByLabelText(/Name/)).toHaveValue("Half written");
+});
+
+// Not a new-greeting draft: an EXISTING greeting, opened by its own address
+// and then edited. The chip's navigation has to keep the record segment
+// (not just drop back to the section root) or the address changes under the
+// edit, `selected` goes null, and the effect's `else resetForm()` throws the
+// draft away -- proven a real regression against ce2c1fc1f.
+test("editing an existing greeting also keeps its draft across the map switch", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  });
+  renderAtUrl("/worlds/w/greetings/dawn");
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText(/Name/), { target: { value: "Saltmarch Dusk" } });
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+  await waitFor(() => expect(lastPath + lastSearch).toBe("/worlds/w/greetings/dawn?view=graph"));
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/greetings/dawn"));
+  expect(await screen.findByLabelText(/Name/)).toHaveValue("Saltmarch Dusk");
+});
+
+// `save()` used to end a create with `select(id)` directly, opening the new
+// record without touching the address -- so `+ New greeting` (a `Link` to
+// `sectionPath`) pointed at the screen already showing and did nothing.
+test("+ New greeting clears the form after a create", async () => {
+  (api.listGreetings as any).mockResolvedValue([]);
+  (api.createGreeting as any) = vi.fn().mockResolvedValue({ id: "new-greeting" });
+  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "new-greeting", name: "New greeting", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  });
+  renderAtUrl("/worlds/w/greetings");
+  fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "New greeting" } });
+  fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/greetings/new-greeting"));
+  await screen.findByRole("button", { name: /^edit$/i });   // opened read-only, not the form
+
+  fireEvent.click(screen.getByRole("link", { name: /new greeting/i }));
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/greetings"));
+  expect(await screen.findByLabelText(/Name/)).toHaveValue("");
 });
 
 test("a ref chip naming a PC opens that PC, and picking PCs from the index clears it", async () => {

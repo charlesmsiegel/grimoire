@@ -114,8 +114,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   /** Bumped when the chip-list editor writes, so the graph re-reads. The two
    *  views draw the same records, and the switch does not wait for a save. */
   const [greetingEpoch, setGreetingEpoch] = useState(0);
-  /** ...and the other way: the graph writes the same edges the chip list holds
-   *  a copy of, and that copy stays mounted behind it. */
+  /** ...and the other way: the graph writes the same edges a record open in
+   *  the chip list already holds a copy of. That record (or a half-written
+   *  draft) stays selected across the switch -- `?view=graph` keeps whatever
+   *  record segment was already in the address -- so it is still there,
+   *  hidden behind the graph, to re-read. */
   const [mapEpoch, setMapEpoch] = useState(0);
   /** True while the chip-list editor is mid-write. Both views send whole edge
    *  arrays, so the map holds still until that save settles. */
@@ -347,13 +350,16 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
 
   /** Which rendering of the greetings the route asks for.
    *
-   *  A record segment forces the list: the graph has no detail pane, so
-   *  `/greetings/tide-watch?view=graph` would be a URL contradicting what it
-   *  renders. Derived rather than held, or the chips and the Back button
-   *  disagree within three clicks -- push ?view=graph, click List, press Back,
-   *  and a graph URL renders the list. */
+   *  Independent of whether a record is also named: the graph draws every
+   *  greeting regardless of `rid`, and a record open in the (hidden) chip
+   *  list when the reader switches to the graph -- a saved one being viewed,
+   *  or a half-written draft -- has to stay open across the switch, so the
+   *  chip's own navigation keeps the record segment and only adds or drops
+   *  `?view=graph`. Derived rather than held, or the chips and the Back
+   *  button disagree within three clicks -- push ?view=graph, click List,
+   *  press Back, and a graph URL would have to render the list. */
   const greetingView: "list" | "graph" =
-    !rid && params.get("view") === "graph" ? "graph" : "list";
+    params.get("view") === "graph" ? "graph" : "list";
 
   if (campaign && !wid) return null;
 
@@ -563,9 +569,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               {([["list", "List"], ["graph", "Plot map"]] as const).map(([key, label]) => (
                 <button key={key} className={"chip" + (greetingView === key ? " on" : "")}
                         aria-pressed={greetingView === key}
-                        onClick={() => navigate(sectionHref(scopeForPaths,
-                          key === "graph" ? { kind: "section", at: "greetings", view: "graph" }
-                                          : { kind: "section", at: "greetings" }))}>{label}</button>
+                        // The current address, not a freshly-built one: whatever record
+                        // segment is already there (or none) survives the switch, and
+                        // only the `?view=graph` query is added or dropped.
+                        onClick={() => navigate(location.pathname
+                          + (key === "graph" ? "?view=graph" : ""))}>{label}</button>
               ))}
             </div>
             {/* Hidden rather than unmounted: the editor holds a half-written
