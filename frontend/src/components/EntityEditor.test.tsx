@@ -266,6 +266,17 @@ test("location rail rows show the primary image when one exists", async () => {
   expect(container.querySelectorAll(".loc-row-img")).toHaveLength(1);
 });
 
+test("the owned-lore panel addresses this location's lore, and pre-owns a new entry under it", async () => {
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "lore"
+      ? [{ id: "the-well", name: "The Well", owners: "locations:warehouse" }] : []));
+  render(<Wrap wid="w" kind="locations" selected="warehouse" />);
+  expect(await screen.findByRole("link", { name: "The Well" }))
+    .toHaveAttribute("href", "/worlds/w/lore/the-well");
+  expect(screen.getByRole("link", { name: /\+ new lore/i }))
+    .toHaveAttribute("href", "/worlds/w/lore?owner=locations%3Awarehouse");
+});
+
 test("location detail shows the primary image header and Images shelf with promote", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "warehouse", name: "Warehouse Nine", has_image: true }]);
   (api.readEntity as any).mockResolvedValue({ meta: { id: "warehouse", name: "Warehouse Nine" }, body: "docks" });

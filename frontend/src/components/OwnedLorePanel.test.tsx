@@ -14,13 +14,12 @@ beforeEach(() => {
   ]);
 });
 
-function show(props: { hrefFor?: (id: string) => string; newHref?: string } = {}) {
+function show() {
   return render(
     <MemoryRouter>
       <OwnedLorePanel scope={{ kind: "world", id: "w" }} ownerRef="characters:tanaka"
                       hrefFor={(id) => `/worlds/w/lore/${id}`}
-                      newHref="/worlds/w/lore?owner=characters%3Atanaka"
-                      {...props} />
+                      newHref="/worlds/w/lore?owner=characters%3Atanaka" />
     </MemoryRouter>,
   );
 }

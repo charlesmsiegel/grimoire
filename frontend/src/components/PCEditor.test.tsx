@@ -158,6 +158,17 @@ test("a selected PC shows a read-only view; Edit reveals the form", async () => 
   expect(container.querySelector("textarea")).not.toBeNull();    // form revealed
 });
 
+test("the owned-lore panel addresses this PC's lore, and pre-owns a new entry under it", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "the-pact", name: "The Pact", owners: "pcs:elara" },
+  ]);
+  renderPCs({ selected: "elara" });
+  expect(await screen.findByRole("link", { name: "The Pact" }))
+    .toHaveAttribute("href", "/worlds/realm/lore/the-pact");
+  expect(screen.getByRole("link", { name: /\+ new lore/i }))
+    .toHaveAttribute("href", "/worlds/realm/lore?owner=pcs%3Aelara");
+});
+
 test("saving the persona returns to the read-only view", async () => {
   const { container } = renderPCs({ selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));

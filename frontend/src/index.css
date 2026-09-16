@@ -1258,8 +1258,14 @@ a.overview-tile { text-decoration: none; }
    inline-block display made `width: 100%` and the vertical padding behave the
    way `.check-row.static`'s comment below describes; an `<a>` defaults to
    inline instead, so it needs the same explicit block along with suppressing
-   the anchor's default underline. */
-a.check-row { display: block; text-decoration: none; }
+   the anchor's default underline. `flex` rather than plain `block`: at the
+   375px floor below, the row's box is taller than its one line of text, and
+   a `<button>` centres that overflow vertically by itself where a block-level
+   `<a>` does not -- `align-items: center` is what actually closes that gap,
+   not `min-height` alone. `width: 100%` above still governs the row's own
+   width either way, so switching to `flex` costs nothing at desktop, where
+   the box is exactly as tall as its content and centring is a no-op. */
+a.check-row { display: flex; align-items: center; text-decoration: none; }
 /* `:not(.static)` rather than a second rule overriding this one: `color:
    inherit` on a static hover would have fought `.ok` below and BRIGHTENED a
    ticked row, which is a hover shift in the other direction, not none. */
@@ -1557,9 +1563,12 @@ a.check-row { display: block; text-decoration: none; }
 .shelf-promote:hover { color: var(--accent); border-color: var(--accent); }
 /* The "open greeting" tile is a Link now; "Set as avatar" and "Add to
    gallery" stay buttons. All three are direct children of `.shelf-tile`
-   (`display: flex`), which blockifies a link the same as a button, so only
-   the anchor default underline needs suppressing. */
-a.shelf-promote { text-decoration: none; }
+   (`display: flex`), which blockifies a link the same as a button -- but a
+   button's UA default `text-align` is `center` and an anchor's is inherited
+   `start`, and `.shelf-tile` is a 96px fixed-width column, wider than this
+   control's own text: without `text-align: center` the label sits flush left
+   instead of centred like the two buttons stacked above it in the same tile. */
+a.shelf-promote { text-decoration: none; text-align: center; }
 .shelf-empty, .shelf-add {
   width: 96px; height: 96px; display: flex; align-items: center; justify-content: center;
   border: 1px dashed var(--rule-soft); background: none; color: var(--muted);
@@ -4635,6 +4644,20 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      the clickable half — a `<button class="chip">`, or the unlinked-version
      row's `<a class="chip">` — owes the floor. */
   button.chip, a.chip { min-height: 44px; }
+  /* The floor above (and `.subtle`'s own, in the 640px block) makes the box
+     taller than a chip's or `.subtle`'s one line of text. A `<button>`
+     centres that overflow vertically by itself; an `<a>` does not -- its
+     text sits at the top of the box instead, which is the same UA-default
+     gap `min-height` alone cannot close. Three sites: a lore/world-greeting
+     chip, the unlinked-version chip (`CharacterGrid.tsx`), and the owned-lore
+     panel's "+ New lore" link -- `span.chip` badges are untouched, since this
+     is element-qualified to `a` the same way the floor above it is.
+     `inline-flex`, not `flex`: `.chip` is always a flex ITEM of `.chips` or
+     `.chip-row` and shrinks to its content regardless of its own display, but
+     `.owned-lore a.subtle` sits in a plain block with nothing to shrink it --
+     a block-level `flex` there stretched it to the full width of the sidebar
+     instead of staying content-sized like the button it replaced. */
+  a.chip, .owned-lore a.subtle { display: inline-flex; align-items: center; justify-content: center; }
   /* Chrome-coloured buttons (the stream's Reroll) never got swept up with
      `.btn-accent` / `.btn-outline` above because they are a third skin, not
      a state of the same one. */
