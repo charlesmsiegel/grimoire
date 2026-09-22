@@ -1172,16 +1172,20 @@ export const api = {
   // one of these per settled keystroke, and the shared-promise cache is keyed
   // on the path — which for a repeated query is the same path, so a result
   // arriving for the query BEFORE an edit-and-undo would be served as the
-  // answer to the current one.
+  // answer to the current one. Being `fresh` is also what makes `signal` safe
+  // here: no other caller can be awaiting this promise, so aborting it settles
+  // it for the one that asked (the hazard `request` describes for shared GETs).
   search: (q: string, opts?: { scope?: string; root?: string; kinds?: string[];
-                               mode?: SearchMode; limit?: number }) => {
+                               mode?: SearchMode; limit?: number },
+           signal?: AbortSignal) => {
     const params = new URLSearchParams({ q });
     if (opts?.scope) params.set("scope", opts.scope);
     if (opts?.root) params.set("root", opts.root);
     if (opts?.kinds?.length) params.set("kinds", opts.kinds.join(","));
     if (opts?.mode) params.set("mode", opts.mode);
     if (opts?.limit) params.set("limit", String(opts.limit));
-    return request<SearchResult>("GET", `/api/search?${params}`, undefined, { fresh: true });
+    return request<SearchResult>("GET", `/api/search?${params}`, undefined,
+                                 { fresh: true, signal });
   },
 
   // scenes

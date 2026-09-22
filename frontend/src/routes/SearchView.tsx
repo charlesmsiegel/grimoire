@@ -164,6 +164,16 @@ function isMode(value: string): value is SearchMode {
  *  for a five-letter word — and the answer to the first four is never shown. */
 const SETTLE_MS = 250;
 
+/** What one search asks — and so what an answer has to have been asked with to
+ *  be shown. `asked` is in it because "ask again" is a different question from
+ *  the one already answered, even when every word of it is the same. */
+type Ask = { q: string; scope: string; kind: string; mode: SearchMode; asked: number };
+
+function sameAsk(a: Ask, b: Ask): boolean {
+  return a.q === b.q && a.scope === b.scope && a.kind === b.kind
+    && a.mode === b.mode && a.asked === b.asked;
+}
+
 /** The library's Ctrl-F (#33): one box over every world and campaign, content
  *  and facts alike.
  *
@@ -195,7 +205,32 @@ export default function SearchView() {
   const [asked, setAsked] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // One sweep in flight at a time, and a queue one deep behind it: `inFlight`
+  // is what the server is working on, `wanted` is what the page is showing
+  // the heading for. The debounce only spaces out the asks; a warm sweep over
+  // a big library still outlasts several of them, and every settle used to
+  // start another sweep beside the ones still running. The server cannot be
+  // told to stop one — the route is a threadpool worker that runs to the end
+  // whether or not anybody is still listening — so aborting the superseded
+  // request would free nothing but the socket. Four overlapping sweeps then
+  // share the CPU and the answer the reader wants arrives last, at several
+  // times the cost of asking for it alone. So a settle while one is out only
+  // records what is wanted, and whatever lands is shown if it is still that
+  // question and otherwise traded straight away for it.
+  const inFlight = useRef<Ask | null>(null);
+  const wanted = useRef<Ask | null>(null);
+  const abort = useRef<AbortController | null>(null);
+
   useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // Leaving the page aborts the one request it has out, so nothing lands on a
+  // page that is gone. `inFlight` is cleared with it because StrictMode
+  // unmounts and remounts in development, and the remount has to be free to
+  // send again rather than wait on an answer this cleanup just threw away.
+  useEffect(() => () => {
+    abort.current?.abort();
+    inFlight.current = null;
+  }, []);
 
   // The URL is the source of truth, so a hit followed and then backed out of
   // restores the box as well as the results.
@@ -234,17 +269,42 @@ export default function SearchView() {
   // which is long enough for one ranking to read as the other's answer.
   useEffect(() => { setResult(null); }, [mode]);
 
+  const send = useCallback(function send(ask: Ask) {
+    inFlight.current = ask;
+    const controller = new AbortController();
+    abort.current = controller;
+    const land = (answer: SearchResult | null) => {
+      if (controller.signal.aborted) return;     // the page it was for is gone
+      inFlight.current = null;
+      const next = wanted.current;
+      // A superseded answer is dropped, never shown: a slow sweep for "sal"
+      // must not land under the heading for "salt". Nor is its failure — the
+      // question it failed on is no longer the one being asked.
+      if (next !== null && sameAsk(next, ask)) {
+        setResult(answer);
+        setFailed(answer === null);
+      } else if (next !== null) {
+        send(next);
+      }
+    };
+    // `fresh`, so this promise is nobody else's and aborting it is safe.
+    api.search(ask.q, { scope: ask.scope, kinds: ask.kind ? [ask.kind] : [], mode: ask.mode },
+               controller.signal)
+      .then(land, () => land(null));
+  }, []);
+
   useEffect(() => {
-    if (!q.trim()) { setResult(null); setFailed(false); return; }
-    // Superseded responses are dropped rather than raced: a slow sweep for
-    // "sal" must not land on top of the answer for "salt".
-    let live = true;
+    if (!q.trim()) {
+      wanted.current = null;
+      setResult(null);
+      setFailed(false);
+      return;
+    }
+    const ask: Ask = { q, scope, kind, mode, asked };
+    wanted.current = ask;
     setFailed(false);
-    api.search(q, { scope, kinds: kind ? [kind] : [], mode })
-      .then((r) => { if (live) setResult(r); })
-      .catch(() => { if (live) { setResult(null); setFailed(true); } });
-    return () => { live = false; };
-  }, [q, scope, kind, mode, asked]);
+    if (inFlight.current === null) send(ask);
+  }, [q, scope, kind, mode, asked, send]);
 
   const facets = result?.facets ?? {};
   const scopes = result?.scopes ?? {};

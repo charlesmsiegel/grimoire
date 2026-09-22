@@ -907,6 +907,15 @@ test("two searches for the same query are two requests, not one shared read", as
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
+test("a search can be aborted by the page that asked for it", async () => {
+  // Safe only because a search is `fresh`: the promise is nobody else's.
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ hits: [] }));
+  globalThis.fetch = fetchMock;
+  const controller = new AbortController();
+  await api.search("salt", {}, controller.signal);
+  expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal);
+});
+
 
 test("setCharacterName PUTs the rename under whichever scope is open", async () => {
   // Scope-aware on purpose (#13): the Name field is editable in campaign scope
