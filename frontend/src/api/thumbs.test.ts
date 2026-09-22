@@ -26,3 +26,9 @@ test("the buckets are the ones the server serves", () => {
   // test_thumbs.py holds to include each of these.
   expect(Object.values(THUMB)).toEqual([128, 256, 512, 1024]);
 });
+
+test("sizes and srcset come before src, the order an <img> must receive them", () => {
+  // Spread onto an element, these land as attributes in key order (React 18),
+  // and an engine that fetches as `src` lands picks with whatever it has then.
+  expect(Object.keys(thumbSet(url, "120px"))).toEqual(["sizes", "srcSet", "src"]);
+});

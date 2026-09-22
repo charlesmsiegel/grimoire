@@ -390,9 +390,10 @@ test("location with a primary image renders a clickable thumbnail", async () => 
   renderInspector();
   const thumb = await screen.findByAltText("The Crypt");
   expect(thumb.closest("button")).not.toBeNull();
-  // A downscale the column's width picks, never the original.
-  expect(thumb.getAttribute("src")).toBe("/loc-img?w=512");
-  expect(thumb.getAttribute("srcset")).toContain("/loc-img?w=1024 682w");
+  // The original: the panel draws this at the main column's full width, past
+  // what the largest `?w=` bucket fills, so a downscale here is a blur.
+  expect(thumb.getAttribute("src")).toBe("/loc-img");
+  expect(thumb.getAttribute("srcset")).toBeNull();
   await waitFor(() => expect(api.listEntityImages).toHaveBeenCalledWith(
     { kind: "campaign", id: "c" }, "locations", "crypt"));
 });

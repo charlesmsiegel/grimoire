@@ -217,7 +217,6 @@ test("the page draws its art as downscales and keeps the original where it is lo
 });
 
 // ------------------------------------------------------------ editing inline
-// ------------------------------------------------------------ editing inline
 
 test("Edit swaps one field for a textarea and Save writes the card back", async () => {
   await renderWorld();

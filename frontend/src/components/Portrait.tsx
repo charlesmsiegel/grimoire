@@ -27,8 +27,10 @@ export function Portrait({ src, name, focus }:
     return <span className="portrait-initials" aria-hidden>{initialsOf(name)}</span>;
   }
   const set = typeof src === "string" ? { src } : src;
-  return <img className="portrait" alt={`${name} portrait`} {...set}
-              loading="lazy" decoding="async"
+  // `loading` ahead of the spread: React sets attributes in prop order, and
+  // Firefox ignores a `loading="lazy"` that arrives after `src`.
+  return <img className="portrait" alt={`${name} portrait`} loading="lazy" decoding="async"
+              {...set}
               style={focus == null ? undefined : { objectPosition: `${focus}% ${focus}%` }}
               onError={() => setBroken(true)} />;
 }

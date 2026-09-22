@@ -42,6 +42,18 @@ test("a thumbSet renders as src, srcset and sizes", () => {
   expect(img.getAttribute("sizes")).toBe("120px");
 });
 
+test("loading, sizes and srcset reach the element before src does", () => {
+  // Attributes are set in prop order. Firefox ignores a `loading="lazy"` set
+  // after `src`, and an engine that fetches as `src` lands picks without the
+  // srcset -- so a portrait that set `src` first was neither lazy nor sized.
+  render(<Portrait src={set()} name="Mara" />);
+  const names = screen.getByAltText("Mara portrait").getAttributeNames();
+  const at = (n: string) => names.indexOf(n);
+  expect(at("loading")).toBeLessThan(at("src"));
+  expect(at("sizes")).toBeLessThan(at("src"));
+  expect(at("srcset")).toBeLessThan(at("src"));
+});
+
 test("a broken thumbSet stays initials across renders that rebuild it", () => {
   // The set is a fresh object every render. Keyed on the object, the reset
   // effect would clear `broken` straight after the error set it, and a 404ing

@@ -51,12 +51,20 @@ export type ThumbSet = { src: string; srcSet: string; sizes: string };
  *  (a full-width card on a DPR-3 phone) gets it and is drawn a little under
  *  device resolution. The original is never a candidate -- a `srcset` cannot
  *  describe a width nobody measured, and a list thumbnail is not where the
- *  reader goes to look at the picture itself. */
+ *  reader goes to look at the picture itself. A slot routinely wider than
+ *  that (the inspector's location picture) keeps the original instead.
+ *
+ *  The keys are in the order they must reach the element: spread onto an
+ *  `<img>`, React 18 sets attributes in prop order, and an engine that starts
+ *  a fetch as `src` lands (WebKit) picks with whatever `sizes`/`srcset` it
+ *  has by then -- fetching the fallback, or a 100vw pick, and then the right
+ *  one. For the same reason `loading="lazy"` goes BEFORE the spread (Firefox
+ *  ignores a `loading` set after `src`). */
 export function thumbSet(url: (w: Thumb) => string, sizes: string,
                          src: Thumb = THUMB.tile): ThumbSet {
   return {
-    src: url(src),
-    srcSet: BUCKETS.map((w) => `${url(w)} ${coverWidth(w)}w`).join(", "),
     sizes,
+    srcSet: BUCKETS.map((w) => `${url(w)} ${coverWidth(w)}w`).join(", "),
+    src: url(src),
   };
 }

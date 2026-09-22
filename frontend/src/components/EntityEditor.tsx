@@ -894,8 +894,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
           {ownersOf(e).map((ref) => {
             const o = ownerOpts.find((x) => x.ref === ref);
             return o?.avatar ? (
-              <img key={ref} className="owner-stack-img" alt="" title={o.label} src={o.avatar}
-                   loading="lazy" decoding="async"
+              <img key={ref} className="owner-stack-img" alt="" title={o.label}
+                   loading="lazy" decoding="async" src={o.avatar}
                    onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
             ) : null;
           })}
