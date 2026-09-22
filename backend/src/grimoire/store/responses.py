@@ -46,7 +46,18 @@ def _read(cid):
 
 
 def _write(cid, data):
-    atomic.write_text(_path(cid), json.dumps(data, ensure_ascii=False, indent=2))
+    # Compact, because this file is campaign-wide and rewritten WHOLE several
+    # times a turn (open a round, prepare, save the variant, close the round),
+    # each while holding the campaign lock every other writer queues on.
+    # `indent` pads it with whitespace nobody reads and, on the CPython
+    # versions this runs on, is also what sends `json.dumps` down the
+    # pure-Python encoder instead of the C one -- the dearer of the two. Still
+    # plain JSON, so a build that wrote it indented and one that writes it
+    # compact read each other's files. `ensure_ascii=False` stays: escaping
+    # the prose's non-ASCII punctuation would hand the bytes straight back.
+    atomic.write_text(
+        _path(cid), json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def _scope(cid, sid, data):
