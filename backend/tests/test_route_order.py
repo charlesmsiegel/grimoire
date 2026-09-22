@@ -15,9 +15,14 @@ here.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import pkgutil
 
+import pytest
+from fastapi import APIRouter
+
+from grimoire import routes
 from grimoire.main import app
 from grimoire.routes import entities, router
 
@@ -244,3 +249,41 @@ def test_every_domain_router_is_composed():
                 f"{mod.__name__} route {route.path} is not in the composed router"
     assert found >= 10, f"only found {found} domain routers; did the package move?"
     assert len(router.routes) > 0
+
+
+def test_domain_routes_are_composed_by_reference_not_rebuilt():
+    """`routes.__init__` moves each domain's route objects into the aggregate
+    rather than `include_router`-ing them. On FastAPI < 0.116 -- the Android
+    pin -- every `include_router` re-analyses each route it copies (signature,
+    dependencies, response model), so an aggregate of includes paid for the
+    whole API a second time at every cold start, before the app's own include
+    paid a third. Checked by identity, so a reverted loop fails here on every
+    FastAPI and not only on the one where it costs; the order is the business
+    of the tests above."""
+    originals = set()
+    for info in pkgutil.iter_modules(routes.__path__):
+        sub = getattr(importlib.import_module(f"{routes.__name__}.{info.name}"), "router", None)
+        if sub is not None:
+            originals.update(id(r) for r in sub.routes)
+    composed = [id(r) for r in router.routes]
+    assert len(composed) == len(set(composed)), "a route object is composed twice"
+    assert set(composed) == originals, (
+        "the aggregate holds route objects no domain router declared -- "
+        "copies, or include wrappers")
+
+
+@pytest.mark.parametrize("kwargs", ["on_startup", "on_shutdown", "lifespan"])
+def test_a_domain_router_that_needs_include_router_is_refused(kwargs):
+    """What composing by reference would silently drop -- a router's own event
+    handlers and lifespan, the only things `include_router` copies off the
+    router itself -- is refused loudly instead. (Refused before anything is
+    appended, so this leaves the real aggregate alone.)"""
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        yield
+
+    arg = {"lifespan": lifespan} if kwargs == "lifespan" else {kwargs: [lambda: None]}
+    before = len(routes.router.routes)
+    with pytest.raises(RuntimeError, match="include_router"):
+        routes._compose(APIRouter(**arg))
+    assert len(routes.router.routes) == before
