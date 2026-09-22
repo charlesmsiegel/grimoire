@@ -113,6 +113,41 @@ def test_a_copied_scene_with_a_duplicate_identity_is_re_minted_next_boot(
     assert store.scenes.find_by_identity(cid, ib) == copy.stem
 
 
+@pytest.mark.skipif(os.name == "nt", reason="st_ctime is the creation time on Windows")
+def test_a_directory_whose_mtime_was_put_back_is_still_rescanned(tmp_path, monkeypatch):
+    """A tool that changes a directory's entries and then restores its mtime --
+    `rsync -a` or `cp -a` over the top, a sync client that preserves directory
+    times -- leaves mtime and inode exactly as recorded. ctime is the part of
+    the signature that still moves, because nothing outside the kernel can set
+    it, so the copied-in duplicate is re-minted all the same."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    a = store.scenes.create_scene(cid, "Mara")
+    d = _scenes_dir(cid)
+    _age(d)
+    migrations.backfill_scene_identities()
+    assert cid in _marks(tmp_path)
+    recorded = d.stat()
+
+    copy = d / "0099--copy-of-mara.md"
+    shutil.copyfile(d / f"{a}.md", copy)
+    # `utime` stamps ctime with the kernel's clock, which ticks coarsely: repeat
+    # it until the tick has passed rather than hoping the steps above took long
+    # enough.
+    deadline = time.monotonic() + 2.0
+    os.utime(d, ns=(recorded.st_atime_ns, recorded.st_mtime_ns))
+    while d.stat().st_ctime_ns == recorded.st_ctime_ns and time.monotonic() < deadline:
+        os.utime(d, ns=(recorded.st_atime_ns, recorded.st_mtime_ns))
+    now = d.stat()
+    assert (now.st_mtime_ns, now.st_ino) == (recorded.st_mtime_ns, recorded.st_ino)
+    assert now.st_ctime_ns != recorded.st_ctime_ns, "the premise: utime moves ctime"
+
+    migrations.backfill_scene_identities()
+
+    ia, ib = store.scenes.scene_identity(cid, a), store.scenes.scene_identity(cid, copy.stem)
+    assert ia and ib and ia != ib
+
+
 def test_a_scenes_dir_inside_the_racy_window_is_not_recorded(tmp_path, monkeypatch):
     """A directory touched within the timestamp granularity may be touched
     again without its mtime moving, so a signature taken then cannot vouch for
