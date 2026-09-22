@@ -779,9 +779,9 @@ def test_the_heading_is_expanded_before_the_body_it_sits_above(monkeypatch, tmp_
     seen: list[str] = []
     real = context_macros.expand_macros
 
-    def spy(text, subs, cid_, sid_):
+    def spy(text, subs, cid_, sid_, **kwargs):
         seen.append(text)
-        return real(text, subs, cid_, sid_)
+        return real(text, subs, cid_, sid_, **kwargs)
 
     monkeypatch.setattr(context_macros, "expand_macros", spy)
     context.build_messages(cid, sid)

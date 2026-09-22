@@ -154,8 +154,7 @@ def get_dismissed(cid: str, sid: str) -> list[str]:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         return []
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return [x for x in meta.get("dismissed", "").split(",") if x]
+    return [x for x in parse_frontmatter_head(p).get("dismissed", "").split(",") if x]
 
 
 def trailing_transitions(messages: list[dict]) -> int:
@@ -200,11 +199,13 @@ def get_time_history(cid: str, sid: str) -> list[str]:
 
 
 def _history(cid: str, sid: str, which: str) -> list[str]:
+    # The header block only, as `_scene_row` reads the same two lines for the
+    # scenes list: the histories live in the frontmatter, and a whole-file read
+    # made each call cost the transcript's length.
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         return []
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return histories(meta)[which]
+    return histories(parse_frontmatter_head(p))[which]
 
 
 def rolling_summary_fields(meta: dict) -> dict:

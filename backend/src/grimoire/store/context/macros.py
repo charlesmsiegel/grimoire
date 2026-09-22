@@ -63,12 +63,16 @@ _ROLL_MACRO = re.compile(r"\{\{roll:([^{}]*)\}\}", re.IGNORECASE)
 _MACRO_TOKEN = re.compile(r"\{\{[^{}]*\}\}")
 
 
-def _datetime_subs(cid: str, sid: str) -> dict[str, str]:
+def _datetime_subs(cid: str, sid: str, times: list[str] | None = None) -> dict[str, str]:
     """{{date}}/{{weekday}}/{{time}} from the scene's current native datetime, via
     the campaign's primary calendar. {} when the scene has no time yet or the
     stored datetime no longer parses -- _substitute then leaves the tokens
-    literal for _strip_unknown_macros to drop."""
-    history = scenes_read.get_time_history(cid, sid)
+    literal for _strip_unknown_macros to drop.
+
+    `times` is the scene's time history when the caller already holds it (the
+    assembler, from the scene it read under the lock); otherwise it is read
+    from the scene's frontmatter here."""
+    history = scenes_read.get_time_history(cid, sid) if times is None else times
     if not history:
         return {}
     native = history[-1]
@@ -108,15 +112,26 @@ def _strip_unknown_macros(text: str) -> str:
     return _MACRO_TOKEN.sub(repl, text)
 
 
-def expand_macros(text: str, subs: dict[str, str], cid: str, sid: str) -> str:
+def expand_macros(text: str, subs: dict[str, str], cid: str, sid: str, *,
+                  datetime_subs: dict[str, str] | None = None) -> str:
     """The single choke point all prompt text flows through: `subs` ({{user}}/
     {{char}}, caller-supplied) plus {{date}}/{{time}}/{{weekday}} (scene calendar)
     substitute literally; {{random:a,b,...}} and {{roll:<dice.py notation>}} expand
     per-occurrence (dice.py's full grammar -- NdM, keep/drop, exploding, pools,
     vs-target); anything left over is an unresolved macro and gets dropped so raw
     tokens never reach the model -- except {{user}}/{{char}}, which stay literal
-    per _substitute's existing contract."""
-    text = _substitute(text, {**subs, **_datetime_subs(cid, sid)})
+    per _substitute's existing contract.
+
+    `datetime_subs` is `_datetime_subs(cid, sid)` computed once by a caller that
+    expands many strings of one scene. Resolving it here costs a read of the
+    scene file, and the assembler expands every history message and every
+    section -- so per call it made one compose O(messages x scene size) in IO,
+    for an answer that cannot change within the compose. Left out, it is still
+    resolved here, and only for text that could use it: every token it supplies
+    is a `{{...}}` macro."""
+    if datetime_subs is None:
+        datetime_subs = _datetime_subs(cid, sid) if "{{" in text else {}
+    text = _substitute(text, {**subs, **datetime_subs})
     text = _expand_random(text)
     text = _expand_rolls(text)
     return _strip_unknown_macros(text)
