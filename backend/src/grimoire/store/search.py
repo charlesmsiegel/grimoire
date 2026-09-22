@@ -105,13 +105,26 @@ MAX_LIMIT = 200
 #: what a sweep holds in memory (whole flattened transcripts) inside a budget
 #: that can be reasoned about on its own.
 #:
-#: That budget is `statcache.MAX_ENTRIES`, and it is a cliff rather than a
-#: gradient: a store holding more files than that evicts in the same order it
-#: walks, so the entry evicted is always the one the next query wants first and
-#: the hit rate collapses to roughly zero. Search still answers correctly —
-#: it degrades to the cost of a first query, which is the O(corpus) this design
-#: already signs up for — but the memo stops helping entirely rather than
-#: helping less. A store that large is the one that wants the FTS5 index.
+#: The budget is `POOL_ENTRIES`, and the size of it matters more than it
+#: looks, because the FIFO is a cliff rather than a gradient: a store holding
+#: more files than the budget evicts in the same order it walks, so the entry
+#: evicted is always the one the next query wants first and the hit rate
+#: collapses to roughly zero. Search still answers correctly -- it degrades to
+#: the cost of a first query, the O(corpus) this design signs up for -- but
+#: the memo stops helping entirely rather than helping less. That is what the
+#: shared default of 4096 did to any library past a few thousand files.
+#:
+#: So the pool is sized above any plausible corpus instead, mirroring
+#: `scenes.read.POOL_ENTRIES`, and what that costs is memory held for the
+#: process's life: every file's flattened text, which for a transcript-heavy
+#: library is most of its prose. In practice the resident set came out no
+#: higher than under the old budget, because a cold sweep already reads and
+#: flattens every file and the process keeps that high-water mark either way
+#: -- so the cliff was costing the time without saving the memory. It is still
+#: a real resident set on a phone, and a library that outgrows even this
+#: budget, or cannot afford to hold it, is the one that wants the FTS5 index
+#: rather than a bigger number here.
+POOL_ENTRIES = 65_536
 _POOL: dict = {}
 
 #: How much text a snippet shows, and how much of it sits before the match.
@@ -259,7 +272,8 @@ def _doc(reader, path: Path) -> tuple[str, str, str] | None:
     sig = statcache.signature(path)
     if sig is None:
         return None
-    return statcache.memo(f"search:{reader.__name__}", sig, lambda: reader(path), pool=_POOL)
+    return statcache.memo(f"search:{reader.__name__}", sig, lambda: reader(path),
+                          pool=_POOL, max_entries=POOL_ENTRIES)
 
 
 def _s(value, fallback: str = "") -> str:

@@ -395,6 +395,29 @@ def test_a_search_does_not_evict_the_shared_stat_cache(world):
     assert search._POOL, "the sweep memoized nothing at all"
 
 
+def test_a_library_bigger_than_the_shared_budget_is_still_remembered_whole(world, monkeypatch):
+    """The pool's FIFO is a cliff: a corpus one file larger than the budget
+    evicts in walk order, so every repeat query re-reads everything. The
+    budget is search's own, sized above the corpus, rather than the shared
+    cache's -- shrunk here so the test does not need thousands of files."""
+    from grimoire.store import statcache
+    _, root = world
+    for n in range(12):
+        entities.create_entity(root, "lore", f"Brine {n}", body="brine")
+    for path in root.rglob("*"):
+        if path.is_file():
+            os.utime(path, (0, 0))
+    monkeypatch.setattr(statcache, "MAX_ENTRIES", 4)
+    monkeypatch.setattr(search, "_POOL", {})
+    search.search("brine")
+
+    reads = []
+    real = search._read_text
+    monkeypatch.setattr(search, "_read_text", lambda p: reads.append(p) or real(p))
+    assert search.search("brine")["total"] == 12
+    assert reads == [], "a repeat query over an unchanged library re-reads nothing"
+
+
 def test_case_folding_is_the_store_s_rule_not_lowercasing(world):
     """`"Straße".lower()` is `"straße"`, so a lower-cased search for "strasse"
     misses the record entirely. `casefold` maps both to "strasse" — the rule
