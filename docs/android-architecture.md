@@ -118,8 +118,12 @@ android/                          ← new top-level Gradle project
 ```
 
 - **`android_entry.py`** sets `HOME` (store root, §Storage), `GRIMOIRE_TEMPLATES`
-  and `GRIMOIRE_DIST` (§6), binds uvicorn to `127.0.0.1:0`, and reports the
-  OS-assigned port back to Kotlin via a callback so the WebView knows what to load. Binding to loopback only
+  and `GRIMOIRE_DIST` (§6), binds a loopback socket *before* importing the app,
+  and reports its port back to Kotlin via a callback so the WebView knows what to
+  load. The port is drawn once per install and recorded beside the store, so the
+  WebView's origin -- and with it its HTTP cache and localStorage -- survives a
+  relaunch; it falls back to an OS-assigned port for a launch where another app
+  holds it. Binding to loopback only
   means nothing on the network can reach the server; a per-boot random bearer token
   appended by the shell and checked by a middleware is a cheap hardening step if we
   ever care about other apps on the same device probing localhost.
