@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from pathlib import Path
 
 from . import (
@@ -16,6 +18,7 @@ from . import (
     overlay,
     scene_ids,
     scene_refs,
+    statcache,
     steering,
     worlds,
 )
@@ -44,37 +47,142 @@ def migrate_scene_ids() -> None:
 
 def backfill_scene_identities() -> None:
     """Give every pre-feature scene an identity. Idempotent: a scene that has
-    one is skipped, so re-running costs a read per scene.
+    one is skipped, so re-running costs a read per scene -- and a campaign
+    whose scenes directory has not moved since a pass that found nothing to do
+    is skipped whole, so the steady state costs a stat per campaign rather than
+    a head-read per scene in the library (see `_identity_marks_path`). This runs
+    before the server accepts its first connection -- on Android the WebView's
+    first page waits on it too -- so a read per scene was paid on every launch.
 
     Assigning only at creation would be worse than nothing -- an old scene and a
     replacement that recycled its `sid` would both present the same absent
     value, so the publish fence would compare None with None, pass, and let the
     corruption it exists to prevent through while reading as solved.
     """
+    marks = _read_identity_marks()
+    settled: dict[str, list[int]] = {}
     for c in campaigns_read.list_campaigns():
+        cid = c["id"]
+        before = _scenes_signature(cid)
+        if before is not None and marks.get(cid) == before:
+            settled[cid] = before
+            continue
         # Per campaign, not per pass. `main._lifespan` catches StoreBusy around
         # the whole startup step, so letting it out of this loop abandons every
         # campaign after the contended one -- they would wait for another
         # startup or a scene-specific lazy repair while the log named only one.
         # Contention on one campaign says nothing about the next.
         try:
-            _backfill_campaign(c["id"])
+            clean = _backfill_campaign(cid)
         except locks.StoreBusy as exc:
             _log.warning("identity backfill skipped for %s -- %s; it will be "
-                         "retried on the next start", c["id"], exc)
+                         "retried on the next start", cid, exc)
+            continue
         except OSError as exc:
             # Enumeration itself can fail -- `glob()` raises if the directory
             # cannot be listed, on a permissions problem or a synced folder
             # mid-error -- and that happens BEFORE any per-scene handler. The
             # startup hook catches only StoreBusy, so an OSError escaping here
             # stops the app launching at all.
-            _log.warning("identity backfill skipped for %s -- %s", c["id"], exc)
+            _log.warning("identity backfill skipped for %s -- %s", cid, exc)
+            continue
+        if clean and before is not None and _may_record(before, _scenes_signature(cid)):
+            settled[cid] = before
+    # Only when it changed: a boot with nothing new to say writes nothing, and
+    # a deleted campaign drops out here rather than accumulating.
+    if settled != marks:
+        _write_identity_marks(settled)
 
 
-def _backfill_campaign(cid: str) -> None:
+def _identity_marks_path() -> Path:
+    """Per campaign, the scenes directory's signature as of the last pass that
+    found every scene already carrying a unique identity.
+
+    What makes a matching signature proof that nothing needs doing: every way
+    a scene file can arrive or leave -- created, deleted, renamed, copied in by
+    hand, restored, landed by a sync client, and every atomic write this app
+    makes, which renames a temp over its target -- changes a directory entry,
+    and that moves the directory's mtime. `st_ino` rides along for the one
+    thing that does not, a whole scenes directory swapped for a copy (`cp -a`,
+    a restore) carrying its old mtime; `st_ctime_ns` for a permission change,
+    because `Path.glob` reads an unlistable directory as an empty one, and a
+    pass over it must not stay recorded as "nothing to do" once a chmod makes
+    its scenes visible.
+
+    What it cannot see is a foreign tool rewriting a transcript IN PLACE --
+    an editor that truncates and writes rather than replacing -- and stripping
+    or duplicating its identity. That state was already reachable for a file
+    edited mid-session, and a missing identity is repaired lazily
+    (`ensure_identity`) when a run reserves the scene.
+
+    Under `.cache` because it is derived and deletable at any moment, and
+    excluded from backups with the rest of that directory: a missing or corrupt
+    record costs one full pass, which is what every boot cost before it
+    existed. On a library shared through a synced folder another machine's
+    inodes never match, so each machine rescans at that same cost rather than
+    ever skipping wrongly.
+    """
+    return home() / ".cache" / "scene-identities.json"
+
+
+def _read_identity_marks() -> dict:
+    """The recorded signatures, or {} -- quietly. Not through `failsoft`: that
+    module is for readers whose empty answer ADDS content, and an empty record
+    here only costs a full pass, which is the case its docstring says stays
+    silent."""
+    try:
+        data = json.loads(_identity_marks_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):     # ValueError covers JSON and UTF-8 decoding
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_identity_marks(settled: dict[str, list[int]]) -> None:
+    """Replace the record. A store this process cannot write to is not a reason
+    to fail a boot over an optimization: the next start simply rescans."""
+    path = _identity_marks_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic.write_text(path, json.dumps(settled, sort_keys=True))
+    except OSError as exc:
+        _log.warning("could not record the identity backfill -- %s; the next "
+                     "start will rescan every campaign", exc)
+
+
+def _scenes_signature(cid: str) -> list[int] | None:
+    """`[st_mtime_ns, st_ctime_ns, st_ino]` of the campaign's scenes directory,
+    or None if it has none -- nothing to backfill, and nothing worth recording.
+    A list rather than a tuple because it is compared with what JSON returns."""
+    try:
+        st = scenes_paths._scenes_dir(cid).stat()
+    except OSError:
+        return None
+    return [st.st_mtime_ns, st.st_ctime_ns, st.st_ino]
+
+
+def _may_record(before: list[int], after: list[int] | None) -> bool:
+    """Whether a pass bracketed by these two signatures may be recorded.
+
+    Only if the directory did not move while the pass ran -- one that minted
+    anything rewrote a transcript, and one that raced another writer saw a
+    directory that is already different -- and only once `before`'s mtime is
+    older than the racy window. A directory touched within the filesystem's
+    timestamp granularity can be touched again without its mtime changing, so a
+    signature taken then cannot vouch for what comes after it: the rule
+    `statcache.memo` applies to the files it memoizes.
+    """
+    return after == before and time.time_ns() - before[0] > statcache.RACY_WINDOW_NS
+
+
+def _backfill_campaign(cid: str) -> bool:
     """One campaign's pass, the whole thing under its lock like
     `_migrate_campaign` -- a second backend serving this campaign must not be
-    read-modify-writing the same scene files underneath us."""
+    read-modify-writing the same scene files underneath us.
+
+    Returns whether it left no scene behind. One it had to skip keeps the
+    campaign out of the watermark, or the next boot would skip it too and a
+    retry would become a permanent omission."""
+    clean = True
     with locks.campaign_lock(cid):
         seen: set[str] = set()
         for sid in _scene_ids(cid):
@@ -101,8 +209,10 @@ def _backfill_campaign(cid: str) -> None:
             except OSError as exc:
                 _log.warning("identity backfill skipped for scene %s in %s -- %s",
                              sid, cid, exc)
+                clean = False
                 continue
             seen.add(token)
+    return clean
 
 
 def _scene_ids(cid: str) -> list[str]:

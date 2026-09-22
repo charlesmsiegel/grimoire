@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -73,6 +74,31 @@ _DERIVED = ".cache"
 #: (Codex review). Named here rather than imported, for the reason `_DERIVED`
 #: is: this module must not depend on every module that keeps scratch space.
 _STAGING = (".world-staging", ".module-staging")
+
+#: Suffixes whose bytes are already compressed, so a member is STORED rather
+#: than deflated. Deflate finds nothing left to remove in a JPEG, and a portrait
+#: is megabytes where the record beside it is kilobytes of text -- so wherever a
+#: library has art, deflating it was most of a backup's CPU spent saving a
+#: fraction of a percent. Matched case-insensitively on the suffix alone: a
+#: mislabelled file costs only a less compact member either way, and stored and
+#: deflated members side by side are standard zip.
+_COMPRESSED = frozenset({
+    ".jpg", ".jpeg", ".png", ".webp", ".gif",
+    ".zip", ".epub", ".woff", ".woff2", ".mp3", ".ogg", ".mp4",
+})
+#: Text is deflated at level 1: markdown and JSON compress well at every
+#: level, and level 1 is several times faster than the default for a few
+#: percent more size.
+_TEXT_LEVEL = 1
+
+#: How long a temp of one of our archives may sit untouched before a later
+#: backup deletes it as abandoned. A build in progress rewrites its temp
+#: continuously, so its mtime is never more than moments old; an hour -- the
+#: scheduler's own tick, `main.BACKUP_TICK_SECONDS` -- is far outside that and
+#: says the writer is gone. It
+#: is not zero because the lock that excludes a concurrent backup is
+#: per-machine, and a second machine sharing this folder can own a live one.
+_STALE_TEMP_AGE = timedelta(hours=1)
 
 _log = logging.getLogger(__name__)
 
@@ -145,11 +171,62 @@ def _is_backup_artifact(name: str) -> bool:
         name.startswith(f".{_PREFIX}") and name.endswith(".tmp"))
 
 
+def _is_abandoned_temp(path: Path, cutoff: float) -> bool:
+    """A temp one of our archives was being built into, last written before
+    `cutoff` (seconds since the epoch).
+
+    Recognized by both halves of its name, because the backup directory is one
+    a user can point anywhere -- the store root, where every atomic write
+    parks its temps, or a folder of their own: `atomic.is_write_temp` for the
+    shape `streaming_write` gives it, and `_NAME_RE` for the archive name it
+    embeds. A `.grimoire-notes.tmp` is neither, and is not ours to delete."""
+    name = path.name
+    if not (atomic.is_write_temp(path) and _NAME_RE.match(name[1:].rsplit(".", 2)[0])):
+        return False
+    try:
+        return path.stat().st_mtime < cutoff
+    except OSError:
+        return False                            # vanished, or unreadable: leave it be
+
+
+def _sweep_abandoned_temps(directory: Path) -> None:
+    """Delete what backups killed mid-zip left behind.
+
+    `atomic.streaming_write` never publishes an interrupted archive, which is
+    what keeps a listing honest -- but a process killed outright (the app
+    closed mid-backup, a phone reclaiming memory) never reaches its cleanup,
+    and the temp it leaves is the size of the whole library. Nothing lists it
+    and nothing else would remove it, so each kill used to cost that much disk
+    for good.
+
+    Best effort: litter that will not delete is not a reason to have no
+    backup, so a failure here is logged and the archive goes ahead."""
+    cutoff = time.time() - _STALE_TEMP_AGE.total_seconds()
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return                                  # no directory yet, or unlistable: nothing to do
+    for path in entries:
+        if not _is_abandoned_temp(path, cutoff):
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            _log.warning("could not remove abandoned backup temp %s -- %s", path.name, exc)
+
+
 def _store_file(z: zipfile.ZipFile, path: Path, arcname: str) -> None:
     """One member. Its own function so the failure policy above is testable:
     what happens when a file in the store cannot be read is a decision, and a
-    decision needs a seam to exercise it."""
-    z.write(path, arcname)
+    decision needs a seam to exercise it.
+
+    Stored or deflated by suffix -- see `_COMPRESSED`."""
+    if path.suffix.lower() in _COMPRESSED:
+        z.write(path, arcname, compress_type=zipfile.ZIP_STORED)
+    else:
+        z.write(path, arcname, compress_type=zipfile.ZIP_DEFLATED, compresslevel=_TEXT_LEVEL)
 
 
 def _walk_error(exc: OSError) -> None:
@@ -270,6 +347,9 @@ def create_backup(when: datetime | None = None) -> Path:
         # walk's own check, and the sweep that follows -- each a fresh config
         # read silently assumed to agree with the others.
         directory = backup_dir()
+        # Before allocating, under the lock: no backup this machine runs can be
+        # mid-build while it is held, and the age test covers another's.
+        _sweep_abandoned_temps(directory)
         target = _allocate(directory, _utc(when))
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic.streaming_write(target) as fh:

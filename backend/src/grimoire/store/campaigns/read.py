@@ -301,8 +301,21 @@ def best_stamp(*candidates: str) -> str:
     Callers pass *every* scene stamp, not the newest -- `list_scenes` sorts by
     the very field that may be bogus, so element zero is only the latest if the
     sort key was trustworthy, which is the thing in question.
+
+    A running max that validates only a candidate which would RAISE it, rather
+    than validating everything and taking the max after. The answer is the
+    same -- a candidate at or below the best believable stamp so far cannot
+    become the answer whether or not it is believable -- but validation is two
+    `strptime`s and a clock read, and `GET /campaigns` calls this over every
+    scene in the library. Handed stamps newest first, as the listing does,
+    that comes to a handful of validations per campaign instead of one per
+    scene.
     """
-    return max((c for c in candidates if _valid_stamp(c)), default="")
+    best = ""
+    for c in candidates:
+        if c > best and _valid_stamp(c):
+            best = c
+    return best
 
 
 def read_activity(cid: str) -> str:

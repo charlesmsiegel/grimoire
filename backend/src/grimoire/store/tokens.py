@@ -18,8 +18,11 @@ now. A leaf that imports nothing but `statcache` is what lets both have it;
 
 from __future__ import annotations
 
-import functools
+import logging
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 from . import statcache
 
@@ -32,12 +35,63 @@ except Exception:  # noqa: BLE001 - an unimportable build must degrade, not brea
     # build escape a module-level import and take the store facade with it.
     tiktoken = None
 
+_log = logging.getLogger(__name__)
 
-@functools.lru_cache(maxsize=1)
+#: How long a failed encoder load is believed before it is tried again.
+#: Ten minutes: long enough that a turn's assembly -- hundreds of counts --
+#: pays for at most one attempt, short enough that a laptop which was offline
+#: at its first turn gets exact counts back without a restart.
+RETRY_AFTER_S = 600.0
+
+
+class _Loader:
+    """The encoder, loaded once -- and a failure to load it, remembered.
+
+    `get_encoding` fetches its BPE file over the network the first time and
+    caches it on disk, so the failure worth planning for is the offline first
+    run. `functools.lru_cache`, which this replaced, caches a return value and
+    never a raise: every `count_tokens` call re-attempted the download, and
+    assembling one turn makes hundreds of them -- seconds added to every turn
+    offline, and a connect timeout per call on a network that drops packets
+    rather than refusing them. Now a failure is paid once, answered by the
+    heuristic until `RETRY_AFTER_S` has passed, and then tried again.
+
+    The lock makes "once" true under the threadpool as well: concurrent first
+    counters wait for the one load rather than each starting their own.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._encoding: Any = None
+        self._failed_at: float | None = None
+
+    def get(self) -> Any:
+        if self._encoding is not None or tiktoken is None:
+            return self._encoding
+        with self._lock:
+            if self._encoding is not None:
+                return self._encoding
+            if (self._failed_at is not None
+                    and time.monotonic() - self._failed_at < RETRY_AFTER_S):
+                return None
+            try:
+                self._encoding = tiktoken.get_encoding("cl100k_base")
+            except Exception as exc:  # noqa: BLE001 - any failure means the heuristic, see count_tokens
+                self._failed_at = time.monotonic()
+                _log.warning("tiktoken could not load its encoding -- %s; counting "
+                             "tokens by length for the next %d minutes",
+                             exc, RETRY_AFTER_S // 60)
+            return self._encoding
+
+
+_loader = _Loader()
+
+
 def _encoder():
-    if tiktoken is None:
-        return None
-    return tiktoken.get_encoding("cl100k_base")
+    """The loaded encoder, or None -- which `count_tokens` answers with the
+    heuristic. The seam a test patches (`context.tokens._encoder`) to force
+    that path."""
+    return _loader.get()
 
 
 def count_tokens(text: str) -> int:
