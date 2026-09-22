@@ -54,6 +54,43 @@ _log = logging.getLogger(__name__)
 # generation is otherwise indistinguishable from a dead connection.
 _HEARTBEAT = ": heartbeat\n\n"
 
+#: The least time since the last frame of any kind before an empty delta earns
+#: a heartbeat. The facade ticks every `llm.HEARTBEAT_INTERVAL` while the model
+#: is silent, but the adapters ALSO report every SSE line as an empty delta,
+#: blank separators included -- so an unthrottled turn sent a heartbeat beside
+#: nearly every token, each one written to the socket and buffered and indexed
+#: by its run for a reconnect to replay. Proof of life needs one a second.
+HEARTBEAT_GAP = 1.0
+
+
+class _Liveness:
+    """Whether an empty delta has earned a heartbeat frame.
+
+    Due once `HEARTBEAT_GAP` has passed since the last frame this stream
+    produced, heartbeat or not, so a stream whose deltas are flowing sends
+    none. The first is always due: the quiet stretch before a first token is
+    the one #95 exists for, and it must show traffic straight away.
+
+    Consulted where frames are PRODUCED, before a run buffers and indexes them,
+    so a frame that is never sent never takes an index and a resume cursor
+    still counts a contiguous sequence.
+    """
+
+    def __init__(self) -> None:
+        self._last = float("-inf")
+
+    def sent(self) -> None:
+        """Record a frame that went out."""
+        self._last = time.monotonic()
+
+    def due(self) -> bool:
+        """Whether a heartbeat goes out now; if so, it counts as sent."""
+        now = time.monotonic()
+        if now - self._last < HEARTBEAT_GAP:
+            return False
+        self._last = now
+        return True
+
 # Which turn each scene currently belongs to, newest claim wins. A cancelled
 # turn's flush runs after its socket has closed, so it has to be able to ask
 # whether it is still the turn the scene belongs to before writing anything.
@@ -675,13 +712,16 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
         # rendered. `watcher.narration` is untouched, so what gets persisted is
         # decided in exactly one place either way (#120).
         redactor = store.turnstate.StreamRedactor()
+        liveness = _Liveness()
         try:
             async for delta in client.stream(messages, conn, meter.usage):
                 if not delta:
-                    yield _HEARTBEAT  # the facade is still waiting on the model
+                    if liveness.due():
+                        yield _HEARTBEAT  # the facade is still waiting on the model
                     continue
                 out = redactor.feed(watcher.feed(delta))
                 if out:
+                    liveness.sent()
                     yield _sse({"delta": out})
                 if watcher.complete:
                     break  # stop-after-fence: ignore anything past the close

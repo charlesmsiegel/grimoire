@@ -331,23 +331,29 @@ async def _select(cid, sid, client, round_record):
 
 
 async def _stream_contribution(client, messages, conn, meter, watcher, run):
+    # Heartbeats are throttled here, at the producer, for `streaming._Liveness`'s
+    # reason: every SSE line arrives as an empty delta.
+    liveness = streaming._Liveness()
     async with aclosing(llm_reasoning.stream(client, messages, conn, meter.usage)) as source:
         async for event in source:
             if run.cancel_requested:
                 raise anyio.get_cancelled_exc_class()()
             if event.get("thinking_reset"):
                 watcher.reasoning = ""
+                liveness.sent()
                 yield streaming._sse(event)
                 continue
             if "thinking_delta" in event:
                 watcher.reasoning += event["thinking_delta"]
+                liveness.sent()
                 yield streaming._sse(event)
                 continue
             delta = event["delta"]
             visible = watcher.feed(delta)
             if visible:
+                liveness.sent()
                 yield streaming._sse({"delta": visible})
-            elif not delta:
+            elif not delta and liveness.due():
                 yield streaming._HEARTBEAT
             if watcher.roll.complete:
                 break
