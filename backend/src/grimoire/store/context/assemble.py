@@ -70,7 +70,8 @@ def compose_opener(cid: str, sid: str, prompt: str,
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH)
     # Both trailing messages are rendered before packing so their tokens can be
     # reserved: neither is droppable, so neither may go uncounted.
-    user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid)
+    user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid,
+                                     datetime_subs=a["datetime_subs"])
     shape = prompts.render("scene/opener_shape.j2", npc_names=a["npc_names"])
     extra = (("Opener prompt", user_text), ("Opener shape rules", shape))
     # Shape rules stay last, right before generation, above the earlier framing.
@@ -113,6 +114,13 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         live_turnstate = turnstate.current(cid, sid, len(scene["messages"]),
                                            config.turnstate_depth())
     history = [dict(m) for m in scene["messages"]]
+    # {{date}}/{{weekday}}/{{time}}, resolved ONCE per compose and handed to
+    # every `expand_macros` call below, in `_render_sections` and in `_prepare`.
+    # Resolved per call it re-read the scene file for every history message and
+    # every section; resolved here it comes off the scene just read under the
+    # lock, so the whole prompt names one moment even if the clock moves
+    # mid-compose.
+    dt_subs = macros._datetime_subs(cid, sid, scenes_read.histories(scene["meta"])["times"])
     croot = campaigns_paths.campaign_root(cid)          # campaign-local: dossiers, calendar, group state
     aroot = appearances_paths.locked_actor_root(cid)    # cast/roster actors are locked, so campaign-side
     # The reader's own pins and excludes (#129), resolved once for this scene at
@@ -201,7 +209,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # `voice_anchors.py` -- substitution is on its list -- and a cap that does
     # not bound what is sent is the worse of the two.
     def _expanded(text: str) -> str:
-        return macros.expand_macros(text, subs, cid, sid) if text else text
+        return macros.expand_macros(text, subs, cid, sid, datetime_subs=dt_subs) if text else text
 
     # ONE resolved structure for every section that names a character:
     # `character_descriptions`, `voice_policy`, `voice_anchors`,
@@ -311,7 +319,6 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # resolve() already skips ids that don't exist; this also covers a file
         # that exists but can't be read, which must not break generation either.
         resolved_style = None
-    offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
     activated_wi, recalled_wi = world_state._world_info(cid, recent_text, exclude,
                                                        frozenset(present),
                                                        pinned_refs, excluded_refs)
@@ -344,22 +351,21 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # (the toggle off, or fewer than two NPCs) renders no section at all.
         # `history`, not `sub_history`: the raw messages still carry the
         # `speaker` stamp that `_project_history` folds into the text.
+        #
+        # One NPC at most when actor-scoped, so `nominate` would answer None
+        # anyway -- and the blanking below says so regardless.
         "speaker": (speaker.nominate(npc_names, history, pending=wi_seed)
-                    if config.speaker_turn_taking() else None),
+                    if not actor_scoped and config.speaker_turn_taking() else None),
         "transient_tracker": config.turnstate_depth() > 0,
         "transient_fields": list(turnstate.FIELDS),
-        "relationship_lines": story._relationship_lines(cid, cast),
         "players": players, "ref_names": ref_names, "refs": refs,
-        "story_entries": story._story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
-        # The archive excludes what the recap already shows, and (via `before`)
-        # this scene and any scene after it: a scene absorbed earlier still has
-        # a chronicle record, so without that bound, continuing an old scene
-        # could recall the present -- or the future -- as a past event.
-        "archive_entries": archive._archive_entries(
-            cid, recent_text, story._recap_ids(cid, full_recap or None), before=sid),
-        "plot_lines": plot.render_open(cid, with_id=False),
-        "commitment_lines": commitments.render_open(cid, with_id=False),
-        "today": world_state._today_data(cid, sid, croot),
+        # The recap, the archive, both ledgers, the calendar, the relationship
+        # graph, group state, the off-scene cast and the art catalogue: what
+        # only a campaign-wide voice is shown, and so not gathered at all for
+        # an actor-scoped compose -- see `_campaign_view`.
+        **_campaign_view(cid, sid, croot, cast, recent_text, full_recap, activated_wi,
+                         recalled_wi, current_loc if not loc_excluded else None,
+                         actor_scoped=actor_scoped),
         "weather": world_state._weather_data(cid, sid),
         "current_setting": current_setting,
         "current_setting_secret": current_setting_secret,
@@ -370,35 +376,6 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "world_info_bodies": wi_public, "secret_world_info_bodies": wi_secret,
         "recalled_lore_bodies": recalled_public,
         "secret_recalled_lore_bodies": recalled_secret,
-        # Ranked against the same scan window world info activates on, over a
-        # pool built from what this turn already resolved -- see art.catalogue.
-        # `[]` on any failure, so a store being synced under us costs the
-        # section rather than the turn.
-        #
-        # SKIPPED ENTIRELY when the reader has switched the section off. Every
-        # other key here is a cheap read that the packer may then drop; this one
-        # walks the cast's asset sidecars and, with an embeddings endpoint
-        # configured, makes a blocking HTTP call -- so computing it for a
-        # section that will not render is the one case where "assemble
-        # everything, render what survives" costs real money. It also makes the
-        # prompt-layout toggle mean what this feature's design says it means:
-        # the off switch, not a way to hide output you are still paying for.
-        "available_art": (art.catalogue(cid, cast, current_loc if not loc_excluded else None,
-                                        activated_wi + recalled_wi, recent_text)
-                          if _section_on("available_art") else []),
-        # Keyword activations only. A recalled group deliberately does NOT pull
-        # its campaign state: that state renders into the `Group state` section,
-        # which is `spotlight`, so feeding it from recall would grow a section
-        # the packer drops whole and largest-first -- and dropping it would take
-        # the states of KEYWORD-activated groups with it. That is the same way
-        # sharing the World info section broke "can only add", one section over.
-        # Giving recalled state its own droppable section would work too; not
-        # having it at all is smaller, and costs a recalled group its state
-        # block rather than costing a keyword-activated one.
-        "group_states": world_state._group_states(cid, croot, activated_wi),
-        "secret_group_states": world_state._group_states(cid, croot, activated_wi,
-                                                         secrecy=entities.SECRET),
-        "offscene_active": offscene_active, "offscene_known": offscene_known,
         "player_names": player_names,
         "mechanics_rules": mech["mechanics_rules"], "mechanics_sheets": mech["mechanics_sheets"],
         "mechanics_checks": mech["mechanics_checks"],
@@ -407,6 +384,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     if actor_scoped:
         # These fields have no actor attribution. In particular a recap or a
         # group marked public does not make its private campaign state public.
+        #
+        # THE CONTRACT, and it stays even though `_campaign_view` no longer
+        # gathers most of these for an actor-scoped compose: that is an
+        # optimisation, and this is what an NPC's prompt is allowed to hold.
         for key in ("story_entries", "archive_entries", "plot_lines", "commitment_lines",
                     "group_states", "secret_group_states", "offscene_active", "offscene_known",
                     "players", "refs", "ref_names", "available_art"):
@@ -435,14 +416,84 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     post_history = prompts.render("scene/post_history.j2", npc_cards=npc_cards,
                                   voice_correction=voice_correction,
                                   length_correction=length_correction)
-    post_history = macros.expand_macros(post_history, subs, cid, sid) if post_history else ""
+    post_history = _expanded(post_history)
 
-    sub_history = [{"role": m["role"], "content": macros.expand_macros(m["content"], subs, cid, sid)}
+    sub_history = [{"role": m["role"], "content": _expanded(m["content"])}
                    for m in story._project_history(history)]
-    return {"data": data, "subs": subs, "history": sub_history,
+    return {"data": data, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
             "post_history": post_history, "npc_names": npc_names,
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
                                                 current_loc if not loc_excluded else None, voiced_ids)}
+
+
+def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str,
+                   full_recap: int, activated_wi: list[dict], recalled_wi: list[dict],
+                   art_loc: str | None, *, actor_scoped: bool) -> dict:
+    """The template data only a campaign-wide voice is shown.
+
+    Every key here is one `_assemble` blanks for an actor-scoped compose -- an
+    assigned NPC's reply, which is every response of an automatic round -- so
+    for one it is not gathered at all: blanks come back, and the blanking block
+    blanks them again as the contract. It used to be gathered and thrown away,
+    between one speaker finishing and the next starting: the off-scene
+    directory walks the world's whole roster, `art.catalogue` walks asset
+    sidecars and may make an embeddings call, and the rest read the chronicle,
+    both ledgers, group state, the relationship graph and the calendar.
+
+    Nothing here draws from the macro RNG or writes, and macro expansion runs
+    later over whatever is present, so skipping it changes no byte of an NPC's
+    prompt; `test_actor_scoped_skip.py` composes the same NPC turn with the
+    skip switched off and requires every variant to match.
+    """
+    if actor_scoped:
+        return {"offscene_active": [], "offscene_known": [], "available_art": [],
+                "story_entries": [], "archive_entries": [], "plot_lines": [],
+                "commitment_lines": [], "group_states": [], "secret_group_states": [],
+                "relationship_lines": [], "today": None}
+    offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
+    return {
+        "offscene_active": offscene_active, "offscene_known": offscene_known,
+        # Ranked against the same scan window world info activates on, over a
+        # pool built from what this turn already resolved -- see art.catalogue.
+        # `[]` on any failure, so a store being synced under us costs the
+        # section rather than the turn.
+        #
+        # SKIPPED ENTIRELY when the reader has switched the section off. Every
+        # other key here is a cheap read that the packer may then drop; this one
+        # walks the cast's asset sidecars and, with an embeddings endpoint
+        # configured, makes a blocking HTTP call -- so computing it for a
+        # section that will not render is the one case where "assemble
+        # everything, render what survives" costs real money. It also makes the
+        # prompt-layout toggle mean what this feature's design says it means:
+        # the off switch, not a way to hide output you are still paying for.
+        "available_art": (art.catalogue(cid, cast, art_loc, activated_wi + recalled_wi, recent_text)
+                          if _section_on("available_art") else []),
+        "story_entries": story._story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
+        # The archive excludes what the recap already shows, and (via `before`)
+        # this scene and any scene after it: a scene absorbed earlier still has
+        # a chronicle record, so without that bound, continuing an old scene
+        # could recall the present -- or the future -- as a past event.
+        "archive_entries": archive._archive_entries(
+            cid, recent_text, story._recap_ids(cid, full_recap or None), before=sid),
+        "plot_lines": plot.render_open(cid, with_id=False),
+        "commitment_lines": commitments.render_open(cid, with_id=False),
+        # Keyword activations only. A recalled group deliberately does NOT pull
+        # its campaign state: that state renders into the `Group state` section,
+        # which is `spotlight`, so feeding it from recall would grow a section
+        # the packer drops whole and largest-first -- and dropping it would take
+        # the states of KEYWORD-activated groups with it. That is the same way
+        # sharing the World info section broke "can only add", one section over.
+        # Giving recalled state its own droppable section would work too; not
+        # having it at all is smaller, and costs a recalled group its state
+        # block rather than costing a keyword-activated one.
+        "group_states": world_state._group_states(cid, croot, activated_wi),
+        "secret_group_states": world_state._group_states(cid, croot, activated_wi,
+                                                         secrecy=entities.SECRET),
+        # The whole graph among those present. An actor-scoped compose gets its
+        # own outgoing feelings instead, from the blanking block.
+        "relationship_lines": story._relationship_lines(cid, cast),
+        "today": world_state._today_data(cid, sid, croot),
+    }
 
 
 #: Which sections a pinned cast member holds up, BY `Section.id`. Not by label:
@@ -476,8 +527,8 @@ _SETTING_SECTION = "current_setting"
 def _section_on(section_id: str) -> bool:
     """Will `section_id` render at all, under the reader's prompt layout?
 
-    Asked in `_assemble` only for data that is expensive to gather -- see the
-    `available_art` key. `layout.apply` is what `_render_sections` will consult
+    Asked in `_campaign_view` only for data that is expensive to gather -- see
+    the `available_art` key. `layout.apply` is what `_render_sections` will consult
     a moment later, so this cannot disagree with it; it costs one `read_config`
     and at most one small file read, which is what that function already
     promises per assemble pass.
@@ -758,6 +809,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
     """
     data = {"model_guidance": "", **a["data"], "opener": opener}
     pinned = a.get("pinned_sections") or frozenset()
+    # Resolved once by `_assemble`; `None` (a hand-built `a`) resolves per call.
+    dt_subs = a.get("datetime_subs")
     out = []
     #: The heading of the last section actually EMITTED, which is what makes
     #: the rule below about contiguous runs rather than the whole message.
@@ -811,8 +864,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
         head = ""
         if body and section.heading and section.heading != last_heading:
             head = macros.expand_macros(prompts.render(section.heading, **data),
-                                        a["subs"], cid, sid).strip()
-        body = macros.expand_macros(body, a["subs"], cid, sid).strip()
+                                        a["subs"], cid, sid, datetime_subs=dt_subs).strip()
+        body = macros.expand_macros(body, a["subs"], cid, sid, datetime_subs=dt_subs).strip()
         text = head + "\n\n" + body if (head and body) else body
         if not text:
             continue
@@ -940,18 +993,20 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         for name, text in model_guidance.freeze_profiles(**data).items():
             wrapped = prompts.render("scene/sections/model_guidance.j2",
                                      **{**data, "model_guidance": text})
-            profiles[name] = macros.expand_macros(wrapped, a["subs"], cid, sid).strip()
+            profiles[name] = macros.expand_macros(wrapped, a["subs"], cid, sid,
+                                                  datetime_subs=a.get("datetime_subs")).strip()
     compose = _compose_system
     history = deepcopy([] if opener else a["history"])
     post_history = a["post_history"]
     before_post, after_post = deepcopy(before_post), deepcopy(after_post)
     budget = pack.budget_tokens()
-    reserved = (tokens.count_tokens(post_history)
-                + sum(tokens.count_tokens(text) for _label, text in extra)) if budget > 0 else 0
+    count = _token_memo()
+    reserved = (count(post_history)
+                + sum(count(text) for _label, text in extra)) if budget > 0 else 0
 
     def variant(guidance):
         sections = _profile_sections(base, guidance)
-        packed = pack.pack(sections, history, reserved, budget, compose=compose)
+        packed = pack.pack(sections, history, reserved, budget, compose=compose, count=count)
         _dedupe_runs(packed["sections"])
         packed["budget"] = budget
         system = compose([s["text"] for s in packed["sections"] if not s["dropped"]])
@@ -961,7 +1016,7 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         if post_history:
             messages.append({"role": "system", "content": post_history})
         messages += after_post
-        detail = (_breakdown({"post_history": post_history}, packed, list(extra))
+        detail = (_breakdown({"post_history": post_history}, packed, list(extra), count=count)
                   if describe else None)
         return messages, detail
 
@@ -976,6 +1031,31 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     prepared = model_guidance.PreparedMessages(model, select, profiles={
         "": frozen[""], **{name: frozen[text] for name, text in profiles.items()}})
     return prepared, prepared.breakdown
+
+
+def _token_memo():
+    """`tokens.count_tokens`, memoized for one `_prepare`.
+
+    `_prepare` packs and describes one variant per distinct model profile, and
+    the variants differ only in the guidance section: the history, the post-
+    history block, the appended messages and every other section are the same
+    strings each time, and within one variant the packer and `_breakdown`
+    measure the same sections and history twice over. Counted afresh they were
+    re-encoded at every one of those -- the whole transcript, several times per
+    turn. Only a composed system message is new per variant, and it is counted
+    once either way. Per call rather than process-wide, so it holds only strings
+    this compose already holds and needs no eviction story; and the tokenizer
+    is looked up on each miss, so a test patching `count_tokens` still sees
+    every distinct string.
+    """
+    seen: dict[str, int] = {}
+
+    def count(text: str) -> int:
+        n = seen.get(text)
+        if n is None:
+            n = seen[text] = tokens.count_tokens(text)
+        return n
+    return count
 
 
 def _compose_system(texts: list[str]) -> str:
@@ -1076,7 +1156,7 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
                   eligible_speakers=eligible_speakers)
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
-    note_text = macros.expand_macros(note, a["subs"], cid, sid)
+    note_text = macros.expand_macros(note, a["subs"], cid, sid, datetime_subs=a["datetime_subs"])
     return _prepare(a, cid, sid, model=model, describe=describe,
                     before_post=({"role": "user", "content": note_text},),
                     after_post=tuple({"role": role, "content": content}
@@ -1092,7 +1172,8 @@ def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = N
     return compose_director_turn(cid, sid, note, turn=turn, describe=False, model=model)[0]
 
 
-def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> dict:
+def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
+               count=None) -> dict:
     """The inspector's view of a turn, from an assemble/pack pair the caller
     already has: every section the packer produced, in prompt order, each with
     its `tier`, its `tokens`, and whether the packer `dropped` it — then the
@@ -1123,14 +1204,19 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
     and the tiktoken-less heuristic rounds each string on its own). Summing the
     rows instead would let the inspector report a total that disagrees with the
     request it is describing.
+
+    `count` is the tokenizer, `tokens.count_tokens` by default; `_prepare`
+    passes the memoized one it packed with (`_token_memo`).
     """
     extra = extra or []
+    if count is None:
+        count = tokens.count_tokens
     rows = [{"id": s["id"], "label": s["label"], "text": s["text"], "tier": s["tier"],
              "dropped": s["dropped"], "trimmed": 0, "pinned": bool(s.get("pinned")),
-             "tokens": tokens.count_tokens(s["text"])}
+             "tokens": count(s["text"])}
             for s in p["sections"]]
 
-    hist_tokens = sum(pack.message_cost(m["content"]) for m in p["history"])
+    hist_tokens = sum(pack.message_cost(m["content"], count) for m in p["history"])
     hist = "\n\n".join(m["content"] for m in p["history"])
     if hist:
         # Displayed joined (one readable block), accounted per message with the
@@ -1142,21 +1228,21 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
         rows.append({"id": "post_history", "label": "Post-history instructions",
                      "text": a["post_history"], "pinned": False,
                      "tier": pack.LOCK_IN, "dropped": False, "trimmed": 0,
-                     "tokens": tokens.count_tokens(a["post_history"])})
+                     "tokens": count(a["post_history"])})
     # `lock-in`, and not merely as a label: `_packed` reserved these, so the
     # packer could not drop them even had it wanted to. Reporting them under any
     # droppable tier would describe a choice the packer never had.
     #: Appended rows are numbered rather than named after their label: two of
     #: them can carry the same one (an opener sends a prompt and shape rules
     #: every time), and the inspector keys its rows on `id`.
-    extra_tokens = [tokens.count_tokens(text) for _label, text in extra]
+    extra_tokens = [count(text) for _label, text in extra]
     rows += [{"id": f"appended_{n}", "label": label, "text": text, "tier": pack.LOCK_IN,
               "dropped": False, "trimmed": 0, "pinned": False, "tokens": count}
              for n, ((label, text), count) in enumerate(zip(extra, extra_tokens))]
 
     kept = [s["text"] for s in p["sections"] if not s["dropped"]]
-    total = (tokens.count_tokens(_compose_system(kept)) + hist_tokens
-             + tokens.count_tokens(a["post_history"]) + sum(extra_tokens))
+    total = (count(_compose_system(kept)) + hist_tokens
+             + count(a["post_history"]) + sum(extra_tokens))
     # Trimmed history messages are gone from `rows` entirely -- they are not a
     # section that can be shown struck through -- so their cost has to be added
     # here, or a pack that fit by trimming history alone reports nothing

@@ -117,18 +117,18 @@ def budget_tokens() -> int:
 SEPARATOR = "\n\n"
 
 
-def message_cost(content: str) -> int:
+def message_cost(content: str, count=None) -> int:
     """What one history message costs: its content plus `MESSAGE_OVERHEAD`.
 
     Shared with `context_breakdown` so the inspector reports history the way
     the packer charges it — the two disagreeing about the same messages is the
-    bug this whole seam keeps producing.
+    bug this whole seam keeps producing. `count` is the tokenizer, as in `pack`.
     """
-    return tokens.count_tokens(content) + MESSAGE_OVERHEAD
+    return (count or tokens.count_tokens)(content) + MESSAGE_OVERHEAD
 
 
 def pack(sections: list[dict], history: list[dict], reserved: int = 0,
-         budget: int | None = None, compose=None) -> dict:
+         budget: int | None = None, compose=None, count=None) -> dict:
     """Fit `sections` + `history` into `budget` tokens.
 
     `sections` are the rendered sections in prompt order, each ``{"label",
@@ -145,6 +145,11 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     `compose` joins the surviving section texts into the system message exactly
     as the caller will send it — the packer measures that composed string, not
     the sum of its parts. Defaults to the blank-line join system.j2 does.
+
+    `count` is the tokenizer, `tokens.count_tokens` when omitted (looked up at
+    call time, so a test patching it still reaches here). A caller packing the
+    same history several times passes a memoized one: `assemble._prepare`
+    packs once per model profile, over the same transcript each time.
 
     Returns ``{"sections", "history", "history_trimmed"}``: the same sections
     in the same order with a ``dropped`` flag added (dropped ones stay in the
@@ -166,6 +171,8 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
                 "history_trimmed_tokens": 0}
     if compose is None:
         compose = SEPARATOR.join
+    if count is None:
+        count = tokens.count_tokens
 
     # Per-section costs order the drops (largest first); they do NOT decide
     # whether we are over. Token counts are not additive: the separators
@@ -174,16 +181,16 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     # therefore clear a ceiling the real message misses, which is the one thing
     # this must not do -- so the system message is composed and measured whole,
     # and re-measured after each drop.
-    costs = [tokens.count_tokens(s["text"]) for s in packed]
+    costs = [count(s["text"]) for s in packed]
 
     def system_cost() -> int:
-        return tokens.count_tokens(compose([s["text"] for s in packed if not s["dropped"]]))
+        return count(compose([s["text"] for s in packed if not s["dropped"]]))
 
     hist = list(history)
     # History messages are sent as separate entries, so summing them is the
     # right shape (unlike the joined system message) -- plus the per-message
     # framing the provider adds around each one.
-    hist_costs = [message_cost(m["content"]) for m in hist]
+    hist_costs = [message_cost(m["content"], count) for m in hist]
     hist_total = sum(hist_costs)
     sys_cost = system_cost()
     total = reserved + sys_cost + hist_total
