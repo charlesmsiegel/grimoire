@@ -122,3 +122,116 @@ def test_recovery_replaces_partial_text_after_variant_commit_crash(tmp_path, mon
     assert len(messages) == 1
     assert messages[0]["content"] == "Complete answer"
     assert messages[0]["response_status"] == "complete"
+
+
+# -- scene open: the migration fast path ------------------------------------
+#
+# Every GET of a scene (and every character-turn reroll) used to run the full
+# `migrate`, which takes the campaign lock and parses the WHOLE campaign's
+# response ledger to find nothing to do. A scene's posts are assigned their
+# response exactly once, so the steady state must cost a transcript read and
+# nothing else -- in particular it must not queue behind a turn that holds the
+# lock for its whole ledger rewrite.
+
+
+def _legacy_scene():
+    """A scene whose reply predates response identities."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    store.scenes.append_message(cid, sid, "user", "Where is the tide ledger?")
+    store.scenes.append_message(cid, sid, "assistant", "Under the table.", speaker="Mara")
+    return cid, sid
+
+
+def test_needs_migration_matches_what_migrate_assigns():
+    from grimoire.store.scenes import serialize
+
+    def post(**extra):
+        return {"role": "assistant", "speaker": "Mara", "content": "Hm.", **extra}
+
+    assert store.responses.needs_migration([post()])
+    assert not store.responses.needs_migration([post(response_id="r1")])
+    assert not store.responses.needs_migration(
+        [{"role": "user", "speaker": "You", "content": "Hello."}])
+    # Synthetic lines are nobody's reply: `migrate` skips them, so they must
+    # not keep a scene on the slow path forever.
+    assert not store.responses.needs_migration(
+        [post(speaker=speaker) for speaker in serialize.SYNTHETIC_SPEAKERS])
+    assert not store.responses.needs_migration([])
+
+
+def test_the_first_open_assigns_a_legacy_post_its_response(client):
+    cid, sid = _legacy_scene()
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}")
+    assert body.status_code == 200, body.text
+    shown = body.json()["messages"][1]
+    assert shown["response_id"] and shown["response_status"] == "complete"
+    # The id is on disk and in the ledger, not only in the response body.
+    stored = store.scenes.read_scene(cid, sid)["messages"][1]
+    assert stored["response_id"] == shown["response_id"]
+    assert store.responses.get(cid, sid, shown["response_id"])["content"] == "Under the table."
+
+
+def test_a_migrated_scene_opens_without_the_ledger_or_the_lock(client, monkeypatch):
+    cid, sid = _legacy_scene()
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    first = client.get(base).json()
+    first_window = client.get(base + "?limit=1").json()
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a steady-state scene open reached the ledger or the lock")
+
+    # A context, not the test-scoped patch: the client's lifespan shutdown runs
+    # before monkeypatch's own teardown and is entitled to the real lock.
+    with monkeypatch.context() as patch:
+        patch.setattr(store.responses, "_read", refuse)
+        patch.setattr(store.locks, "campaign_lock", refuse)
+        again = client.get(base)
+        window = client.get(base + "?limit=1")
+    assert again.status_code == 200, again.text
+    assert window.status_code == 200, window.text
+    assert again.json() == first
+    assert window.json() == first_window
+
+
+def test_a_scene_without_an_identity_still_takes_the_full_migrate(client, monkeypatch):
+    from grimoire.store import frontmatter
+
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    store.scenes.append_message(cid, sid, "user", "Nothing to migrate here.")
+    # Written before identities existed: nothing needs a response id, but the
+    # open is still what hands the scene its identity (`migrate` -> `_scope`
+    # -> `ensure_identity`), so the fast path must not skip it.
+    path = store.scenes.paths._scene_path(cid, sid)
+    meta, text = frontmatter.parse_frontmatter(path.read_text(encoding="utf-8"))
+    meta.pop("identity", None)
+    path.write_text(frontmatter.dump_frontmatter(meta, text), encoding="utf-8")
+    assert store.scenes.scene_identity(cid, sid) is None
+    calls = []
+    real = store.responses.migrate
+    monkeypatch.setattr(store.responses, "migrate",
+                        lambda c, s: calls.append((c, s)) or real(c, s))
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").status_code == 200
+    assert calls == [(cid, sid)]
+    assert store.scenes.scene_identity(cid, sid)
+
+
+def test_reroll_takes_the_same_fast_path(client, monkeypatch):
+    """`post_regenerate` migrated unconditionally too, right before reading the
+    scene it then rerolls from."""
+    cid, sid = _legacy_scene()
+    client.get(f"/api/campaigns/{cid}/scenes/{sid}")   # the one real migration
+    calls = []
+    monkeypatch.setattr(store.responses, "migrate", lambda c, s: calls.append((c, s)))
+    from grimoire.routes import character_turns
+    seen = []
+    monkeypatch.setattr(character_turns, "regenerate_response",
+                        lambda cid, sid, rid, *rest: seen.append(rid) or {"ok": True})
+    reply = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate", json={})
+    assert reply.status_code == 200, reply.text
+    assert calls == []
+    assert seen == [store.scenes.read_scene(cid, sid)["messages"][1]["response_id"]]
+
