@@ -504,7 +504,12 @@ def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None =
         raise HTTPException(status_code=400, detail="before must not be negative")
     try:
         if character_turns.enabled():
-            store.responses.migrate(cid,sid)
+            # Lock-free unless a post still needs its response assigned: the
+            # full `migrate` parses the campaign's whole ledger and waits out a
+            # turn's lock, on every open -- see `migrate_if_needed`.
+            scene = store.responses.migrate_if_needed(cid, sid)
+            if limit is None:
+                return scene
         if limit is None:
             return store.scenes.read_scene(cid, sid)
         return store.scenes.read_scene_window(cid, sid, limit, before)
@@ -935,8 +940,7 @@ def post_regenerate(cid: str, sid: str, request: Request,
         return replay
     _require_scene(cid, sid)
     if character_turns.enabled():
-        store.responses.migrate(cid,sid)
-        messages = store.scenes.read_scene(cid,sid)["messages"]
+        messages = store.responses.migrate_if_needed(cid, sid)["messages"]
         rid = next((m["response_id"] for m in reversed(messages) if m.get("response_id")),None)
         if rid is None:
             raise HTTPException(400,detail="no response to regenerate")

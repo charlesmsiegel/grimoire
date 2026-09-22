@@ -81,6 +81,58 @@ def _message(record, content, status, variant=None):
     }
 
 
+def _unassigned(message: dict) -> bool:
+    """A model-written post the ledger has no record for yet.
+
+    One predicate for both halves of the migration -- what `migrate` assigns
+    and what `needs_migration` looks for -- so the fast path cannot decide a
+    scene is finished while `migrate` would still find work in it, nor keep a
+    scene on the slow path forever over a line `migrate` will never touch (a
+    synthetic speaker is nobody's reply).
+    """
+    return (
+        message["role"] == "assistant"
+        and message.get("speaker") not in serialize.SYNTHETIC_SPEAKERS
+        and not message.get("response_id")
+    )
+
+
+def needs_migration(messages: list[dict]) -> bool:
+    """Whether `migrate` would assign anything in this transcript."""
+    return any(_unassigned(m) for m in messages)
+
+
+def migrate_if_needed(cid: str, sid: str) -> dict:
+    """`migrate` for a caller that wants its effect rather than its records,
+    and the scene as it stands afterwards: the scene open and the reroll.
+
+    Both used to call `migrate` unconditionally, which takes the campaign lock
+    and parses the WHOLE campaign's ledger -- every scene's variants, not this
+    one's -- to find, in the steady state, nothing at all: a post is assigned
+    its response exactly once. That made opening a scene cost the campaign's
+    entire response history, and made it queue behind a turn, which holds the
+    lock across its own ledger rewrites. So the transcript is asked first,
+    without the lock, and `migrate` runs only when it would do something.
+
+    Double-checked, not merely checked: `migrate` re-reads the ledger and the
+    transcript under the lock and decides again, so two opens racing here
+    cannot assign one post twice. A post appended between this read and the
+    caller's use of it is migrated on the next open -- which is what already
+    happened to a post appended just after an open.
+
+    A missing identity also takes the slow path. Nothing here needs one, but
+    `migrate` is where an opened scene that predates identities has always
+    been given its token (`_scope` -> `ensure_identity`), and runs and
+    notifications key on that token; skipping it would leave such a scene
+    identity-less until something else happened to ask.
+    """
+    scene = read.read_scene(cid, sid)
+    if not needs_migration(scene["messages"]) and identity.scene_identity(cid, sid):
+        return scene
+    migrate(cid, sid)
+    return read.read_scene(cid, sid)
+
+
 def migrate(cid: str, sid: str) -> list[dict]:
     """Assign legacy posts IDs once, under the transcript's campaign lock."""
     with locks.campaign_lock(cid):
@@ -89,11 +141,7 @@ def migrate(cid: str, sid: str) -> list[dict]:
         messages = read.read_scene(cid, sid)["messages"]
         changed = False
         for message in messages:
-            if (
-                message["role"] != "assistant"
-                or message.get("speaker") in serialize.SYNTHETIC_SPEAKERS
-                or message.get("response_id")
-            ):
+            if not _unassigned(message):
                 continue
             rid, vid = _id(), _id()
             record = {
