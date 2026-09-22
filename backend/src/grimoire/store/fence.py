@@ -16,17 +16,40 @@ OPENER = re.compile(r"```[ \t]*roll\b", re.IGNORECASE)
 # A buffer suffix that could still grow into an opener: 1-3 backticks,
 # then (only after all 3) optional spaces/tabs and a prefix of "roll".
 _OPENER_PREFIX = re.compile(r"(`{1,2}|`{3}[ \t]*(r(o(l(l)?)?)?)?)$", re.IGNORECASE)
+# Every character `_OPENER_PREFIX` can match, plus the one newline its `$` may
+# match in front of. A match lies wholly inside the trailing run of these, so
+# that run is all `_opener_prefix_len` has to search.
+_PREFIX_RUN = frozenset("` \trolROL\n")
 
 
-def _opener_prefix_len(buf: str) -> int:
-    m = _OPENER_PREFIX.search(buf)
+def trailing_run(buf: str, chars: frozenset, start: int) -> int:
+    """Where the run of `chars` that ends `buf` begins, looking no further back
+    than `start`. Public for `response_protocol`, which bounds its own prefix
+    search the same way."""
+    i = len(buf)
+    while i > start and buf[i - 1] in chars:
+        i -= 1
+    return i
+
+
+def _opener_prefix_len(buf: str, start: int = 0) -> int:
+    """How long the suffix of `buf` is that could still grow into an opener.
+
+    `start` is where the caller's undecided text begins: no prefix can start
+    before it (see `FenceWatcher.feed`), and searching only the trailing run is
+    what keeps a feed from costing the length of everything already streamed.
+    The match found is the leftmost one either way, which is what the holdback
+    has always measured -- including the one `$` finds in front of a final
+    newline, whose length leaves that newline out.
+    """
+    m = _OPENER_PREFIX.search(buf, trailing_run(buf, _PREFIX_RUN, start))
     return len(m.group(0)) if m else 0
 
 
 class FenceWatcher:
     def __init__(self) -> None:
         self._buf = ""            # unemitted tail (pre-fence mode)
-        self._emitted = ""        # text already returned to the caller
+        self._emitted = 0         # how much of `_buf` has been returned to the caller
         self._after = ""          # everything from the opener onward
         self._open = False
         self.complete = False
@@ -36,14 +59,28 @@ class FenceWatcher:
         self._finished = False
 
     def feed(self, chunk: str) -> str:
-        if self._finished:
+        # An empty chunk changes nothing, whatever the state: the adapters feed
+        # one per SSE line, blank separators included, as proof of life.
+        if self._finished or not chunk:
             return ""
         if self._open:
             self._after += chunk
             self._try_close()
             return ""
+        # Everything before `_emitted` is DECIDED, so both searches start there
+        # rather than at 0. Rescanning the whole buffer on every feed made a
+        # reply cost O(length²) in CPU, on the event loop.
+        # Starting later cannot miss a match: text is only emitted once the
+        # holdback below has ruled out an opener beginning inside it, and every
+        # prefix of an opener is itself an `_OPENER_PREFIX` match, so an opener
+        # can never begin before `_emitted`. The one character the `$`-before-
+        # a-final-newline holdback lets out ("``" + "\n" withholds one backtick
+        # and the newline) cannot begin one either -- nothing continues a run of
+        # backticks across a newline. `test_stream_watchers_incremental.py`
+        # holds this to the rescanning algorithm, feed for feed.
+        start = self._emitted
         self._buf += chunk
-        m = OPENER.search(self._buf)
+        m = OPENER.search(self._buf, start)
         if m and m.end() < len(self._buf):
             return self._commit(m)
         # A match ending exactly at the buffer end is deferred: its \b was
@@ -56,16 +93,15 @@ class FenceWatcher:
         # still extend into an opener (backticks + optional spaces/tabs +
         # a prefix of "roll"); a fixed-length tail leaks backticks when
         # the optional whitespace stretches the opener.
-        safe_len = max(len(self._emitted),
-                       len(self._buf) - _opener_prefix_len(self._buf))
-        out = self._buf[len(self._emitted): safe_len]
-        self._emitted = self._buf[:safe_len]
+        safe_len = max(start, len(self._buf) - _opener_prefix_len(self._buf, start))
+        out = self._buf[start:safe_len]
+        self._emitted = safe_len
         return out
 
     def _commit(self, m: re.Match[str]) -> str:
         self._narration_prefix = self._buf[: m.start()]
-        out = self._narration_prefix[len(self._emitted):]
-        self._emitted = self._narration_prefix
+        out = self._narration_prefix[self._emitted:]
+        self._emitted = len(self._narration_prefix)
         self._after = self._buf[m.start():]
         self._open = True
         self._buf = ""
@@ -91,7 +127,7 @@ class FenceWatcher:
         if not self._open:
             # End of stream is a word boundary: a deferred opener held at
             # the buffer end (see feed) is a real opener after all.
-            m = OPENER.search(self._buf)
+            m = OPENER.search(self._buf, self._emitted)
             if m:
                 out = self._commit(m)
         if self._open:
@@ -100,8 +136,8 @@ class FenceWatcher:
                 first_nl = self._after.find("\n")
                 self.body = self._after[first_nl + 1:] if first_nl >= 0 else ""
             return out
-        out = self._buf[len(self._emitted):]
-        self._emitted = self._buf
+        out = self._buf[self._emitted:]
+        self._emitted = len(self._buf)
         return out
 
     @property

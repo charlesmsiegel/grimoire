@@ -11,6 +11,9 @@ _HANDOFF = re.compile(r"```[ \t]*handoff\b", re.IGNORECASE)
 _PREFIX = re.compile(
     r"(`{1,2}|`{3}[ \t]*(?:h(?:a(?:n(?:d(?:o(?:f(?:f)?)?)?)?)?)?)?)$", re.IGNORECASE
 )
+# Every character `_PREFIX` can match, plus the newline its `$` may match in
+# front of: a match lies inside the trailing run of these (`fence.trailing_run`).
+_PREFIX_RUN = frozenset("` \thandofHANDOF\n")
 
 
 def validate_handoff(payload, eligible, used):
@@ -38,11 +41,19 @@ class ResponseWatcher:
         self._narration = ""
 
     def _emit(self, text):
+        # Everything before `visible` is decided, so the searches start there
+        # -- `fence.FenceWatcher.feed` makes the same argument, and for the
+        # same reason: rescanning `raw` from 0 on every feed made a reply
+        # O(length²) on the event loop. `visible` only ever stops at the start
+        # of a handoff match or of a `_PREFIX` match, every prefix of a handoff
+        # opener is itself a `_PREFIX` match, and a search from there finds the
+        # same leftmost match a search from 0 would.
+        start = self.visible
         self.raw += text
-        match = _HANDOFF.search(self.raw)
+        match = _HANDOFF.search(self.raw, start)
         stop = match.start() if match else len(self.raw)
         if match is None:
-            prefix = _PREFIX.search(self.raw)
+            prefix = _PREFIX.search(self.raw, fence.trailing_run(self.raw, _PREFIX_RUN, start))
             if prefix:
                 stop = prefix.start()
         delta = self.raw[self.visible : stop]
@@ -50,6 +61,11 @@ class ResponseWatcher:
         return self.redactor.feed(delta)
 
     def feed(self, text):
+        # A no-op for "" in every state (the roll watcher, the searches and the
+        # redactor all reach the answer they already had), and the adapters send
+        # one per SSE line -- so it is answered before any of them runs.
+        if not text:
+            return ""
         return self._emit(self.roll.feed(text))
 
     def finish(self):
