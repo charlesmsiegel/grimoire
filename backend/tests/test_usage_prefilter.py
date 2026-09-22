@@ -5,8 +5,8 @@ its window and then throw most of them away; the prefilter rejects a line on
 its text before it is parsed. That is only safe because the rule is EXACT, so
 most of this file is about the two ways it could stop being exact -- a
 campaign spelled with a JSON escape, and a campaign id that is a substring of
-another -- and about the single-pass rollups agreeing, row for row, with the
-two-pass implementations they replaced. The old code is kept inline below as
+another -- and about the prefiltered rollups agreeing, row for row, with the
+unfiltered implementations they replaced. The old code is kept inline below as
 the oracle rather than trusted from memory.
 """
 
@@ -135,7 +135,7 @@ def test_an_unscoped_read_still_sees_every_campaign(home):
     assert len(list(usage.calls(30))) == 2
 
 
-# ---- (c) the single pass agrees with the two passes it replaced ----
+# ---- (c) the prefiltered passes agree with the full parses they replaced ----
 # The implementations below are the ones this module shipped before the
 # prefilter: a full-ledger trail pass, then a second full pass that parsed every
 # campaign's rows. They are the oracle, so they are copied rather than imported
@@ -366,7 +366,7 @@ def _synthetic_ledger(home) -> set[str]:
     return names - {""}
 
 
-def test_the_single_pass_rollups_agree_with_the_two_pass_ones(home, monkeypatch):
+def test_the_prefiltered_rollups_agree_with_the_full_parse_ones(home, monkeypatch):
     names = _synthetic_ledger(home)
     (home / "pricing.json").write_text(json.dumps(
         {"local/glm": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0}}),

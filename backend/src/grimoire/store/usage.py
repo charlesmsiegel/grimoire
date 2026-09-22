@@ -1019,10 +1019,11 @@ def _rename_trail(campaign: str, since: str,
     A pass of its own, and a cheap one: a rename row is a handful per scene's
     life, and the text test in `_read_rows` rejects every other line -- this
     campaign's calls included, which do not say "rename" or hold a backslash
-    unless a hand edit or an odd scene id put one there -- without parsing it. The alternative, one pass that buffered
-    the campaign's rows until the trail was complete, would hold every parsed
-    row of the campaign's whole history at once for the all-time view, which
-    is exactly what `_read_rows` reads a line at a time to avoid.
+    unless a hand edit or an odd scene id put one there -- without parsing
+    it. The alternative, one pass that buffered the campaign's rows until the
+    trail was complete, would hold every parsed row of the campaign's whole
+    history at once for the all-time view, which is exactly what `_read_rows`
+    reads a line at a time to avoid.
     """
     trail: dict[str, list[tuple[str, str]]] = {}
     for row in _read_rows(since, until, campaign, KIND_RENAME):
