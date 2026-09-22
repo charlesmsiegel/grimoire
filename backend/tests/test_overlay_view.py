@@ -12,6 +12,7 @@ point of the change -- the count does not grow with the cast.
 import io
 import json
 import os
+import threading
 import time
 
 import pytest
@@ -209,3 +210,33 @@ def test_a_pointer_resolved_listing_opens_the_pointer_at_most_once(monkeypatch, 
     with _Opens((pointer.name,)) as counts:
         assert len(overlay.list_characters(cid)) == 20
     assert counts[pointer.name] <= 1, counts
+
+
+def test_views_on_different_threads_do_not_queue_behind_each_other(monkeypatch, tmp_path):
+    """A view resolves on the request thread that built it, and two requests'
+    views share nothing -- so one parsing a slow campaign.md must not hold up
+    another. (`functools.cached_property` on 3.11 would: its lock is per
+    property for the whole class, and held across the computation.)"""
+    _home(monkeypatch, tmp_path, "threads")
+    cid, _ids = _campaign(1)
+    inside, release, done = threading.Event(), threading.Event(), threading.Event()
+    real = overlay.wroot_of
+
+    def slow(c):
+        if threading.current_thread().name == "slow-view":
+            inside.set()
+            release.wait(5)
+        return real(c)
+
+    monkeypatch.setattr(overlay, "wroot_of", slow)
+    held = threading.Thread(target=lambda: overlay.view(cid).wroot, name="slow-view")
+    held.start()
+    assert inside.wait(5)
+    other = threading.Thread(target=lambda: (overlay.view(cid).wroot, done.set()))
+    other.start()
+    try:
+        assert done.wait(2), "a second view waited on the first one's resolution"
+    finally:
+        release.set()
+        held.join(5)
+        other.join(5)
