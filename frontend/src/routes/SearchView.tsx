@@ -303,7 +303,20 @@ export default function SearchView() {
     const ask: Ask = { q, scope, kind, mode, asked };
     wanted.current = ask;
     setFailed(false);
-    if (inFlight.current === null) send(ask);
+    const out = inFlight.current;
+    if (out === null) {
+      send(ask);
+    } else if (out.mode !== ask.mode) {
+      // A question only queues behind one of its own mode. The queue exists
+      // because two keyword sweeps share one CPU; a meaning search spends its
+      // time waiting on an embeddings endpoint (up to that client's timeout),
+      // and holding a keyword answer behind it after the reader switched
+      // modes would buy nothing. Aborting settles the old request for this
+      // page alone -- its `land` sees the signal and stands down -- and the
+      // server finishes it unobserved, as it would any dropped answer.
+      abort.current?.abort();
+      send(ask);
+    }
   }, [q, scope, kind, mode, asked, send]);
 
   const facets = result?.facets ?? {};
