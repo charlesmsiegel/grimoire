@@ -831,11 +831,16 @@ def list_campaign_gallery(cid: str):
     to find the version directories, and then each is resolved through the
     overlay, which reads a campaign sidecar and a world sidecar per version.
     That is the price of an answer that matches what the campaign renders; the
-    world route is still there, unchanged, for the world's own question.
+    world route is still there, unchanged, for the world's own question. What
+    it does NOT pay is resolving the campaign itself per folder: one
+    `overlay.view` carries the world root, the tombstones and the detachments
+    through every row below, so those reads are a constant per request rather
+    than several per version folder.
     """
     _campaign_root_or_404(cid)
     croot = store.campaigns.campaign_root(cid)
-    wroot = store.overlay.wroot_of(cid)
+    ov = store.overlay.view(cid)
+    wroot = ov.wroot
     out = []
     names: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
     subjects = _GreetingSubjects(wroot)
@@ -850,17 +855,17 @@ def list_campaign_gallery(cid: str):
         for rid, vid in sorted(pairs):
             key = (base, rid)
             if key not in names:
-                names[key] = _overlay_name_and_versions(cid, base, rid)
+                names[key] = _overlay_name_and_versions(cid, base, rid, ov)
             found = names[key]
             # Same gate as the world sweep: an asset folder whose record -- or
             # whose version -- is gone serves no bytes, so a tile over it is a
             # broken image the reader cannot clear.
             if found is None or (found[1] and vid not in found[1]):
                 continue
-            imgs = store.overlay.list_images(cid, rid, vid, base)
+            imgs = store.overlay.list_images(cid, rid, vid, base, v=ov)
             if not imgs:
                 continue   # every image here was tombstoned campaign-side
-            desc = store.overlay.read_descriptions(cid, rid, vid, base)
+            desc = store.overlay.read_descriptions(cid, rid, vid, base, v=ov)
             for item in imgs:
                 base_url = _actor_image_url(f"/api/campaigns/{quote(cid, safe='')}",
                                             base, rid, vid, item["name"])
@@ -943,25 +948,27 @@ class _GreetingSubjects:
         return self._subjects[gid].get(name, [])
 
 
-def _overlay_name_and_versions(cid: str, base: str, rid: str) -> tuple[str, set[str]] | None:
+def _overlay_name_and_versions(cid: str, base: str, rid: str,
+                               ov: store.overlay.View) -> tuple[str, set[str]] | None:
     """`_record_name_and_versions` through the overlay: the campaign's record if
     it has one, the world's if it inherits, and None when neither can be read.
 
     Split from the world-rooted one rather than parameterised because the reads
     differ by more than a root -- `overlay.read_character` applies tombstones
-    and detachment, which a bare root read cannot see.
+    and detachment, which a bare root read cannot see. `ov` is the gallery's
+    one view of the campaign, shared with every record it names.
     """
     try:
         if base == "characters":
-            d = store.overlay.read_character(cid, rid)
+            d = store.overlay.read_character(cid, rid, v=ov)
             return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
         if base == store.pcs.ASSET_BASE:
-            d = store.overlay.read_pc(cid, rid)
+            d = store.overlay.read_pc(cid, rid, v=ov)
             return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
         if base == "greetings":
-            g = store.overlay.read_greeting(cid, rid)
+            g = store.overlay.read_greeting(cid, rid, v=ov)
             return str(g.get("name") or rid), set()
-        e = store.overlay.read_entity(cid, base, rid)
+        e = store.overlay.read_entity(cid, base, rid, v=ov)
         return str(e["meta"].get("name") or rid), set()
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
             store.entities.EntityNotFound, store.greetings.GreetingNotFound,

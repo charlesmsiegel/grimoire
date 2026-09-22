@@ -52,6 +52,7 @@ import json
 import logging
 import shutil
 from contextlib import contextmanager
+from functools import cached_property
 from pathlib import Path
 
 from . import (
@@ -104,6 +105,72 @@ def wroot_of(cid: str) -> Path:
     Either way, nothing here raises for it — every resolver below just reads
     a path that doesn't hold the expected records as holding none."""
     return campaigns_read.world_root_of(cid)
+
+
+class View:
+    """One campaign's overlay context, for a read sweep that asks it per row.
+
+    Every per-record resolver below turns on the same four facts: the
+    campaign's own root, its world's root (a parse of campaign.md), its
+    tombstones (deleted.json) and its detachments (detached.json). Asked row by
+    row, a listing re-read those three files several times per row -- and
+    re-resolved the store root for every path it built -- to learn something
+    that cannot change between two rows of one listing. So a sweep builds one
+    of these with `view()` and hands it to every row, and the listing costs a
+    fixed handful of those reads however large the cast; a helper called alone
+    builds its own and costs what it always did.
+
+    Lazy, field by field, and that is what makes the second half true: passing
+    a view never costs a read the helper would not have made, so `tagline` for
+    a campaign that holds its own line still parses no campaign.md. The sets
+    are frozen because one view is shared across rows, and a row that edited
+    `gone` would change every later row's answer.
+
+    A READ-sweep helper, and only that. It is a snapshot, so it must not live
+    across a mutation -- a tombstone written mid-sweep is not in `gone` -- and
+    it is never kept beyond the call that built it: no module state, nothing
+    shared between requests, so there is no invalidation story to get wrong.
+    That is why the writers here (`add_deleted`, `promote_image`, the creates
+    and deletes) take none and keep reading the ledgers fresh.
+    """
+
+    def __init__(self, cid: str) -> None:
+        self.cid = cid
+
+    @cached_property
+    def croot(self) -> Path:
+        return croot_of(self.cid)
+
+    @cached_property
+    def wroot(self) -> Path:
+        return wroot_of(self.cid)
+
+    @cached_property
+    def gone(self) -> frozenset[str]:
+        return frozenset(deleted(self.cid))
+
+    @cached_property
+    def off(self) -> frozenset[str]:
+        return frozenset(detached(self.cid))
+
+
+def view(cid: str) -> View:
+    """A fresh `View` of `cid` for one read sweep. See `View` for its limits."""
+    return View(cid)
+
+
+def _view(cid: str, v: View | None) -> View:
+    """`v` when it describes `cid`, else a fresh view.
+
+    A view of a DIFFERENT campaign is refused rather than replaced: using it
+    would resolve this campaign's records against another world and another
+    campaign's tombstones, and replacing it quietly would hide the caller's
+    bug behind a correct-looking answer."""
+    if v is None:
+        return View(cid)
+    if v.cid != cid:
+        raise ValueError(f"an overlay view of campaign {v.cid!r} cannot answer for {cid!r}")
+    return v
 
 
 # ---- tombstones ----
@@ -561,22 +628,23 @@ def materialize_entity(cid: str, kind: str, eid: str) -> None:
         raise entities.EntityNotFound(f"{kind}/{eid}")
 
 
-def list_entities(cid: str, kind: str) -> list[dict]:
-    mine = entities.list_entities(croot_of(cid), kind)
+def list_entities(cid: str, kind: str, *, v: View | None = None) -> list[dict]:
+    v = _view(cid, v)
+    mine = entities.list_entities(v.croot, kind)
     have = {e["id"] for e in mine}
-    gone = deleted(cid)
-    inherited = [e for e in entities.list_entities(wroot_of(cid), kind)
-                 if e["id"] not in have and _flat_ref(kind, e["id"]) not in gone]
+    inherited = [e for e in entities.list_entities(v.wroot, kind)
+                 if e["id"] not in have and _flat_ref(kind, e["id"]) not in v.gone]
     return sorted(mine + inherited, key=lambda e: e["id"])
 
 
-def read_entity(cid: str, kind: str, eid: str) -> dict:
+def read_entity(cid: str, kind: str, eid: str, *, v: View | None = None) -> dict:
+    v = _view(cid, v)
     try:
-        return entities.read_entity(croot_of(cid), kind, eid)
+        return entities.read_entity(v.croot, kind, eid)
     except entities.EntityNotFound:
-        if _flat_ref(kind, eid) in deleted(cid):
+        if _flat_ref(kind, eid) in v.gone:
             raise
-        return entities.read_entity(wroot_of(cid), kind, eid)
+        return entities.read_entity(v.wroot, kind, eid)
 
 
 def read_entity_rev(cid: str, kind: str, eid: str) -> dict:
@@ -869,13 +937,14 @@ def list_greetings(cid: str) -> list[dict]:
     return out
 
 
-def read_greeting(cid: str, gid: str) -> dict:
+def read_greeting(cid: str, gid: str, *, v: View | None = None) -> dict:
+    v = _view(cid, v)
     try:
-        return greetings.read_greeting(croot_of(cid), gid)
+        return greetings.read_greeting(v.croot, gid)
     except greetings.GreetingNotFound:
-        if _flat_ref("greetings", gid) in deleted(cid):
+        if _flat_ref("greetings", gid) in v.gone:
             raise
-        return greetings.read_greeting(wroot_of(cid), gid)
+        return greetings.read_greeting(v.wroot, gid)
 
 
 def read_greeting_rev(cid: str, gid: str) -> dict:
@@ -1018,24 +1087,25 @@ def _actor_not_found(kind: str, aid: str) -> Exception:
     return characters.CharacterNotFound(aid) if kind == "characters" else pcs.PCNotFound(aid)
 
 
-def actor_root(cid: str, kind: str, aid: str) -> Path:
+def actor_root(cid: str, kind: str, aid: str, *, v: View | None = None) -> Path:
     """Root whose <kind>/<aid> dir is authoritative for meta + version files.
     Tombstoned actors resolve to the campaign, where the caller's read raises
     its usual NotFound."""
-    croot = croot_of(cid)
+    v = _view(cid, v)
+    croot = v.croot
     if (croot / kind / aid / _actor_meta(kind)).exists():
         return croot
-    if _flat_ref(kind, aid) in deleted(cid):
+    if _flat_ref(kind, aid) in v.gone:
         return croot
-    return wroot_of(cid)
+    return v.wroot
 
 
-def char_root(cid: str, aid: str) -> Path:
-    return actor_root(cid, "characters", aid)
+def char_root(cid: str, aid: str, *, v: View | None = None) -> Path:
+    return actor_root(cid, "characters", aid, v=v)
 
 
-def pc_root(cid: str, aid: str) -> Path:
-    return actor_root(cid, "pcs", aid)
+def pc_root(cid: str, aid: str, *, v: View | None = None) -> Path:
+    return actor_root(cid, "pcs", aid, v=v)
 
 
 def materialize_actor(cid: str, kind: str, aid: str) -> None:
@@ -1126,8 +1196,8 @@ def dematerialize_actor(cid: str, kind: str, aid: str) -> None:
         d.rmdir()
 
 
-def _patch_char_item(cid: str, item: dict) -> dict:
-    images = list_images(cid, item["id"], item["default_version"])
+def _patch_char_item(v: View, item: dict) -> dict:
+    images = list_images(v.cid, item["id"], item["default_version"], v=v)
     names = [i["name"] for i in images]
     return {**item,
             "has_avatar": assets.AVATAR in names,
@@ -1135,22 +1205,25 @@ def _patch_char_item(cid: str, item: dict) -> dict:
             # avatar lives world-side would otherwise carry the campaign root's
             # token for a file it does not have, and `?v=` caches immutable.
             "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
-            "avatar_focus": read_focus(cid, item["id"], item["default_version"]),
+            "avatar_focus": read_focus(v.cid, item["id"], item["default_version"], v=v),
             "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
             "localized_count": sum(1 for n in names if n.startswith("embed-")),
-            "tagline": tagline(cid, item["id"])}
+            "tagline": tagline(v.cid, item["id"], v=v)}
 
 
 def list_characters(cid: str) -> list[dict]:
-    mine = characters.list_characters(croot_of(cid))
+    # One view for the whole listing: every row below asks the same campaign
+    # the same questions, and asking per row made this listing's cost grow
+    # with the cast in campaign-file reads alone (see `View`).
+    v = view(cid)
+    mine = characters.list_characters(v.croot)
     # dossier/state-only dirs have no character.md and are filtered by
     # characters.list_characters itself (it requires the meta file)
     have = {c["id"] for c in mine}
-    gone = deleted(cid)
-    world_rows = characters.list_characters(wroot_of(cid))
+    world_rows = characters.list_characters(v.wroot)
     inherited = [c for c in world_rows
-                 if c["id"] not in have and _flat_ref("characters", c["id"]) not in gone]
-    rows = [_patch_char_item(cid, c) for c in mine + inherited]
+                 if c["id"] not in have and _flat_ref("characters", c["id"]) not in v.gone]
+    rows = [_patch_char_item(v, c) for c in mine + inherited]
 
     # `has_voice_anchor` is resolved from what the two scans ALREADY read, not
     # by asking the overlay again. Each scan does one anchor read per row, so
@@ -1164,7 +1237,7 @@ def list_characters(cid: str) -> list[dict]:
     # tombstone -- which is why "no campaign card, therefore no campaign
     # anchor" would be wrong, and is the case this got wrong first.
     world = {c["id"]: c.get("has_voice_anchor", False) for c in world_rows}
-    cdir = croot_of(cid) / "characters"
+    cdir = v.croot / "characters"
     campaign_side = ({p.parent.name for p in cdir.glob("*/voice_anchor.md")}
                      if cdir.is_dir() else set())          # paths-ok: sibling of anchor_path
     # A DETACHED actor does not inherit, and this has to agree with
@@ -1172,19 +1245,18 @@ def list_characters(cid: str) -> list[dict]:
     # these refs. Without it a campaign whose character id has since been
     # reused world-side would report has_voice_anchor: true off an unrelated
     # row, while reading that character's effective anchor returned "".
-    off = detached(cid)
     for row in rows:
         if row["id"] in campaign_side:
-            rec = voice_anchors.read_record(croot_of(cid), row["id"])
+            rec = voice_anchors.read_record(v.croot, row["id"])
             row["has_voice_anchor"] = bool(rec["text"])    # tombstone reads as none
-        elif _flat_ref("characters", row["id"]) in off:
+        elif _flat_ref("characters", row["id"]) in v.off:
             row["has_voice_anchor"] = False
         else:
             row["has_voice_anchor"] = world.get(row["id"], False)
     return sorted(rows, key=lambda c: c["id"])
 
 
-def _patch_pc_item(cid: str, item: dict) -> dict:
+def _patch_pc_item(v: View, item: dict) -> dict:
     """The PC counterpart of `_patch_char_item`: `pcs.list_pcs` computed these
     against one root, but a thin campaign's PC can hold its images world-side,
     so the derived fields have to come from the overlay union (#219).
@@ -1194,22 +1266,22 @@ def _patch_pc_item(cid: str, item: dict) -> dict:
     because `pcs.list_pcs` is also the world route's answer, where the values
     it computes are the ones served; `_patch_char_item` has carried the same
     cost since characters got theirs."""
-    names = [i["name"] for i in list_images(cid, item["id"], item["default_version"],
-                                            pcs.ASSET_BASE)]
+    names = [i["name"] for i in list_images(v.cid, item["id"], item["default_version"],
+                                            pcs.ASSET_BASE, v=v)]
     return {**item,
             "has_avatar": assets.AVATAR in names,
-            "avatar_focus": read_focus(cid, item["id"], item["default_version"],
-                                       pcs.ASSET_BASE),
+            "avatar_focus": read_focus(v.cid, item["id"], item["default_version"],
+                                       pcs.ASSET_BASE, v=v),
             "gallery_count": sum(1 for n in names if n.startswith("gallery_"))}
 
 
 def list_pcs(cid: str) -> list[dict]:
-    mine = pcs.list_pcs(croot_of(cid))
+    v = view(cid)    # one for every row, as in `list_characters`
+    mine = pcs.list_pcs(v.croot)
     have = {p["id"] for p in mine}
-    gone = deleted(cid)
-    inherited = [p for p in pcs.list_pcs(wroot_of(cid))
-                 if p["id"] not in have and _flat_ref("pcs", p["id"]) not in gone]
-    return sorted([_patch_pc_item(cid, p) for p in mine + inherited], key=lambda p: p["id"])
+    inherited = [p for p in pcs.list_pcs(v.wroot)
+                 if p["id"] not in have and _flat_ref("pcs", p["id"]) not in v.gone]
+    return sorted([_patch_pc_item(v, p) for p in mine + inherited], key=lambda p: p["id"])
 
 
 def character_refs(cid: str) -> list[str]:
@@ -1346,44 +1418,48 @@ def _asset_ref(base: str, aid: str, vid: str, name: str) -> str:
     return f"assets/{base}/{aid}/{vid}/{name}"
 
 
-def list_images(cid: str, aid: str, vid: str, base: str = "characters") -> list[dict]:
-    mine = assets.list_images(croot_of(cid), aid, vid, base)
-    if _flat_ref(base, aid) in detached(cid):
+def list_images(cid: str, aid: str, vid: str, base: str = "characters",
+                *, v: View | None = None) -> list[dict]:
+    v = _view(cid, v)
+    mine = assets.list_images(v.croot, aid, vid, base)
+    if _flat_ref(base, aid) in v.off:
         return sorted(mine, key=lambda i: i["name"])   # the world's id-mate is a stranger
     have = {i["name"] for i in mine}
-    gone = deleted(cid)
-    inherited = [i for i in assets.list_images(wroot_of(cid), aid, vid, base)
-                 if i["name"] not in have and _asset_ref(base, aid, vid, i["name"]) not in gone]
+    inherited = [i for i in assets.list_images(v.wroot, aid, vid, base)
+                 if i["name"] not in have and _asset_ref(base, aid, vid, i["name"]) not in v.gone]
     return sorted(mine + inherited, key=lambda i: i["name"])
 
 
-def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> Path:
-    croot = croot_of(cid)
+def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters",
+               *, v: View | None = None) -> Path:
+    v = _view(cid, v)
+    croot = v.croot
     if assets.image_path(croot, aid, vid, name, base) is not None:
         return croot
-    gone = deleted(cid)
     # A per-asset tombstone or a whole-record tombstone (the record was deleted
     # campaign-side; only its <base>/<aid> ref is written) both hide the image:
     # return croot so the serve route 404s instead of falling through to the world.
-    if (_asset_ref(base, aid, vid, name) in gone or _flat_ref(base, aid) in gone
-            or _flat_ref(base, aid) in detached(cid)):
+    if (_asset_ref(base, aid, vid, name) in v.gone or _flat_ref(base, aid) in v.gone
+            or _flat_ref(base, aid) in v.off):
         return croot
-    return wroot_of(cid)
+    return v.wroot
 
 
-def read_focus(cid: str, aid: str, vid: str, base: str = "characters") -> int | None:
-    croot = croot_of(cid)
+def read_focus(cid: str, aid: str, vid: str, base: str = "characters",
+               *, v: View | None = None) -> int | None:
+    v = _view(cid, v)
+    croot = v.croot
     focus_file = croot / base / aid / "assets" / vid / assets.FOCUS_FILE
     if (assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None
             or focus_file.exists()
-            or _asset_ref(base, aid, vid, assets.AVATAR) in deleted(cid)
-            or _flat_ref(base, aid) in detached(cid)):
+            or _asset_ref(base, aid, vid, assets.AVATAR) in v.gone
+            or _flat_ref(base, aid) in v.off):
         return assets.read_focus(croot, aid, vid, base)
-    return assets.read_focus(wroot_of(cid), aid, vid, base)
+    return assets.read_focus(v.wroot, aid, vid, base)
 
 
 def read_description(cid: str, aid: str, vid: str, name: str,
-                     base: str = "characters") -> str:
+                     base: str = "characters", *, v: View | None = None) -> str:
     """One image's description, resolved campaign-first.
 
     The rule is per IMAGE, where `read_focus`' is per folder, because that is
@@ -1406,19 +1482,21 @@ def read_description(cid: str, aid: str, vid: str, name: str,
     campaign-side for an image whose bytes are still inherited would be
     filtered out as naming nothing.
     """
-    croot = croot_of(cid)
-    union = {i["name"] for i in list_images(cid, aid, vid, base)}
+    v = _view(cid, v)
+    croot = v.croot
+    union = {i["name"] for i in list_images(cid, aid, vid, base, v=v)}
     mine = image_descriptions.read_all(croot, aid, vid, base, names=union)
     if (assets.image_path(croot, aid, vid, name, base) is not None
-            or _asset_ref(base, aid, vid, name) in deleted(cid)
-            or _flat_ref(base, aid) in detached(cid)):
+            or _asset_ref(base, aid, vid, name) in v.gone
+            or _flat_ref(base, aid) in v.off):
         return mine.get(name, "")
     if name in mine:            # typed read: a malformed entry is not an answer
         return mine[name]
-    return image_descriptions.read(wroot_of(cid), aid, vid, name, base)
+    return image_descriptions.read(v.wroot, aid, vid, name, base)
 
 
-def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters") -> dict[str, str]:
+def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters",
+                      *, v: View | None = None) -> dict[str, str]:
     """Every visible image's description for one version, by `read_description`'s
     per-image rule — but resolving the whole version in one pass.
 
@@ -1433,8 +1511,9 @@ def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters") ->
     ABSENT rather than empty, so a caller can still tell "not reviewed" from
     "reviewed, nothing to say".
     """
-    croot, wroot = croot_of(cid), wroot_of(cid)
-    images = list_images(cid, aid, vid, base)
+    v = _view(cid, v)
+    croot = v.croot
+    images = list_images(cid, aid, vid, base, v=v)
     union = {i["name"] for i in images}
     mine_images = {i["name"] for i in assets.list_images(croot, aid, vid, base)}
     mine = image_descriptions.read_all(croot, aid, vid, base, names=union)
@@ -1445,12 +1524,12 @@ def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters") ->
     # the image reviewed-empty. `read_description` never agreed with that: it
     # falls through to the world for the same image.
     mine_keys = set(mine)
-    gone, detached_record = deleted(cid), _flat_ref(base, aid) in detached(cid)
+    gone, detached_record = v.gone, _flat_ref(base, aid) in v.off
     theirs: dict[str, str] = {}
     # Only read the world side if some image might fall through to it -- a fully
     # diverged version never touches it.
     if not detached_record and not union <= mine_images:
-        theirs = image_descriptions.read_all(wroot, aid, vid, base, names=union)
+        theirs = image_descriptions.read_all(v.wroot, aid, vid, base, names=union)
 
     out: dict[str, str] = {}
     for name in sorted(union):
@@ -1565,7 +1644,7 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
             add_deleted(cid, _asset_ref(base, aid, vid, name))
 
 
-def base_versions(cid: str, char_id: str) -> list[dict]:
+def base_versions(cid: str, char_id: str, *, v: View | None = None) -> list[dict]:
     """The world's versions of a character this campaign no longer holds, as
     art it may look at beside the version it shows -- the pass-through.
 
@@ -1599,22 +1678,22 @@ def base_versions(cid: str, char_id: str) -> list[dict]:
     removed stays removed. Empty when any of them is shut, or when the world no
     longer holds the character.
     """
+    v = _view(cid, v)
     ref = _flat_ref("characters", char_id)
-    gone = deleted(cid)
-    if ref in gone or ref in detached(cid):
+    if ref in v.gone or ref in v.off:
         return []
-    wroot = wroot_of(cid)
+    wroot = v.wroot
     theirs = characters.version_ids(wroot, char_id)
     if not theirs:
         return []
-    held = set(characters.version_ids(char_root(cid, char_id), char_id))
+    held = set(characters.version_ids(char_root(cid, char_id, v=v), char_id))
     default = characters.default_version(wroot, char_id)
-    ordered = ([default] if default in theirs else []) + [v for v in theirs if v != default]
+    ordered = ([default] if default in theirs else []) + [x for x in theirs if x != default]
     out = []
     for vid in ordered:
         if vid in held:
             continue
-        images = list_images(cid, char_id, vid)   # tombstones applied, campaign file first
+        images = list_images(cid, char_id, vid, v=v)   # tombstones applied, campaign file first
         if not images:
             continue
         out.append({
@@ -1622,12 +1701,12 @@ def base_versions(cid: str, char_id: str) -> list[dict]:
             "name": characters.version_label(wroot, char_id, vid),
             "images": [i["name"] for i in images],
             "image_v": {i["name"]: i["v"] for i in images},
-            "image_descriptions": read_descriptions(cid, char_id, vid),
+            "image_descriptions": read_descriptions(cid, char_id, vid, v=v),
         })
     return out
 
 
-def shadowed_images(cid: str, char_id: str, vid: str) -> list[dict]:
+def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) -> list[dict]:
     """The world's copies of one version's pictures that the union HIDES: same
     version, same name, and a campaign file of its own under that name.
 
@@ -1652,16 +1731,17 @@ def shadowed_images(cid: str, char_id: str, vid: str) -> list[dict]:
     and so does a per-image tombstone, though a name the campaign holds a
     file under cannot normally carry one.
     """
+    v = _view(cid, v)
     ref = _flat_ref("characters", char_id)
-    gone = deleted(cid)
-    if ref in gone or ref in detached(cid):
+    gone = v.gone
+    if ref in gone or ref in v.off:
         return []
-    croot = croot_of(cid)
+    croot = v.croot
     mine = [p for i in assets.list_images(croot, char_id, vid)
             if (p := assets.image_path(croot, char_id, vid, i["name"])) is not None]
     if not mine:
         return []
-    wroot = wroot_of(cid)
+    wroot = v.wroot
     held = {p.stem for p in mine}
     out = [i for i in assets.list_images(wroot, char_id, vid)
            if i["name"] in held
@@ -1686,34 +1766,37 @@ def _novel_bytes(theirs: Path | None, mine: list[Path]) -> bool:
 
 # ---- payload patching: asset-derived fields come from the union ----
 
-def read_character(cid: str, char_id: str) -> dict:
-    detail = characters.read_character(char_root(cid, char_id), char_id)
-    croot = croot_of(cid)
-    for v in detail["versions"]:
-        images = list_images(cid, char_id, v["id"])
-        v["images"] = [i["name"] for i in images]
-        v["image_v"] = {i["name"]: i["v"] for i in images}
+def read_character(cid: str, char_id: str, *, v: View | None = None) -> dict:
+    # One view across every version below and the pass-through after them:
+    # each version asks the same campaign the same questions five times over.
+    v = _view(cid, v)
+    detail = characters.read_character(char_root(cid, char_id, v=v), char_id)
+    croot = v.croot
+    for ver in detail["versions"]:
+        images = list_images(cid, char_id, ver["id"], v=v)
+        ver["images"] = [i["name"] for i in images]
+        ver["image_v"] = {i["name"]: i["v"] for i in images}
         # Which of those names the campaign holds no file for -- the Art tab
         # shelves the campaign's own pictures apart from the world's. Names
         # only: the token and caption of an inherited picture are the union's.
-        mine = {i["name"] for i in assets.list_images(croot, char_id, v["id"])}
-        v["inherited"] = [n for n in v["images"] if n not in mine]
-        v["avatar_focus"] = read_focus(cid, char_id, v["id"])
+        mine = {i["name"] for i in assets.list_images(croot, char_id, ver["id"])}
+        ver["inherited"] = [n for n in ver["images"] if n not in mine]
+        ver["avatar_focus"] = read_focus(cid, char_id, ver["id"], v=v)
         # Re-derived per image, not per folder: `read_descriptions` refuses to
         # caption a campaign-side picture with the world's sentence about a
         # different one. See its docstring.
-        v["image_descriptions"] = read_descriptions(cid, char_id, v["id"])
+        ver["image_descriptions"] = read_descriptions(cid, char_id, ver["id"], v=v)
         # The world's copies this version's own files hide -- shown beside
         # them, never instead of them. See `shadowed_images`.
-        v["world_shadowed"] = shadowed_images(cid, char_id, v["id"])
+        ver["world_shadowed"] = shadowed_images(cid, char_id, ver["id"], v=v)
     # The world's versions the campaign no longer holds, passed through beside
     # the ones it does: a pick purges every other version from the campaign,
     # and the union above cannot reach a version id the campaign lacks.
-    detail["base_versions"] = base_versions(cid, char_id)
+    detail["base_versions"] = base_versions(cid, char_id, v=v)
     return detail
 
 
-def read_pc(cid: str, pid: str) -> dict:
+def read_pc(cid: str, pid: str, *, v: View | None = None) -> dict:
     """`pcs.read_pc` with its image fields re-derived from the union.
 
     The persona files resolve whole-directory through `pc_root`, but assets
@@ -1721,19 +1804,21 @@ def read_pc(cid: str, pid: str) -> dict:
     only the world has. Reading the detail off one root would hide it -- the
     same reason `read_character` exists rather than callers using
     `characters.read_character` directly (#219)."""
-    detail = pcs.read_pc(pc_root(cid, pid), pid)
-    for v in detail["versions"]:
-        v["images"] = [i["name"] for i in list_images(cid, pid, v["id"], pcs.ASSET_BASE)]
-        v["avatar_focus"] = read_focus(cid, pid, v["id"], pcs.ASSET_BASE)
-        v["image_descriptions"] = read_descriptions(cid, pid, v["id"], pcs.ASSET_BASE)
+    v = _view(cid, v)
+    detail = pcs.read_pc(pc_root(cid, pid, v=v), pid)
+    for ver in detail["versions"]:
+        ver["images"] = [i["name"] for i in list_images(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)]
+        ver["avatar_focus"] = read_focus(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)
+        ver["image_descriptions"] = read_descriptions(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)
     return detail
 
 
-def tagline(cid: str, char_id: str) -> str:
-    mine = taglines.read(croot_of(cid), char_id)
-    if mine or _flat_ref("characters", char_id) in detached(cid):
+def tagline(cid: str, char_id: str, *, v: View | None = None) -> str:
+    v = _view(cid, v)
+    mine = taglines.read(v.croot, char_id)
+    if mine or _flat_ref("characters", char_id) in v.off:
         return mine
-    return taglines.read(wroot_of(cid), char_id)
+    return taglines.read(v.wroot, char_id)
 
 
 def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
@@ -1810,19 +1895,20 @@ def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
     voice_anchors.write(croot, char_id, text)
 
 
-def voice_anchor_record(cid: str, char_id: str) -> dict:
+def voice_anchor_record(cid: str, char_id: str, *, v: View | None = None) -> dict:
     """The winning anchor's {"text", "id"} — same per-file overlay as
     `voice_anchor`, but carrying the nonce a fingerprint needs. Resolved as one
     record so text and identity always come from the SAME file: reading the
     text campaign-side and the nonce world-side would fingerprint an anchor that
     exists nowhere."""
-    mine = voice_anchors.read_record(croot_of(cid), char_id)
-    if mine["disabled"] or _flat_ref("characters", char_id) in detached(cid):
+    v = _view(cid, v)
+    mine = voice_anchors.read_record(v.croot, char_id)
+    if mine["disabled"] or _flat_ref("characters", char_id) in v.off:
         return mine   # campaign opt-out, or a world id-mate that is a stranger
-    return mine if mine["text"] else voice_anchors.read_record(wroot_of(cid), char_id)
+    return mine if mine["text"] else voice_anchors.read_record(v.wroot, char_id)
 
 
-def voice_anchor(cid: str, char_id: str) -> str:
+def voice_anchor(cid: str, char_id: str, *, v: View | None = None) -> str:
     """The character's voice anchor as this campaign sees it.
 
     Same per-file overlay as tagline, with one difference tagline has no need
@@ -1831,7 +1917,7 @@ def voice_anchor(cid: str, char_id: str) -> str:
     `set_voice_anchor`). The anchor is world-level (a voice is a library
     property), but a campaign that has materialized its own copy of the
     character is entitled to its own reference text -- or to none."""
-    return voice_anchor_record(cid, char_id)["text"]
+    return voice_anchor_record(cid, char_id, v=v)["text"]
 
 
 # ---- world-side deletes: nothing outlives the record it was filed beside ----

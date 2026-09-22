@@ -10,7 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import atomic, failsoft
+from . import atomic, failsoft, statcache
 
 DEFAULT_HOME = Path.home() / ".grimoire"  # paths-ok: this IS the resolver's default root
 
@@ -29,7 +29,7 @@ def pointer_path() -> Path:
     return Path.home() / ".grimoire.json"  # paths-ok: the bootstrap pointer cannot live inside the directory it names
 
 
-def _read_pointer() -> dict:
+def _read_pointer_uncached() -> dict:
     """The bootstrap pointer's contents, empty when it has none.
 
     A corrupt pointer reads as empty too -- refusing to start over a bad
@@ -44,6 +44,39 @@ def _read_pointer() -> dict:
         f"set, else {DEFAULT_HOME}") or {}
 
 
+#: The pointer memo's own `statcache` pool. Its own, because the shared FIFO is
+#: one that a whole-store sweep can flush in a single request, and this is the
+#: one read every other read in the app sits behind. Four entries: there is one
+#: pointer, and a test suite that repoints `pointer_path` per test needs only
+#: the current one to stay warm.
+_POINTER_POOL: dict = {}
+
+
+def _read_pointer() -> dict:
+    """`_read_pointer_uncached`, re-read only when the pointer's stat moves.
+
+    `home()` resolves through here for every path the store builds, so without
+    `GRIMOIRE_HOME` -- the desktop default, and Android, which pops it -- one
+    overlay listing opened and parsed this file thousands of times. Keyed on
+    `statcache.signature`, so every way the pointer can change is a new key:
+    `set_data_dir` writes through `store.atomic` (a new inode and mtime), a
+    sync client or an editor that lands a replacement is a new inode, and an
+    in-place rewrite moves the mtime. Absence is a signature of its own, so a
+    pointer created after an absent one was memoized is seen at once.
+
+    A pointer written less than statcache's racy window ago is re-read on every
+    call until it ages, which is the correct side of a coarse mtime tick. The
+    cost of the memo is where a corrupt pointer gets reported: once per
+    signature rather than once per call, which `failsoft` had to dedupe anyway.
+
+    A copy, because `set_data_dir` edits what it reads before writing it back,
+    and an edit whose write then failed must not become every later answer.
+    """
+    sig = statcache.signature(pointer_path(), absent_ok=True)
+    return dict(statcache.memo("bootstrap_pointer", sig, _read_pointer_uncached,
+                               pool=_POINTER_POOL, max_entries=4))
+
+
 def _pointer_data_dir() -> Path | None:
     raw = _read_pointer().get("data_dir")
     return Path(raw).expanduser() if raw else None  # paths-ok: expanding the user's own configured storage path is the feature
@@ -54,7 +87,10 @@ def home() -> Path:
 
     Order: ``GRIMOIRE_HOME`` env var (override / test isolation) → the
     user-chosen path from the bootstrap pointer → the default ``~/.grimoire``.
-    Resolved live on every call so a path change takes effect immediately.
+    Resolved live on every call so a path change takes effect immediately: the
+    pointer is memoized, but only against its own stat signature (see
+    `_read_pointer`), so a changed pointer is a miss rather than a stale hit and
+    what this saves is the open and the parse, never the check.
     """
     env = os.environ.get("GRIMOIRE_HOME")
     if env:
