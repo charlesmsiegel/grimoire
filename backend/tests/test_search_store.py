@@ -418,6 +418,25 @@ def test_a_library_bigger_than_the_shared_budget_is_still_remembered_whole(world
     assert reads == [], "a repeat query over an unchanged library re-reads nothing"
 
 
+def test_an_edited_file_keeps_one_copy_in_the_pool_not_one_per_search(world, monkeypatch):
+    """The memo is keyed on the signature, so every edit makes a new entry and
+    the old one is never asked for again. At a budget sized above the corpus
+    the FIFO would take tens of thousands of entries to reach it -- a scene
+    played on between searches would leave a whole flattened copy of itself
+    behind each time."""
+    _, root = world
+    entities.create_entity(root, "lore", "Brine", body="brine")
+    path = next((root / "lore").glob("*.md"))
+    monkeypatch.setattr(search, "_POOL", {})
+    for n in range(5):
+        path.write_text(path.read_text(encoding="utf-8") + f"\nthe tide turned {n}\n",
+                        encoding="utf-8")
+        os.utime(path, (1000 + n, 1000 + n))   # out of the racy window, each distinct
+        assert search.search(f'"tide turned {n}"')["total"] == 1, "searched as it is now"
+    copies = [key for key in search._POOL if key[1][0][0] == str(path)]
+    assert len(copies) == 1, "the versions an edit left behind are dropped"
+
+
 def test_case_folding_is_the_store_s_rule_not_lowercasing(world):
     """`"Straße".lower()` is `"straße"`, so a lower-cased search for "strasse"
     misses the record entirely. `casefold` maps both to "strasse" — the rule

@@ -124,8 +124,18 @@ MAX_LIMIT = 200
 #: a real resident set on a phone, and a library that outgrows even this
 #: budget, or cannot afford to hold it, is the one that wants the FTS5 index
 #: rather than a bigger number here.
+#:
+#: "Every file's text" and not every VERSION of it is `_LATEST`'s job. The
+#: memo is keyed on the signature, so an edited file's old entry is never
+#: asked for again -- and unlike `scenes.read`'s small head rows, each one is a
+#: whole flattened file. Left to the FIFO, a transcript played on between
+#: searches would leave one full copy of itself behind per search, and at
+#: this budget the FIFO is tens of thousands of entries away.
 POOL_ENTRIES = 65_536
 _POOL: dict = {}
+#: The signature each file was last memoized under, per reader: what `_doc`
+#: drops from `_POOL` when the file moves on. One small tuple per path.
+_LATEST: dict[tuple[str, str], tuple] = {}
 
 #: How much text a snippet shows, and how much of it sits before the match.
 SNIPPET_CHARS = 180
@@ -268,11 +278,23 @@ def _doc(reader, path: Path) -> tuple[str, str, str] | None:
     stats every file and parses none of the unchanged ones. A file whose mtime
     is inside `statcache`'s racy window is computed and not cached, so a record
     saved a moment ago is searched as it is now, not as it was.
+
+    A file whose signature moved drops its previous entry here (see `_POOL`).
+    Racy under the threadpool the way the memo itself is: two sweeps crossing
+    an edit can leave one stale copy for the FIFO, or drop an entry the other
+    then recomputes -- a cost either way, never a wrong answer.
     """
     sig = statcache.signature(path)
     if sig is None:
         return None
-    return statcache.memo(f"search:{reader.__name__}", sig, lambda: reader(path),
+    kind = f"search:{reader.__name__}"
+    slot = (kind, str(path))
+    was = _LATEST.get(slot)
+    if was != sig:
+        if was is not None:
+            _POOL.pop((kind, was), None)    # statcache.memo's key for that version
+        _LATEST[slot] = sig
+    return statcache.memo(kind, sig, lambda: reader(path),
                           pool=_POOL, max_entries=POOL_ENTRIES)
 
 
