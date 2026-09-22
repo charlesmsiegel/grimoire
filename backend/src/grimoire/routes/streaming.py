@@ -91,6 +91,7 @@ class _Liveness:
         self._last = now
         return True
 
+
 # Which turn each scene currently belongs to, newest claim wins. A cancelled
 # turn's flush runs after its socket has closed, so it has to be able to ask
 # whether it is still the turn the scene belongs to before writing anything.

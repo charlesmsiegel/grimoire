@@ -1237,8 +1237,8 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
     #: every time), and the inspector keys its rows on `id`.
     extra_tokens = [count(text) for _label, text in extra]
     rows += [{"id": f"appended_{n}", "label": label, "text": text, "tier": pack.LOCK_IN,
-              "dropped": False, "trimmed": 0, "pinned": False, "tokens": count}
-             for n, ((label, text), count) in enumerate(zip(extra, extra_tokens))]
+              "dropped": False, "trimmed": 0, "pinned": False, "tokens": cost}
+             for n, ((label, text), cost) in enumerate(zip(extra, extra_tokens))]
 
     kept = [s["text"] for s in p["sections"] if not s["dropped"]]
     total = (count(_compose_system(kept)) + hist_tokens
