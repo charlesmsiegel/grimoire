@@ -300,7 +300,8 @@ test("a PC speaker's plate carries their portrait once the roster locks a versio
   renderCampaign();
   const stream = within(await screen.findByTestId("stream"));
   const portrait = await stream.findByAltText("Yara portrait");
-  expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v2/avatar");
+  // A 26px plate asks for the smallest bucket, never the original.
+  expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v2/avatar?w=128");
 });
 
 /** A scene whose transcript has one post, spoken by a cast member. */
@@ -7866,7 +7867,7 @@ test("an unstamped player post is plated with the PC's name and portrait", async
   expect(names).toEqual(["Elara Vane", "Grimoire"]);
   // the portrait comes from the roster's locked version, like any other actor's
   const avatar = container.querySelector(".plate-avatar img");
-  expect(avatar?.getAttribute("src")).toBe("/img/pcs/elara/default/avatar");
+  expect(avatar?.getAttribute("src")).toBe("/img/pcs/elara/default/avatar?w=128");
 });
 
 test("with two players seated the plate names the first, deterministically", async () => {

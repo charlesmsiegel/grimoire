@@ -4,8 +4,9 @@ import type { Actor, Briefing, RosterEntry } from "../../api/client";
 
 vi.mock("../../api/client", () => ({
   api: {
-    actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string) =>
-      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}`,
+    actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string,
+                    o?: { w?: number }) =>
+      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}${o?.w ? `?w=${o.w}` : ""}`,
   },
 }));
 
@@ -85,10 +86,23 @@ test("a PC's tile shows their portrait, not just initials", () => {
   renderColumn();
   const pc = screen.getByText("Ferrant Wyle").closest(".cast-tile")!;
   expect(pc.querySelector("img")!.getAttribute("src"))
-    .toBe("/api/campaigns/saltmarch/pcs/wyle/versions/v1/images/avatar");
+    .toBe("/api/campaigns/saltmarch/pcs/wyle/versions/v1/images/avatar?w=512");
   const npc = screen.getByText("Sister Aud").closest(".cast-tile")!;
   expect(npc.querySelector("img")!.getAttribute("src"))
-    .toBe("/api/campaigns/saltmarch/characters/aud/versions/v1/images/avatar");
+    .toBe("/api/campaigns/saltmarch/characters/aud/versions/v1/images/avatar?w=512");
+});
+
+test("a tile's portrait is a thumbnail its screen picks the size of", () => {
+  // A ~116px tile beside the transcript was drawn from the full-size original.
+  // The browser chooses among the buckets by density: a 256 on a desktop, a
+  // 512 on a phone, and the 52px circle the grid becomes at phone width.
+  renderColumn();
+  const img = screen.getByText("Sister Aud").closest(".cast-tile")!.querySelector("img")!;
+  const base = "/api/campaigns/saltmarch/characters/aud/versions/v1/images/avatar";
+  expect(img.getAttribute("srcset")).toContain(`${base}?w=256 170w`);
+  expect(img.getAttribute("srcset")).toContain(`${base}?w=1024 682w`);
+  expect(img.getAttribute("sizes")).toBe("(max-width: 720px) 52px, 120px");
+  expect(img.getAttribute("loading")).toBe("lazy");
 });
 
 test("a tile says where its actor stands", () => {

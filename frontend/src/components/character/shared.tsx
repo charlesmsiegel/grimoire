@@ -67,15 +67,20 @@ export function formatOf(file: File): string {
   return ext === "png" ? "png" : ext === "charx" ? "charx" : "json";
 }
 
-/** `?v=` names the exact content state, so these cache immutable; an upload, a
+/** One character image's URL at a given `?w=` downscale -- or, called with
+ *  none, the original, which is what a link out and the crop picker want.
+ *
+ *  `?v=` names the exact content state, so these cache immutable; an upload, a
  *  remove or a promote refreshes the tokens through the character read. The
  *  token must come from the STORE: a session counter reset to its initial value
  *  on every mount pinned the pre-upload image in the browser cache for a year
  *  (an immutable URL is never revalidated). */
-export const withToken = (url: string, v?: string | null) => (v ? `${url}?v=${v}` : url);
+export const characterImage = (scope: EntityScope, cid: string, version: string, name: string,
+                               v?: string | null) =>
+  (w?: number) => api.actorImageUrl(scope, "characters", cid, version, name, { w, v });
 
 export const avatarSrc = (scope: EntityScope, cid: string, version: string, v?: string | null) =>
-  withToken(api.actorImageUrl(scope, "characters", cid, version, "avatar"), v);
+  characterImage(scope, cid, version, "avatar", v)();
 
 /** Two initials, for a record with no avatar. */
 export function initialsOf(name: string): string {

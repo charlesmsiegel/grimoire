@@ -1046,6 +1046,30 @@ test("getCalendarMonths asks the scope's own calendar for its months", async () 
     "/api/worlds/realm/calendar/months?year=5786", expect.objectContaining({ method: "GET" }));
 });
 
+test("actor and entity image URLs take the same {w, v} query the cover builders do", () => {
+  // A tile or a portrait asks for a `?w=` downscale; without one every grid
+  // pulled every original at full size to draw it at a few dozen pixels.
+  const scope = { kind: "world", id: "realm" } as const;
+  const actor = "/api/worlds/realm/characters/seraphine/versions/v1/images/avatar";
+  expect(api.actorImageUrl(scope, "characters", "seraphine", "v1", "avatar")).toBe(actor);
+  expect(api.actorImageUrl(scope, "characters", "seraphine", "v1", "avatar", { w: 512, v: "abc" }))
+    .toBe(`${actor}?w=512&v=abc`);
+  expect(api.actorImageUrl(scope, "characters", "seraphine", "v1", "avatar", { w: 128 }))
+    .toBe(`${actor}?w=128`);
+  expect(api.actorImageUrl(scope, "pcs", "mara", "v1", "avatar", { v: "t1" }))
+    .toBe("/api/worlds/realm/pcs/mara/versions/v1/images/avatar?v=t1");
+  // Empty options are no options: a missing token is a bare (revalidated) URL,
+  // never `?v=` naming nothing.
+  expect(api.actorImageUrl(scope, "characters", "seraphine", "v1", "avatar", { v: "" })).toBe(actor);
+
+  const loc = "/api/campaigns/run/locations/saltmarch/images/avatar";
+  expect(api.entityImageUrl({ kind: "campaign", id: "run" }, "locations", "saltmarch", "avatar"))
+    .toBe(loc);
+  expect(api.entityImageUrl({ kind: "campaign", id: "run" }, "locations", "saltmarch", "avatar",
+                            { w: 256, v: "abc" }))
+    .toBe(`${loc}?w=256&v=abc`);
+});
+
 test("the campaign image library's four URLs are the four routes that serve it", async () => {
   // Worth pinning harder than most: `campaignImageUrl`'s output is not merely
   // fetched, it is WRITTEN INTO A POST and saved (#376). A wrong template here

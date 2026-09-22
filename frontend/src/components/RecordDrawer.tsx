@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type CastDetail, type CastSource } from "../api/client";
+import { THUMB } from "../api/thumbs";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 
 export type DrawerTarget =
@@ -61,8 +62,14 @@ export function RecordDrawer({ cid, sid, target, onClose }:
         setBody(d.body);
         setSource(d.source);
         // Either actor kind: `d.kind` is the asset base, so a PC's portrait
-        // resolves here exactly as a character's does (#219).
-        setAvatar(api.actorImageUrl({ kind: "campaign", id: cid }, d.kind, d.id, d.version, "avatar"));
+        // resolves here exactly as a character's does (#219). One fixed
+        // bucket, not a srcset: `.drawer-avatar` is drawn at its own aspect
+        // with no set width, and a srcset's descriptors would re-state its
+        // natural size -- shrinking a small original below what it drew at.
+        // The large bucket, because this is the one portrait on screen and
+        // the reader opened it to look at this person.
+        setAvatar(api.actorImageUrl({ kind: "campaign", id: cid }, d.kind, d.id, d.version, "avatar",
+                                    { w: THUMB.large }));
       });
     } else {
       api.readEntity({ kind: "campaign", id: cid }, "locations", target.id).then((e) => {
@@ -88,7 +95,7 @@ export function RecordDrawer({ cid, sid, target, onClose }:
           <span className={`role-chip cast-source ${source}`} title={badge.hint}>{badge.label}</span>
         )}
         {avatar && (
-          <img className="drawer-avatar" alt={`${title} avatar`} src={avatar}
+          <img className="drawer-avatar" alt={`${title} avatar`} src={avatar} decoding="async"
                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
         )}
         <div className="detail-rendered"><Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown></div>

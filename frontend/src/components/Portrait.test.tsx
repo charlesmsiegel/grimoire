@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from "@testing-library/react";
+import { thumbSet } from "../api/thumbs";
 import { Portrait, initialsOf } from "./Portrait";
 
 test("initialsOf takes the first letters of the first two words", () => {
@@ -21,4 +22,36 @@ test("falls back to initials when the image fails to load", () => {
   render(<Portrait src="/img/broken.png" name="Maren Voss" />);
   fireEvent.error(screen.getByAltText("Maren Voss portrait"));
   expect(screen.getByText("MV")).toBeInTheDocument();
+});
+
+const set = () => thumbSet((w) => `/img/mara?w=${w}`, "120px");
+
+test("a portrait loads lazily and decodes off the main thread", () => {
+  render(<Portrait src="/img/mara" name="Mara" />);
+  const img = screen.getByAltText("Mara portrait");
+  expect(img.getAttribute("loading")).toBe("lazy");
+  expect(img.getAttribute("decoding")).toBe("async");
+  expect(img.getAttribute("srcset")).toBeNull();
+});
+
+test("a thumbSet renders as src, srcset and sizes", () => {
+  render(<Portrait src={set()} name="Mara" />);
+  const img = screen.getByAltText("Mara portrait");
+  expect(img.getAttribute("src")).toBe("/img/mara?w=512");
+  expect(img.getAttribute("srcset")).toContain("/img/mara?w=256 170w");
+  expect(img.getAttribute("sizes")).toBe("120px");
+});
+
+test("a broken thumbSet stays initials across renders that rebuild it", () => {
+  // The set is a fresh object every render. Keyed on the object, the reset
+  // effect would clear `broken` straight after the error set it, and a 404ing
+  // portrait would re-request itself forever.
+  const { rerender } = render(<Portrait src={set()} name="Mara Winifred" />);
+  fireEvent.error(screen.getByAltText("Mara Winifred portrait"));
+  expect(screen.getByText("MW")).toBeInTheDocument();
+  rerender(<Portrait src={set()} name="Mara Winifred" />);
+  expect(screen.queryByAltText("Mara Winifred portrait")).toBeNull();
+  // ...while a different picture is a fresh chance to load.
+  rerender(<Portrait src={thumbSet((w) => `/img/winifred?w=${w}`, "120px")} name="Mara Winifred" />);
+  expect(screen.getByAltText("Mara Winifred portrait")).toBeInTheDocument();
 });

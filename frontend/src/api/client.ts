@@ -788,6 +788,22 @@ function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
 
+/** What an image URL can ask of the route that serves it: `w`, a downscale
+ *  (`api/thumbs.ts` says which), and `v`, the store's token for the bytes,
+ *  which makes the response cache immutable. Either left out, or empty, is
+ *  simply not asked -- a bare URL is the revalidated one. */
+export type ImageOpts = { w?: number; v?: string | null };
+
+/** `path` with `opts` as its query. One builder for every image URL, so `w`
+ *  and `v` read the same way, in the same order, wherever a picture is drawn. */
+function withImageQuery(path: string, opts?: ImageOpts): string {
+  const q = new URLSearchParams();
+  if (opts?.w) q.set("w", String(opts.w));
+  if (opts?.v) q.set("v", opts.v);
+  const qs = q.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
 // `signal` unsubscribes; it no longer cancels. Aborting used to BE the cancel:
 // the backend saw the disconnect, persisted whatever the model had produced,
 // and unwound. A turn is detached from its request now -- that is the whole
@@ -1613,18 +1629,14 @@ export const api = {
   setAvatarFocus: (scope: EntityScope, cid: string, vid: string, focus: number) =>
     request<{ ok: boolean }>("PUT",
       `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/avatar/focus`, { focus }),
-  entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
-    `${entityBase(scope)}/${kind}/${eid}/images/${name}`,
+  entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string,
+                   opts?: ImageOpts) =>
+    withImageQuery(`${entityBase(scope)}/${kind}/${eid}/images/${name}`, opts),
   listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
     request<{ name: string; ext: string; v: string; description?: string; described?: boolean }[]>(
       "GET", `${entityBase(scope)}/${kind}/${eid}/images`),
-  campaignCoverUrl: (cid: string, opts?: { w?: number; v?: string }) => {
-    const q = new URLSearchParams();
-    if (opts?.w) q.set("w", String(opts.w));
-    if (opts?.v) q.set("v", opts.v);
-    const qs = q.toString();
-    return `/api/campaigns/${cid}/cover${qs ? `?${qs}` : ""}`;
-  },
+  campaignCoverUrl: (cid: string, opts?: ImageOpts) =>
+    withImageQuery(`/api/campaigns/${cid}/cover`, opts),
   putCampaignCover: (cid: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -1640,13 +1652,8 @@ export const api = {
    *  only names that survive one (`store.image_library.addressable`), which
    *  is the same rule its listing filters by, so a name this builder is ever
    *  handed is already URL- and markdown-safe. */
-  campaignImageUrl: (cid: string, name: string, opts?: { w?: number; v?: string }) => {
-    const q = new URLSearchParams();
-    if (opts?.w) q.set("w", String(opts.w));
-    if (opts?.v) q.set("v", opts.v);
-    const qs = q.toString();
-    return `/api/campaigns/${cid}/images/${name}${qs ? `?${qs}` : ""}`;
-  },
+  campaignImageUrl: (cid: string, name: string, opts?: ImageOpts) =>
+    withImageQuery(`/api/campaigns/${cid}/images/${name}`, opts),
   /** The library this campaign can see, and what it has hidden.
    *
    *  `{images, hidden}` rather than a bare array since the library began
@@ -1670,13 +1677,8 @@ export const api = {
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/images/${name}`),
   // ---- the world's cover and its own image library ----
   /** The world's cover: the worlds shelf, the world header, and a bundle. */
-  worldCoverUrl: (wid: string, opts?: { w?: number; v?: string }) => {
-    const q = new URLSearchParams();
-    if (opts?.w) q.set("w", String(opts.w));
-    if (opts?.v) q.set("v", opts.v);
-    const qs = q.toString();
-    return `/api/worlds/${wid}/cover${qs ? `?${qs}` : ""}`;
-  },
+  worldCoverUrl: (wid: string, opts?: ImageOpts) =>
+    withImageQuery(`/api/worlds/${wid}/cover`, opts),
   putWorldCover: (wid: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -1693,13 +1695,8 @@ export const api = {
    *  This URL is for the world's OWN surfaces. A post never carries it: what a
    *  campaign inserts is `campaignImageUrl`, which follows the campaign even
    *  for a picture it inherits (`store/context/art.py:url_for`). */
-  worldImageUrl: (wid: string, name: string, opts?: { w?: number; v?: string }) => {
-    const q = new URLSearchParams();
-    if (opts?.w) q.set("w", String(opts.w));
-    if (opts?.v) q.set("v", opts.v);
-    const qs = q.toString();
-    return `/api/worlds/${wid}/images/${name}${qs ? `?${qs}` : ""}`;
-  },
+  worldImageUrl: (wid: string, name: string, opts?: ImageOpts) =>
+    withImageQuery(`/api/worlds/${wid}/images/${name}`, opts),
   /** Named for the library, not for "the world's images": `listWorldImages`
    *  next door is the whole-world GALLERY (every record's art), and two
    *  functions a letter apart returning different things is how the wrong one
@@ -1926,8 +1923,8 @@ export const api = {
    *  place that drew a portrait beside a name had "characters" written into
    *  it, which is what left every PC showing initials. */
   actorImageUrl: (scope: EntityScope, kind: "characters" | "pcs", aid: string,
-                  vid: string, name: string) =>
-    `${entityBase(scope)}/${kind}/${aid}/versions/${vid}/images/${name}`,
+                  vid: string, name: string, opts?: ImageOpts) =>
+    withImageQuery(`${entityBase(scope)}/${kind}/${aid}/versions/${vid}/images/${name}`, opts),
 
   // campaign cast & play
   listAppearances: (cid: string) => request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`),

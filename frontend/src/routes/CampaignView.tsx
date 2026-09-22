@@ -16,6 +16,7 @@ import {
   type UsageBucket,
   type UsagePostBucket,
 } from "../api/client";
+import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
 import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
@@ -3884,7 +3885,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // every PC, because PCs had no images to point at (#219).
     const { kind, id } = run.actor;
     const ver = roster.find((r) => r.kind === kind && r.id === id)?.version;
-    return ver ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, ver, "avatar") : null;
+    // A 26px plate: the smallest bucket, never the original.
+    return ver ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, ver, "avatar",
+                                   { w: THUMB.row }) : null;
   }
 
   /** Whose images the picker offers for a post in `run` (#376).

@@ -786,6 +786,24 @@ def _upload_image_ext(data: bytes) -> str:
 #: width that drifts between them is two cache keys for one picture.
 THUMB_W = 320
 
+#: The widths `?w=` is actually served at. A request snaps UP to the smallest
+#: bucket that holds it (a tile asking for 154 gets 256, never 128 -- snapping
+#: down would hand a slot fewer pixels than it asked for), and past the last
+#: one it is capped there. A handful rather than any integer because every
+#: distinct width is a cache entry and a cold Pillow resize per picture: a
+#: layout asking for its own exact pixel count multiplies both by the number
+#: of layouts that draw it. The client asks for these exactly
+#: (`frontend/src/api/thumbs.ts`), which is what keeps the width a `srcset`
+#: candidate is described by true of the bytes that come back. THUMB_W stays
+#: a bucket so the gallery thumbnails built with it keep their own entry.
+THUMB_BUCKETS = (128, 256, THUMB_W, 512, 1024)
+
+
+def _thumb_width(w: int) -> int:
+    """The bucket a requested `?w=` is served at: the smallest that is at
+    least `w`, or the largest when `w` is past them all."""
+    return next((b for b in THUMB_BUCKETS if b >= w), THUMB_BUCKETS[-1])
+
 
 def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
                  request: Request | None = None):
@@ -830,7 +848,7 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     # ?w= asks for a downscaled variant — tiles shouldn't pull multi-MB originals.
     # An undecodable source just serves the original bytes.
     if request is not None and (w := request.query_params.get("w", "")).isdigit():
-        tp = store.thumbs.thumbnail(p, max(16, min(1024, int(w))))
+        tp = store.thumbs.thumbnail(p, _thumb_width(int(w)))
         if tp is not None:
             try:
                 thumb = tp.read_bytes()

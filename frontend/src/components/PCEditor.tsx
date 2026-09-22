@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
+import { THUMB, thumbSet } from "../api/thumbs";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
@@ -233,11 +234,13 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
   // Only ever called from inside the `detail &&` branch, so the id is there;
   // taking it as an argument says that instead of papering it over with a
   // `?? ""` that would build a URL with an empty path segment.
-  const imgSrc = (pid: string, n: string) => {
-    const base = api.actorImageUrl(scope, "pcs", pid, vid, n);
-    const v = images.find((i) => i.name === n)?.v;
-    return v ? `${base}?v=${v}` : base;
-  };
+  const imgUrl = (pid: string, n: string, w?: number) =>
+    api.actorImageUrl(scope, "pcs", pid, vid, n, { w, v: images.find((i) => i.name === n)?.v });
+  // The original is for where the reader looks at the picture itself -- a link
+  // out, the crop picker. What the page draws is a downscale sized to its slot.
+  const imgSrc = (pid: string, n: string) => imgUrl(pid, n);
+  const imgThumb = (pid: string, n: string, sizes: string) =>
+    thumbSet((w) => imgUrl(pid, n, w), sizes);
 
   /** Re-read the open version in place. `select()` would snap back to the
    *  default version, which is the wrong answer after editing another one's art. */
@@ -359,7 +362,8 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
             <span className="pc-row-portrait" aria-hidden>
               <Portrait name={p.name} focus={p.avatar_focus}
                         src={p.has_avatar
-                          ? api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar")
+                          ? api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar",
+                                              { w: THUMB.row })
                           : null} />
             </span>
             <span className="row-name">{p.name}</span>
@@ -396,8 +400,8 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
                   <button className="pc-head-art avatar-crop-btn" type="button"
                           aria-label="Adjust avatar crop" title="Adjust avatar crop"
                           onClick={() => setCropOpen(true)}>
-                    <Portrait src={imgSrc(detail.meta.id, "avatar")} name={persona.name || detail.meta.name}
-                              focus={avatarFocus} />
+                    <Portrait src={imgThumb(detail.meta.id, "avatar", "160px")}
+                              name={persona.name || detail.meta.name} focus={avatarFocus} />
                   </button>
                 ) : (
                   <span className="pc-head-art" aria-hidden>
@@ -417,7 +421,8 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
                 {hasAvatar ? (
                   <figure className="shelf-tile avatar-tile">
                     <a href={imgSrc(detail.meta.id, "avatar")} target="_blank" rel="noreferrer">
-                      <img alt="avatar" src={imgSrc(detail.meta.id, "avatar")} />
+                      <img alt="avatar" loading="lazy" decoding="async"
+                           {...imgThumb(detail.meta.id, "avatar", "96px")} />
                     </a>
                     <figcaption>avatar</figcaption>
                     <button className="shelf-promote" onClick={() => removeImage("avatar")}>Remove</button>
@@ -430,7 +435,9 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
                 )}
                 {galleryNames.map((n) => (
                   <div className="shelf-tile" key={n}>
-                    <a href={imgSrc(detail.meta.id, n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(detail.meta.id, n)} /></a>
+                    <a href={imgSrc(detail.meta.id, n)} target="_blank" rel="noreferrer">
+                      <img alt={n} loading="lazy" decoding="async" {...imgThumb(detail.meta.id, n, "96px")} />
+                    </a>
                     <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as avatar</button>
                     <button className="shelf-promote" onClick={() => removeImage(n)}>Remove</button>
                     <ImageDescriptionField key={`${vid}:${n}`} name={n} value={descriptions[n]}

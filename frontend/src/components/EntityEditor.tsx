@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
 import { errorText } from "../api/errors";
 import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
+import { thumbSet } from "../api/thumbs";
 import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
 import { Field } from "./Field";
@@ -107,6 +108,9 @@ const tokenTitle = (level: Secrecy) => (isNeverCharged(level) ? TOKEN_HINT_NEVER
 // to be in the name rather than only in the styling.
 const tokenAria = (n: number, level: Secrecy) =>
   isNeverCharged(level) ? `${tokenLabel(n)}, never charged` : tokenLabel(n);
+
+// The width a tile on the detail view's `.images-shelf.wide` is drawn at.
+const SHELF_WIDE = "154px";
 
 // What each secrecy level does to the prompt, in the words the picker shows.
 // "this text", not "this entry": secrecy gates the BODY, and the record still
@@ -759,11 +763,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     .map((i) => i.name)
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
-  const imgSrc = (n: string) => {
-    const base = api.entityImageUrl(scope, kind, editing ?? "", n);
-    const v = images.find((i) => i.name === n)?.v;
-    return v ? `${base}?v=${v}` : base;
-  };
+  const imgUrl = (n: string, w?: number) =>
+    api.entityImageUrl(scope, kind, editing ?? "", n, { w, v: images.find((i) => i.name === n)?.v });
+  // The original is what a link out opens -- there the reader is looking at
+  // the picture itself. What the page draws is a downscale sized to its slot.
+  const imgSrc = (n: string) => imgUrl(n);
+  const imgThumb = (n: string, sizes: string) => thumbSet((w) => imgUrl(n, w), sizes);
 
   async function describeImage(name: string, description: string) {
     if (!editing) return;
@@ -872,8 +877,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
           className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
           to={recordHref(e.id)}>
       {e.has_image && (
-        <img className="loc-row-img" alt=""
-             src={`${api.entityImageUrl(scope, kind, e.id, "avatar")}${e.image_v ? `?v=${e.image_v}` : ""}`}
+        // The 220px rail, or the whole width once the editor stacks on a phone.
+        <img className="loc-row-img" alt="" loading="lazy" decoding="async"
+             {...thumbSet((w) => api.entityImageUrl(scope, kind, e.id, "avatar", { w, v: e.image_v }),
+                          "(max-width: 640px) 100vw, 220px")}
              onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
       )}
       <span className="row-name">{e.name}</span>
@@ -888,6 +895,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             const o = ownerOpts.find((x) => x.ref === ref);
             return o?.avatar ? (
               <img key={ref} className="owner-stack-img" alt="" title={o.label} src={o.avatar}
+                   loading="lazy" decoding="async"
                    onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
             ) : null;
           })}
@@ -1005,7 +1013,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             <div className="detail-main">
               {editing && hasPrimary ? (
                 <div className="loc-head">
-                  <img className="loc-head-img" alt={`${name} primary`} src={imgSrc("avatar")}
+                  <img className="loc-head-img" alt={`${name} primary`} decoding="async"
+                       {...imgThumb("avatar", "340px")}
                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                   {heading}
                 </div>
@@ -1019,7 +1028,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                     {hasPrimary ? (
                       <figure className="shelf-tile avatar-tile">
                         <a href={imgSrc("avatar")} target="_blank" rel="noreferrer">
-                          <img alt="primary" src={imgSrc("avatar")} />
+                          <img alt="primary" loading="lazy" decoding="async"
+                               {...imgThumb("avatar", SHELF_WIDE)} />
                         </a>
                         <figcaption>primary</figcaption>
                         <ImageDescriptionField
@@ -1034,7 +1044,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                     )}
                     {galleryNames.map((n) => (
                       <div className="shelf-tile" key={n}>
-                        <a href={imgSrc(n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(n)} /></a>
+                        <a href={imgSrc(n)} target="_blank" rel="noreferrer">
+                          <img alt={n} loading="lazy" decoding="async" {...imgThumb(n, SHELF_WIDE)} />
+                        </a>
                         <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as primary</button>
                         <ImageDescriptionField
                           key={`${editing}:${n}`}

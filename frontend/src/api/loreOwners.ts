@@ -1,9 +1,15 @@
 import { api, type EntityScope, type RefKind } from "./client";
+import { THUMB } from "./thumbs";
 
 /** A record another record can point at: a lore entry's owner, or the target of
  *  a `ref` entity field (#222). One shape for both because a ref is one thing —
  *  `<kind>:<id>` plus something to show the reader — and the picker that offers
- *  them is the same picker. */
+ *  them is the same picker.
+ *
+ *  `avatar` is a row-bucket thumbnail: every place that draws one is a chip or
+ *  an owner stack (22-26px), and a lore list is many rows each stacking
+ *  several faces. A surface that ever wants these larger should build its own
+ *  URL rather than stretch this one. */
 export type RecordRef = { ref: string; label: string; kind: RefKind; avatar?: string };
 
 /** The historical name, kept because `owners:` is what most of the app calls
@@ -70,7 +76,8 @@ async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<Record
     return chars.filter((c) => referenceable(c.id)).map((c) => ({
       ref: `characters:${c.id}`, label: c.name, kind,
       ...(c.has_avatar
-        ? { avatar: api.actorImageUrl(scope, "characters", c.id, c.default_version, "avatar") }
+        ? { avatar: api.actorImageUrl(scope, "characters", c.id, c.default_version, "avatar",
+                                      { w: THUMB.row, v: c.avatar_v }) }
         : {}),
     }));
   }
@@ -81,7 +88,8 @@ async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<Record
     return pcs.filter((p) => referenceable(p.id)).map((p) => ({
       ref: `pcs:${p.id}`, label: p.name, kind,
       ...(p.has_avatar
-        ? { avatar: api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar") }
+        ? { avatar: api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar",
+                                      { w: THUMB.row }) }
         : {}),
     }));
   }

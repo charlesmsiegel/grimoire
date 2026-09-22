@@ -1,4 +1,5 @@
 import { api, type Actor, type Briefing, type RosterEntry } from "../../api/client";
+import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
 import CastChanges from "./CastChanges";
 
@@ -40,9 +41,12 @@ export function tiers(cast: Actor[], roster: RosterEntry[]): CastTile[] {
 function Tile(
   { cid, tile, onOpen }: { cid: string; tile: CastTile; onOpen: () => void },
 ) {
+  // `.cast-tile-art`: half the 274px column (~116px) on a desktop, a 52px
+  // circle once the grid becomes a strip at phone width.
   const src = tile.version
-    ? api.actorImageUrl({ kind: "campaign", id: cid }, tile.kind, tile.id,
-                            tile.version, "avatar")
+    ? thumbSet((w) => api.actorImageUrl({ kind: "campaign", id: cid }, tile.kind, tile.id,
+                                        tile.version, "avatar", { w }),
+               "(max-width: 720px) 52px, 120px")
     : null;
   return (
     <div className="cast-tile">

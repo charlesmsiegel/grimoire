@@ -4,7 +4,8 @@ import { api, type Appearance, type BaseVersion, type EntityScope, type Shadowed
   from "../../api/client";
 import { errorText } from "../../api/errors";
 import { ImageDescriptionField } from "../ImageDescriptionField";
-import { avatarSrc, withToken } from "./shared";
+import { thumbSet } from "../../api/thumbs";
+import { characterImage } from "./shared";
 
 /** The names a batch of newly-picked files lands under.
  *
@@ -32,10 +33,13 @@ export function nextImageNames(count: number, hasAvatar: boolean, gallery: strin
  *  written to from here, and the description in the same clamped box whether
  *  it can be edited (`onSave` given, the field) or only read (a plain box).
  */
-function Tile({ name, src, avatar, caption, description, descKey,
+function Tile({ name, url, avatar, caption, description, descKey,
                 onSave, onDraft, onPromote, onRemove }: {
   name: string;
-  src: string;
+  /** The image's URL at a `?w=`, or the original with none: the tile draws a
+   *  96px downscale and links to the original, which is where the reader goes
+   *  to look at the picture itself. */
+  url: (w?: number) => string;
   avatar?: boolean;
   caption?: string;
   description: string | undefined;
@@ -47,7 +51,9 @@ function Tile({ name, src, avatar, caption, description, descKey,
 }) {
   return (
     <figure className={"shelf-tile" + (avatar ? " avatar-tile" : "")}>
-      <a href={src} target="_blank" rel="noreferrer"><img alt={name} src={src} /></a>
+      <a href={url()} target="_blank" rel="noreferrer">
+        <img alt={name} loading="lazy" decoding="async" {...thumbSet(url, "96px")} />
+      </a>
       {caption && <figcaption title={caption}>{caption}</figcaption>}
       {onPromote && (
         <button className="shelf-promote" type="button" onClick={onPromote}>Set as avatar</button>
@@ -167,9 +173,7 @@ export function ArtTab(
    *  resolve the name the way the shelf read it, so the same controls apply. */
   const versionTile = (name: string, avatar: boolean) => (
     <Tile key={name} name={name} avatar={avatar} caption={avatar ? "avatar" : undefined}
-          src={avatar ? avatarSrc(scope, cid, vid, imageTokens.avatar)
-                      : withToken(api.actorImageUrl(scope, "characters", cid, vid, name),
-                                  imageTokens[name])}
+          url={characterImage(scope, cid, vid, name, imageTokens[name])}
           description={descriptions[name]} descKey={`${vid}:${name}`}
           onSave={(d) => guard(() => api.setCharacterImageDescription(scope, cid, vid, name, d))}
           onDraft={worldScope
@@ -209,9 +213,7 @@ export function ArtTab(
               world's bytes. */}
           {originals.map((img) => (
             <Tile key={`shadowed:${img.name}`} name={img.name} caption={`${img.name} · world’s copy`}
-                  src={withToken(
-                    api.actorImageUrl({ kind: "world", id: wid }, "characters", cid, vid, img.name),
-                    img.v)}
+                  url={characterImage({ kind: "world", id: wid }, cid, vid, img.name, img.v)}
                   description={img.description} descKey={`shadowed:${vid}:${img.name}`} />
           ))}
           {/* A version the campaign no longer holds: the campaign route falls
@@ -221,8 +223,7 @@ export function ArtTab(
           {bases.map((base) => base.images.map((name) => (
             <Tile key={`${base.id}:${name}`} name={name}
                   caption={`${name} · ${base.name === base.id ? base.name : `${base.name} (${base.id})`}`}
-                  src={withToken(api.actorImageUrl(scope, "characters", cid, base.id, name),
-                                 base.image_v[name])}
+                  url={characterImage(scope, cid, base.id, name, base.image_v[name])}
                   description={base.image_descriptions[name]} descKey={`${base.id}:${name}`} />
           )))}
         </div>
@@ -236,7 +237,8 @@ export function ArtTab(
           {appearances.map((a) => (
             <div className="shelf-tile" key={`${a.gid}/${a.name}`}>
               <a href={a.url} target="_blank" rel="noreferrer">
-                <img alt={`${a.greeting_name} art`} src={a.thumb ?? a.url} />
+                <img alt={`${a.greeting_name} art`} src={a.thumb ?? a.url}
+                     loading="lazy" decoding="async" />
               </a>
               <button className="shelf-promote" onClick={() => void guard(() =>
                 api.copyGreetingImage(scope, cid, vid, { gid: a.gid, name: a.name, slot: "avatar" }))}>
