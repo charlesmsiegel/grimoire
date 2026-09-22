@@ -235,3 +235,23 @@ def test_reroll_takes_the_same_fast_path(client, monkeypatch):
     assert calls == []
     assert seen == [store.scenes.read_scene(cid, sid)["messages"][1]["response_id"]]
 
+
+def test_the_ledger_is_written_compact_and_still_reads_indented(tmp_path, monkeypatch):
+    """Compact on write: the ledger is rewritten whole several times a turn, and
+    `indent` both inflates it and pushes `json.dumps` onto the pure-Python
+    encoder. Older builds wrote it indented, and that must still read."""
+    import json
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    store.scenes.append_message(cid, sid, "assistant", "Salt — and tide.", speaker="Mara")
+    rid = store.responses.migrate(cid, sid)[0]["id"]
+    path = store.responses._path(cid)
+    raw = path.read_text(encoding="utf-8")
+    assert raw == json.dumps(json.loads(raw), ensure_ascii=False, separators=(",", ":"))
+    assert "—" in raw          # ensure_ascii stays off: prose is not \u-escaped
+    path.write_text(json.dumps(json.loads(raw), ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    assert store.responses.get(cid, sid, rid)["content"] == "Salt — and tide."
