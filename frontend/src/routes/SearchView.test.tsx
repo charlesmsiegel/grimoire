@@ -51,7 +51,8 @@ test("a query in the URL is searched for and its hits are listed", async () => {
   // Queried by role, not by text: the matched term is wrapped in a <mark>, so
   // the name is three nodes rather than one.
   expect(await screen.findByRole("link", { name: /the salt pact/i })).toBeInTheDocument();
-  expect(api.search).toHaveBeenCalledWith("salt", { scope: "", kinds: [], mode: "keyword" });
+  expect(api.search).toHaveBeenCalledWith(
+    "salt", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal));
   // The box is seeded from the URL, so the page is a link rather than a state
   // someone has to retype into.
   expect(screen.getByRole("searchbox", { name: /search the library/i })).toHaveValue("salt");
@@ -81,7 +82,8 @@ test("typing settles before it searches, and only the settled query is asked", a
   // per keystroke would put four in flight for a five-letter word.
   expect(api.search).not.toHaveBeenCalled();
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
-  expect(api.search).toHaveBeenCalledWith("salt", { scope: "", kinds: [], mode: "keyword" });
+  expect(api.search).toHaveBeenCalledWith(
+    "salt", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal));
 });
 
 test("a hit says which world or campaign holds it", async () => {
@@ -110,10 +112,12 @@ test("the kind column filters, and clicking the live filter clears it", async ()
   const column = within(await screen.findByRole("complementary"));
   fireEvent.click(column.getByRole("button", { name: /^Lore/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: ["lore"], mode: "keyword" }));
+    expect(api.search).toHaveBeenLastCalledWith(
+      "salt", { scope: "", kinds: ["lore"], mode: "keyword" }, expect.any(AbortSignal)));
   fireEvent.click(column.getByRole("button", { name: /^Lore/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "keyword" }));
+    expect(api.search).toHaveBeenLastCalledWith(
+      "salt", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal)));
 });
 
 test("the scope column narrows to worlds or campaigns", async () => {
@@ -121,7 +125,8 @@ test("the scope column narrows to worlds or campaigns", async () => {
   const column = within(await screen.findByRole("complementary"));
   fireEvent.click(column.getByRole("button", { name: /^Campaigns/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "campaign", kinds: [], mode: "keyword" }));
+    expect(api.search).toHaveBeenLastCalledWith(
+      "salt", { scope: "campaign", kinds: [], mode: "keyword" }, expect.any(AbortSignal)));
 });
 
 test("only the kinds this query found are offered as filters", async () => {
@@ -137,7 +142,8 @@ test("nothing matching says so, and offers the way out of the filter", async () 
   expect(await screen.findByText(/nothing matches/i)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /search everywhere instead/i }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "keyword" }));
+    expect(api.search).toHaveBeenLastCalledWith(
+      "salt", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal)));
 });
 
 test("a failed search degrades to a message rather than a stuck spinner", async () => {
@@ -195,7 +201,8 @@ test("the kind still filtering stays in the column when its count drops to 0", a
   await waitFor(() => expect(column.getByRole("button", { name: /^Lore/ })).toHaveClass("active"));
   fireEvent.click(column.getByRole("button", { name: /^Lore/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "keyword" }));
+    expect(api.search).toHaveBeenLastCalledWith(
+      "salt", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal)));
 });
 
 test("the result count is announced, not just shown", async () => {
@@ -208,9 +215,10 @@ test("the result count is announced, not just shown", async () => {
 
 
 test("a slow answer for an old query never lands on top of a newer one", async () => {
-  // Type "sal", then "salt". If the sweep for "sal" settles last -- it walks
-  // the whole store, so it easily can -- the page would show its hits under
-  // the newer query's heading, with no way to tell.
+  // Type "sal", then "salt". The sweep for "sal" is still out when "salt"
+  // settles, so the page waits for it rather than starting a second sweep
+  // beside it -- and when it lands, its hits are dropped rather than shown
+  // under the newer query's heading, and "salt" is asked for straight away.
   let releaseStale = (_: unknown) => {};
   (api.search as any).mockImplementationOnce(
     () => new Promise((res) => { releaseStale = res; }));
@@ -221,12 +229,90 @@ test("a slow answer for an old query never lands on top of a newer one", async (
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
   fireEvent.change(screen.getByRole("searchbox", { name: /search the library/i }),
                    { target: { value: "salt" } });
-  await screen.findByRole("link", { name: /the tide table/i });
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/q=salt$/));
+  expect(api.search).toHaveBeenCalledTimes(1);
 
   releaseStale(result([hit()]));                       // the stale answer, late
-  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(2));
+  await screen.findByRole("link", { name: /the tide table/i });
+  expect(api.search).toHaveBeenCalledTimes(2);
+  expect(api.search).toHaveBeenLastCalledWith(
+    "salt", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal));
   expect(screen.queryByRole("link", { name: /the salt pact/i })).not.toBeInTheDocument();
-  expect(screen.getByRole("link", { name: /the tide table/i })).toBeInTheDocument();
+});
+
+test("typing on through a slow sweep asks once more, for the last query only", async () => {
+  // Four settles while one sweep is out. Each used to start a sweep of its
+  // own beside the others, all walking the whole store at once, with the one
+  // the reader wanted finishing last. Now the page sends at most two: the one
+  // already out, and the last thing typed.
+  let release = (_: unknown) => {};
+  (api.search as any).mockImplementationOnce(
+    () => new Promise((res) => { release = res; }));
+  (api.search as any).mockResolvedValue(result([hit({ id: "salt-marsh", name: "Salt Marsh" })],
+                                                { q: "salt marsh", terms: ["salt", "marsh"] }));
+
+  show("/search");
+  const box = screen.getByRole("searchbox", { name: /search the library/i });
+  for (const [typed, inUrl] of [["sa", "sa"], ["sal", "sal"], ["salt", "salt"],
+                                ["salt marsh", "salt\\+marsh"]]) {
+    fireEvent.change(box, { target: { value: typed } });
+    await waitFor(() =>
+      expect(screen.getByTestId("where")).toHaveTextContent(new RegExp(`q=${inUrl}$`)));
+  }
+  expect(api.search).toHaveBeenCalledTimes(1);
+
+  release(result([hit({ id: "sandbar", name: "Sandbar" })], { q: "sa", terms: ["sa"] }));
+  expect(await screen.findByRole("link", { name: /salt marsh/i })).toBeInTheDocument();
+  expect(api.search).toHaveBeenCalledTimes(2);
+  expect(api.search).toHaveBeenLastCalledWith(
+    "salt marsh", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal));
+  expect(screen.queryByRole("link", { name: /sandbar/i })).not.toBeInTheDocument();
+});
+
+test("typing away and back while a sweep is out keeps its answer", async () => {
+  // "salt", then "salty", then "salt" again before the first sweep lands: the
+  // answer on its way is the answer to the question now being asked.
+  let release = (_: unknown) => {};
+  (api.search as any).mockImplementationOnce(
+    () => new Promise((res) => { release = res; }));
+
+  show("/search?q=salt");
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
+  const box = screen.getByRole("searchbox", { name: /search the library/i });
+  fireEvent.change(box, { target: { value: "salty" } });
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/q=salty$/));
+  fireEvent.change(box, { target: { value: "salt" } });
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/q=salt$/));
+
+  release(result([hit()]));
+  expect(await screen.findByRole("link", { name: /the salt pact/i })).toBeInTheDocument();
+  expect(api.search).toHaveBeenCalledTimes(1);
+});
+
+test("a superseded search that fails is traded for the wanted one, not reported", async () => {
+  let fail = (_: unknown) => {};
+  (api.search as any).mockImplementationOnce(
+    () => new Promise((_res, rej) => { fail = rej; }));
+
+  show("/search?q=sal");
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
+  fireEvent.change(screen.getByRole("searchbox", { name: /search the library/i }),
+                   { target: { value: "salt" } });
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/q=salt$/));
+
+  fail(new Error("the sweep for sal fell over"));
+  expect(await screen.findByRole("link", { name: /the salt pact/i })).toBeInTheDocument();
+  expect(screen.queryByText(/could not be run/i)).not.toBeInTheDocument();
+});
+
+test("leaving the page aborts the search it left running", async () => {
+  (api.search as any).mockImplementation(() => new Promise(() => {}));
+  const { unmount } = show();
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
+  const signal = (api.search as any).mock.calls[0][2] as AbortSignal;
+  expect(signal.aborted).toBe(false);
+  unmount();
+  expect(signal.aborted).toBe(true);
 });
 
 // ---- mode: keywords or meaning (#34) --------------------------------------
@@ -236,7 +322,8 @@ test("the mode is part of the query and lives in the URL like every other filter
   await screen.findByRole("link", { name: /the salt pact/i });
   fireEvent.click(screen.getByRole("button", { name: /meaning/i }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "semantic" }));
+    expect(api.search).toHaveBeenLastCalledWith(
+      "salt", { scope: "", kinds: [], mode: "semantic" }, expect.any(AbortSignal)));
   expect(screen.getByTestId("where").textContent).toContain("mode=semantic");
 });
 
@@ -306,7 +393,7 @@ test("meaning mode waits to be asked rather than searching as you type", async (
   expect(api.search).not.toHaveBeenCalled();
   fireEvent.submit(box.closest("form")!);
   await waitFor(() => expect(api.search).toHaveBeenCalledWith(
-    "salt", { scope: "", kinds: [], mode: "semantic" }));
+    "salt", { scope: "", kinds: [], mode: "semantic" }, expect.any(AbortSignal)));
 });
 
 test("a character hit names the version it matched, so two versions are two rows", async () => {
