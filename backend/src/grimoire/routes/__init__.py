@@ -95,12 +95,39 @@ __all__ = [
 
 router = APIRouter()
 
+
+def _compose(domain: APIRouter) -> None:
+    """Append ``domain``'s route objects to ``router`` -- the objects, not copies.
+
+    Not ``include_router``: on FastAPI < 0.116, the Android pin, an include
+    re-analyses every route it copies (signature, dependencies, response
+    model), and ``main.create_app`` includes this aggregate into the app, which
+    analyses them all again anyway. Including here as well cost one extra
+    analysis of the whole API at every cold start, for an aggregate nothing
+    serves directly. (The lazy FastAPI the desktop runs analyses each route
+    once either way; there an include only nests one more wrapper to walk.)
+
+    Nothing an include would have applied is lost. A router's own prefix,
+    tags, dependencies and default response class are baked into each route
+    when ``@router.get`` declares it, and the include's arguments would come
+    from this call, which passes none. What an include copies off the router
+    *itself* is its startup and shutdown handlers and its lifespan, so a
+    domain router that grows any of those is refused here rather than
+    silently dropped.
+    """
+    own_lifespan = type(domain.lifespan_context) is not type(router.lifespan_context)
+    if domain.on_startup or domain.on_shutdown or own_lifespan:
+        raise RuntimeError("a domain router with event handlers or a lifespan "
+                           "must be composed with include_router")
+    router.routes.extend(domain.routes)
+
+
 # `world_images` AFTER `characters`: `/worlds/{wid}/images/{name}` generalizes
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, modules, worlds, characters, world_images, greetings,
                 runs, scenes, character_turns, passage_characters, weather, mechanics, usage, observability,
                 campaigns, ledger, search, shell, todo):
-    router.include_router(_domain.router)
+    _compose(_domain.router)
 
-router.include_router(entities.router)  # keep last: generic /{kind} catch-alls
+_compose(entities.router)  # keep last: generic /{kind} catch-alls
