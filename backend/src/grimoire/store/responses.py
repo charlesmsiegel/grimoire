@@ -49,9 +49,10 @@ def _write(cid, data):
     # Compact, because this file is campaign-wide and rewritten WHOLE several
     # times a turn (open a round, prepare, save the variant, close the round),
     # each while holding the campaign lock every other writer queues on.
-    # `indent` pads it with whitespace nobody reads and, on the CPython
-    # versions this runs on, is also what sends `json.dumps` down the
-    # pure-Python encoder instead of the C one -- the dearer of the two. Still
+    # `indent` pads it with whitespace nobody reads and, before CPython 3.13
+    # (so on the 3.11 floor and on the 3.12 Android embeds), is also what
+    # sends `json.dumps` down the pure-Python encoder instead of the C one --
+    # the dearer of the two; 3.13's C encoder indents too. Still
     # plain JSON, so a build that wrote it indented and one that writes it
     # compact read each other's files. `ensure_ascii=False` stays: escaping
     # the prose's non-ASCII punctuation would hand the bytes straight back.
