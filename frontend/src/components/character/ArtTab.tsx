@@ -237,8 +237,8 @@ export function ArtTab(
           {appearances.map((a) => (
             <div className="shelf-tile" key={`${a.gid}/${a.name}`}>
               <a href={a.url} target="_blank" rel="noreferrer">
-                <img alt={`${a.greeting_name} art`} src={a.thumb ?? a.url}
-                     loading="lazy" decoding="async" />
+                <img alt={`${a.greeting_name} art`} loading="lazy" decoding="async"
+                     src={a.thumb ?? a.url} />
               </a>
               <button className="shelf-promote" onClick={() => void guard(() =>
                 api.copyGreetingImage(scope, cid, vid, { gid: a.gid, name: a.name, slot: "avatar" }))}>

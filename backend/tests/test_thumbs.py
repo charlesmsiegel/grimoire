@@ -1,10 +1,15 @@
 """Thumbnail generation + the ?w= image route parameter."""
 
 import io
+import re
+from pathlib import Path
 
 from PIL import Image
 
+from grimoire.routes.common import THUMB_BUCKETS, THUMB_W
 from grimoire.store import assets, thumbs
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _png_bytes(w=1200, h=800, color=(200, 30, 30)) -> bytes:
@@ -123,11 +128,16 @@ def test_a_width_snaps_up_to_its_bucket(client):
             assert max(im.size) == served, (asked, im.size)
 
 
-def test_the_client_buckets_are_server_buckets(client, tmp_path):
-    # `frontend/src/api/thumbs.ts` asks for exactly these, so each one must be
-    # a bucket already -- one that snapped to a neighbour would be served a
-    # different size than the srcset descriptor it was chosen by claims.
-    from grimoire.routes.common import THUMB_BUCKETS, THUMB_W
+def test_the_client_buckets_are_server_buckets():
+    # `frontend/src/api/thumbs.ts` asks for exactly its THUMB widths, so each
+    # one must be a bucket already -- one that snapped to a neighbour would be
+    # served a different size than the srcset descriptor it was chosen by
+    # claims. Read from the client's own source, so a width added on either
+    # side alone fails here rather than going soft in a browser.
+    src = (REPO / "frontend" / "src" / "api" / "thumbs.ts").read_text(encoding="utf-8")
+    m = re.search(r"export const THUMB = \{(.*?)\} as const;", src, re.DOTALL)
+    assert m, "THUMB is not declared in thumbs.ts in the shape this guard reads"
+    client = [int(n) for n in re.findall(r":\s*(\d+)", m.group(1))]
+    assert client and set(client) <= set(THUMB_BUCKETS), (client, THUMB_BUCKETS)
     assert THUMB_W in THUMB_BUCKETS
-    assert {128, 256, 512, 1024} <= set(THUMB_BUCKETS)
     assert list(THUMB_BUCKETS) == sorted(THUMB_BUCKETS)

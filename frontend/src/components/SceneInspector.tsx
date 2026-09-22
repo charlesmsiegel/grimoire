@@ -8,7 +8,7 @@ import {
   type RollingSummary, type SceneBreak,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
-import { THUMB, thumbSet } from "../api/thumbs";
+import { THUMB } from "../api/thumbs";
 import { onNoticesChanged } from "../appEvents";
 import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { ContextDiff } from "./ContextDiff";
@@ -1373,11 +1373,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           ? <button className={"inspector-row" + (locImages.includes("avatar") ? " inspector-loc" : "")}
                     onClick={() => setDrawer({ type: "location", id: setting.current!.id })}>
               {locImages.includes("avatar") && (
+                // The original, not a `?w=` bucket. The inspector opens in
+                // `.panel-slot` above the transcript, as wide as the main
+                // column, and this is drawn at `width: 100%` of it -- 800px
+                // and more on a desktop, past what the 1024 bucket fills at
+                // DPR 2 and far past the 512 a narrower `sizes` would pick at
+                // DPR 1. (The stylesheet's "286px column" describes a layout
+                // nothing renders any more.) One picture, fetched only once the
+                // reader opens the panel.
                 <img className="inspector-loc-thumb" alt={setting.current.name} decoding="async"
-                     {...thumbSet((w) => api.entityImageUrl({ kind: "campaign", id: cid }, "locations",
-                                                            setting.current!.id, "avatar", { w }),
-                                  // the inspector's ~290px track; the whole width on a phone
-                                  "(max-width: 720px) 100vw, 290px")}
+                     src={api.entityImageUrl({ kind: "campaign", id: cid }, "locations",
+                                             setting.current.id, "avatar")}
                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
               )}
               <span>{setting.current.name}</span>
