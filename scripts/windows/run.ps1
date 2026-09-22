@@ -1,8 +1,28 @@
+# Two ways to run. The default is what a player wants: one backend serving the
+# production bundle from frontend\dist beside the API, on one port. -Dev is the
+# contributor's loop and exactly what this script used to do every time --
+# uvicorn --reload plus the Vite dev server with HMR -- which costs each page
+# load an unbundled request per source module, React's development build and a
+# Node proxy in front of every API call and stream. scripts/unix/run.sh mirrors
+# this with --dev, and says more about why.
+param([switch]$Dev)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $RunDir = "$Root\.run"
 $PidFile = "$RunDir\pids"
-$Url = "http://127.0.0.1:5173"
+$DistIndex = "$Root\frontend\dist\index.html"
+$BackendPort = 8173
+$VitePort = 5173
+if ($Dev) {
+    $Url = "http://127.0.0.1:$VitePort"
+    $Ports = @($BackendPort, $VitePort)
+} else {
+    $Url = "http://127.0.0.1:$BackendPort"
+    # Only the port this mode binds: sweeping Vite's too would kill an unrelated
+    # dev server that happens to sit on Vite's default port.
+    $Ports = @($BackendPort)
+}
 New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
 
 # Kill a process tree, tolerating already-dead PIDs. taskkill's stderr must be
@@ -17,7 +37,7 @@ function Stop-Tree([int]$Id) {
 if (Test-Path $PidFile) {
     $existing = Get-Content $PidFile | Select-Object -First 1
     if ($existing -and (Get-Process -Id $existing -ErrorAction SilentlyContinue)) {
-        Write-Host "grimoire is already running ($Url). Use shutdown.ps1 to stop it."
+        Write-Host "grimoire is already running (http://127.0.0.1:$BackendPort, or :$VitePort if started with -Dev). Use shutdown.ps1 to stop it."
         exit 0
     }
     # Stale pid file: the recorded parents died, but on Windows their children
@@ -29,18 +49,69 @@ if (Test-Path $PidFile) {
 # Orphaned workers can hold the ports even with no pid file on record (a killed
 # supervisor never takes its children with it) — a fresh launch would then bind
 # alongside a zombie serving stale code. Free the ports before starting.
-foreach ($port in 8173, 5173) {
+foreach ($port in $Ports) {
     $owners = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -Unique
     foreach ($o in $owners) {
         if ($o) { Stop-Tree $o }
     }
 }
 
+# What `vite build` reads. The bundle is rebuilt when any of these is newer than
+# the dist\index.html the last build wrote, which is what makes the first launch
+# after a `git pull` serve the new UI rather than the one the installer built:
+# git stamps every file it writes with the checkout time. The inputs themselves
+# are compared as well as everything under them, since deleting a file changes
+# nothing but its directory's timestamp. A missing entry is skipped rather than
+# fatal; test_install_scripts.py asserts they all exist and that
+# scripts/unix/run.sh watches the same list.
+$BundleInputs = @("src", "public", "index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts")
+
+function Test-BundleStale {
+    if (-not (Test-Path -LiteralPath $DistIndex)) { return $true }
+    $built = (Get-Item -LiteralPath $DistIndex).LastWriteTimeUtc
+    $paths = @($BundleInputs | ForEach-Object { Join-Path "$Root\frontend" $_ } |
+        Where-Object { Test-Path -LiteralPath $_ })
+    if ($paths.Count -eq 0) { return $false }
+    $items = @(Get-Item -LiteralPath $paths -Force) + @(Get-ChildItem -LiteralPath $paths -Recurse -Force)
+    $newer = $items | Where-Object { $_.LastWriteTimeUtc -gt $built } | Select-Object -First 1
+    return [bool]$newer
+}
+
+if (-not $Dev -and (Test-BundleStale)) {
+    Write-Host "Building the UI (the first launch after an update takes a few seconds)..."
+    # `vite build` through the .bin shim, not `npm run build`: that script's
+    # `tsc -b` is a type check, the gate's job rather than a launch's. Errors
+    # only -- the bundler's size advisories are for whoever is changing the code.
+    # A missing shim (packages never installed) throws rather than setting an
+    # exit code, so both count as a failed build.
+    $buildOk = $false
+    Push-Location "$Root\frontend"
+    try {
+        .\node_modules\.bin\vite.cmd build --logLevel error
+        $buildOk = ($LASTEXITCODE -eq 0)
+    } catch {
+        Write-Host $_
+    } finally {
+        Pop-Location
+    }
+    if (-not $buildOk) {
+        # Vite empties dist\ only once bundling has succeeded, so a failure here
+        # (typically dependencies an update changed) leaves the previous build in
+        # place. Serving it beats not starting, and the next launch tries again.
+        if (Test-Path -LiteralPath $DistIndex) {
+            Write-Host "The UI build failed; serving the previous build. After an update, re-run scripts\windows\install.ps1."
+        } else {
+            Write-Host "The UI build failed and there is no previous build to serve. Re-run scripts\windows\install.ps1."
+            exit 1
+        }
+    }
+}
+
 # Kill-on-close job object: when THIS PowerShell process dies for any reason
 # (window closed, taskkill, logoff, crash), the OS terminates every process in
 # the job. This guarantees "close the terminal -> grimoire stops" even when no
-# finally block gets to run. uvicorn's --reload worker and npm's node child are
-# created as descendants and are inherited into the job automatically.
+# finally block gets to run. Descendants -- under -Dev, uvicorn's --reload
+# worker and npm's node child -- are inherited into the job automatically.
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -103,27 +174,44 @@ public static class GrimoireJob {
 '@
 $job = [GrimoireJob]::Create()
 
-# -NoNewWindow streams both servers' output into THIS console (interleaved) for
-# live debugging; -PassThru returns the Process so we can join it to the job.
-$back = Start-Process -FilePath "$Root\backend\.venv\Scripts\python.exe" `
-    -ArgumentList "-m", "uvicorn", "grimoire.main:app", "--reload", "--port", "8173" `
-    -WorkingDirectory "$Root\backend" -PassThru -NoNewWindow
-$front = Start-Process -FilePath "npm.cmd" `
-    -ArgumentList "run", "dev", "--", "--port", "5173" `
-    -WorkingDirectory "$Root\frontend" -PassThru -NoNewWindow
-[GrimoireJob]::Assign($job, $back.Handle)
-[GrimoireJob]::Assign($job, $front.Handle)
-Set-Content -Path $PidFile -Value @($back.Id, $front.Id)
+# -NoNewWindow streams the servers' output into THIS console (interleaved under
+# -Dev) for live debugging; -PassThru returns the Process so we can join it to
+# the job.
+if ($Dev) {
+    $back = Start-Process -FilePath "$Root\backend\.venv\Scripts\python.exe" `
+        -ArgumentList "-m", "uvicorn", "grimoire.main:app", "--reload", "--port", "$BackendPort" `
+        -WorkingDirectory "$Root\backend" -PassThru -NoNewWindow
+    $front = Start-Process -FilePath "npm.cmd" `
+        -ArgumentList "run", "dev", "--", "--port", "$VitePort" `
+        -WorkingDirectory "$Root\frontend" -PassThru -NoNewWindow
+    $procs = @($back, $front)
+} else {
+    # No --reload: its supervisor is a second process watching the source tree
+    # for edits a player never makes. main.py mounts frontend\dist beside /api,
+    # with the client-route fallback that lets a deep link survive a reload.
+    $back = Start-Process -FilePath "$Root\backend\.venv\Scripts\python.exe" `
+        -ArgumentList "-m", "uvicorn", "grimoire.main:app", "--port", "$BackendPort" `
+        -WorkingDirectory "$Root\backend" -PassThru -NoNewWindow
+    $procs = @($back)
+}
+foreach ($p in $procs) { [GrimoireJob]::Assign($job, $p.Handle) }
+Set-Content -Path $PidFile -Value @($procs | ForEach-Object { $_.Id })
 
-Write-Host "grimoire running at $Url (backend $($back.Id), frontend $($front.Id))"
+if ($Dev) {
+    Write-Host "grimoire running at $Url (backend $($back.Id), frontend $($front.Id))"
+} else {
+    Write-Host "grimoire running at $Url (pid $($back.Id))"
+}
 Write-Host "Logs stream below. Close this window or press Ctrl+C to stop grimoire."
 
 # Wait for a TCP port to accept connections (cold starts can exceed any fixed delay:
-# Vite pre-bundles deps on first run, uvicorn imports the app).
+# Vite pre-bundles deps on first run, uvicorn imports the app). Given a process,
+# give up at once when it has exited: a backend that died (an import error, a
+# bind failure) is not going to become ready.
 function Wait-Port {
-    param([string]$Name, [int]$Port)
+    param([string]$Name, [int]$Port, [System.Diagnostics.Process]$Proc = $null, [int]$Tries = 60)
     Write-Host -NoNewline "Waiting for $Name to be ready"
-    for ($i = 0; $i -lt 60; $i++) {
+    for ($i = 0; $i -lt $Tries; $i++) {
         try {
             $client = New-Object System.Net.Sockets.TcpClient
             $client.Connect("127.0.0.1", $Port)
@@ -131,6 +219,10 @@ function Wait-Port {
             Write-Host ""
             return $true
         } catch {
+            if ($Proc -and $Proc.HasExited) {
+                Write-Host ""
+                return $false
+            }
             Write-Host -NoNewline "."
             Start-Sleep -Seconds 1
         }
@@ -139,25 +231,38 @@ function Wait-Port {
     return $false
 }
 
-if (-not (Wait-Port "backend" 8173)) {
-    Write-Host "Backend did not become ready (port 8173). The config page will fail to load; check the backend output above."
-}
-if (-not (Wait-Port "frontend" 5173)) {
-    Write-Host "Frontend did not become ready in time. Check logs; opening $Url anyway."
-}
-
-Start-Process $Url
-
-# Block in the foreground streaming logs. Ctrl+C interrupts Wait-Process so the
+# Block in the foreground streaming logs. Ctrl+C interrupts the wait so the
 # finally runs a tidy teardown; an ungraceful window-close is caught by the job
 # object above instead.
 try {
-    Wait-Process -Id $back.Id, $front.Id -ErrorAction SilentlyContinue
-} finally {
-    foreach ($id in @($back.Id, $front.Id)) {
-        if ($id) { Stop-Tree $id }
+    if ($Dev) {
+        if (-not (Wait-Port "backend" $BackendPort)) {
+            Write-Host "Backend did not become ready (port $BackendPort). The config page will fail to load; check the backend output above."
+        }
+        if (-not (Wait-Port "frontend" $VitePort)) {
+            Write-Host "Frontend did not become ready in time. Check logs; opening $Url anyway."
+        }
+    } else {
+        # Without --reload uvicorn binds only after the app's startup (the store
+        # migrations) has run, so an open port means ready -- and a slow start
+        # on a large library earns a longer wait than the dev servers get.
+        if (-not (Wait-Port -Name "backend" -Port $BackendPort -Proc $back -Tries 180)) {
+            if ($back.HasExited) {
+                Write-Host "The backend exited before it was ready; check its output above."
+                exit 1
+            }
+            Write-Host "The backend is still not answering on port $BackendPort; opening $Url anyway."
+        }
     }
-    foreach ($port in 8173, 5173) {
+
+    Start-Process $Url
+
+    Wait-Process -Id ($procs | ForEach-Object { $_.Id }) -ErrorAction SilentlyContinue
+} finally {
+    foreach ($p in $procs) {
+        if ($p.Id) { Stop-Tree $p.Id }
+    }
+    foreach ($port in $Ports) {
         $owners = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -Unique
         foreach ($o in $owners) {
             if ($o) { Stop-Tree $o }

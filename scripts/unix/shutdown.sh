@@ -8,9 +8,11 @@ if [ ! -f "$PIDFILE" ]; then
   exit 0
 fi
 
-# Kill each recorded process AND its descendants. uvicorn --reload spawns a
-# worker and npm spawns node; stopping only the parent leaves those children
-# holding ports 8173/5173, breaking the next launch.
+# Kill each recorded process AND its descendants. The pidfile holds one line
+# for a default launch (the backend serving the built UI) and two for --dev,
+# where uvicorn --reload spawns a worker and npm spawns node -- and stopping
+# only a parent leaves those children holding ports 8173/5173, breaking the
+# next launch.
 while read -r pid; do
   if kill -0 "$pid" 2>/dev/null; then
     pkill -TERM -P "$pid" 2>/dev/null || true
