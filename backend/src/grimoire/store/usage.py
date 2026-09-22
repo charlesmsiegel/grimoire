@@ -85,9 +85,10 @@ import json
 import re
 import time
 from datetime import date, timedelta
+from functools import partial
 from pathlib import Path
 
-from . import atomic, errors, paths, pricing
+from . import atomic, errors, paths, pricing, statcache
 
 #: The row kinds this ledger holds. ``llm`` is the only one written today;
 #: the field exists from the first row so image generation (#159) can share the
@@ -538,12 +539,12 @@ def calls(days: int = 30, campaign: str = "", *,
     if not (since and until):
         until = _today()
         since = (date.fromisoformat(until) - timedelta(days=days - 1)).isoformat()
-    for row in _read_rows(since, until):
-        if _is_call(row) and not (campaign and row.get("campaign") != campaign):
+    for row in _read_rows(since, until, campaign):
+        if _is_call(row):
             yield row
 
 
-def _read_rows(since: str, until: str):
+def _read_rows(since: str, until: str, campaign: str = "", kind: str = ""):
     """Every well-formed row stamped in ``[since, until]``, oldest file first.
 
     Tolerant by design, in both directions. A file that cannot be read is
@@ -552,6 +553,21 @@ def _read_rows(since: str, until: str):
     not parse is skipped too: `atomic.append_line` documents the one way a torn
     line can be produced, and a hand-edited or half-synced file produces the
     rest.
+
+    ``campaign`` and ``kind``, when given, keep only the rows whose field is
+    exactly that -- and both are tested against the line's TEXT before it is
+    parsed. That is where a scoped rollup's time went: the ledger is
+    home-scoped, so asking what one campaign cost used to `json.loads` every
+    campaign's rows and discard nearly all of them, which made the per-scene
+    panel and the Costs page cost the whole library's traffic.
+
+    The text test is exact, not a heuristic. A JSON string's characters appear
+    in a line either literally or as an escape, and every escape starts with a
+    backslash -- so a line holding neither the value nor a backslash cannot
+    decode to a row carrying that value. `json.dumps` escapes nothing in a
+    slug, so in practice only a hand edit takes the slow path. Whatever passes
+    is parsed and judged on the decoded field, which is what keeps
+    `saltmarch`'s rows out of a read for `salt`.
     """
     for path in _window_files(since, until):
         try:
@@ -561,9 +577,15 @@ def _read_rows(since: str, until: str):
             # a report that never needs two rows at the same time.
             with open(path, encoding="utf-8") as f:
                 for line in f:
+                    if campaign and campaign not in line and "\\" not in line:
+                        continue
+                    if kind and kind not in line and "\\" not in line:
+                        continue
                     row = _row(line, since, until)
-                    if row is not None:
-                        yield row
+                    if row is None or (campaign and row.get("campaign") != campaign) \
+                            or (kind and row.get("kind") != kind):
+                        continue
+                    yield row
         except (OSError, ValueError):    # ValueError covers invalid UTF-8
             # Mid-file as well as on open: a decode error surfaces on the read
             # that hits the bad bytes, and a report drawn short beats no report.
@@ -822,8 +844,8 @@ def summary(days: int = 30, campaign: str = "") -> dict:
     by_campaign: dict[str, dict] = {}
     rates = Rates.current()
 
-    for row in _read_rows(since, until):
-        if not _is_call(row) or (campaign and row.get("campaign") != campaign):
+    for row in _read_rows(since, until, campaign):
+        if not _is_call(row):
             continue
         _add(totals, row, rates)
         ts = row["ts"]
@@ -993,11 +1015,17 @@ def _rename_trail(campaign: str, since: str,
 
     Sorted by stamp so `_scene_now` can take the FIRST hop at or after a row's
     own stamp, which is the one that was in force when the row was written.
+
+    A pass of its own, and a cheap one: a rename row is a handful per scene's
+    life, and the text test in `_read_rows` rejects every other line -- this
+    campaign's calls included, which do not say "rename" or hold a backslash
+    unless a hand edit or an odd scene id put one there -- without parsing it. The alternative, one pass that buffered
+    the campaign's rows until the trail was complete, would hold every parsed
+    row of the campaign's whole history at once for the all-time view, which
+    is exactly what `_read_rows` reads a line at a time to avoid.
     """
     trail: dict[str, list[tuple[str, str]]] = {}
-    for row in _read_rows(since, until):
-        if row.get("kind") != KIND_RENAME or row.get("campaign") != campaign:
-            continue
+    for row in _read_rows(since, until, campaign, KIND_RENAME):
         was, now, ts = row.get("was"), row.get("scene"), row.get("ts")
         if not (isinstance(was, str) and isinstance(now, str) and isinstance(ts, str)):
             continue
@@ -1086,8 +1114,8 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
     by_post: dict[int, dict] = {}
     rerolls: dict[int, int] = {}
     turns: list[dict] = []
-    for row in _read_rows(start, until):
-        if not _is_call(row) or row.get("campaign") != campaign:
+    for row in _read_rows(start, until, campaign):
+        if not _is_call(row):
             continue
         # Asked per row rather than resolved to a set of ids up front: an id can
         # belong to this scene for a stretch and to another scene before and
@@ -1224,8 +1252,8 @@ def campaign_scenes(campaign: str, *, since: str = "", order: str = "cost",
     totals = dict(_ZERO)
     buckets: dict[str, dict] = {}
     seen: dict[str, list[str]] = {}
-    for row in _read_rows(start, until):
-        if not _is_call(row) or row.get("campaign") != campaign:
+    for row in _read_rows(start, until, campaign):
+        if not _is_call(row):
             continue
         _add(totals, row, rates)
         scene = row.get("scene")
@@ -1355,8 +1383,8 @@ def budget(campaign: str, limit_usd: object, period: object = "") -> dict:
     # limit on arithmetic nobody was invoiced for. `unpriced_calls` still says
     # the figure is a floor, which is the honest version of the same warning.
     rates = Rates.off()
-    for row in _read_rows(since, until):
-        if not _is_call(row) or row.get("campaign") != campaign:
+    for row in _read_rows(since, until, campaign):
+        if not _is_call(row):
             continue
         _add(totals, row, rates)
     spent = round(totals["cost_usd"], _CENTS)
@@ -1369,6 +1397,16 @@ def budget(campaign: str, limit_usd: object, period: object = "") -> dict:
             # reason: 0.7999999999999999 renders as 79.99999999999999%.
             "fraction": round(fraction, 4), "level": level,
             "warn_fraction": WARN_FRACTION}
+
+
+#: `unpriced_models`' memo: per month file, how many calls of each model a
+#: rate COULD price. A pool of its own rather than the shared `statcache`
+#: FIFO, which the sync sweeps fill with every entity and card hash. The
+#: budget covers the two months read plus the signatures the current month
+#: leaves behind as it is appended to -- each is a handful of model names, so
+#: the stale ones cost nothing worth evicting early.
+_UNPRICED_POOL: dict = {}
+_UNPRICED_ENTRIES = 64
 
 
 def unpriced_models(months: int = 2) -> list[dict]:
@@ -1389,6 +1427,16 @@ def unpriced_models(months: int = 2) -> list[dict]:
     this backs a chore and a hint, both opened casually, and `lifetime_since`
     is the read reserved for the all-time view. Two months is enough to name
     the models in current use, which is the question being asked.
+
+    **Counted per file and remembered; judged fresh every time.** The chore is
+    asked on every shell read, and re-parsing two month files to answer it cost
+    more than the rest of that read. A month's counts are memoized on the
+    file's stat signature, so a past month is parsed once per process and the
+    current one whenever it has actually grown -- `statcache` refuses to keep
+    anything inside its racy window, so a row appended a moment ago is never
+    missed. The rate table is deliberately applied AFTER the memo: it is the
+    user's to edit at any moment, and a memo holding verdicts would keep
+    listing a model for as long as its month file happened not to change.
     """
     root = ledger_dir()
     try:
@@ -1399,23 +1447,49 @@ def unpriced_models(months: int = 2) -> list[dict]:
     table = pricing.read_pricing()
     counts: dict[str, int] = {}
     for path in files:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
+        sig = statcache.signature(path)
+        if sig is None:
             continue
-        for line in text.splitlines():
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict) or _float(row.get("cost_usd")) is not None:
-                continue
-            if _count(row.get("prompt_tokens")) is None \
-                    or _count(row.get("completion_tokens")) is None:
-                continue
-            model = str(row.get("model") or "")
-            if not model or pricing.rate_for(table, model) is not None:
-                continue
-            counts[model] = counts.get(model, 0) + 1
+        try:
+            month = statcache.memo("usage:unpriced", sig, partial(_month_unpriced, path),
+                                   pool=_UNPRICED_POOL, max_entries=_UNPRICED_ENTRIES)
+        except OSError:
+            # Raised by the compute and so never stored: a month a sync client
+            # has locked costs this read, not every read until the file next
+            # changes -- which for a past month is never.
+            continue
+        for model, n in month:
+            counts[model] = counts.get(model, 0) + n
     return [{"model": m, "calls": n}
-            for m, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+            for m, n in sorted(counts.items(), key=lambda kv: -kv[1])
+            if pricing.rate_for(table, m) is None]
+
+
+def _month_unpriced(path: Path) -> tuple[tuple[str, int], ...]:
+    """One month file's rate-priceable calls, as ``(model, calls)`` pairs in
+    order of first appearance -- the order `unpriced_models` breaks ties in.
+
+    A tuple, because the value lives in a memo other requests read. Raises
+    OSError rather than answering empty, so a file that could not be opened is
+    never remembered as one with nothing in it. Bytes that are not UTF-8 end
+    the read where the decoder meets them, the tolerance `_read_rows` has: a
+    list drawn short rather than a chore that raises."""
+    counts: dict[str, int] = {}
+    with open(path, encoding="utf-8") as f:
+        try:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or _float(row.get("cost_usd")) is not None:
+                    continue
+                if _count(row.get("prompt_tokens")) is None \
+                        or _count(row.get("completion_tokens")) is None:
+                    continue
+                model = str(row.get("model") or "")
+                if model:
+                    counts[model] = counts.get(model, 0) + 1
+        except ValueError:      # UnicodeDecodeError, surfacing mid-file
+            pass
+    return tuple(counts.items())
