@@ -29,8 +29,8 @@ def pointer_path() -> Path:
     return Path.home() / ".grimoire.json"  # paths-ok: the bootstrap pointer cannot live inside the directory it names
 
 
-def _read_pointer_uncached() -> dict:
-    """The bootstrap pointer's contents, empty when it has none.
+def _parse_pointer(pointer: Path) -> dict | None:
+    """The bootstrap pointer's contents; None when it is missing or unusable.
 
     A corrupt pointer reads as empty too -- refusing to start over a bad
     dotfile is the worse failure -- but that drops the user's ``data_dir`` and
@@ -39,9 +39,9 @@ def _read_pointer_uncached() -> dict:
     symptom anyone can trace to this file, so `failsoft` logs it.
     """
     return failsoft.read_json(
-        pointer_path(), dict,
+        pointer, dict,
         "its data_dir is ignored -- the store falls back to $GRIMOIRE_HOME if "
-        f"set, else {DEFAULT_HOME}") or {}
+        f"set, else {DEFAULT_HOME}")
 
 
 #: The pointer memo's own `statcache` pool. Its own, because the shared FIFO is
@@ -52,8 +52,20 @@ def _read_pointer_uncached() -> dict:
 _POINTER_POOL: dict = {}
 
 
+class _UnvouchedReadError(Exception):
+    """A pointer read that its stat signature does not vouch for.
+
+    Raised out of the memo's compute so `statcache.memo` stores nothing, and
+    caught by `_read_pointer`, which still returns `answer` -- the right answer
+    for this call, just not one to hand every later call under that key."""
+
+    def __init__(self, answer: dict) -> None:
+        super().__init__("bootstrap pointer read not vouched for by its signature")
+        self.answer = answer
+
+
 def _read_pointer() -> dict:
-    """`_read_pointer_uncached`, re-read only when the pointer's stat moves.
+    """The bootstrap pointer's contents, re-read only when its stat moves.
 
     `home()` resolves through here for every path the store builds, so without
     `GRIMOIRE_HOME` -- the desktop default, and Android, which pops it -- one
@@ -62,19 +74,39 @@ def _read_pointer() -> dict:
     `set_data_dir` writes through `store.atomic` (a new inode and mtime), a
     sync client or an editor that lands a replacement is a new inode, and an
     in-place rewrite moves the mtime. Absence is a signature of its own, so a
-    pointer created after an absent one was memoized is seen at once.
+    pointer created after an absent one was memoized is seen at once. A pointer
+    written less than statcache's racy window ago is re-read on every call
+    until it ages, which is the correct side of a coarse mtime tick.
 
-    A pointer written less than statcache's racy window ago is re-read on every
-    call until it ages, which is the correct side of a coarse mtime tick. The
-    cost of the memo is where a corrupt pointer gets reported: once per
-    signature rather than once per call, which `failsoft` had to dedupe anyway.
+    Only an answer the signature vouches for is memoized: a parsed pointer
+    under a present signature, or none under an absent one. A present file that
+    could not be used -- corrupt, unreadable, or gone between the stat and the
+    read -- still answers empty, through `failsoft` as it always did, but
+    uncached. Memoizing that empty answer would turn a transient failure (a
+    Windows sharing violation, EMFILE under a burst) into the store relocating
+    to the default root for the life of the process, with the pointer on disk
+    intact and nothing left to trip a re-read. The same rule catches a pointer
+    that appears between an absent stat and the read: its contents are
+    returned, not filed under "absent" for a later deletion to be answered by.
 
     A copy, because `set_data_dir` edits what it reads before writing it back,
     and an edit whose write then failed must not become every later answer.
     """
-    sig = statcache.signature(pointer_path(), absent_ok=True)
-    return dict(statcache.memo("bootstrap_pointer", sig, _read_pointer_uncached,
-                               pool=_POINTER_POOL, max_entries=4))
+    pointer = pointer_path()
+    sig = statcache.signature(pointer, absent_ok=True)
+    absent = sig == ((str(pointer), "absent"),)   # statcache's documented sentinel
+
+    def settled() -> dict:
+        data = _parse_pointer(pointer)
+        if (data is None) != absent:
+            raise _UnvouchedReadError(data or {})
+        return data or {}
+
+    try:
+        return dict(statcache.memo("bootstrap_pointer", sig, settled,
+                                   pool=_POINTER_POOL, max_entries=4))
+    except _UnvouchedReadError as unvouched:
+        return dict(unvouched.answer)
 
 
 def _pointer_data_dir() -> Path | None:

@@ -11,6 +11,7 @@ still seen at once, however it lands, and an unchanged pointer is not re-read.
 import json
 import logging
 import os
+import pathlib
 import time
 
 import pytest
@@ -147,9 +148,10 @@ def test_a_caller_mutating_the_pointer_cannot_poison_the_memo(monkeypatch, tmp_p
 
 
 def test_a_corrupt_pointer_warns_once_per_signature_and_again_after_a_change(monkeypatch, tmp_path, caplog):
-    """The dedup used to be all that kept a corrupt pointer from logging on
-    every call. Now an aged corrupt pointer is not even re-read -- and a
-    different corruption is a different file, so it is reported."""
+    """A corrupt pointer is not memoized (a torn read is one way to be
+    corrupt), so it is re-read -- and `failsoft`'s dedup is still what keeps
+    that from logging on every call. A different corruption is a different
+    file, so it is reported."""
     pointer = isolate(monkeypatch, tmp_path)
     pointer.write_text("{ half a", encoding="utf-8")
     _age(pointer)
@@ -162,3 +164,48 @@ def test_a_corrupt_pointer_warns_once_per_signature_and_again_after_a_change(mon
         for _ in range(20):
             assert store.home() == tmp_path / "default"
     assert len(caplog.records) == 2
+
+
+def test_a_transient_read_failure_is_not_memoized(monkeypatch, tmp_path):
+    """The pointer is there and intact, but one read of it fails -- a sharing
+    violation, EMFILE under a burst. That call falls back to the default root,
+    as it always did; the next must not. Memoized, the empty answer would sit
+    under a signature nothing is going to move, and the store would stay
+    relocated for the life of the process."""
+    pointer = isolate(monkeypatch, tmp_path)
+    pointer.write_text(json.dumps({"data_dir": str(tmp_path / "synced")}), encoding="utf-8")
+    _age(pointer)
+    real = pathlib.Path.read_text
+    failures = [PermissionError(13, "held open by another process")]
+
+    def flaky(self, *a, **kw):
+        if self == pointer and failures:
+            raise failures.pop()
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", flaky)
+    assert store.home() == tmp_path / "default"
+    assert not failures
+    assert store.home() == tmp_path / "synced"
+
+
+def test_a_pointer_appearing_mid_read_is_not_filed_under_absent(monkeypatch, tmp_path):
+    """The stat finds nothing, then the read finds the pointer `set_data_dir`
+    just landed. The contents are this call's answer -- but filed under the
+    absent signature, they would be what a later deletion of the pointer is
+    answered with, and removing it would not put the store back."""
+    pointer = isolate(monkeypatch, tmp_path)
+    real = failsoft.read_json
+
+    def lands_first(path, *a, **kw):
+        if path == pointer and not pointer.exists():
+            pointer.write_text(json.dumps({"data_dir": str(tmp_path / "chosen")}),
+                               encoding="utf-8")
+            _age(pointer)
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(failsoft, "read_json", lands_first)
+    assert store.home() == tmp_path / "chosen"
+    monkeypatch.setattr(failsoft, "read_json", real)
+    pointer.unlink()
+    assert store.home() == tmp_path / "default"

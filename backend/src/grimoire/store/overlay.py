@@ -52,7 +52,6 @@ import json
 import logging
 import shutil
 from contextlib import contextmanager
-from functools import cached_property
 from pathlib import Path
 
 from . import (
@@ -132,26 +131,44 @@ class View:
     shared between requests, so there is no invalidation story to get wrong.
     That is why the writers here (`add_deleted`, `promote_image`, the creates
     and deletes) take none and keep reading the ledgers fresh.
+
+    Plain properties over `None`, not `functools.cached_property`: on 3.11,
+    this package's floor, that descriptor takes ONE lock per property for the
+    whole class and holds it across the computation, so every request thread
+    resolving any campaign's world root would queue behind whichever one was
+    parsing a campaign.md. A view never crosses threads, so it needs no lock.
     """
 
     def __init__(self, cid: str) -> None:
         self.cid = cid
+        self._croot: Path | None = None
+        self._wroot: Path | None = None
+        self._gone: frozenset[str] | None = None
+        self._off: frozenset[str] | None = None
 
-    @cached_property
+    @property
     def croot(self) -> Path:
-        return croot_of(self.cid)
+        if self._croot is None:
+            self._croot = croot_of(self.cid)
+        return self._croot
 
-    @cached_property
+    @property
     def wroot(self) -> Path:
-        return wroot_of(self.cid)
+        if self._wroot is None:
+            self._wroot = wroot_of(self.cid)
+        return self._wroot
 
-    @cached_property
+    @property
     def gone(self) -> frozenset[str]:
-        return frozenset(deleted(self.cid))
+        if self._gone is None:
+            self._gone = frozenset(deleted(self.cid))
+        return self._gone
 
-    @cached_property
+    @property
     def off(self) -> frozenset[str]:
-        return frozenset(detached(self.cid))
+        if self._off is None:
+            self._off = frozenset(detached(self.cid))
+        return self._off
 
 
 def view(cid: str) -> View:
