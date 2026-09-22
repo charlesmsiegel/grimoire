@@ -140,7 +140,8 @@ freely otherwise, e.g. `4d6kh3!+2`.
 ## Install
 
 Clone the repo, then run the installer for your platform. It creates the backend
-virtualenv, installs the frontend packages, and adds a desktop launcher.
+virtualenv, installs the frontend packages, builds the UI, and adds a desktop
+launcher.
 
 **macOS / Linux**
 
@@ -177,15 +178,28 @@ scripts/unix/run.sh
 scripts\windows\run.ps1
 ```
 
-This starts the backend (port **8173**) and the frontend (port **5173**) in the
-**current terminal**, waits for both to be ready, opens
-**<http://127.0.0.1:5173>** in your browser, and then streams both servers' logs
-into that terminal so you can watch status and errors live. The installer also
-drops a **Grimoire** launcher on your desktop that opens the same console.
+This starts Grimoire on a single port, **8173**, in the **current terminal**:
+one server answers both the API and the UI, which it serves from the build the
+installer made (`frontend/dist`). Once it is ready the script opens
+**<http://127.0.0.1:8173>** in your browser, then streams the server's log into
+that terminal so you can watch status and errors live. Bookmarks and reloads
+work on any page, not just the home screen. The installer also drops a
+**Grimoire** launcher on your desktop that opens the same console.
+
+**After an update** (`git pull`), the first launch notices that the UI's sources
+are newer than its build and rebuilds it before starting — a few seconds, once.
+If that build fails (usually because the update brought new dependencies),
+Grimoire starts on the previous build and says so; re-run the installer.
 
 **The terminal stays open while Grimoire runs.** Closing the window — or pressing
-**Ctrl+C** — shuts down both servers cleanly (no leftover process holding a
-port).
+**Ctrl+C** — shuts it down cleanly (no leftover process holding a port).
+
+**Changing the code?** `scripts/unix/run.sh --dev` (Windows:
+`scripts\windows\run.ps1 -Dev`) runs the development setup instead — the
+backend with auto-reload on 8173, plus the Vite dev server with hot module
+replacement at **<http://127.0.0.1:5173>**, proxying API calls to the backend.
+It loads markedly slower (React's development build, one request per source
+module), so it is for editing, not for playing.
 
 If you ever start Grimoire another way and need to stop it, the shutdown scripts
 still work:

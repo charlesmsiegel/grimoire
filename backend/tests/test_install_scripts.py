@@ -26,7 +26,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -157,6 +159,119 @@ def test_the_readme_requirements_match_the_floors():
     assert python_stated and node_stated, "README no longer states its Requirements"
     assert python_stated.group(1) == _python_floor(UNIX)
     assert node_stated.group(1) == _node_floor(UNIX)
+
+
+# --- launchers ---------------------------------------------------------------
+#
+# The run scripts serve the production bundle from the backend by default and
+# keep the two-server Vite setup behind `--dev` / `-Dev`. That put three facts
+# in places that each hold a copy: the bundle the installer builds, the list of
+# files whose change makes that bundle stale (one copy per platform), and the
+# ports -- two scripts, the README, and the dev proxy in `vite.config.ts`. Each
+# copy drifts on its own and silently: a stale-input list that lost an entry
+# keeps serving an old UI after `git pull`, and a port the README no longer
+# agrees with sends a fresh clone to a dead address.
+
+RUN_UNIX = UNIX.with_name("run.sh")
+RUN_WINDOWS = WINDOWS.with_name("run.ps1")
+LAUNCHERS = pytest.mark.parametrize(
+    "script", [RUN_UNIX, RUN_WINDOWS], ids=["unix", "windows"])
+FRONTEND = REPO / "frontend"
+
+#: `vite build` through the platform's `node_modules/.bin` shim -- the one
+#: spelling that runs the locked vite on both, with no npm/npx wrapper that
+#: could fetch one or (under PowerShell's `npm.ps1`) eat an argument.
+VITE_BUILD = r"node_modules[/\\]\.bin[/\\]vite(\.cmd)?\"?\s+build\b"
+
+
+def _first_command_matching(script: Path, pattern: str) -> int:
+    """`_step`, for a command recognised by shape rather than a fixed substring."""
+    for number, line in enumerate(_text(script).splitlines()):
+        if re.search(pattern, line) and not line.lstrip().startswith("#"):
+            return number
+    raise AssertionError(f"{script.name} no longer runs a command matching {pattern!r}")
+
+
+@INSTALLERS
+def test_installer_builds_the_bundle_after_installing_what_it_needs(script):
+    """The default launch serves `frontend/dist`, so an install that never built
+    it opens on a page the backend has nothing to answer with -- and the
+    installer's terminal is the one place a build failure is sure to be seen
+    (the Linux desktop entry launches without one)."""
+    assert _step(script, "npm install") < _first_command_matching(script, VITE_BUILD)
+
+
+@LAUNCHERS
+def test_launcher_can_rebuild_the_bundle(script):
+    """The first launch after an update has to rebuild what moved; otherwise the
+    default mode keeps serving whatever the installer built."""
+    _first_command_matching(script, VITE_BUILD)
+
+
+def _bundle_inputs(script: Path) -> list[str]:
+    text = _text(script)
+    found = (re.search(r"^BUNDLE_INPUTS=\(([^)]*)\)", text, re.MULTILINE)
+             or re.search(r"^\$BundleInputs\s*=\s*@\(([^)]*)\)", text, re.MULTILINE))
+    assert found, f"{script.name} no longer declares the inputs its bundle is rebuilt from"
+    return re.findall(r"[\w.-]+", found.group(1))
+
+
+def test_both_launchers_watch_the_same_bundle_inputs():
+    """One list per platform is two copies of one decision."""
+    assert _bundle_inputs(RUN_UNIX) == _bundle_inputs(RUN_WINDOWS)
+
+
+def test_every_watched_bundle_input_exists():
+    """Both scripts skip an input that is not on disk -- they must, or a checkout
+    without an optional file could not launch -- which means a renamed one
+    (`vite.config.ts` becoming `.mts`) would drop out of the staleness check
+    without a sound. So its presence is asserted here instead."""
+    missing = [n for n in _bundle_inputs(RUN_UNIX) if not (FRONTEND / n).exists()]
+    assert not missing, f"the launchers watch frontend/ inputs that do not exist: {missing}"
+
+
+def _port(script: Path, unix_name: str, windows_name: str) -> str:
+    return _declared(script, rf"(?m)(?:^{unix_name}|^\${windows_name})\s*=\s*(\d+)\s*$")
+
+
+def test_the_ports_agree_everywhere_they_are_written():
+    """The scripts, the README and the dev proxy each carry the two ports.
+
+    The README has to give both addresses as links a reader can follow and name
+    the dev flag for each platform; `vite.config.ts` has to proxy `/api` to the
+    backend port `--dev` starts, or dev mode loads a UI whose every call fails.
+    """
+    backend = {_port(s, "BACKEND_PORT", "BackendPort") for s in (RUN_UNIX, RUN_WINDOWS)}
+    vite = {_port(s, "VITE_PORT", "VitePort") for s in (RUN_UNIX, RUN_WINDOWS)}
+    assert len(backend) == 1 and len(vite) == 1, (
+        f"run.sh and run.ps1 disagree on their ports: backend {backend}, vite {vite}")
+    (backend_port,), (vite_port,) = backend, vite
+
+    readme = _text(REPO / "README.md")
+    assert f"<http://127.0.0.1:{backend_port}>" in readme, (
+        "README no longer gives the address the default launch opens")
+    assert f"<http://127.0.0.1:{vite_port}>" in readme, (
+        "README no longer gives the address `--dev` opens")
+    assert "run.sh --dev" in readme and "run.ps1 -Dev" in readme, (
+        "README no longer names the dev flag for both platforms")
+
+    proxy = _text(FRONTEND / "vite.config.ts")
+    assert f"http://127.0.0.1:{backend_port}" in proxy, (
+        "vite.config.ts proxies /api somewhere other than the backend --dev starts")
+
+
+# Not on Windows even with a bash on PATH: that is as likely to be WSL's, which
+# cannot open the Windows path it would be handed.
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
+                    reason="no POSIX bash to parse with")
+@pytest.mark.parametrize("name", ["install.sh", "run.sh", "shutdown.sh"])
+def test_the_unix_scripts_parse(name):
+    """Nothing in the gate runs these, so a syntax error in a branch its author
+    did not exercise (`--dev`, the build-failed fallback) would first be met by
+    whoever double-clicks the launcher. `bash -n` reads without running."""
+    result = subprocess.run(["bash", "-n", str(UNIX.with_name(name))],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
 
 
 # --- docs ------------------------------------------------------------------

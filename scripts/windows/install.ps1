@@ -28,7 +28,17 @@ Pop-Location
 Write-Host "Installing frontend..."
 Push-Location "$Root\frontend"
 npm install
+
+# The bundle run.ps1 serves by default. Built here rather than left to the first
+# launch because this console is the one a failure is sure to be seen in.
+# `vite build` through the .bin shim, not `npm run build`: that script's `tsc -b`
+# is a type check, which is the gate's job, not setup's. As with the probes
+# above, a native command's exit code is not an error to PowerShell.
+Write-Host "Building the UI..."
+.\node_modules\.bin\vite.cmd build --logLevel error
+$built = $LASTEXITCODE
 Pop-Location
+if ($built -ne 0) { throw "The UI build failed; see the output above." }
 
 Write-Host "Creating pinnable desktop launcher..."
 $run = "$Root\scripts\windows\run.ps1"
@@ -39,8 +49,8 @@ $shell = New-Object -ComObject WScript.Shell
 # The shortcut must target powershell.exe directly: Explorer offers "Pin to taskbar"
 # only for shortcuts to ordinary executables, and shortcuts hosted by wscript.exe
 # (the previous launch.vbs approach) don't get the option. WindowStyle 1 opens a
-# normal, visible console: run.ps1 stays attached and streams the backend and
-# frontend logs, and closing that window shuts grimoire down.
+# normal, visible console: run.ps1 stays attached and streams the server's log,
+# and closing that window shuts grimoire down.
 function New-GrimoireShortcut($path) {
     $lnk = $shell.CreateShortcut($path)
     $lnk.TargetPath = $powershell

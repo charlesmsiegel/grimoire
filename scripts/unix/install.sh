@@ -27,6 +27,13 @@ echo "Installing frontend…"
 cd "$ROOT/frontend"
 npm install
 
+# The bundle run.sh serves by default. Built here rather than left to the first
+# launch because this terminal is the one a failure is sure to be seen in (the
+# Linux desktop entry runs without one). `vite build`, not `npm run build`:
+# that script's `tsc -b` is a type check, which is the gate's job, not setup's.
+echo "Building the UI…"
+node_modules/.bin/vite build --logLevel error
+
 echo "Creating desktop launcher…"
 RUN="$ROOT/scripts/unix/run.sh"
 chmod +x "$ROOT/scripts/unix/"*.sh

@@ -53,9 +53,12 @@ scripts\windows\install.ps1      # Windows (PowerShell)
 ```
 
 The installer creates `backend/.venv` and installs `-e ".[dev,desktop]"` into it,
-installs the frontend packages, and drops a desktop launcher. `scripts/unix/run.sh`
-(or `scripts\windows\run.ps1`) then starts backend on **8173** and vite on
-**5173** in the current terminal.
+installs the frontend packages, builds the UI bundle, and drops a desktop
+launcher. For frontend work launch with `scripts/unix/run.sh --dev` (or
+`scripts\windows\run.ps1 -Dev`): uvicorn `--reload` on **8173** and vite with HMR
+on **5173**, in the current terminal. Without the flag the launcher is the
+player's one — the backend alone, serving `frontend/dist` — so source edits
+appear only after its next rebuild, on the following launch.
 
 Requirements: **Python 3.11+** (CI tests 3.11 and 3.14), **Node 18+** (CI uses
 24), and an OpenRouter key only if you want to exercise real model calls — the
