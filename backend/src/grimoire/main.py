@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -83,15 +84,60 @@ class SPAStaticFiles(StaticFiles):
         """
         return path.replace("\\", "/").split("/", 1)[0] == "api"
 
+    #: The document. It names the hashed bundles by URL, and Vite empties
+    #: ``dist/`` on every build -- so a copy a browser kept past a rebuild or an
+    #: APK update asks for scripts that no longer exist, the fallback above
+    #: deliberately 404s them, and the app is blank until a hard reload. With no
+    #: Cache-Control at all, that is what heuristic freshness does to it.
+    #: ``no-cache`` rather than ``no-store``: the ETag keeps every revalidation
+    #: a bodiless 304.
+    DOCUMENT_POLICY = "no-cache"
+    #: Vite's ``build.assetsDir``. Every file Vite writes there carries a
+    #: content hash in its name, so its URL names one byte sequence forever and
+    #: a repeat load need not ask about it at all.
+    HASHED_POLICY = "public, max-age=31536000, immutable"
+    #: Everything else is a ``public/`` file served under its own unhashed name
+    #: (the favicon, the header logo): it CAN change under the same URL, but a
+    #: stale icon for a day costs nothing and a revalidation per load costs a
+    #: round trip.
+    UNHASHED_POLICY = "public, max-age=86400"
+
+    @classmethod
+    def _cache_control(cls, path: str) -> str:
+        """The caching policy for the file ``path`` resolved to.
+
+        Read off the same resolved, separator-normalized path as
+        ``_under_api`` and for the same reasons; the whole first segment,
+        because only Vite's own output directory is content-hashed.
+        """
+        parts = path.replace("\\", "/").split("/")
+        # "." is the root URL, answered with index.html.
+        if parts[-1] == "." or parts[-1].endswith(".html"):
+            return cls.DOCUMENT_POLICY
+        if parts[0] == "assets":
+            return cls.HASHED_POLICY
+        return cls.UNHASHED_POLICY
+
     async def get_response(self, path: str, scope):
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code != 404 or self._under_api(path):
                 raise
             if "text/html" not in Headers(scope=scope).get("accept", ""):
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+            path = "index.html"
+        # A file (200) or its revalidation (304) -- never a redirect or an
+        # error, and a missing asset raised above without a policy, so a 404
+        # under ``assets/`` is not pinned for a year. The 304 carries the
+        # policy too: a cache replaces its stored headers with a 304's, which
+        # is how a copy cached before this policy existed learns it on its
+        # first revalidation instead of staying heuristic for as long as it
+        # lives.
+        if response.status_code in (200, 304):
+            response.headers["cache-control"] = self._cache_control(path)
+        return response
 
 
 #: How often the backup schedule is *checked*. Not how often a backup happens —
@@ -349,6 +395,80 @@ class _CampaignActivityStamp:
             raise
 
 
+def _is_loopback(host: str | None) -> bool:
+    """Is ``host`` -- an ASGI ``client`` host -- this machine?
+
+    The whole of 127.0.0.0/8 and ``::1``, and an IPv4 loopback peer as a
+    dual-stack listener reports it (``::ffff:127.0.0.1``), which older patch
+    releases of ``ipaddress`` do not count as loopback on their own. ``None``
+    (a unix-domain socket, the usual way a reverse proxy reaches an app
+    server) and anything that does not parse -- ``TestClient`` reports
+    ``"testclient"`` -- are not.
+    """
+    if host == "localhost":
+        return True
+    try:
+        addr = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return (getattr(addr, "ipv4_mapped", None) or addr).is_loopback
+
+
+class _RemoteOnlyGZip:
+    """``GZipMiddleware`` for every client that is not on this machine.
+
+    Both servers this app ships are loopback-only -- the Android entry point
+    binds ``127.0.0.1``, and the desktop scripts run uvicorn on its default
+    host -- and compressing for a peer on the same machine saves no transfer
+    time while costing CPU on the event loop that carries every live turn's
+    stream. The 1 MB bundle alone cost tens of milliseconds per uncached
+    fetch. On the Android dependency set it was far worse: Starlette 0.46
+    excludes only ``text/event-stream`` and compresses inline in ``send``, so
+    every image and font byte the WebView asked for was deflated on the loop
+    for no saving at all, stalling token delivery while a grid of portraits
+    loaded. The desktop's newer Starlette skips media types and offloads big
+    bodies to a thread, which is why desktop testing never showed it.
+
+    A client elsewhere -- the server started on a LAN address, or reached
+    through a reverse proxy -- keeps exactly the old behaviour. A proxy on the
+    same host connects FROM loopback but relays over a real network, so any
+    forwarding header makes a loopback peer count as remote. (uvicorn already
+    rewrites ``client`` from ``X-Forwarded-For`` for a trusted loopback peer;
+    the rest it does not read, and nothing guarantees the server is uvicorn
+    with its defaults.) A proxy that sends none of them looks local and is
+    handed identity bytes, which it can compress itself -- the wrong guess in
+    the cheap direction.
+
+    Raw ASGI for the reason ``_CampaignActivityStamp`` gives, and a wrapper
+    rather than GZipMiddleware's ``exclude_content_types``, which the Android
+    set's Starlette does not have -- and which would ask the wrong question:
+    what makes compression worthless here is where the client is, not what
+    the body is.
+    """
+
+    #: ASGI header names are lowercased by the server.
+    _FORWARDING = frozenset({b"forwarded", b"x-forwarded-for", b"x-forwarded-host",
+                             b"x-forwarded-proto", b"x-real-ip"})
+
+    def __init__(self, app):
+        self.app = app
+        # compresslevel 6 over the default 9: ~2-3x less CPU for ~1% larger
+        # output. Character detail responses run to hundreds of KB of JSON;
+        # payloads under the floor (and event streams) pass through untouched.
+        self.gzip = GZipMiddleware(app, minimum_size=1024, compresslevel=6)
+
+    def _local(self, scope) -> bool:
+        client = scope.get("client")
+        if not _is_loopback(client[0] if client else None):
+            return False
+        return not any(name in self._FORWARDING for name, _ in scope.get("headers") or ())
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or self._local(scope):
+            return await self.app(scope, receive, send)
+        return await self.gzip(scope, receive, send)
+
+
 def create_app() -> FastAPI:
     # Before anything else that can log. Fifteen modules under this package
     # call `logging.getLogger(__name__)` and, until this line existed, logged
@@ -376,10 +496,9 @@ def create_app() -> FastAPI:
     # every route test and every migrated handler. `runner.install` attaches the
     # parts that do need a running loop.
     runs.install_registry(app)
-    # character detail responses run to hundreds of KB of JSON; payloads under
-    # the floor (and streaming responses) pass through untouched
-    # compresslevel 6 over the default 9: ~2-3x less CPU for ~1% larger output
-    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+    # Compression for clients that are not on this machine -- which, for the
+    # servers this app ships, is nobody. `_RemoteOnlyGZip` says why.
+    app.add_middleware(_RemoteOnlyGZip)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

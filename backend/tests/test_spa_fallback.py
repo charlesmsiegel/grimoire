@@ -42,6 +42,7 @@ def client(tmp_path, monkeypatch):
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<html>grimoire</html>", encoding="utf-8")
     (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    (dist / "favicon.ico").write_bytes(b"\x00\x00\x01\x00")
     monkeypatch.setenv("GRIMOIRE_DIST", str(dist))
 
     from fastapi import FastAPI
@@ -111,6 +112,84 @@ def test_a_client_route_still_falls_back_with_windows_separators(client, monkeyp
     r = client.get("/campaigns/realm-watch/scenes/003--council-of-mara", headers=PAGE)
     assert r.status_code == 200
     assert "grimoire" in r.text
+    assert r.headers["cache-control"] == "no-cache"
+
+
+# ---- caching: the document revalidates, the hashed bundle never does ----
+
+@pytest.mark.parametrize("path", [
+    "/",
+    "/index.html",
+    # The fallback answers a client route with the same document, so it has
+    # to carry the same policy -- a reload of a scene URL is how most loads
+    # after the first one arrive.
+    "/campaigns/realm-watch/scenes/003--council-of-mara",
+    "/worlds",
+])
+def test_the_document_is_revalidated_on_every_load(client, path):
+    # Vite empties `dist/` on every build, so an index.html a browser kept
+    # past a rebuild (or an APK update) names bundles that no longer exist,
+    # and the fallback deliberately 404s the script request: a blank app
+    # until a hard reload. `no-cache`, not `no-store`: the ETag keeps each
+    # revalidation a bodiless 304.
+    r = client.get(path, headers=PAGE)
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    assert r.headers.get("etag")
+
+
+def test_a_hashed_asset_is_immutable(client):
+    r = client.get("/assets/app.js", headers={"accept": "*/*"})
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_an_unhashed_public_file_is_cached_for_a_day(client):
+    r = client.get("/favicon.ico", headers={"accept": "image/*"})
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "public, max-age=86400"
+
+
+@pytest.mark.parametrize("path, accept, policy", [
+    ("/", PAGE["accept"], "no-cache"),
+    ("/campaigns/realm-watch", PAGE["accept"], "no-cache"),
+    ("/assets/app.js", "*/*", "public, max-age=31536000, immutable"),
+])
+def test_a_304_carries_the_policy_too(client, path, accept, policy):
+    # A cache replaces its stored headers with a 304's, so this is how a copy
+    # cached BEFORE the policy existed -- heuristically fresh, with no
+    # Cache-Control of its own -- learns it on its first revalidation. Without
+    # it that copy would stay on heuristic freshness for as long as it lived.
+    etag = client.get(path, headers={"accept": accept}).headers["etag"]
+    r = client.get(path, headers={"accept": accept, "if-none-match": etag})
+    assert r.status_code == 304
+    assert r.headers["cache-control"] == policy
+
+
+def test_a_missing_asset_is_not_cached_as_immutable(client):
+    # A 404 under `assets/` is a deploy in flux or a typo, not a file that
+    # will never change; pinning it for a year would outlive the fix.
+    r = client.get("/assets/gone.js", headers={"accept": "*/*"})
+    assert r.status_code == 404
+    assert "immutable" not in r.headers.get("cache-control", "")
+
+
+@pytest.mark.parametrize("path, policy", [
+    ("assets/index-3f9a1c.js", "public, max-age=31536000, immutable"),
+    # A Windows checkout resolves the same URL with backslashes (#313).
+    ("assets\\index-3f9a1c.js", "public, max-age=31536000, immutable"),
+    ("assets/fonts/inter-latin.woff2", "public, max-age=31536000, immutable"),
+    ("index.html", "no-cache"),
+    # The root URL resolves to "." and is answered with index.html.
+    (".", "no-cache"),
+    ("favicon.ico", "public, max-age=86400"),
+    ("grimoire-128.png", "public, max-age=86400"),
+    # Whole first segment, as with the API guard: only Vite's own output
+    # directory is content-hashed.
+    ("assets-old/index.js", "public, max-age=86400"),
+])
+def test_the_cache_policy_reads_either_separator(path, policy):
+    assert SPAStaticFiles._cache_control(path) == policy
 
 
 @pytest.mark.parametrize("path, under", [
