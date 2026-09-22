@@ -327,6 +327,23 @@ test("the mode is part of the query and lives in the URL like every other filter
   expect(screen.getByTestId("where").textContent).toContain("mode=semantic");
 });
 
+test("switching modes does not queue behind the other mode's search", async () => {
+  // A meaning search waits on an embeddings endpoint, not on the CPU the
+  // queue is there to share, so a reader who gives up on one and switches to
+  // keywords is answered now rather than once the endpoint lets go.
+  (api.search as any).mockImplementationOnce(() => new Promise(() => {}));
+  show("/search?q=salt&mode=semantic");
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
+  const stuck = (api.search as any).mock.calls[0][2] as AbortSignal;
+
+  fireEvent.click(screen.getByRole("button", { name: /^keywords/i }));
+  expect(await screen.findByRole("link", { name: /the salt pact/i })).toBeInTheDocument();
+  expect(api.search).toHaveBeenCalledTimes(2);
+  expect(api.search).toHaveBeenLastCalledWith(
+    "salt", { scope: "", kinds: [], mode: "keyword" }, expect.any(AbortSignal));
+  expect(stuck.aborted).toBe(true);
+});
+
 test("an answer that fell back to keywords says so, and why", async () => {
   (api.search as any).mockResolvedValue(result([hit()], {
     mode: "keyword", requested_mode: "semantic",

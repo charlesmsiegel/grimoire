@@ -182,9 +182,10 @@ function retireAllInflight(): void {
   inflightGets.clear();
 }
 
-// `signal` aborts the request. Only non-GETs take one today, and deliberately
-// so: an aborted GET would settle the shared promise below for every caller
-// waiting on it, not just the one that asked to stop.
+// `signal` aborts the request. Only non-GETs and `fresh` GETs take one, and
+// deliberately so: an aborted shared GET would settle the shared promise below
+// for every caller waiting on it, not just the one that asked to stop -- and a
+// `fresh` read is never shared, so its promise is its caller's alone.
 function request<T>(method: string, path: string, body?: unknown,
                     opts?: { fresh?: boolean; signal?: AbortSignal;
                              attempt?: string }): Promise<T> {
