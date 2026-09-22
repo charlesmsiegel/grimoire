@@ -238,8 +238,9 @@ def test_reroll_takes_the_same_fast_path(client, monkeypatch):
 
 def test_the_ledger_is_written_compact_and_still_reads_indented(tmp_path, monkeypatch):
     """Compact on write: the ledger is rewritten whole several times a turn, and
-    `indent` both inflates it and pushes `json.dumps` onto the pure-Python
-    encoder. Older builds wrote it indented, and that must still read."""
+    `indent` both inflates it and, before CPython 3.13, pushes `json.dumps`
+    onto the pure-Python encoder. Older builds wrote it indented, and that must
+    still read."""
     import json
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
