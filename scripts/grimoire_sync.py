@@ -68,8 +68,10 @@ SKIP_GLOBS = ("*.sync-conflict-*", "*.orig", "*.pyc")
 # user gave a world.
 SKIP_DIRS = frozenset({"__pycache__"})
 
-# Written beside the phone's store by android_entry._open_store_to_usb.
-SKIP_NAMES = frozenset({".usb_readable"})
+# Written beside the phone's store by android_entry (the USB sentinel, and the
+# port that keeps the WebView's origin stable). Both describe one device; they
+# only reach a sync at all if the store root was pointed at the app's HOME.
+SKIP_NAMES = frozenset({".usb_readable", ".grimoire-port"})
 
 BASELINE_DIR = Path.home() / ".grimoire-sync"
 

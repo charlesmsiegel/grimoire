@@ -71,6 +71,14 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // First, before the WebView: constructing one initialises Chromium on
+        // this thread, and the server's own start (the interpreter, then the
+        // app's imports) runs on its own thread, so starting it here overlaps
+        // the two instead of queueing one behind the other. Nothing below
+        // needs the server yet; `subscribe` fires at once if the port is
+        // already known by the time it registers.
+        startService(Intent(this, ServerService::class.java))
+        ServerRuntime.ensureStarted(this)
 
         web = WebView(this).apply { visibility = View.GONE }
         status = TextView(this).apply {
@@ -115,8 +123,6 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        startService(Intent(this, ServerService::class.java))
-        ServerRuntime.ensureStarted(this)
         val opening = sceneFrom(intent)
         ServerRuntime.subscribe(
             onReady = { port ->

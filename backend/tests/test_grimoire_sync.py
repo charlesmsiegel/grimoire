@@ -132,6 +132,7 @@ def test_a_conflict_resolved_to_the_same_content_is_simply_in_sync():
     "worlds/realm/world.sync-conflict-20260101-abc.md",
     "worlds/realm/world.md.orig",
     ".usb_readable",
+    ".grimoire-port",
 ])
 def test_excluded_paths(rel):
     assert gs._excluded(gs.PurePosixPath(rel)) is True
