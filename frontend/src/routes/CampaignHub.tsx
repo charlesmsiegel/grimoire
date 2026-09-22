@@ -4,6 +4,7 @@ import { api, type CampaignBudget, type CampaignMeta, type CharacterSummary,
          type ChronicleEntry, type PCSummary, type RecordChange,
          type SceneIdea, type SceneMeta } from "../api/client";
 import type { ShellPayload } from "../api/types";
+import { THUMB } from "../api/thumbs";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { PageShell, ColumnSection } from "../components/PageShell";
 import { errorText } from "../api/errors";
@@ -98,22 +99,22 @@ type Face = {
   key: string; id: string; name: string;
   kind: "pcs" | "characters"; version: string;
   avatar: boolean;
-  /** `?v=<bytes>` or empty. Never a counter: an immutable URL is never
-   *  revalidated, so a token that reset on mount would pin a replaced image in
-   *  the browser cache for a year. */
-  token: string;
+  /** The store's token for the avatar's bytes, spent as `?v=`, or absent.
+   *  Never a counter: an immutable URL is never revalidated, so a token that
+   *  reset on mount would pin a replaced image in the browser cache for a
+   *  year. */
+  v?: string | null;
 };
 
 function faces(cast: { chars: CharacterSummary[]; pcs: PCSummary[] }): Face[] {
   return [
     ...cast.pcs.map((p): Face => ({
       key: `pcs:${p.id}`, id: p.id, name: p.name, kind: "pcs",
-      version: p.default_version, avatar: !!p.has_avatar, token: "",
+      version: p.default_version, avatar: !!p.has_avatar,
     })),
     ...cast.chars.map((c): Face => ({
       key: `characters:${c.id}`, id: c.id, name: c.name, kind: "characters",
-      version: c.default_version, avatar: !!c.has_avatar,
-      token: c.avatar_v ? `?v=${c.avatar_v}` : "",
+      version: c.default_version, avatar: !!c.has_avatar, v: c.avatar_v,
     })),
   ];
 }
@@ -576,11 +577,10 @@ export default function CampaignHub() {
                         to={sectionHref({ kind: "campaign", id: cid },
                                         { kind: "record", at: who.kind, rid: who.id })}>
                     {who.avatar
-                      ? <img className="hub-face-avatar" alt=""
+                      ? <img className="hub-face-avatar" alt="" loading="lazy" decoding="async"
                              src={api.actorImageUrl({ kind: "campaign", id: cid },
-                                                    who.kind, who.id,
-                                                    who.version, "avatar")
-                                  + who.token} />
+                                                    who.kind, who.id, who.version, "avatar",
+                                                    { w: THUMB.face, v: who.v })} />
                       : <span className="initials-avatar" aria-hidden>
                           {initials(who.name)}
                         </span>}

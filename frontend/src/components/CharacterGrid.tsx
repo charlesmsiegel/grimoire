@@ -5,6 +5,7 @@ import {
   type EntityScope, type ModuleDetail, type UndescribedImage,
 } from "../api/client";
 import { errorText } from "../api/errors";
+import { thumbSet } from "../api/thumbs";
 import { isAbortError, type TaglineBatchEvent } from "../api/stream";
 import CreationWizard from "./CreationWizard";
 import { DescribeQueue } from "./DescribeQueue";
@@ -13,6 +14,16 @@ import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
 import { ImportVersionDialog, type ImportChoice } from "./character/ImportVersionDialog";
 import { characterHref, focusStyle, formatOf, initialsOf } from "./character/shared";
+
+/** How wide a card's portrait is drawn: `.char-grid` is three columns of
+ *  `.page-wide`, which stops growing at 1120px -- so at most
+ *  (1120 - 68 padding - 36 gaps) / 3 on a desktop, and under a third of the
+ *  viewport below that. A phone is spelled out rather than left to the third:
+ *  there the page keeps only a 14px gutter, and at DPR 3 the slack in "33vw"
+ *  is exactly the difference between the 512 bucket and the 1024 one.
+ *  A roster is the one screen where a whole library's art can be on screen at
+ *  once, so this is where a thumbnail the size of the card matters most. */
+const CARD_SIZES = "(max-width: 720px) calc((100vw - 64px) / 3), (max-width: 1120px) 33vw, 340px";
 
 /** The world's (or campaign's) roster, as cards.
  *
@@ -501,8 +512,11 @@ export function CharacterGrid(
               <Link className="char-card-main" to={characterHref(scope, c.id)}>
                 {c.has_avatar
                   ? <img className="char-card-avatar" alt="" style={focusStyle(c.avatar_focus)}
-                         src={api.actorImageUrl(scope, "characters", c.id, c.default_version, "avatar")
-                              + (c.avatar_v ? `?v=${c.avatar_v}` : "")} />
+                         loading="lazy" decoding="async"
+                         {...thumbSet((w) => api.actorImageUrl(scope, "characters", c.id,
+                                                               c.default_version, "avatar",
+                                                               { w, v: c.avatar_v }),
+                                      CARD_SIZES)} />
                   : <div className="initials-avatar" aria-hidden>{initialsOf(c.name)}</div>}
                 <span className="char-card-name">{c.name}</span>
                 {c.tagline ? <span className="char-card-tagline">{c.tagline}</span> : null}

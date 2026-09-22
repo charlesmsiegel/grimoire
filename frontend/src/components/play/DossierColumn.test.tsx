@@ -4,8 +4,9 @@ import type { Casefile, Provenance } from "../../api/client";
 
 vi.mock("../../api/client", () => ({
   api: {
-    actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string) =>
-      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}`,
+    actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string,
+                    o?: { w?: number }) =>
+      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}${o?.w ? `?w=${o.w}` : ""}`,
   },
 }));
 
@@ -103,6 +104,15 @@ test("a standing fact leads with its id, so it can be cited", () => {
   const row = screen.getByText(/priory owes the Reeve/).closest(".fact-row") as HTMLElement;
   expect(within(row).getByText("f4")).toBeInTheDocument();
   expect(within(row).getByText(/The Priory Door · 4 Reaping 1183/)).toBeInTheDocument();
+});
+
+test("the portrait is a thumbnail sized for the 134px frame, not the original", () => {
+  renderDossier();
+  const img = screen.getByAltText("Sister Aud portrait");
+  const base = "/api/campaigns/saltmarch/characters/aud/versions/v1/images/avatar";
+  expect(img.getAttribute("src")).toBe(`${base}?w=512`);
+  expect(img.getAttribute("srcset")).toContain(`${base}?w=1024 682w`);
+  expect(img.getAttribute("sizes")).toBe("134px");
 });
 
 test("‹ All cast returns to the grid", () => {

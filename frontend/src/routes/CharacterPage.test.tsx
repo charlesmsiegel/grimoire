@@ -8,8 +8,12 @@ vi.mock("../api/client", async () => {
   return {
     ...actual,
     api: {
-      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
-        `/img/${sc.id}/${k}/${a}/${v}/${n}`,
+      // `?w=` then `?v=`, as the real builder writes them, so a tile's
+      // downscale and the original it links to read differently.
+      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string,
+                      o?: { w?: number; v?: string | null }) =>
+        `/img/${sc.id}/${k}/${a}/${v}/${n}`
+        + (o?.w || o?.v ? "?" + [o.w && `w=${o.w}`, o.v && `v=${o.v}`].filter(Boolean).join("&") : ""),
       exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
       imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
       readCharacter: vi.fn(), listCharacters: vi.fn(), deleteCharacter: vi.fn(),
@@ -191,6 +195,28 @@ test("the description carries what it costs, every turn", async () => {
   expect(within(fieldBlock("Description")).getByText(/sent every turn in scene/i)).toBeTruthy();
 });
 
+test("the page draws its art as downscales and keeps the original where it is looked at", async () => {
+  await renderWorld();
+  const base = "/img/realm/characters/seraphine/default/avatar";
+  // The identity art tops out at 240px, so the screen picks among the buckets.
+  const art = document.querySelector(".identity-art img")!;
+  expect(art.getAttribute("src")).toBe(`${base}?w=512&v=a1`);
+  expect(art.getAttribute("srcset")).toContain(`${base}?w=1024&v=a1 682w`);
+  expect(art.getAttribute("sizes")).toBe("240px");
+  // The crop picker is the reader looking at the picture itself: the original.
+  fireEvent.click(screen.getByRole("button", { name: "Adjust avatar crop" }));
+  expect(screen.getByAltText("avatar full view").getAttribute("src")).toBe(`${base}?v=a1`);
+  fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+  // A 96px shelf tile draws a downscale and links to the original.
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  const tile = await screen.findByAltText("avatar");
+  expect(tile.getAttribute("src")).toBe(`${base}?w=512&v=a1`);
+  expect(tile.getAttribute("sizes")).toBe("96px");
+  expect(tile.getAttribute("loading")).toBe("lazy");
+  expect(tile.closest("a")!.getAttribute("href")).toBe(`${base}?v=a1`);
+});
+
+// ------------------------------------------------------------ editing inline
 // ------------------------------------------------------------ editing inline
 
 test("Edit swaps one field for a textarea and Save writes the card back", async () => {
@@ -653,7 +679,7 @@ test("campaign scope shelves the campaign's own pictures apart from the world's"
   expect(within(world).getAllByRole("img").map((i) => i.getAttribute("alt")))
     .toEqual(["avatar", "gallery_2"]);
   expect(within(world).getByAltText("gallery_2").getAttribute("src"))
-    .toBe("/img/run/characters/seraphine/default/gallery_2?v=g2");
+    .toBe("/img/run/characters/seraphine/default/gallery_2?w=512&v=g2");
   // ...and, being this version's, they keep their controls: the campaign
   // routes resolve an inherited name exactly as the shelf read it
   expect(within(world).getByRole("button", { name: "Remove" })).toBeTruthy();
@@ -668,11 +694,11 @@ test("campaign scope passes the world's default art through under World images",
   const world = await worldShelf();
   const tiles = screen.getAllByAltText("gallery_1");
   expect(tiles.map((t) => t.getAttribute("src"))).toEqual([
-    "/img/run/characters/seraphine/veiled/gallery_1?v=c1",
-    "/img/run/characters/seraphine/default/gallery_1?v=wg",
+    "/img/run/characters/seraphine/veiled/gallery_1?w=512&v=c1",
+    "/img/run/characters/seraphine/default/gallery_1?w=512&v=wg",
   ]);
   expect(within(world).getByAltText("avatar").getAttribute("src"))
-    .toBe("/img/run/characters/seraphine/default/avatar?v=wa");
+    .toBe("/img/run/characters/seraphine/default/avatar?w=512&v=wa");
   // captioned with the version it came from, described in the same box
   expect(within(world).getByText("gallery_1 · default")).toBeTruthy();
   expect(within(world).getByText("at the tide gate")).toBeTruthy();
@@ -709,8 +735,8 @@ test("campaign scope shows the world's copy beside a same-named file of the vers
   // resolve that name to the campaign's file)
   const tiles = screen.getAllByAltText("gallery_1");
   expect(tiles.map((t) => t.getAttribute("src"))).toEqual([
-    "/img/run/characters/seraphine/default/gallery_1?v=c1",
-    "/img/realm/characters/seraphine/default/gallery_1?v=w1",
+    "/img/run/characters/seraphine/default/gallery_1?w=512&v=c1",
+    "/img/realm/characters/seraphine/default/gallery_1?w=512&v=w1",
   ]);
   expect(within(world).getByText("gallery_1 · world’s copy")).toBeTruthy();
   expect(within(world).getByText("at the tide gate")).toBeTruthy();
@@ -743,9 +769,9 @@ test("every passed-through version is captioned, in the order the server lists t
   // calls the same thing can still be told apart
   expect(within(world).getByText("gallery_1 · main (young)")).toBeTruthy();
   expect(screen.getAllByAltText("gallery_1").map((t) => t.getAttribute("src"))).toEqual([
-    "/img/run/characters/seraphine/veiled/gallery_1?v=c1",
-    "/img/run/characters/seraphine/default/gallery_1?v=wg",
-    "/img/run/characters/seraphine/young/gallery_1?v=y1",
+    "/img/run/characters/seraphine/veiled/gallery_1?w=512&v=c1",
+    "/img/run/characters/seraphine/default/gallery_1?w=512&v=wg",
+    "/img/run/characters/seraphine/young/gallery_1?w=512&v=y1",
   ]);
 });
 

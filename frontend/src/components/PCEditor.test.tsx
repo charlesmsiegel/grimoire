@@ -33,8 +33,12 @@ vi.mock("../api/client", async () => {
       setPCImageDescription: vi.fn(),
       draftPCImageDescription: vi.fn(),
       promotePCImage: vi.fn(), setPCAvatarFocus: vi.fn(),
-      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
-        `/img/${sc.id}/${k}/${a}/${v}/${n}`,
+      // `?w=` then `?v=`, as the real builder writes them, so a tile's
+      // downscale and the original it links to read differently.
+      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string,
+                      o?: { w?: number; v?: string | null }) =>
+        `/img/${sc.id}/${k}/${a}/${v}/${n}`
+        + (o?.w || o?.v ? "?" + [o.w && `w=${o.w}`, o.v && `v=${o.v}`].filter(Boolean).join("&") : ""),
     },
   };
 });
@@ -475,14 +479,21 @@ it("the shelf renders the avatar and gallery, cache-busted by the listing's toke
   ]);
   renderPCs({ selected: "elara" });
 
+  // A 96px tile draws a downscale under the token; its link opens the original.
   const avatar = await screen.findByAltText("avatar");
-  expect(avatar.getAttribute("src")).toBe("/img/realm/pcs/elara/default/avatar?v=a1");
+  expect(avatar.getAttribute("src")).toBe("/img/realm/pcs/elara/default/avatar?w=512&v=a1");
+  expect(avatar.getAttribute("sizes")).toBe("96px");
+  expect(avatar.closest("a")!.getAttribute("href")).toBe("/img/realm/pcs/elara/default/avatar?v=a1");
   // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
   const gallery = [screen.getByAltText("gallery_2"), screen.getByAltText("gallery_10")];
   expect(gallery.map((g) => g.getAttribute("src"))).toEqual([
-    "/img/realm/pcs/elara/default/gallery_2?v=g2",
-    "/img/realm/pcs/elara/default/gallery_10?v=g10",
+    "/img/realm/pcs/elara/default/gallery_2?w=512&v=g2",
+    "/img/realm/pcs/elara/default/gallery_10?w=512&v=g10",
   ]);
+  // The header portrait is a thumbnail too, sized to its 160px frame.
+  const head = screen.getByAltText(/portrait$/);
+  expect(head.getAttribute("src")).toBe("/img/realm/pcs/elara/default/avatar?w=512&v=a1");
+  expect(head.getAttribute("sizes")).toBe("160px");
 });
 
 it("the first upload becomes the avatar; the next queues into the gallery", async () => {
@@ -594,7 +605,8 @@ it("the rail draws each PC's portrait from its summary, at its own crop", async 
   const { container } = renderPCs();
   await screen.findByText("Rook");
   const thumb = container.querySelector(".pc-row-portrait img") as HTMLImageElement;
-  expect(thumb.getAttribute("src")).toBe("/img/realm/pcs/elara/v2/avatar");
+  // A 28px row: the smallest bucket, never the original.
+  expect(thumb.getAttribute("src")).toBe("/img/realm/pcs/elara/v2/avatar?w=128");
   expect(thumb.style.objectPosition).toBe("20% 20%");
   // the one with no avatar falls back to initials rather than a broken img
   expect(container.querySelectorAll(".pc-row-portrait img")).toHaveLength(1);
@@ -606,7 +618,7 @@ it("campaign scope addresses the campaign's own copy of the art", async () => {
   (api.listPCImages as any).mockResolvedValue([{ name: "avatar", ext: "png", v: "a1" }]);
   renderPCs({ scope: { kind: "campaign", id: "run" }, selected: "elara" });
   const avatar = await screen.findByAltText("avatar");
-  expect(avatar.getAttribute("src")).toBe("/img/run/pcs/elara/default/avatar?v=a1");
+  expect(avatar.getAttribute("src")).toBe("/img/run/pcs/elara/default/avatar?w=512&v=a1");
   fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
   await waitFor(() => expect(api.putPCImage).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "elara", "default", "gallery_1", FILE));

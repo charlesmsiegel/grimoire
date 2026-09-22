@@ -1,0 +1,62 @@
+/** The widths stored art is asked for through `?w=`, by the slot it fills.
+ *
+ *  Every image route answers `?w=` with a WebP downscale it caches on disk, and
+ *  a slot drawing a portrait at a few dozen pixels has no use for the original
+ *  -- a grid that asked for originals moved every card's full file and decoded
+ *  it at full resolution, which on a phone's WebView is memory as much as time.
+ *
+ *  Mirrors `THUMB_BUCKETS` in `backend/src/grimoire/routes/common.py` (less
+ *  320, which the server keeps for the gallery URLs it builds itself). The
+ *  server snaps any width up to a bucket anyway; asking for one exactly is what
+ *  keeps a `srcset`'s descriptors true to the bytes that come back, and keeps
+ *  one picture to a handful of cache entries however many layouts draw it.
+ *
+ *  - `row`: a fixed slot up to ~28 CSS px (speaker plates, owner stacks, chips)
+ *  - `face`: a fixed slot up to ~56 CSS px (the hub's faces, inspector rows)
+ *  - `tile` / `large`: anything bigger, through `thumbSet`, which lets the
+ *    browser pick by screen density. Those two bounds are `coverWidth` of the
+ *    bucket over a DPR of 3, so a fixed slot stays sharp on a phone.
+ */
+export const THUMB = { row: 128, face: 256, tile: 512, large: 1024 } as const;
+export type Thumb = (typeof THUMB)[keyof typeof THUMB];
+const BUCKETS: readonly Thumb[] = Object.values(THUMB);
+
+/** The width, in device pixels, a thumbnail of `bucket` fills without
+ *  upscaling when it is cover-cropped.
+ *
+ *  The server fits a thumbnail inside a `bucket`-by-`bucket` box, so the bucket
+ *  is its LONG edge. A cover crop fills its slot along the image's SHORT edge,
+ *  and character art is mostly 2:3 portraits, whose short edge is two thirds of
+ *  the long one (a 3:2 landscape in a square slot is the same sum turned on its
+ *  side). Describing the 512 as `512w` would let a browser fill a slot 512
+ *  device pixels wide with a 341px-wide portrait -- the blur this exists to
+ *  prevent. A square picture is under-described by the same factor, which only
+ *  costs it being fetched a bucket early. */
+const coverWidth = (bucket: number) => Math.floor((bucket * 2) / 3);
+
+export type ThumbSet = { src: string; srcSet: string; sizes: string };
+
+/** `src`, `srcSet` and `sizes` for art cover-cropped into a slot `sizes` wide.
+ *
+ *  For any slot that can be large, rather than a fixed bucket: a 134px dossier
+ *  portrait wants a 256 on a desktop and a 1024 on a DPR-3 phone, and only the
+ *  browser knows which one it is on. `sizes` is the slot's CSS width -- a
+ *  media-conditioned list where the layout changes it -- and should stay an
+ *  upper bound on what the stylesheet draws, since an under-stated slot is a
+ *  blurry one -- but a tight one where it can be, since the slack is paid in a
+ *  whole bucket. `src` is the candidate where `srcset` is not honoured, and the
+ *  one a test reads.
+ *
+ *  The 1024 is a ceiling, not a guarantee: a slot wider than 682 device pixels
+ *  (a full-width card on a DPR-3 phone) gets it and is drawn a little under
+ *  device resolution. The original is never a candidate -- a `srcset` cannot
+ *  describe a width nobody measured, and a list thumbnail is not where the
+ *  reader goes to look at the picture itself. */
+export function thumbSet(url: (w: Thumb) => string, sizes: string,
+                         src: Thumb = THUMB.tile): ThumbSet {
+  return {
+    src: url(src),
+    srcSet: BUCKETS.map((w) => `${url(w)} ${coverWidth(w)}w`).join(", "),
+    sizes,
+  };
+}

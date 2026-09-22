@@ -31,8 +31,10 @@ vi.mock("../api/client", async () => {
       // so it renders its quiet state: these suites assert on the rest of
       // the inspector, not on the bill.
       getSceneUsage: vi.fn(), getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(),
-      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string) => `/img/${k}/${a}/${v}`,
-      entityImageUrl: () => "/loc-img",
+      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, _n: string,
+                      o?: { w?: number }) => `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}`,
+      entityImageUrl: (_sc: unknown, _k: string, _e: string, _n: string, o?: { w?: number }) =>
+        `/loc-img${o?.w ? `?w=${o.w}` : ""}`,
     },
   };
 });
@@ -379,7 +381,8 @@ test("a PC in the roster gets a portrait like anyone else", async () => {
     { id: "yara", name: "Yara", tags: [], default_version: "default", versions: [] }]);
   renderInspector();
   const portrait = await screen.findByAltText("yara portrait");
-  expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v3");
+  // A 34px row: the face bucket, which a DPR-3 screen still fills sharply.
+  expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v3?w=256");
 });
 
 test("location with a primary image renders a clickable thumbnail", async () => {
@@ -387,6 +390,9 @@ test("location with a primary image renders a clickable thumbnail", async () => 
   renderInspector();
   const thumb = await screen.findByAltText("The Crypt");
   expect(thumb.closest("button")).not.toBeNull();
+  // A downscale the column's width picks, never the original.
+  expect(thumb.getAttribute("src")).toBe("/loc-img?w=512");
+  expect(thumb.getAttribute("srcset")).toContain("/loc-img?w=1024 682w");
   await waitFor(() => expect(api.listEntityImages).toHaveBeenCalledWith(
     { kind: "campaign", id: "c" }, "locations", "crypt"));
 });

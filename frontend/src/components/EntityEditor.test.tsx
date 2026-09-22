@@ -72,9 +72,16 @@ vi.mock("../api/client", () => ({
     demoteFromLibrary: vi.fn(),
     pushToLibrary: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
-    actorImageUrl: (sc: { kind: string; id: string }, k: string, a: string, v: string, n: string) =>
-      `/img/${sc.id}/${k}/${a}/${v}/${n}`,
-    entityImageUrl: (_s: any, k: string, e: string, n: string) => `/img/${k}/${e}/${n}`,
+    // `?w=` then `?v=`, the order the real builder writes them in, so a test
+    // can tell a thumbnail from the original it links to.
+    actorImageUrl: (sc: { kind: string; id: string }, k: string, a: string, v: string, n: string,
+                    o?: { w?: number; v?: string | null }) =>
+      `/img/${sc.id}/${k}/${a}/${v}/${n}`
+      + (o?.w || o?.v ? "?" + [o.w && `w=${o.w}`, o.v && `v=${o.v}`].filter(Boolean).join("&") : ""),
+    entityImageUrl: (_s: any, k: string, e: string, n: string,
+                     o?: { w?: number; v?: string | null }) =>
+      `/img/${k}/${e}/${n}`
+      + (o?.w || o?.v ? "?" + [o.w && `w=${o.w}`, o.v && `v=${o.v}`].filter(Boolean).join("&") : ""),
     getSheet: vi.fn(),
     putSheet: vi.fn(),
     putSheetCreation: vi.fn(),
@@ -355,6 +362,9 @@ test("lore rows stack owner avatars; owners without avatars are omitted", async 
   await screen.findAllByText("Smuggling");
   await waitFor(() => expect(container.querySelectorAll(".owner-stack-img")).toHaveLength(2));
   expect(container.querySelector(".owner-stack-img")).toHaveAttribute("title", "Maren");
+  // A 26px stack draws the smallest bucket.
+  expect(container.querySelector(".owner-stack-img"))
+    .toHaveAttribute("src", "/img/w/characters/maren/v1/avatar?w=128");
 });
 
 test("lore detail owner chips include an avatar or initials", async () => {
@@ -392,14 +402,21 @@ test("image urls carry per-record version tokens for immutable caching", async (
   ]);
   const { container, rerender } = render(<Wrap wid="w" kind="locations" />);
   await screen.findByText("Warehouse Nine");
-  expect(container.querySelector(".loc-row-img")!.getAttribute("src"))
-    .toBe("/img/locations/warehouse/avatar?v=aaa1");
+  // Every picture drawn is a downscale under the same token; a rail of
+  // location cards used to pull each original to fill a 220px strip.
+  const rowImg = container.querySelector(".loc-row-img")!;
+  expect(rowImg.getAttribute("src")).toBe("/img/locations/warehouse/avatar?w=512&v=aaa1");
+  expect(rowImg.getAttribute("srcset")).toContain("/img/locations/warehouse/avatar?w=1024&v=aaa1 682w");
+  expect(rowImg.getAttribute("loading")).toBe("lazy");
   rerender(<Wrap wid="w" kind="locations" selected="warehouse" />);
   await screen.findByText("Images");
   expect(screen.getByAltText("Warehouse Nine primary").getAttribute("src"))
-    .toBe("/img/locations/warehouse/avatar?v=aaa1");
-  expect(screen.getByAltText("gallery_1").getAttribute("src"))
-    .toBe("/img/locations/warehouse/gallery_1?v=bbb2");
+    .toBe("/img/locations/warehouse/avatar?w=512&v=aaa1");
+  const gallery = screen.getByAltText("gallery_1");
+  expect(gallery.getAttribute("src")).toBe("/img/locations/warehouse/gallery_1?w=512&v=bbb2");
+  // ...but the link out is the original: that is where the reader goes to
+  // look at the picture itself.
+  expect(gallery.closest("a")!.getAttribute("href")).toBe("/img/locations/warehouse/gallery_1?v=bbb2");
 });
 
 test("new kinds render the list/detail pattern with their own label", async () => {

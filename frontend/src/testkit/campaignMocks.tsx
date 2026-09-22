@@ -109,8 +109,10 @@ export async function campaignApiMock() {
       // Per-task routing (#142): the page resolves the model its turns run on
       // and publishes it to the header.
       getCampaignRouting: vi.fn(), setCampaignRouting: vi.fn(),
-      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string) =>
-        `/img/${k}/${a}/${v}/${n}`,
+      // The width a portrait asks for is part of the URL a test reads, so a
+      // plate that fell back to the full-size original says so.
+      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string,
+                      o?: { w?: number }) => `/img/${k}/${a}/${v}/${n}${o?.w ? `?w=${o.w}` : ""}`,
       entityImageUrl: () => "/loc-img",
     },
   };

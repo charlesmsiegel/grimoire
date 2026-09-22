@@ -6,6 +6,7 @@ import {
   type ModuleDetail, type VersionRef,
 } from "../api/client";
 import { errorText } from "../api/errors";
+import { thumbSet } from "../api/thumbs";
 import { AvatarFocusPicker } from "../components/AvatarFocusPicker";
 import { CalendarDatePicker } from "../components/CalendarDatePicker";
 import { ErrorNote } from "../components/ErrorNote";
@@ -22,7 +23,7 @@ import { TaglineSection } from "../components/character/TaglineSection";
 import { VersionList } from "../components/character/VersionList";
 import { VoiceAnchorSection } from "../components/character/VoiceAnchorSection";
 import {
-  avatarSrc, buildCard, characterHref, charactersHref,
+  avatarSrc, buildCard, characterHref, characterImage, charactersHref,
   ExportMenu, focusStyle, formatOf, initialsOf,
 } from "../components/character/shared";
 import { sectionHref } from "../worldPaths";
@@ -555,8 +556,10 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       ? <button className="identity-art avatar-crop-btn" type="button"
                 aria-label="Adjust avatar crop" title="Adjust avatar crop"
                 onClick={() => setCropOpen(true)}>
-          <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
-               src={avatarSrc(scope, eid, vid, imageTokens.avatar)} />
+          {/* `.identity-art` tops out at 240px square: a thumbnail the
+              screen picks, while the crop picker below keeps the original. */}
+          <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)} decoding="async"
+               {...thumbSet(characterImage(scope, eid, vid, "avatar", imageTokens.avatar), "240px")} />
         </button>
       : <div className="identity-art identity-art-empty" aria-hidden>{initialsOf(name)}</div>}
 

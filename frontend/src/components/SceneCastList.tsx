@@ -1,4 +1,5 @@
 import { api, type Actor, type RosterEntry } from "../api/client";
+import { THUMB } from "../api/thumbs";
 
 /** "In this scene": who is seated, at the version this campaign locked for
  *  them. Split out of `CastPanel`. */
@@ -19,9 +20,9 @@ export function SceneCastList({ cid, cast, roster }: {
         return (
           <div className="cast-row" key={`${a.kind}/${a.id}`}>
             {ver
-              ? <img className="row-avatar" alt={`${a.id} avatar`}
+              ? <img className="row-avatar" alt={`${a.id} avatar`} loading="lazy" decoding="async"
                      src={api.actorImageUrl({ kind: "campaign", id: cid },
-                                            a.kind, a.id, ver, "avatar")}
+                                            a.kind, a.id, ver, "avatar", { w: THUMB.row })}
                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
               : null}
             <span>{a.id}</span>

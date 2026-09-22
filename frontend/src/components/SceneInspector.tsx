@@ -8,6 +8,7 @@ import {
   type RollingSummary, type SceneBreak,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
+import { THUMB, thumbSet } from "../api/thumbs";
 import { onNoticesChanged } from "../appEvents";
 import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { ContextDiff } from "./ContextDiff";
@@ -1236,7 +1237,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
               <button className={"inspector-row" + (pc ? " pc" : "")}
                       onClick={() => setDrawer({ type: "actor", kind: a.kind, id: a.id })}>
                 <Portrait src={ver ? api.actorImageUrl({ kind: "campaign", id: cid },
-                                                            a.kind, a.id, ver, "avatar") : null}
+                                                            a.kind, a.id, ver, "avatar",
+                                                            { w: THUMB.face }) : null}
                           name={nameOf(a)} />
                 <span className="inspector-name">{nameOf(a)}</span>
                 <span className="role-chip">{pc ? "player" : "npc"}</span>
@@ -1371,8 +1373,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           ? <button className={"inspector-row" + (locImages.includes("avatar") ? " inspector-loc" : "")}
                     onClick={() => setDrawer({ type: "location", id: setting.current!.id })}>
               {locImages.includes("avatar") && (
-                <img className="inspector-loc-thumb" alt={setting.current.name}
-                     src={api.entityImageUrl({ kind: "campaign", id: cid }, "locations", setting.current.id, "avatar")}
+                <img className="inspector-loc-thumb" alt={setting.current.name} decoding="async"
+                     {...thumbSet((w) => api.entityImageUrl({ kind: "campaign", id: cid }, "locations",
+                                                            setting.current!.id, "avatar", { w }),
+                                  // the inspector's ~290px track; the whole width on a phone
+                                  "(max-width: 720px) 100vw, 290px")}
                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
               )}
               <span>{setting.current.name}</span>

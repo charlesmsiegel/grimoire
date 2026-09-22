@@ -1,4 +1,5 @@
 import { api, type Casefile, type Provenance } from "../../api/client";
+import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
 import CitedRow from "./CitedRow";
 
@@ -59,8 +60,11 @@ export default function DossierColumn(
   }
 
   const c = casefile;
+  // `.dossier-portrait` is a fixed 134px frame.
   const src = c.version
-    ? api.actorImageUrl({ kind: "campaign", id: cid }, c.kind, c.id, c.version, "avatar")
+    ? thumbSet((w) => api.actorImageUrl({ kind: "campaign", id: cid }, c.kind, c.id, c.version,
+                                        "avatar", { w }),
+               "134px")
     : null;
   // The dossier paragraph is written by a later absorb phase, which rests on no
   // transcript citation to weigh — so it is uncited by construction, and the

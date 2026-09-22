@@ -7,8 +7,9 @@ vi.mock("../api/client", async () => {
   return {
     ...actual,
     api: {
-      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
-        `/img/${sc.id}/${k}/${a}/${v}/${n}`,
+      // The real builder: what a card asks the route for (its `?w=` and
+      // `?v=`) is the thing the portrait test below is about.
+      actorImageUrl: actual.api.actorImageUrl,
       listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
       deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
       importCharacterFromChub: vi.fn(), importCharacterBook: vi.fn(),
@@ -66,6 +67,29 @@ beforeEach(() => {
 });
 
 // -------------------------------------------------------------------- cards
+
+test("a card's portrait is a lazy, versioned thumbnail, never the original", async () => {
+  // A world grid drew every card from its full-size original: the whole
+  // roster's files moved and decoded at full resolution to fill tiles a few
+  // hundred pixels wide, the ones below the fold included.
+  (api.listCharacters as any).mockResolvedValue([
+    row("seraphine", "Seraphine", { has_avatar: true, avatar_v: "abc" }),
+    row("mara", "Mara", { has_avatar: true }),
+  ]);
+  const { container } = renderGrid();
+  await screen.findByText("Seraphine");
+  const [sera, mara] = Array.from(container.querySelectorAll(".char-card-avatar"));
+  const base = "/api/worlds/realm/characters/seraphine/versions/default/images/avatar";
+  expect(sera.getAttribute("src")).toBe(`${base}?w=512&v=abc`);
+  expect(sera.getAttribute("srcset")).toContain(`${base}?w=1024&v=abc 682w`);
+  expect(sera.getAttribute("sizes")).toMatch(/px/);
+  expect(sera.getAttribute("loading")).toBe("lazy");
+  expect(sera.getAttribute("decoding")).toBe("async");
+  // No token, no `?v=`: a bare thumbnail revalidates rather than caching a
+  // year under a name that does not pin its bytes.
+  expect(mara.getAttribute("src"))
+    .toBe("/api/worlds/realm/characters/mara/versions/default/images/avatar?w=512");
+});
 
 test("a card shows the tagline and its badges, versions included", async () => {
   (api.listCharacters as any).mockResolvedValue([

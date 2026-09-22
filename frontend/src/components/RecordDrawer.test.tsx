@@ -11,7 +11,8 @@ vi.mock("../api/client", async () => {
     api: {
       getCastDetail: vi.fn(),
       readEntity: vi.fn(),
-      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string) => `/img/${k}/${a}/${v}`,
+      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, _n: string,
+                      o?: { w?: number }) => `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}`,
     },
   };
 });
@@ -47,6 +48,15 @@ test.each([
   // A word each is not enough to act on — "Override" only means something
   // once you know what it overrode — so each badge carries its own sentence.
   expect(chip.getAttribute("title")).toContain(hint);
+});
+
+test("the avatar is a downscale, not the original file", async () => {
+  // Drawn at up to 180px at its own aspect, so it takes one fixed bucket
+  // rather than a srcset (whose descriptors would re-state its natural size):
+  // the large one, since the reader opened this to look at one person.
+  open();
+  const img = await screen.findByAltText("Seraphine avatar");
+  expect(img.getAttribute("src")).toBe("/img/characters/seraphine/default?w=1024");
 });
 
 test("an unrecognized source renders no badge at all", async () => {

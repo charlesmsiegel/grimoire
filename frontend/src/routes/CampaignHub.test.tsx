@@ -592,6 +592,35 @@ test("the cast card shows only actors who have appeared", async () => {
   expect(within(card).getByText("2")).toBeInTheDocument();
 });
 
+test("a face is a face-sized thumbnail, token and all", async () => {
+  // 48px faces used to be drawn from full-size originals, a front door
+  // moving every cast member's whole file to show a thumbnail of it.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara Vance", default_version: "v1", versions: [], has_avatar: true,
+      avatar_v: "abc" },
+  ]);
+  (api.listCampaignPCs as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "v2", versions: [], tags: [],
+      has_avatar: true },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    appeared("characters", "mara"), appeared("pcs", "seraphine"),
+  ]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Cast" })).closest("section")!;
+  await within(card).findByRole("link", { name: "Mara Vance" });
+  expect(api.actorImageUrl).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "characters", "mara", "v1", "avatar", { w: 256, v: "abc" });
+  // A PC has no token to spend -- only a character's avatar is swapped by a
+  // promote -- so its face is the bare, revalidated thumbnail.
+  expect(api.actorImageUrl).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "pcs", "seraphine", "v2", "avatar", { w: 256 });
+  for (const img of card.querySelectorAll("img.hub-face-avatar")) {
+    expect(img.getAttribute("loading")).toBe("lazy");
+  }
+});
+
 test("a campaign whose cast has never been on stage reads as empty, not as the world", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "winifred", name: "Winifred", default_version: "v1", versions: [], has_avatar: false },
