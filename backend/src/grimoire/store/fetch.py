@@ -12,6 +12,7 @@ on the way to the socket — see `resolve_allowed` and `_pinned_request`.
 from __future__ import annotations
 
 import base64
+import functools
 import ipaddress
 import socket
 import ssl
@@ -25,8 +26,27 @@ _CT_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
            "image/gif": "gif", "image/webp": "webp"}
 _MAX_REDIRECTS = 5
 _UA = "Mozilla/5.0 (grimoire image fetch)"
-# Trust certifi's CA bundle explicitly, independent of any ambient SSL_CERT_FILE.
-_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+#: An override for the context `_ssl_ctx` hands out -- the seam the TLS tests
+#: set. None, the default, means certifi's.
+_SSL_CTX: ssl.SSLContext | None = None
+
+
+@functools.cache
+def _default_ssl_ctx() -> ssl.SSLContext:
+    """Trust certifi's CA bundle explicitly, independent of any ambient
+    SSL_CERT_FILE.
+
+    Built on first use rather than at import: loading the bundle is tens of
+    milliseconds, this module is imported by every process through the store
+    facade, and most sessions never fetch an image at all -- so every start
+    paid for a context almost nothing used, and on Android it sat squarely in
+    the cold start. Two first fetches racing may each build one; the cache
+    keeps whichever lands, and both are equivalent."""
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def _ssl_ctx() -> ssl.SSLContext:
+    return _SSL_CTX if _SSL_CTX is not None else _default_ssl_ctx()
 
 
 def sniff_ext(raw: bytes) -> str | None:
@@ -153,7 +173,7 @@ def _http_get_bytes(url: str, *, transport: httpx.BaseTransport | None = None) -
     # pinned address, so a redirect to a different hostname on the same IP
     # would otherwise reuse a connection whose TLS handshake named the old one.
     limits = httpx.Limits(max_keepalive_connections=0)
-    with httpx.Client(timeout=10.0, follow_redirects=False, verify=_SSL_CTX,
+    with httpx.Client(timeout=10.0, follow_redirects=False, verify=_ssl_ctx(),
                       headers=headers, limits=limits, transport=transport) as client:
         for _ in range(_MAX_REDIRECTS + 1):
             u = httpx.URL(url)
