@@ -14,6 +14,10 @@ incremental watchers must match them feed for feed -- every returned delta,
 `body` / `handoff` / `issue` -- over randomized chunkings and over every
 chunking of a small alphabet. If the grammar changes, change the oracle with
 it; if only the watcher changes, the oracle is the spec.
+
+The same empty feeds used to cost a frame each as well: both turn producers
+answered every one with a heartbeat. The last section pins the throttle that
+replaced that (`streaming._Liveness`).
 """
 
 from __future__ import annotations
@@ -22,10 +26,14 @@ import itertools
 import json
 import random
 import re
+from types import SimpleNamespace
 
 import pytest
 
+from grimoire import routes
+from grimoire.routes import character_turns, streaming
 from grimoire.store import fence, response_protocol, turnstate
+from tests.llm_fakes import FakeOpenRouter
 
 # ---- oracles: the pre-incremental algorithms, verbatim ---------------------
 
@@ -284,3 +292,44 @@ def test_an_empty_feed_changes_nothing(prefix):
         before = [dict(vars(p)) for p in parts]
         assert w.feed("") == ""
         assert [dict(vars(p)) for p in parts] == before
+
+
+# ---- the frames around them --------------------------------------------------
+
+#: One token per event with a blank line between, as the adapters report them:
+#: four empty deltas, of which only the first arrives before any text.
+_SPARSE = ["", "The ", "", "tide ", "", "turns.", ""]
+
+
+@pytest.mark.parametrize(("gap", "beats"), [(3600.0, 1), (0.0, 4)])
+def test_a_turn_heartbeats_only_through_a_quiet_second(client, monkeypatch, gap, beats):
+    """The first empty delta always beats -- the wait before a first token is
+    what #95 is for -- and after that only a second with no frame at all does.
+    A zero gap is the old behaviour, which is what proves the test can see
+    heartbeats at all."""
+    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", gap)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tide"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(_SPARSE)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+    assert resp.status_code == 200
+    assert resp.text.count(streaming._HEARTBEAT) == beats
+    assert resp.text.index(streaming._HEARTBEAT) < resp.text.index('"delta"')
+    shown = "".join(json.loads(line[len("data: "):]).get("delta", "")
+                    for line in resp.text.splitlines() if line.startswith("data: "))
+    assert shown == "The tide turns."
+
+
+@pytest.mark.parametrize(("gap", "beats"), [(3600.0, 1), (0.0, 4)])
+async def test_an_assigned_actor_heartbeats_the_same_way(monkeypatch, gap, beats):
+    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", gap)
+    frames = [f async for f in character_turns._stream_contribution(
+        FakeOpenRouter(_SPARSE), [{"role": "user", "content": "and then?"}],
+        {"kind": "openrouter", "model": "m"}, SimpleNamespace(usage={}),
+        response_protocol.ResponseWatcher(), SimpleNamespace(cancel_requested=False))]
+    assert frames.count(streaming._HEARTBEAT) == beats
+    assert frames[0] == streaming._HEARTBEAT
+    assert "".join(json.loads(f[len("data: "):])["delta"]
+                   for f in frames if f.startswith("data: ")) == "The tide turns."
