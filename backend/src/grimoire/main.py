@@ -433,11 +433,13 @@ class _RemoteOnlyGZip:
     through a reverse proxy -- keeps exactly the old behaviour. A proxy on the
     same host connects FROM loopback but relays over a real network, so any
     forwarding header makes a loopback peer count as remote. (uvicorn already
-    rewrites ``client`` from ``X-Forwarded-For`` for a trusted loopback peer;
-    the rest it does not read, and nothing guarantees the server is uvicorn
-    with its defaults.) A proxy that sends none of them looks local and is
-    handed identity bytes, which it can compress itself -- the wrong guess in
-    the cheap direction.
+    rewrites ``client`` from ``X-Forwarded-For`` for a trusted loopback peer,
+    but takes no client from the others, and nothing guarantees the server is
+    uvicorn with its defaults.) A proxy that sends none of them -- nginx's
+    ``proxy_pass`` unless configured to, or an SSH tunnel (``ssh -L``), which
+    has no headers to add -- looks local and is handed identity bytes. Each can
+    compress for itself (``gzip on``, ``ssh -C``): the wrong guess in the cheap
+    direction.
 
     Raw ASGI for the reason ``_CampaignActivityStamp`` gives, and a wrapper
     rather than GZipMiddleware's ``exclude_content_types``, which the Android

@@ -114,9 +114,10 @@ def test_a_remote_peer_is_still_gzipped(client):
     (b"x-forwarded-host", b"grimoire.example"),
 ])
 def test_a_same_host_reverse_proxy_keeps_compression(forwarded):
-    """nginx, Caddy or `tailscale serve` on the same machine connect from
-    loopback but relay the response over a real network, where compression
-    still pays -- and each of them says so with one of these headers."""
+    """A reverse proxy on the same machine connects from loopback but relays
+    the response over a real network, where compression still pays. Caddy
+    sends these headers by default and nginx when configured to; one that
+    sends none looks local, the trade `_RemoteOnlyGZip` states."""
     status, headers, _ = _asgi(_wrapped(), "/", client=("127.0.0.1", 50123),
                                headers=[*GZIP, forwarded])
     assert status == 200
