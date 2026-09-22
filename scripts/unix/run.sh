@@ -51,8 +51,8 @@ bundle_is_stale() {
     if [ -e "$ROOT/frontend/$p" ]; then paths+=("$ROOT/frontend/$p"); fi
   done
   [ "${#paths[@]}" -gt 0 ] || return 1
-  # -print -quit rather than `| head -n1`: under pipefail a find killed by
-  # SIGPIPE fails the pipeline, and under set -e that ends the script.
+  # One newer path settles it, so -quit ends the walk at the first match
+  # rather than listing the whole tree.
   [ -n "$(find "${paths[@]}" -newer "$DIST_INDEX" -print -quit 2>/dev/null)" ]
 }
 
@@ -134,6 +134,11 @@ fi
 # is what ended the `wait` below), and a second read would then fail.
 cleanup() {
   local pids pid
+  # Deaf to further signals from here on. An impatient second Ctrl+C would
+  # otherwise run `exit` inside this EXIT trap, which ends the shell on the
+  # spot: the kill -9 pass is skipped and the pidfile outlives its processes,
+  # holding pids the OS may reissue -- to something shutdown.sh would then kill.
+  trap '' INT TERM HUP
   pids="$(cat "$PIDFILE" 2>/dev/null)" || return 0
   for pid in $pids; do
     if kill -0 "$pid" 2>/dev/null; then
