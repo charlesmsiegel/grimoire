@@ -184,3 +184,14 @@ def test_a_malformed_plot_map_leaves_edges_off_rather_than_failing_the_list(clie
             assert [row["id"] for row in r.json()] == ids
             assert not any("edges" in row for row in r.json()), (bad, base)
         assert lenient.get(f"{wbase}/greetings/{gid}").status_code == 500, bad
+
+    # An edge list naming a list: `edges_of` hands it back as it found it, so
+    # the world's list and read agree on it, but the detachment filter tests
+    # each id against a set and cannot hash that one.
+    (worlds.world_root(wid) / "plotmap.json").write_text(
+        json.dumps({gid: {"leads_to": [["not", "an", "id"]]}}), encoding="utf-8")
+    r = client.get(f"{cbase}/greetings")
+    assert r.status_code == 200
+    assert [row["id"] for row in r.json()] == [docks, gid]
+    assert not any("edges" in row for row in r.json())
+    assert lenient.get(f"{cbase}/greetings/{gid}").status_code == 500
