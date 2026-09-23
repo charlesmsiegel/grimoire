@@ -2163,6 +2163,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const owns = () => mountedRef.current && !abortRef.current && activeIdRef.current === id;
     let wait = FLUSH_POLL_MS;
     let waited = 0;
+    // The length the screen was last refreshed to, so a tick can tell a
+    // transcript that moved some other way than growing from one that has not
+    // moved at all (below).
+    let onScreen = seen;
     while (waited < FLUSH_POLL_BUDGET_MS) {
       await new Promise((r) => setTimeout(r, wait));
       waited += wait;
@@ -2200,6 +2204,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // goes on and the next tick tries again, as it always did.
         if (shown < 0) continue;
         return void await settleProposal(id, owns);
+      }
+      // Growth is what this waits for, but not the only thing the server can do
+      // meanwhile: a detached turn that fails after its connection has gone
+      // rolls its post back, and the transcript SHRINKS. The per-tick refresh
+      // this replaced put that on screen as a side effect; without it the post
+      // stayed, still offering Edit and Cut against an index the file no longer
+      // has. So a length that moved without growing is re-read once, and the
+      // wait goes on.
+      if (n >= 0 && n !== onScreen) {
+        const shown = await selectScene(id, owns).catch(() => -1);
+        if (!owns()) return;
+        if (shown < 0) continue;
+        onScreen = shown;
+        // The flush can land between the length read and this refresh.
+        if (shown > seen) return void await settleProposal(id, owns);
       }
     }
   }
@@ -4679,14 +4698,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               {/* Memoized, with stable handlers: it re-renders for the scene,
                   the refresh beat and the cost reads, never for the composer.
                   The usage and budget are the reads this view already holds,
-                  handed down so its Cost section does not repeat them. */}
+                  handed down so its Cost section does not repeat them. The
+                  usage only while the transcript on screen is the ACTIVE
+                  scene's: it is read for the transcript, which stays the scene
+                  being left until the new one lands (for good, if it never
+                  does), and this section is headed by the active scene. Until
+                  then it reads as a read in flight, not as the wrong scene's
+                  spend. */}
               <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
                               onSceneChanged={onInspectorSceneChanged}
                               onSceneRenamed={sceneRenamedStable} pcless={activePcless}
                               sceneLocked={sceneLocked}
                               onRenaming={markRenaming}
                               posts={messages.length}
-                              usage={sceneCosts?.usage ?? null} budget={budget}
+                              usage={transcriptIsActive ? sceneCosts?.usage ?? null : null}
+                              budget={budget}
                               onBudgetSaved={onBudgetSaved} />
             </div>
           )}

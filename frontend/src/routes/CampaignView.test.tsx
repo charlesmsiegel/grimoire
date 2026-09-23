@@ -220,6 +220,49 @@ test("cost chips never land on the transcript they were not read for", async () 
   expect(screen.queryByText(/\$9\.99/)).toBeNull();
 });
 
+test("the inspector's Cost section never shows the scene being left as the one being opened", async () => {
+  // The Cost section renders the usage this view read for its own chips rather
+  // than asking again -- and that read follows the transcript ON SCREEN, which
+  // stays the scene being left until the new one's lands, or for good if it
+  // never does. Handed down unscoped, a section headed by the second scene
+  // showed the first scene's spend.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "First", model: "", created: "", updated: "2026-01-02" },
+    { id: "s2", title: "Second", model: "", created: "", updated: "2026-01-01" },
+  ]);
+  (api.getScene as any).mockImplementation(async (_cid: string, sid: string) => {
+    if (sid === "s1") {
+      return { meta: { id: "s1", title: "First" },
+               messages: [{ role: "user", content: "the first scene" }] };
+    }
+    return new Promise(() => {});          // the second transcript never arrives
+  });
+  (api.getSceneUsage as any).mockImplementation(async (_cid: string, sid: string) => {
+    const totals = { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
+                     total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+                     cost_usd: 0, estimated_usd: 0, modelled_usd: 0, priced_calls: 0,
+                     unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
+                     unmetered_calls: 0, duration_ms: 0 };
+    return { campaign: "run", scene: sid, since: "", until: "", clamped: false,
+      generated_at: "", by_task: [], by_post: [], turns: [], listed: 0, truncated: false,
+      totals: sid === "s1" ? { ...totals, calls: 1, cost_usd: 4.56, priced_calls: 1 } : totals };
+  });
+  renderCampaign();
+  await screen.findByText("the first scene");
+  fireEvent.click(screen.getByRole("button", { name: /What the model saw/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^cost/i }));
+  const panel = await waitFor(() => {
+    const el = document.querySelector(".cost-panel");
+    expect(el).not.toBeNull();
+    return el as HTMLElement;
+  });
+  expect(await within(panel).findByText(/\$4\.56 · 1 turn/)).toBeInTheDocument();
+
+  await openScene(/Second/);
+
+  expect(within(panel).queryByText(/\$4\.56/)).toBeNull();
+});
+
 test("opening a scene reads its costs and the budget once each, and a turn once more", async () => {
   // Both used to be read on the way in AND again when the transcript's landing
   // bumped the refresh beat, the first answer only ever discarded. With a
@@ -2071,6 +2114,35 @@ test("the flush poll asks for the transcript's length, and refreshes the scene o
   flushed = true;
   expect(await screen.findByText("the flushed partial", {}, { timeout: 4000 })).toBeInTheDocument();
   expect((api.getCast as any).mock.calls.length).toBe(castReads + 1);
+});
+
+test("the flush poll re-reads a transcript that shrank under it", async () => {
+  // Growth is what the poll waits for, but it is not the only thing the server
+  // can do in the wait: a turn that fails after the connection has gone rolls
+  // its post back. A tick used to be a whole refresh, so that reached the
+  // screen as a side effect; polling the length alone must not lose it and
+  // leave a post the transcript no longer has, still offering Edit and Cut
+  // against its index.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let rolledBack = false;
+  const opening = { role: "assistant", content: "the opening" };
+  (api.getScene as any).mockImplementation(async () => (rolledBack
+    ? { meta: {}, total: 1, messages: [opening] }
+    : { meta: {}, total: 2,
+        messages: [opening, { role: "user", content: "a post the server took back" }] }));
+  (api.chat as any).mockImplementation(hangingChat(["a fragment"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
+  expect(screen.getByText("a post the server took back")).toBeInTheDocument();
+
+  rolledBack = true;
+  await waitFor(() => expect(screen.queryByText("a post the server took back")).toBeNull(),
+                { timeout: 4000 });
+  expect(screen.getByText("the opening")).toBeInTheDocument();
 });
 
 test("StrictMode's mount cycle does not switch the flush poll off", async () => {
