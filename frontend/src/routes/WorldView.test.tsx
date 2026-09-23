@@ -1301,6 +1301,22 @@ test("a section that takes no module never reads one", async () => {
   expect(api.readModule).not.toHaveBeenCalled();
 });
 
+test("a roster left before its list lands asks nothing for the section it was left for", async () => {
+  // The grid's "my list is in" is what asks for the module on the roster; a
+  // reader already on Greetings by then gains three reads nothing there uses.
+  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
+  let land: (rows: unknown) => void = () => {};
+  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  renderAtUrl("/worlds/w/characters");
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Greetings"));
+  await screen.findByRole("heading", { name: "Greetings" });
+  await act(async () => { land([]); });
+  await screen.findByRole("heading", { name: "Greetings" });
+  expect(api.getWorldSheetsIndex).not.toHaveBeenCalled();
+  expect(api.listModules).not.toHaveBeenCalled();
+});
+
 test("moving from a section without the module to one with it asks then", async () => {
   (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
   renderAtUrl("/worlds/w/greetings");

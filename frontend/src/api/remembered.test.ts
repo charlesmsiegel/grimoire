@@ -159,6 +159,22 @@ test("a read answered from before a write does not outlive the write", async () 
   expect(api.rememberedCharacters(WORLD)).toBeUndefined();
 });
 
+test("a read sent before a write is not remembered by a caller who joined it after", async () => {
+  // The grid's reload after a create or a delete asks for the list the moment
+  // the write settles -- and an identical GET still on the wire from before
+  // the write is what the client's in-flight sharing hands it. That answer
+  // predates the write however late it was joined.
+  await freshRoot();
+  const list = held<unknown>();
+  stubFetch((path, init) => (init.method === "GET" ? list.promise : { ok: true }));
+  const early = api.listCharacters(WORLD);
+  await api.deleteCharacter(WORLD, "mara");
+  const late = api.listCharacters(WORLD);
+  list.resolve([row("seraphine", "Seraphine"), row("mara", "Mara")]);
+  await Promise.all([early, late]);
+  expect(api.rememberedCharacters(WORLD)).toBeUndefined();
+});
+
 test("uploads and streamed writes forget as well", async () => {
   await freshRoot();
   stubFetch(() => [row("seraphine", "Seraphine")]);

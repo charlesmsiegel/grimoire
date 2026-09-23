@@ -219,10 +219,17 @@ function retireAllInflight(): void {
 // - A read only lands if nothing was forgotten while it was in flight: a
 //   root change or a write (`writing`) bumps `memoEpoch`, and an answer
 //   issued before the bump describes a store that may no longer be the one
-//   being shown.
+//   being shown. "Issued" is when the request was SENT, not when a caller
+//   asked: the in-flight sharing in `request` hands a caller who asks after a
+//   write the identical GET still on the wire from before it -- exactly what
+//   a grid's reload after its own create or delete does -- and that answer is
+//   as old as its request, however late it was joined (`issuedIn`).
 let memoRoot: string | null = null;
 let memoEpoch = 0;
 const memo = new Map<string, unknown>();
+/** The `memoEpoch` each shared GET was sent in, keyed by the promise
+ *  `request` hands every caller who joins it. */
+const issuedIn = new WeakMap<Promise<unknown>, number>();
 /** How many answers are kept, the least recently used going first. A reader
  *  moves between a handful of worlds and campaigns at a time, and that
  *  handful is all the memo has to cover; without a bound, a long session
@@ -257,7 +264,8 @@ function noteRoot(root: string | undefined): void {
  *  confirm those rows is no reason to go on painting them on the next visit
  *  (a world deleted elsewhere would flash its old cast every time). */
 function remembering<T>(key: string, read: Promise<T>): Promise<T> {
-  const epoch = memoEpoch;
+  // A read that was not shared (a `fresh` one) is sent by this very call.
+  const epoch = issuedIn.get(read) ?? memoEpoch;
   return read.then((value) => {
     if (epoch === memoEpoch && memoRoot !== null) {
       memo.delete(key);   // re-inserted at the young end
@@ -329,6 +337,7 @@ function request<T>(method: string, path: string, body?: unknown,
     if (inflightGets.get(path) === p) inflightGets.delete(path);
   });
   inflightGets.set(path, p);
+  issuedIn.set(p, memoEpoch);
   return p;
 }
 
