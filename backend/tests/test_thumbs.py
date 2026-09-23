@@ -257,6 +257,16 @@ def test_the_sweep_retires_only_generations_older_than_its_own(tmp_path, monkeyp
     assert not any(p.exists() for p in gone)
 
 
+def test_an_encoder_change_comes_with_a_new_revision():
+    # The sweep leaves a generation at its own revision alone whatever its
+    # encoder, since that is a phone's JPEG beside a desktop's WebP. So a
+    # setting changed without REVISION moving leaves the old entries on disk
+    # for good -- and the thumbnails browsers cached from them in place, since
+    # the client's `t` is the revision. Pinned, to fail until both move.
+    assert (thumbs.REVISION, thumbs.ENCODER, thumbs.FALLBACK_ENCODER) == (
+        3, "webp-q80-m2", "jpeg-q85-png"), "bump REVISION (and THUMB_REV) with the encoder"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="creating symlinks on Windows needs elevation")
 def test_the_sweep_does_not_follow_a_symlink(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))

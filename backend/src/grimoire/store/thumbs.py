@@ -93,7 +93,10 @@ METHOD = 2
 #: mtime, size) and the width, none of which an encoder change moves, so
 #: without this a cache written under old settings would be served as though
 #: it were the new. Derived from the two settings rather than written beside
-#: them, so bumping either one is a new entry by construction.
+#: them, so bumping either one is a new entry by construction -- though not a
+#: retired generation: bump REVISION with it, or the sweep takes the old
+#: entries for a sibling device's and leaves them (test_thumbs.py pins the
+#: pair to say so).
 ENCODER = f"webp-q{QUALITY}-m{METHOD}"
 #: The JPEG quality where there is no WebP encoder (`_encoding`) -- about what
 #: WebP's 80 looks like, at a few more bytes.
