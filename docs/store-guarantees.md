@@ -77,10 +77,16 @@ the walks that copy or pack a whole directory of records — a world export, a
 world fork — which must skip such a file: it is not part of the store's
 content, and the writer that owns it will rename or unlink it out from under
 the walk. The pattern lives beside the code that generates the name rather
-than in those callers, where it would drift the day the prefix changes. The
-backup is its one other reader: a process killed mid-archive never reaches
-`streaming_write`'s cleanup, so `create_backup` deletes a temp whose embedded
-name is one of its own archives once it has sat untouched for an hour.
+than in those callers, where it would drift the day the prefix changes. Two
+other readers delete what it matches. The backup: a process killed mid-archive
+never reaches `streaming_write`'s cleanup, so `create_backup` deletes a temp
+whose embedded name is one of its own archives once it has sat untouched for an
+hour. And the thumbnail cache's sweep (`store/thumbs.py`), which deletes a temp
+whose embedded name is a thumbnail entry inside a generation older than the
+running build's, with no age test: nothing on this device writes into a retired
+generation, and a device on an older build sharing the library through a sync
+client, writing there at that moment, loses one thumbnail — it serves that
+picture's original and makes the thumbnail again on the next request.
 
 ### What it does not guarantee
 
@@ -310,8 +316,10 @@ file it read *and* of every directory whose listing it read: a directory's
 mtime moves on every create, unlink and rename inside it (every atomic write
 included), so a card or an image arriving from a sync client is noticed
 without the row having to list anything again. The stamp adds `st_ctime_ns`,
-which catches a same-size in-place rewrite whose mtime was handed back — the
-residual the `(path, mtime_ns, size)` signature above accepts. What it cannot
+which on POSIX catches a same-size in-place rewrite whose mtime was handed back
+— the residual the `(path, mtime_ns, size)` signature above accepts. On Windows
+`st_ctime` is the creation time, which an in-place rewrite does not move, so
+there that residual stands as it does for every other memo. What it cannot
 see is a mount whose directories do not advance their mtime when an entry
 changes; on such a store a new file shows up at the next change to anything
 else the row read, or at restart.
