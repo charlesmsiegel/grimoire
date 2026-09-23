@@ -249,8 +249,9 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, onBusy, reload
   /** Whether the LIST came back. "No greetings" and "the list request failed"
    *  are different answers, and only this one licenses the first. */
   const [listed, setListed] = useState(false);
-  /** Greetings the list named but whose edges never arrived. They are nodes,
-   *  and they are not writable — see `write`. */
+  /** Greetings the list named without their edges -- the server could not
+   *  read the plot map they live in. They are nodes, and they are not
+   *  writable — see `write`. */
   const [unread, setUnread] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   /** The greeting a new link starts at, once the reader has armed one. */
@@ -303,22 +304,25 @@ export function PlotMapEditor({ scope, onOpenGreeting, onChanged, onBusy, reload
     // in-flight write comes back describing the map without it, and this
     // replaces `edgesRef` with that -- so the next whole-array write deletes
     // an edit the server had already accepted.
-    chain.current.then(() => api.listGreetings(scope)).then(async (list) => {
-      // Edges live in the plot map, and only the per-greeting read carries
-      // them -- the list endpoint returns summaries. One read each, and a
-      // greeting whose read fails is still a node: a map that silently omits
-      // an opening is worse than one that admits it is missing some lines.
-      const missed: string[] = [];
-      const pairs = await Promise.all(list.map((g) =>
-        // `fresh`: identical in-flight GETs are shared, and this load may be
-        // verifying a write that another view just made -- a promise started
-        // before it answers from before it, and this map would install that
-        // and let the next whole-array write send it back.
-        api.readGreeting(scope, g.id, { fresh: true })
-          .then((d) => [g.id, d.edges ?? NO_EDGES] as const)
-          .catch(() => { missed.push(g.id); return [g.id, NO_EDGES] as const })));
+    //
+    // `fresh`, for the other half of the same hazard: identical in-flight GETs
+    // are shared, and this load may be verifying a write that another view
+    // just made -- a promise started before it answers from before it, and
+    // this map would install that and let the next whole-array write send it
+    // back.
+    chain.current.then(() => api.listGreetings(scope, { fresh: true })).then((list) => {
       if (loadId.current !== mine) return;
-      edgesRef.current = Object.fromEntries(pairs);
+      // Every greeting's edges ride on its list row: the server reads the one
+      // plot map once for all of them. This was a read per greeting, a fan-out
+      // as wide as the plot for every open and every reload after a write.
+      //
+      // A row without `edges` is one whose map the server could not read. It
+      // is still a node -- a map that silently omits an opening is worse than
+      // one that admits it is missing some lines -- and it is unread, so never
+      // written from the empty arrays it is drawn with. A list that fails
+      // outright is the catch below: nothing is drawn, and the banner says why.
+      const missed = list.filter((g) => !g.edges).map((g) => g.id);
+      edgesRef.current = Object.fromEntries(list.map((g) => [g.id, g.edges ?? NO_EDGES]));
       setGreetings(list);
       setEdgeMap(edgesRef.current);
       setUnread(missed);

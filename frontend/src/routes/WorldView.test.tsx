@@ -625,8 +625,10 @@ test("Images is offered in the command palette, like every other world section",
 
 test("Greetings switches between the chip list and the plot map, and a node opens the greeting", async () => {
   (api.listGreetings as any).mockResolvedValue([
-    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-    { id: "sol-2", name: "SoL 2", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: ["sol-2"], excludes: [] } },
+    { id: "sol-2", name: "SoL 2", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
   ]);
   (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
@@ -678,7 +680,8 @@ test("switching to the plot map keeps a half-written greeting, and a save reload
 
 test("a save that lands after the map is open makes the map re-read", async () => {
   (api.listGreetings as any).mockResolvedValue([
-    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
   ]);
   (api.readGreeting as any).mockResolvedValue({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
@@ -702,19 +705,24 @@ test("a save that lands after the map is open makes the map re-read", async () =
 
   fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
-  const readsBefore = (api.readGreeting as any).mock.calls.length;
+  // The map's own reads: its edges ride on a `fresh` list read, where the
+  // chip list's are shared ones and its greeting reads are per record.
+  const mapReads = () => (api.listGreetings as any).mock.calls
+    .filter((c: unknown[]) => (c[1] as { fresh?: boolean } | undefined)?.fresh).length;
+  const readsBefore = mapReads();
 
   landSave();
   // Without the re-read the map would keep serving a snapshot from before the
   // save, and its next whole-array write would send those edges back.
-  await waitFor(() =>
-    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
+  await waitFor(() => expect(mapReads()).toBeGreaterThan(readsBefore));
 });
 
 test("the map holds still while a list save is in flight", async () => {
   (api.listGreetings as any).mockResolvedValue([
-    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
+    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
   ]);
   (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
@@ -745,8 +753,10 @@ test("the map holds still while a list save is in flight", async () => {
 
 test("a graph edit re-reads the chip list behind it", async () => {
   (api.listGreetings as any).mockResolvedValue([
-    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
+    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
   ]);
   (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
@@ -774,8 +784,10 @@ test("a graph edit re-reads the chip list behind it", async () => {
 
 test("a map remounted mid-write is held behind the write the last one left", async () => {
   (api.listGreetings as any).mockResolvedValue([
-    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
+    { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
+      edges: { leads_to: [], excludes: [] } },
   ]);
   (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },

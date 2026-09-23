@@ -29,9 +29,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "",
     counts: { characters: 2, pcs: 1, locations: 3, lore: 5, items: 0, groups: 1, creatures: 0, greetings: 2 } });
-  (api.listGreetings as any).mockResolvedValue([{ id: "g1", name: "Gala" }, { id: "g2", name: "Docks" }]);
-  (api.readGreeting as any).mockResolvedValue({ meta: { id: "g1" }, body: "", predecessors: [],
-    edges: { leads_to: ["g2"], excludes: [] } });
+  // Each row carries its plot-map edges, which is all the connections row needs.
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", edges: { leads_to: ["g2"], excludes: [] } },
+    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]);
   (api.listCharacters as any).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "default", versions: [], tagline: "a smuggler" },
     { id: "winifred", name: "Winifred", default_version: "default", versions: [] },  // no tagline
@@ -66,6 +67,43 @@ test("derives the setup checklist", async () => {
   expect(await screen.findByText(/plot map has connections/i)).toBeInTheDocument();
   const missing = screen.getByText(/1 character missing a tagline/i);
   expect(missing.closest("a")).toHaveAttribute("href", "/worlds/w/characters");
+});
+
+// ---- the plot map row: one list read, not one read per greeting ----
+
+test("the plot map row reads the list's edges, and no greeting one by one", async () => {
+  // A read per greeting was dozens of requests on every open of a world, all
+  // landing just as the reader clicks through to its characters.
+  show();
+  expect(await screen.findByText(/✓ Plot map has connections/)).toBeInTheDocument();
+  expect(api.listGreetings).toHaveBeenCalledTimes(1);
+  expect(api.readGreeting).not.toHaveBeenCalled();
+});
+
+test("an exclusion is a connection too", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", edges: { leads_to: [], excludes: ["g2"] } },
+    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]);
+  show();
+  expect(await screen.findByText(/✓ Plot map has connections/)).toBeInTheDocument();
+});
+
+test("greetings with no edges leave the plot map row open", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", edges: { leads_to: [], excludes: [] } },
+    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]);
+  show();
+  expect(await screen.findByText(/○ Plot map has connections/)).toBeInTheDocument();
+  expect(screen.getByText(/✓ Has a greeting/)).toBeInTheDocument();
+});
+
+test("a plot map the server could not read is no row at all, not an open one", async () => {
+  // Rows without `edges` mean the map could not be read -- unknown, which is
+  // not "no connections", and a chore that drawing a link would never clear.
+  (api.listGreetings as any).mockResolvedValue([{ id: "g1", name: "Gala" }, { id: "g2", name: "Docks" }]);
+  show();
+  expect(await screen.findByText(/✓ Has a greeting/)).toBeInTheDocument();
+  expect(screen.queryByText(/Plot map has connections/)).toBeNull();
 });
 
 test("a checklist row is a link, and a row with no section is not", async () => {
