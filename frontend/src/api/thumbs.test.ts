@@ -39,7 +39,8 @@ test("a slot that can outgrow the largest bucket offers the original above it", 
   // Described past the 1024's width, the original is what a browser reaches
   // for only where the 1024 falls short.
   const set = thumbSet(url, "(max-width: 640px) 100vw, 220px", THUMB.tile, "/img/seraphine");
-  expect(set.srcSet.split(", ").at(-1)).toBe(`/img/seraphine ${ORIGINAL_W}w`);
+  const candidates = set.srcSet.split(", ");
+  expect(candidates[candidates.length - 1]).toBe(`/img/seraphine ${ORIGINAL_W}w`);
   expect(ORIGINAL_W).toBeGreaterThan(Math.floor((THUMB.large * 2) / 3));
   expect(set.src).toBe("/img/seraphine?w=512");
   expect(thumbSet(url, "120px").srcSet).not.toContain(`${ORIGINAL_W}w`);
