@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import store
 from ..llm import LLMClient
+from . import characters as character_routes
 from . import runs
 from .common import (
     _campaign_root_or_404,
@@ -784,20 +785,18 @@ def list_campaign_undescribed_images(cid: str, count: bool = False):
     root = _campaign_root_or_404(cid)
     # One overlay view for every record lookup below, as the listings share one.
     v = store.overlay.view(cid)
-    # One read per record, name and versions together -- see the world queue's
-    # `_describable` for why both, and why one memo.
+    # The world queue's record filter, with this scope's lookup: one read per
+    # record, name and versions together -- see `_describable` for why both,
+    # and why one memo -- so the two queues cannot drift apart on what counts.
     seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
 
-    def describable(base: str, rid: str, vid: str) -> tuple[str, set[str]] | None:
-        key = (base, rid)
-        if key not in seen:
-            seen[key] = _campaign_record_name_and_versions(cid, base, rid, v)
-        found = seen[key]
-        return None if found is None or (found[1] and vid not in found[1]) else found
+    def describable(base: str, rid: str, vid: str) -> str | None:
+        return character_routes._describable(
+            seen, base, rid, vid, lambda b, r: _campaign_record_name_and_versions(cid, b, r, v))
 
     if count:
         return {"count": len(store.campaign_images.own_undescribed(cid)) + sum(
-            k for base in _UNDESCRIBED_BASES
+            k for base in character_routes.UNDESCRIBED_BASES
             for rid, vid, k in store.image_descriptions.undescribed_by_version(root, base)
             if describable(base, rid, vid) is not None)}
     out: list[dict] = []
@@ -810,20 +809,15 @@ def list_campaign_undescribed_images(cid: str, count: bool = False):
                 "url": f"/api/campaigns/{cid}/images/{quote(image['name'], safe='')}"}
                for image in store.campaign_images.own_undescribed(cid))
 
-    for base in _UNDESCRIBED_BASES:
+    for base in character_routes.UNDESCRIBED_BASES:
         for item in store.image_descriptions.undescribed(root, base):
-            found = describable(base, item["id"], item["vid"])
-            if found is None:
+            name = describable(base, item["id"], item["vid"])
+            if name is None:
                 continue
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
-                        "name": item["name"], "record_name": found[0],
+                        "name": item["name"], "record_name": name,
                         "url": _campaign_image_url(cid, base, item)})
     return out
-
-
-#: The record bases the campaign describe queue walks: the world queue's
-#: (`routes.characters.UNDESCRIBED_BASES`), which routes cannot import.
-_UNDESCRIBED_BASES = ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS)
 
 
 def _campaign_record_name_and_versions(cid: str, base: str, rid: str,

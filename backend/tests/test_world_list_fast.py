@@ -339,9 +339,9 @@ def test_character_md_rewritten_in_place_same_size_new_mtime(realm):
     _held(root)
     meta = root / "characters" / mara / "character.md"
     old = meta.read_text(encoding="utf-8")
-    _rewrite_in_place(meta, _same_size(old, old.replace("Mara", "Nara")))
+    _rewrite_in_place(meta, _same_size(old, old.replace("Mara", "MARA")))
     _bump(meta)
-    assert next(r for r in _check(root) if r["id"] == mara)["name"] == "Nara"
+    assert next(r for r in _check(root) if r["id"] == mara)["name"] == "MARA"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="st_ctime is the creation time on Windows")
@@ -354,10 +354,10 @@ def test_a_same_size_rewrite_that_restores_the_old_mtime_is_still_seen(realm):
     st = meta.stat()
     old = meta.read_text(encoding="utf-8")
     time.sleep(0.01)          # a ctime tick apart from the aging write
-    _rewrite_in_place(meta, _same_size(old, old.replace("Mara", "Lara")))
+    _rewrite_in_place(meta, _same_size(old, old.replace("Mara", "mara")))
     os.utime(meta, ns=(st.st_atime_ns, st.st_mtime_ns))
     assert (meta.stat().st_mtime_ns, meta.stat().st_size) == (st.st_mtime_ns, st.st_size)
-    assert next(r for r in _check(root) if r["id"] == mara)["name"] == "Lara"
+    assert next(r for r in _check(root) if r["id"] == mara)["name"] == "mara"
 
 
 def test_a_card_edited_in_place_relabels_its_version(realm):
@@ -370,6 +370,24 @@ def test_a_card_edited_in_place_relabels_its_version(realm):
     _bump(characters._card_path(root, ser, alt))
     row = next(r for r in _check(root) if r["id"] == ser)
     assert {"id": alt, "name": "After the flood"} in row["versions"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="st_ctime is the creation time on Windows")
+def test_a_card_rewritten_at_its_old_mtime_relabels_its_version(realm):
+    """The row notices the card's ctime moving; the card summary it rebuilds
+    from has to notice it too, or the rebuild re-serves the old label and the
+    row stores it under the new stamps."""
+    root, ser, alt = realm["root"], realm["ser"], realm["alt"]
+    _held(root)
+    p = characters._card_path(root, ser, alt)
+    st = p.stat()
+    old = p.read_text(encoding="utf-8")
+    time.sleep(0.01)          # a ctime tick apart from the aging write
+    _rewrite_in_place(p, _same_size(old, old.replace("Saltmarch", "SALTMARCH")))
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert (p.stat().st_mtime_ns, p.stat().st_size) == (st.st_mtime_ns, st.st_size)
+    row = next(r for r in _check(root) if r["id"] == ser)
+    assert {"id": alt, "name": "SALTMARCH"} in row["versions"]
 
 
 def test_tagline_and_voice_anchor_arrive_change_and_leave(realm):

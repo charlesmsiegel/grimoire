@@ -445,19 +445,26 @@ def _card_summary(root: Path, cid: str, vid: str,
     never re-read or re-parsed.
 
     `stamped` is the card's path and a `statcache.stamp` of it that a caller
-    already took, standing in for the path's construction and the signature's
-    stat: the listing stamps every card before asking for its summary, and
-    doing both again per version is all it would buy."""
+    already took, standing in for the path's construction and the stat: the
+    listing stamps every card before asking for its summary, and doing both
+    again per version is all it would buy.
+
+    Keyed on the stamp's ctime as well as `statcache.signature`'s fields. The
+    listing row holding this summary is re-validated on ctime, so a card
+    rewritten in place at the same size with its old mtime handed back misses
+    the row -- and a summary keyed without ctime would then answer the rebuild
+    with the old label, which the row stores under its new stamps for good.
+    The ctime rides as an entry of its own rather than a fifth field, so
+    `memo`'s racy check still reads the four-field one."""
     if not safe_id(vid):
         raise VersionNotFound(vid)
     if stamped is None:
         p = _card_path(root, cid, vid)
-        sig = statcache.signature(p)
-    else:
-        p, stamp = stamped
-        sig = None if stamp is None else ((stamp[0], stamp[1], stamp[3], stamp[4]),)
-    if sig is None:
+        stamped = (p, statcache.stamp(p))
+    p, stamp = stamped
+    if stamp is None:
         raise VersionNotFound(vid)
+    sig = ((stamp[0], stamp[1], stamp[3], stamp[4]), (stamp[0], "ctime", stamp[2]))
 
     def compute() -> dict:
         card = json.loads(p.read_text(encoding="utf-8"))
