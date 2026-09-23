@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { api, type Casefile, type Provenance } from "../../api/client";
 import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
@@ -30,8 +31,11 @@ function Meter({ label, value }: { label: string; value: number }) {
  *
  *  Everything here is a file the absorb pass wrote. The source is named under
  *  the paragraph on purpose: the point of the panel is that these are records
- *  you can go and read, not a summary the app invented. */
-export default function DossierColumn(
+ *  you can go and read, not a summary the app invented.
+ *
+ *  Exported memoized, for `CastColumn`'s reason: the play view re-renders per
+ *  keystroke and per delta, and a dossier has no business redrawing for either. */
+function DossierColumn(
   { cid, casefile, provenance, onBack, onOpenActor, onRemove, onHoverQuote,
     onGoToTurn, busy }: {
     cid: string;
@@ -178,3 +182,5 @@ export default function DossierColumn(
     </>
   );
 }
+
+export default memo(DossierColumn);

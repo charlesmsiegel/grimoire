@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { api, type Actor, type Briefing, type RosterEntry } from "../../api/client";
 import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
@@ -69,8 +70,12 @@ function Tile(
  *  All three used to be behind a toggle — the cast in an inspector panel, the
  *  threads and commitments in a briefing you opened before the scene and then
  *  closed. Continuity is the thing this app is *for*, so it sits beside the
- *  transcript permanently and nothing has to be reopened to check it. */
-export default function CastColumn(
+ *  transcript permanently and nothing has to be reopened to check it.
+ *
+ *  Exported memoized: the play view re-renders on every keystroke and every
+ *  streamed delta, and hands this stable handlers, so the grid redraws for the
+ *  cast and the briefing and not for those. */
+function CastColumn(
   { cid, sid, hasPosts, refreshKey, cast, roster, briefing, onOpen, onCastChanged }: {
     cid: string;
     /** The open scene, or "" when none is. The cast-change scan is per scene. */
@@ -149,3 +154,5 @@ export default function CastColumn(
     </>
   );
 }
+
+export default memo(CastColumn);
