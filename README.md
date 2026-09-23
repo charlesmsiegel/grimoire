@@ -189,7 +189,15 @@ work on any page, not just the home screen. The installer also drops a
 **After an update** (`git pull`), the first launch notices that the UI's sources
 are newer than its build and rebuilds it before starting — a few seconds, once.
 If that build fails (usually because the update brought new dependencies),
-Grimoire starts on the previous build and says so; re-run the installer.
+Grimoire starts on the previous build and says so, in the terminal and in a page
+it opens beside the app; re-run the installer.
+
+**Updating from a version that opened on port 5173?** The address is now
+**<http://127.0.0.1:8173>**, so a bookmark to `127.0.0.1:5173` needs updating
+(`:5173` is only the `--dev` address now). A browser keeps its settings per
+address, so what Grimoire keeps there — the campaign list's sort, focus mode,
+the campaign you last had open, the scene inspector's open sections — starts
+from its defaults on the new one.
 
 **The terminal stays open while Grimoire runs.** Closing the window — or pressing
 **Ctrl+C** — shuts it down cleanly (no leftover process holding a port).
