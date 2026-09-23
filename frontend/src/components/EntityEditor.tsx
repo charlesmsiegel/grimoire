@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
 import { errorText } from "../api/errors";
 import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
-import { thumbSet } from "../api/thumbs";
+import { THUMB, thumbSet } from "../api/thumbs";
 import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
 import { Field } from "./Field";
@@ -772,7 +772,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // The original is what a link out opens -- there the reader is looking at
   // the picture itself. What the page draws is a downscale sized to its slot.
   const imgSrc = (n: string) => imgUrl(n);
-  const imgThumb = (n: string, sizes: string) => thumbSet((w) => imgUrl(n, w), sizes);
+  const imgThumb = (n: string, sizes: string, original?: string) =>
+    thumbSet((w) => imgUrl(n, w), sizes, THUMB.tile, original);
 
   async function describeImage(name: string, description: string) {
     if (!editing) return;
@@ -901,10 +902,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
             to={recordHref(e.id)}>
         {e.has_image && (
-          // The 220px rail, or the whole width once the editor stacks on a phone.
+          // The 220px rail, or the whole width once the editor stacks on a
+          // phone -- past what the 1024 fills there, so the original is offered.
           <img className="loc-row-img" alt="" loading="lazy" decoding="async"
                {...thumbSet((w) => api.entityImageUrl(at, kind, e.id, "avatar", { w, v: e.image_v }),
-                            "(max-width: 640px) 100vw, 220px")}
+                            "(max-width: 640px) 100vw, 220px", THUMB.tile,
+                            api.entityImageUrl(at, kind, e.id, "avatar", { v: e.image_v }))}
                onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
         )}
         <span className="row-name">{e.name}</span>
@@ -1060,7 +1063,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
               {editing && hasPrimary ? (
                 <div className="loc-head">
                   <img className="loc-head-img" alt={`${name} primary`} decoding="async"
-                       {...imgThumb("avatar", "340px")}
+                       {...imgThumb("avatar", "340px", imgSrc("avatar"))}
                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                   {heading}
                 </div>
