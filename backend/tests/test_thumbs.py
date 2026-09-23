@@ -588,6 +588,57 @@ def test_a_damaged_exif_block_is_an_upright_picture(tmp_path, monkeypatch):
         assert t.size == (171, 256)
 
 
+_XMP_TURNED = (b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF '
+               b'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description '
+               b'xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6"/></rdf:RDF></x:xmpmeta>')
+
+
+@pytest.mark.parametrize("case", ["webp-exif", "jpeg-xmp"])
+def test_an_orientation_no_browser_applies_is_not_applied(tmp_path, monkeypatch, case):
+    # The goal is the picture the browser draws from the original, not an
+    # upright one at any cost. Chromium (the Android WebView, most desktops)
+    # applies EXIF Orientation to a JPEG or PNG, and draws a WebP's EXIF, and
+    # any XMP `tiff:Orientation`, as stored -- which Pillow's `getexif()`
+    # turns anyway, putting the tile at right angles to the picture it opens.
+    if case == "webp-exif" and not thumbs._encodes_webp():
+        pytest.skip("this Pillow cannot read a WebP source")
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    im = Image.new("RGB", (1200, 800), (255, 255, 255))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    if case == "webp-exif":
+        src = tmp_path / "stored.webp"
+        im.save(src, format="WEBP", exif=exif.tobytes())
+    else:
+        # The APP1 segment written by hand: `save(xmp=)` is newer than the
+        # Pillow floor pyproject allows.
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG")
+        body = b"http://ns.adobe.com/xap/1.0/\x00" + _XMP_TURNED
+        app1 = b"\xff\xe1" + (len(body) + 2).to_bytes(2, "big") + body
+        src = tmp_path / "stored.jpg"
+        src.write_bytes(buf.getvalue()[:2] + app1 + buf.getvalue()[2:])
+    with Image.open(src) as check:
+        if check.getexif().get(0x0112) != 6:  # what makes this the case in question
+            pytest.skip("this Pillow takes no orientation from XMP, so there is nothing to mistake")
+    tp = thumbs.thumbnail(src, 256)
+    assert tp is not None
+    with Image.open(tp) as t:
+        assert t.size == (256, 171)
+
+
+def test_a_png_orientation_is_applied_as_a_jpeg_one_is(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    src = tmp_path / "stored.png"
+    Image.new("RGB", (1200, 800), (255, 255, 255)).save(src, format="PNG", exif=exif.tobytes())
+    tp = thumbs.thumbnail(src, 256)
+    assert tp is not None
+    with Image.open(tp) as t:
+        assert t.size == (171, 256)
+
+
 def _rgb_profile() -> bytes:
     cms = pytest.importorskip("PIL.ImageCms")
     return cms.ImageCmsProfile(cms.createProfile("sRGB")).tobytes()

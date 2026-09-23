@@ -49,7 +49,9 @@ a smaller raster of its bytes:
 - **Upright.** A phone photo is stored as the sensor saw it, with an EXIF
   Orientation tag that browsers apply. A thumbnail carries no EXIF, so the
   orientation is applied here (`_UPRIGHT`) -- otherwise a portrait taken on a
-  phone lies on its side on every surface that draws the thumbnail.
+  phone lies on its side on every surface that draws the thumbnail. Applied
+  exactly where a browser applies it (`_orientation`), since the goal is
+  agreement with the original rather than an upright picture at any cost.
 - **In its own colours.** An RGB colour profile (Display P3, Adobe RGB) is
   embedded in the thumbnail as it was in the original; dropped, the browser
   reads the pixels as sRGB and every colour shifts.
@@ -444,15 +446,31 @@ _UPRIGHT = {
 #: depth map -- reports several frames too, and a browser draws it as the
 #: plain JPEG it starts with.
 _ANIMATES = frozenset({"GIF", "PNG", "WEBP"})
+#: The formats whose EXIF Orientation Chromium -- the Android WebView, and
+#: most desktop browsers -- applies when it draws the original. Not WebP: an
+#: EXIF chunk in a WebP is drawn as stored, so a thumbnail that turned it
+#: would disagree with the original it stands in for.
+_ORIENTS = frozenset({"JPEG", "MPO", "PNG"})
 
 
 def _orientation(im: Image.Image) -> Image.Transpose | None:
     """The transpose that stands `im` upright, read before anything shrinks it.
 
+    Read from the EXIF block the file opened with, and only where a browser
+    reads it (`_ORIENTS`). Not `im.getexif()`: that also takes an orientation
+    from XMP (`tiff:Orientation`), which no browser applies, and on a PNG it
+    decodes the whole picture to reach an `eXIf` chunk after the pixel data,
+    which a browser does not apply either.
+
     None for an upright picture -- and for EXIF too damaged to read, which a
     browser shows as stored as well, rather than costing the thumbnail."""
+    raw = im.info.get("exif") if im.format in _ORIENTS else None
+    if not raw or not isinstance(raw, bytes):
+        return None
     try:
-        tag = im.getexif().get(0x0112)
+        exif = Image.Exif()
+        exif.load(raw)
+        tag = exif.get(0x0112)
     except Exception:  # noqa: BLE001 — a malformed EXIF block is an upright picture, not a failed tile
         return None
     return _UPRIGHT.get(tag) if isinstance(tag, int) else None
