@@ -77,12 +77,22 @@ ENCODER = f"webp-q{QUALITY}-m{METHOD}"
 #: than sitting beside the new entries unreachable.
 KEY_SCHEME = 2
 
-#: The shape of everything this module writes under a generation: an entry,
-#: and the temp `atomic` stages one in (`.<entry>.<8 chars>.tmp`), which a
-#: crash mid-write leaves behind. The sweep deletes nothing else -- this cache
-#: sits in a folder the user may sync or put things in, and a file of any other
-#: shape is not ours to remove.
-_OURS = re.compile(r"[0-9a-f]{32}\.webp|\.[0-9a-f]{32}\.webp\.[a-z0-9_]{8}\.tmp")
+#: The shape of an entry's name.
+_ENTRY = re.compile(r"[0-9a-f]{32}\.webp")
+
+
+def _ours(name: str) -> bool:
+    """Is `name` something this module writes under a generation?
+
+    An entry, or the temp `atomic` stages one in (`.<entry>.<random>.tmp`),
+    which a crash mid-write leaves behind. The sweep deletes nothing else --
+    this cache sits in a folder the user may sync or put things in, and a file
+    of any other shape is not ours to remove. What a temp looks like is asked
+    of `atomic.is_write_temp`, declared beside the code that makes one, rather
+    than spelled again here to drift the day that suffix changes."""
+    if _ENTRY.fullmatch(name):
+        return True
+    return atomic.is_write_temp(Path(name)) and bool(_ENTRY.fullmatch(name[1:].rsplit(".", 2)[0]))
 
 
 def generation() -> str:
@@ -124,17 +134,36 @@ def _key(src: Path, st: os.stat_result, width: int, root: Path) -> str:
 
 
 # ---- one decode per key ----
-#: Output path -> [its lock, how many requests hold or wait on it]. An entry
-#: lives exactly as long as someone is using it, so the map is bounded by the
-#: requests in flight, not by the number of pictures ever asked for.
-_flights: dict[str, list] = {}
+class _Flight:
+    """One entry being generated: its lock, how many requests hold or wait on
+    it, and whether the request that held it gave up.
+
+    `failed` is what keeps a source that will not decode from being decoded
+    once per waiter, one after another: without it, six askers for a truncated
+    picture would each take the lock in turn and fail it again -- serially,
+    where before this lock they at least failed side by side. It lives only as
+    long as the flight, so the next request after it retries."""
+
+    __slots__ = ("failed", "lock", "users")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.users = 0
+        self.failed = False
+
+
+#: Output path -> its flight. An entry lives exactly as long as someone is
+#: using it, so the map is bounded by the requests in flight, not by the number
+#: of pictures ever asked for.
+_flights: dict[str, _Flight] = {}
 _flights_guard = threading.Lock()
 
 
 @contextlib.contextmanager
-def _single_flight(key: str) -> Iterator[None]:
+def _single_flight(key: str) -> Iterator[_Flight]:
     """Hold `key`'s lock: one request generates an entry while any other that
-    wants the same one waits, then finds it published.
+    wants the same one waits, then finds it published -- or finds the flight
+    marked failed, and serves the original as the request it waited on did.
 
     Per key, so two different tiles never wait on each other -- a grid's cold
     pass runs as wide as the server's threadpool lets it. In-process only, like
@@ -142,15 +171,15 @@ def _single_flight(key: str) -> Iterator[None]:
     generate an entry, which costs a duplicate decode and publishes equal bytes.
     """
     with _flights_guard:
-        slot = _flights.setdefault(key, [threading.Lock(), 0])
-        slot[1] += 1
+        flight = _flights.setdefault(key, _Flight())
+        flight.users += 1
     try:
-        with slot[0]:
-            yield
+        with flight.lock:
+            yield flight
     finally:
         with _flights_guard:
-            slot[1] -= 1
-            if not slot[1]:
+            flight.users -= 1
+            if not flight.users:
                 del _flights[key]
 
 
@@ -189,7 +218,7 @@ def _drop(entry: os.DirEntry[str]) -> int:
     removed and never followed -- what it points at is somewhere this cache
     does not own."""
     try:
-        if not _OURS.fullmatch(entry.name) or not entry.is_file(follow_symlinks=False):
+        if not _ours(entry.name) or not entry.is_file(follow_symlinks=False):
             return 0
         size = entry.stat(follow_symlinks=False).st_size
         os.unlink(entry.path)
@@ -204,7 +233,7 @@ def sweep(root: Path) -> int:
     Retired means everything under the cache root except the current
     generation: the entries the flat layout before generations wrote directly
     under it, and each other generation's directory, which is removed once it
-    is empty. Only files of the cache's own shape (`_OURS`) are deleted, one
+    is empty. Only files of the cache's own shape (`_ours`) are deleted, one
     level deep, and no symlink is followed -- a directory or file this module
     would never have written stays, and so does the directory holding it.
 
@@ -256,11 +285,19 @@ def sweep(root: Path) -> int:
 #: Modes a downscale can run in directly, converting only the small result.
 #: Resampling works per channel, so shrinking L and converting to RGB is the
 #: same picture as converting and then shrinking -- at a fraction of the cost,
-#: since the full-resolution pass is the one that goes. CMYK's conversion to
-#: RGB is linear until ink clips, so the order moves only pixels at the edge of
-#: a clipped region -- and that conversion is Pillow's naive, profile-less one,
-#: approximate colour to begin with.
-_DOWNSCALE_FIRST = frozenset({"RGB", "RGBA", "L", "LA", "CMYK"})
+#: since the full-resolution pass is the one that goes.
+#:
+#: CMYK is not one of them, although it is four plain channels. Pillow takes it
+#: to RGB as (255-C)(255-K)/255 per channel: a product of ink and black, not a
+#: sum, so an average of CMYK pixels converts to something other than the
+#: average of their colours, off by how much C and K vary *together* under the
+#: kernel. Photographs barely move; line work does -- a dark line over a pale
+#: ground is high C and high K against low and low, and shrinking it in CMYK
+#: comes out uniformly darker (several levels of mean luminance at the tile
+#: buckets). Pillow's own RGB->CMYK writes K=0, so art made that way cannot
+#: show it; any real print file can. The JPEG draft goes with it, since DCT
+#: scaling averages in the stored colour space too.
+_DOWNSCALE_FIRST = frozenset({"RGB", "RGBA", "L", "LA"})
 #: The modes whose alpha must be premultiplied for a resample to be correct:
 #: an unpremultiplied average bleeds the colour of transparent pixels into the
 #: edge. Pillow's own resize does this for RGBA and LA but then skips the
@@ -283,12 +320,13 @@ def _downscale(im: Image.Image, width: int) -> Image.Image:
     Downscales first wherever that gives the same picture (`_DOWNSCALE_FIRST`).
     Converts first only where resampling in the source mode would be wrong:
     a palette (P, PA) or bilevel ("1") image resizes nearest-neighbour; I;16
-    and the other wide modes reach 8 bits by clipping, which a resample in
-    between would move; and a colour key ("transparency" outside RGB/RGBA)
-    names exact values that a resample blends away. RGB keeps ignoring a colour
-    key, as it did when everything else converted first. The target is RGBA
-    only where there is alpha to keep -- an opaque palette image went to RGBA
-    for nothing, paying a fourth channel and the premultiplied resample.
+    and the other wide modes reach 8 bits by clipping, and CMYK reaches RGB by
+    a product (`_DOWNSCALE_FIRST`), both of which a resample in between would
+    move; and a colour key ("transparency" outside RGB/RGBA) names exact values
+    that a resample blends away. RGB keeps ignoring a colour key, as it did
+    when everything else converted first. The target is RGBA only where there
+    is alpha to keep -- an opaque palette image went to RGBA for nothing,
+    paying a fourth channel and the premultiplied resample.
     """
     if im.mode in ("RGB", "RGBA"):
         target = im.mode
@@ -325,9 +363,11 @@ def thumbnail(src: Path, width: int) -> Path | None:
     if out.exists():
         return out
     _sweep_in_background(root)
-    with _single_flight(str(out)):
+    with _single_flight(str(out)) as flight:
         if out.exists():  # published by the request this one waited behind
             return out
+        if flight.failed:  # ... or given up on by it: no second decode to fail
+            return None
         try:
             with Image.open(src) as im:
                 small = _downscale(im, width)
@@ -341,5 +381,6 @@ def thumbnail(src: Path, width: int) -> Path | None:
             out.parent.mkdir(parents=True, exist_ok=True)
             atomic.write_bytes(out, buf.getvalue())
         except Exception:  # noqa: BLE001 — undecodable/corrupt image: no thumb, caller serves original
+            flight.failed = True
             return None
     return out
