@@ -30,6 +30,16 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
   // it as a task -- so a keyboard or pointer user never meets an open, empty
   // disclosure. `toggle` stays authoritative for any other way it opens.
   const [open, setOpen] = useState(false);
+  // The route disclosure is part of the body, so it goes when the body does:
+  // rebuilt, its `<details>` comes back shut, and a `routeOpen` still true
+  // would mount the picker inside it anyway -- hidden, and re-reading the
+  // connections and the config for a control nobody can see. The route it
+  // chose is state up here and survives, as it does when that disclosure is
+  // shut on its own.
+  function follow(next: boolean) {
+    setOpen(next);
+    if (!next) setRouteOpen(false);
+  }
   async function variants() {
     if (loading || disabled) return;
     setLoading(true); setError(null);
@@ -44,8 +54,8 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
         this only follows it. The click handler reads the element as it is
         before its own toggle runs, so it sets what the element is about to
         become. */}
-    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary onClick={(event) => setOpen(
+    <details onToggle={(event) => follow(event.currentTarget.open)}>
+      <summary onClick={(event) => follow(
         !(event.currentTarget.parentElement as HTMLDetailsElement).open)}>Response actions</summary>
       {open && <>
       {canReroll ? <>
