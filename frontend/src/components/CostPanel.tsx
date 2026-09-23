@@ -23,13 +23,31 @@ import { Footnotes, about, bound, bucketPrice, money, turnPrice } from "./cost";
  *  the calls were free rather than uncounted — so a turn nobody priced says
  *  "not reported", and a total with such calls under it says it is a floor.
  */
-export function CostPanel({ cid, sid, refreshKey }: {
+export function CostPanel({ cid, sid, refreshKey, usage: usageProp, budget: budgetProp,
+                           onBudgetSaved }: {
   cid: string; sid: string;
   /** Bumped by the inspector once per turn, which is exactly when this moves. */
   refreshKey?: number;
+  /** The scene's usage and the campaign's budget, when a parent already holds
+   *  them. The play view reads both once a turn for its own chips, banner and
+   *  scene head, and this section asking again doubled the slowest read on the
+   *  screen (a ledger scan) for the same answer. `null` is "the parent is
+   *  reading it and has nothing yet", which this renders exactly as a read of
+   *  its own still in flight; left out (`undefined`), the panel reads it
+   *  itself, as it did before anything supplied it. */
+  usage?: SceneUsage | null;
+  budget?: CampaignBudget | null;
+  /** Told about a budget this panel saved, so a parent that supplies `budget`
+   *  shows the new one -- here and in its banner -- without a re-read. Named
+   *  with the campaign it was saved for, which the reader may have left. */
+  onBudgetSaved?: (cid: string, budget: CampaignBudget) => void;
 }) {
-  const [usage, setUsage] = useState<SceneUsage | null>(null);
-  const [budget, setBudget] = useState<CampaignBudget | null>(null);
+  const [ownUsage, setUsage] = useState<SceneUsage | null>(null);
+  const [ownBudget, setBudget] = useState<CampaignBudget | null>(null);
+  const usage = usageProp !== undefined ? usageProp : ownUsage;
+  const budget = budgetProp !== undefined ? budgetProp : ownBudget;
+  const suppliedUsage = usageProp !== undefined;
+  const suppliedBudget = budgetProp !== undefined;
   const [limit, setLimit] = useState("");
   const [period, setPeriod] = useState("monthly");
   const [editing, setEditing] = useState(false);
@@ -50,23 +68,31 @@ export function CostPanel({ cid, sid, refreshKey }: {
   // rather than theoretical.
   useEffect(() => {
     let live = true;
-    api.getSceneUsage(cid, sid)
-      .then((u) => { if (live) setUsage(u); })
-      .catch(() => { if (live) setUsage(null); });
-    api.getCampaignBudget(cid).then((b) => {
-      if (!live) return;
-      setBudget(b);
-      if (seededFrom.current === cid) return;
-      seededFrom.current = cid;
-      // Seeded from the server's answer rather than from what was typed: the
-      // stored figure is rounded to the cent, and leaving "12.567" in the box
-      // next to a saved 12.57 invites a reader to "fix" the display by saving
-      // the number back.
-      setLimit(b.level === "off" ? "" : String(b.limit_usd));
-      setPeriod(b.period);
-    }).catch(() => { if (live) setBudget(null); });
+    if (!suppliedUsage) {
+      api.getSceneUsage(cid, sid)
+        .then((u) => { if (live) setUsage(u); })
+        .catch(() => { if (live) setUsage(null); });
+    }
+    if (!suppliedBudget) {
+      api.getCampaignBudget(cid)
+        .then((b) => { if (live) setBudget(b); })
+        .catch(() => { if (live) setBudget(null); });
+    }
     return () => { live = false; };
-  }, [cid, sid, refreshKey]);
+  }, [cid, sid, refreshKey, suppliedUsage, suppliedBudget]);
+
+  // The form is filled from the first budget that arrives for a campaign,
+  // however it arrived -- read here or handed down.
+  useEffect(() => {
+    if (!budget || seededFrom.current === cid) return;
+    seededFrom.current = cid;
+    // Seeded from the server's answer rather than from what was typed: the
+    // stored figure is rounded to the cent, and leaving "12.567" in the box
+    // next to a saved 12.57 invites a reader to "fix" the display by saving
+    // the number back.
+    setLimit(budget.level === "off" ? "" : String(budget.limit_usd));
+    setPeriod(budget.period);
+  }, [cid, budget]);
 
   async function saveBudget(next: number | null) {
     setError(null);
@@ -74,6 +100,7 @@ export function CostPanel({ cid, sid, refreshKey }: {
     try {
       const b = await api.setCampaignBudget(cid, { budget_usd: next, budget_period: period });
       setBudget(b);
+      onBudgetSaved?.(cid, b);
       setLimit(b.level === "off" ? "" : String(b.limit_usd));
       setEditing(false);
     } catch (err: any) {

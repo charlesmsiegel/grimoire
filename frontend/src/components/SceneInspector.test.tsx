@@ -774,6 +774,44 @@ test("the Context section header still shows the percentage badge and collapses 
   expect(screen.queryByText(/World info/)).not.toBeInTheDocument();
 });
 
+test("a shut Context section does not recompose the prompt after a turn; opening it does", async () => {
+  // GET /context has the server assemble the whole next prompt. Read on every
+  // `refreshKey` bump it cost that after every turn, for a section the reader
+  // had closed.
+  localStorage.setItem("grimoire.inspector.sections", JSON.stringify({ context: true }));
+  const view = (key: number) => (
+    <MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={key}
+                                  onSceneChanged={() => {}} /></MemoryRouter>);
+  const { rerender } = render(view(0));
+  await screen.findByText("Active characters");
+  rerender(view(1));                                   // a turn landed
+  await screen.findByText("Active characters");
+  expect(api.getSceneContext).not.toHaveBeenCalled();
+  expect(screen.queryByText("10%")).toBeNull();       // no figure nobody read
+
+  fireEvent.click(screen.getByRole("button", { name: /^context/i }));
+  expect(await screen.findByText(/World info/)).toBeInTheDocument();
+  expect(api.getSceneContext).toHaveBeenCalledTimes(1);
+  // Shut and reopened within the same turn: the answer on hand is still the
+  // current one, so it is not asked for again.
+  fireEvent.click(screen.getByRole("button", { name: /^context/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^context/i }));
+  await screen.findByText(/World info/);
+  expect(api.getSceneContext).toHaveBeenCalledTimes(1);
+});
+
+test("an open Context section is re-read once per turn", async () => {
+  const view = (key: number) => (
+    <MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={key}
+                                  onSceneChanged={() => {}} /></MemoryRouter>);
+  const { rerender } = render(view(0));
+  await screen.findByText(/World info/);
+  expect(api.getSceneContext).toHaveBeenCalledTimes(1);
+  rerender(view(1));
+  await screen.findByText(/World info/);
+  expect(api.getSceneContext).toHaveBeenCalledTimes(2);
+});
+
 test("removing a cast member calls removeFromCast, reloads cast, and notifies the scene changed", async () => {
   const onSceneChanged = vi.fn();
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={onSceneChanged} />);
