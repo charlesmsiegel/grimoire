@@ -18,6 +18,18 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
   const [record, setRecord] = useState<ResponseRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Whether "Response actions" is open. Its body -- the steer box, the route
+  // disclosure, five buttons -- is built only while it is: a transcript carries
+  // one of these per response, nearly all of them shut for the whole scene,
+  // and their bodies were most of the DOM a long scene mounted. Everything a
+  // body holds (the steer, the route, the variants read) is state up here, so
+  // closing it loses nothing.
+  //
+  // Set on the summary's click as well as on `toggle`: the click is where the
+  // reader asked, and it lands synchronously, while `toggle` is queued behind
+  // it as a task -- so a keyboard or pointer user never meets an open, empty
+  // disclosure. `toggle` stays authoritative for any other way it opens.
+  const [open, setOpen] = useState(false);
   async function variants() {
     if (loading || disabled) return;
     setLoading(true); setError(null);
@@ -28,8 +40,14 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
   return <div className="response-controls">
     {status === "incomplete" && <p className="subtle">Incomplete response</p>}
     {contextChanged && <p className="subtle">Earlier context changed</p>}
-    <details>
-      <summary>Response actions</summary>
+    {/* Not a controlled `open`: the browser owns a disclosure's state, and
+        this only follows it. The click handler reads the element as it is
+        before its own toggle runs, so it sets what the element is about to
+        become. */}
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary onClick={(event) => setOpen(
+        !(event.currentTarget.parentElement as HTMLDetailsElement).open)}>Response actions</summary>
+      {open && <>
       {canReroll ? <>
         <label>Response steer<input aria-label="Response steer" value={guidance} disabled={disabled}
           onChange={(event) => setGuidance(event.target.value)} placeholder="Optional direction for this response" /></label>
@@ -55,6 +73,7 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
           Use variant {index + 1}{variant.status === "incomplete" ? " (incomplete)" : ""}
         </button>
       </div>)}
+      </>}
     </details>
   </div>;
 }
