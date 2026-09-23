@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { errorText } from "../api/errors";
@@ -18,6 +18,31 @@ const sameEdges = (a: Edges, b: Edges) =>
   a.leads_to.join("\u0000") === b.leads_to.join("\u0000")
   && a.excludes.join("\u0000") === b.excludes.join("\u0000");
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
+
+// Marks are campaign-only (a world has no play history), so the rail's mark
+// chips are too; search works in both scopes.
+const MARKS: Exclude<GreetingMark, null>[] = ["played", "completed", "skipped"];
+const MARK_LABEL: Record<string, string> = { played: "played", completed: "done", skipped: "skip" };
+
+// NFC on both sides before folding case. Names arrive from hand-written
+// markdown and imported cards, so an accented one can be stored decomposed
+// (e + combining acute) while the reader types it composed; the two render
+// identically and would otherwise never match (Codex review). This normalizes
+// form, not accents: "cafe" still does not find "café", which keeps the match
+// rule something a reader can predict.
+const fold = (s: string) => s.normalize("NFC").toLowerCase();
+
+/** `list` with `id` added, or taken out if it is already there. */
+const toggled = (list: string[], id: string) =>
+  list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+
+/** One plot-map edge list as chips: every other greeting, lit where `on` names it. */
+function edgeChips(others: Greeting[], on: string[], onToggle: (id: string) => void) {
+  return others.map((g) => (
+    <button key={g.id} className={"chip" + (on.includes(g.id) ? " on" : "")}
+            onClick={() => onToggle(g.id)}>{g.name}</button>
+  ));
+}
 
 export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, selected, sectionPath, recordHref,
                                  onChanged, onBusy, onEdgeDraft, hold = null, refreshKey = 0 }:
@@ -350,20 +375,16 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     }
   }
 
-  function toggle(list: "leads_to" | "excludes", id: string) {
-    const cur = edges[list];
-    setEdges({ ...edges, [list]: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
-  }
-
-  function toggleTag(tid: string) {
-    const cur = form.requires_tags;
-    setForm({ ...form, requires_tags: cur.includes(tid) ? cur.filter((t) => t !== tid) : [...cur, tid] });
-  }
-
-  function togglePresent(cid: string) {
-    const cur = form.present;
-    setForm({ ...form, present: cur.includes(cid) ? cur.filter((c) => c !== cid) : [...cur, cid] });
-  }
+  // Updaters rather than a spread of the form this render holds: the chip
+  // lists below that call these are memoized, so a click can reach a closure
+  // from several keystrokes ago -- and spreading THAT form would put the body
+  // back the way it was then.
+  const toggle = useCallback((list: "leads_to" | "excludes", id: string) =>
+    setEdges((e) => ({ ...e, [list]: toggled(e[list], id) })), []);
+  const toggleTag = useCallback((tid: string) =>
+    setForm((f) => ({ ...f, requires_tags: toggled(f.requires_tags, tid) })), []);
+  const togglePresent = useCallback((cid: string) =>
+    setForm((f) => ({ ...f, present: toggled(f.present, cid) })), []);
 
   const mark: GreetingMark = greetings.find((g) => g.id === gid)?.mark ?? null;
 
@@ -377,8 +398,14 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     }
   }
 
-  const others = greetings.filter((g) => g.id !== gid);
-  const charName = (id: string) => chars.find((c) => c.id === id)?.name ?? id;
+  // Everything from here to the rail is memoized on what it reads, because
+  // this editor re-renders on every keystroke in the body and a world can hold
+  // a great many greetings and characters: the rail, the mark counts, and the
+  // form's chip lists -- two of them a chip per OTHER greeting -- were all
+  // rebuilt for each letter typed.
+  const others = useMemo(() => greetings.filter((g) => g.id !== gid), [greetings, gid]);
+  const charById = useMemo(() => new Map(chars.map((c) => [c.id, c])), [chars]);
+  const charName = useCallback((id: string) => charById.get(id)?.name ?? id, [charById]);
   // Falls back to the raw id, as every other reference chip here does: a
   // location the campaign has deleted (or a list that failed to load) still
   // shows *something* the reader can recognise and clear.
@@ -386,11 +413,9 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   const locationKnown = locations.some((l) => l.id === form.location);
 
   // --- rail filtering -------------------------------------------------------
-  // Marks are campaign-only (a world has no play history), so the chips are
-  // too; search works in both scopes.
-  const MARKS: Exclude<GreetingMark, null>[] = ["played", "completed", "skipped"];
-  const MARK_LABEL: Record<string, string> = { played: "played", completed: "done", skipped: "skip" };
-  const markCounts = MARKS.map((m) => [m, greetings.filter((g) => g.mark === m).length] as const);
+  const markCounts = useMemo(
+    () => MARKS.map((m) => [m, greetings.filter((g) => g.mark === m).length] as const),
+    [greetings]);
 
   function toggleMark(m: Exclude<GreetingMark, null>) {
     setHiddenMarks((prev) => {
@@ -400,33 +425,38 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     });
   }
 
-  // NFC on both sides before folding case. Names arrive from hand-written
-  // markdown and imported cards, so an accented one can be stored decomposed
-  // (e + combining acute) while the reader types it composed; the two render
-  // identically and would otherwise never match (Codex review). This normalizes
-  // form, not accents: "cafe" still does not find "café", which keeps the match
-  // rule something a reader can predict.
-  const fold = (s: string) => s.normalize("NFC").toLowerCase();
-
-  // Name, source character, and every present character -- all of which the
-  // list payload already carries, so this costs no request. Bodies are NOT
-  // searched: they only exist on the per-greeting read.
-  function matchesQuery(g: Greeting, needle: string): boolean {
-    if (!needle) return true;
-    const hay = [g.name, charName(g.character), ...(g.present ?? []).map(charName)];
-    return hay.some((s) => fold(s).includes(needle));
-  }
-
-  const needle = fold(query.trim());
-  const shownGreetings = greetings.filter((g) => {
-    // The open greeting always stays listed. Its content is on screen either
-    // way, and dropping its row would leave the body with no visible source --
-    // the reader would see a record the list denies having.
-    if (g.id === gid) return true;
-    if (!worldScope && g.mark && hiddenMarks.has(g.mark)) return false;
-    return matchesQuery(g, needle);
-  });
+  const shownGreetings = useMemo(() => {
+    // Name, source character, and every present character -- all of which the
+    // list payload already carries, so this costs no request. Bodies are NOT
+    // searched: they only exist on the per-greeting read.
+    const needle = fold(query.trim());
+    const matchesQuery = (g: Greeting) => !needle
+      || [g.name, charName(g.character), ...(g.present ?? []).map(charName)]
+        .some((s) => fold(s).includes(needle));
+    return greetings.filter((g) => {
+      // The open greeting always stays listed. Its content is on screen either
+      // way, and dropping its row would leave the body with no visible source --
+      // the reader would see a record the list denies having.
+      if (g.id === gid) return true;
+      if (!worldScope && g.mark && hiddenMarks.has(g.mark)) return false;
+      return matchesQuery(g);
+    });
+  }, [greetings, gid, worldScope, hiddenMarks, query, charName]);
   const hiddenCount = greetings.length - shownGreetings.length;
+  const rail = useMemo(() => shownGreetings.map((g) => (
+    <Link
+      key={g.id}
+      className={"row" + (gid === g.id ? " active" : "")}
+      to={recordHref(g.id)}
+    >
+      {g.name}
+      {!worldScope && g.mark && (
+        <span className={`mark-badge ${g.mark}`}>
+          {MARK_LABEL[g.mark]}
+        </span>
+      )}
+    </Link>
+  )), [shownGreetings, gid, worldScope, recordHref]);
   const greetName = (id: string) => greetings.find((g) => g.id === id)?.name ?? id;
   // the version a present character is cast at: source at the greeting's version, others at their default
   const presentVid = (id: string) => (id === form.character ? form.version : (chars.find((c) => c.id === id)?.default_version ?? ""));
@@ -440,6 +470,27 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     return version ? `${charName(id)}:${version}` : charName(id);
   };
   const imageName = (src: string) => src.split("/").pop() ?? "";
+
+  // The form's long lists, for the rail's reason: each rebuilt only when what
+  // it lists or which of them are on changes, never for a keystroke elsewhere.
+  const characterOptions = useMemo(
+    () => chars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>), [chars]);
+  const locationOptions = useMemo(
+    () => locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>), [locations]);
+  const presentChips = useMemo(() => chars.map((c) => (
+    <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
+            onClick={() => togglePresent(c.id)}>{c.name}</button>
+  )), [chars, form.present, togglePresent]);
+  const tagChips = useMemo(() => Object.keys(tags).sort().map((tid) => (
+    <button key={tid} className={"chip" + (form.requires_tags.includes(tid) ? " on" : "")}
+            onClick={() => toggleTag(tid)}>{tags[tid]}</button>
+  )), [tags, form.requires_tags, toggleTag]);
+  const leadsToChips = useMemo(
+    () => edgeChips(others, edges.leads_to, (id) => toggle("leads_to", id)),
+    [others, edges.leads_to, toggle]);
+  const excludesChips = useMemo(
+    () => edgeChips(others, edges.excludes, (id) => toggle("excludes", id)),
+    [others, edges.excludes, toggle]);
 
   async function saveSubjects(name: string, cids: string[]) {
     await api.setImageSubjects(wid, gid!, name, cids);
@@ -492,20 +543,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
             ))}
           </div>
         )}
-        {shownGreetings.map((g) => (
-          <Link
-            key={g.id}
-            className={"row" + (gid === g.id ? " active" : "")}
-            to={recordHref(g.id)}
-          >
-            {g.name}
-            {!worldScope && g.mark && (
-              <span className={`mark-badge ${g.mark}`}>
-                {MARK_LABEL[g.mark]}
-              </span>
-            )}
-          </Link>
-        ))}
+        {rail}
         {/* One status line, always in the DOM rather than mounted on demand:
             filtering happens while focus is still in the search box, so a
             result count that only appears afterwards is never announced. Live
@@ -666,7 +704,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
                       setForm({ ...form, character: next, version: "", present });
                     }}>
               <option value="">— no character (narrator-only) —</option>
-              {chars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {characterOptions}
               {/* A stored character the list does not offer (deleted since, or
                   the list failed). Without this the controlled select renders
                   the narrator option while the field still holds the dead id —
@@ -716,7 +754,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
             <select value={form.location} aria-label="Location"
                     onChange={(e) => setForm({ ...form, location: e.target.value })}>
               <option value="">— no location —</option>
-              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              {locationOptions}
               {/* A stored id the list does not offer. Without this the
                   controlled select renders blank, which claims the greeting
                   has no location while the field still holds one, and the next
@@ -733,10 +771,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
           </Field>
           <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
             <div className="chips">
-              {chars.map((c) => (
-                <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
-                        onClick={() => togglePresent(c.id)}>{c.name}</button>
-              ))}
+              {presentChips}
               {chars.length === 0 && <span className="field-hint">No characters in this world yet.</span>}
             </div>
           </Field>
@@ -758,10 +793,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
           </Field>
           <Field label="Required tags" hint="the greeting unlocks only if a player PC carries these">
             <div className="chips">
-              {Object.keys(tags).sort().map((tid) => (
-                <button key={tid} className={"chip" + (form.requires_tags.includes(tid) ? " on" : "")}
-                        onClick={() => toggleTag(tid)}>{tags[tid]}</button>
-              ))}
+              {tagChips}
               {Object.keys(tags).length === 0 && <span className="field-hint">No tags in this world yet.</span>}
             </div>
           </Field>
@@ -774,19 +806,13 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
           </Field>
           <Field label="Leads to" hint="greetings this one unlocks once played">
             <div className="chips">
-              {others.map((g) => (
-                <button key={g.id} className={"chip" + (edges.leads_to.includes(g.id) ? " on" : "")}
-                        onClick={() => toggle("leads_to", g.id)}>{g.name}</button>
-              ))}
+              {leadsToChips}
               {others.length === 0 && <span className="field-hint">No other greetings yet.</span>}
             </div>
           </Field>
           <Field label="Excludes" hint="playing this one locks these (mutually exclusive)">
             <div className="chips">
-              {others.map((g) => (
-                <button key={g.id} className={"chip" + (edges.excludes.includes(g.id) ? " on" : "")}
-                        onClick={() => toggle("excludes", g.id)}>{g.name}</button>
-              ))}
+              {excludesChips}
             </div>
           </Field>
           <div className="form-actions">
