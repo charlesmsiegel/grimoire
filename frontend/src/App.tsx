@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type ProviderHealth } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
@@ -18,6 +18,7 @@ import { onConfigChanged } from "./appEvents";
 import { RAIL_PX, railless } from "./shell/rail";
 import { useOpenCampaign } from "./shell/useOpenCampaign";
 import { useShellPayload } from "./shell/useShellPayload";
+import { ShellPayloadProvider } from "./shell/ShellPayloadContext";
 import CampaignsView from "./routes/CampaignsView";
 import CampaignWizard from "./routes/CampaignWizard";
 import OpenScene from "./routes/OpenScene";
@@ -47,8 +48,16 @@ import SetupWizard from "./routes/SetupWizard";
 
 /** The shell's own body: header, palette, routes. Split out from `App` only so
  *  the ⌘K hotkey can live *under* `PaletteProvider` — a hook cannot read a
- *  context its own component renders. */
-function Shell(
+ *  context its own component renders.
+ *
+ *  Memoized because everything under it is the whole app, and `App` re-renders
+ *  for reasons that change none of these props: a `configChanged` bumps its
+ *  revision counter before the read it asks for has even answered. Every prop
+ *  is a primitive, the provider health object (held stable across reads that
+ *  did not change it -- see `App`), or a state setter, so the comparison is
+ *  exact. What Shell reads for itself -- the location, focus, the palette --
+ *  still re-renders it through its own hooks. */
+const Shell = memo(function Shell(
   { inSetup, dataDir, ready, connection, model, health, onLeftSetup }: {
     inSetup: boolean; dataDir: string; ready: boolean;
     connection: string; model: string; health: ProviderHealth | null;
@@ -100,6 +109,14 @@ function Shell(
    *  keeps tracking what was last played instead of freezing on whichever
    *  campaign it happened to pick first. */
   const openCid = shell.payload?.campaign?.id ?? cid;
+  /** The same read, for the pages that draw its numbers (the hub, the scenes
+   *  list). They used to issue their own copy of it beside this one and hold
+   *  the page until it answered; `ShellPayloadContext` says why that was the
+   *  slowest thing on either page. `cid` rides along because a status is only
+   *  a statement about the campaign it asked about. */
+  const shellValue = useMemo(
+    () => ({ status: shell.status, payload: shell.payload, retry: shell.retry, cid }),
+    [shell.status, shell.payload, shell.retry, cid]);
 
   // `innerWidth` rather than `matchMedia`, and event-driven rather than polled
   // -- the same reading `PageShell` takes for its own breakpoint, and the one
@@ -157,138 +174,17 @@ function Shell(
           every page, so it is asked once in chrome that outlives every route.
           A page's own column still answers which of THAT page's records you are
           reading, which is why `PageShell` is untouched by this. */}
+      <ShellPayloadProvider value={shellValue}>
       <div className="app-body">
         {!noRail && (
           <AppRail payload={shell.payload} status={shell.status} cid={openCid}
                    dataDir={dataDir} docked={docked} open={railOpen}
                    onClose={closeRail} onRetry={shell.retry} />
         )}
-      <Routes>
-        {/* A fresh install lands on the wizard instead of an empty campaigns
-            list. Only `/` is redirected: every other route stays reachable, so
-            a deep link is never hijacked. The two guards are exact opposites
-            of one `inSetup`, which is what keeps them from bouncing a redirect
-            back and forth. Gating `/welcome` too is what stops a reload
-            part-way through the wizard — after a world exists, so the server no
-            longer calls it a first run — from restarting at step one and
-            creating a second world. */}
-        <Route path="/" element={inSetup ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
-        {/* `?again=1` is the explicit re-entry signal Configuration's own
-            First-run setup row links with. Without one this route is a
-            redirect the moment setup is done, so nothing could offer the
-            wizard again -- and the four things it walks (storage, model, look,
-            world) are exactly what somebody moving to a new machine wants to
-            be walked through a second time. It has to be explicit rather than
-            inferred: `inSetup` answers "has this library been set up", and
-            re-running is a decision, not a state. */}
-        <Route path="/welcome" element={
-          inSetup || rerunSetup
-            ? <SetupWizard onDone={(dir) => onLeftSetup(dir ?? dataDir)} />
-            : <Navigate to="/" replace />} />
-        <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
-        {/* Where a completion-notification tap lands; see `OpenScene`. */}
-        <Route path="/open" element={<OpenScene />} />
-        {/* Keyed so a campaign→campaign move remounts. The palette made that
-            transition reachable: it stays on this route and only changes the
-            param, so React reuses the component, and CampaignView's [cid]
-            effect refetches without synchronously dropping the scene list,
-            transcript or activeId. Until those land -- or forever, if they
-            fail -- it would show campaign A's scene while its handlers carry
-            B's cid, and scene ids repeat across campaigns. The key is the
-            campaign segment alone and NOT the whole pathname: this route
-            matches deeper now (#87, below), and keying on the full path would
-            remount on every scene jump -- exactly what the nested child exists
-            to prevent. */}
-        {/* The play view answers to two paths — with and without a scene
-            (#87) — and they have to resolve to the SAME element instance.
-            Sibling routes would remount CampaignView on
-            /campaigns/A/scenes/s1 → /campaigns/B but not on
-            A/scenes/s1 → B/scenes/s2, so the stale-response guards the view is
-            built around (cidRef, the window token) would hold in one direction
-            and be bypassed in the other. Nesting keeps one instance for every
-            combination. The child renders nothing — CampaignView has no
-            <Outlet /> — and exists only to put `:sid` in the matched path,
-            where useMatch can read it. */}
-        {/* The campaign's front door, and it is not the transcript. Opening a
-            campaign used to resume whichever scene was played last, which is
-            the complaint the hub answers -- so play now lives one segment
-            deeper and the reader arrives somewhere that says what is waiting. */}
-        <Route path="/campaigns/:cid" element={<CampaignHub />} />
-        {/* The list is the route; play is one scene inside it. They are
-            separate elements rather than one component branching on `:sid`,
-            because a list read top to bottom and a transcript being written
-            into are not the same page wearing two states. */}
-        <Route path="/campaigns/:cid/scenes" element={<ScenesView ready={ready} />} />
-        <Route path="/campaigns/:cid/scenes/:sid" element={
-          <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
-                        ready={ready} />} />
-        {/* The review's own address. Same element, because a review is a mode
-            of this page and not a second copy of it -- `useSceneReview` adopts
-            whatever the scene is holding whichever of the two URLs you arrive
-            on. What the separate path buys is that the rail's Wrap-up row can
-            light, and that "the thing that is waiting" is something a reader
-            can bookmark or be sent a link to. The `key` is deliberately the
-            campaign and nothing more, exactly as above: moving between the
-            transcript and its wrap-up must not remount the page and discard
-            the review being judged. */}
-        <Route path="/campaigns/:cid/scenes/:sid/wrap-up" element={
-          <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
-                        ready={ready} />} />
-        {/* A campaign's character used to live here, outside the world copy
-            that holds its other seven record kinds. It moved so the two shapes
-            are one shape; this keeps a link somebody already holds working,
-            and is a redirect rather than a second live route so there is still
-            exactly one address per screen. */}
-        <Route path="/campaigns/:cid/characters/:eid" element={<LegacyCharacterRedirect />} />
-        {/* The ledger is a room, not a drawer over the transcript (4e): it is a
-            table read top to bottom, and the supersession chains it exists to
-            show do not fit in a panel wedged above the scene. */}
-        <Route path="/campaigns/:cid/ledger" element={<LedgerView />} />
-        <Route path="/campaigns/:cid/costs" element={<CostsView />} />
-        {/* The timeline is the ledger's other half and a room for the same
-            reason (#198): the ledger says what is still open, this says what
-            happened, and a play history read end to end is not a drawer over
-            the scene it is a history of. */}
-        <Route path="/campaigns/:cid/timeline" element={<TimelineView />} />
-        {/* Sheet coverage across the cast (#201). A room for the ledger's
-            reason: the play view's mechanics panel binds the module in six
-            lines, but "who among forty characters has a sheet" is a list read
-            top to bottom, and a drawer over the transcript is not where a list
-            like that goes. */}
-        <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
-        <Route path="/todo" element={<TodoView cid={openCid} />} />
-        <Route path="/library" element={<LibraryView />} />
-        {/* Search keeps its query in the URL, so a result page is a link and
-            the back button returns to it after following a hit. */}
-        <Route path="/search" element={<SearchView />} />
-        <Route path="/worlds" element={<WorldsView />} />
-        {/* A character owns a screen rather than a third of one — see
-            `CharacterPage`. Both scopes, because a campaign's copy of a
-            character is a different record from the world's. Declared before
-            the splats for a reader; the matcher ranks static segments above a
-            splat on its own. */}
-        <Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} />
-        <Route path="/campaigns/:cid/world/characters/:eid" element={<CharacterPage campaign />} />
-        {/* One splat per shape, so every section and record of a world is the
-            same route object and React keeps ONE `WorldView` across all of
-            them. Sibling routes per section would remount the page on every
-            column click and re-read the world and its cover each time. */}
-        <Route path="/worlds/:wid/*" element={<WorldView />} />
-        <Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
-        <Route path="/modules" element={<ModulesView />} />
-        <Route path="/styles" element={<StyleGuidesView />} />
-        <Route path="/response-presets" element={<ResponsePresetsView />} />
-        <Route path="/calendars" element={<CalendarsView />} />
-        <Route path="/climates" element={<ClimatesView />} />
-        <Route path="/connections" element={<ConnectionsView />} />
-        <Route path="/config" element={<ConfigView />} />
-        {/* A room, not a tab inside Configuration (#154 asked for a "tab").
-            Config is a page of settings; this is a page of readings, and the
-            only thing on it that can be changed -- the log's own level -- is
-            saved through Configuration like every other setting. */}
-        <Route path="/stats" element={<StatsView />} />
-      </Routes>
+      <AppRoutes inSetup={inSetup} rerunSetup={rerunSetup} ready={ready}
+                 dataDir={dataDir} openCid={openCid} onLeftSetup={onLeftSetup} />
       </div>
+      </ShellPayloadProvider>
       {/* The phone's half of the same decision, and a ROW of the shell rather
           than something floating over it: `#root` is already a column, so the
           bar taking its own height is what keeps a scrolling page from ending
@@ -304,6 +200,161 @@ function Shell(
       )}
     </>
   );
+});
+
+/** The routes, apart from the chrome around them.
+ *
+ *  Memoized for the reason `Shell` is, one level down. Shell owns the rail's
+ *  shell read, so every re-read -- each notification, each arrival at a
+ *  campaign page -- re-renders it at least once for the request and once for
+ *  the answer, and each of those used to rebuild every route element and
+ *  re-render whichever page was open, the play view included, to draw nothing
+ *  new. The props here are what the route table actually takes from the
+ *  chrome; the pages that draw the shell's numbers read them from
+ *  `ShellPayloadContext`, which reaches them through this boundary on its own. */
+const AppRoutes = memo(function AppRoutes(
+  { inSetup, rerunSetup, ready, dataDir, openCid, onLeftSetup }: {
+    inSetup: boolean; rerunSetup: boolean; ready: boolean; dataDir: string;
+    openCid: string | null; onLeftSetup: (dir: string) => void;
+  },
+) {
+  const location = useLocation();
+  return (
+    <Routes>
+      {/* A fresh install lands on the wizard instead of an empty campaigns
+          list. Only `/` is redirected: every other route stays reachable, so
+          a deep link is never hijacked. The two guards are exact opposites
+          of one `inSetup`, which is what keeps them from bouncing a redirect
+          back and forth. Gating `/welcome` too is what stops a reload
+          part-way through the wizard — after a world exists, so the server no
+          longer calls it a first run — from restarting at step one and
+          creating a second world. */}
+      <Route path="/" element={inSetup ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
+      {/* `?again=1` is the explicit re-entry signal Configuration's own
+          First-run setup row links with. Without one this route is a
+          redirect the moment setup is done, so nothing could offer the
+          wizard again -- and the four things it walks (storage, model, look,
+          world) are exactly what somebody moving to a new machine wants to
+          be walked through a second time. It has to be explicit rather than
+          inferred: `inSetup` answers "has this library been set up", and
+          re-running is a decision, not a state. */}
+      <Route path="/welcome" element={
+        inSetup || rerunSetup
+          ? <SetupWizard onDone={(dir) => onLeftSetup(dir ?? dataDir)} />
+          : <Navigate to="/" replace />} />
+      <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
+      {/* Where a completion-notification tap lands; see `OpenScene`. */}
+      <Route path="/open" element={<OpenScene />} />
+      {/* Keyed so a campaign→campaign move remounts. The palette made that
+          transition reachable: it stays on this route and only changes the
+          param, so React reuses the component, and CampaignView's [cid]
+          effect refetches without synchronously dropping the scene list,
+          transcript or activeId. Until those land -- or forever, if they
+          fail -- it would show campaign A's scene while its handlers carry
+          B's cid, and scene ids repeat across campaigns. The key is the
+          campaign segment alone and NOT the whole pathname: this route
+          matches deeper now (#87, below), and keying on the full path would
+          remount on every scene jump -- exactly what the nested child exists
+          to prevent. */}
+      {/* The play view answers to two paths — with and without a scene
+          (#87) — and they have to resolve to the SAME element instance.
+          Sibling routes would remount CampaignView on
+          /campaigns/A/scenes/s1 → /campaigns/B but not on
+          A/scenes/s1 → B/scenes/s2, so the stale-response guards the view is
+          built around (cidRef, the window token) would hold in one direction
+          and be bypassed in the other. Nesting keeps one instance for every
+          combination. The child renders nothing — CampaignView has no
+          <Outlet /> — and exists only to put `:sid` in the matched path,
+          where useMatch can read it. */}
+      {/* The campaign's front door, and it is not the transcript. Opening a
+          campaign used to resume whichever scene was played last, which is
+          the complaint the hub answers -- so play now lives one segment
+          deeper and the reader arrives somewhere that says what is waiting. */}
+      <Route path="/campaigns/:cid" element={<CampaignHub />} />
+      {/* The list is the route; play is one scene inside it. They are
+          separate elements rather than one component branching on `:sid`,
+          because a list read top to bottom and a transcript being written
+          into are not the same page wearing two states. */}
+      <Route path="/campaigns/:cid/scenes" element={<ScenesView ready={ready} />} />
+      <Route path="/campaigns/:cid/scenes/:sid" element={
+        <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
+                      ready={ready} />} />
+      {/* The review's own address. Same element, because a review is a mode
+          of this page and not a second copy of it -- `useSceneReview` adopts
+          whatever the scene is holding whichever of the two URLs you arrive
+          on. What the separate path buys is that the rail's Wrap-up row can
+          light, and that "the thing that is waiting" is something a reader
+          can bookmark or be sent a link to. The `key` is deliberately the
+          campaign and nothing more, exactly as above: moving between the
+          transcript and its wrap-up must not remount the page and discard
+          the review being judged. */}
+      <Route path="/campaigns/:cid/scenes/:sid/wrap-up" element={
+        <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
+                      ready={ready} />} />
+      {/* A campaign's character used to live here, outside the world copy
+          that holds its other seven record kinds. It moved so the two shapes
+          are one shape; this keeps a link somebody already holds working,
+          and is a redirect rather than a second live route so there is still
+          exactly one address per screen. */}
+      <Route path="/campaigns/:cid/characters/:eid" element={<LegacyCharacterRedirect />} />
+      {/* The ledger is a room, not a drawer over the transcript (4e): it is a
+          table read top to bottom, and the supersession chains it exists to
+          show do not fit in a panel wedged above the scene. */}
+      <Route path="/campaigns/:cid/ledger" element={<LedgerView />} />
+      <Route path="/campaigns/:cid/costs" element={<CostsView />} />
+      {/* The timeline is the ledger's other half and a room for the same
+          reason (#198): the ledger says what is still open, this says what
+          happened, and a play history read end to end is not a drawer over
+          the scene it is a history of. */}
+      <Route path="/campaigns/:cid/timeline" element={<TimelineView />} />
+      {/* Sheet coverage across the cast (#201). A room for the ledger's
+          reason: the play view's mechanics panel binds the module in six
+          lines, but "who among forty characters has a sheet" is a list read
+          top to bottom, and a drawer over the transcript is not where a list
+          like that goes. */}
+      <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
+      <Route path="/todo" element={<TodoView cid={openCid} />} />
+      <Route path="/library" element={<LibraryView />} />
+      {/* Search keeps its query in the URL, so a result page is a link and
+          the back button returns to it after following a hit. */}
+      <Route path="/search" element={<SearchView />} />
+      <Route path="/worlds" element={<WorldsView />} />
+      {/* A character owns a screen rather than a third of one — see
+          `CharacterPage`. Both scopes, because a campaign's copy of a
+          character is a different record from the world's. Declared before
+          the splats for a reader; the matcher ranks static segments above a
+          splat on its own. */}
+      <Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} />
+      <Route path="/campaigns/:cid/world/characters/:eid" element={<CharacterPage campaign />} />
+      {/* One splat per shape, so every section and record of a world is the
+          same route object and React keeps ONE `WorldView` across all of
+          them. Sibling routes per section would remount the page on every
+          column click and re-read the world and its cover each time. */}
+      <Route path="/worlds/:wid/*" element={<WorldView />} />
+      <Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
+      <Route path="/modules" element={<ModulesView />} />
+      <Route path="/styles" element={<StyleGuidesView />} />
+      <Route path="/response-presets" element={<ResponsePresetsView />} />
+      <Route path="/calendars" element={<CalendarsView />} />
+      <Route path="/climates" element={<ClimatesView />} />
+      <Route path="/connections" element={<ConnectionsView />} />
+      <Route path="/config" element={<ConfigView />} />
+      {/* A room, not a tab inside Configuration (#154 asked for a "tab").
+          Config is a page of settings; this is a page of readings, and the
+          only thing on it that can be changed -- the log's own level -- is
+          saved through Configuration like every other setting. */}
+      <Route path="/stats" element={<StatsView />} />
+    </Routes>
+  );
+});
+
+/** The fields of a provider verdict the header draws. `at` is left out on
+ *  purpose: the server restamps it on every real turn, so comparing it would
+ *  make nearly every read after play look like news to a dot that says the
+ *  same thing. */
+function sameHealth(a: ProviderHealth | null, b: ProviderHealth | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.state === b.state && a.kind === b.kind && a.detail === b.detail;
 }
 
 /** The address a campaign's character page used to have.
@@ -352,12 +403,6 @@ export default function App() {
 
   const location = useLocation();
 
-  useEffect(() => {
-    api.getConfig()
-      .then((c) => { setTheme(c.theme); setFirstRun(c.first_run); setDataDir(c.data_dir); })
-      .catch(() => setTheme(DEFAULT_MODE));
-  }, []);
-
   // Navigation is not the only thing that changes what the header should say:
   // /config switches the active connection and /connections edits its model,
   // both without moving the pathname. Leaving the header naming the old
@@ -366,10 +411,19 @@ export default function App() {
   const [configRev, setConfigRev] = useState(0);
   useEffect(() => onConfigChanged(() => setConfigRev((n) => n + 1)), []);
 
+  /** What the last run of the effect below asked about. */
+  const asked = useRef<string | null>(null);
+
+  // ONE read serves the theme and the header. They used to be two effects, a
+  // cached read for the theme and a fresh one for everything else, which on
+  // mount were two requests for the same bytes -- three under StrictMode.
   useEffect(() => {
     // `fresh`: the cached config is only invalidated by this tab's own writes,
     // so a library populated in another tab or by a sync client would leave
     // `firstRun` — and the connection and model beside it — stale indefinitely.
+    // The exception is a re-run for inputs already asked about, which only
+    // StrictMode's rehearsed mount produces: that joins the read those inputs
+    // started (`getConfig` caches the promise) instead of issuing a second.
     //
     // Guarded because this effect can be in flight twice at once -- two quick
     // connection edits, or a store move during a slow read -- and nothing
@@ -379,15 +433,31 @@ export default function App() {
     // header to the connection it just stopped describing -- and, now that
     // first-run rides along, could re-arm the wizard redirect from a stale
     // read.
+    const inputs = `${location.pathname}\n${configRev}`;
+    const fresh = asked.current !== inputs;
+    asked.current = inputs;
     let live = true;
-    api.getConfig({ fresh: true }).then((c) => {
+    api.getConfig(fresh ? { fresh: true } : undefined).then((c) => {
       if (!live) return;
+      // The theme is taken once: `ThemeProvider` owns it from then on, and a
+      // change made in Configuration reaches it through that provider rather
+      // than through here.
+      setTheme((t) => t ?? c.theme);
+      // Primitives, so an unchanged value is a bail-out rather than a render.
       setReady(c.ready);
       setFirstRun(c.first_run);
       setDataDir(c.data_dir);
       setConnection(c.active_connection ? c.active_connection.name.toUpperCase() : "");
       setModel(c.active_connection?.model ?? "");
-      setHealth(c.health);
+      // ...but health is an object, new on every read. Installed wholesale it
+      // re-rendered the whole tree once per navigation, after the read landed,
+      // to draw the same dot.
+      setHealth((h) => (sameHealth(h, c.health) ? h : c.health));
+    }).catch(() => {
+      // A failed read must not leave the app blank: with no theme nothing
+      // renders at all. Later failures change nothing -- the header keeps
+      // saying what the last good read said.
+      if (live) setTheme((t) => t ?? DEFAULT_MODE);
     });
     return () => { live = false; };
   }, [location.pathname, configRev]);

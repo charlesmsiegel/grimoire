@@ -1,5 +1,8 @@
+import type { ReactNode } from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { useShellPayload } from "../shell/useShellPayload";
+import { ShellPayloadProvider } from "../shell/ShellPayloadContext";
 
 vi.mock("../api/client", () => ({
   api: { getCampaign: vi.fn(), listScenes: vi.fn(), getShell: vi.fn(),
@@ -82,13 +85,25 @@ function Landed() {
   return <div data-testid="play">{seed ? `seed:${seed}` : "seed:none"}</div>;
 }
 
+const noop = () => {};
+
+/** The rail's shell read, provided the way `App.Shell` provides it: the list
+ *  draws its turn counts and waiting reviews from here rather than reading
+ *  them itself, so the `getShell` mock still decides what a row says. */
+function WithShell({ children }: { children: ReactNode }) {
+  const shell = useShellPayload("/store", "run", noop);
+  return <ShellPayloadProvider value={{ ...shell, cid: "run" }}>{children}</ShellPayloadProvider>;
+}
+
 function renderScenes() {
   return render(
     <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
-      <Routes>
-        <Route path="/campaigns/:cid/scenes" element={<ScenesView />} />
-        <Route path="/campaigns/:cid/scenes/:sid" element={<Landed />} />
-      </Routes>
+      <WithShell>
+        <Routes>
+          <Route path="/campaigns/:cid/scenes" element={<ScenesView />} />
+          <Route path="/campaigns/:cid/scenes/:sid" element={<Landed />} />
+        </Routes>
+      </WithShell>
     </MemoryRouter>);
 }
 
@@ -228,8 +243,52 @@ test("closing the chooser leaves the list alone", async () => {
 test("a failed read is not an empty campaign", async () => {
   (api.listScenes as any).mockRejectedValue(new Error("offline"));
   renderScenes();
-  expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
+  expect(await screen.findByText(/the scenes could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText(/no scenes yet/i)).not.toBeInTheDocument();
+});
+
+// ---- the shell read is the rail's, and the list does not wait on it ----
+
+test("the list does not wait on the shell read", async () => {
+  // The list's own read answers in tens of milliseconds; the shell read is the
+  // slowest in the chrome, and the page used to hold every row until its own
+  // copy of it answered.
+  (api.getShell as any).mockReturnValue(new Promise(() => {}));
+  renderScenes();
+  expect(await screen.findByText("The third")).toBeInTheDocument();
+  expect(screen.getAllByRole("listitem")).toHaveLength(3);
+  // Until the counts arrive a row says only what its frontmatter knows: an
+  // open scene reads "Open", the wording that never claims there is something
+  // to come back to, and it draws no turn count rather than zero.
+  const rows = screen.getAllByRole("listitem");
+  expect(within(rows[0]).getByText("Open →")).toBeInTheDocument();
+  expect(within(rows[0]).queryByText(/\dt$/)).not.toBeInTheDocument();
+});
+
+test("a failed shell read costs the counts, not the list", async () => {
+  (api.getShell as any).mockRejectedValue(new Error("offline"));
+  renderScenes();
+  expect(await screen.findByText(/waiting reviews and turn counts could not be read/i))
+    .toBeInTheDocument();
+  expect(screen.getByText("The third")).toBeInTheDocument();
+  expect(screen.queryByText(/the scenes could not be read/i)).not.toBeInTheDocument();
+
+  // ...and its retry asks again, and the rows take what it answers.
+  (api.getShell as any).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("4 unreviewed")).toBeInTheDocument();
+  expect(screen.queryByText(/turn counts could not be read/i)).not.toBeInTheDocument();
+});
+
+test("a payload about another campaign draws nothing on these rows", async () => {
+  (api.getShell as any).mockResolvedValue({
+    ...shell([{ sid: "002--second", proposals: 4 }]),
+    campaign: { ...shell([{ sid: "002--second", proposals: 4 }]).campaign, id: "elsewhere" },
+  });
+  renderScenes();
+  await screen.findByText("The second");
+  expect(screen.queryByText("4 unreviewed")).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Wrap up →" })).not.toBeInTheDocument();
 });
 
 
