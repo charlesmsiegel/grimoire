@@ -769,6 +769,51 @@ def test_the_client_buckets_are_server_buckets():
     assert list(THUMB_BUCKETS) == sorted(THUMB_BUCKETS)
 
 
+def test_the_client_revision_is_the_server_revision():
+    # The client puts `t` in every `?w=` URL so a browser's cache is keyed on
+    # the pipeline that made a thumbnail. A revision bumped here and not there
+    # leaves every copy a browser cached immutable in place.
+    src = (REPO / "frontend" / "src" / "api" / "thumbs.ts").read_text(encoding="utf-8")
+    m = re.search(r"export const THUMB_REV = (\d+);", src)
+    assert m, "THUMB_REV is not declared in thumbs.ts in the shape this guard reads"
+    assert int(m.group(1)) == thumbs.REVISION
+
+
+# ---- what a browser keeps ----
+def test_a_thumbnail_is_validated_by_what_made_it(client, monkeypatch):
+    # The thumbnail used to carry its source's ETag, so a thumbnail made the
+    # old way revalidated as current for as long as the source sat unchanged
+    # -- no fix to how thumbnails are made ever reached a browser holding one.
+    base = _avatar_route(client)
+    full, thumb = client.get(base), client.get(f"{base}?w=128")
+    assert thumb.headers["etag"] != full.headers["etag"]
+    same = {"If-None-Match": thumb.headers["etag"]}
+    assert client.get(f"{base}?w=128", headers=same).status_code == 304
+    assert client.get(f"{base}?w=256", headers=same).status_code == 200  # another bucket
+    assert client.get(base, headers=same).status_code == 200             # the original
+    monkeypatch.setattr(thumbs, "REVISION", thumbs.REVISION + 1)
+    again = client.get(f"{base}?w=128", headers=same)
+    assert again.status_code == 200 and again.headers["etag"] != thumb.headers["etag"]
+
+
+def test_an_original_standing_in_for_a_thumbnail_is_never_immutable(client, monkeypatch):
+    # A thumbnail that failed for a moment -- a source mid-write under a sync
+    # client, a cache write that hit a full disk -- served the multi-MB
+    # original under the `?w=&v=` URL as immutable: a year of it in a tile.
+    base = _avatar_route(client)
+    real = thumbs.thumbnail
+    monkeypatch.setattr(thumbs, "thumbnail", lambda *_: None)
+    stand_in = client.get(f"{base}?w=128&v=abc")
+    assert stand_in.headers["content-type"] == "image/png"
+    assert stand_in.headers["cache-control"] == "no-cache"
+    asked = {"If-None-Match": stand_in.headers["etag"]}
+    assert client.get(f"{base}?w=128&v=abc", headers=asked).status_code == 304  # still failing
+    monkeypatch.setattr(thumbs, "thumbnail", real)
+    retried = client.get(f"{base}?w=128&v=abc", headers=asked)
+    assert retried.status_code == 200 and retried.headers["content-type"] == "image/webp"
+    assert "immutable" in retried.headers["cache-control"]
+
+
 def test_the_route_serves_a_fallback_thumbnail_as_what_it_is(client, monkeypatch):
     monkeypatch.setattr(thumbs, "_encodes_webp", lambda: False)
     base = _avatar_route(client)

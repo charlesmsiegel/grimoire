@@ -8,7 +8,7 @@ vi.mock("../api/thumbs", async () => {
   const actual = await vi.importActual<typeof import("../api/thumbs")>("../api/thumbs");
   return { ...actual, thumbSet: vi.fn(actual.thumbSet) };
 });
-import { thumbSet } from "../api/thumbs";
+import { THUMB_REV, thumbSet } from "../api/thumbs";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -95,15 +95,15 @@ test("a card's portrait is a lazy, versioned thumbnail, never the original", asy
   await screen.findByText("Seraphine");
   const [sera, mara] = Array.from(container.querySelectorAll(".char-card-avatar"));
   const base = "/api/worlds/realm/characters/seraphine/versions/default/images/avatar";
-  expect(sera.getAttribute("src")).toBe(`${base}?w=512&v=abc`);
-  expect(sera.getAttribute("srcset")).toContain(`${base}?w=1024&v=abc 682w`);
+  expect(sera.getAttribute("src")).toBe(`${base}?w=512&t=${THUMB_REV}&v=abc`);
+  expect(sera.getAttribute("srcset")).toContain(`${base}?w=1024&t=${THUMB_REV}&v=abc 682w`);
   expect(sera.getAttribute("sizes")).toMatch(/px/);
   expect(sera.getAttribute("loading")).toBe("lazy");
   expect(sera.getAttribute("decoding")).toBe("async");
   // No token, no `?v=`: a bare thumbnail revalidates rather than caching a
   // year under a name that does not pin its bytes.
   expect(mara.getAttribute("src"))
-    .toBe("/api/worlds/realm/characters/mara/versions/default/images/avatar?w=512");
+    .toBe(`/api/worlds/realm/characters/mara/versions/default/images/avatar?w=512&t=${THUMB_REV}`);
 });
 
 test("a card shows the tagline and its badges, versions included", async () => {

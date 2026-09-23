@@ -799,6 +799,19 @@ THUMB_W = 320
 THUMB_BUCKETS = (128, 256, THUMB_W, 512, 1024)
 
 
+def thumb_query(v: str) -> str:
+    """The query of a thumbnail URL this side builds: the gallery width, the
+    thumbnail pipeline's revision and the source's version token.
+
+    The revision (`t`) is read by no route. It is there for the browser: a `v`
+    URL is cached immutable, so a thumbnail a browser holds from before a
+    change to how thumbnails are made would otherwise go on being drawn for a
+    year -- a phone photo on its side, say, after the fix that stood it up.
+    The client builds its own `?w=` URLs with the same number
+    (`frontend/src/api/thumbs.ts`)."""
+    return f"?w={THUMB_W}&t={store.thumbs.REVISION}&v={v}"
+
+
 def _thumb_width(w: int) -> int:
     """The bucket a requested `?w=` is served at: the smallest that is at
     least `w`, or the largest when `w` is past them all."""
@@ -822,6 +835,16 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     one exact content state, so it caches immutable: zero requests on later
     renders.
 
+    A `?w=` thumbnail's ETag names what made it as well as its source: the
+    bucket and the thumbnail generation. With the source's alone, a thumbnail
+    made the old way revalidated as current for as long as the source sat
+    unchanged, so no fix to how thumbnails are made ever reached a browser
+    that had one. The original served in a thumbnail's place (an animated
+    picture, one that would not decode, a cache write that failed) is never
+    cached immutable, and carries a tag of its own: it may be a stand-in for
+    a failure that has since cleared, and a year of a multi-MB original in a
+    128px slot is what `immutable` would have made of it.
+
     A `FileNotFoundError` reading the file is a 404, not a 500: an image can be
     replaced or removed between the caller resolving its path and this reading
     it, and that is a missing image rather than a server fault. That applies to
@@ -839,16 +862,19 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
         st = p.stat()
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
-    etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    source = f"{st.st_mtime_ns:x}-{st.st_size:x}"
+    etag = f'"{source}"'
     versioned = request is not None and "v" in request.query_params
     cache = "public, max-age=31536000, immutable" if versioned else "no-cache"
-    headers = {"Cache-Control": cache, "ETag": etag}
-    if request is not None and etag in request.headers.get("if-none-match", ""):
-        return Response(status_code=304, headers=headers)
+    asked = request.headers.get("if-none-match", "") if request is not None else ""
     # ?w= asks for a downscaled variant — tiles shouldn't pull multi-MB originals.
-    # An undecodable source just serves the original bytes.
     if request is not None and (w := request.query_params.get("w", "")).isdigit():
-        tp = store.thumbs.thumbnail(p, _thumb_width(int(w)))
+        bucket = _thumb_width(int(w))
+        tag = f'"{source}-{bucket}-{store.thumbs.generation()}"'
+        headers = {"Cache-Control": cache, "ETag": tag}
+        if tag in asked:
+            return Response(status_code=304, headers=headers)
+        tp = store.thumbs.thumbnail(p, bucket)
         if tp is not None:
             try:
                 thumb = tp.read_bytes()
@@ -857,6 +883,11 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
             if thumb is not None:
                 return Response(content=thumb, media_type=_IMAGE_MEDIA[tp.suffix[1:]],
                                 headers=headers)
+        # No thumbnail: the original stands in, revalidated every time.
+        cache, etag = "no-cache", f'"{source}-full"'
+    headers = {"Cache-Control": cache, "ETag": etag}
+    if etag in asked:
+        return Response(status_code=304, headers=headers)
     try:
         content = p.read_bytes()
     except FileNotFoundError:

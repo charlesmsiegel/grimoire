@@ -5,6 +5,7 @@ import { campaignsChanged, configChanged, noticesChanged,
   shellChanged } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
+import { THUMB_REV } from "./thumbs";
 // `errorText` and `isOffline` used to live here, next to `ApiError`. They are
 // in `./errors` now — a leaf with no imports of its own, for the reason its
 // docstring gives: the components that render an error are tested against a
@@ -933,10 +934,16 @@ function entityBase(scope: EntityScope): string {
 export type ImageOpts = { w?: number; v?: string | null };
 
 /** `path` with `opts` as its query. One builder for every image URL, so `w`
- *  and `v` read the same way, in the same order, wherever a picture is drawn. */
+ *  and `v` read the same way, in the same order, wherever a picture is drawn.
+ *  A `w` brings `t` with it, the thumbnail pipeline's revision (`THUMB_REV`),
+ *  so a thumbnail made the old way is never the one a browser has cached for
+ *  the URL. */
 function withImageQuery(path: string, opts?: ImageOpts): string {
   const q = new URLSearchParams();
-  if (opts?.w) q.set("w", String(opts.w));
+  if (opts?.w) {
+    q.set("w", String(opts.w));
+    q.set("t", String(THUMB_REV));
+  }
   if (opts?.v) q.set("v", opts.v);
   const qs = q.toString();
   return qs ? `${path}?${qs}` : path;
