@@ -277,3 +277,30 @@ test("a four-figure budget is grouped like every other number here", async () =>
 
   expect(await screen.findByText(/\$1,250\.00 of \$2,500\.00/)).toBeInTheDocument();
 });
+
+test("reads a parent already holds are rendered, not asked for again", async () => {
+  // The play view reads the scene's usage and the campaign's budget once a turn
+  // for its own chips and banner; the inspector's Cost section asking again was
+  // a second ledger scan for the same answer.
+  const saved = vi.fn();
+  render(<CostPanel cid="c" sid="s" usage={USAGE as never} budget={SET as never}
+                    onBudgetSaved={saved} />);
+
+  expect(await screen.findByText(/\$0\.0084 · 2 turns/)).toBeInTheDocument();
+  expect(screen.getByText(/\$2\.00 of \$10\.00/)).toBeInTheDocument();
+  expect(api.getSceneUsage).not.toHaveBeenCalled();
+  expect(api.getCampaignBudget).not.toHaveBeenCalled();
+
+  // A save goes to the server as ever, and the parent hears what it stored --
+  // with the campaign, since that is whose budget it now holds.
+  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(saved).toHaveBeenCalledWith("c", SET));
+});
+
+test("a parent still reading renders as a read in flight, not as nothing spent", async () => {
+  render(<CostPanel cid="c" sid="s" usage={null} budget={null} />);
+  await screen.findByText((_, el) => el?.classList.contains("cost-panel") ?? false);
+  expect(screen.queryByText(/\$0\.00/)).toBeNull();
+  expect(screen.queryByText("Campaign budget")).toBeNull();
+  expect(api.getSceneUsage).not.toHaveBeenCalled();
+});

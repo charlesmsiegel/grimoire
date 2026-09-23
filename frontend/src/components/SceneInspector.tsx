@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
          type ReactNode } from "react";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
   type PinRule, type PromptDiff, type PromptEntry, type PromptSnapshot,
-  type RollingSummary, type SceneBreak,
+  type RollingSummary, type SceneBreak, type CampaignBudget, type SceneUsage,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { THUMB } from "../api/thumbs";
@@ -113,8 +113,17 @@ function BriefingRows({ label, rows }:
   );
 }
 
-export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless,
-                                 sceneLocked, onRenaming, posts }:
+/** The scene's rail of everything the next prompt is made of.
+ *
+ *  Memoized: the play view re-renders on every composer keystroke and every
+ *  streamed delta, and hands this stable handlers, so it re-renders for what
+ *  it shows -- the scene, the refresh beat, the cost reads -- and not for those.
+ *  With a large campaign that matters, because its pickers are an option per
+ *  character and per location. */
+export const SceneInspector = memo(function SceneInspector({
+  cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless, sceneLocked, onRenaming, posts,
+  usage, budget, onBudgetSaved,
+}:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
     onSceneRenamed?: (id: string) => void; pcless?: boolean;
     /** A turn is streaming into this scene, so anything that can rename its
@@ -132,13 +141,24 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
      *  The caller's count is windowed (#94) and so understates a long
      *  transcript — which does not matter here, because a window is a whole page
      *  and the only distinction this draws is "barely started or not". */
-    posts?: number }) {
+    posts?: number;
+    /** The reads the Cost section renders, when the caller already holds them
+     *  (see `CostPanel`); left out, that section reads them itself. */
+    usage?: SceneUsage | null;
+    budget?: CampaignBudget | null;
+    onBudgetSaved?: (cid: string, budget: CampaignBudget) => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
   const [locImages, setLocImages] = useState<string[]>([]);
-  const [ctx, setCtx] = useState<SceneContext | null>(null);
+  // The live composition, stamped with the campaign, scene and refresh it was
+  // composed for: the scene half so a switch never paints one scene's prompt
+  // under another's heading, the refresh half so a shut section can tell a
+  // figure that is still current from one a turn has since moved (see the
+  // effect that reads it).
+  const [ctx, setCtx] =
+    useState<{ cid: string; sid: string; key: number; data: SceneContext } | null>(null);
   // Held with the campaign and scene it came from, exactly like `brief` above
   // and for the same reason: the inspector stays mounted across both switches,
   // so a bare array keeps the previous scene's turns on screen until the new
@@ -362,8 +382,16 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.listCampaignPCs(cid).then(setPcs).catch(() => setPcs([]));
   }, [cid]);
 
-  const addOptions = (addKind === "characters" ? chars : pcs)
-    .filter((o) => !cast.some((a) => a.kind === addKind && a.id === o.id));
+  // The pickers' options, built once per change to what they list rather than
+  // on every render. A campaign's cast and location lists are the longest
+  // things in this panel, and rebuilding an `<option>` per record on each of
+  // its re-renders was most of what an open inspector cost.
+  const addOptions = useMemo(() => {
+    const seated = new Set(cast.filter((a) => a.kind === addKind).map((a) => a.id));
+    return (addKind === "characters" ? chars : pcs)
+      .filter((o) => !seated.has(o.id))
+      .map((o) => <option key={o.id} value={o.id}>{o.name}</option>);
+  }, [addKind, chars, pcs, cast]);
 
   async function addCastMember() {
     if (!addActorId) return;
@@ -525,7 +553,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     reloadPins();
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
-    api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
+    // The live composition is NOT read here -- see the effect below `seen`.
 
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     const token = ++readToken.current;
@@ -588,11 +616,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     return () => { live = false; };
   }, [cid, pinKind, pinOptionKey, pinOptions]);
 
-  const pinChoices: { id: string; name: string }[] =
-    pinKind === "characters" ? chars
-    : pinKind === "pcs" ? pcs
-    : pinKind ? pinOptions[pinOptionKey] ?? []
-    : [];
+  const pinChoices = useMemo(() => {
+    const rows: { id: string; name: string }[] =
+      pinKind === "characters" ? chars
+      : pinKind === "pcs" ? pcs
+      : pinKind ? pinOptions[pinOptionKey] ?? []
+      : [];
+    return rows.map((o) => <option key={o.id} value={o.id}>{o.name}</option>);
+  }, [pinKind, chars, pcs, pinOptions, pinOptionKey]);
 
   // Its own effect rather than a line in the load above, because it is the one
   // request here whose late answer can be *wrong* rather than merely stale: a
@@ -767,9 +798,36 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const seen = useMemo(
     () => (frozen && frozen.cid === cid && frozen.sid === sid ? frozen.data : null),
     [frozen, cid, sid]);
+  // The live composition (GET /context) is the most expensive read this panel
+  // makes: the server assembles the whole next prompt to answer it. It used to
+  // ride the load effect above, and so was made on every select and every
+  // `refreshKey` bump -- after every turn -- whether or not anything showed it.
+  // It is asked for only while its answer is on screen: the Context section
+  // open, and no past turn selected in its place (`shown` prefers the frozen
+  // snapshot, and a comparison replaces the breakdown and asks the server for
+  // the live side itself). An answer already on hand for this scene and this
+  // refresh is not asked for again when the section reopens.
+  const liveShown = !collapsed.context && !seen;
+  const ctxReq = useRef({ token: 0, key: "" });
+  const ctxKey = `${cid}/${sid}/${refreshKey}`;
+  const ctxHeld = ctx !== null && `${ctx.cid}/${ctx.sid}/${ctx.key}` === ctxKey;
+  useEffect(() => {
+    if (!liveShown || ctxHeld || ctxReq.current.key === ctxKey) return;
+    // A token as well as the key: the newest request is the only one that may
+    // write, whichever order the answers come back in.
+    const req = { token: ctxReq.current.token + 1, key: ctxKey };
+    ctxReq.current = req;
+    api.getSceneContext(cid, sid)
+      .then((data) => { if (ctxReq.current === req) setCtx({ cid, sid, key: refreshKey, data }); })
+      .catch(() => { if (ctxReq.current === req) setCtx(null); })
+      // Settled, so a later reopen for the same key may ask again if this one
+      // failed; a success is `ctxHeld` from here on.
+      .finally(() => { if (ctxReq.current === req) ctxReq.current = { ...req, key: "" }; });
+  }, [cid, sid, refreshKey, ctxKey, liveShown, ctxHeld]);
+  const liveCtx = ctx && ctx.cid === cid && ctx.sid === sid ? ctx.data : null;
   // A selected past turn wins over the live composition — that IS the feature.
   // Both are the same shape, so everything below reads one variable.
-  const shown = useMemo(() => seen ?? ctx, [seen, ctx]);
+  const shown = useMemo(() => seen ?? liveCtx, [seen, liveCtx]);
   // Empty until the rows on hand are this scene's, so a switch shows "no
   // captured turns yet" for a moment rather than the previous scene's list.
   const shownTurns = useMemo(
@@ -1014,6 +1072,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   }
 
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
+
+  const hereId = setting?.current?.id;
+  const moveOptions = useMemo(
+    () => locations.filter((l) => l.id !== hereId)
+      .map((l) => <option key={l.id} value={l.id}>{l.name}</option>),
+    [locations, hereId]);
 
   // Deliberately keyed on cid+sid and NOT on `refreshKey`, which is the same
   // call `LedgerPanel` makes and states its reason for: a refresh re-reads the
@@ -1276,7 +1340,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           <select aria-label="Character or PC to add" value={addActorId}
                   onChange={(e) => setAddActorId(e.target.value)}>
             <option value="">— pick —</option>
-            {addOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            {addOptions}
           </select>
           {addKind === "characters" && !pcless && (
             <select aria-label="Role for new cast member" value={addRole}
@@ -1341,7 +1405,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           <select aria-label="Record to pin or exclude" value={pinTarget}
                   onChange={(e) => setPinTarget(e.target.value)}>
             <option value="">— pick —</option>
-            {pinChoices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            {pinChoices}
           </select>
           <select aria-label="Pin or exclude" value={pinMode}
                   onChange={(e) => setPinMode(e.target.value as "pin" | "exclude")}>
@@ -1394,9 +1458,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <select aria-label="Move to location" value={locPick}
                     onChange={(e) => setLocPick(e.target.value)}>
               <option value="">Move to…</option>
-              {locations
-                .filter((l) => l.id !== setting?.current?.id)
-                .map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              {moveOptions}
             </select>
             <button className="primary" onClick={moveTo} disabled={!locPick}>Move to</button>
           </div>
@@ -1497,7 +1559,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                    title={shownDiff ? "Context (compared)"
                           : frozen ? "Context (past turn)" : "Context"}
                    collapsed={!!collapsed.context} onToggle={toggleSection}
-                   extra={!shownDiff && shown && contextPercent(shown, models) > 0
+                   // Shut, the badge is only as good as the read behind it, and
+                   // a shut section is not re-read per turn -- so a figure a turn
+                   // has since moved is not shown as though it were current.
+                   extra={!shownDiff && shown && (seen || liveShown || ctxHeld)
+                          && contextPercent(shown, models) > 0
                      ? <span className="ctx-pct">{contextPercent(shown, models)}%</span> : undefined}>
         {seen && (
           <div className="ctx-frozen">
@@ -1572,7 +1638,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           one worth pushing the scene's own state down the rail for. */}
       <SideSection id="cost" title="Cost" collapsed={collapsed.cost ?? true}
                    onToggle={toggleSection}>
-        <CostPanel cid={cid} sid={sid} refreshKey={refreshKey} />
+        <CostPanel cid={cid} sid={sid} refreshKey={refreshKey}
+                   usage={usage} budget={budget} onBudgetSaved={onBudgetSaved} />
       </SideSection>
 
       <SideSection id="turns" title="Turn history" collapsed={!!collapsed.turns} onToggle={toggleSection}>
@@ -1596,4 +1663,4 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       {drawer && <RecordDrawer cid={cid} sid={sid} target={drawer} onClose={() => setDrawer(null)} />}
     </aside>
   );
-}
+});
