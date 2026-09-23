@@ -272,13 +272,22 @@ test("shows the world name and opens on the Overview", async () => {
   expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
 });
 
+/** A world read whose stored counts are the ones given, every other kind 0. */
+function worldWithCounts(counts: Record<string, number>) {
+  return {
+    meta: { id: "w", name: "Drowned Realm" }, body: "",
+    counts: { characters: 0, pcs: 0, creatures: 0, groups: 0, locations: 0,
+              items: 0, lore: 0, greetings: 0, ...counts },
+  };
+}
+
 test("the index is grouped who / where & what / writing, each row counted", async () => {
-  (api.listCharacters as any).mockResolvedValue([
-    { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
-    { id: "aud", name: "Aud", default_version: "main", versions: [{ id: "main", name: "main" }] },
-  ]);
-  (api.listEntities as any).mockImplementation((_scope: unknown, kind: string) =>
-    Promise.resolve(kind === "locations" ? [{ id: "the-wall", name: "The Wall" }] : []));
+  (api.getWorld as any).mockResolvedValue(
+    worldWithCounts({ characters: 2, locations: 1, lore: 7, greetings: 5 }));
+  // The lists say something else on purpose: on the world shape the numbers
+  // come from the world read the header already makes, and a list that
+  // disagreed would be answering a question nobody asked it.
+  (api.listCharacters as any).mockResolvedValue([]);
   (api.listTags as any).mockResolvedValue({ tide: "Tide", dusk: "Dusk", salt: "Salt" });
   renderAt();
   await screen.findByText("Drowned Realm");
@@ -286,14 +295,40 @@ test("the index is grouped who / where & what / writing, each row counted", asyn
   for (const label of ["Who", "Where & what", "Writing"]) {
     expect(screen.getByText(label)).toBeInTheDocument();
   }
-  // A live count, not the world's stored one: it is the same read the section's
-  // own editor makes, so both shapes of the route can use it.
   await waitFor(() => expect(indexRow("Characters")).toHaveTextContent("2"));
   expect(indexRow("Locations")).toHaveTextContent("1");
+  expect(indexRow("Lore")).toHaveTextContent("7");
+  expect(indexRow("Greetings")).toHaveTextContent("5");
   expect(indexRow("Items")).toHaveTextContent("0");
   expect(indexRow("Tags")).toHaveTextContent("3");
   // ...and the facts a world has that are not records in it
   expect(screen.getByText("3 tags · 2 campaigns")).toBeInTheDocument();
+});
+
+test("opening a world counts it without listing a single section", async () => {
+  // Nine full lists -- every character card parsed, every entity token-counted
+  // -- were downloaded on every visit just to be counted, while the world read
+  // beside them already carried the counts as directory tallies.
+  // Opened on Items rather than the overview, whose setup checklist makes
+  // reads of its own; the Items editor lists items and nothing else.
+  (api.getWorld as any).mockResolvedValue(worldWithCounts({ creatures: 4 }));
+  renderAtUrl("/worlds/w/items");
+  await waitFor(() => expect(indexRow("Creatures")).toHaveTextContent("4"));
+  expect(api.getWorld).toHaveBeenCalledTimes(1);
+  expect((api.listEntities as any).mock.calls).toEqual([[{ kind: "world", id: "w" }, "items"]]);
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  expect(api.listPCs).not.toHaveBeenCalled();
+  expect(api.listGreetings).not.toHaveBeenCalled();
+});
+
+test("a kind the world read did not count is a dash, not a zero", async () => {
+  (api.getWorld as any).mockResolvedValue({
+    meta: { id: "w", name: "Drowned Realm" }, body: "", counts: { characters: 3 },
+  });
+  renderAt();
+  await waitFor(() => expect(indexRow("Characters")).toHaveTextContent("3"));
+  expect(indexRow("Items")).toHaveTextContent("—");
+  expect(indexRow("Items")).not.toHaveTextContent("0");
 });
 
 test("picking a section swaps main and leaves the index standing", async () => {
@@ -1080,19 +1115,76 @@ test("a campaign is sent to its cast, and cannot address a world-only section", 
   await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
 });
 
-test("the world is read once across a section change, while the counts re-read", async () => {
+/** Forget every call so far, keeping what each mock answers. */
+function forgetCalls() {
+  for (const fn of Object.values(api)) {
+    if (typeof fn === "function" && "mockClear" in fn) (fn as any).mockClear();
+  }
+}
+
+test("a section click recounts in one request, and never by listing another section", async () => {
+  // It used to re-download all nine lists on every click to learn one number
+  // that could have moved. The section being left is where a record may have
+  // been added or removed; the world read counts every kind at once, so one
+  // cheap request answers it -- a reclassify's destination included.
+  (api.getWorld as any).mockResolvedValue(worldWithCounts({ items: 2 }));
+  renderAtUrl("/worlds/w/items");
+  await waitFor(() => expect(indexRow("Items")).toHaveTextContent("2"));
+  forgetCalls();
+  // A record was made while Items was open.
+  (api.getWorld as any).mockResolvedValue(worldWithCounts({ items: 3 }));
+
+  fireEvent.click(indexRow("Creatures"));
+  await screen.findByRole("heading", { name: "Creatures" });
+  await waitFor(() => expect(indexRow("Items")).toHaveTextContent("3"));
+  expect(api.getWorld).toHaveBeenCalledTimes(1);
+  // The only list read is the one the Creatures editor makes for its own rows.
+  expect((api.listEntities as any).mock.calls).toEqual([[{ kind: "world", id: "w" }, "creatures"]]);
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  expect(api.listPCs).not.toHaveBeenCalled();
+  expect(api.listGreetings).not.toHaveBeenCalled();
+  expect(api.listTags).not.toHaveBeenCalled();
+  // ...and the page itself is not re-read: the name and cover stand.
+  expect(screen.getByText("Drowned Realm")).toBeInTheDocument();
+});
+
+test("a click from a section with no count asks for nothing", async () => {
   renderAtUrl("/worlds/w");
-  await screen.findByRole("heading", { level: 1 });
-  const worldReads = (api.getWorld as any).mock.calls.length;
-  const countReads = (api.listEntities as any).mock.calls.length;
-  const column = within(await screen.findByRole("complementary"));
-  fireEvent.click(column.getByRole("link", { name: /Lore/ }));
-  // The counts are started inside a promise, so they land a microtask after the
-  // pathname changes -- assert them through waitFor, not on the next line.
-  await waitFor(() =>
-    expect((api.listEntities as any).mock.calls.length).toBeGreaterThan(countReads));
-  expect(lastPath).toBe("/worlds/w/lore");
-  expect((api.getWorld as any).mock.calls.length).toBe(worldReads);
+  await screen.findByRole("heading", { name: "Overview" });
+  forgetCalls();
+  fireEvent.click(indexRow("Groups"));
+  await screen.findByRole("heading", { name: "Groups" });
+  expect(api.getWorld).not.toHaveBeenCalled();
+  expect(api.listTags).not.toHaveBeenCalled();
+});
+
+test("leaving Tags recounts the vocabulary, which the world read does not carry", async () => {
+  (api.listTags as any).mockResolvedValue({ tide: "Tide" });
+  renderAtUrl("/worlds/w/tags");
+  await waitFor(() => expect(indexRow("Tags")).toHaveTextContent("1"));
+  (api.listTags as any).mockResolvedValue({ tide: "Tide", dusk: "Dusk" });
+  fireEvent.click(indexRow("Items"));
+  await waitFor(() => expect(indexRow("Tags")).toHaveTextContent("2"));
+  expect(screen.getByText("2 tags · 2 campaigns")).toBeInTheDocument();
+});
+
+test("a campaign's copy re-lists only the rows a section change could have moved", async () => {
+  // The campaign shape keeps its list counts -- they are overlay unions the
+  // world's tallies know nothing about -- but a click re-lists the section
+  // being left and the one being entered (a reclassify lands there, and that
+  // read is the one its editor is making anyway), not all eight.
+  renderCampaignAtUrl("/campaigns/c1/world/items");
+  await screen.findByRole("heading", { name: "Items" });
+  forgetCalls();
+  fireEvent.click(indexRow("Creatures"));
+  await screen.findByRole("heading", { name: "Creatures" });
+  await waitFor(() => expect(api.listEntities).toHaveBeenCalledWith(
+    { kind: "campaign", id: "c1" }, "items"));
+  const kinds = (api.listEntities as any).mock.calls.map((c: unknown[]) => c[1]);
+  expect(new Set(kinds)).toEqual(new Set(["items", "creatures"]));
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  expect(api.listPCs).not.toHaveBeenCalled();
+  expect(api.listGreetings).not.toHaveBeenCalled();
 });
 
 test("a campaign is redirected before its world id has arrived", async () => {
