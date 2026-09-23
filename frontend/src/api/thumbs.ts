@@ -1,6 +1,7 @@
 /** The widths stored art is asked for through `?w=`, by the slot it fills.
  *
- *  Every image route answers `?w=` with a WebP downscale it caches on disk, and
+ *  Every image route answers `?w=` with a downscale it caches on disk (WebP, or
+ *  JPEG/PNG where the server's Pillow has no WebP writer, as on Android), and
  *  a slot drawing a portrait at a few dozen pixels has no use for the original
  *  -- a grid that asked for originals moved every card's full file and decoded
  *  it at full resolution, which on a phone's WebView is memory as much as time.

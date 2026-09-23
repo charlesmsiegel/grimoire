@@ -780,10 +780,11 @@ def _upload_image_ext(data: bytes) -> str:
 
 
 #: The width a gallery tile requests through `?w=`, which `store.thumbs` honours
-#: with an on-the-fly WebP downscale. Tiles render at 96-154px and 320 covers
-#: retina. Here rather than in each listing route because two routes now build
-#: thumbnail URLs -- the greeting tagger's and the world gallery's -- and a
-#: width that drifts between them is two cache keys for one picture.
+#: with an on-the-fly downscale (WebP, or JPEG/PNG on a Pillow that cannot
+#: write WebP). Tiles render at 96-154px and 320 covers retina. Here rather
+#: than in each listing route because two routes now build thumbnail URLs --
+#: the greeting tagger's and the world gallery's -- and a width that drifts
+#: between them is two cache keys for one picture.
 THUMB_W = 320
 
 #: The widths `?w=` is actually served at. A request snaps UP to the smallest
