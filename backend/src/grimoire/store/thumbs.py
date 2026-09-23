@@ -449,9 +449,10 @@ def _orientation(im: Image.Image) -> Image.Transpose | None:
     None for an upright picture -- and for EXIF too damaged to read, which a
     browser shows as stored as well, rather than costing the thumbnail."""
     try:
-        return _UPRIGHT.get(im.getexif().get(0x0112))
+        tag = im.getexif().get(0x0112)
     except Exception:  # noqa: BLE001 — a malformed EXIF block is an upright picture, not a failed tile
         return None
+    return _UPRIGHT.get(tag) if isinstance(tag, int) else None
 
 
 def _rgb_profile(im: Image.Image) -> bytes | None:
