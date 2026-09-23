@@ -12,6 +12,7 @@ $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $RunDir = "$Root\.run"
 $PidFile = "$RunDir\pids"
 $DistIndex = "$Root\frontend\dist\index.html"
+$StaleNotice = $null
 $BackendPort = 8173
 $VitePort = 5173
 if ($Dev) {
@@ -100,6 +101,24 @@ if (-not $Dev -and (Test-BundleStale)) {
         # place. Serving it beats not starting, and the next launch tries again.
         if (Test-Path -LiteralPath $DistIndex) {
             Write-Host "The UI build failed; serving the previous build. After an update, re-run scripts\windows\install.ps1."
+            # ...but an old UI against an updated backend can fail in ways that
+            # look like bugs, and this console is behind the browser by the
+            # time they do. So the browser is told too, as scripts/unix/run.sh
+            # does: a page opened beside the app.
+            $StaleNotice = "$RunDir\ui-build-failed.html"
+            Set-Content -LiteralPath $StaleNotice -Encoding UTF8 -Value @'
+<!doctype html>
+<meta charset="utf-8">
+<title>Grimoire is running its previous interface</title>
+<body style="font: 16px/1.5 system-ui, sans-serif; max-width: 40em; margin: 3em auto; padding: 0 1em">
+<h1>Grimoire is running its previous interface</h1>
+<p>After the update, rebuilding Grimoire's interface failed, so this launch is
+serving the build from before it. The updated backend may not work with it:
+pages can fail to load or behave oddly.</p>
+<p>To fix it, close Grimoire, run <code>scripts\windows\install.ps1</code> again,
+and start Grimoire. What the build reported is in the console window Grimoire
+runs in.</p>
+'@
         } else {
             Write-Host "The UI build failed and there is no previous build to serve. Re-run scripts\windows\install.ps1."
             exit 1
@@ -256,6 +275,7 @@ try {
     }
 
     Start-Process $Url
+    if ($StaleNotice) { Start-Process $StaleNotice }
 
     Wait-Process -Id ($procs | ForEach-Object { $_.Id }) -ErrorAction SilentlyContinue
 } finally {

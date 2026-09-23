@@ -27,8 +27,11 @@ import json
 import os
 import re
 import shutil
+import socket
 import stat
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -272,6 +275,76 @@ def test_the_unix_scripts_parse(name):
     result = subprocess.run(["bash", "-n", str(UNIX.with_name(name))],
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def _port_is_free(port: int) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _executable(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
+                    reason="no POSIX bash to run it with")
+def test_a_failed_rebuild_is_announced_in_the_browser(tmp_path):
+    """A failed rebuild after an update serves the previous build against the
+    updated backend -- an old UI talking to a newer API. Its one warning went
+    to stderr, which the Linux desktop entry (Terminal=false) sends nowhere,
+    so the player met a UI that broke oddly with nothing saying why. The
+    branch is run for real here, with the build, the backend and the browser
+    stubbed, since nothing else in the gate reaches it."""
+    port = int(_port(RUN_UNIX, "BACKEND_PORT", "BackendPort"))
+    if not _port_is_free(port):
+        pytest.skip(f"port {port} is in use, and the launcher insists on it")
+    root = tmp_path / "grimoire"
+    run = root / "scripts" / "unix" / "run.sh"
+    run.parent.mkdir(parents=True)
+    shutil.copy2(RUN_UNIX, run)
+    built = root / "frontend" / "dist" / "index.html"
+    built.parent.mkdir(parents=True)
+    built.write_text("the previous build", encoding="utf-8")
+    hour_ago = time.time() - 3600
+    os.utime(built, (hour_ago, hour_ago))
+    (root / "frontend" / "src").mkdir()
+    (root / "frontend" / "src" / "main.tsx").write_text("what the update brought", encoding="utf-8")
+    _executable(root / "frontend" / "node_modules" / ".bin" / "vite",
+                "#!/bin/sh\necho 'Could not resolve \"left-pad\"' >&2\nexit 1\n")
+    # The backend: listens where the launcher waits for it, then exits, which
+    # ends the launcher's `wait`.
+    _executable(root / "backend" / ".venv" / "bin" / "python",
+                f"#!/bin/sh\nexec {sys.executable} -c \"import socket, time; "
+                f"s = socket.socket(); s.bind(('127.0.0.1', {port})); s.listen(); time.sleep(2)\"\n")
+    opened = tmp_path / "opened"
+    for opener in ("open", "xdg-open"):
+        _executable(tmp_path / "bin" / opener, f'#!/bin/sh\necho "$1" >> "{opened}"\n')
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}"}
+    done = subprocess.run(["bash", str(run)], env=env, capture_output=True, text=True,
+                          timeout=120, check=False)
+    notice = root / ".run" / "ui-build-failed.html"
+    assert "serving the previous build" in done.stderr, done.stdout + done.stderr
+    assert opened.read_text(encoding="utf-8").splitlines() == [
+        f"http://127.0.0.1:{port}", str(notice)], done.stdout + done.stderr
+    page = notice.read_text(encoding="utf-8")
+    assert "scripts/unix/install.sh" in page and ".run/ui-build.log" in page
+    assert "left-pad" in (root / ".run" / "ui-build.log").read_text(encoding="utf-8")
+
+
+@LAUNCHERS
+def test_both_launchers_open_a_notice_when_serving_a_stale_build(script):
+    """The Windows half of the test above, by shape: nothing here can run
+    PowerShell, and the two launchers are one decision in two files."""
+    text = _text(script)
+    assert "ui-build-failed.html" in text, f"{script.name} no longer writes the notice"
+    assert re.search(r"(open_page|Start-Process) \"?\$(STALE_NOTICE|StaleNotice)", text), (
+        f"{script.name} writes the notice but never opens it")
 
 
 # --- docs ------------------------------------------------------------------

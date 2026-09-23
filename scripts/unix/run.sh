@@ -4,6 +4,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNDIR="$ROOT/.run"
 PIDFILE="$RUNDIR/pids"
 DIST_INDEX="$ROOT/frontend/dist/index.html"
+BUILD_LOG="$RUNDIR/ui-build.log"
+STALE_NOTICE=""
 BACKEND_PORT=8173
 VITE_PORT=5173
 
@@ -94,12 +96,31 @@ if [ "$DEV" = 0 ]; then
     # `vite build`, not `npm run build`: that script's `tsc -b` is a type check,
     # the gate's job rather than a launch's. Errors only -- the bundler's size
     # advisories are for whoever is changing the code, not whoever is playing.
-    if ! (cd "$ROOT/frontend" && node_modules/.bin/vite build --logLevel error); then
+    # Kept in BUILD_LOG as well as shown, since the desktop entry has no
+    # terminal to show it in.
+    if ! (cd "$ROOT/frontend" && node_modules/.bin/vite build --logLevel error) 2>&1 | tee "$BUILD_LOG"; then
       # Vite empties dist/ only once bundling has succeeded, so a failure here
       # (typically dependencies an update changed) leaves the previous build in
       # place. Serving it beats not starting, and the next launch tries again.
       if [ -f "$DIST_INDEX" ]; then
         echo "The UI build failed; serving the previous build. After an update, re-run scripts/unix/install.sh." >&2
+        # ...but an old UI against an updated backend can fail in ways that
+        # look like bugs, and the line above goes nowhere under the Linux
+        # desktop entry (Terminal=false). So the browser is told too: a page
+        # opened beside the app, saying what happened and what fixes it.
+        STALE_NOTICE="$RUNDIR/ui-build-failed.html"
+        cat > "$STALE_NOTICE" <<HTML
+<!doctype html>
+<meta charset="utf-8">
+<title>Grimoire is running its previous interface</title>
+<body style="font: 16px/1.5 system-ui, sans-serif; max-width: 40em; margin: 3em auto; padding: 0 1em">
+<h1>Grimoire is running its previous interface</h1>
+<p>After the update, rebuilding Grimoire's interface failed, so this launch is
+serving the build from before it. The updated backend may not work with it:
+pages can fail to load or behave oddly.</p>
+<p>To fix it, close Grimoire, run <code>scripts/unix/install.sh</code> again,
+and start Grimoire. What the build reported is in <code>$BUILD_LOG</code>.</p>
+HTML
       else
         echo "The UI build failed and there is no previous build to serve. Re-run scripts/unix/install.sh." >&2
         exit 1
@@ -183,7 +204,12 @@ else
   fi
 fi
 
-if command -v open >/dev/null; then open "$URL"
-elif command -v xdg-open >/dev/null; then xdg-open "$URL"
-fi
+open_page() {
+  if command -v open >/dev/null; then open "$1"
+  elif command -v xdg-open >/dev/null; then xdg-open "$1"
+  fi
+}
+open_page "$URL"
+# After the app, so the notice is the tab in front.
+if [ -n "$STALE_NOTICE" ]; then open_page "$STALE_NOTICE"; fi
 wait
