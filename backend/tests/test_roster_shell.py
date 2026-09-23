@@ -41,26 +41,29 @@ def _unaddress(root, aid):
 def _library(monkeypatch, tmp_path):
     """A world and a campaign on it, holding one of every roster case:
 
-    - `mara`       inherited, world tagline and anchor
-    - `seraphine`  inherited, campaign tagline over a world one, campaign
-                   anchor TOMBSTONE over a world anchor
-    - `winifred`   a campaign COPY, renamed campaign-side, whose default
-                   version has gone stale, with a campaign anchor override
-    - `realm-hand` tombstoned campaign-side: listed by neither
-    - `hollow`     a world character with no addressable version: listed by
-                   neither
-    - `saltmarch`  a campaign copy whose WORLD original lost every version but
-                   kept its anchor -- the world scan does not list it, so the
-                   campaign row must not pick the anchor up from it
-    - `gull`       campaign-created, hence detached; the world later took the
-                   same slug with its own tagline and anchor, which must reach
-                   neither field
-    - `ledger`     campaign-created and nothing more
+    - `mara`              inherited, world tagline and anchor
+    - `seraphine`         inherited, campaign tagline over a world one,
+                          campaign anchor TOMBSTONE over a world anchor
+    - `winifred`          a campaign COPY, renamed campaign-side, whose default
+                          version has gone stale, with a campaign anchor
+                          override
+    - `winifred-ashcroft` tombstoned campaign-side: listed by neither
+    - `seraphine-vale`    a world character with no addressable version:
+                          listed by neither
+    - `saltmarch`         a campaign copy whose WORLD original lost every
+                          version but kept its anchor -- the world scan does
+                          not list it, so the campaign row must not pick the
+                          anchor up from it
+    - `mara-vance`        campaign-created, hence detached; the world later
+                          took the same slug with its own tagline and anchor,
+                          which must reach neither field
+    - `winifred-vance`    campaign-created and nothing more
     """
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)
-    for name in ("Mara", "Seraphine", "Winifred", "Realm Hand", "Hollow", "Saltmarch"):
+    for name in ("Mara", "Seraphine", "Winifred", "Winifred Ashcroft", "Seraphine Vale",
+                 "Saltmarch"):
         aid, _ = characters.create_character(wroot, name)
         taglines.write(wroot, aid, f"{name} of the world.")
         voice_anchors.write(wroot, aid, f"{name} speaks plainly.")
@@ -69,7 +72,7 @@ def _library(monkeypatch, tmp_path):
     pcs.create_pc(wroot, "Mara", [])
     for kind in ("locations", "lore"):
         entities.create_entity(wroot, kind, "Saltmarch Quay", "world text")
-        entities.create_entity(wroot, kind, "The Ford", "world text")
+        entities.create_entity(wroot, kind, "Saltmarch Docks", "world text")
 
     cid = campaigns.create_campaign("A Long Run", wid)
     croot = campaigns.campaign_root(cid)
@@ -81,19 +84,19 @@ def _library(monkeypatch, tmp_path):
     characters.set_default_version(croot, "winifred", "older")
     (croot / "characters" / "winifred" / "older.json").unlink()   # stale default
     overlay.set_voice_anchor(cid, "winifred", "Winifred, clipped and dry.")
-    overlay.delete_actor(cid, "characters", "realm-hand")
-    _unaddress(wroot, "hollow")
+    overlay.delete_actor(cid, "characters", "winifred-ashcroft")
+    _unaddress(wroot, "seraphine-vale")
     overlay.materialize_actor(cid, "characters", "saltmarch")
     _unaddress(wroot, "saltmarch")
-    overlay.create_character(cid, "Gull")
-    characters.create_character(wroot, "Gull")               # the world's stranger
-    taglines.write(wroot, "gull", "A stranger's line.")
-    voice_anchors.write(wroot, "gull", "A stranger's voice.")
-    overlay.create_character(cid, "Ledger")
+    overlay.create_character(cid, "Mara Vance")
+    characters.create_character(wroot, "Mara Vance")         # the world's stranger
+    taglines.write(wroot, "mara-vance", "A stranger's line.")
+    voice_anchors.write(wroot, "mara-vance", "A stranger's voice.")
+    overlay.create_character(cid, "Winifred Vance")
 
     overlay.delete_actor(cid, "pcs", "mara")
     overlay.create_pc(cid, "Winifred", [])
-    overlay.delete_entity(cid, "lore", "the-ford")
+    overlay.delete_entity(cid, "lore", "saltmarch-docks")
     overlay.create_entity(cid, "locations", "Tidewatch", "campaign text")
     return cid, wroot
 
@@ -102,7 +105,8 @@ def test_the_roster_is_list_characters_cut_to_three_fields(monkeypatch, tmp_path
     cid, _ = _library(monkeypatch, tmp_path)
     full = overlay.list_characters(cid)
     assert [c["id"] for c in full] == [
-        "gull", "ledger", "mara", "saltmarch", "seraphine", "winifred"]   # the fixture holds
+        "mara", "mara-vance", "saltmarch", "seraphine", "winifred",
+        "winifred-vance"]                                   # the fixture holds
 
     roster = overlay.character_roster(cid)
     assert roster == [{"id": c["id"], "name": c["name"], "default_version": c["default_version"]}
@@ -148,9 +152,9 @@ def test_sidecars_keep_list_characters_precedence(monkeypatch, tmp_path):
     assert not by["seraphine"]["has_voice_anchor"]          # the tombstone wins
     assert by["winifred"]["has_voice_anchor"]               # the campaign's override
     assert not by["saltmarch"]["has_voice_anchor"]          # unlisted world row
-    assert by["gull"] == {"id": "gull", "name": "Gull", "tagline": "",
-                          "has_voice_anchor": False}        # detached: no stranger's fields
-    assert not by["ledger"]["tagline"] and not by["ledger"]["has_voice_anchor"]
+    assert by["mara-vance"] == {"id": "mara-vance", "name": "Mara Vance", "tagline": "",
+                                "has_voice_anchor": False}  # detached: no stranger's fields
+    assert not by["winifred-vance"]["tagline"] and not by["winifred-vance"]["has_voice_anchor"]
 
 
 @pytest.mark.parametrize("kind", FILE_KINDS)
