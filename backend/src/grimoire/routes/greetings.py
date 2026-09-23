@@ -70,12 +70,15 @@ def _with_edges(rows: list[dict], read_plotmap: Callable[[], dict]) -> list[dict
     `UnicodeDecodeError`, are both one). `AttributeError` is one that parses to
     the wrong shape -- a list, or an entry that is not an object -- which both
     `edges_of` and the overlay's detachment filter take as a mapping of
-    mappings, and meet as `.get`/`.items` on something else. Either way the
-    file is garbage, which is the only thing a row can say about it."""
+    mappings, and meet as `.get`/`.items` on something else. `TypeError` is
+    the same garbage one level down: that filter tests every id in an edge
+    list against a set, and an id that is itself a list or an object cannot
+    be hashed. Either way the file is garbage, which is the only thing a row
+    can say about it."""
     try:
         plotmap = read_plotmap()
         edges = {g["id"]: store.greetings.edges_of(plotmap, g["id"]) for g in rows}
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):
         return rows
     return [{**g, "edges": edges[g["id"]]} for g in rows]
 
