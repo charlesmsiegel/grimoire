@@ -181,9 +181,6 @@
   "backend/src/grimoire/store/sync.py": {
     "assignment": 1
   },
-  "backend/src/grimoire/store/thumbs.py": {
-    "assignment": 1
-  },
   "backend/src/grimoire/store/undo.py": {
     "arg-type": 4,
     "assignment": 1,
