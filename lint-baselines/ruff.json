@@ -384,9 +384,6 @@
   "backend/src/grimoire/store/tags.py": {
     "N818": 1
   },
-  "backend/src/grimoire/store/thumbs.py": {
-    "PLW2901": 1
-  },
   "backend/src/grimoire/store/undo.py": {
     "C901": 3,
     "N818": 4
