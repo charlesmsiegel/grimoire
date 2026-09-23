@@ -271,7 +271,12 @@ export function CharacterGrid(
 
   useEffect(() => {
     const from = scope;
-    const current = () => liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+    // `alive` as well as the scope test: a reader who leaves the roster while
+    // its read is in flight has left for a section that may take no module,
+    // and `onListed` landing then would start the page's module reads for it.
+    let alive = true;
+    const current = () => alive
+      && liveScope.current.kind === from.kind && liveScope.current.id === from.id;
     // The revalidation, when this scope painted from remembered rows, and the
     // read, when it did not -- the same call either way.
     reload()
@@ -293,6 +298,7 @@ export function CharacterGrid(
     // A report is a claim about one library ("Derived 12 taglines"); left
     // standing it becomes a claim about whichever library is showing now.
     setTaglineBatchMsg(null);
+    return () => { alive = false; };
   }, [reload, scope]);
 
   // A derive dies with the view that started it — nothing here is a detached
