@@ -12,30 +12,35 @@ import { api } from "../api/client";
 
 const SCOPE = { kind: "world" as const, id: "w" };
 
-/** A greeting summary as `listGreetings` returns one. */
+type EdgeMap = Record<string, { leads_to: string[]; excludes: string[] }>;
+
+/** A greeting summary as `listGreetings` returns one: its plot-map edges ride
+ *  on the row. `edges: undefined` is a row whose map the server could not read. */
 function greeting(id: string, name: string, extra: Record<string, unknown> = {}) {
   return { id, name, character: "seraphine", version: "default", present: [],
-           requires_tags: [], predecessor_join: "all" as const, ...extra };
+           requires_tags: [], predecessor_join: "all" as const,
+           edges: { leads_to: [], excludes: [] }, ...extra };
+}
+
+/** The list rows for `names`, each carrying its edges from `map`. */
+function rows(names: [string, string][], map: EdgeMap, extra: Record<string, Record<string, unknown>> = {}) {
+  return names.map(([id, name]) =>
+    greeting(id, name, { edges: map[id] ?? { leads_to: [], excludes: [] }, ...extra[id] }));
 }
 
 /** The three-greeting plot the suite works against: dawn unlocks ledger, and
  *  ledger and word exclude each other in one direction only. */
-const PLOT: Record<string, { leads_to: string[]; excludes: string[] }> = {
+const PLOT: EdgeMap = {
   dawn: { leads_to: ["ledger"], excludes: [] },
   ledger: { leads_to: [], excludes: ["word"] },
   word: { leads_to: [], excludes: [] },
 };
 
-function plot(map: Record<string, { leads_to: string[]; excludes: string[] }> = PLOT) {
-  (api.listGreetings as any).mockResolvedValue([
-    greeting("dawn", "Saltmarch Dawn"),
-    greeting("ledger", "The Ledger"),
-    greeting("word", "A Quiet Word"),
-  ]);
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
-    meta: greeting(gid, gid), body: "", rev: "r1", predecessors: [],
-    edges: map[gid] ?? { leads_to: [], excludes: [] },
-  }));
+const NAMES: [string, string][] = [
+  ["dawn", "Saltmarch Dawn"], ["ledger", "The Ledger"], ["word", "A Quiet Word"]];
+
+function plot(map: EdgeMap = PLOT, extra: Record<string, Record<string, unknown>> = {}) {
+  (api.listGreetings as any).mockResolvedValue(rows(NAMES, map, extra));
 }
 
 beforeEach(() => {
@@ -50,10 +55,8 @@ const edge = (label: RegExp | string) => screen.getByRole("button", { name: labe
  *  two links between DIFFERENT pairs (every pair in PLOT is already taken, and
  *  this view refuses to draw a second line between one). */
 function plot4() {
-  (api.listGreetings as any).mockResolvedValue([
-    greeting("dawn", "Saltmarch Dawn"), greeting("ledger", "The Ledger"),
-    greeting("word", "A Quiet Word"), greeting("vow", "Vow of Silence"),
-  ]);
+  (api.listGreetings as any).mockResolvedValue(
+    rows([...NAMES, ["vow", "Vow of Silence"]], PLOT));
 }
 
 test("every greeting is a node, and the two edge kinds render distinctly", async () => {
@@ -62,10 +65,14 @@ test("every greeting is a node, and the two edge kinds render distinctly", async
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
   expect(screen.getByRole("button", { name: "Open The Ledger" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Open A Quiet Word" })).toBeInTheDocument();
-  // `fresh`, because this map reads a greeting's edges in order to write them
-  // back: a shared in-flight GET issued before someone else's write answers
-  // from before it, and the next whole-array write would send that back.
-  expect(api.readGreeting).toHaveBeenCalledWith(SCOPE, "dawn", { fresh: true });
+  // ONE read for every greeting's edges -- they ride on the list rows -- where
+  // there used to be one per greeting. `fresh`, because this map reads the
+  // edges in order to write them back: a shared in-flight GET issued before
+  // someone else's write answers from before it, and the next whole-array
+  // write would send that back.
+  expect(api.listGreetings).toHaveBeenCalledTimes(1);
+  expect(api.listGreetings).toHaveBeenCalledWith(SCOPE, { fresh: true });
+  expect(api.readGreeting).not.toHaveBeenCalled();
 
   // An unlock is directed and an exclusion is not, so they are not the same
   // line with a different colour -- they carry different classes and say
@@ -275,12 +282,9 @@ test("a write that fails says so and leaves the drawn map alone", async () => {
     .toBeInTheDocument();
 });
 
-test("a greeting whose edges cannot be read is a node, but not a link source", async () => {
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => {
-    if (gid === "word") throw new Error("boom");
-    return { meta: greeting(gid, gid), body: "", rev: "r1", predecessors: [],
-             edges: PLOT[gid] };
-  });
+test("a greeting listed without its edges is a node, but not a link source", async () => {
+  // A row with no `edges` is one whose plot map the server could not read.
+  plot(PLOT, { word: { edges: undefined } });
   render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open A Quiet Word" });
   await screen.findByText(/could not be read/i);
@@ -295,9 +299,7 @@ test("a greeting whose edges cannot be read is a node, but not a link source", a
   expect(screen.getByRole("button", { name: "Link from The Ledger" })).toBeEnabled();
 
   // Retry re-reads, and the node becomes a source once its edges land
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
-    meta: greeting(gid, gid), body: "", rev: "r1", predecessors: [], edges: PLOT[gid],
-  }));
+  plot();
   fireEvent.click(screen.getByRole("button", { name: /retry/i }));
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Link from A Quiet Word" })).toBeEnabled());
@@ -319,15 +321,11 @@ test("a scope change clears the map instead of leaving the old one clickable", a
 });
 
 test("a cycle is drawn in as many columns as it has greetings, not more", async () => {
-  (api.listGreetings as any).mockResolvedValue([
-    greeting("dawn", "Saltmarch Dawn"),
-    greeting("ledger", "The Ledger"),
-    greeting("word", "A Quiet Word"),
-  ]);
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
-    meta: greeting(gid, gid), body: "", rev: "r1", predecessors: [],
-    edges: { leads_to: [{ dawn: "ledger", ledger: "word", word: "dawn" }[gid]!], excludes: [] },
-  }));
+  plot({
+    dawn: { leads_to: ["ledger"], excludes: [] },
+    ledger: { leads_to: ["word"], excludes: [] },
+    word: { leads_to: ["dawn"], excludes: [] },
+  });
   const { container } = render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
 
@@ -359,18 +357,9 @@ test("two links between one pair are drawn apart so each can be selected", async
 });
 
 test("ids that contain spaces cannot collide into one exclusion", async () => {
-  (api.listGreetings as any).mockResolvedValue([
-    greeting("a", "A"), greeting("b c", "B C"), greeting("a b", "A B"), greeting("c", "C"),
-  ]);
-  const map: Record<string, { leads_to: string[]; excludes: string[] }> = {
-    a: { leads_to: [], excludes: ["b c"] },
-    "a b": { leads_to: [], excludes: ["c"] },
-    "b c": { leads_to: [], excludes: [] },
-    c: { leads_to: [], excludes: [] },
-  };
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
-    meta: greeting(gid, gid), body: "", rev: "r1", predecessors: [], edges: map[gid],
-  }));
+  (api.listGreetings as any).mockResolvedValue(rows(
+    [["a", "A"], ["b c", "B C"], ["a b", "A B"], ["c", "C"]],
+    { a: { leads_to: [], excludes: ["b c"] }, "a b": { leads_to: [], excludes: ["c"] } }));
   const { container } = render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open A B" });
   // ("a", "b c") and ("a b", "c") are different pairs, whatever a naive join says
@@ -447,14 +436,8 @@ test("a conversion whose source is unread is refused before it deletes anything"
   // dawn and ledger exclude each other; ledger's edges never arrive.
   plot({
     dawn: { leads_to: [], excludes: ["ledger"] },
-    ledger: { leads_to: [], excludes: ["dawn"] },
     word: { leads_to: [], excludes: [] },
-  });
-  const real = (api.readGreeting as any).getMockImplementation();
-  (api.readGreeting as any).mockImplementation(async (s: unknown, gid: string) => {
-    if (gid === "ledger") throw new Error("boom");
-    return real(s, gid);
-  });
+  }, { ledger: { edges: undefined } });
   render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByText(/could not be read/i);
 
@@ -469,11 +452,7 @@ test("a conversion whose source is unread is refused before it deletes anything"
 });
 
 test("the edge toolbar is gone while the map is re-reading", async () => {
-  const real = (api.readGreeting as any).getMockImplementation();
-  (api.readGreeting as any).mockImplementation(async (sc: unknown, gid: string) => {
-    if (gid === "word") throw new Error("boom");
-    return real(sc, gid);
-  });
+  plot(PLOT, { word: { edges: undefined } });
   render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByText(/could not be read/i);
   fireEvent.click(edge("Unlocks: Saltmarch Dawn → The Ledger"));
@@ -500,16 +479,7 @@ test("two links between one pair in the same column bow to opposite sides", asyn
   // The pair sits in one column (nothing unlocks either), so both lines take
   // the same-column route -- where taking the lift's SIZE but not its sign
   // gave them one path again, and with it one hit target covering the other.
-  plot({
-    dawn: { leads_to: [], excludes: ["ledger"] },
-    ledger: { leads_to: [], excludes: [] },
-    word: { leads_to: [], excludes: [] },
-  });
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
-    meta: greeting(gid, gid), body: "", rev: "r1", predecessors: [],
-    edges: gid === "dawn" ? { leads_to: ["ledger"], excludes: ["ledger"] }
-                          : { leads_to: [], excludes: [] },
-  }));
+  plot({ dawn: { leads_to: ["ledger"], excludes: ["ledger"] } });
   const { container } = render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
   await waitFor(() => expect(container.querySelectorAll(".pm-edge")).toHaveLength(2));

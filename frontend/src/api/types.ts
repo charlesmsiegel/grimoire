@@ -688,6 +688,13 @@ export type Greeting = {
   sequence: number | null;
   optional: boolean;
   mark?: GreetingMark;   // campaign lists carry it
+  /** The greeting's plot-map edges, exactly as its own read reports them. On
+   *  list rows only (a detail read's `meta` never has it: the detail carries
+   *  `edges` beside it), so a screen that wants every greeting's edges asks
+   *  once rather than once per greeting. ABSENT when the server could not read
+   *  the plot map: that is "unknown", not "no edges", and a caller that writes
+   *  edges back must not treat it as empty. */
+  edges?: Edges;
 };
 export type Edges = { leads_to: string[]; excludes: string[] };
 export type GreetingDetail = { meta: Greeting; body: string; edges: Edges; predecessors: string[];

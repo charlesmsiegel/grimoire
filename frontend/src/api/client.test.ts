@@ -401,6 +401,25 @@ test("scope-parameterized calls route to worlds or campaigns", async () => {
     expect.objectContaining({ method: "GET" }));
 });
 
+test("a fresh greeting list never joins one already on the wire", async () => {
+  // The plot map writes back what this read hands it, so an answer started
+  // before somebody's edge write would be sent back over it.
+  let settleOld: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn()
+    .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))
+    .mockResolvedValue(jsonOk([{ id: "new" }]));
+  globalThis.fetch = fetchMock;
+  const scope = { kind: "world", id: "w" } as const;
+
+  const stale = api.listGreetings(scope);          // in flight, pre-write
+  expect(await api.listGreetings(scope, { fresh: true })).toEqual([{ id: "new" }]);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/worlds/w/greetings",
+    expect.objectContaining({ method: "GET" }));
+  settleOld(jsonOk([{ id: "old" }]));
+  await stale;
+});
+
 test("greeting marks and version picks POST to their campaign routes", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;

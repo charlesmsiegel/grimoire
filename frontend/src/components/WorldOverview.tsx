@@ -27,10 +27,11 @@ export function WorldOverview({
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [checks, setChecks] = useState<Check[]>([]);
   // Reported by the Calendar section below rather than read here: it fetches
-  // the same config anyway, and the rest of this list costs a read of every
-  // greeting, which a save on one checkbox must not re-run. `null` is "not
-  // reported yet, or that read failed" — genuinely unknown, and an unknown flag
-  // is not a chore, so it contributes no row at all.
+  // the same config anyway, and the rest of this list costs four reads -- the
+  // world's untagged-image sweep among them -- which a save on one checkbox
+  // must not re-run. `null` is "not reported yet, or that read failed" —
+  // genuinely unknown, and an unknown flag is not a chore, so it contributes
+  // no row at all.
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
   const scope = useMemo(() => ({ kind: "world" as const, id: wid }), [wid]);
 
@@ -40,17 +41,25 @@ export function WorldOverview({
       const [w, greetings, chars, untagged] = await Promise.all([
         api.getWorld(wid), api.listGreetings(scope), api.listCharacters(scope), api.listUntaggedImages(wid),
       ]);
-      const details = await Promise.all(greetings.map((g) => api.readGreeting(scope, g.id)));
       if (!live) return;
       const c = w.counts ?? {};
-      const hasEdges = details.some((d) => d.edges.leads_to.length > 0 || d.edges.excludes.length > 0);
+      // From the list's own rows, which carry each greeting's edges. This used
+      // to be a read per greeting -- dozens of requests on every open, filling
+      // the connection pool just as the reader clicks through to Characters,
+      // to learn one boolean. A row without `edges` is one whose plot map the
+      // server could not read: unknown, like an unreported calendar flag, and
+      // so no row rather than an open chore that linking greetings would not
+      // clear.
+      const mapped = greetings.every((g) => g.edges);
+      const hasEdges = greetings.some((g) =>
+        !!g.edges && (g.edges.leads_to.length > 0 || g.edges.excludes.length > 0));
       const noTagline = chars.filter((ch) => !ch.tagline).length;
       setCounts(c);
       setChecks([
         { label: "Has a player character", ok: (c.pcs ?? 0) > 0, tab: "pcs" },
         { label: "Has a location", ok: (c.locations ?? 0) > 0, tab: "locations" },
         { label: "Has a greeting", ok: greetings.length > 0, tab: "greetings" },
-        { label: "Plot map has connections", ok: hasEdges, tab: "greetings" },
+        ...(mapped ? [{ label: "Plot map has connections", ok: hasEdges, tab: "greetings" }] : []),
         { label: noTagline
             ? `${noTagline} character${noTagline === 1 ? "" : "s"} missing a tagline`
             : "All characters have taglines", ok: noTagline === 0, tab: "characters" },

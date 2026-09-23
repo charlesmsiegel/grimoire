@@ -4,6 +4,8 @@ routes that open a scene from a greeting."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import store
@@ -45,10 +47,45 @@ def _provided(model, field: str) -> bool:
     return field in fields
 
 
+def _with_edges(rows: list[dict], read_plotmap: Callable[[], dict]) -> list[dict]:
+    """`rows` with each greeting's plot-map `edges` added -- exactly what that
+    greeting's own read reports (`edges_of`) -- from ONE read of the map.
+
+    Every greeting's edges live in that one file, yet the list used to leave
+    them out, so a client that wanted them issued one GET per greeting: the
+    world overview on every open, to decide a single checklist row, and the
+    plot map to draw its lines. Dozens of reads, fired just as the reader
+    reaches for the next page, where one small file was enough.
+
+    A map that cannot be read leaves `edges` OFF every row rather than failing
+    the list. The single-greeting read still fails on it, as it always has; but
+    the list never read the map before it carried edges, and a garbled
+    plotmap.json must not start taking the greetings tab, a character page and
+    the image gallery down with it. Absent, not empty: a client told "no edges"
+    would draw a plot with no lines and let its next whole-array write erase
+    the ones it could not see, so absent means "could not say" and the clients
+    treat it that way.
+
+    `ValueError` is a file that does not parse (`JSONDecodeError`, and a
+    `UnicodeDecodeError`, are both one). `AttributeError` is one that parses to
+    the wrong shape -- a list, or an entry that is not an object -- which both
+    `edges_of` and the overlay's detachment filter take as a mapping of
+    mappings, and meet as `.get`/`.items` on something else. Either way the
+    file is garbage, which is the only thing a row can say about it."""
+    try:
+        plotmap = read_plotmap()
+        edges = {g["id"]: store.greetings.edges_of(plotmap, g["id"]) for g in rows}
+    except (OSError, ValueError, AttributeError):
+        return rows
+    return [{**g, "edges": edges[g["id"]]} for g in rows]
+
+
 # ---- world greetings ----
 @router.get("/worlds/{wid}/greetings")
 def get_world_greetings(wid: str):
-    return store.greetings.list_greetings(_world_root_or_404(wid))
+    root = _world_root_or_404(wid)
+    return _with_edges(store.greetings.list_greetings(root),
+                       lambda: store.greetings.read_plotmap(root))
 
 
 @router.post("/worlds/{wid}/greetings")
@@ -247,7 +284,10 @@ def get_campaign_greetings(cid: str):
     mark_of = dict.fromkeys(marks["played"], "played")
     mark_of.update(dict.fromkeys(marks["completed"], "completed"))
     mark_of.update(dict.fromkeys(marks["skipped"], "skipped"))
-    return [{**g, "mark": mark_of.get(g["id"])} for g in store.overlay.list_greetings(cid)]
+    # `overlay.read_plotmap`, as the single read below uses: the campaign's own
+    # map if it forked one, else the world's with detached greetings filtered.
+    return _with_edges([{**g, "mark": mark_of.get(g["id"])} for g in store.overlay.list_greetings(cid)],
+                       lambda: store.overlay.read_plotmap(cid))
 
 
 @router.post("/campaigns/{cid}/greetings")
