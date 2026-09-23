@@ -353,7 +353,10 @@ const AppRoutes = memo(function AppRoutes(
  *  make nearly every read after play look like news to a dot that says the
  *  same thing. */
 function sameHealth(a: ProviderHealth | null, b: ProviderHealth | null): boolean {
-  if (a === null || b === null) return a === b;
+  // Falsy rather than `=== null`: this runs inside a state updater, so a
+  // payload that left the key out would otherwise throw during render and
+  // take the whole tree down over a status dot.
+  if (!a || !b) return a === b;
   return a.state === b.state && a.kind === b.kind && a.detail === b.detail;
 }
 

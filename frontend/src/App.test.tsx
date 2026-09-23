@@ -486,6 +486,17 @@ test("a navigation's config read that changes nothing commits nothing at all", a
   expect(commits.n).toBe(before);
 });
 
+test("a config with no health verdict survives the comparison that keeps it stable", async () => {
+  // The comparison runs inside a state updater, where a throw is a render
+  // error: a payload that left `health` out must be a no-op, not a blank app.
+  (api.getConfig as any).mockResolvedValue({ ...READY_OPENROUTER, health: undefined });
+  render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
+  await waitFor(() => expect(header().getByTitle(/openrouter/i)).toBeInTheDocument());
+  fireEvent.click(column().getByRole("link", { name: /styles/i }));
+  await waitFor(() => expect(api.getConfig).toHaveBeenCalledTimes(2));
+  expect(await header().findByTitle(/openrouter/i)).toBeInTheDocument();
+});
+
 // ---- first-run setup wizard (#194) ----
 const FIRST_RUN = { ...READY_OPENROUTER, ready: false, active_connection: null, setup_done: "off", first_run: true };
 
