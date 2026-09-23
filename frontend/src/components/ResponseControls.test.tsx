@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { ResponseControls } from "./ResponseControls";
 import { api } from "../api/client";
 
-vi.mock("../api/client", () => ({ api: { getResponse: vi.fn() } }));
+vi.mock("../api/client", () => ({
+  api: { getResponse: vi.fn(), listConnections: vi.fn(), getConfig: vi.fn() },
+}));
 
 function show(extra = {}, { open = true } = {}) {
   const actions = { onDelete: vi.fn(), onReroll: vi.fn(), onActivate: vi.fn(), onReplay: vi.fn() };
@@ -50,6 +52,24 @@ describe("individual response controls", () => {
     expect(screen.queryByLabelText("Response steer")).toBeNull();
     fireEvent.click(summary);
     expect(screen.getByLabelText("Response steer")).toHaveValue("Quieter");
+  });
+  it("shuts the route disclosure with the body, so a reopen reads nothing it does not show", async () => {
+    // The route picker reads the connections and the config as it mounts. The
+    // body is rebuilt on every reopen, and its route disclosure with it, shut:
+    // a picker still mounted inside that shut disclosure would read both again
+    // for a control nobody can see.
+    vi.mocked(api.listConnections).mockResolvedValue([]);
+    vi.mocked(api.getConfig).mockResolvedValue({ active_connection: null } as never);
+    show();
+    fireEvent.click(screen.getByText("Model for this reroll"));
+    await waitFor(() => expect(api.listConnections).toHaveBeenCalledTimes(1));
+    const summary = screen.getByText("Response actions");
+    fireEvent.click(summary);
+    fireEvent.click(summary);
+    await screen.findByText("Model for this reroll");
+    expect(screen.getByText("Model for this reroll").closest("details")).not.toHaveAttribute("open");
+    expect(api.listConnections).toHaveBeenCalledTimes(1);
+    expect(api.getConfig).toHaveBeenCalledTimes(1);
   });
   it("activates the stable variant id from the selected response", async () => {
     vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
