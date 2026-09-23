@@ -2,7 +2,8 @@
 
 A thin Kotlin shell around the real grimoire: the APK packages
 `backend/src` (via Chaquopy) and the freshly built `frontend/dist` (as assets),
-runs the FastAPI app on `127.0.0.1:<random port>` inside the app process, and
+runs the FastAPI app on `127.0.0.1:<port>` inside the app process — a port
+drawn once per install and kept, falling back to one the OS assigns — and
 shows it in a full-screen WebView. There is no Android copy of any grimoire
 code — see `docs/android-architecture.md` for the full design.
 
