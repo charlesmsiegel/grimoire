@@ -1,4 +1,4 @@
-"""Android process entrypoint: bind the socket, configure the environment, run the grimoire server.
+"""Android process entrypoint: configure the environment, bind, run the grimoire server.
 
 Called from Kotlin (ServerRuntime.bootstrap) on a dedicated thread; start_server
 blocks in uvicorn for the life of the process.

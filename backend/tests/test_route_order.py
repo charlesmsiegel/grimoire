@@ -287,3 +287,23 @@ def test_a_domain_router_that_needs_include_router_is_refused(kwargs):
     with pytest.raises(RuntimeError, match="include_router"):
         routes._compose(APIRouter(**arg))
     assert len(routes.router.routes) == before
+
+
+def test_the_refusal_reads_the_domain_router_not_the_aggregate(monkeypatch):
+    """An `include_router` into the aggregate -- the right tool for a router
+    that does need one -- replaces the aggregate's lifespan with a merged one.
+    A check that compared each domain router against the aggregate's lifespan
+    would then refuse every plain router composed after it, naming a lifespan
+    that router does not have."""
+    aggregate = APIRouter()
+    aggregate.include_router(APIRouter(prefix="/elsewhere"))
+    monkeypatch.setattr(routes, "router", aggregate)
+
+    plain = APIRouter()
+
+    @plain.get("/plain")
+    def _plain() -> None:
+        return None
+
+    routes._compose(plain)
+    assert aggregate.routes[-1] is plain.routes[0]

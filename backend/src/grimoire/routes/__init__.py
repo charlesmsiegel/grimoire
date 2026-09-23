@@ -95,6 +95,12 @@ __all__ = [
 
 router = APIRouter()
 
+# The lifespan an APIRouter carries when it was given none -- compared by type,
+# since each router holds its own instance. Read off a fresh router rather than
+# `router`: an include into the aggregate replaces its lifespan with a merged
+# one, after which every plain domain router would look like one with its own.
+_NO_LIFESPAN = type(APIRouter().lifespan_context)
+
 
 def _compose(domain: APIRouter) -> None:
     """Append ``domain``'s route objects to ``router`` -- the objects, not copies.
@@ -115,7 +121,7 @@ def _compose(domain: APIRouter) -> None:
     domain router that grows any of those is refused here rather than
     silently dropped.
     """
-    own_lifespan = type(domain.lifespan_context) is not type(router.lifespan_context)
+    own_lifespan = type(domain.lifespan_context) is not _NO_LIFESPAN
     if domain.on_startup or domain.on_shutdown or own_lifespan:
         raise RuntimeError("a domain router with event handlers or a lifespan "
                            "must be composed with include_router")
