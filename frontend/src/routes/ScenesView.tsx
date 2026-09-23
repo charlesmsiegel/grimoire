@@ -4,11 +4,11 @@ import { NewSceneChooser } from "../components/NewSceneChooser";
 import { SceneImport } from "../components/SceneImport";
 import { api, type CampaignMeta, type CampaignSceneCosts,
          type SceneMeta } from "../api/client";
-import type { ShellPayload } from "../api/types";
 import { PageShell, ColumnSection } from "../components/PageShell";
 import { errorText } from "../api/errors";
 import { bucketPrice, UNPRICED } from "../components/cost";
 import { usePublishShellContext } from "../components/ShellStatus";
+import { useCampaignShell } from "../shell/ShellPayloadContext";
 import { sceneNumber } from "./sceneNumber";
 
 /** Every scene in the campaign, newest first.
@@ -24,10 +24,19 @@ import { sceneNumber } from "./sceneNumber";
  *  already reads. Two columns cannot: **turns** is in the transcript and
  *  **spend** is in the ledger, and reading either per row on the way into this
  *  page would make opening it cost more than playing a turn. So neither is
- *  waited for. Turns arrive for the OPEN scenes only, off `GET /api/shell`,
+ *  waited for. Turns arrive for the OPEN scenes only, off the rail's
+ *  `GET /api/shell` (drawn from `ShellPayloadContext`, not read again here),
  *  which already counts them and bounds that cost by how many are open rather
- *  than by the campaign's length. Spend arrives in a second effect, after the
- *  list is on screen, and a row simply has no figure until it does.
+ *  than by the campaign's length. Which scenes hold a review rides the same
+ *  payload. Spend arrives in a second effect, after the list is on screen, and
+ *  a row simply has no figure until it does.
+ *
+ *  None of them is waited for, the shell included: it used to sit in the same
+ *  `Promise.all` as the list and hold every row until the slowest read in the
+ *  chrome had answered. Until it does, a row says what its frontmatter knows --
+ *  "open" or "absorbed", "Open →" or "Read →" -- and gains its review chip,
+ *  its wrap-up link and its turn count when the payload for this campaign
+ *  lands.
  *
  *  A column that has not arrived renders as nothing, never as `0` or `$0.00` —
  *  the cost rule, and the same sentence the rail's tails are built on.
@@ -67,7 +76,8 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const [costs, setCosts] = useState<CampaignSceneCosts | null>(null);
   const [meta, setMeta] = useState<CampaignMeta | null>(null);
   const [scenes, setScenes] = useState<SceneMeta[] | null>(null);
-  const [shell, setShell] = useState<ShellPayload | null>(null);
+  /** The rail's shell read, only when it is about this campaign. */
+  const { payload: shell, failed: shellFailed, retry: retryShell } = useCampaignShell(cid);
   const [failed, setFailed] = useState(false);
   /** Why the last delete did not happen, or null. Separate from `failed`,
    *  which means the LIST could not be read: one says "look again", the other
@@ -85,10 +95,9 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
     Promise.all([
       api.getCampaign(cid).then((r) => r.meta),
       api.listScenes(cid),
-      api.getShell(cid),
-    ]).then(([m, sc, sh]) => {
+    ]).then(([m, sc]) => {
       if (!live) return;
-      setMeta(m); setScenes(sc); setShell(sh);
+      setMeta(m); setScenes(sc);
     }).catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
   }, [cid]);
@@ -158,7 +167,10 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
    *  Re-read rather than spliced out of `scenes`: deleting cascades into the
    *  absorbed count in the eyebrow and the shell's open/pending sets, and a
    *  local splice would leave both describing a campaign that no longer
-   *  exists. */
+   *  exists. The shell's half is the rail's read, and `deleteScene` already
+   *  tells the rail (`notifyShell`) -- the mutator is the one place every
+   *  delete goes through, so asking again from here would be a second request
+   *  for the same answer. */
   async function remove(s: SceneMeta) {
     if (!window.confirm(`Delete '${s.title}'? This cannot be undone.`)) return;
     setDelFailed(null);
@@ -168,8 +180,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
       setDelFailed(`'${s.title}' was not deleted: ${errorText(err)}`);
       return;
     }
-    const [sc, sh] = await Promise.all([api.listScenes(cid), api.getShell(cid)]);
-    setScenes(sc); setShell(sh);
+    setScenes(await api.listScenes(cid));
   }
 
   const column = (
@@ -267,6 +278,18 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
           <div className="banner error-banner">
             {delFailed}{" "}
             <button className="subtle" onClick={() => setDelFailed(null)}>Dismiss</button>
+          </div>
+        )}
+
+        {/* The shell read failing costs the two things it carries and nothing
+            else. The rows still stand, saying only what their frontmatter
+            knows -- which is the honest rendering of "not counted" -- and a
+            banner over them saying the scenes could not be read would report
+            the wrong thing as broken. */}
+        {!failed && shellFailed && (
+          <div className="banner error-banner" role="status">
+            Waiting reviews and turn counts could not be read.{" "}
+            <button className="subtle" onClick={retryShell}>Try again</button>
           </div>
         )}
 

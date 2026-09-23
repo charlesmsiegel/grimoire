@@ -1,6 +1,6 @@
 import { render, screen, within, fireEvent, waitFor, act } from "@testing-library/react";
 import { MemoryRouter, useNavigate, useParams } from "react-router-dom";
-import { useEffect } from "react";
+import { Profiler, StrictMode, useEffect } from "react";
 import App from "./App";
 import { configChanged } from "./appEvents";
 
@@ -34,11 +34,15 @@ function widthOf(px: number) {
 afterEach(() => widthOf(REAL_WIDTH));
 
 const campaignMounts: string[] = [];
+/** Every render of the play-view stub, so a test can see a route re-rendered
+ *  by something that changed nothing it draws. */
+const campaignRenders = { n: 0 };
 vi.mock("./routes/CampaignView", () => ({
   // Named, and capitalized, so `react-hooks/rules-of-hooks` can see that the
   // hooks below sit inside a component. An anonymous arrow assigned to
   // `default` is a component to vitest and an ordinary function to eslint.
   default: function CampaignViewStub() {
+    campaignRenders.n += 1;
     // Mount-only deps on purpose: this must record one entry per *mount*, so
     // a test can tell a remount (fresh state) from a re-render with a new
     // param (stale state kept). Keyed on [cid] it would fire either way and
@@ -370,8 +374,9 @@ test("a slow pre-mutation config response cannot revert the header behind a newe
   // cannot detach the .then already on it.
   let settleOld: (v: unknown) => void = () => {};
   (api.getConfig as any)
-    // call 1 is App's theme read, which must resolve or nothing renders;
-    // call 2 is this effect's first run, left hanging deliberately.
+    // call 1 is the boot read, which must resolve or nothing renders; call 2
+    // is the first edit's read, left hanging deliberately; call 3 is the
+    // second edit's, which answers first.
     .mockResolvedValueOnce(READY_OPENROUTER)
     .mockReturnValueOnce(new Promise((r) => { settleOld = r; }))
     .mockResolvedValue({
@@ -379,7 +384,9 @@ test("a slow pre-mutation config response cannot revert the header behind a newe
       active_connection: { id: "claude", kind: "claude", name: "Claude", model: "opus" },
     });
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
 
+  act(() => configChanged());
   act(() => configChanged());
   await waitFor(() => expect(header().getByText("OPUS")).toBeInTheDocument());
 
@@ -392,6 +399,91 @@ test("a slow pre-mutation config response cannot revert the header behind a newe
   });
   expect(header().getByText("OPUS")).toBeInTheDocument();
   expect(header().getByTitle(/claude/i)).toBeInTheDocument();
+});
+
+test("booting reads the config once, for the theme and the header both", async () => {
+  // Two effects used to ask on mount -- a cached read for the theme and a
+  // fresh one for the header -- so every cold load paid for the config twice,
+  // and StrictMode made it three.
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  await waitFor(() => expect(header().getByTitle(/openrouter, connected/i)).toBeInTheDocument());
+  expect(api.getConfig).toHaveBeenCalledTimes(1);
+});
+
+test("under StrictMode, booting still asks the server once for each read", async () => {
+  // `main.tsx` mounts under StrictMode, so the dev build rehearses every
+  // mount effect. The rehearsal may call `getConfig` again, but only as a
+  // cached call -- which joins the fresh read the first run started -- and it
+  // must not start a second shell read at all.
+  render(
+    <StrictMode>
+      <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}><App /></MemoryRouter>
+    </StrictMode>);
+  await screen.findByTestId("campaign-view");
+  const fresh = (api.getConfig as any).mock.calls.filter((c: unknown[]) =>
+    (c[0] as { fresh?: boolean } | undefined)?.fresh);
+  expect(fresh).toHaveLength(1);
+  expect(api.getShell).toHaveBeenCalledWith("run");
+  expect((api.getShell as any).mock.calls.filter((c: unknown[]) => c[0] === "run")).toHaveLength(1);
+});
+
+test("a config change that changes nothing a page draws re-renders no route", async () => {
+  // `configChanged` bumps App's revision, re-reads the config, and makes the
+  // rail re-read the shell. Each of those used to rebuild every route element
+  // and re-render the open page -- the play view, here -- for an answer that
+  // drew nothing new: once for the bump, once for the new health object the
+  // read installed, and once more for the rail's request.
+  (api.getConfig as any).mockImplementation(() => Promise.resolve({
+    ...READY_OPENROUTER, health: { ...READY_OPENROUTER.health },
+    active_connection: { ...READY_OPENROUTER.active_connection },
+  }));
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}><App /></MemoryRouter>);
+  await screen.findByTestId("campaign-view");
+  const before = campaignRenders.n;
+  const reads = (api.getConfig as any).mock.calls.length;
+
+  act(() => configChanged());
+  await waitFor(() => expect((api.getConfig as any).mock.calls.length).toBeGreaterThan(reads));
+  await screen.findByTestId("campaign-view");
+  expect(campaignRenders.n).toBe(before);
+});
+
+test("a navigation's config read that changes nothing commits nothing at all", async () => {
+  // The chrome's half of the same rule: the header, the rail and the palette
+  // are re-rendered by a new health object as surely as a route is, and a
+  // config read rides every navigation.
+  (api.getShell as any).mockResolvedValue({
+    campaigns: 1, todo: null,
+    campaign: { id: "run", name: "Run", world: "w", world_name: "Saltmarch", scenes: 2,
+                open: [], ledger_open: 0, sheets: null, unreviewed: null, pending: [],
+                images_undescribed: null },
+  });
+  const commits = { n: 0 };
+  render(
+    <Profiler id="app" onRender={() => { commits.n += 1; }}>
+      <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+        <Jump to="/campaigns/run/scenes/s2" />
+        <App />
+      </MemoryRouter>
+    </Profiler>);
+  await screen.findByTestId("campaign-view");
+
+  // Hold the navigation's read, so everything the navigation itself commits is
+  // done before the answer lands.
+  let land: (v: unknown) => void = () => {};
+  (api.getConfig as any).mockReturnValueOnce(new Promise((r) => { land = r; }));
+  fireEvent.click(screen.getByText("jump"));
+  await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
+  await screen.findByTestId("campaign-view");
+  const before = commits.n;
+
+  await act(async () => {
+    land({ ...READY_OPENROUTER, health: { ...READY_OPENROUTER.health },
+           active_connection: { ...READY_OPENROUTER.active_connection } });
+  });
+  await screen.findByTestId("campaign-view");
+  expect(commits.n).toBe(before);
 });
 
 // ---- first-run setup wizard (#194) ----

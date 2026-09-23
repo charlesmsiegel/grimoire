@@ -1,5 +1,8 @@
+import type { ReactNode } from "react";
 import { render, screen, within, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { useShellPayload } from "../shell/useShellPayload";
+import { ShellPayloadProvider } from "../shell/ShellPayloadContext";
 
 // The three settings panels are driven by their own suites; here they only
 // have to be REACHABLE, which is the bug this covers.
@@ -66,10 +69,23 @@ function withMoney(over: Record<string, unknown>) {
   });
 }
 
+const noop = () => {};
+
+/** The rail's shell read, provided the way `App.Shell` provides it. The hub
+ *  reads its counts from here rather than issuing a read of its own, so the
+ *  `getShell` mock each test stocks still decides what the page draws -- it
+ *  just reaches the page through the chrome, as it does in the app. */
+function WithShell({ children }: { children: ReactNode }) {
+  const shell = useShellPayload("/store", "run", noop);
+  return <ShellPayloadProvider value={{ ...shell, cid: "run" }}>{children}</ShellPayloadProvider>;
+}
+
 function renderHub() {
   return render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Routes><Route path="/campaigns/:cid" element={<CampaignHub />} /></Routes>
+      <WithShell>
+        <Routes><Route path="/campaigns/:cid" element={<CampaignHub />} /></Routes>
+      </WithShell>
     </MemoryRouter>);
 }
 
@@ -307,10 +323,65 @@ test("the ledger is reachable from the hub", async () => {
 test("a failed read is not an empty campaign", async () => {
   // Opposite answers, and the difference has to survive: "could not be read"
   // must never render as "there is nothing here".
+  (api.getCampaign as any).mockRejectedValue(new Error("offline"));
+  renderHub();
+  expect(await screen.findByText(/this campaign could not be read/i)).toBeInTheDocument();
+  expect(screen.queryByText("Next up")).not.toBeInTheDocument();
+});
+
+// ---- the shell read is the rail's, and the page does not wait on it ----
+
+test("the page does not wait on the shell read", async () => {
+  // The slowest read in the chrome, library-scaled. The hub used to hold its
+  // title, its scene rows and its recap -- all of which had arrived -- until
+  // its own copy of it answered.
+  (api.getShell as any).mockReturnValue(new Promise(() => {}));
+  renderHub();
+  expect(await screen.findByRole("heading", { name: "Run One" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "The third" })).toBeInTheDocument();
+  expect(screen.getByText("It ended, and the tide went out.")).toBeInTheDocument();
+  // ...and what the shell answers is pending, not an answer: none of these
+  // sentences may be said about a campaign nobody has counted yet.
+  expect(screen.queryByText(/every scene has been wrapped up/i)).not.toBeInTheDocument();
+  expect(screen.queryByText("Nothing waiting")).not.toBeInTheDocument();
+  expect(screen.queryByText(/nothing is owed/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no count was reported/i)).not.toBeInTheDocument();
+});
+
+test("the money stays pending until a payload about this campaign arrives", async () => {
+  // A payload about another campaign is not a payload about this one -- the
+  // rail can hold one for a moment on the way in -- and the cost rule says a
+  // figure nobody reported for THIS campaign is never drawn at all.
+  (api.getShell as any).mockResolvedValue({
+    ...withMoney({}), campaign: { ...withMoney({}).campaign, id: "elsewhere" },
+  });
+  renderHub();
+  const card = (await screen.findByRole("heading", { name: "Costs" })).closest("section")!;
+  expect(within(card).getByText(/loading/i)).toBeInTheDocument();
+  expect(within(card).queryByText("$4.82")).not.toBeInTheDocument();
+  expect(within(card).queryByText("$0.00")).not.toBeInTheDocument();
+});
+
+test("a failed shell read costs the counts, not the page", async () => {
   (api.getShell as any).mockRejectedValue(new Error("offline"));
   renderHub();
-  expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
-  expect(screen.queryByText("Next up")).not.toBeInTheDocument();
+  expect(await screen.findByText(/counts on this page could not be read/i)).toBeInTheDocument();
+  // The page itself stands: its own reads answered.
+  expect(screen.getByText("Next up")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "The third" })).toBeInTheDocument();
+  expect(screen.queryByText(/this campaign could not be read/i)).not.toBeInTheDocument();
+  // "Could not count" is still never a zero.
+  const card = screen.getByRole("heading", { name: "Costs" }).closest("section")!;
+  expect(within(card).queryByText("$0.00")).not.toBeInTheDocument();
+  expect(screen.queryByText(/every scene has been wrapped up/i)).not.toBeInTheDocument();
+
+  // ...and the notice's retry asks again.
+  (api.getShell as any).mockResolvedValue(shell({ ledger_open: 2 }));
+  const calls = (api.getShell as any).mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("2 still open.")).toBeInTheDocument();
+  expect((api.getShell as any).mock.calls.length).toBeGreaterThan(calls);
+  expect(screen.queryByText(/counts on this page could not be read/i)).not.toBeInTheDocument();
 });
 
 

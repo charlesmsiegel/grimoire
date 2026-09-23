@@ -3,9 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import { api, type CampaignBudget, type CampaignMeta, type CharacterSummary,
          type ChronicleEntry, type PCSummary, type RecordChange,
          type SceneIdea, type SceneMeta } from "../api/client";
-import type { ShellPayload } from "../api/types";
 import { THUMB } from "../api/thumbs";
 import { usePublishShellContext } from "../components/ShellStatus";
+import { useCampaignShell } from "../shell/ShellPayloadContext";
 import { PageShell, ColumnSection } from "../components/PageShell";
 import { errorText } from "../api/errors";
 import { MoneyColumns, money } from "../components/cost";
@@ -126,7 +126,12 @@ function initials(name: string): string {
 export default function CampaignHub() {
   const { cid = "" } = useParams();
   const [meta, setMeta] = useState<CampaignMeta | null>(null);
-  const [shell, setShell] = useState<ShellPayload | null>(null);
+  /** The rail's shell read, when it is about this campaign; `null` while it is
+   *  out, after it failed, or while the rail still holds another campaign's.
+   *  Every figure drawn from it renders as pending under `null` rather than
+   *  as an answer -- "every scene has been wrapped up" and "nothing is owed"
+   *  are statements, and nobody has counted yet. */
+  const { payload: shell, failed: shellFailed, retry: retryShell } = useCampaignShell(cid);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [chronicle, setChronicle] = useState<ChronicleEntry[]>([]);
   const [failed, setFailed] = useState(false);
@@ -135,7 +140,7 @@ export default function CampaignHub() {
   /** The three cards that need a read of their own, each `null` until it has
    *  answered and each allowed to stay `null` for good.
    *
-   *  Loaded in a SECOND effect, after the four reads the page cannot render
+   *  Loaded in a SECOND effect, after the three reads the page cannot render
    *  without. That ordering is the whole point: a hub that waits on the cast,
    *  the budget and the change journal before it can say what to do next has
    *  put three summaries in front of its own headline. Each of these fails
@@ -163,19 +168,21 @@ export default function CampaignHub() {
     if (!cid) return;
     let live = true;
     setFailed(false);
-    // Four reads rather than one aggregate: each already exists and answers its
-    // own question, and inventing a hub-shaped endpoint would be a fifth place
-    // the same counts are derived. `getShell` is the one that already gathers
-    // what the rail needs, so the hub and the rail cannot disagree about how
-    // many scenes are open.
+    // Three reads rather than one aggregate: each already exists and answers
+    // its own question, and inventing a hub-shaped endpoint would be another
+    // place the same counts are derived. The counts themselves -- what is
+    // open, what is waiting, the money -- are the rail's shell read, drawn
+    // from above rather than read again here, so the hub and the rail cannot
+    // disagree about how many scenes are open. It was a fourth member of this
+    // `Promise.all` once, and as the slowest read in the chrome it held the
+    // title and the scene rows back by the whole of its own time.
     Promise.all([
       api.getCampaign(cid).then((r) => r.meta),
-      api.getShell(cid),
       api.listScenes(cid),
       api.getChronicle(cid).catch(() => [] as ChronicleEntry[]),
-    ]).then(([m, s, sc, ch]) => {
+    ]).then(([m, sc, ch]) => {
       if (!live) return;
-      setMeta(m); setShell(s); setScenes(sc); setChronicle(ch);
+      setMeta(m); setScenes(sc); setChronicle(ch);
     }).catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
   }, [cid]);
@@ -238,11 +245,19 @@ export default function CampaignHub() {
   const open = camp?.open ?? [];
   const waiting = camp?.unreviewed ?? 0;
   const pending = camp?.pending ?? [];
-  // A payload that says `null` and a payload that has not arrived are the same
-  // answer to a card -- nobody has counted -- so they collapse here rather than
-  // being told apart three lines further down where only one of them is
-  // reachable.
-  const todo = shell?.todo ?? null;
+  // Three states, like the money below: `undefined` is "not yet" (the page no
+  // longer waits for the shell before drawing), `null` is a payload saying
+  // nobody computed it, and a number is the count. The first two used to
+  // collapse because the page could not render until the payload had landed;
+  // now that it can, "No count was reported" would be said about a read still
+  // on its way.
+  const todo = shell ? shell.todo : undefined;
+  /** What a card drawn from the shell says while it has no answer: pending, or
+   *  -- once the read has failed -- that it could not be read. Never the
+   *  empty-state sentence the card would give a campaign counted at zero. */
+  const unknown = shellFailed
+    ? <p className="field-hint error">Could not be read.</p>
+    : <p className="field-hint">Loading…</p>;
   /** The campaign's all-time money, or `undefined` while the shell read is out.
    *
    *  Three states rather than two, and the middle one is why: `undefined` is
@@ -267,8 +282,11 @@ export default function CampaignHub() {
   /** Delete a scene from the hub's preview.
    *
    *  The same call and the same refusal as the scenes list -- see `remove`
-   *  there. Both reads are redone because the hub draws the campaign's counts
-   *  beside the rows, and a spliced-out row would leave "3 scenes" over two. */
+   *  there. The rows are re-read here, and the counts beside them are re-read
+   *  too, because a spliced-out row would leave "3 scenes" over two -- but the
+   *  counts are the rail's read, and `deleteScene` already tells the rail
+   *  (`notifyShell`), which is the one place every delete goes through. A
+   *  second request from here would only ask the same question twice. */
   async function removeScene(s: SceneMeta) {
     if (!window.confirm(`Delete '${s.title}'? This cannot be undone.`)) return;
     setDelFailed(null);
@@ -278,8 +296,7 @@ export default function CampaignHub() {
       setDelFailed(`'${s.title}' was not deleted: ${errorText(err)}`);
       return;
     }
-    const [sc, sh] = await Promise.all([api.listScenes(cid), api.getShell(cid)]);
-    setScenes(sc); setShell(sh);
+    setScenes(await api.listScenes(cid));
   }
 
   const column = (
@@ -340,17 +357,29 @@ export default function CampaignHub() {
           opinion about before they can read the page. */}
       <div className="page-wide view-anim hub">
         <div className="eyebrow">
-          {[camp?.world_name, camp ? `${camp.scenes} scenes` : null,
+          {/* The world's name rides the campaign's own meta as well, so it
+              need not wait for the shell; the counts beside it do. */}
+          {[camp?.world_name ?? meta?.world_name, camp ? `${camp.scenes} scenes` : null,
             open.length ? `${open.length} open` : null].filter(Boolean).join(" · ")}
         </div>
         <h1 className="screen-title">{meta?.name ?? "…"}</h1>
 
+        {/* The shell read failing costs its counts and nothing else: the page's
+            own reads answered, and a banner saying the campaign could not be
+            read would be the wrong thing reported as broken. */}
+        {shellFailed && (
+          <div className="banner error-banner" role="status">
+            The counts on this page could not be read.{" "}
+            <button className="subtle" onClick={retryShell}>Try again</button>
+          </div>
+        )}
+
         {panel && (
           <section className="hub-panel">
-            {panel === "mechanics" && (
-              <MechanicsConfig cid={cid}
-                               onChanged={() => { void api.getShell(cid).then(setShell); }} />
-            )}
+            {/* Binding a module changes whether the Sheets row and card exist,
+                and the write does not notify the rail on its own. Asking the
+                rail rather than reading here refreshes both at once. */}
+            {panel === "mechanics" && <MechanicsConfig cid={cid} onChanged={retryShell} />}
             {panel === "calendar" && <CalendarConfig scope={{ kind: "campaign", id: cid }} />}
             {panel === "cover" && <CampaignCover cid={cid} />}
           </section>
@@ -359,7 +388,10 @@ export default function CampaignHub() {
         {/* ---- what to do next, before any state ---- */}
         <section className="hub-next">
           <div className="hub-eyebrow">Next up</div>
-          {open.length === 0 && (
+          {/* What is open is the shell's answer. Until it has one, "every
+              scene has been wrapped up" would be a claim nobody made. */}
+          {!camp && unknown}
+          {camp && open.length === 0 && (
             <p className="hub-lead">Every scene has been wrapped up.</p>
           )}
           {open.length === 1 && (
@@ -404,8 +436,10 @@ export default function CampaignHub() {
               the control keeps the name the Scenes page gives it.
               The secondary dress is the cards' foot line: it is the hub's
               existing "lighter than a button" link, and no new class is worth
-              a rule of its own for one link. */}
-          {open.length === 0 ? (
+              a rule of its own for one link. Secondary too while nothing is
+              known: promoting it before the shell has said nothing is open
+              would be the same claim in button form. */}
+          {camp && open.length === 0 ? (
             <Link className="hub-primary" to={`/campaigns/${cid}/scenes`}>
               + New scene →
             </Link>
@@ -424,8 +458,10 @@ export default function CampaignHub() {
             that with "Nothing waiting. Every proposal has been decided",
             which is the one thing it must never say while something is
             waiting. `ScenesView` keys off `pending` and has always been right
-            about this. */}
-        {pending.length > 0 ? (
+            about this. Absent entirely until the shell has answered, for the
+            same reason: "Nothing waiting" before anyone has looked is that
+            sentence again, and the notice above covers a read that failed. */}
+        {!camp ? null : pending.length > 0 ? (
           <section className="hub-waiting">
             <div className="hub-eyebrow">Waiting on you</div>
             <p>
@@ -503,7 +539,7 @@ export default function CampaignHub() {
           <Card title="Costs"
                 foot={<Link to={`/campaigns/${cid}/costs`}>The full ledger →</Link>}>
             {money_ === undefined ? (
-              <p className="field-hint">Loading…</p>
+              unknown
             ) : money_.partial ? (
               // The one thing a cost surface may not do is render "could not
               // count" as $0.00, and this is where that case arrives.
@@ -593,11 +629,13 @@ export default function CampaignHub() {
           <Card title="Open threads"
                 tail={camp ? String(camp.ledger_open) : undefined}
                 foot={<Link to={`/campaigns/${cid}/ledger`}>The ledger →</Link>}>
-            <p className="field-hint">
-              {camp?.ledger_open
-                ? `${camp.ledger_open} still open.`
-                : "Nothing is owed."}
-            </p>
+            {!camp ? unknown : (
+              <p className="field-hint">
+                {camp.ledger_open
+                  ? `${camp.ledger_open} still open.`
+                  : "Nothing is owed."}
+              </p>
+            )}
           </Card>
 
           {/* What play has actually changed. The rolling view -- the latest
@@ -635,16 +673,18 @@ export default function CampaignHub() {
               `0` is "nothing outstanding" and renders, `null` is "nobody
               computed it" and must draw no tail at all. The body says which
               of the two it is, because a card with no tail and no sentence
-              cannot. */}
+              cannot -- and a third thing while the payload is still out. */}
           <Card title="To do" tail={count(todo)}
                 foot={<Link to="/todo">Everything noticed →</Link>}>
-            <p className="field-hint">
-              {todo === null
-                ? "No count was reported."
-                : todo
-                  ? `${todo} still to answer.`
-                  : "Nothing outstanding."}
-            </p>
+            {todo === undefined ? unknown : (
+              <p className="field-hint">
+                {todo === null
+                  ? "No count was reported."
+                  : todo
+                    ? `${todo} still to answer.`
+                    : "Nothing outstanding."}
+              </p>
+            )}
           </Card>
 
           {/* What to play next, and where the reason comes from.

@@ -64,11 +64,21 @@ export function useOpenCampaign(dataDir: string): {
   reconcile: (resolved: string | null) => void;
 } {
   const { pathname } = useLocation();
-  const [cid, setCid] = useState<string | null>(() => load(dataDir));
+  // The route's own id first, and only then storage. The effects below reach
+  // the same answer, but a render late -- and the shell read keyed on `cid`
+  // starts in the same commit they do. Seeded from storage alone, every cold
+  // deep link sent a whole `GET /api/shell` about the remembered campaign (or
+  // about none, in a fresh browser) and then the right one beside it; that
+  // read is library-scaled, and two in flight convoy on the server rather
+  // than running side by side.
+  const [cid, setCid] = useState<string | null>(() => cidIn(pathname) ?? load(dataDir));
 
   // The store root can arrive after the first render (App reads config
   // asynchronously) and can change mid-session from Configuration. Either way
   // the answer for the new root is that root's own, never the previous one's.
+  // On a campaign route the effect below runs after this one in the same
+  // flush, and the two updates batch: the route's id still wins, with no
+  // render in between where it did not.
   useEffect(() => { setCid(load(dataDir)); }, [dataDir]);
 
   useEffect(() => {
