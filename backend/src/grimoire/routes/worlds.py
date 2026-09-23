@@ -98,7 +98,16 @@ def get_world(wid: str):
     # learn by fetching every campaign's shelf row (a scene listing each) and
     # filtering. The same rows' `world`, off `list_campaigns`, whose heads are
     # stat-memoized: a stat or two per campaign, and no transcript is read.
-    out["campaigns"] = sum(1 for c in store.campaigns.list_campaigns() if c["world"] == wid)
+    #
+    # It is also the one field here that reads outside this world, and
+    # `list_campaigns` raises on a campaign.md it cannot read. That must cost
+    # the count, not the world: None is "unknown" to the page, the same dash it
+    # drew when its own campaign-shelf read failed.
+    try:
+        out["campaigns"] = sum(1 for c in store.campaigns.list_campaigns()
+                               if c["world"] == wid)
+    except Exception:  # noqa: BLE001 — an unreadable campaign costs the count, no 500
+        out["campaigns"] = None
     return out
 
 

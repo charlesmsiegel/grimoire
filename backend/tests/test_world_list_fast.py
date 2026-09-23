@@ -680,3 +680,22 @@ def test_memo_stamped_stays_bounded(tmp_path):
         statcache.memo_stamped(i, lambda: ("v", (statcache.stamp(tmp_path),)),
                                pool=pool, max_entries=4)
     assert len(pool) <= 4
+
+
+def test_an_unreadable_campaign_costs_the_count_not_the_world_page(realm, client):
+    """The count is the one field of GET /worlds/{wid} that reads outside the
+    world, and `list_campaigns` raises on a campaign.md it cannot read. Before
+    the count moved here the page learned it from its own GET /campaigns and
+    drew a dash when that failed; the world read itself never depended on
+    another folder. It still must not: an unknown count is None, which the page
+    renders as unknown, and the rest of the world answers as before."""
+    wid = realm["wid"]
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    mp = campaigns.campaign_root(cid) / "campaign.md"
+    mp.unlink()
+    mp.mkdir()                      # present, so listed -- and unreadable
+    r = client.get(f"/api/worlds/{wid}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["campaigns"] is None
+    assert body["meta"]["name"] == "Realm"
