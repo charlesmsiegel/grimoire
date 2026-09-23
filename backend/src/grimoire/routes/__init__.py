@@ -102,30 +102,57 @@ router = APIRouter()
 _NO_LIFESPAN = type(APIRouter().lifespan_context)
 
 
+def _includes_nest() -> bool:
+    """Does ``include_router`` nest a router rather than copy its routes?
+
+    Newer FastAPI -- the desktop's -- includes a router as one branch whose
+    routes are analysed on the first request that walks into it; older FastAPI
+    -- the Android pin, < 0.116 -- copies every route at include time and
+    re-analyses each copy. Asked of FastAPI rather than of a version number:
+    an empty router leaves a branch behind only where includes nest, and costs
+    no analysis on either kind."""
+    probe = APIRouter()
+    probe.include_router(APIRouter())
+    return bool(probe.routes)
+
+
+_NESTED = _includes_nest()
+
+
 def _compose(domain: APIRouter) -> None:
-    """Append ``domain``'s route objects to ``router`` -- the objects, not copies.
+    """Add ``domain``'s routes to ``router``: included where includes nest, and
+    appended by reference -- the route objects, not copies -- where they copy.
 
-    Not ``include_router``: on FastAPI < 0.116, the Android pin, an include
-    re-analyses every route it copies (signature, dependencies, response
-    model), and ``main.create_app`` includes this aggregate into the app, which
-    analyses them all again anyway. Including here as well cost one extra
-    analysis of the whole API at every cold start, for an aggregate nothing
-    serves directly. (The lazy FastAPI the desktop runs analyses each route
-    once either way; there an include only nests one more wrapper to walk.)
+    Where an include copies (FastAPI < 0.116, the Android pin) it re-analyses
+    every route it copies (signature, dependencies, response model), and
+    ``main.create_app`` includes this aggregate into the app, which analyses
+    them all again anyway. Including here as well cost one extra analysis of
+    the whole API at every cold start, for an aggregate nothing serves
+    directly. Appending the objects costs none, and loses nothing an include
+    would have applied: a router's own prefix, tags, dependencies and default
+    response class are baked into each route when ``@router.get`` declares it,
+    and the include's arguments would come from this call, which passes none.
 
-    Nothing an include would have applied is lost. A router's own prefix,
-    tags, dependencies and default response class are baked into each route
-    when ``@router.get`` declares it, and the include's arguments would come
-    from this call, which passes none. What an include copies off the router
-    *itself* is its startup and shutdown handlers and its lifespan, so a
-    domain router that grows any of those is refused here rather than
-    silently dropped.
+    Where an include nests (the desktop's FastAPI), each domain has to stay a
+    branch of its own. A branch's routes are analysed on the first request
+    that walks into it; a flat aggregate is one branch, so whichever request
+    came first -- a world's character list, from a tab left open across a
+    restart -- paid for all ~450 routes before it was answered, where one
+    branch per domain has it pay for the few domains it walks past.
+
+    What an include copies off the router *itself* is its startup and shutdown
+    handlers and its lifespan, which appending would drop. A domain router
+    that grows any of those is refused on either kind of FastAPI, so a router
+    that would only work on the desktop fails the gate there too.
     """
     own_lifespan = type(domain.lifespan_context) is not _NO_LIFESPAN
     if domain.on_startup or domain.on_shutdown or own_lifespan:
         raise RuntimeError("a domain router with event handlers or a lifespan "
                            "must be composed with include_router")
-    router.routes.extend(domain.routes)
+    if _NESTED:
+        router.include_router(domain)
+    else:
+        router.routes.extend(domain.routes)
 
 
 # `world_images` AFTER `characters`: `/worlds/{wid}/images/{name}` generalizes
