@@ -119,12 +119,17 @@ def suggestions(cid: str, scene_id: str) -> list[dict]:
     appeared_chars = {actor_id for ref in paths.record(cid) for k, actor_id in [paths._split(ref)] if k == "characters"}
     dismissed = set(scenes_read.get_dismissed(cid, scene_id))
     in_scene_chars = [a["id"] for a in cast.scene_cast(cid, scene_id) if a["kind"] == "characters"]
-    candidates = [c for c in overlay.list_characters(cid)
+    # The roster rather than the full listing: a candidate is matched by name
+    # and reported by id, and the full row's image listing per character was
+    # most of this route's cost -- and of the turn's, which ranks the
+    # off-scene directory through here (`context.cast._scope_known`).
+    v = overlay.view(cid)
+    candidates = [c for c in overlay.character_roster(cid, v=v)
                   if c["id"] not in appeared_chars and c["id"] not in dismissed and c["id"] not in in_scene_chars]
 
     mentioned_by: dict[str, list[str]] = {}
     for char_id in in_scene_chars:
-        card = characters.read_card(overlay.char_root(cid, char_id), char_id,
+        card = characters.read_card(overlay.char_root(cid, char_id, v=v), char_id,
                                     versions.locked_version(cid, "characters", char_id))
         d = card.get("data", {})
         text = "\n".join(d.get(f) for f in ("description", "personality", "scenario", "first_mes", "mes_example")

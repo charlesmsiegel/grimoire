@@ -134,7 +134,7 @@ def _images_undescribed(wid: str) -> int | None:
         return None
 
 
-def _campaign_block(cid: str) -> dict | None:
+def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
     """The open campaign's badges, or ``None`` if `cid` does not resolve.
 
     ``None`` rather than a 404 on purpose: the rail asks with an id remembered
@@ -143,6 +143,9 @@ def _campaign_block(cid: str) -> dict | None:
     ordinary state, not an error, and answering it with a status code would
     make the client treat a dropped connection and a deleted campaign as the
     same event -- which is exactly the confusion that erases valid state.
+
+    `ctx` is the request's to-do context for `cid`, shared with the badge
+    count so the sheet tally both of them need is swept once.
     """
     try:
         meta = store.campaigns.read.read_campaign(cid)["meta"]
@@ -170,8 +173,9 @@ def _campaign_block(cid: str) -> dict | None:
     # rather than by the campaign's age -- the reason it is here and the
     # ledger's lifetime rollup is not. `{}` means no mechanics module is
     # bound, which is a legal state and not a missing answer, so it reports
-    # None and the row goes quiet rather than claiming 0 of 0.
-    cov = store.sheets.coverage(cid)
+    # None and the row goes quiet rather than claiming 0 of 0. Through the
+    # shared ctx: the sheet chore behind the badge asks the same question.
+    cov = ctx.coverage()
     sheets = None
     if cov:
         sheets = {"sheeted": sum(k["sheeted"] for k in cov.values()),
@@ -275,14 +279,18 @@ def get_shell(campaign: str = ""):
     them level -- a seventh section would ship a badge of six.
     """
     campaigns = store.campaigns.read.list_campaigns()
-    block = _campaign_block(campaign) if campaign else None
-    if not campaign:
-        fallback = _most_recent(campaigns)
-        block = _campaign_block(fallback) if fallback else None
+    cid = campaign or _most_recent(campaigns)
+    # One to-do context for the request, built for the campaign the block
+    # answers about and handed to both halves: the rail's sheet row and the
+    # badge's sheet chore are one tally. Per request and thrown away after,
+    # as `_Ctx` requires.
+    ctx = todo_routes._Ctx(cid)
+    block = _campaign_block(cid, ctx) if cid else None
     # The badge is scoped to the campaign the payload actually carries, so the
     # rail's count and the Todo page below it are answering about the same
     # campaign. An id that resolved to nothing scopes to the library, which is
-    # what the reader is left looking at.
+    # what the reader is left looking at -- with a context of its own, since
+    # the shared one describes the campaign that did not resolve.
     return {
         "campaigns": len(campaigns),
         "campaign": block,
@@ -294,5 +302,6 @@ def get_shell(campaign: str = ""):
         # before a campaign is chosen, and that is exactly when a freshly
         # imported world's backlog is largest. A `null` here would draw no
         # tail over a list that has entries.
-        "todo": todo_routes.badge_count(block["id"] if block else ""),
+        "todo": (todo_routes.badge_count(cid, ctx) if block
+                 else todo_routes.badge_count("")),
     }

@@ -31,11 +31,14 @@ played in another language gets an empty ``leave`` bucket and a poor
 it works in any language. Cast changes stay available by hand there, which is
 the state every campaign was in before this module.
 
-Cost: one scene read plus the campaign's character, PC and entity listings, per
-call -- which the client makes once per scene read (a landed turn, a scene
-switch). The listings are the same sweep ``context.world_state`` already runs
-every turn, so this re-reads data the turn loop is reading anyway rather than
-adding a new class of work.
+Cost: one scene read plus the campaign's character roster and its PC and
+entity listings, per call -- which the client makes once per scene read (a
+landed turn, a scene switch). The roster is ``overlay.character_roster``, the
+id-and-name cut of the character listing, because a name is all either bucket
+matches on and the full row is an image listing per character. The entity
+listings are the same sweep ``context.world_state`` already runs every turn, so
+this re-reads data the turn loop is reading anyway rather than adding a new
+class of work.
 """
 
 from __future__ import annotations
@@ -152,7 +155,8 @@ def cast_changes(cid: str, scene_id: str) -> dict:
         return {"enter": [], "leave": [], "unknown": []}
     dismissed = set(scenes_read.get_dismissed(cid, scene_id))
     in_scene = cast.scene_cast(cid, scene_id)
-    characters = overlay.list_characters(cid)
+    # The roster, not the full listing: both buckets read an id and a name.
+    characters = overlay.character_roster(cid)
 
     seated = {(a["kind"], a["id"]) for a in in_scene}
     enter = []

@@ -1247,30 +1247,44 @@ def list_characters(cid: str) -> list[dict]:
     # re-resolving in `_patch_char_item` cost three or four reads per returned
     # character on a listing that is already the expensive one -- and this store
     # may sit in a synced folder, where per-file latency is the whole cost.
-    #
-    # ONE directory scan settles which rows even have a campaign-side anchor
-    # file, and only those are read. `set_voice_anchor` writes that file
-    # WITHOUT copying the card down, so an inherited row can carry a campaign
-    # tombstone -- which is why "no campaign card, therefore no campaign
-    # anchor" would be wrong, and is the case this got wrong first.
     world = {c["id"]: c.get("has_voice_anchor", False) for c in world_rows}
+    anchored = _anchor_presence(v, [row["id"] for row in rows],
+                                lambda aid: world.get(aid, False))
+    for row in rows:
+        row["has_voice_anchor"] = anchored[row["id"]]
+    return sorted(rows, key=lambda c: c["id"])
+
+
+def _anchor_presence(v: View, ids: list[str], world_has) -> dict[str, bool]:
+    """`has_voice_anchor` for each of `ids`, the rule `list_characters` and
+    `character_sidecars` both report by. `world_has(aid)` answers for a row
+    that falls through to the world, from whatever the caller already read.
+
+    ONE directory scan settles which rows even have a campaign-side anchor
+    file, and only those are read. `set_voice_anchor` writes that file
+    WITHOUT copying the card down, so an inherited row can carry a campaign
+    tombstone -- which is why "no campaign card, therefore no campaign
+    anchor" would be wrong, and is the case this got wrong first.
+
+    A DETACHED actor does not inherit, and this has to agree with
+    `voice_anchor_record`, which suppresses the world fallback for exactly
+    these refs. Without it a campaign whose character id has since been
+    reused world-side would report has_voice_anchor: true off an unrelated
+    row, while reading that character's effective anchor returned "".
+    """
     cdir = v.croot / "characters"
     campaign_side = ({p.parent.name for p in cdir.glob("*/voice_anchor.md")}
                      if cdir.is_dir() else set())          # paths-ok: sibling of anchor_path
-    # A DETACHED actor does not inherit, and this has to agree with
-    # `voice_anchor_record`, which suppresses the world fallback for exactly
-    # these refs. Without it a campaign whose character id has since been
-    # reused world-side would report has_voice_anchor: true off an unrelated
-    # row, while reading that character's effective anchor returned "".
-    for row in rows:
-        if row["id"] in campaign_side:
-            rec = voice_anchors.read_record(v.croot, row["id"])
-            row["has_voice_anchor"] = bool(rec["text"])    # tombstone reads as none
-        elif _flat_ref("characters", row["id"]) in v.off:
-            row["has_voice_anchor"] = False
+    out: dict[str, bool] = {}
+    for aid in ids:
+        if aid in campaign_side:
+            rec = voice_anchors.read_record(v.croot, aid)
+            out[aid] = bool(rec["text"])    # tombstone reads as none
+        elif _flat_ref("characters", aid) in v.off:
+            out[aid] = False
         else:
-            row["has_voice_anchor"] = world.get(row["id"], False)
-    return sorted(rows, key=lambda c: c["id"])
+            out[aid] = world_has(aid)
+    return out
 
 
 def _patch_pc_item(v: View, item: dict) -> dict:
@@ -1301,8 +1315,95 @@ def list_pcs(cid: str) -> list[dict]:
     return sorted([_patch_pc_item(v, p) for p in mine + inherited], key=lambda p: p["id"])
 
 
-def character_refs(cid: str) -> list[str]:
-    return [c["id"] for c in list_characters(cid)]
+# ---- rosters: the listings' union, cut to what an id-and-name caller reads ----
+#
+# `list_characters` is the full row, and most of its cost is in fields nobody
+# but a grid reads: an image listing and a focus read per character off both
+# roots, a card summary per version, a tagline. The turn's off-scene directory,
+# cast-change detection, the suggestion rail, scene suggestions, the sheet
+# tally and the to-do list asked it only who is here and what they are called.
+# These answer exactly that, through the same union -- campaign rows, then the
+# world's rows the campaign neither holds nor tombstoned -- so they list the
+# same characters as the full listing, in the same order, and a test holds
+# them to it. A caller that needs another field reads the full listing for it:
+# widening a roster row piecemeal is how it would drift back into being one.
+
+def _roster_union(v: View, kind: str, mine: list, theirs: list, key=lambda r: r) -> list:
+    """`mine` plus every row of `theirs` whose id `mine` lacks and the campaign
+    has not tombstoned, sorted by id: the union `list_characters`, `list_pcs`
+    and `list_entities` each build. `key` reads the id off a row, for rows
+    that are dicts rather than bare ids."""
+    have = {key(r) for r in mine}
+    inherited = [r for r in theirs if key(r) not in have and _flat_ref(kind, key(r)) not in v.gone]
+    return sorted(mine + inherited, key=key)
+
+
+def character_roster(cid: str, *, v: View | None = None) -> list[dict]:
+    """`{id, name, default_version}` per character `list_characters` lists.
+
+    The name is the owning root's, as in the full listing: a campaign copy
+    renamed campaign-side lists under the campaign's name."""
+    v = _view(cid, v)
+    return _roster_union(v, "characters", characters.roster(v.croot),
+                        characters.roster(v.wroot), key=lambda r: r["id"])
+
+
+def character_ids(cid: str, *, v: View | None = None) -> list[str]:
+    """The ids of `character_roster`, reading no character file at all."""
+    v = _view(cid, v)
+    return _roster_union(v, "characters", characters.listed_ids(v.croot),
+                        characters.listed_ids(v.wroot))
+
+
+def cast_ids(cid: str, kind: str, *, v: View | None = None) -> list[str]:
+    """The ids `list_characters`, `list_pcs` or `list_entities` would list for
+    `kind`, off stats and directory listings alone -- for a caller that counts
+    a cast (`sheets.coverage`) and never reads a row of it."""
+    v = _view(cid, v)
+    if kind == "characters":
+        return character_ids(cid, v=v)
+    if kind == "pcs":
+        return _roster_union(v, "pcs", pcs.listed_ids(v.croot), pcs.listed_ids(v.wroot))
+    # `list_entities`' union: the flat rule has no whole-record detachment to
+    # honour here, because a detached flat record is one the campaign holds.
+    return _roster_union(v, kind, entities.entity_ids(v.croot, kind),
+                        entities.entity_ids(v.wroot, kind))
+
+
+def character_sidecars(cid: str, *, v: View | None = None) -> list[dict]:
+    """`{id, name, tagline, has_voice_anchor}` per character, with exactly the
+    values `list_characters` reports for those two fields.
+
+    For the to-do list's tagline and anchor gaps, which read nothing else off
+    the row. Both fields keep the full listing's precedence, which is subtler
+    than "campaign, else world", and that is why this lives here rather than
+    at the call site:
+
+    - `tagline` is `tagline()`: the campaign's line, else nothing for a
+      detached id (the world's id-mate is a stranger), else the world's.
+    - `has_voice_anchor` is `_anchor_presence`, the very rule the full listing
+      applies. Its world fallback reads the world's anchor only for a row the
+      full listing would have had a WORLD row for: a campaign copy whose world
+      original lost every card is not listed world-side, so the full listing
+      never read that anchor, and neither does this.
+    """
+    v = _view(cid, v)
+    theirs = characters.roster(v.wroot)
+    rows = _roster_union(v, "characters", characters.roster(v.croot), theirs,
+                         key=lambda r: r["id"])
+    world_listed = {r["id"] for r in theirs}
+    anchored = _anchor_presence(
+        v, [r["id"] for r in rows],
+        lambda aid: aid in world_listed and bool(voice_anchors.read(v.wroot, aid)))
+    return [{"id": r["id"], "name": r["name"], "tagline": tagline(cid, r["id"], v=v),
+             "has_voice_anchor": anchored[r["id"]]} for r in rows]
+
+
+def character_refs(cid: str, *, v: View | None = None) -> list[str]:
+    """The campaign's character ids: `character_ids`, under the name the turn's
+    off-scene directory has always called it by. It used to build the full
+    listing and keep only the ids, on every generated turn."""
+    return character_ids(cid, v=v)
 
 
 def _mark_campaign_owned(cid: str, kind: str, aid: str) -> None:

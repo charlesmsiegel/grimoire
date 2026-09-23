@@ -205,36 +205,52 @@ def read_pc(root: Path, pid: str) -> dict:
             "versions": versions}
 
 
+def _listed_dirs(root: Path) -> list[Path]:
+    """The PC directories `list_pcs` walks, in its order -- see
+    `characters._listed_dirs`."""
+    d = _pcs_dir(root)
+    if not d.exists():
+        return []
+    return sorted(p for p in d.iterdir()
+                  if p.is_dir() and (p / _META_NAME).exists() and safe_id(p.name))
+
+
+def listed_ids(root: Path) -> list[str]:
+    """The ids `list_pcs` lists, reading no file: the same walk and the same
+    at-least-one-addressable-version filter, without the meta read, the asset
+    scan and the persona read per version the row carries. For a caller that
+    counts PCs -- `overlay.cast_ids`, and through it the sheet tally."""
+    return [pd.name for pd in _listed_dirs(root) if _version_ids(root, pd.name)]
+
+
 def list_pcs(root: Path) -> list[dict]:
     out: list[dict] = []
-    d = _pcs_dir(root)
-    if d.exists():
-        for pd in sorted(p for p in d.iterdir()
-                         if p.is_dir() and (p / _META_NAME).exists() and safe_id(p.name)):
-            pid = pd.name
-            meta = _read_meta(root, pid)
-            version_ids = _version_ids(root, pid)
-            if not version_ids:
-                continue   # see read_pc: no addressable version, nothing to show
-            default = meta.get("default_version", "")
-            default = default if default in version_ids else version_ids[0]
-            # The rail renders a portrait per row, so the summary carries the
-            # same derived image fields characters.list_characters does. No
-            # `localized_count`: only a character card's text is localized, so a
-            # PC has no `embed-` images to count.
-            #
-            # This adds two stats per art-less PC and nothing more: both
-            # `list_images` and `read_focus` return early on a directory or
-            # sidecar that is not there, so the scan and the parse are only
-            # paid by PCs that actually have images.
-            names = [i["name"] for i in assets.list_images(root, pid, default, ASSET_BASE)]
-            out.append({"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
-                        "default_version": default,
-                        "has_avatar": assets.AVATAR in names,
-                        "avatar_focus": assets.read_focus(root, pid, default, ASSET_BASE),
-                        "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
-                        "versions": [{"id": v, "name": read_persona(root, pid, v)["name"]}
-                                     for v in version_ids]})
+    # the same walk `listed_ids` takes, so the two cannot disagree
+    for pd in _listed_dirs(root):
+        pid = pd.name
+        meta = _read_meta(root, pid)
+        version_ids = _version_ids(root, pid)
+        if not version_ids:
+            continue   # see read_pc: no addressable version, nothing to show
+        default = meta.get("default_version", "")
+        default = default if default in version_ids else version_ids[0]
+        # The rail renders a portrait per row, so the summary carries the
+        # same derived image fields characters.list_characters does. No
+        # `localized_count`: only a character card's text is localized, so a
+        # PC has no `embed-` images to count.
+        #
+        # This adds two stats per art-less PC and nothing more: both
+        # `list_images` and `read_focus` return early on a directory or
+        # sidecar that is not there, so the scan and the parse are only
+        # paid by PCs that actually have images.
+        names = [i["name"] for i in assets.list_images(root, pid, default, ASSET_BASE)]
+        out.append({"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
+                    "default_version": default,
+                    "has_avatar": assets.AVATAR in names,
+                    "avatar_focus": assets.read_focus(root, pid, default, ASSET_BASE),
+                    "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
+                    "versions": [{"id": v, "name": read_persona(root, pid, v)["name"]}
+                                 for v in version_ids]})
     return out
 
 

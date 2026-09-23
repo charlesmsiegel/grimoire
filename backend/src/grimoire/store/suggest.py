@@ -173,13 +173,17 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
         return "unseen"
 
     cast, seen = [], set()
-    for c in overlay.list_characters(cid):
+    # The roster and one view, not the full listing: a cast line is a token,
+    # a name and a tagline, and the full row resolved the tagline too -- along
+    # with an image listing per character that nothing here reads.
+    v = overlay.view(cid)
+    for c in overlay.character_roster(cid, v=v):
         tok = f"characters:{c['id']}"
         if offscreen and tok in player_tokens:
             continue   # don't offer the model a token the parser will discard
         seen.add(tok)
         cast.append({"token": tok, "name": c.get("name", c["id"]),
-                     "tagline": overlay.tagline(cid, c["id"]),
+                     "tagline": overlay.tagline(cid, c["id"], v=v),
                      "status": _status(tok),
                      "role": "player" if tok in player_tokens else "npc"})
     if not offscreen:  # offscreen scenes never cast the player
@@ -280,9 +284,12 @@ def valid_ids(cid: str):
     has". Reads the campaign's entities and roster, so callers resolve it once
     for a whole list rather than per row (see `ref_validator`).
     """
-    char_ids = {c["id"] for c in overlay.list_characters(cid)}
+    # Ids off directory listings: validity is membership, so neither the full
+    # character rows nor every location's parsed body is needed to decide it.
+    v = overlay.view(cid)
+    char_ids = set(overlay.character_ids(cid, v=v))
     player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances_cast.roster(cid) if a["role"] == "player"}
-    loc_ids = {e["id"] for e in overlay.list_entities(cid, "locations")}
+    loc_ids = set(overlay.cast_ids(cid, "locations", v=v))
     return char_ids, player_tokens, loc_ids
 
 
