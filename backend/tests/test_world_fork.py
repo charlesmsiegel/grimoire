@@ -207,9 +207,16 @@ def test_a_fork_sorts_ahead_of_a_source_touched_in_the_same_second(
     meta["created"] = "2025-01-01T00:00:00Z"          # `updated` stays at now
     mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
-    stamp = worlds.read_world(wid)["meta"]["updated"]
     new = worlds.fork_world(wid, "Winifred")
-    assert worlds.read_world(new)["meta"]["updated"] == stamp, "seed raced the clock"
+    # The tie is the case under test, so make it one rather than hoping for
+    # it: pin the source's `updated` to the fork's. Asserting the two writes
+    # landed in the same second instead made this a race with the clock --
+    # a second boundary between them failed it, a few milliseconds apart.
+    stamp = worlds.read_world(new)["meta"]["updated"]
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["updated"] = stamp
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    assert worlds.read_world(wid)["meta"]["updated"] == stamp
     # The source's slug sorts FIRST alphabetically, so directory order would
     # put it ahead if nothing broke the tie.
     assert wid < new
