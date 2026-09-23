@@ -60,6 +60,7 @@ keeps a crop that no longer frames anything. Stated rather than solved.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -212,27 +213,53 @@ def _walk(root: Path, base: str) -> Iterator[tuple[Path, Path]]:
     twice. Said twice it drifts, and a base reaches the gallery but not the
     describe queue, or the other way round.
 
-    Only the traversal. `catalog` and `undescribed_count` need very different
-    amounts of each version folder -- the gallery resolves an extension and a
-    cache-busting `v` per image, which are a stat apiece, and a count needs
-    neither -- so what they read inside a folder is theirs. What they must NOT
-    disagree on is which images count, and that is `assets.storable` plus key
-    presence in both, held to one answer by `test_image_descriptions_store.py`.
+    Only the traversal. `catalog` and the backlog (`_undescribed_names`) need
+    very different amounts of each version folder -- the gallery resolves an
+    extension and a cache-busting `v` per image, which are a stat apiece, and
+    the backlog needs neither -- so what they read inside a folder is theirs.
+    What they must NOT disagree on is which images count, and that is
+    `assets.storable` plus key presence in both, held to one answer by
+    `test_image_descriptions_store.py`.
     """
     bdir = root / base
     if not bdir.exists():
         return
-    for rec in sorted(p for p in bdir.iterdir() if p.is_dir()):
+    for rec in _subdirs(bdir):
         adir = rec / "assets"
-        if not adir.is_dir():
+        try:
+            vdirs = _subdirs(adir)
+        except (FileNotFoundError, NotADirectoryError):
+            continue        # no art folder: the `is_dir()` this replaced said False
+        except OSError:
+            # Anything else, ask as the old walk did: a directory that cannot
+            # be listed raises, as its `iterdir` did, and whatever `is_dir()`
+            # calls no directory is skipped.
+            if adir.is_dir():
+                raise
             continue
-        for vdir in sorted(p for p in adir.iterdir() if p.is_dir()):
-            yield rec, vdir
+        yield from ((rec, vdir) for vdir in vdirs)
+
+
+def _subdirs(d: Path) -> list[Path]:
+    """`sorted(p for p in d.iterdir() if p.is_dir())`, off one `os.scandir`.
+
+    The entry carries its type from the directory read, so a plain directory
+    costs no stat to recognise; the `iterdir` form paid one per entry, per
+    record and per version folder, on a walk the describe queue, its count,
+    the gallery and the to-do list's chores all take. Same order: siblings
+    sort by name, case-folded where the platform's paths are
+    (`os.path.normcase`), as pathlib sorts them. Raises what `os.scandir`
+    raises for a `d` that cannot be listed.
+    """
+    with os.scandir(d) as it:
+        names = [e.name for e in it if e.is_dir()]
+    return [d / name for name in sorted(names, key=os.path.normcase)]
 
 
 def catalog(root: Path, base: str = "characters") -> list[dict]:
     """Every stored image of `base`, whether described or not — the gallery's
-    listing (#200), and the walk ``undescribed`` filters.
+    listing (#200). The backlog walks the same folders (`_walk`) but reads
+    less of each; see ``undescribed``.
 
     One entry per logical image: ``id``, ``vid``, ``name``, the ``ext`` and
     cache-busting ``v`` token ``assets.list_in`` resolves, and the two facts the
@@ -276,18 +303,24 @@ def undescribed(root: Path, base: str = "characters") -> list[dict]:
     Only the three keys the queue reads, not `catalog`'s row whole: widening a
     response nobody asked to widen is how a second, quieter contract grows on a
     route that already has one.
+
+    Off `_undescribed_names` rather than `catalog`, for the reason
+    `undescribed_count` gives: the gallery's `ext` and `v` are a stat per
+    image, and this list carries neither. Walking one way for the count and
+    another for the list also left the two free to disagree; now a count is
+    this list's length by construction (`undescribed_by_version`).
     """
-    return [{"id": i["id"], "vid": i["vid"], "name": i["name"]}
-            for i in catalog(root, base) if not i["described"]]
+    return [{"id": rid, "vid": vid, "name": name}
+            for rid, vid, names in _undescribed_names(root, base) for name in names]
 
 
 def undescribed_count(root: Path, base: str = "characters") -> int:
     """How many images of `base` have no sidecar key, without building the list.
 
-    Same walk and the same two rules as `undescribed` -- `assets.storable`, and
-    key PRESENCE rather than non-empty text -- but it never asks `assets.list_in`
-    for an `ext` or a `v`, and those are a stat per image. That is the whole
-    difference, and on a whole-library sweep it is most of the cost: the to-do
+    The walk `undescribed` takes (`_undescribed_names`), with its two rules --
+    `assets.storable`, and key PRESENCE rather than non-empty text -- and
+    neither asks `assets.list_in` for an `ext` or a `v`, which are a stat per
+    image. On a whole-library sweep that stat is most of the cost: the to-do
     list needs this number for every world on every read, and the list itself
     only for the one world a reader expanded.
 
@@ -295,8 +328,14 @@ def undescribed_count(root: Path, base: str = "characters") -> int:
     that can disagree with the list behind it is worse than no count -- it is
     the stale number the to-do list exists to not have.
     """
-    n = 0
-    for _rec, vdir in _walk(root, base):
+    return sum(n for _rid, _vid, n in undescribed_by_version(root, base))
+
+
+def _undescribed_names(root: Path, base: str) -> Iterator[tuple[str, str, list[str]]]:
+    """`(record id, version id, sorted undescribed names)` per version folder
+    holding any: the one walk behind `undescribed`, `undescribed_count` and
+    `undescribed_by_version`."""
+    for rec, vdir in _walk(root, base):
         # ONE directory read per version, answering both questions it is asked:
         # which images are here, and is there a sidecar at all. Asking
         # separately -- `read_raw`, which stats the sidecar before opening it,
@@ -307,10 +346,24 @@ def undescribed_count(root: Path, base: str = "characters") -> int:
         if not names:
             continue
         reviewed = read_raw(vdir) if has_sidecar else {}
-        for name in names:
-            if assets.storable(name) and name not in reviewed:
-                n += 1
-    return n
+        todo = sorted(n for n in names if assets.storable(n) and n not in reviewed)
+        if todo:
+            yield rec.name, vdir.name, todo
+
+
+def undescribed_by_version(root: Path, base: str = "characters") -> Iterator[tuple[str, str, int]]:
+    """`(record id, version id, how many)` for every version folder of `base`
+    holding undescribed images: `undescribed_count`, not yet summed.
+
+    For a caller that has to filter the backlog by record before counting it --
+    the describe queue drops an image whose record or version is gone
+    (`routes.characters.list_undescribed_images`), and a count of the queue has
+    to drop the same ones or it is a number for a different list. The record
+    and version ids are `undescribed`'s `id` and `vid`, so a filter written
+    against one reads the other.
+    """
+    for rid, vid, names in _undescribed_names(root, base):
+        yield rid, vid, len(names)
 
 
 def has_undescribed(root: Path, base: str = "characters") -> bool:

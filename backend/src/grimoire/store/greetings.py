@@ -176,13 +176,33 @@ def read_greeting_rev(root: Path, gid: str) -> dict:
     return {**record, "rev": entities.content_hash(text)}
 
 
+#: `list_greetings`' parsed rows, one per greeting file, in a pool of their own
+#: for `characters.POOL_ENTRIES`' reason: both character rosters fold these in
+#: on every read, so a world's greetings are part of opening it.
+_META_POOL: dict = {}
+
+
 def list_greetings(root: Path) -> list[dict]:
     d = _greetings_dir(root)
     if not d.exists():
         return []
-    metas = [read_greeting(root, p.stem)["meta"] for p in d.glob("*.md") if safe_id(p.stem)]
+    metas = [_listed_meta(root, p) for p in d.glob("*.md") if safe_id(p.stem)]
     metas.sort(key=lambda m: natural_key(m["name"]))  # A2 before A10
     return metas
+
+
+def _listed_meta(root: Path, p: Path) -> dict:
+    """`read_greeting(...)["meta"]` for a listed file, memoized on its stat, as
+    a copy -- the lists in it included, since callers are free to edit a row
+    they were handed. A file that vanished since the glob takes the unmemoized
+    read, which fails exactly as the listing always has."""
+    sig = statcache.signature(p)
+    if sig is None:
+        return read_greeting(root, p.stem)["meta"]
+    meta = statcache.memo("greeting_meta", sig, lambda: read_greeting(root, p.stem)["meta"],
+                          pool=_META_POOL, max_entries=characters.POOL_ENTRIES)
+    return {**meta, "present": list(meta["present"]),
+            "requires_tags": list(meta["requires_tags"])}
 
 
 def greeting_count(root: Path) -> int:

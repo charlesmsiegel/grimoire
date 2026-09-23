@@ -93,6 +93,12 @@ def get_world(wid: str):
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found")
     out["meta"]["cover"] = store.covers.world_cover_version(wid)
+    # How many campaigns are played in this world -- the one fact about a
+    # world that is not a record inside it, and which the world page used to
+    # learn by fetching every campaign's shelf row (a scene listing each) and
+    # filtering. The same rows' `world`, off `list_campaigns`, whose heads are
+    # stat-memoized: a stat or two per campaign, and no transcript is read.
+    out["campaigns"] = sum(1 for c in store.campaigns.list_campaigns() if c["world"] == wid)
     return out
 
 

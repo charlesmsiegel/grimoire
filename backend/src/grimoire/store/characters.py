@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -27,6 +28,19 @@ from . import (
 )
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
+
+#: The listing's memo families live in pools of their own rather than in
+#: statcache's shared FIFO of 4096 (see `statcache.memo`'s `pool`): a large
+#: library's rows and card summaries can outnumber that budget on their own,
+#: and a listing that evicted its own working set -- and every entity and sync
+#: hash with it -- would hand the next listing a cold cache. Sized above any
+#: plausible library's cast, like `scenes.read.POOL_ENTRIES`; a row and a
+#: summary are each a small dict.
+POOL_ENTRIES = 65536
+_ROW_POOL: dict = {}
+_SUMMARY_POOL: dict = {}
+_FACTS_POOL: dict = {}
+_IDENTITY_POOL: dict = {}
 
 
 class CharacterNotFound(Exception):
@@ -170,9 +184,13 @@ def clear_chub_source(root: Path, cid: str, vid: str) -> None:
 
 
 def _version_ids(root: Path, cid: str) -> list[str]:
+    return _version_ids_in(_char_dir(root, cid))
+
+
+def _version_ids_in(d: Path) -> list[str]:
     # enumeration agrees with the lookups: a version id read_card would
     # refuse must not reach it through a listing (#259 review)
-    return sorted(p.stem for p in _char_dir(root, cid).glob("*.json") if safe_id(p.stem))
+    return sorted(p.stem for p in d.glob("*.json") if safe_id(p.stem))
 
 
 def require_version(root: Path, cid: str, vid: str) -> Path:
@@ -330,6 +348,43 @@ def version_ids(root: Path, cid: str) -> list[str]:
     return _version_ids(root, cid)
 
 
+def name_and_versions(root: Path, cid: str) -> tuple[str, list[str]]:
+    """`read_character`'s `meta.name` and version ids, reading no card.
+
+    For a caller that only needs to know what a character is called and which
+    versions it still has -- the describe queue, once per record behind an
+    image -- where the full read opens every card, lists every version's art
+    and reads its focus and descriptions, all to be thrown away. Raises
+    `CharacterNotFound` exactly where `read_character` would before it reads a
+    card: no such character, or not one addressable version.
+
+    Memoized on two stamps (`_build_identity`), so an unchanged character
+    costs two stats: the queue asks this for every record with art behind it
+    whenever the character page mounts.
+    """
+    name, version_ids = statcache.memo_stamped(
+        ("identity", os.fspath(_char_dir(root, cid))), lambda: _build_identity(root, cid),
+        pool=_IDENTITY_POOL, max_entries=POOL_ENTRIES)
+    return name, list(version_ids)
+
+
+def _build_identity(root: Path, cid: str) -> tuple[tuple[str, tuple[str, ...]], tuple | None]:
+    """`name_and_versions`' value, vouched for by the character directory
+    (whose listing is the version ids) and `character.md` (the name), each
+    stamped before it is read. A miss raises and is not remembered."""
+    here = statcache.stamp(_char_dir(root, cid))
+    meta_stamp = statcache.stamp(_meta_path(root, cid))
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    version_ids = _version_ids(root, cid)
+    if not version_ids:
+        raise CharacterNotFound(cid)
+    value = (meta.get("name", cid), tuple(version_ids))
+    if here is None or meta_stamp is None:
+        return value, None
+    return value, (here, meta_stamp)
+
+
 def read_character(root: Path, cid: str) -> dict:
     _require_char(root, cid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
@@ -383,14 +438,24 @@ def _greeting_count(data: dict) -> int:
             + (len(greetings) if isinstance(greetings, list) else 0))
 
 
-def _card_summary(root: Path, cid: str, vid: str) -> dict:
+def _card_summary(root: Path, cid: str, vid: str,
+                  stamped: tuple[Path, statcache.Stamp | None] | None = None) -> dict:
     """The small derived view of a card that list endpoints need (label,
     greeting count, chub link), memoized by stat so unchanged cards are
-    never re-read or re-parsed."""
+    never re-read or re-parsed.
+
+    `stamped` is the card's path and a `statcache.stamp` of it that a caller
+    already took, standing in for the path's construction and the signature's
+    stat: the listing stamps every card before asking for its summary, and
+    doing both again per version is all it would buy."""
     if not safe_id(vid):
         raise VersionNotFound(vid)
-    p = _card_path(root, cid, vid)
-    sig = statcache.signature(p)
+    if stamped is None:
+        p = _card_path(root, cid, vid)
+        sig = statcache.signature(p)
+    else:
+        p, stamp = stamped
+        sig = None if stamp is None else ((stamp[0], stamp[1], stamp[3], stamp[4]),)
     if sig is None:
         raise VersionNotFound(vid)
 
@@ -400,54 +465,247 @@ def _card_summary(root: Path, cid: str, vid: str) -> dict:
                 "greeting_count": _greeting_count(cards.card_data(card)),
                 "chub_source": _version_chub_source(card)}
 
-    return statcache.memo("card_summary", sig, compute)
+    return statcache.memo("card_summary", sig, compute,
+                          pool=_SUMMARY_POOL, max_entries=POOL_ENTRIES)
 
 
 def list_characters(root: Path) -> list[dict]:
+    """One row per character, in `_listed_dirs` order: what the grid draws.
+
+    Each row is memoized on the stamps of everything it was built from
+    (`_row`), so on an unchanged library this is a directory listing and a
+    handful of stats per character -- no file is opened. The rows are copies:
+    callers fold counts into them in place (`greetings.add_featuring_counts`),
+    and the memo must not see that.
+    """
+    chars = _chars_dir(root)
     out: list[dict] = []
-    # The same walk `roster` and `listed_ids` take, so the three cannot
-    # disagree about which directories are characters.
-    for cd in _listed_dirs(root):
-        cid = cd.name
-        meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
-        version_ids = _version_ids(root, cid)
-        if not version_ids:
-            continue   # see read_character: no addressable card, nothing to show
-        default = _addressable_default(meta.get("default_version", ""), version_ids)
-        images = assets.list_images(root, cid, default)
-        names = [i["name"] for i in images]
-        try:
-            greeting_count = _card_summary(root, cid, default)["greeting_count"]
-        except VersionNotFound:
-            greeting_count = 0
-        out.append({
-            "id": cid,
-            "name": meta.get("name", cid),
-            "default_version": default,
-            "has_avatar": assets.AVATAR in names,
-            # Names the avatar's current BYTES: the grid tile spends it as
-            # `?v=`, which `routes.common._serve_image_file` serves
-            # immutable. A token that outlives the bytes pins a stale tile.
-            "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
-            "avatar_focus": assets.read_focus(root, cid, default),
-            "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
-            "localized_count": sum(1 for n in names if n.startswith("embed-")),
-            "greeting_count": greeting_count,
-            "tagline": taglines.read(root, cid),
-            # A BOOLEAN, not the body: the listing has no use for the text,
-            # and this call already stats every version and every image of
-            # every character. One added read, and it answers one question.
-            #
-            # At world level a tombstone and an absence are the same state
-            # -- `voice_anchors.read_record` says so, and there is nothing
-            # beneath a world to inherit from -- so `read` covering both is
-            # correct rather than a simplification. Tombstones only carry
-            # meaning in a campaign, which this world-scoped listing is not.
-            "has_voice_anchor": bool(voice_anchors.read(root, cid)),
-            "versions": [{"id": v, "name": _card_summary(root, cid, v)["label"]}
-                         for v in version_ids],
-        })
+    for cid in _listed_names(chars):
+        row = _row(root, chars, cid)
+        if row is not None:
+            out.append({**row, "versions": [dict(v) for v in row["versions"]]})
     return out
+
+
+def _listed_names(chars: Path) -> list[str]:
+    """`_listed_dirs`' names, off one `os.scandir` and no stat per entry.
+
+    The walk `roster` and `listed_ids` take, so the three cannot disagree about
+    which directories are characters -- except that the `character.md` test is
+    left to `_row`, which has to stat that file anyway and answers None for a
+    directory without one. Sorted as `_listed_dirs` sorts its paths: siblings
+    compare by name, case-folded where the platform's paths are
+    (`os.path.normcase`), which is pathlib's ordering on both.
+    """
+    try:
+        it = os.scandir(chars)
+    except OSError:
+        # `_listed_dirs` guards with `exists()`: a missing directory lists
+        # nothing, one that exists and cannot be listed raises.
+        if not chars.exists():
+            return []
+        raise
+    with it:
+        names = [e.name for e in it if safe_id(e.name) and e.is_dir()]
+    return sorted(names, key=os.path.normcase)
+
+
+def _row(root: Path, chars: Path, cid: str) -> dict | None:
+    """The listing row for one character directory, or None when the listing
+    skips it (no `character.md`, or no addressable card), memoized in
+    `_ROW_POOL` on the stamps `_build_row` collected. Frozen: see
+    `list_characters`."""
+    return statcache.memo_stamped((os.fspath(chars), cid), lambda: _build_row(root, cid),
+                                  pool=_ROW_POOL, max_entries=POOL_ENTRIES)
+
+
+def _build_row(root: Path, cid: str) -> tuple[dict | None, tuple | None]:
+    """`_row`'s value, and the stamps that vouch for it.
+
+    EVERY input the row is built from is covered, each stamped before it is
+    read (`statcache.memo_stamped` says why that order is the whole game):
+
+    - the character directory -- its listing names the cards, and whether
+      `character.md`, `tagline.md` and `voice_anchor.md` exist at all;
+    - `character.md` (name, default version);
+    - every card file, not just the default's: each version's label is read
+      off its own card, and a text editor saving one in place moves no
+      directory;
+    - the default version's art and the tagline, as `_build_version_facts`
+      stamps them (through its memo entry, whose stamps it validated just now);
+    - `voice_anchor.md` when present -- absent, the directory's stamp already
+      covers its arriving.
+
+    A directory stamp alone would not do: an in-place edit (a sync client, a
+    text editor) changes a file's mtime and size and leaves its directory
+    alone, so a memo keyed on directories would serve the old row forever.
+    Which is also why this is per row rather than one memo over the list --
+    the list's only directory is the one edits never touch.
+
+    The values are the ones the pre-memo listing computed, through the same
+    helpers in the same order, so the failures are its failures too: an
+    unreadable `character.md` or a malformed card still raises, and a card
+    that vanishes mid-listing still does whatever `_card_summary` does about
+    it -- it is only never remembered.
+    """
+    d = _char_dir(root, cid)
+    here = statcache.stamp(d)
+    if here is None:
+        return None, None                  # gone since the listing
+    stamps = [here]
+    meta_path = d / "character.md"
+    meta_stamp = statcache.stamp(meta_path)
+    if meta_stamp is None:
+        # Not a character (a campaign's dossier-only directory): skipped, and
+        # vouched for by the directory, which `character.md` arriving moves.
+        return None, tuple(stamps)
+    stamps.append(meta_stamp)
+    meta, _ = parse_frontmatter(meta_path.read_text(encoding="utf-8"))
+    version_ids = _version_ids_in(d)
+    if not version_ids:
+        return None, tuple(stamps)         # see read_character: nothing to show
+    default = _addressable_default(meta.get("default_version", ""), version_ids)
+    cacheable = True
+    cards_at: dict[str, tuple[Path, statcache.Stamp | None]] = {}
+    for v in version_ids:
+        card = d / f"{v}.json"             # `_card_path`, without rebuilding `d`
+        card_stamp = statcache.stamp(card)
+        cards_at[v] = (card, card_stamp)
+        if card_stamp is None:
+            cacheable = False              # vanished since the glob
+        else:
+            stamps.append(card_stamp)
+    facts, fact_stamps = _facts_entry(root, cid, default, crop=False, d=d)
+    if fact_stamps is None:
+        cacheable = False
+    else:
+        stamps.extend(fact_stamps)
+    names = facts["names"]
+    try:
+        greeting_count = _card_summary(root, cid, default, cards_at[default])["greeting_count"]
+    except VersionNotFound:
+        greeting_count = 0
+    anchor_stamp = statcache.stamp(voice_anchors.anchor_path(root, cid))
+    if anchor_stamp is not None:
+        stamps.append(anchor_stamp)
+    row = {
+        "id": cid,
+        "name": meta.get("name", cid),
+        "default_version": default,
+        "has_avatar": assets.AVATAR in names,
+        # Names the avatar's current BYTES: the grid tile spends it as
+        # `?v=`, which `routes.common._serve_image_file` serves
+        # immutable. A token that outlives the bytes pins a stale tile.
+        "avatar_v": facts["avatar_v"],
+        "avatar_focus": facts["focus"],
+        "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
+        "localized_count": sum(1 for n in names if n.startswith("embed-")),
+        "greeting_count": greeting_count,
+        "tagline": facts["tagline"],
+        # A BOOLEAN, not the body: the listing has no use for the text.
+        #
+        # At world level a tombstone and an absence are the same state
+        # -- `voice_anchors.read_record` says so, and there is nothing
+        # beneath a world to inherit from -- so `read` covering both is
+        # correct rather than a simplification. Tombstones only carry
+        # meaning in a campaign, which this world-scoped listing is not.
+        "has_voice_anchor": bool(voice_anchors.read(root, cid)),
+        "versions": [{"id": v, "name": _card_summary(root, cid, v, cards_at[v])["label"]}
+                     for v in version_ids],
+    }
+    # Deduplicated exactly: the facts stamp this directory again, and an
+    # absent art folder is vouched for by the nearest directory that exists,
+    # which is often this one. Two DIFFERENT stamps of one path stay, and can
+    # never both match again -- which is right, since the path moved mid-build.
+    return row, (tuple(dict.fromkeys(stamps)) if cacheable else None)
+
+
+def version_facts(root: Path, cid: str, vid: str, *, crop: bool = False) -> dict:
+    """What a listing row reads off ONE root about one version's art and the
+    character's tagline, memoized in `_FACTS_POOL` -- see `_build_version_facts`.
+
+    Per root on purpose. The campaign listing unions two roots' answers under
+    the campaign's tombstones and detachments (`overlay._patch_char_item`), and
+    a memo of that merged row would need a key covering all four; memoizing
+    each root's facts on that root's own stamps, and merging per request, is
+    exact with no such key. Frozen: callers read it and build their own rows.
+    """
+    return _facts_entry(root, cid, vid, crop=crop)[0]
+
+
+def _facts_entry(root: Path, cid: str, vid: str, *, crop: bool,
+                 d: Path | None = None) -> tuple[dict, tuple | None]:
+    """`version_facts`' memo entry: the facts AND the stamps that vouch for
+    them, so a listing row built from the facts can carry those stamps as its
+    own (`_build_row`). One entry serves both readers -- the campaign listing's
+    world side asks for exactly the facts the world row was built from, and a
+    row rebuilt because only a card moved reuses the art it did not re-scan."""
+    def compute() -> tuple[tuple[dict, tuple | None], tuple | None]:
+        facts, stamps = _build_version_facts(root, cid, vid, crop=crop, d=d)
+        return (facts, stamps), stamps
+
+    return statcache.memo_stamped(("facts", os.fspath(root), cid, vid, crop), compute,
+                                  pool=_FACTS_POOL, max_entries=POOL_ENTRIES)
+
+
+_NO_FACTS = {"names": (), "avatar_v": None, "focus": None,
+             "avatar_file": False, "focus_file": False, "tagline": ""}
+
+
+def _build_version_facts(root: Path, cid: str, vid: str, *, crop: bool = False,
+                         d: Path | None = None) -> tuple[dict, tuple | None]:
+    """`version_facts`' value and its stamps. The value:
+
+    - `names`: the image names of `assets.list_images(root, cid, vid)`, in its
+      order, stranded promotion healed -- and `avatar_v`, the `v` it gives
+      `AVATAR`, or None. Only those: a row counts names and spends one token,
+      and a memo holding every image's entry for every character in a large
+      library is memory a phone pays for;
+    - `focus`: `assets.read_focus(root, cid, vid)`;
+    - `tagline`: `taglines.read(root, cid)`;
+    - with `crop`, `avatar_file` -- whether `assets.image_path` finds any
+      `avatar.*` file, of ANY extension, which is `overlay.read_focus`'s test
+      for "this root owns the crop" and not the same question as an `avatar`
+      among the names -- and `focus_file`, whether `focus.json` exists, the
+      other half of that test. Only the campaign side of a merge asks, so
+      only it pays the glob.
+
+    Stamped as `assets.version_art` stamps the art, plus the character
+    directory, whose listing covers `tagline.md` arriving, and `tagline.md`
+    itself when present. `avatar_file` and `focus_file` are both a question
+    about the art folder's LISTING, which its stamp covers.
+
+    A root that has no directory for this character at all -- a campaign that
+    holds nothing of an inherited one, the common case -- answers every
+    question emptily, and says so without asking: the nearest ancestor that
+    exists vouches for the directory's absence, one stat.
+    """
+    if d is None:
+        d = _char_dir(root, cid)       # raises CharacterNotFound for an unsafe id
+    here = statcache.stamp(d)
+    if here is None:
+        up = statcache.stamp(d.parent) or statcache.stamp(root)
+        return dict(_NO_FACTS), (None if up is None else (up,))
+    stamps = [here]
+    cacheable = True
+    tagline_stamp = statcache.stamp(taglines.tagline_path(root, cid))
+    if tagline_stamp is not None:
+        stamps.append(tagline_stamp)
+    images, focus, art = assets.version_art(root, cid, vid)
+    if art is None:
+        cacheable = False
+    else:
+        stamps.extend(art)
+    facts = {
+        "names": tuple(i["name"] for i in images),
+        "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
+        "focus": focus,
+        "avatar_file": (crop and assets.image_path(root, cid, vid, assets.AVATAR) is not None),
+        "focus_file": (crop and safe_id(vid)
+                       and (d / "assets" / vid / assets.FOCUS_FILE).exists()),
+        "tagline": taglines.read(root, cid),
+    }
+    return facts, (tuple(dict.fromkeys(stamps)) if cacheable else None)
 
 
 def _listed_dirs(root: Path) -> list[Path]:
@@ -591,9 +849,10 @@ def dir_hash(root: Path, cid: str) -> str | None:
 
 
 def character_count(root: Path) -> int:
+    # `_listed_names` for the directories -- their type comes off the listing,
+    # so only `character.md` costs a stat -- then that stat as the filter.
     d = _chars_dir(root)
-    return sum(1 for p in d.iterdir()
-               if p.is_dir() and (p / "character.md").exists() and safe_id(p.name)) if d.exists() else 0
+    return sum(1 for cid in _listed_names(d) if (d / cid / "character.md").exists())
 
 
 def character_exists(root: Path, cid: str) -> bool:
