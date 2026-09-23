@@ -17,7 +17,7 @@ import threading
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import atomic
+from . import atomic, statcache
 from .paths import safe_id
 
 AVATAR = "avatar"
@@ -444,27 +444,72 @@ def list_in(d: Path) -> list[dict]:
     Newest wins, the same rule and the same tie-break `path_in` resolves by,
     so the entry always describes the bytes the serve route returns.
     """
-    if not d.exists():
+    return _listing(_candidates(d))
+
+
+def _candidates(d: Path) -> dict[str, list[tuple[str, int, int]]] | None:
+    """Every file in `d` that could answer for a logical image, by stem, each
+    as `(name, st_mtime_ns, st_size)` -- or None when `d` is not there to list.
+
+    ONE stat per file, and it is the one the listing needs anyway: `os.scandir`
+    carries each entry's type from the directory read, so `is_file` costs
+    nothing for a plain file, and the stat that ranks two siblings is the same
+    stat the `v` token is formatted from. `iterdir` paid for the type check, a
+    stat per comparison and a fresh stat for the token -- three per image on
+    the listing every character grid row and describe queue is built from.
+
+    The token coming from the ranking stat is a tightening, not only a saving:
+    the two used to be taken apart, so a file rewritten between them could be
+    ranked by one version of itself and tokened by another.
+
+    The stem and extension split is `names_in`'s, which that function's
+    docstring holds to this one: for every name either accepts, a
+    `rpartition(".")` and pathlib's `stem`/`suffix` agree.
+    """
+    try:
+        it = os.scandir(d)
+    except OSError:
+        # `d.exists()` was the old guard, and it reads a missing directory and
+        # a missing PARENT the same way -- while a `d` that exists but cannot
+        # be listed (a file, a permissions problem) raised out of `iterdir`.
+        # Both halves are kept.
+        if not d.exists():
+            return None
+        raise
+    found: dict[str, list[tuple[str, int, int]]] = {}
+    with it:
+        for e in it:
+            stem, _, ext = e.name.rpartition(".")
+            # filter on addressability, not just the extension: a name
+            # image_path could never resolve would advertise a gallery entry
+            # that cannot be served, promoted or deleted (#259 review).
+            # `promote-tmp` is the one deliberate exception -- unwritable, but a
+            # stranded one is shown on purpose so failed recovery is visible
+            # rather than silent (#253).
+            if not (stem and _norm_ext(ext) and _addressable_name(stem)):
+                continue
+            try:
+                if not e.is_file():
+                    continue
+                st = e.stat()
+            except OSError:
+                continue   # vanished mid-scan; a listing must not fail over one file
+            found.setdefault(stem, []).append((e.name, st.st_mtime_ns, st.st_size))
+    return found
+
+
+def _listing(found: dict[str, list[tuple[str, int, int]]] | None) -> list[dict]:
+    """`list_in`'s entries from `_candidates`: newest sibling per stem by
+    (mtime, name), which is order-independent because names are unique -- so
+    the directory's own enumeration order, unlike `iterdir`'s sorted one,
+    cannot change which file wins."""
+    if not found:
         return []
-    best: dict[str, Path] = {}
-    for p in sorted(d.iterdir()):
-        # filter on addressability, not just the extension: a name image_path
-        # could never resolve would advertise a gallery entry that cannot be
-        # served, promoted or deleted (#259 review). `promote-tmp` is the one
-        # deliberate exception -- unwritable, but a stranded one is shown on
-        # purpose so failed recovery is visible rather than silent (#253).
-        if p.is_file() and _norm_ext(p.suffix) and _addressable_name(p.stem):
-            cur = best.get(p.stem)
-            if cur is None or (_mtime_ns(p), p.name) > (_mtime_ns(cur), cur.name):
-                best[p.stem] = p
     out: list[dict] = []
-    for name in sorted(best):
-        p = best[name]
-        try:
-            out.append({"name": name, "ext": p.suffix.lstrip(".").lower(),
-                        "v": image_version(p)})
-        except OSError:
-            continue   # vanished mid-scan; a listing must not fail over one file
+    for stem in sorted(found):
+        name, mtime_ns, size = max(found[stem], key=lambda c: (c[1], c[0]))
+        out.append({"name": stem, "ext": name.rpartition(".")[2].lower(),
+                    "v": _token(mtime_ns, size)})
     return out
 
 
@@ -485,7 +530,99 @@ def image_version(p: Path) -> str:
     """Cache-busting token for an image file's current bytes; a `?v=` URL
     carrying it is served immutable, so the browser never revalidates."""
     st = p.stat()
-    return f"{st.st_mtime_ns:x}-{st.st_size:x}"
+    return _token(st.st_mtime_ns, st.st_size)
+
+
+def _token(mtime_ns: int, size: int) -> str:
+    """`image_version`'s token from a stat already in hand."""
+    return f"{mtime_ns:x}-{size:x}"
+
+
+def _stranded(found: dict[str, list[tuple[str, int, int]]]) -> bool:
+    """Whether `_heal_stranded_promotion` could find something to rescue among
+    these candidates. Case-folded, so it answers yes wherever the heal's glob
+    might match (a case-insensitive filesystem): a false yes only costs a
+    listing that is not memoized."""
+    return any(stem.casefold() == _PROMOTE_TMP for stem in found)
+
+
+def version_art(root: Path, cid: str, vid: str,
+                base: str = "characters") -> tuple[list[dict], int | None, tuple | None]:
+    """`(list_images(...), read_focus(...), stamps)` for one version folder.
+
+    The same two answers those functions give, plus what vouches for them in
+    `statcache.memo_stamped`'s terms, so a caller memoizing a row built from a
+    version's art knows which stats will tell it the art moved:
+
+    - the folder itself, stamped before it is listed -- its mtime covers every
+      image arriving, leaving or being renamed, and `focus.json` appearing;
+    - each file that could answer for `AVATAR`, whose bytes are the only ones
+      a row reports on (`avatar_v`); for every other image only the NAME is
+      used, and names are the folder's listing;
+    - `focus.json` when there is one, stamped before it is read.
+
+    A folder that is not there is vouched for by the nearest ancestor that is,
+    up to `root`: creating it moves that directory's mtime.
+
+    The stamps are None -- "compute again next time" -- when a file vanished
+    mid-read, and when the folder holds a stranded promotion: `list_images`
+    heals one on every scan, and a heal that failed (a read-only store, a held
+    file) is meant to be retried by the next scan rather than remembered as
+    the answer.
+    """
+    if not (safe_id(cid) and safe_id(vid)):
+        return [], None, ()
+    d = _dir(root, cid, vid, base)
+    here = statcache.stamp(d)
+    if here is None:
+        # Walk up to whatever exists; `root` itself missing leaves nothing to
+        # vouch with, and an empty answer that is recomputed every time.
+        up = next((s for s in map(statcache.stamp, (d.parent, d.parent.parent,
+                                                     d.parent.parent.parent, root))
+                   if s is not None), None)
+        # The folder may have been created since that stamp; whatever the
+        # reads below see, the stamp no longer matches next time.
+        return (list_images(root, cid, vid, base), read_focus(root, cid, vid, base),
+                None if up is None else (up,))
+    stamps = [here]
+    _heal_stranded_promotion(d)      # as `list_images` does, before listing
+    found = _candidates(d)
+    if found is None:
+        return [], read_focus(root, cid, vid, base), None
+    cacheable = _restamp_avatar(d, found, stamps) and not _stranded(found)
+    focus_stamp = statcache.stamp(d / FOCUS_FILE)
+    if focus_stamp is not None:
+        stamps.append(focus_stamp)
+    focus = read_focus(root, cid, vid, base)
+    return _listing(found), focus, (tuple(stamps) if cacheable else None)
+
+
+def _restamp_avatar(d: Path, found: dict[str, list[tuple[str, int, int]]],
+                    stamps: list) -> bool:
+    """Stamp every file that could answer for `AVATAR`, onto `stamps`, and
+    rebuild its candidates in `found` from those stamps. False when one of
+    them vanished since the scan (the listing then simply lacks it).
+
+    From the STAMPS, so the token a row reports and the stat that vouches for
+    it are one stat: stamping after the scan instead would let a rewrite
+    between the two store the new stamp beside the old token. Not the scan's
+    own stat either: `DirEntry.stat()` has no inode on Windows, so it would
+    never equal the `os.stat` a later call compares it with.
+    """
+    ok = True
+    fresh = []
+    for name, _mtime, _size in found.get(AVATAR, []):
+        s = statcache.stamp(os.path.join(d, name))
+        if s is None:
+            ok = False
+            continue
+        stamps.append(s)
+        fresh.append((name, s[1], s[3]))
+    if fresh:
+        found[AVATAR] = fresh
+    else:
+        found.pop(AVATAR, None)
+    return ok
 
 
 def read_focus(root: Path, cid: str, vid: str, base: str = "characters") -> int | None:

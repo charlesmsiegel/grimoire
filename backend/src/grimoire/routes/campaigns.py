@@ -22,7 +22,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from .. import store
 from ..llm import LLMClient
@@ -766,8 +766,10 @@ def list_campaign_library(cid: str):
 
 
 @router.get("/campaigns/{cid}/images/undescribed")
-def list_campaign_undescribed_images(cid: str):
-    """This campaign's OWN undescribed art — the queue's campaign half.
+def list_campaign_undescribed_images(cid: str, count: bool = False):
+    """This campaign's OWN undescribed art — the queue's campaign half. With
+    `?count=1`, only how many (`{"count": n}`), through the same filter as the
+    list -- see the world queue's count form.
 
     Registered before `/images/{name}`, which would otherwise match
     "undescribed" as an image name.
@@ -780,6 +782,24 @@ def list_campaign_undescribed_images(cid: str):
     need words of their own.
     """
     root = _campaign_root_or_404(cid)
+    # One overlay view for every record lookup below, as the listings share one.
+    v = store.overlay.view(cid)
+    # One read per record, name and versions together -- see the world queue's
+    # `_describable` for why both, and why one memo.
+    seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
+
+    def describable(base: str, rid: str, vid: str) -> tuple[str, set[str]] | None:
+        key = (base, rid)
+        if key not in seen:
+            seen[key] = _campaign_record_name_and_versions(cid, base, rid, v)
+        found = seen[key]
+        return None if found is None or (found[1] and vid not in found[1]) else found
+
+    if count:
+        return {"count": len(store.campaign_images.own_undescribed(cid)) + sum(
+            k for base in _UNDESCRIBED_BASES
+            for rid, vid, k in store.image_descriptions.undescribed_by_version(root, base)
+            if describable(base, rid, vid) is not None)}
     out: list[dict] = []
     # `own_undescribed`, NOT the merged listing: the library reads through to
     # the world now, and handing the merged names to this queue would re-offer
@@ -790,16 +810,10 @@ def list_campaign_undescribed_images(cid: str):
                 "url": f"/api/campaigns/{cid}/images/{quote(image['name'], safe='')}"}
                for image in store.campaign_images.own_undescribed(cid))
 
-    # One read per record, name and versions together -- see the world queue's
-    # `_record_name_and_versions` for why both, and why one memo.
-    seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
-    for base in ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS):
+    for base in _UNDESCRIBED_BASES:
         for item in store.image_descriptions.undescribed(root, base):
-            key = (base, item["id"])
-            if key not in seen:
-                seen[key] = _campaign_record_name_and_versions(cid, base, item["id"])
-            found = seen[key]
-            if found is None or (found[1] and item["vid"] not in found[1]):
+            found = describable(base, item["id"], item["vid"])
+            if found is None:
                 continue
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
                         "name": item["name"], "record_name": found[0],
@@ -807,17 +821,26 @@ def list_campaign_undescribed_images(cid: str):
     return out
 
 
-def _campaign_record_name_and_versions(cid: str, base: str,
-                                       rid: str) -> tuple[str, set[str]] | None:
+#: The record bases the campaign describe queue walks: the world queue's
+#: (`routes.characters.UNDESCRIBED_BASES`), which routes cannot import.
+_UNDESCRIBED_BASES = ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS)
+
+
+def _campaign_record_name_and_versions(cid: str, base: str, rid: str,
+                                       v: store.overlay.View | None = None,
+                                       ) -> tuple[str, set[str]] | None:
     """`_record_name_and_versions` (routes/characters.py) through the overlay."""
     try:
         if base == "characters":
-            d = store.overlay.read_character(cid, rid)
-            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
+            # Off `character.md` and a listing, not the full overlay read --
+            # which lists and byte-compares every version's art to answer two
+            # questions about the record.
+            name, versions = store.overlay.character_name_and_versions(cid, rid, v=v)
+            return str(name), set(versions)
         if base == store.pcs.ASSET_BASE:
-            d = store.overlay.read_pc(cid, rid)
-            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
-        return str(store.overlay.read_entity(cid, base, rid)["meta"]["name"]), set()
+            d = store.overlay.read_pc(cid, rid, v=v)
+            return str(d["meta"]["name"]), {ver["id"] for ver in d["versions"]}
+        return str(store.overlay.read_entity(cid, base, rid, v=v)["meta"]["name"]), set()
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
             store.entities.EntityNotFound, KeyError, OSError, UnicodeDecodeError):
         return None
@@ -1969,8 +1992,10 @@ def get_campaign_characters(cid: str):
     # Same rule as the world roster: the badge counts the world greetings the
     # character is present at, read through the overlay so a campaign's own
     # and deleted greetings are respected.
-    return store.greetings.add_featuring_counts(
-        store.overlay.list_characters(cid), store.overlay.list_greetings(cid))
+    # Rendered as it stands, not through `jsonable_encoder`: already plain
+    # JSON, and the same bytes -- see the world roster's route.
+    return JSONResponse(store.greetings.add_featuring_counts(
+        store.overlay.list_characters(cid), store.overlay.list_greetings(cid)))
 
 
 @router.post("/campaigns/{cid}/characters")

@@ -205,22 +205,26 @@ def test_undescribed_is_not_swallowed_by_the_generic_entity_routes(client, world
 
 def test_the_backlog_reads_each_record_once_not_once_per_image(client, world, monkeypatch):
     """A character with a gallery contributes one queue entry per picture, and
-    the name lookup opens a card file -- so the naive loop re-read one card once
-    per image in it (395ms for a 300-character world, on a route that fires
-    whenever the character page mounts)."""
+    the name lookup reads the record -- so the naive loop re-read one record
+    once per image in it (395ms for a 300-character world, on a route that
+    fires whenever the character page mounts). And the lookup is the light one:
+    a name and the version ids, never the full read with every card in it."""
     made = client.post(f"/api/worlds/{world}/characters", json={"name": "Seraphine"}).json()
     cid, vid = made["character"], made["version"]
     for name in ("avatar", "gallery_1", "gallery_2"):
         client.put(f"/api/worlds/{world}/characters/{cid}/versions/{vid}/images/{name}",
                    files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
 
-    reads = []
-    real = store.characters.read_character
-    monkeypatch.setattr(store.characters, "read_character",
+    reads, full = [], []
+    real = store.characters.name_and_versions
+    monkeypatch.setattr(store.characters, "name_and_versions",
                         lambda root, rid: (reads.append(rid), real(root, rid))[1])
+    monkeypatch.setattr(store.characters, "read_character",
+                        lambda root, rid: full.append(rid))
     queue = client.get(f"/api/worlds/{world}/images/undescribed").json()
     assert len(queue) == 3                     # three images...
-    assert reads.count(cid) == 1               # ...one card read
+    assert reads.count(cid) == 1               # ...one record read
+    assert full == []                          # ...and no card opened for it
 
 
 def test_the_campaign_queue_covers_its_library_and_its_diverged_art(client, world):

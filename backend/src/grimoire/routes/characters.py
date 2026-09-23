@@ -16,7 +16,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .. import store
@@ -68,8 +68,15 @@ def get_world_characters(wid: str):
     root = _world_root_or_404(wid)
     # The badge count agrees with the character page's Greetings tab, which
     # lists world greetings featuring the character beneath the card's own.
-    return store.greetings.add_featuring_counts(
+    rows = store.greetings.add_featuring_counts(
         store.characters.list_characters(root), store.greetings.list_greetings(root))
+    # Rendered as it stands rather than through FastAPI's `jsonable_encoder`,
+    # which walks every value of a list that is already plain JSON -- strs,
+    # ints, bools, None, lists and str-keyed dicts, nothing it would convert --
+    # and on a large cast that walk cost more than building the rows from the
+    # listing memo. The bytes are the ones the default path renders, which is
+    # this same class (`test_world_list_fast.py` compares them).
+    return JSONResponse(rows)
 
 
 @router.post("/worlds/{wid}/characters")
@@ -641,9 +648,9 @@ def post_character_lorebook_import(wid: str, cid: str, vid: str):
 
 
 @router.get("/worlds/{wid}/images/undescribed")
-def list_undescribed_images(wid: str):
+def list_undescribed_images(wid: str, count: bool = False):
     """Every stored image in this world with NO description entry — the backlog
-    `DescribeQueue` steps through.
+    `DescribeQueue` steps through. With `?count=1`, only how many: `{"count": n}`.
 
     Key ABSENT, never merely empty: an image reviewed and deliberately left
     undescribed is finished, and re-offering it is how a queue never empties.
@@ -662,32 +669,28 @@ def list_undescribed_images(wid: str):
     count. Measured at ~200ms for a 300-character world with 900 undescribed
     images — an outlier by some way, and one that shrinks as the queue is
     worked. Worth knowing before adding anything else to this loop.
+
+    Which is what the count form is for: a page that only labels a button
+    needs the number, and the number needs neither a `v` token per image (a
+    stat apiece) nor a URL. It walks `undescribed_by_version` instead, with
+    the SAME record filter (`_describable`), so it is the length of the list
+    this route would have answered, not an approximation of it.
     """
     root = _world_root_or_404(wid)
-    out = []
-    # One name lookup per RECORD, not per image. A character with a gallery
-    # contributes an entry per picture and `_record_display_name` opens a card
-    # file, so the naive loop re-read one card once per image in it: 395ms for a
-    # 300-character world, on a route that fires whenever the character page
-    # mounts. The same mistake `context.art._keyword_scores` makes it easy to
-    # make twice.
-    # One read per RECORD, yielding both what to call it and which versions it
-    # still has. Two separate memos, or a version check outside the memo, is the
-    # same per-image re-read this exists to avoid -- which is exactly how it
-    # crept back in when the version check was added.
+    # One lookup per RECORD, not per image; see `_describable`.
     seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
-    for base in ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS):
+    if count:
+        n = sum(k for base in UNDESCRIBED_BASES
+                for rid, vid, k in store.image_descriptions.undescribed_by_version(root, base)
+                if _describable(seen, base, rid, vid,
+                                lambda b, r: _record_name_and_versions(root, b, r)) is not None)
+        return {"count": n + store.world_images.undescribed_count(wid)}
+    out = []
+    for base in UNDESCRIBED_BASES:
         for item in store.image_descriptions.undescribed(root, base):
-            key = (base, item["id"])
-            if key not in seen:
-                seen[key] = _record_name_and_versions(root, base, item["id"])
-            found = seen[key]
-            name = found[0] if found else None
-            if name is None or (found is not None and found[1] and item["vid"] not in found[1]):
-                # An asset folder whose record -- or whose VERSION -- is gone.
-                # Not listed: the queue would offer an image no route can
-                # describe, and the PUT it issues is a 404 by design, so the
-                # entry could never be cleared and would be re-offered forever.
+            name = _describable(seen, base, item["id"], item["vid"],
+                                lambda b, r: _record_name_and_versions(root, b, r))
+            if name is None:
                 continue
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
                         "name": item["name"], "record_name": name,
@@ -702,6 +705,40 @@ def list_undescribed_images(wid: str):
                for image in store.world_images.undescribed(wid))
     return out
 
+
+def _describable(seen: dict, base: str, rid: str, vid: str, lookup) -> str | None:
+    """The record name to show beside a queued image, or None to leave it out.
+
+    Left out when its record -- or its VERSION -- is gone: the queue would
+    offer an image no route can describe, and the PUT it issues is a 404 by
+    design, so the entry could never be cleared and would be re-offered
+    forever. Shared by this queue's list and count forms, so the count is the
+    length of the list by construction. (The campaign queue in
+    `routes/campaigns.py` applies the same rule inline: routes do not import
+    one another.)
+
+    `lookup(base, rid)` is the scope's `(name, version ids)` read, and `seen`
+    memoizes it per RECORD, not per image. A character with a gallery
+    contributes an entry per picture, and the naive loop re-read one record
+    once per image in it: 395ms for a 300-character world, on a route that
+    fires whenever the character page mounts. The same mistake
+    `context.art._keyword_scores` makes it easy to make twice. Name and
+    versions come from ONE read, for the same reason: two separate memos, or a
+    version check outside the memo, is the per-image re-read again -- which is
+    exactly how it crept back in when the version check was added.
+    """
+    key = (base, rid)
+    if key not in seen:
+        seen[key] = lookup(base, rid)
+    found = seen[key]
+    if found is None or (found[1] and vid not in found[1]):
+        return None
+    return found[0]
+
+
+#: The RECORD bases the describe queue walks, world and campaign alike.
+#: Greetings are not among them -- see `GALLERY_BASES`.
+UNDESCRIBED_BASES = ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS)
 
 #: Every base a whole-world image sweep walks: `list_undescribed_images`' list,
 #: plus greetings. `ENTITY_KINDS` is spread rather than spelled out, so a sixth
@@ -1024,8 +1061,12 @@ def _record_name_and_versions(root, base: str, rid: str) -> tuple[str, set[str]]
     """
     try:
         if base == "characters":
-            d = store.characters.read_character(root, rid)
-            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
+            # The name and the version ids, off `character.md` and a listing:
+            # `read_character` would open every card and list every version's
+            # art to answer the same two questions, once per record per queue
+            # read.
+            name, versions = store.characters.name_and_versions(root, rid)
+            return str(name), set(versions)
         if base == store.pcs.ASSET_BASE:
             d = store.pcs.read_pc(root, rid)
             return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}

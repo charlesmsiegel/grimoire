@@ -1214,18 +1214,49 @@ def dematerialize_actor(cid: str, kind: str, aid: str) -> None:
 
 
 def _patch_char_item(v: View, item: dict) -> dict:
-    images = list_images(v.cid, item["id"], item["default_version"], v=v)
-    names = [i["name"] for i in images]
+    """One listing row with its asset-derived fields and tagline re-derived
+    from the union -- `list_images`, `read_focus` and `tagline`, answered from
+    each root's memoized `characters.version_facts` instead of re-listing and
+    re-reading both roots per row on every request.
+
+    The merge is those three functions' rules, restated over the facts, and
+    each branch is theirs: a detached record never consults the world (so its
+    facts are never even computed), a per-image tombstone hides that world
+    image, and the crop comes from the campaign whenever the campaign owns an
+    avatar file, a `focus.json`, or a tombstone over the world's avatar.
+    `test_world_list_fast.py` holds the patched row to the one the three
+    functions build, across each of those.
+    """
+    aid, vid = item["id"], item["default_version"]
+    mine = characters.version_facts(v.croot, aid, vid, crop=True)
+    detached = _flat_ref("characters", aid) in v.off
+    theirs = None if detached else characters.version_facts(v.wroot, aid, vid)
+    # `list_images`' union, over names: the campaign's, then each world name
+    # the campaign holds no file for and has not tombstoned. The avatar's
+    # token comes from whichever side answered for the name -- a campaign row
+    # whose avatar lives world-side would otherwise carry the campaign root's
+    # token for a file it does not have, and `?v=` caches immutable.
+    names = set(mine["names"])
+    avatar_v = mine["avatar_v"]
+    if theirs is not None:
+        inherited = [n for n in theirs["names"]
+                     if n not in names and _asset_ref("characters", aid, vid, n) not in v.gone]
+        if assets.AVATAR in inherited:
+            avatar_v = theirs["avatar_v"]
+        names.update(inherited)
+    # `read_focus`: the campaign's crop whenever it owns an avatar file, a
+    # `focus.json`, or a tombstone over the world's avatar -- or is detached.
+    focus = (mine["focus"] if (theirs is None or mine["avatar_file"] or mine["focus_file"]
+                               or _asset_ref("characters", aid, vid, assets.AVATAR) in v.gone)
+             else theirs["focus"])
     return {**item,
             "has_avatar": assets.AVATAR in names,
-            # From the union, like every other field here: a campaign row whose
-            # avatar lives world-side would otherwise carry the campaign root's
-            # token for a file it does not have, and `?v=` caches immutable.
-            "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
-            "avatar_focus": read_focus(v.cid, item["id"], item["default_version"], v=v),
+            "avatar_v": avatar_v,
+            "avatar_focus": focus,
             "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
             "localized_count": sum(1 for n in names if n.startswith("embed-")),
-            "tagline": tagline(v.cid, item["id"], v=v)}
+            "tagline": (mine["tagline"] if mine["tagline"] or theirs is None
+                        else theirs["tagline"])}
 
 
 def list_characters(cid: str) -> list[dict]:
@@ -1912,6 +1943,16 @@ def read_character(cid: str, char_id: str, *, v: View | None = None) -> dict:
     # and the union above cannot reach a version id the campaign lacks.
     detail["base_versions"] = base_versions(cid, char_id, v=v)
     return detail
+
+
+def character_name_and_versions(cid: str, char_id: str, *,
+                                v: View | None = None) -> tuple[str, list[str]]:
+    """`read_character`'s `meta.name` and version ids, reading no card and no
+    art: both come off whichever root `char_root` says answers for the actor,
+    exactly as the full read takes them. For the campaign describe queue,
+    which asks it once per record behind an image."""
+    v = _view(cid, v)
+    return characters.name_and_versions(char_root(cid, char_id, v=v), char_id)
 
 
 def read_pc(cid: str, pid: str, *, v: View | None = None) -> dict:

@@ -303,6 +303,19 @@ sync client, invalidates the entry. Filesystem timestamps tick coarsely (up to
 leave the signature unchanged; `RACY_WINDOW_NS` handles that the way git
 handles racy-clean, by never caching a file whose mtime is that recent.
 
+The character listings' rows (`statcache.memo_stamped`) are keyed wider,
+because a row is built from directory listings as well as files — which card
+files exist, which images a version holds. Each row carries a stamp of every
+file it read *and* of every directory whose listing it read: a directory's
+mtime moves on every create, unlink and rename inside it (every atomic write
+included), so a card or an image arriving from a sync client is noticed
+without the row having to list anything again. The stamp adds `st_ctime_ns`,
+which catches a same-size in-place rewrite whose mtime was handed back — the
+residual the `(path, mtime_ns, size)` signature above accepts. What it cannot
+see is a mount whose directories do not advance their mtime when an entry
+changes; on such a store a new file shows up at the next change to anything
+else the row read, or at restart.
+
 ### Conflicted copies
 
 What no read notices is the wreckage a sync client leaves when two *devices*
