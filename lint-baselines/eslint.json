@@ -382,6 +382,9 @@
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 1
   },
+  "frontend/src/components/play/TranscriptPost.tsx": {
+    "jsx-a11y/no-autofocus": 1
+  },
   "frontend/src/components/review/AbsorbEditRow.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
@@ -419,12 +422,12 @@
   },
   "frontend/src/routes/CampaignView.tsx": {
     "@typescript-eslint/no-explicit-any": 18,
-    "@typescript-eslint/no-floating-promises": 14,
-    "@typescript-eslint/no-misused-promises": 22,
+    "@typescript-eslint/no-floating-promises": 13,
+    "@typescript-eslint/no-misused-promises": 13,
     "@typescript-eslint/no-unnecessary-type-assertion": 5,
     "@typescript-eslint/no-unsafe-assignment": 3,
     "@typescript-eslint/no-unsafe-member-access": 11,
-    "jsx-a11y/no-autofocus": 4,
+    "jsx-a11y/no-autofocus": 3,
     "react/no-array-index-key": 1
   },
   "frontend/src/routes/CampaignWizard.test.tsx": {

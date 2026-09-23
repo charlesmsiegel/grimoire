@@ -220,6 +220,25 @@ test("cost chips never land on the transcript they were not read for", async () 
   expect(screen.queryByText(/\$9\.99/)).toBeNull();
 });
 
+test("opening a scene reads its costs and the budget once each, and a turn once more", async () => {
+  // Both used to be read on the way in AND again when the transcript's landing
+  // bumped the refresh beat, the first answer only ever discarded. With a
+  // budget set, each is a scan of the usage ledger.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(api.getSceneUsage).toHaveBeenCalledTimes(1);
+  expect(api.getSceneUsage).toHaveBeenCalledWith("run", "s1");
+  expect(api.getCampaignBudget).toHaveBeenCalledTimes(1);
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(api.getSceneUsage).toHaveBeenCalledTimes(2));
+  expect(api.getCampaignBudget).toHaveBeenCalledTimes(2);
+});
+
 test("a failed cost read leaves the transcript alone", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
@@ -1123,6 +1142,22 @@ test("a seeded premise survives the rename from the first date set", async () =>
   expect(screen.getByTestId("cast-panel")).toHaveTextContent("A premise");
 });
 
+test("the setup panel is not remounted by the rename its own date field causes", async () => {
+  // The rename drops `loaded` until the re-read lands, on purpose: nothing may
+  // act on posts whose indices might have moved. The setup panel acts on no
+  // post, and remounting it there threw away what it held and re-read the
+  // campaign's character list mid-setup.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  const panel = await screen.findByTestId("cast-panel");
+  (api.listScenes as any).mockResolvedValue(
+    [{ id: "s10", title: "Old", model: "", created: "", updated: "" }]);
+  fireEvent.click(screen.getByText("stub-datestamp"));   // first date set renames s1 -> s10
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s10", { limit: 60 }));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s10"));
+  expect(screen.getByTestId("cast-panel")).toBe(panel);
+});
+
 test("closing the chooser creates nothing", async () => {
   renderCampaign();
   await screen.findByText(/Run One/);
@@ -2006,6 +2041,36 @@ test("a cancel that streamed nothing still waits for the backend's flush", async
   setTimeout(() => { flushed = true; }, 100);
   await waitFor(() =>
     expect(screen.getByText("held back all along")).toBeInTheDocument());
+});
+
+test("the flush poll asks for the transcript's length, and refreshes the scene once it grows", async () => {
+  // A tick used to be a whole scene refresh -- the cast, the roster, the
+  // briefing, the column's reads -- so a Stop that waited out the poll cost a
+  // dozen requests a tick to learn one number. The length is polled; the
+  // refresh runs once, on the tick that sees it grow.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let flushed = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {}, total: flushed ? 1 : 0,
+    messages: flushed ? [{ role: "assistant", content: "the flushed partial" }] : [],
+  }));
+  (api.chat as any).mockImplementation(hangingChat(["a fragment"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
+  const castReads = (api.getCast as any).mock.calls.length;
+  const lengthReads = () =>
+    (api.getScene as any).mock.calls.filter((c: any[]) => c[2]?.limit === 1).length;
+
+  await waitFor(() => expect(lengthReads()).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+  expect((api.getCast as any).mock.calls.length).toBe(castReads);   // no refresh yet
+
+  flushed = true;
+  expect(await screen.findByText("the flushed partial", {}, { timeout: 4000 })).toBeInTheDocument();
+  expect((api.getCast as any).mock.calls.length).toBe(castReads + 1);
 });
 
 test("StrictMode's mount cycle does not switch the flush poll off", async () => {

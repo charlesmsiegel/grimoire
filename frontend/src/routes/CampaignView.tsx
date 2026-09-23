@@ -1,10 +1,7 @@
-import { Thinking, SavedThinking } from "../components/Thinking";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Thinking } from "../components/Thinking";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useMatch, useNavigate, useParams } from "react-router-dom";
 import { sceneNumber as numberOf } from "./sceneNumber";
-import Markdown from "react-markdown";
-import { hideArtHandles } from "../artHandles";
-import remarkGfm from "remark-gfm";
 import {
   api, ApiError, invalidateConfigCache, type Actor, type SceneMeta,
   type Message, type RosterEntry, type SceneAlternates,
@@ -13,7 +10,7 @@ import {
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
   type CampaignBudget,
   type IncomingRef,
-  type UsageBucket,
+  type SceneUsage,
   type UsagePostBucket,
 } from "../api/client";
 import { THUMB } from "../api/thumbs";
@@ -28,7 +25,6 @@ import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { PostImagePicker, type PickerTarget } from "../components/PostImagePicker";
 import { ChangesPanel } from "../components/ChangesPanel";
-import { ResponseControls } from "../components/ResponseControls";
 import { PassageCharacterDialog } from "../components/PassageCharacterDialog";
 import { ReplayPanel } from "../components/ReplayPanel";
 import { IncomingReview } from "../components/IncomingReview";
@@ -36,12 +32,10 @@ import { CompositionPanel } from "../components/CompositionPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
 import { SceneInspector } from "../components/SceneInspector";
-import { PostCost, UNPRICED, bucketPrice, money } from "../components/cost";
+import { UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
-import RerollRoutePicker, {
-  NO_REROLL_ROUTE, type RerollRoute,
-} from "../components/RerollRoute";
+import { NO_REROLL_ROUTE, type RerollRoute } from "../components/RerollRoute";
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { onConfigChanged } from "../appEvents";
@@ -60,33 +54,15 @@ import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { useHotkeys } from "../shortcuts/useHotkeys";
-import { commentPlugin } from "../markdown/commentPlugin";
-import { quotePlugin } from "../markdown/quotePlugin";
+import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
+import {
+  DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun,
+  type TranscriptActions, type TranscriptContext, type TranscriptReroll, type TranscriptRunData,
+} from "../components/play/TranscriptPost";
 
-// Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
-// Prefixed with an invisible separator so it can never collide with a real
-// typed speaker label or cast name — a character actually named "Roll" is
-// unaffected.
-const ROLL_SPEAKER = "⁣Roll";
-// Marks a scene transition line — join/leave, location change, time advance
-// (backend: scenes.TRANSITION_SPEAKER); same invisible-separator prefix as
-// ROLL_SPEAKER. Purely internal metadata: drift measurement uses it as a turn
-// separator and reroll steps over it, but it is NEVER displayed — a transition
-// renders as the unlabelled narration it was before the tag existed.
-const TRANSITION_SPEAKER = "⁣Scene";
-// Marks a stored director note (backend: scenes.DIRECTOR_SPEAKER) — what the
-// player typed to STEER a turn rather than to say in it. Same
-// invisible-separator prefix as the two above.
-//
-// It is in the transcript so the generation it bought has an index to be
-// charged against; it is not prose, so it is hidden by default and revealed by
-// a per-scene toggle. Shown, it renders under a dashed rule rather than a
-// speaker plate: it is a stage direction in the margin, not a line in the
-// scene.
-const DIRECTOR_SPEAKER = "⁣Note";
-// What a shown note is labelled. Never the model's label and never the
-// player's: it is neither of them speaking.
-const DIRECTOR_LABEL = "Note";
+// The transcript's four kinds of line — a roll, a transition, a director note
+// and what a shown note is labelled — are defined beside the row that renders
+// them (`components/play/TranscriptPost`), and imported above.
 // The window token of a transcript that has been edited optimistically. Real
 // tokens come from `++windowTokenRef` and so start at 1; this identifies posts
 // that no fetch produced, so every readiness gate comparing against a fetch's
@@ -197,17 +173,46 @@ function liveProposal(record: ProposalRecord | null): ProposalRecord | null {
 // "date" is latest in-story date first, "order" is the highest scene number
 // first. Scenes with no in-story date always sort after every dated scene.
 
-// Memoized so typing in the input bar (which re-renders CampaignView on every
-// keystroke) doesn't re-parse the markdown of every unchanged message.
-const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: string }) {
-  // commentPlugin runs first, though nothing depends on it doing so: quotePlugin
-  // scans `text` nodes only and steps over `raw`/`comment` ones without reading
-  // their values, so a quote mark inside a note could never have opened a run
-  // either way. The order is for reading, not for correctness.
-  return (
-    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[commentPlugin, quotePlugin]}>{content}</Markdown>
-  );
-});
+/** A function whose identity never changes and which always runs the latest
+ *  closure it was handed.
+ *
+ *  For the handlers this view passes to memoized children — the transcript
+ *  rows, the context column, the inspector. Every one of them is declared in
+ *  the render body and closes over this render's state, so as a plain prop it
+ *  is a new function on every keystroke and every streamed delta, and a
+ *  memoized child compares it, finds it changed and re-renders anyway. Rather
+ *  than a dependency list per handler, which is where a stale closure would
+ *  come from, the ref follows the render and the wrapper never moves.
+ *
+ *  Updated in a layout effect, not during render: the wrapper is only ever
+ *  called from an event handler, after the commit that installed its closure,
+ *  and a render that React throws away must not leave its closure behind. */
+function useStableCallback<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  useLayoutEffect(() => { ref.current = fn; });
+  return useCallback((...args: A) => ref.current(...args), []);
+}
+
+/** `useStableCallback` for a whole set of handlers at once: an object built on
+ *  the first render whose members forward to the latest render's. The keys are
+ *  fixed by that first render, so a call site hands in the same set every
+ *  time. */
+function useStableHandlers<T extends { [K in keyof T]: (...args: never[]) => void }>(
+  handlers: T,
+): T {
+  const ref = useRef(handlers);
+  useLayoutEffect(() => { ref.current = handlers; });
+  const [stable] = useState(() => {
+    const out: Partial<T> = {};
+    for (const key of Object.keys(handlers) as (keyof T)[]) {
+      const forward = (...args: unknown[]) =>
+        (ref.current[key] as unknown as (...a: unknown[]) => void)(...args);
+      out[key] = forward as unknown as T[keyof T];
+    }
+    return out as T;
+  });
+  return stable;
+}
 
 export default function CampaignView({ ready }: { ready: boolean }) {
   const { cid = "" } = useParams();
@@ -281,6 +286,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // ids repeat across campaigns, so A→B with a colliding id reads as a refresh
   // and a sid-only key never notices the transcript is still A's.
   const [loaded, setLoaded] = useState<{ cid: string; sid: string; token: number } | null>(null);
+  // Which scene's transcript is on screen, for the one reader that has to keep
+  // its answer through a rename: the empty-scene setup panel. `loaded` is the
+  // answer for everything that ACTS on the posts, and a rename drops it on
+  // purpose (`reviewSceneRenamed`) until the re-read lands. The setup panel acts
+  // on no post, and a first date set -- one of its own fields -- is a rename, so
+  // gating it on `loaded` would remount it mid-setup, throwing away what it
+  // holds and re-reading the campaign's whole character list. This follows the
+  // rename instead (`adoptSceneId`), and is otherwise set and cleared exactly
+  // where `loaded` is.
+  const [landedScene, setLandedScene] = useState<{ cid: string; sid: string } | null>(null);
 
   // "The transcript on screen is the active scene's own."
   //
@@ -508,7 +523,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // (#153). Held as a level rather than a boolean so dismissing the 80% warning
   // does not also swallow the one that says the budget is gone: crossing into
   // `over` is a different fact, and it gets said again.
-  const [budget, setBudget] = useState<CampaignBudget | null>(null);
+  //
+  // Held with the campaign it was read for, because it is read later than it
+  // used to be (see the effect that reads it): between a campaign switch and
+  // the new campaign's first transcript, the previous campaign's answer is
+  // still the one on hand, and it must not be shown -- or handed to the Cost
+  // section -- as this campaign's.
+  const [budgetRead, setBudgetRead] =
+    useState<{ cid: string; data: CampaignBudget } | null>(null);
+  const budget = budgetRead && budgetRead.cid === cid ? budgetRead.data : null;
   const [budgetSeen, setBudgetSeen] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   /** The post an image is being picked for (#376). Holds the index and who
@@ -927,6 +950,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setActive(null);
     setMessages([]);
     setLoaded(null);
+    setLandedScene(null);
     setFirstIndex(0);
     setHasUserPost(null);
   }
@@ -1435,6 +1459,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (stillWanted && !stillWanted()) return -1;
     setMessages(scene.messages);
     setLoaded({ cid, sid: id, token });
+    setLandedScene({ cid, sid: id });
     // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
     setFirstIndex(scene.offset ?? 0);
     setHasUserPost(scene.has_user_message ?? null);
@@ -1550,28 +1575,48 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // than on a timer, so a campaign with no budget costs one request per scene
   // and the server does not even scan the ledger for it (`level: "off"`).
   //
+  // Not read until the scene being opened has landed, though. Opening a scene
+  // bumps `ctxKey` when its transcript arrives, so a read taken on the way in
+  // -- the campaign changing, or this view mounting -- was answered again a
+  // few hundred milliseconds later with nothing spent in between, and with a
+  // budget set each of those is a scan of the ledger's period. `budgetFor` is
+  // the campaign once its transcript is the one on screen, or once its scene
+  // list has come back empty and there is no transcript to wait for; a
+  // campaign switch or a first open therefore reads once, on the landing.
+  //
   // Every rejection is swallowed to a cleared banner, the rule this whole view
   // follows: a budget lookup that failed is not a reason to put an error over a
   // turn that landed, and the Cost section in the inspector is where a reader
   // who actually wants the figure goes.
+  const budgetFor = transcriptIsActive
+    || (!activeId && sceneListCid === cid && scenes.length === 0) ? cid : null;
   useEffect(() => {
+    if (!budgetFor) return;   // keep the last answer; it is scoped by `cid` anyway
     let live = true;
-    api.getCampaignBudget(cid)
-      .then((b) => { if (live) setBudget(b); })
-      .catch(() => { if (live) setBudget(null); });
+    api.getCampaignBudget(budgetFor)
+      .then((b) => { if (live) setBudgetRead({ cid: budgetFor, data: b }); })
+      .catch(() => { if (live) setBudgetRead(null); });
     return () => { live = false; };
-  }, [cid, ctxKey]);
+  }, [budgetFor, ctxKey]);
 
   // What each player post in this scene has cost, keyed by transcript index
-  // (#153). Read on the same `ctxKey` beat as the budget above.
+  // (#153), and the scene's whole usage read, which the inspector's Cost
+  // section renders rather than asking for it a second time. Read on the same
+  // `ctxKey` beat as the budget above.
   //
   // Held WITH the scene it was read for, and that is load-bearing rather than
   // tidy. This view deliberately keeps scene A's messages on screen until B's
-  // transcript read lands, and the usage read is a separate request that can
+  // transcript read lands, and the usage read is a separate request that could
   // land FIRST — so a plain index-keyed map put B's costs beside A's posts, and
   // left them there for good if B's transcript read then failed. Matching the
   // costs to `loaded` (the transcript actually rendered) rather than to `cid`/
   // `activeId` (the one requested) is what closes that window.
+  //
+  // And read FOR `loaded`, not for `activeId`, for the budget's reason: keyed
+  // on the scene being requested it fired once on the way in and again when
+  // the transcript's landing bumped `ctxKey`, and the first answer could only
+  // ever be discarded by the gate below. A ledger scan is the slowest read on
+  // this screen, so the one that cannot be shown is not asked for.
   //
   // Swallowed to "no chips" on failure, the rule this view follows everywhere:
   // an accounting read that failed is not a reason to put an error over a
@@ -1579,19 +1624,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // figure and an explanation goes.
   const [postCosts, setPostCosts] =
     useState<{ cid: string; sid: string; byPost: Record<number, UsagePostBucket>;
-               totals: UsageBucket } | null>(null);
+               usage: SceneUsage } | null>(null);
+  const usageCid = loaded?.cid ?? null;
+  const usageSid = loaded?.sid ?? null;
   useEffect(() => {
-    if (!activeId) { setPostCosts(null); return; }
+    // Not cleared when nothing is loaded, nor on the way to a refetch.
+    // `sceneCosts` below already refuses to render a read whose cid/sid is not
+    // the transcript on screen, so clearing bought nothing -- and it made the
+    // chips blink out and back on every `ctxKey` change, which is a real gap
+    // under load: the suite's own `findByText` for a cost could open and close
+    // inside it, and this test reds CI intermittently (#351's shape).
+    if (!usageCid || !usageSid) return;
     let live = true;
-    // NOT cleared here on the way to a refetch. `postChips` below already
-    // refuses to render a bucket whose cid/sid is not the transcript on
-    // screen, so clearing bought nothing -- and it made the chips blink out
-    // and back on every `ctxKey` change, which is a real gap under load: the
-    // suite's own `findByText` for a cost could open and close inside it, and
-    // this test reds CI intermittently (#351's shape).
-    const forCid = cid;
-    const forSid = activeId;
-    api.getSceneUsage(forCid, forSid)
+    api.getSceneUsage(usageCid, usageSid)
       .then((u) => {
         if (!live) return;
         // The scene's own totals ride the read the chips already pay for.
@@ -1599,12 +1644,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // they stay correct where the per-post list is capped or the scan is
         // clamped -- which is why the bar says the total and the gutter says
         // the breakdown, rather than the bar adding the gutter up.
-        setPostCosts({ cid: forCid, sid: forSid, totals: u.totals,
+        setPostCosts({ cid: usageCid, sid: usageSid, usage: u,
                        byPost: Object.fromEntries(u.by_post.map((b) => [b.post, b])) });
       })
       .catch(() => { if (live) setPostCosts(null); });
     return () => { live = false; };
-  }, [cid, activeId, ctxKey]);
+  }, [usageCid, usageSid, ctxKey]);
 
   /** The chips, but only where they describe the transcript on screen. */
   const sceneCosts =
@@ -1619,13 +1664,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  nothing". The design puts spend and modelled side by side here, and they
    *  stay side by side: `Footnotes` in the inspector is where the three are
    *  explained, and this is the one line of it the bar has room for. */
-  const sceneSpend = sceneCosts && sceneCosts.totals.calls > 0
+  const sceneSpend = sceneCosts && sceneCosts.usage.totals.calls > 0
     // `calls > 0` is the "never generated against" test, and it has to be made
     // here: `bucketPrice` answers `$0.00` for an all-zero bucket, which is
     // correct for a bucket of calls that genuinely cost nothing and wrong for
     // a scene that has no calls in it at all. The two are the same numbers and
     // different claims, and only the caller knows which one it is holding.
-    ? bucketPrice(sceneCosts.totals)
+    ? bucketPrice(sceneCosts.usage.totals)
     : null;
 
   // A dismissal belongs to the campaign it was made in, to the level it was
@@ -1875,6 +1920,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // id wherever the reader happens to be standing.
     setSeedPrompt((p) =>
       (p && p.cid === cid && p.sid === oldId ? { ...p, sid: newId } : p));
+    // The same scene's transcript is still the one on screen, which is all the
+    // setup panel asks of it -- see `landedScene`. Same campaign scoping as the
+    // premise just above.
+    setLandedScene((l) => (l && l.cid === cid && l.sid === oldId ? { cid, sid: newId } : l));
     reviewSceneRenamed(oldId, newId);
     // Campaign-scoped like the seed prompt just above, and for the same
     // sentence: the renamed scene is THIS handler's campaign's, so a bare
@@ -2119,13 +2168,39 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       waited += wait;
       wait = Math.min(wait * 2, FLUSH_POLL_MAX_MS);
       if (!owns()) return;
+      // What a tick asks is two questions, not a scene. Each used to be a whole
+      // `selectScene` -- the transcript window, the cast, the roster, the
+      // briefing, the column's reads, a dozen requests -- and a Stop that
+      // waited out the budget cost eight of them to learn one number. The
+      // transcript's LENGTH is what says the flush landed, so that is what is
+      // polled, and the full refresh runs once, on the tick that sees it grow.
+      //
+      // The proposal is the other question, and it is still asked every tick,
+      // because it is the one flush that need not grow the transcript: a reply
+      // that was nothing but a roll fence persists a proposal and no post.
+      // Fired and not awaited, exactly as `selectScene` fires it, and claimed
+      // BEFORE the length read, so the settling read after growth outranks it
+      // however late it lands.
+      const claim = claimProposalRead();
+      api.getRollProposal(cid, id)
+        .then((r) => { if (owns()) applyProposalRead(claim, r.record); })
+        .catch(() => {});
       // A read that fails is a tick that learned nothing, not the end of the
       // wait: the flush this is watching for happens on the server whether or
       // not one GET made it there, and throwing here would escape a `finally`
       // (review, #95). Keep polling until the budget runs out.
-      const n = await selectScene(id, owns).catch(() => -1);
+      const n = await api.getScene(cid, id, { limit: 1 })
+        .then((s) => s.total ?? s.messages.length)
+        .catch(() => -1);
       if (!owns()) return;
-      if (n > seen) return void await settleProposal(id, owns);
+      if (n > seen) {
+        const shown = await selectScene(id, owns).catch(() => -1);
+        if (!owns()) return;
+        // A refresh that failed has not put the partial on screen, so the wait
+        // goes on and the next tick tries again, as it always did.
+        if (shown < 0) continue;
+        return void await settleProposal(id, owns);
+      }
     }
   }
 
@@ -3817,7 +3892,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // The transition tag is internal drift metadata, never a speaker: a
   // transition renders as the unlabelled narration it was before the tag
   // existed, so tagged and pre-existing untagged transitions look the same.
-  const speakerOf = (m: Message) =>
+  //
+  // A callback, like `matchActor` below, because `runs` is memoized on both:
+  // as plain functions they were new on every render and the memo would have
+  // recomputed every time.
+  const speakerOf = useCallback((m: Message) =>
     (m.speaker === TRANSITION_SPEAKER ? undefined
      // A note is assistant-role by the transcript format's construction (the
      // role is derived from the label, and `You` is the only user label), so
@@ -3825,13 +3904,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
      // definitely not.
      : m.speaker === DIRECTOR_SPEAKER ? DIRECTOR_LABEL
      : m.speaker)
-    ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant);
+    ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant),
+  [playerName, labels]);
 
   // A speaker label names a cast member if it matches exactly (case-insensitive)
   // or is a word-boundary prefix of exactly one name — "Winifred" is Winifred
   // Vance; an ambiguous or mid-word label matches no one. Mirrors the
   // backend's scenes.match_name so role attribution and plates agree.
-  function matchActor(speaker: string): Actor | undefined {
+  const matchActor = useCallback((speaker: string): Actor | undefined => {
     const low = speaker.trim().toLowerCase();
     if (!low) return undefined;
     const exact = cast.filter((a) => a.name.toLowerCase() === low);
@@ -3841,7 +3921,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       return n.startsWith(low) && !/[\p{L}\p{N}]/u.test(n[low.length] ?? "");
     });
     return prefixed.length === 1 ? prefixed[0] : undefined;
-  }
+  }, [cast]);
 
   // One highlight, two sources: the dossier's provenance popover and the
   // review's "find in transcript". They can never both be open — the review
@@ -3850,9 +3930,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const isCited = (text: string) =>
     citedNeedle !== "" && text.toLowerCase().includes(citedNeedle);
 
-  // consecutive messages by the same speaker form one run under a single plate
-  type Run = { speaker: string; pc: boolean; actor: Actor | undefined;
-               posts: { m: Message; index: number }[] };
   /** How many notes this scene is holding, for the toggle's label.
    *
    *  Counted over the loaded window rather than the whole scene, like
@@ -3860,37 +3937,67 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  the toggle governs. */
   const noteCount = messages.filter((m) => m.speaker === DIRECTOR_SPEAKER).length;
 
-  const runs: Run[] = [];
-  messages.forEach((m, i) => {
-    const index = firstIndex + i; // absolute: what edit/reroll address it by
-    // Hidden, not removed. The index above is computed from the position in the
-    // loaded window, so skipping here leaves every other post addressed
-    // exactly as before — filtering `messages` first would renumber them and
-    // send an edit to the wrong post.
-    if (m.speaker === DIRECTOR_SPEAKER && !showNotes) return;
-    const speaker = speakerOf(m);
-    const last = runs[runs.length - 1];
-    if (last && last.speaker === speaker) {
-      last.posts.push({ m, index });
-      return;
-    }
-    const actor = matchActor(speaker);
-    runs.push({ speaker, pc: actor ? actor.role === "player" : m.role === "user",
-                actor, posts: [{ m, index }] });
-  });
+  // Consecutive messages by the same speaker form one run under a single plate.
+  // Memoized on what a run is made of, so the run objects -- and so the
+  // memoized rows that receive them -- survive every render that is not a
+  // change to the transcript: a keystroke, a streamed delta.
+  const runs = useMemo(() => {
+    const out: TranscriptRunData[] = [];
+    messages.forEach((m, i) => {
+      const index = firstIndex + i; // absolute: what edit/reroll address it by
+      // Hidden, not removed. The index above is computed from the position in
+      // the loaded window, so skipping here leaves every other post addressed
+      // exactly as before — filtering `messages` first would renumber them and
+      // send an edit to the wrong post.
+      if (m.speaker === DIRECTOR_SPEAKER && !showNotes) return;
+      const speaker = speakerOf(m);
+      const last = out[out.length - 1];
+      if (last && last.speaker === speaker) {
+        last.posts.push({ m, index });
+        return;
+      }
+      const actor = matchActor(speaker);
+      out.push({ speaker, pc: actor ? actor.role === "player" : m.role === "user",
+                 actor, posts: [{ m, index }] });
+    });
+    return out;
+  }, [messages, firstIndex, showNotes, speakerOf, matchActor]);
 
-  function plateAvatar(run: Run): string | null {
+  /** Which posts are the last part of their response in the window — the one
+   *  that carries the response's controls and its saved thinking.
+   *
+   *  One pass from the end. It used to be asked per post, by slicing the rest
+   *  of the window and scanning it, which made every render of a transcript
+   *  full of responses quadratic in its length. */
+  const lastOfResponse = useMemo(() => {
+    const out = new Set<number>();
+    const seen = new Set<string>();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const rid = messages[i].response_id;
+      if (!rid || seen.has(rid)) continue;
+      seen.add(rid);
+      out.add(firstIndex + i);
+    }
+    return out;
+  }, [messages, firstIndex]);
+
+  /** The version the roster has locked for each actor, keyed `kind/id`: a
+   *  lookup per plate rather than a scan of the roster per plate. */
+  const lockedVersion = useMemo(
+    () => new Map(roster.map((r) => [`${r.kind}/${r.id}`, r.version])), [roster]);
+
+  const plateAvatar = useCallback((run: TranscriptRunData): string | null => {
     if (!run.actor) return null;
     // Either actor kind: a speaker plate used to fall back to initials for
     // every PC, because PCs had no images to point at (#219).
     const { kind, id } = run.actor;
-    const ver = roster.find((r) => r.kind === kind && r.id === id)?.version;
+    const ver = lockedVersion.get(`${kind}/${id}`);
     // A 26px plate: the smallest bucket, never the original.
     return ver ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, ver, "avatar",
                                    { w: THUMB.row }) : null;
-  }
+  }, [lockedVersion, cid]);
 
-  /** Whose images the picker offers for a post in `run` (#376).
+  /** Whose images the picker offers for a post by `speaker` (#376).
    *
    *  The speaker decides: an actor post offers that actor's art at the version
    *  the roster has locked — the version that spoke, and the same one
@@ -3899,12 +4006,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  hang art off. An actor the roster cannot place gets the library too: that
    *  is the one scope that is always there, and an empty picker would be worse
    *  than a general one. */
-  function pickerTarget(run: Run): PickerTarget {
-    const ver = run.actor
-      && roster.find((r) => r.kind === run.actor!.kind && r.id === run.actor!.id)?.version;
-    return run.actor && ver
-      ? { kind: run.actor.kind, id: run.actor.id, version: ver, name: run.speaker }
-      : { kind: "campaign", name: run.speaker };
+  function pickerTarget(actor: Actor | undefined, speaker: string): PickerTarget {
+    const ver = actor && lockedVersion.get(`${actor.kind}/${actor.id}`);
+    return actor && ver
+      ? { kind: actor.kind, id: actor.id, version: ver, name: speaker }
+      : { kind: "campaign", name: speaker };
   }
 
   /** Put one image reference into the post, by opening it for editing with the
@@ -3930,6 +4036,89 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const current = (editing?.index === index ? editing.text : post.content).trimEnd();
     setEditing({ index, text: current ? `${current}\n\n${markdown}` : markdown });
   }
+
+  // ---- what the memoized transcript rows are handed ----
+  //
+  // Every handler is stable (`useStableHandlers`) and every value is memoized
+  // on the state it reads, so a render that changes none of them -- every
+  // composer keystroke, every streamed delta -- reaches no row at all. See
+  // `components/play/TranscriptPost` for the rows' side of the contract.
+  const transcriptActions = useStableHandlers<TranscriptActions>({
+    openActor,
+    openReroll: () => {
+      setRerollPrompt("");
+      // Cleared on OPEN rather than on close, so a popover dismissed with
+      // Escape and reopened does not come back wearing the route the player
+      // backed out of.
+      setRerollRoute(NO_REROLL_ROUTE);
+    },
+    stepAlternate: (delta) => void pickAlternate(stepAlternate(delta)),
+    edit: (index, text) => setEditing({ index, text }),
+    cancelEdit: () => setEditing(null),
+    saveEdit: () => void saveEdit(),
+    saveRetcon: () => void saveRetcon(),
+    pickImage: (index, actor, speaker) =>
+      setPicking({ index, target: pickerTarget(actor, speaker) }),
+    cutFrom: (index) => void deleteMessagesFrom(index),
+    replayFrom: (index) => setReplayAt(index),
+    setRerollPrompt,
+    setRerollRoute,
+    reroll: () => void reroll(),
+    deleteResponse: (id) => void mutateResponse(id),
+    rerollResponse: (id, guidance, route) => void rerollResponse(id, guidance, route),
+    activateVariant: (id, variant) => void mutateResponse(id, variant),
+    createCharacter: (rid) => void openCharacterPassage(rid),
+  });
+
+  const editingAny = editing !== null;
+  const transcriptReroll = useMemo<TranscriptReroll>(() => ({
+    swipe: canSwipe
+      ? { active: alternates.active, count: altCount, title: altTitle,
+          disabled: rolling || editingAny || sceneLocked }
+      : null,
+    pop: rerollPrompt !== null ? { prompt: rerollPrompt, route: rerollRoute } : null,
+  }), [canSwipe, alternates.active, altCount, altTitle, rolling, editingAny, sceneLocked,
+       rerollPrompt, rerollRoute]);
+  const transcriptCtx = useMemo<TranscriptContext>(() => ({
+    cid, sid: activeId ?? "",
+    loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
+    busy, rolling, active: transcriptIsActive,
+    responseDisabled: busy || rolling || sceneLocked || editingAny || renamesInFlight > 0,
+    lastIndex: firstIndex + messages.length - 1,
+    rerollAt, canReroll, postChips, citedNeedle, lastOfResponse,
+  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, sceneLocked,
+       editingAny, renamesInFlight, firstIndex, messages.length, rerollAt, canReroll,
+       postChips, citedNeedle, lastOfResponse]);
+
+  // The rows themselves, as one list built only when one of its inputs moves.
+  // Each row would skip a keystroke on its own; this skips even asking them,
+  // which on a long window is a few hundred elements built and compared per
+  // keystroke for nothing.
+  //
+  // The edit form and the reroll row's extras go to the one run that holds
+  // them, and null to every other, so typing in either re-renders one run.
+  const transcript = useMemo(() => runs.map((run) => {
+    const holds = (index: number) => run.posts.some((p) => p.index === index);
+    return (
+      <TranscriptRun key={run.posts[0].index} run={run} avatar={plateAvatar(run)}
+                     ctx={transcriptCtx} actions={transcriptActions}
+                     editing={editing && holds(editing.index) ? editing : null}
+                     reroll={holds(rerollAt) ? transcriptReroll : null} />
+    );
+  }), [runs, plateAvatar, transcriptCtx, transcriptActions, editing, rerollAt, transcriptReroll]);
+
+  // The same treatment for the context column and the inspector, which are
+  // memoized too and were handed fresh closures on every render.
+  const goToQuoteStable = useStableCallback(goToQuote);
+  const closeActorStable = useStableCallback(closeActor);
+  const removeSelectedActorStable = useStableCallback(() => void removeSelectedActor());
+  const openDrawerActor = useStableCallback((kind: string, id: string) => setDrawer(
+    { type: "actor", kind: kind as "characters" | "pcs", id }));
+  const onCastChanged = useStableCallback(() => { if (activeId) refreshAndAsk(activeId); });
+  const onInspectorSceneChanged = useStableCallback(() => { if (activeId) void selectScene(activeId); });
+  const sceneRenamedStable = useStableCallback((id: string) => void sceneRenamed(id));
+  const onBudgetSaved = useStableCallback(
+    (forCid: string, b: CampaignBudget) => setBudgetRead({ cid: forCid, data: b }));
 
   const sceneTitle = scenes.find((s) => s.id === activeId)?.title ?? "";
   /** The scene the open review was absorbed FROM, which is not necessarily the
@@ -4081,20 +4270,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // The column is one swap zone: cast, or one actor. `columnMode` is derived
   // from `selectedActor` rather than stored beside it, so the two can never
   // disagree about which is showing.
+  //
+  // Both are memoized and every handler here is stable, so neither re-renders
+  // for a keystroke or a streamed delta -- only for the state it shows.
   const column = selectedActor
     ? <DossierColumn cid={cid} casefile={casefile} provenance={provenance}
-                     onHoverQuote={setCitedQuote} onGoToTurn={goToQuote}
-                     onBack={closeActor}
-                     onOpenActor={(kind, id) => setDrawer(
-                       { type: "actor", kind: kind as "characters" | "pcs", id })}
-                     onRemove={removeSelectedActor} busy={sceneLocked} />
+                     onHoverQuote={setCitedQuote} onGoToTurn={goToQuoteStable}
+                     onBack={closeActorStable}
+                     onOpenActor={openDrawerActor}
+                     onRemove={removeSelectedActorStable} busy={sceneLocked} />
     : <CastColumn cid={cid} sid={activeId ?? ""} hasPosts={messages.length > 0} refreshKey={ctxKey}
                   cast={cast} roster={roster} briefing={briefing}
-                  onOpen={openActor}
+                  onOpen={transcriptActions.openActor}
                   // A confirmed enter or leave writes a transition line into the
                   // transcript as well as moving the cast, so the scene is
                   // re-read whole rather than the cast alone.
-                  onCastChanged={() => { if (activeId) refreshAndAsk(activeId); }} />;
+                  onCastChanged={onCastChanged} />;
 
   // The wrap-up address with nothing to wrap up. Reached by a bookmark, a back
   // button after a save, or a link to a review somebody else already decided --
@@ -4461,7 +4652,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           </>)}
           {absorb && <ReviewPanel review={review} />}
           {!absorb && (<>
-          {activeId && messages.length === 0 && (
+          {/* Only once THIS scene's transcript has landed and turned out empty.
+              `messages` is also empty in the gap between opening a scene and
+              its transcript arriving, and mounting here then cost a
+              campaign-wide character list and a suggestion scan for a panel
+              that unmounted as soon as the posts came in. `landedScene`
+              rather than `loaded`, so a rename from the panel's own date field
+              does not remount it -- see there. */}
+          {activeId && landedScene?.cid === cid && landedScene.sid === activeId
+            && messages.length === 0 && (
             <CastPanel
               cid={cid}
               sid={activeId}
@@ -4477,12 +4676,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           )}
           {showInspector && activeId && (
             <div className="panel-slot">
+              {/* Memoized, with stable handlers: it re-renders for the scene,
+                  the refresh beat and the cost reads, never for the composer.
+                  The usage and budget are the reads this view already holds,
+                  handed down so its Cost section does not repeat them. */}
               <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
-                              onSceneChanged={() => selectScene(activeId)}
-                              onSceneRenamed={sceneRenamed} pcless={activePcless}
+                              onSceneChanged={onInspectorSceneChanged}
+                              onSceneRenamed={sceneRenamedStable} pcless={activePcless}
                               sceneLocked={sceneLocked}
                               onRenaming={markRenaming}
-                              posts={messages.length} />
+                              posts={messages.length}
+                              usage={sceneCosts?.usage ?? null} budget={budget}
+                              onBudgetSaved={onBudgetSaved} />
             </div>
           )}
           {activeId && !focus && (
@@ -4558,219 +4763,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 </button>
               </div>
             )}
-            {runs.map((run) => (
-              <div className={"run" + (run.pc ? " pc" : "")
-                               + (run.speaker === DIRECTOR_LABEL ? " director-note" : "")}
-                   key={run.posts[0].index}>
-                <div className={"plate" + (run.pc ? " pc" : "")}>
-                  {run.actor ? (
-                    <>
-                      {/* The same thing clicking them in the cast grid does, and
-                          for the same reason: a speaker in the transcript is in
-                          this scene, so the column has a dossier for them. A
-                          drawer over the transcript to read about someone who
-                          is standing in it was a modal answering a question the
-                          column beside it already answers. */}
-                      <button className="plate-avatar" aria-label={`Open ${run.speaker} record`}
-                              onClick={() => openActor(run.actor!.kind, run.actor!.id)}>
-                        <Portrait src={plateAvatar(run)} name={run.speaker} />
-                      </button>
-                      <button className="plate-name"
-                              onClick={() => openActor(run.actor!.kind, run.actor!.id)}>
-                        {run.speaker}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="plate-avatar"><Portrait src={null} name={run.speaker} /></span>
-                      <span className="plate-name">{run.speaker}</span>
-                    </>
-                  )}
-                  <span className="role-chip">{run.pc ? "pc" : "npc"}</span>
-                </div>
-                {run.posts.map(({ m, index }) => (
-                  /* `.cited` marks the line a hovered citation was taken from.
-                     Substring, for the reason `goToQuote` gives: the citation
-                     records an excerpt, and there is no index to trust. */
-                  <div className={`msg ${m.role}` + (isCited(m.content) ? " cited" : "")}
-                       key={index}>
-                    <span className="msg-gutter">
-                      {editing?.index !== index && !busy && (
-                        <span className="gutter-icons">
-                          {index === rerollAt && canReroll && !m.response_id && (
-                            <button className="msg-edit" title="Reroll" aria-label="Reroll"
-                                    disabled={rolling} onClick={() => {
-                                      setRerollPrompt("");
-                                      // Cleared on OPEN rather than on close, so
-                                      // a popover dismissed with Escape and
-                                      // reopened does not come back wearing the
-                                      // route the player backed out of.
-                                      setRerollRoute(NO_REROLL_ROUTE);
-                                    }}>↻</button>
-                          )}
-                          {index === rerollAt && canSwipe && !m.response_id && (
-                            <span className="swipe-nav">
-                              <button className="msg-edit" aria-label="Previous alternate"
-                                      disabled={rolling || editing !== null || sceneLocked}
-                                      onClick={() => pickAlternate(stepAlternate(-1))}>‹</button>
-                              <span className="swipe-count" title={altTitle}>
-                                {alternates.active === null ? "–" : alternates.active + 1}/{altCount}
-                              </span>
-                              <button className="msg-edit" aria-label="Next alternate"
-                                      disabled={rolling || editing !== null || sceneLocked}
-                                      onClick={() => pickAlternate(stepAlternate(1))}>›</button>
-                            </span>
-                          )}
-                          {m.speaker !== ROLL_SPEAKER && transcriptIsActive && (
-                            <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
-                                    disabled={rolling}
-                                    onClick={() => setEditing({ index, text: m.content })}>✎</button>
-                          )}
-                          {/* Refused on a dice-roll line for the same reason
-                              Edit is: this rewrites the post, and that line's
-                              text must stay in lockstep with an immutable
-                              rolls.json entry. Everything else about it is
-                              Edit — it opens the very same buffer, with the
-                              reference already in it (#376). */}
-                          {m.speaker !== ROLL_SPEAKER && transcriptIsActive && (
-                            <button className="msg-edit" title="Insert an image"
-                                    aria-label={`Insert an image into message ${index + 1}`}
-                                    disabled={rolling}
-                                    onClick={() => setPicking({ index, target: pickerTarget(run) })}>🖼</button>
-                          )}
-                          {/* Offered on a dice-roll line too, where Edit is not:
-                              that line is refused because its text must stay in
-                              lockstep with an immutable rolls.json entry, and a
-                              cut removes the line rather than rewriting it. */}
-                          {transcriptIsActive && (
-                            <button className="msg-edit msg-cut" title="Delete this post and everything after it"
-                                    aria-label={`Delete message ${index + 1} and everything after it`}
-                                    disabled={rolling}
-                                    onClick={() => deleteMessagesFrom(index)}>🗑</button>
-                          )}
-                          {/* Replay the turns AFTER this one (#79): the post
-                              itself stands -- it is the one that was retconned
-                              -- and everything past it is cut and re-run one
-                              turn at a time. Offered only where there is
-                              something after it to replay, and on a roll line
-                              too: a cut span may contain one, and replaying it
-                              re-posts the line while `rolls.json` keeps the
-                              entry it names. */}
-                          {transcriptIsActive && index < firstIndex + messages.length - 1 && (
-                            <button className="msg-edit" title="Replay the turns after this post"
-                                    aria-label={`Replay the turns after message ${index + 1}`}
-                                    disabled={rolling}
-                                    onClick={() => setReplayAt(index + 1)}>⏩</button>
-                          )}
-                        </span>
-                      )}
-                      {rerollPrompt !== null && !busy &&
-                       index === rerollAt && canReroll && (
-                        /* Escape-to-dismiss on the container is what the rule
-                           below objects to, and it is the accessible choice
-                           here rather than a lapse from it: the alternative is
-                           a popover only one of its three controls can be
-                           backed out of. */
-                        // eslint-disable-next-line jsx-a11y/no-static-element-interactions
-                        <span className="reroll-pop"
-                              // On the popover, not on the guidance input it
-                              // used to sit on: the route row (#77) added two
-                              // more controls, and Escape backing out of one
-                              // of three of them is worse than not offering it
-                              // at all. Keydown bubbles from every child.
-                              onKeyDown={(e) => {
-                                // Both keys on the popover, so all three of its
-                                // controls commit and dismiss alike. Enter used
-                                // to work from the guidance input alone, which
-                                // meant typing a model id and pressing Enter
-                                // did nothing at all. `ModelCombobox` stops an
-                                // Escape that is closing its own dropdown, so
-                                // that one does not reach here.
-                                if (e.key === "Escape") setRerollPrompt(null);
-                                // `preventDefault` is what tells the shortcut
-                                // dispatcher this keystroke is spoken for: ⌘⏎
-                                // typed here means "reroll", not "send", and
-                                // without it both fired (PR #400 review).
-                                if (e.key === "Enter") { e.preventDefault(); reroll(); }
-                              }}>
-                          {/* Above the guidance, not beside it: this is where
-                              the reroll goes, and the hint is what it says once
-                              it gets there. Untouched, both halves are the
-                              campaign's standing configuration. */}
-                          <RerollRoutePicker value={rerollRoute} onChange={setRerollRoute} />
-                          <span className="reroll-guide">
-                            <input
-                              autoFocus
-                              placeholder="Guide the reroll (optional)…"
-                              aria-label="Reroll guidance"
-                              value={rerollPrompt}
-                              onChange={(e) => setRerollPrompt(e.target.value)}
-                            />
-                            <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
-                          </span>
-                        </span>
-                      )}
-                    </span>
-                    <div className="msg-body">
-                      {/* What this post cost to answer, over every reroll of it
-                          (#153). On what the player PUT there and nothing
-                          else: those are the lines a generation was made FOR,
-                          and a chip on the reply would double-count the same
-                          spend under the text it paid for.
-                          A director note is one of them. It is assistant-role
-                          by the transcript format's construction, so a bare
-                          `role === "user"` test left the one line whose whole
-                          reason for being stored is that it can carry a figure
-                          as the only line that could not. Suppressed while the
-                          post is being edited, where the row is a form and not
-                          a message. */}
-                      {(m.role === "user" || m.speaker === DIRECTOR_SPEAKER)
-                        && editing?.index !== index
-                        && postChips?.[index] !== undefined && (
-                        <PostCost bucket={postChips[index]} />
-                      )}
-                      {editing?.index === index ? (
-                        <div className="msg-edit-form">
-                          <textarea aria-label="Edit message" rows={4} value={editing.text}
-                                    onChange={(e) => setEditing({ index, text: e.target.value })} />
-                          <div className="form-actions">
-                            <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
-                            {/* Beside Save rather than instead of it: Save fixes
-                                the words, Retcon says the scene did not happen
-                                that way and takes back what it wrote (#78). */}
-                            <button className="subtle" onClick={saveRetcon} disabled={rolling}
-                                    title="Rewrite this post and take back what the scene recorded">
-                              Retcon
-                            </button>
-                            <button className="primary" onClick={saveEdit} disabled={rolling}>Save</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          {m.response_id && m.response_thinking && loaded
-                            && !messages.slice(index - firstIndex + 1).some((later) => later.response_id === m.response_id) && <SavedThinking key={`${loaded.cid}:${loaded.sid}:${m.response_thinking}`}
-                            cid={loaded.cid} sid={loaded.sid} responseId={m.response_id} variantId={m.response_thinking} />}
-                          <RenderedMarkdown content={m.content} />
-                        </>
-                      )}
-                      {m.response_id && m.role === "assistant" && transcriptIsActive
-                        && !messages.slice(index - firstIndex + 1).some((later) => later.response_id === m.response_id) && (
-                        <ResponseControls key={`${m.response_id}:${m.content}`} cid={cid} sid={activeId}
-                          responseId={m.response_id} canReroll={!!m.response_can_reroll}
-                          status={m.response_status} contextChanged={m.context_changed}
-                          disabled={busy || rolling || sceneLocked || editing !== null || renamesInFlight > 0}
-                          onDelete={(id) => void mutateResponse(id)}
-                          onReroll={(id, guidance, route) => void rerollResponse(id, guidance, route)}
-                          onActivate={(id, variant) => void mutateResponse(id, variant)}
-                          onReplay={() => setReplayAt(index)}
-                          onCreateCharacter={m.speaker === "Grimoire" && m.response_status === "complete"
-                            ? () => void openCharacterPassage(m.response_id!) : undefined} />
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
+            {/* Memoized per run and per post (`components/play/TranscriptPost`):
+                the context and the actions are the same objects across every
+                render that does not change the transcript, so a keystroke or a
+                streamed delta re-renders none of what is already on screen. */}
+            {transcript}
             {directorNote && busy
               && directorNote.cid === cid && directorNote.sid === activeId && (
               <div className="run director-note">
@@ -4799,19 +4796,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                         `[[art:...]]` sit in the prose and then turn into a
                         picture. Display only -- nothing here changes what is
                         stored. */}
+                    {/* A block at a time (`StreamingMarkdown`), so the part that
+                        is still arriving re-parses its open tail per delta rather
+                        than everything above the cursor. */}
                     {streamingSpeakers.length ? <>
-                      {streamingSpeakers[0].offset > 0 && <RenderedMarkdown content={hideArtHandles(streaming.slice(0, streamingSpeakers[0].offset))} />}
+                      {streamingSpeakers[0].offset > 0 && <StreamingMarkdown text={streaming.slice(0, streamingSpeakers[0].offset)} />}
                       {streamingSpeakers.map((part, index) => <div className="streaming-response" key={part.id}>
                         <strong>{part.speaker}</strong>
                         <Thinking content={part.thinking ?? ""} />
-                        <RenderedMarkdown content={hideArtHandles(streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset))} />
+                        <StreamingMarkdown text={streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
                         {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
                           <div className="response-progress" role="status" aria-label={`${part.speaker} is responding`}>
                             <span className="cursor" aria-hidden="true" /> {part.speaker} is responding…
                           </div>
                         )}
                       </div>)}
-                    </> : <><RenderedMarkdown content={hideArtHandles(streaming)} /><span className="cursor" /></>}
+                    </> : <><StreamingMarkdown text={streaming} /><span className="cursor" /></>}
                   </div>
                 </div>
               </div>
