@@ -405,50 +405,105 @@ def _card_summary(root: Path, cid: str, vid: str) -> dict:
 
 def list_characters(root: Path) -> list[dict]:
     out: list[dict] = []
-    d = _chars_dir(root)
-    if d.exists():
-        for cd in sorted(p for p in d.iterdir()
-                         if p.is_dir() and (p / "character.md").exists() and safe_id(p.name)):
-            cid = cd.name
-            meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
-            version_ids = _version_ids(root, cid)
-            if not version_ids:
-                continue   # see read_character: no addressable card, nothing to show
-            default = _addressable_default(meta.get("default_version", ""), version_ids)
-            images = assets.list_images(root, cid, default)
-            names = [i["name"] for i in images]
-            try:
-                greeting_count = _card_summary(root, cid, default)["greeting_count"]
-            except VersionNotFound:
-                greeting_count = 0
-            out.append({
-                "id": cid,
-                "name": meta.get("name", cid),
-                "default_version": default,
-                "has_avatar": assets.AVATAR in names,
-                # Names the avatar's current BYTES: the grid tile spends it as
-                # `?v=`, which `routes.common._serve_image_file` serves
-                # immutable. A token that outlives the bytes pins a stale tile.
-                "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
-                "avatar_focus": assets.read_focus(root, cid, default),
-                "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
-                "localized_count": sum(1 for n in names if n.startswith("embed-")),
-                "greeting_count": greeting_count,
-                "tagline": taglines.read(root, cid),
-                # A BOOLEAN, not the body: the listing has no use for the text,
-                # and this call already stats every version and every image of
-                # every character. One added read, and it answers one question.
-                #
-                # At world level a tombstone and an absence are the same state
-                # -- `voice_anchors.read_record` says so, and there is nothing
-                # beneath a world to inherit from -- so `read` covering both is
-                # correct rather than a simplification. Tombstones only carry
-                # meaning in a campaign, which this world-scoped listing is not.
-                "has_voice_anchor": bool(voice_anchors.read(root, cid)),
-                "versions": [{"id": v, "name": _card_summary(root, cid, v)["label"]}
-                             for v in version_ids],
-            })
+    # The same walk `roster` and `listed_ids` take, so the three cannot
+    # disagree about which directories are characters.
+    for cd in _listed_dirs(root):
+        cid = cd.name
+        meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+        version_ids = _version_ids(root, cid)
+        if not version_ids:
+            continue   # see read_character: no addressable card, nothing to show
+        default = _addressable_default(meta.get("default_version", ""), version_ids)
+        images = assets.list_images(root, cid, default)
+        names = [i["name"] for i in images]
+        try:
+            greeting_count = _card_summary(root, cid, default)["greeting_count"]
+        except VersionNotFound:
+            greeting_count = 0
+        out.append({
+            "id": cid,
+            "name": meta.get("name", cid),
+            "default_version": default,
+            "has_avatar": assets.AVATAR in names,
+            # Names the avatar's current BYTES: the grid tile spends it as
+            # `?v=`, which `routes.common._serve_image_file` serves
+            # immutable. A token that outlives the bytes pins a stale tile.
+            "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
+            "avatar_focus": assets.read_focus(root, cid, default),
+            "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
+            "localized_count": sum(1 for n in names if n.startswith("embed-")),
+            "greeting_count": greeting_count,
+            "tagline": taglines.read(root, cid),
+            # A BOOLEAN, not the body: the listing has no use for the text,
+            # and this call already stats every version and every image of
+            # every character. One added read, and it answers one question.
+            #
+            # At world level a tombstone and an absence are the same state
+            # -- `voice_anchors.read_record` says so, and there is nothing
+            # beneath a world to inherit from -- so `read` covering both is
+            # correct rather than a simplification. Tombstones only carry
+            # meaning in a campaign, which this world-scoped listing is not.
+            "has_voice_anchor": bool(voice_anchors.read(root, cid)),
+            "versions": [{"id": v, "name": _card_summary(root, cid, v)["label"]}
+                         for v in version_ids],
+        })
     return out
+
+
+def _listed_dirs(root: Path) -> list[Path]:
+    """The character directories `list_characters` walks, in its order: a
+    child dir holding `character.md` under an id the resolvers accept."""
+    d = _chars_dir(root)
+    if not d.exists():
+        return []
+    return sorted(p for p in d.iterdir()
+                  if p.is_dir() and (p / "character.md").exists() and safe_id(p.name))
+
+
+def roster(root: Path) -> list[dict]:
+    """`list_characters`, cut to `id`, `name` and `default_version`.
+
+    For the callers that ask who is here and what they are called -- the
+    turn's off-scene directory, cast-change detection, suggestions, the
+    to-do list -- which paid the full row for it: an asset scan and a focus
+    read per character, a card summary per version, a tagline and a voice
+    anchor. What is left is the meta read and the version glob, and both are
+    load-bearing: the glob is the row FILTER (a character with no addressable
+    card is not listed, see `read_character`) and the meta is the name.
+
+    Same walk, same filter, same order, same values as `list_characters`, and
+    held to it by test -- a roster that listed one character the full listing
+    did not would put a name in a prompt that no other surface can open. The
+    meta goes through `parse_frontmatter` on the whole file, as the listing
+    does, rather than the head parser: `character.md` has no body to skip, and
+    the two parsers split a line differently on the rarer Unicode separators.
+    A caller that needs another field of the row should read the full listing
+    for it rather than widen this one piecemeal.
+    """
+    out: list[dict] = []
+    for cd in _listed_dirs(root):
+        cid = cd.name
+        # Meta first, as the listing reads it, so an unreadable meta fails
+        # here exactly where it fails there.
+        meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+        version_ids = _version_ids(root, cid)
+        if not version_ids:
+            continue
+        out.append({"id": cid, "name": meta.get("name", cid),
+                    "default_version": _addressable_default(meta.get("default_version", ""),
+                                                            version_ids)})
+    return out
+
+
+def listed_ids(root: Path) -> list[str]:
+    """The ids `list_characters` lists, reading no file at all.
+
+    Not `character_refs`, which is every character dir holding a meta file:
+    that one also names a character whose every card has gone, which the
+    listing -- and so every count derived from it -- leaves out. The one way
+    the two can differ is failure: a meta file the listing cannot read raises
+    there and is simply counted here, which is the direction a count wants."""
+    return [cd.name for cd in _listed_dirs(root) if _version_ids(root, cd.name)]
 
 
 def delete_version(root: Path, cid: str, vid: str) -> None:

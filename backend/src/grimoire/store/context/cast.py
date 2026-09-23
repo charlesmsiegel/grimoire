@@ -161,10 +161,15 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
             active.append({"name": _char_name(croot, a["id"]), "dossier": body})
 
     known: list[dict] = []
-    for char_id in overlay.character_refs(cid):
+    # Ids off directory listings (`character_refs` no longer builds the full
+    # row), and one overlay view for every candidate's tagline and root: tier
+    # 3 iterates the whole world on every generated turn, so a per-candidate
+    # re-read of the campaign's ledgers is paid per character per turn.
+    v = overlay.view(cid)
+    for char_id in overlay.character_refs(cid, v=v):
         if char_id in roster_ids or char_id in present:
             continue
-        tag = overlay.tagline(cid, char_id)
+        tag = overlay.tagline(cid, char_id, v=v)
         if not tag:
             continue
         # ONE read for both the name and the version list, off one resolved
@@ -178,10 +183,10 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
         # CharacterNotFound fallback was unreachable here for that reason, and
         # this is a read-once refactor -- turning that raise into a degraded
         # entry would be a different change, with its own test.
-        record = characters.read_character(overlay.char_root(cid, char_id), char_id)
+        record = characters.read_character(overlay.char_root(cid, char_id, v=v), char_id)
         known.append({"id": char_id, "name": record["meta"]["name"],
                       "tagline": tag,
-                      "versions": [v["id"] for v in record["versions"]]})
+                      "versions": [ver["id"] for ver in record["versions"]]})
     # Asked only when it can bite: `_scope_known` reads a card per in-scene
     # actor to rank the tail, and a campaign inside the ceiling has no tail.
     limit = _known_limit()

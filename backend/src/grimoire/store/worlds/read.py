@@ -26,8 +26,9 @@ def _world_row(d: Path, mp: Path) -> dict:
 
     Memoized as the row minus `id` and `counts`. The `id` is the directory
     name, not file content. The `counts` are live reads (correctness-critical).
-    Treated as frozen by every caller — `list_worlds` copies it into a fresh
-    dict per call, so nothing downstream can mutate the cached value.
+    Treated as frozen by every caller — `list_worlds` and `list_world_rows`
+    copy it into a fresh dict per call, so nothing downstream can mutate the
+    cached value.
     """
     def compute() -> dict:
         meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
@@ -40,40 +41,68 @@ def _world_row(d: Path, mp: Path) -> dict:
     return statcache.memo("world_row", sig, compute)
 
 
-def list_worlds() -> list[dict]:
+def _listed() -> list[tuple[Path, Path]]:
+    """(world dir, its world.md) for every world `list_worlds` lists, in
+    directory order."""
     ensure_home()
-    out: list[dict] = []
     base = paths._worlds_dir()
-    if base.exists():
-        for d in sorted(base.iterdir()):
-            mp = d / "world.md"
-            # an id the resolvers refuse must not be listed: it would only fail
-            # on the caller's next call (#259 review)
-            if not d.is_dir() or not mp.exists() or not safe_id(d.name):
-                continue
-            out.append({
-                "id": d.name,
-                **_world_row(d, mp),
-                "counts": {**entities.entity_counts(d), "characters": characters.character_count(d),
-                           "pcs": pcs.pc_count(d), "greetings": greetings.greeting_count(d)},
-            })
-    # `created` breaks a tie on `updated`, newest first. `now_iso()` has
-    # one-second resolution, so a world forked (or created) in the same second
-    # as an edit to its source ties -- and a plain single-key sort then falls
-    # back to the directory order underneath it, which is alphabetical and says
-    # nothing about recency. The fork would sit wherever its slug happened to
-    # land, while the UI that refreshes instead of navigating promises it is at
-    # the front (Codex review). `created` separates them because a copy is new
-    # and the thing it was copied from is not.
-    #
-    # It is a tie-breaker, not a clock. Two worlds CREATED in the same second
-    # -- a brand-new world forked immediately -- tie on both keys and fall back
-    # to directory order, and closing that would mean giving `now_iso()`
-    # sub-second precision, which every stamp in the store and the frozen
-    # campaign's snapshot are written against. Not worth it for two adjacent
-    # rows that are both seconds old.
-    out.sort(key=lambda m: (m["updated"], m["created"]), reverse=True)
+    if not base.exists():
+        return []
+    out = []
+    for d in sorted(base.iterdir()):
+        mp = d / "world.md"
+        # an id the resolvers refuse must not be listed: it would only fail
+        # on the caller's next call (#259 review)
+        if d.is_dir() and mp.exists() and safe_id(d.name):
+            out.append((d, mp))
     return out
+
+
+def _newest_first(rows: list[dict]) -> list[dict]:
+    """Sort `rows` in place the way the world shelf reads, and return them.
+
+    `created` breaks a tie on `updated`, newest first. `now_iso()` has
+    one-second resolution, so a world forked (or created) in the same second
+    as an edit to its source ties -- and a plain single-key sort then falls
+    back to the directory order underneath it, which is alphabetical and says
+    nothing about recency. The fork would sit wherever its slug happened to
+    land, while the UI that refreshes instead of navigating promises it is at
+    the front (Codex review). `created` separates them because a copy is new
+    and the thing it was copied from is not.
+
+    It is a tie-breaker, not a clock. Two worlds CREATED in the same second
+    -- a brand-new world forked immediately -- tie on both keys and fall back
+    to directory order, and closing that would mean giving `now_iso()`
+    sub-second precision, which every stamp in the store and the frozen
+    campaign's snapshot are written against. Not worth it for two adjacent
+    rows that are both seconds old.
+    """
+    rows.sort(key=lambda m: (m["updated"], m["created"]), reverse=True)
+    return rows
+
+
+def list_world_rows() -> list[dict]:
+    """`list_worlds` without `counts`: the same worlds in the same order, each
+    `{id, name, created, updated}`.
+
+    The counts are the expensive half of a world row -- a directory listing
+    per record kind per world, never memoized, because they are live reads --
+    and the to-do list's world chores, which run on every `/api/shell` read,
+    only ever needed a world's id and name. Everything else here is the
+    stat-memoized `_world_row`, so on an unchanged library this costs a stat
+    per world. A caller that shows counts reads `list_worlds`.
+    """
+    return _newest_first([{"id": d.name, **_world_row(d, mp)} for d, mp in _listed()])
+
+
+def list_worlds() -> list[dict]:
+    out = [{
+        "id": d.name,
+        **_world_row(d, mp),
+        "counts": {**entities.entity_counts(d), "characters": characters.character_count(d),
+                   "pcs": pcs.pc_count(d), "greetings": greetings.greeting_count(d)},
+    } for d, mp in _listed()]
+    return _newest_first(out)
 
 
 def read_world(wid: str) -> dict:

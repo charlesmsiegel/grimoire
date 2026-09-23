@@ -70,7 +70,11 @@ def _sheetable_kinds(pack: dict) -> list[str]:
 
 def _cast(cid: str, kind: str) -> list[dict]:
     """One kind of the campaign's cast, through the overlay -- so an inherited
-    world record counts and a tombstoned one does not."""
+    world record counts and a tombstoned one does not.
+
+    Full rows, for `roster` and `create_missing`, which report each member by
+    name. `coverage` only counts, so it reads `overlay.cast_ids` instead: the
+    same members, held to this by test, off directory listings alone."""
     if kind == "characters":
         return overlay.list_characters(cid)
     if kind == "pcs":
@@ -120,8 +124,14 @@ def coverage(cid: str) -> dict:
     pack = modules_pack.load_pack(mid)
     read_one = _sweep_reader(pack, mid, lambda k, e: paths._campaign_path(cid, k, e))
     out: dict = {}
+    # Ids, not rows: `/api/shell` runs this on every navigation, and a full
+    # character row is an image listing and a focus read per member, a PC row
+    # a persona read per version, and an entity row a parse and a token count
+    # -- all to be counted. One view for every kind, since each asks the same
+    # campaign the same questions.
+    v = overlay.view(cid)
     for kind in _sheetable_kinds(pack):
-        ids = [e["id"] for e in _cast(cid, kind)]
+        ids = overlay.cast_ids(cid, kind, v=v)
         out[kind] = _tally(ids, lambda eid, k=kind: read_one(k, eid))
     return out
 
@@ -140,12 +150,13 @@ def world_coverage(wid: str, mid: str) -> dict:
     read_one = _sweep_reader(pack, mid, lambda k, e: paths._world_path(wid, mid, k, e))
     out: dict = {}
     for kind in _sheetable_kinds(pack):
+        # The listings' ids without their rows, for `coverage`'s reason.
         if kind == "characters":
-            ids = [c["id"] for c in characters.list_characters(root)]
+            ids = characters.listed_ids(root)
         elif kind == "pcs":
-            ids = [p["id"] for p in pcs.list_pcs(root)]
+            ids = pcs.listed_ids(root)
         else:
-            ids = [e["id"] for e in entities.list_entities(root, kind)]
+            ids = entities.entity_ids(root, kind)
         out[kind] = _tally(ids, lambda eid, k=kind: read_one(k, eid))
     return out
 

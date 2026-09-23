@@ -748,7 +748,9 @@ def materialize(cid: str, sid: str, parsed: dict,
                     "payload": {"text": text, "date": date, "supersedes": sup,
                                 "scene": sid}}, e))
 
-    existing_char_names = {c["name"].strip().lower() for c in overlay.list_characters(cid)}
+    # Names only, so the roster: the full listing's per-character image scan
+    # would be read here for nothing.
+    existing_char_names = {c["name"].strip().lower() for c in overlay.character_roster(cid)}
     for e in parsed.get("new_characters", []):
         name = (e.get("name", "") or "").strip()
         description = (e.get("description", "") or "").strip()

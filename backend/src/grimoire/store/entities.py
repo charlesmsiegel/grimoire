@@ -122,6 +122,22 @@ def list_entities(root: Path, kind: str) -> list[dict]:
     return out
 
 
+def entity_ids(root: Path, kind: str) -> list[str]:
+    """The ids `list_entities` lists, in its order, without opening a record.
+
+    For a caller that only counts: the listing reads and parses every record
+    of the kind and measures each one's tokens, which on a cold process also
+    loads the tokenizer -- a whole-kind read to learn a set of file stems. The
+    filter is the listing's (`safe_id` on the stem) and nothing else, because
+    the listing has no other: a record it could not parse raises there rather
+    than being skipped."""
+    _check_kind(kind)
+    d = _kind_dir(root, kind)
+    if not d.exists():
+        return []
+    return [p.stem for p in sorted(d.glob("*.md")) if safe_id(p.stem)]
+
+
 def require_entity(root: Path, kind: str, eid: str) -> Path:
     """Assert `kind`/`eid` names a real entity here; return the record's path.
 

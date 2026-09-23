@@ -42,8 +42,11 @@ def validate(name: str, passage: str, source_text: str, mes_example: str) -> Non
 
 
 def _created_for_operation(cid: str, operation: str) -> dict | None:
-    for summary in overlay.list_characters(cid):
-        detail = characters.read_character(overlay.char_root(cid, summary["id"]), summary["id"])
+    # The roster: each character's cards are read below anyway, and the full
+    # listing's image scan per character answered nothing this looks at.
+    v = overlay.view(cid)
+    for summary in overlay.character_roster(cid, v=v):
+        detail = characters.read_character(overlay.char_root(cid, summary["id"], v=v), summary["id"])
         for version in detail["versions"]:
             evidence = version["card"]["data"].get("extensions", {}).get("grimoire", {}).get("passage_evidence", [])
             if any(item.get("operation") == operation for item in evidence):

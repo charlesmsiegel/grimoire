@@ -91,6 +91,20 @@ class _Ctx:
     def character_gaps(self) -> tuple[list[dict], list[dict]]:
         return self._once("gaps", lambda: _character_gaps(self.cid))
 
+    def coverage(self) -> dict:
+        """`sheets.coverage` for the campaign, computed once per request.
+
+        `/api/shell` asks it twice -- the rail's "sheeted of total" and the
+        sheet chore behind the badge -- and each ask sweeps the cast and reads
+        one sheet per member. `get_shell` hands one ctx to both, so the second
+        asker gets the first one's answer.
+
+        A tally that RAISES is not memoized (`_once` stores only a return), so
+        each asker meets the failure itself and keeps the handling it always
+        had: the chore swallows it and the rail's campaign block does not.
+        """
+        return self._once("coverage", lambda: store.sheets.coverage(self.cid))
+
     def world_char_gaps(self) -> tuple[list[dict], list[dict]]:
         """(untagged, anchorless) over `other_worlds`, computed once.
 
@@ -102,10 +116,14 @@ class _Ctx:
                           lambda: _world_char_gaps(self.other_worlds()))
 
     def worlds(self) -> list[dict]:
-        """Every world, newest first."""
+        """Every world, newest first, as `{id, name, created, updated}`.
+
+        `list_world_rows`, not `list_worlds`: every chore here reads a world's
+        id and name and nothing else, and the counts `list_worlds` adds are a
+        directory listing per record kind per world, on every navigation."""
         def read() -> list[dict]:
             try:
-                return store.worlds.read.list_worlds()
+                return store.worlds.read.list_world_rows()
             except OSError:
                 return []
         return self._once("worlds", read)
@@ -141,10 +159,10 @@ class _Ctx:
 def _character_gaps(cid: str) -> tuple[list[dict], list[dict]]:
     """(no tagline, no voice anchor) across the campaign's EFFECTIVE roster.
 
-    Through `overlay.list_characters`, and that is the whole point of this
-    function rather than an implementation note. A campaign is copy-on-write
-    over its world, so reading the world root directly gets three things wrong
-    at once, and this got all three:
+    Through the overlay, and that is the whole point of this function rather
+    than an implementation note. A campaign is copy-on-write over its world,
+    so reading the world root directly gets three things wrong at once, and
+    this got all three:
 
     - a character the campaign DELETED is still in the world, so it was
       reported as missing a tagline in a campaign it is not in;
@@ -154,12 +172,15 @@ def _character_gaps(cid: str) -> tuple[list[dict], list[dict]]:
     - a materialized actor is authoritative for its own meta, so a campaign
       copy's tagline was invisible behind the world's.
 
-    `list_characters` already resolves both fields -- `tagline` per file and
-    `has_voice_anchor` off one directory scan rather than a read per row -- so
-    this is also cheaper than the walk it replaces.
+    `overlay.character_sidecars` resolves both fields exactly as
+    `list_characters` does -- `tagline` per file and `has_voice_anchor` off one
+    directory scan rather than a read per row -- without the image listing,
+    focus read and card summaries the full row adds, none of which this reads.
+    It runs for the badge on every navigation, so that difference is paid per
+    page, not per visit to this one.
     """
     try:
-        rows = store.overlay.list_characters(cid)
+        rows = store.overlay.character_sidecars(cid)
     except (store.CampaignNotFound, OSError):
         return [], []
     no_tagline: list[dict] = []
@@ -214,7 +235,7 @@ def _chore_open_scenes(ctx: _Ctx) -> dict | None:
 def _chore_sheets(ctx: _Ctx) -> dict | None:
     cid = ctx.cid
     try:
-        cov = store.sheets.coverage(cid)
+        cov = ctx.coverage()
     except (OSError, KeyError, ValueError):
         return None
     n = sum(k["total"] - k["sheeted"] for k in cov.values()) if cov else 0
@@ -546,7 +567,7 @@ def _chores(cid: str) -> list[dict]:
     return [c for c in (b(ctx) for _i, b in _builders_for(ctx)) if c]
 
 
-def badge_count(cid: str) -> int:
+def badge_count(cid: str, ctx: _Ctx | None = None) -> int:
     """`live(cid)["count"]`, without paying for the totals behind the labels.
 
     The rail reads this on every navigation and renders one number: how many
@@ -558,8 +579,17 @@ def badge_count(cid: str) -> int:
     Identical output to `live`, by construction and by test: same builders,
     same ignore set, and a presence test that is the same predicate as
     `n > 0`.
+
+    `ctx` lets `/api/shell` share the one it built for its campaign block, so a
+    derivation both halves ask for (the sheet tally) is computed once for the
+    request. It must be a fresh ctx of THIS request for `cid`; one for another
+    campaign is refused rather than used, since its memo answers for a
+    different cast.
     """
-    ctx = _Ctx(cid)
+    if ctx is None:
+        ctx = _Ctx(cid)
+    elif ctx.cid != cid:
+        raise ValueError(f"a to-do context for {ctx.cid!r} cannot count for {cid!r}")
     off = store.chores.ignored()
     n = 0
     for cid_, builder in _builders_for(ctx):
