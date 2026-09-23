@@ -855,7 +855,8 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
             except OSError:
                 thumb = None  # cache entry swept between generation and read
             if thumb is not None:
-                return Response(content=thumb, media_type="image/webp", headers=headers)
+                return Response(content=thumb, media_type=_IMAGE_MEDIA[tp.suffix[1:]],
+                                headers=headers)
     try:
         content = p.read_bytes()
     except FileNotFoundError:
