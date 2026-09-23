@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -541,9 +541,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // actually arrived can say a record is gone.
   const unresolvedHint = refOptsComplete ? DANGLING_HINT : UNLOADED_HINT;
 
+  // The owner candidates by ref. The rail asks for an owner's label and avatar
+  // once per owner per row, and a scan of every candidate for each of those
+  // made a large lore rail cost owners × entries on every render.
+  const ownerById = useMemo(() => new Map(ownerOpts.map((o) => [o.ref, o])), [ownerOpts]);
   const ownerLabel = useCallback(
-    (ref: string) => ownerOpts.find((o) => o.ref === ref)?.label ?? ref,
-    [ownerOpts],
+    (ref: string) => ownerById.get(ref)?.label ?? ref,
+    [ownerById],
   );
 
   // Whatever the route names.
@@ -846,74 +850,123 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     </h3>
   );
 
-  // Group lore rows: "Unowned (world)" first, then one group per distinct owner ref.
-  const ownersOf = (e: EntitySummary) => (e.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean);
-
-  // What the rail is currently showing. Name and keys, because those are what
-  // a reader knows a record BY -- the id is a slug they never typed and the
-  // body is not in the summary.
-  const needle = query.trim().toLowerCase();
-  const shown = needle
-    ? items.filter((e) => (e.name ?? "").toLowerCase().includes(needle)
-                       || (e.keys ?? "").toLowerCase().includes(needle))
-    : items;
-
-  const groups: { key: string; label: string; rows: EntitySummary[] }[] = [];
-  if (kind === "lore") {
-    const unowned = shown.filter((e) => ownersOf(e).length === 0);
-    if (unowned.length) groups.push({ key: "", label: "Unowned (world)", rows: unowned });
-    const seen = new Set<string>();
-    for (const e of shown) {
-      for (const ref of ownersOf(e)) {
-        if (seen.has(ref)) continue;
-        seen.add(ref);
-        groups.push({ key: ref, label: ownerLabel(ref), rows: shown.filter((x) => ownersOf(x).includes(ref)) });
+  // What the rail is currently showing, and — for lore — grouped: "Unowned
+  // (world)" first, then one group per distinct owner ref, in the order the
+  // owners are first met.
+  //
+  // Memoized on the rail's own inputs. This editor re-renders on every
+  // keystroke in the body, and rebuilding the rail each time -- a filter, and a
+  // group per owner that re-filtered the whole list and re-split every entry's
+  // owners string -- is what made typing in a large world's lore lag. Now each
+  // entry's owners are parsed once, the groups are filled in one pass, and none
+  // of it runs for a keystroke.
+  //
+  // Name and keys are searched, because those are what a reader knows a record
+  // BY -- the id is a slug they never typed and the body is not in the summary.
+  const { shown, groups } = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const shown = needle
+      ? items.filter((e) => (e.name ?? "").toLowerCase().includes(needle)
+                         || (e.keys ?? "").toLowerCase().includes(needle))
+      : items;
+    const groups: { key: string; label: string; rows: EntitySummary[] }[] = [];
+    if (kind === "lore") {
+      const unowned: EntitySummary[] = [];
+      const byOwner = new Map<string, EntitySummary[]>();
+      for (const e of shown) {
+        const refs = parseRefs(e.owners);
+        if (!refs.length) { unowned.push(e); continue; }
+        // Once per group even if the owners string names someone twice, as
+        // the per-owner filter this replaces did.
+        for (const ref of new Set(refs)) {
+          const rows = byOwner.get(ref);
+          if (rows) rows.push(e); else byOwner.set(ref, [e]);
+        }
       }
+      if (unowned.length) groups.push({ key: "", label: "Unowned (world)", rows: unowned });
+      for (const [ref, rows] of byOwner) groups.push({ key: ref, label: ownerLabel(ref), rows });
     }
-  }
+    return { shown, groups };
+  }, [items, query, kind, ownerLabel]);
 
-  const row = (e: EntitySummary) => (
-    <Link key={e.id}
-          className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
-          to={recordHref(e.id)}>
-      {e.has_image && (
-        // The 220px rail, or the whole width once the editor stacks on a phone.
-        <img className="loc-row-img" alt="" loading="lazy" decoding="async"
-             {...thumbSet((w) => api.entityImageUrl(scope, kind, e.id, "avatar", { w, v: e.image_v }),
-                          "(max-width: 640px) 100vw, 220px")}
-             onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
-      )}
-      <span className="row-name">{e.name}</span>
-      {asSecrecy(e.secrecy) !== "public" && (
-        <span className={`chip secrecy-tag ${asSecrecy(e.secrecy)}`}>
-          {SECRECY_LABELS[asSecrecy(e.secrecy)]}
-        </span>
-      )}
-      {kind === "lore" && (
-        <span className="owner-stack">
-          {ownersOf(e).map((ref) => {
-            const o = ownerOpts.find((x) => x.ref === ref);
-            return o?.avatar ? (
-              <img key={ref} className="owner-stack-img" alt="" title={o.label}
-                   loading="lazy" decoding="async" src={o.avatar}
-                   onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
-            ) : null;
-          })}
-        </span>
-      )}
-      {/* The unit is dropped for width -- the rail is a fixed 220px -- so the
-          accessible name carries it instead. The row is a link named from
-          its contents, so without this a screen reader reads "Salt 1,240" and
-          the number could be anything; `title` alone is not announced. */}
-      {typeof e.tokens === "number" && (
-        <span className={tokenClass(asSecrecy(e.secrecy), "row-tokens")}
-              title={tokenTitle(asSecrecy(e.secrecy))}
-              aria-label={tokenAria(e.tokens, asSecrecy(e.secrecy))}>
-          {e.tokens.toLocaleString()}
-        </span>
-      )}
-    </Link>
-  );
+  // The rows themselves, for the same keystroke's reason: built when what they
+  // show changes -- the list, the selection, the owners' avatars -- and handed
+  // back as the same elements otherwise, which React then skips outright.
+  const scopeKind = scope.kind;
+  const scopeId = scope.id;
+  const rail = useMemo(() => {
+    const at: EntityScope = { kind: scopeKind, id: scopeId };
+    const row = (e: EntitySummary) => (
+      <Link key={e.id}
+            className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
+            to={recordHref(e.id)}>
+        {e.has_image && (
+          // The 220px rail, or the whole width once the editor stacks on a phone.
+          <img className="loc-row-img" alt="" loading="lazy" decoding="async"
+               {...thumbSet((w) => api.entityImageUrl(at, kind, e.id, "avatar", { w, v: e.image_v }),
+                            "(max-width: 640px) 100vw, 220px")}
+               onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+        )}
+        <span className="row-name">{e.name}</span>
+        {asSecrecy(e.secrecy) !== "public" && (
+          <span className={`chip secrecy-tag ${asSecrecy(e.secrecy)}`}>
+            {SECRECY_LABELS[asSecrecy(e.secrecy)]}
+          </span>
+        )}
+        {kind === "lore" && (
+          <span className="owner-stack">
+            {parseRefs(e.owners).map((ref) => {
+              const o = ownerById.get(ref);
+              return o?.avatar ? (
+                <img key={ref} className="owner-stack-img" alt="" title={o.label}
+                     loading="lazy" decoding="async" src={o.avatar}
+                     onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+              ) : null;
+            })}
+          </span>
+        )}
+        {/* The unit is dropped for width -- the rail is a fixed 220px -- so the
+            accessible name carries it instead. The row is a link named from
+            its contents, so without this a screen reader reads "Salt 1,240" and
+            the number could be anything; `title` alone is not announced. */}
+        {typeof e.tokens === "number" && (
+          <span className={tokenClass(asSecrecy(e.secrecy), "row-tokens")}
+                title={tokenTitle(asSecrecy(e.secrecy))}
+                aria-label={tokenAria(e.tokens, asSecrecy(e.secrecy))}>
+            {e.tokens.toLocaleString()}
+          </span>
+        )}
+      </Link>
+    );
+    return kind === "lore"
+      ? groups.map((g) => (
+          <div key={g.key} className="rail-group">
+            <div className="rail-group-head">{g.label}</div>
+            {g.rows.map(row)}
+          </div>
+        ))
+      : shown.map(row);
+  }, [kind, shown, groups, editing, ownerById, recordHref, scopeKind, scopeId]);
+
+  // The owner picker: a checkbox per character, PC and location the world
+  // holds, so as long as the rail in a large world -- and it sits in the same
+  // form as the body, so it was rebuilt for every keystroke there too. The
+  // updater reads the owners as they are when the box is clicked, not as this
+  // memo last saw them.
+  const ownerPicker = useMemo(() => ownerOpts.map((o) => (
+    <label key={o.ref} className="owner-option">
+      <input
+        type="checkbox"
+        aria-label={o.label}
+        checked={owners.includes(o.ref)}
+        onChange={(e) => {
+          const on = e.target.checked;
+          setOwners((cur) => (on ? [...cur, o.ref] : cur.filter((r) => r !== o.ref)));
+        }}
+      />
+      {o.label}
+    </label>
+  )), [ownerOpts, owners]);
 
   return (
     <div className="editor">
@@ -952,14 +1005,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             + New {label} with sheet…
           </button>
         )}
-        {kind === "lore"
-          ? groups.map((g) => (
-              <div key={g.key} className="rail-group">
-                <div className="rail-group-head">{g.label}</div>
-                {g.rows.map(row)}
-              </div>
-            ))
-          : shown.map(row)}
+        {rail}
         {/* Three different answers, and they must not share one line: nothing
             here yet, nothing MATCHING here, and a filter narrowing a real set. */}
         {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
@@ -1267,19 +1313,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             {kind === "lore" && (
               <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
                 <div className="chips owner-picker">
-                  {ownerOpts.map((o) => (
-                    <label key={o.ref} className="owner-option">
-                      <input
-                        type="checkbox"
-                        aria-label={o.label}
-                        checked={owners.includes(o.ref)}
-                        onChange={(e) =>
-                          setOwners(e.target.checked ? [...owners, o.ref] : owners.filter((r) => r !== o.ref))
-                        }
-                      />
-                      {o.label}
-                    </label>
-                  ))}
+                  {ownerPicker}
                   {ownerOpts.length === 0 && <span className="field-hint">No characters, PCs, or locations yet.</span>}
                 </div>
               </Field>
