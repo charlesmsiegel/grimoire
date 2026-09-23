@@ -5,10 +5,12 @@ import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({ api: { getResponse: vi.fn() } }));
 
-function show(extra = {}) {
+function show(extra = {}, { open = true } = {}) {
   const actions = { onDelete: vi.fn(), onReroll: vi.fn(), onActivate: vi.fn(), onReplay: vi.fn() };
   render(<ResponseControls cid="realm" sid="scene" responseId="response-a" canReroll={true}
     {...actions} {...extra} />);
+  // The actions live behind the disclosure, and are built only once it opens.
+  if (open) fireEvent.click(screen.getByText("Response actions"));
   return actions;
 }
 
@@ -34,6 +36,20 @@ describe("individual response controls", () => {
     expect(screen.queryByRole("button", { name: "Reroll response" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Replay from here" }));
     expect(actions.onReplay).toHaveBeenCalledOnce();
+  });
+  it("builds the actions only once the disclosure is opened, and keeps a steer across closing it", () => {
+    // One of these sits under every response in a scene, nearly all of them
+    // shut for good, so a shut one carries no body at all.
+    show({ status: "incomplete" }, { open: false });
+    expect(screen.getByText("Incomplete response")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete response" })).toBeNull();
+    const summary = screen.getByText("Response actions");
+    fireEvent.click(summary);
+    fireEvent.change(screen.getByLabelText("Response steer"), { target: { value: "Quieter" } });
+    fireEvent.click(summary);
+    expect(screen.queryByLabelText("Response steer")).toBeNull();
+    fireEvent.click(summary);
+    expect(screen.getByLabelText("Response steer")).toHaveValue("Quieter");
   });
   it("activates the stable variant id from the selected response", async () => {
     vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
