@@ -357,9 +357,11 @@ test("a pointer passing over a card on its way elsewhere asks for nothing", asyn
   expect(api.listCharacters).not.toHaveBeenCalled();
 });
 
-test("a press prefetches at once, with no dwell -- on a phone nothing hovers", async () => {
+test("a press prefetches at once, with no dwell", async () => {
+  // A mouse or pen press. A finger waits for a rest first (`prefetch.test.ts`),
+  // because on a phone a press is also how every scroll begins.
   const card = await worldCard();
-  fireEvent.touchStart(card);
+  fireEvent.pointerDown(card);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w1" }));
   fireEvent.pointerDown(card);
   await sleep(10);
