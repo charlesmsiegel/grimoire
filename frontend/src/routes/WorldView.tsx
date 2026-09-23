@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, ENTITY_KINDS, type EntityKind, type EntityScope, type ModuleDetail } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
@@ -51,13 +51,37 @@ const INDEX: { group: string; rows: { key: IndexKey; label: string }[] }[] = [
   ] },
 ];
 
-/** How many records a row stands for.
+/** The rows whose number `GET /worlds/{wid}` already carries in `counts`: every
+ *  record kind, counted as a directory tally. Everything but Tags. */
+const STORED: readonly IndexKey[] = [
+  "characters", "pcs", "creatures", "groups", "locations", "items", "lore", "greetings",
+];
+
+/** The stored rows' numbers out of a world read. A kind the read did not
+ *  report is `null`, and draws a dash: an older server's missing key is
+ *  "unknown", never a section with nothing in it. */
+function storedCounts(counts: Record<string, number> | undefined): Record<string, number | null> {
+  return Object.fromEntries(STORED.map((k) => {
+    const n = counts?.[k];
+    return [k, typeof n === "number" ? n : null];
+  }));
+}
+
+/** How many records a row stands for, read from the row's own list.
  *
- *  Deliberately the same list read the row's own editor makes when you open it,
- *  rather than the world's stored `counts`: those are world-scoped, and half of
- *  this page's job is showing a *campaign's* fork of the same records. One
- *  source for both shapes also leaves nowhere for the number in the column and
- *  the rows in main to disagree. */
+ *  What the CAMPAIGN shape counts with, and the world shape only for Tags.
+ *  A campaign's fork is an overlay union -- its own records plus everything
+ *  it inherits -- which the world's stored tallies know nothing about, so its
+ *  numbers are the same list reads the rows' editors make; overlay-aware
+ *  tallies would need an endpoint of their own.
+ *
+ *  The world shape used to count this way too, for one source across both
+ *  shapes, and paid for it with nine full lists -- every character card
+ *  parsed, every entity token-counted -- on every visit and every click, when
+ *  the world read the header already makes carries the counts. The two can
+ *  disagree only over a record damaged past listing (a character directory
+ *  whose every version file is gone is tallied but not listed), which is a
+ *  number one high beside a store that needs repair, not a count that drifts. */
 function countOf(key: IndexKey, scope: EntityScope, wid: string): Promise<number> {
   if (key === "characters") return api.listCharacters(scope).then((l) => l.length);
   if (key === "pcs") return api.listPCs(scope).then((l) => l.length);
@@ -67,6 +91,34 @@ function countOf(key: IndexKey, scope: EntityScope, wid: string): Promise<number
   // right id to ask with here even though everything else takes the scope.
   if (key === "tags") return api.listTags(wid).then((t) => Object.keys(t).length);
   return api.listEntities(scope, key).then((l) => l.length);
+}
+
+/** Read the numbers for `keys` and hand each to `apply` as it lands. A failed
+ *  read costs the numbers it was answering -- dashes -- and never the index.
+ *
+ *  World shape: any stored row asked for is ONE `getWorld`, applied for every
+ *  stored row it answers -- a directory tally per kind, far cheaper than the
+ *  list it replaces, so it fails or lands for all of them together. Campaign
+ *  shape, and Tags: the row's own list, one request each, settling
+ *  independently. Started inside a promise so a read that throws
+ *  *synchronously* is the same "unknown, show a dash" case as one that
+ *  rejects, rather than an exception out of an effect that takes the whole
+ *  column down with it. */
+function readCounts(keys: readonly IndexKey[], campaign: boolean, scope: EntityScope,
+                    wid: string, apply: (patch: Record<string, number | null>) => void) {
+  const listed = campaign ? keys : keys.filter((k) => !STORED.includes(k));
+  if (!campaign && keys.some((k) => STORED.includes(k))) {
+    Promise.resolve()
+      .then(() => api.getWorld(wid))
+      .then((w) => apply(storedCounts(w.counts)))
+      .catch(() => apply(storedCounts(undefined)));
+  }
+  for (const key of listed) {
+    Promise.resolve()
+      .then(() => countOf(key, scope, wid))
+      .then((n) => apply({ [key]: n }))
+      .catch(() => apply({ [key]: null }));
+  }
 }
 
 export default function WorldView({ campaign = false }: { campaign?: boolean }) {
@@ -140,6 +192,26 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // about a page the reader has left.
   usePublishShellContext(campaign && campaignName ? { campaign: campaignName, scene: "" } : null);
 
+  /** Which world, or which campaign's copy of one, the index is counting. */
+  const scopeKey = campaign ? `campaign:${cid}` : `world:${widParam}`;
+  /** Bumped when `scopeKey` changes, so a count still in flight for the world
+   *  being left cannot land in the one being entered -- the route keeps this
+   *  instance across a world switch. A generation rather than a per-effect
+   *  `live` flag because the counts are started from three effects, and a
+   *  section click's cleanup must not drop the previous click's answer, only a
+   *  scope change may. */
+  const countGen = useRef(0);
+  /** An `apply` for `readCounts`, bound to the generation that started it. */
+  const countsFor = useCallback((gen: number) => (patch: Record<string, number | null>) => {
+    if (countGen.current === gen) setCounts((c) => ({ ...c, ...patch }));
+  }, []);
+  // Before the world read below, which captures the generation this starts.
+  useEffect(() => {
+    countGen.current += 1;
+    // Dashes rather than the previous scope's numbers while the new ones load.
+    setCounts((c) => (Object.keys(c).length ? {} : c));
+  }, [scopeKey]);
+
   useEffect(() => {
     if (campaign) {
       api.getCampaign(cid).then((c) => {
@@ -153,15 +225,18 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         .catch(() => setModuleCtx(null));
     } else {
       setWid(widParam);
+      // The header's read carries the index's numbers too: every record row
+      // is a stored tally on it, so a visit lists nothing to count it.
+      const apply = countsFor(countGen.current);
       api.getWorld(widParam)
-        .then((w) => { setName(w.meta.name); setCover(w.meta.cover ?? ""); })
-        .catch(() => { setName(widParam); setCover(""); });
+        .then((w) => { setName(w.meta.name); setCover(w.meta.cover ?? ""); apply(storedCounts(w.counts)); })
+        .catch(() => { setName(widParam); setCover(""); apply(storedCounts(undefined)); });
       Promise.all([api.getWorldSheetsIndex(widParam), api.listModules()])
         .then(([index, installed]) =>
           setWorldMid(index.default || index.modules[0] || installed[0]?.id || ""))
         .catch(() => setWorldMid(""));
     }
-  }, [campaign, cid, widParam]);
+  }, [campaign, cid, widParam, countsFor]);
 
   // world path: re-resolve the module context whenever the picked module id changes
   useEffect(() => {
@@ -186,32 +261,55 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     [campaign],
   );
 
-  // One request per row, the way the library column does it: they settle
-  // independently, and a row whose read fails costs its own number rather than
-  // blanking the index.
-  //
-  // Re-run when the section changes, because that is the first moment the
-  // column can hear about a record created in the section being left: the
-  // editors own their own lists and have no way to say they added to one. A
-  // count that arrives a click late is worth more than one that is quietly
-  // wrong.
+  // The first count of a scope. The world shape's record rows came with the
+  // world read above; what is left is Tags, whose vocabulary no world read
+  // carries. The campaign shape lists every row, one request each so they
+  // settle independently -- and does not wait for the campaign's world id to
+  // do it, since none of its lists is addressed by one.
   useEffect(() => {
-    if (!wid) return; // campaign shape: the world id arrives with the campaign
-    let live = true;
-    for (const row of groups.flatMap((g) => g.rows)) {
-      // Started inside a promise so a read that throws *synchronously* is the
-      // same "unknown, show a dash" case as one that rejects, rather than an
-      // exception out of an effect that takes the whole column down with it.
-      Promise.resolve()
-        .then(() => countOf(row.key, scope, wid))
-        .then((n) => { if (live) setCounts((c) => ({ ...c, [row.key]: n })); })
-        .catch(() => { if (live) setCounts((c) => ({ ...c, [row.key]: null })); });
+    const apply = countsFor(countGen.current);
+    if (campaign) {
+      readCounts(groups.flatMap((g) => g.rows.map((r) => r.key)), true,
+                 { kind: "campaign", id: cid }, "", apply);
+    } else {
+      readCounts(["tags"], false, { kind: "world", id: widParam }, widParam, apply);
     }
-    return () => { live = false; };
-    // `scope` is rebuilt every render; the values it is made of are the real
-    // dependencies.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign, cid, wid, groups, section, populated]);
+  }, [campaign, cid, widParam, groups, countsFor]);
+
+  /** What the effect below last saw, so it can tell what moved. */
+  const lastSeen = useRef<{ scope: string; section: Section; populated: number } | null>(null);
+
+  // A section change is the first moment the column can hear about a record
+  // created in the section being left: the editors own their own lists and
+  // have no way to say they added to one. A count that arrives a click late is
+  // worth more than one that is quietly wrong.
+  //
+  // What is re-read is what the click could have moved, and no more -- it
+  // used to be every row, nine full lists per click. The section being left
+  // is where a record was added or removed. On the world shape that is one
+  // world read, which tallies every kind at once and so also covers a
+  // reclassify's destination. On the campaign shape it is that row's list,
+  // plus the row being entered, where a reclassify lands -- a read its editor
+  // is making at the same moment, which the api client's in-flight sharing
+  // turns into one request.
+  useEffect(() => {
+    const prev = lastSeen.current;
+    lastSeen.current = { scope: scopeKey, section, populated };
+    // A new scope is counted by the effect above; the same inputs seen again
+    // are StrictMode's rehearsal, or a render in which nothing moved.
+    if (!prev || prev.scope !== scopeKey) return;
+    const rows = groups.flatMap((g) => g.rows.map((r) => r.key));
+    const isRow = (s: Section): s is IndexKey => (rows as Section[]).includes(s);
+    const touched: IndexKey[] =
+      // A scenario import writes half a dozen sections at once.
+      populated !== prev.populated ? rows
+      : section !== prev.section ? (campaign ? [prev.section, section] : [prev.section]).filter(isRow)
+      : [];
+    if (!touched.length) return;
+    readCounts(touched, campaign,
+               campaign ? { kind: "campaign", id: cid } : { kind: "world", id: widParam },
+               widParam, countsFor(countGen.current));
+  }, [scopeKey, section, populated, campaign, cid, widParam, groups, countsFor]);
 
   // How many campaigns are played in this world: the one fact about a world
   // that is not a record inside it. Only on the world shape -- a campaign
