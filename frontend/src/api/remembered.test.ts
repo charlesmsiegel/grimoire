@@ -111,6 +111,43 @@ test("moving the store here forgets everything, even to a path spelled the same"
   expect(api.rememberedCharacters(WORLD)).toBeUndefined();
 });
 
+test("a store moved in another tab is forgotten here before anything paints", async () => {
+  // Another tab's move reached this one only through the config read the app
+  // makes on navigation -- from an effect, after the route's first render,
+  // which is the render that paints from memory. So that render drew the old
+  // library's cast, linking to its ids, for a round trip.
+  await freshRoot();
+  stubFetch(() => [row("seraphine", "Seraphine")]);
+  await api.listCharacters(WORLD);
+  window.dispatchEvent(new StorageEvent("storage", { key: "grimoire.store.moved", newValue: "x" }));
+  expect(api.rememberedCharacters(WORLD)).toBeUndefined();
+  // ...and nothing is remembered again until a config says which store it is.
+  await api.listCharacters(WORLD);
+  expect(api.rememberedCharacters(WORLD)).toBeUndefined();
+  await freshRoot();
+  stubFetch(() => [row("seraphine", "Seraphine")]);
+  await api.listCharacters(WORLD);
+  expect(api.rememberedCharacters(WORLD)).toHaveLength(1);
+});
+
+test("a key other than the store move leaves the memo alone", async () => {
+  await freshRoot();
+  stubFetch(() => [row("seraphine", "Seraphine")]);
+  await api.listCharacters(WORLD);
+  window.dispatchEvent(new StorageEvent("storage", { key: "grimoire.focus", newValue: "1" }));
+  expect(api.rememberedCharacters(WORLD)).toHaveLength(1);
+});
+
+test("moving the store here tells this origin's other tabs", async () => {
+  const root = await freshRoot();
+  const before = localStorage.getItem("grimoire.store.moved");
+  stubFetch(() => ({ data_dir: root, default: root, is_default: true, source: "default", exists: true }));
+  await api.putDataDir(root);
+  const after = localStorage.getItem("grimoire.store.moved");
+  expect(after).toBeTruthy();
+  expect(after).not.toBe(before);
+});
+
 test("a read in flight across a store change is not remembered for the new one", async () => {
   await freshRoot();
   const list = held<unknown>();

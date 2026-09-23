@@ -213,10 +213,15 @@ function retireAllInflight(): void {
 // - Keys name the read's scope kind and id, and nothing is ever looked up
 //   under a key other than the page's own.
 // - Everything belongs to one store root: the `data_dir` a config read
-//   reported. A different one -- a move made here (`putDataDir`) or one made
-//   elsewhere and noticed by the next config read, which the app makes on
-//   every navigation -- forgets all of it, and until a root is known nothing
-//   is remembered or recalled at all.
+//   reported. A different one -- a move made here (`putDataDir`), one made in
+//   another tab of this origin (`ROOT_MOVED_KEY`), or one made anywhere else
+//   and noticed by the next config read, which the app makes on every
+//   navigation -- forgets all of it, and until a root is known nothing is
+//   remembered or recalled at all. The other tab is told directly because the
+//   config read comes too late for it: the app makes it from an effect, after
+//   the route's first render, and the first render is the one that paints
+//   from memory -- another library's cast, under ids that need not exist in
+//   this one.
 // - A read only lands if nothing was forgotten while it was in flight: a
 //   root change or a write (`writing`) bumps `memoEpoch`, and an answer
 //   issued before the bump describes a store that may no longer be the one
@@ -249,6 +254,33 @@ function forgetRemembered(): void {
   memo.clear();
   memoEpoch += 1;
 }
+
+/** The localStorage key a store move writes, which is how every OTHER tab of
+ *  this origin hears of it: a `storage` event fires in the tabs that did not
+ *  make the write, and only when the value changes, so each move writes one
+ *  nobody has written before. */
+const ROOT_MOVED_KEY = "grimoire.store.moved";
+
+/** Tell this origin's other tabs the store moved. Fail-soft, like every
+ *  localStorage use: a private window or blocked storage costs those tabs the
+ *  early notice, and their next config read still catches the move. */
+function announceRootMoved(): void {
+  try { localStorage.setItem(ROOT_MOVED_KEY, newAttemptId()); } catch { /* see above */ }
+}
+
+/** A move another tab announced: what this tab remembers, what it has in
+ *  flight and its config all describe the old store. The root is forgotten
+ *  with the rows, so nothing is recalled until a config read names the new
+ *  one. */
+function hearRootMoved(e: StorageEvent): void {
+  if (e.key !== ROOT_MOVED_KEY) return;
+  memoRoot = null;
+  forgetRemembered();
+  retireAllInflight();
+  invalidateConfigCache();
+  campaignsChanged();
+}
+if (typeof window !== "undefined") window.addEventListener("storage", hearRootMoved);
 
 /** The store root a config response describes. Called with every config the
  *  client receives, so the memo notices a root change the first time any of
@@ -1097,6 +1129,9 @@ export const api = {
         // rows. `noteRoot` then adopts the new root as the memo's owner.
         forgetRemembered();
         noteRoot(info.data_dir);
+        // ...and in every other tab of this origin, which would otherwise
+        // paint the old store's rows on its next navigation.
+        announceRootMoved();
         // ...and both things the shell's chrome is showing. A new root has its
         // own campaigns and its own connections, so the sidebar's links point
         // at campaigns that need not exist here and the status bar names a
