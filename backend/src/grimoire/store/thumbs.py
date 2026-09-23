@@ -24,10 +24,13 @@ module is arranged around:
   absolute key it could hit none of them: every device regenerated every
   picture, and the synced cache filled with entries no device could reach. A
   source outside home() has nothing to share and keeps its absolute path.
-- **Entries are grouped by generation** (`generation()`), and a generation this
-  process does not write is garbage by construction. The first miss for a
-  library starts one background `sweep` that retires them, so an encoder or
-  key change stops costing disk forever. The current generation is not
+- **Entries are grouped by generation** (`generation()`), and a generation
+  older than this process's REVISION is garbage by construction. The first
+  miss for a library starts one background `sweep` that retires them, so an
+  encoder or key change stops costing disk forever. A generation at this
+  revision or a later one is left alone: it is another device's, on a library
+  synced between them, and retiring it would cost that device its whole cache
+  at every one of this process's starts. The current generation is not
   pruned: an edited source's old entry still sits there unreferenced, since
   telling which entries nothing names any more takes a pass over the whole
   library that no request has a reason to pay for.
@@ -38,11 +41,32 @@ module is arranged around:
   change the picture: a full-resolution conversion to RGBA is the costliest
   pass there is, and doing it first also loaded a JPEG outright, which is what
   defeats the reduced-size draft decode `thumbnail` asks the JPEG reader for.
+
+A thumbnail stands in for the original on every grid, rail and portrait, so it
+has to be the picture a browser would have drawn from the original, not merely
+a smaller raster of its bytes:
+
+- **Upright.** A phone photo is stored as the sensor saw it, with an EXIF
+  Orientation tag that browsers apply. A thumbnail carries no EXIF, so the
+  orientation is applied here (`_UPRIGHT`) -- otherwise a portrait taken on a
+  phone lies on its side on every surface that draws the thumbnail.
+- **In its own colours.** An RGB colour profile (Display P3, Adobe RGB) is
+  embedded in the thumbnail as it was in the original; dropped, the browser
+  reads the pixels as sRGB and every colour shifts.
+- **Moving, if it moved.** An animated GIF, PNG or WebP gets no thumbnail at
+  all, and the route serves the original: a still of its first frame would
+  stop it animating, and a downscale of every frame is a cold cost no grid
+  should wait on.
+- **Encodable here.** Not every Pillow can write WebP -- Chaquopy's Android
+  wheel has no libwebp -- so a build without it writes JPEG, or PNG where
+  there is alpha (`_encoding`), rather than decoding every source only to fail
+  the save and serve the original anyway.
 """
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import io
 import logging
@@ -52,7 +76,7 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, features
 
 from . import atomic
 from .paths import home
@@ -71,14 +95,30 @@ METHOD = 2
 #: it were the new. Derived from the two settings rather than written beside
 #: them, so bumping either one is a new entry by construction.
 ENCODER = f"webp-q{QUALITY}-m{METHOD}"
-#: What a key *names*, as ENCODER is what an entry's bytes are: bumped when the
-#: key changes meaning (2 is the store-relative path), so that what the old
-#: scheme wrote lands outside the current generation and gets swept rather
-#: than sitting beside the new entries unreachable.
-KEY_SCHEME = 2
+#: The JPEG quality where there is no WebP encoder (`_encoding`) -- about what
+#: WebP's 80 looks like, at a few more bytes.
+JPEG_QUALITY = 85
+#: ENCODER's counterpart on a Pillow without WebP: JPEG for an opaque picture,
+#: PNG (lossless, so it has no setting to name) for one with alpha.
+FALLBACK_ENCODER = f"jpeg-q{JPEG_QUALITY}-png"
+#: The pipeline's revision, bumped whenever what a `?w=` request answers for
+#: an unchanged source changes: an encoder setting, what a key names, or what
+#: the decode does to the picture. 2 made the key store-relative; 3 turned a
+#: thumbnail upright, kept its colour profile and left animation to the
+#: original.
+#:
+#: It orders generations, so a sweep retires only those OLDER than its own
+#: (`sweep`): two devices on one synced library, one a build behind, would
+#: otherwise each delete the other's cache at every process start.
+REVISION = 3
 
 #: The shape of an entry's name.
-_ENTRY = re.compile(r"[0-9a-f]{32}\.webp")
+_ENTRY = re.compile(r"[0-9a-f]{32}\.(?:webp|jpg|png)")
+#: The shape of a generation's name: its revision first, so any build can tell
+#: whether a generation it did not write is older than its own. Every
+#: generation from REVISION 3 on is named this way; a directory that is not is
+#: from before that, and is retired as such.
+_GENERATION = re.compile(r"r(\d+)-.+")
 
 
 def _ours(name: str) -> bool:
@@ -95,11 +135,31 @@ def _ours(name: str) -> bool:
     return atomic.is_write_temp(Path(name)) and bool(_ENTRY.fullmatch(name[1:].rsplit(".", 2)[0]))
 
 
+@functools.cache
+def _encodes_webp() -> bool:
+    """Can this Pillow write WebP?
+
+    Pillow registers the WebP writer only when it was built against libwebp,
+    and the Android build is not: Chaquopy's wheel ships the plugin's Python
+    but not its `_webp` module. Asked once, since it is a property of the
+    build rather than of any picture."""
+    return features.check_module("webp")
+
+
+def _encoder() -> str:
+    """The encoder this process writes with (ENCODER, or FALLBACK_ENCODER
+    where Pillow has no WebP)."""
+    return ENCODER if _encodes_webp() else FALLBACK_ENCODER
+
+
 def generation() -> str:
     """The directory, under the cache root, this process writes entries to.
 
-    Read live rather than frozen at import, so it follows ENCODER."""
-    return f"{ENCODER}-k{KEY_SCHEME}"
+    Read live rather than frozen at import, so it follows ENCODER. A phone and
+    a desktop sharing a library write different generations at one REVISION
+    -- one of them cannot make the other's format -- and neither retires the
+    other's."""
+    return f"r{REVISION}-{_encoder()}"
 
 
 #: The cache root, under a library's home().
@@ -129,7 +189,7 @@ def _key(src: Path, st: os.stat_result, width: int, root: Path) -> str:
     if name.startswith(prefix):
         name = name[len(prefix):].replace(os.sep, "/")
     # else: outside the library, where no other device will ask for it
-    ident = f"{name}|{st.st_mtime_ns // 1000}|{st.st_size}|{width}|{ENCODER}"
+    ident = f"{name}|{st.st_mtime_ns // 1000}|{st.st_size}|{width}|{_encoder()}"
     return hashlib.sha256(ident.encode()).hexdigest()[:32]
 
 
@@ -227,24 +287,35 @@ def _drop(entry: os.DirEntry[str]) -> int:
     return size
 
 
+def _retired(name: str) -> bool:
+    """Is the generation directory `name` older than this process's?
+
+    Older is a lower REVISION, or a name from before generations carried one.
+    The same revision under another encoder is a sibling -- a phone's JPEG
+    beside a desktop's WebP -- and a higher one is a newer build's."""
+    m = _GENERATION.fullmatch(name)
+    return m is None or int(m.group(1)) < REVISION
+
+
 def sweep(root: Path) -> int:
     """Delete what earlier generations left in `root`'s cache; the bytes freed.
 
-    Retired means everything under the cache root except the current
-    generation: the entries the flat layout before generations wrote directly
-    under it, and each other generation's directory, which is removed once it
-    is empty. Only files of the cache's own shape (`_ours`) are deleted, one
-    level deep, and no symlink is followed -- a directory or file this module
-    would never have written stays, and so does the directory holding it.
+    Retired means the entries the flat layout before generations wrote
+    directly under the cache root, and each generation directory older than
+    this process's (`_retired`), which is removed once it is empty. Only files
+    of the cache's own shape (`_ours`) are deleted, one level deep, and no
+    symlink is followed -- a directory or file this module would never have
+    written stays, and so does the directory holding it.
 
     Fail-soft throughout: an entry that will not go is skipped, and a cache
     that cannot be listed is left as it is. A failed sweep costs disk, which
     the next process's sweep gets another try at; it never costs a request.
 
-    Two devices sharing a synced library on different versions each retire
-    what the other writes (a version from before generations writes the flat
-    layout, which counts as retired too): one regeneration per picture viewed,
-    per process start, on each, until both run the same version.
+    Two devices sharing a synced library on different versions: the newer
+    never loses its cache to the older, which reads a higher revision in its
+    generation's name and leaves it be. The older still loses its own to
+    the newer, one regeneration per picture viewed per process start, until it
+    is updated too -- which is the one way round that ends.
     """
     base = root.joinpath(*_CACHE)
     current = generation()
@@ -264,6 +335,8 @@ def sweep(root: Path) -> int:
         if not is_dir:
             n = _drop(entry)
             freed, removed = freed + n, removed + bool(n)
+            continue
+        if not _retired(entry.name):
             continue
         try:
             with os.scandir(entry.path) as it:
@@ -348,10 +421,76 @@ def _downscale(im: Image.Image, width: int) -> Image.Image:
     return im if im.mode == target else im.convert(target)
 
 
+#: EXIF Orientation -> the transpose that shows the picture upright, as
+#: `ImageOps.exif_transpose` maps it (and as a browser draws the original).
+_UPRIGHT = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT,
+    3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM,
+    5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270,
+    7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
+#: The formats a browser animates. Only these count as animated: an MPO -- the
+#: multi-picture JPEG some cameras write, its second frame a preview or a
+#: depth map -- reports several frames too, and a browser draws it as the
+#: plain JPEG it starts with.
+_ANIMATES = frozenset({"GIF", "PNG", "WEBP"})
+
+
+def _orientation(im: Image.Image) -> Image.Transpose | None:
+    """The transpose that stands `im` upright, read before anything shrinks it.
+
+    None for an upright picture -- and for EXIF too damaged to read, which a
+    browser shows as stored as well, rather than costing the thumbnail."""
+    try:
+        return _UPRIGHT.get(im.getexif().get(0x0112))
+    except Exception:  # noqa: BLE001 — a malformed EXIF block is an upright picture, not a failed tile
+        return None
+
+
+def _rgb_profile(im: Image.Image) -> bytes | None:
+    """`im`'s embedded colour profile, if it describes RGB.
+
+    The thumbnail is always RGB, so a profile for any other space would be a
+    lie about its pixels: a CMYK print profile, or a Gray one, reaches RGB by
+    Pillow's plain conversion and has nothing left to describe. The data colour
+    space is the four bytes at offset 16 of every ICC header."""
+    icc = im.info.get("icc_profile")
+    return icc if isinstance(icc, bytes) and icc[16:20] == b"RGB " else None
+
+
+def _encoding(small: Image.Image) -> tuple[str, str, dict]:
+    """The format, entry suffix and save options for the downscaled `small`.
+
+    WebP wherever Pillow can write it. Where it cannot, JPEG for an opaque
+    picture -- a PNG of a photograph is many times the size -- and PNG where
+    there is alpha to keep, which JPEG has no way to carry."""
+    if _encodes_webp():
+        return "WEBP", ".webp", {"quality": QUALITY, "method": METHOD}
+    if small.mode == "RGB":
+        return "JPEG", ".jpg", {"quality": JPEG_QUALITY}
+    return "PNG", ".png", {}
+
+
+def _published(stem: Path) -> Path | None:
+    """The entry already written for `stem`, in whichever format it took.
+
+    One suffix where WebP is written. Two where it is not, since whether a
+    picture has alpha -- JPEG or PNG -- is only known once it is decoded."""
+    for suffix in (".webp",) if _encodes_webp() else (".jpg", ".png"):
+        out = stem.with_name(stem.name + suffix)
+        if out.exists():
+            return out
+    return None
+
+
 def thumbnail(src: Path, width: int) -> Path | None:
-    """Path to a cached WebP of `src` scaled to fit in width x width (never
-    upscaled), generating it on first request. None if the source is missing
-    or not a decodable image."""
+    """Path to a cached downscale of `src` fitted in width x width (never
+    upscaled), upright and in its own colours, generating it on first request.
+    None if the source is missing, not a decodable image, or animated -- each
+    a case where the caller serves the original."""
     try:
         st = src.stat()
     except OSError:
@@ -359,25 +498,39 @@ def thumbnail(src: Path, width: int) -> Path | None:
     root = home()
     # One join, not four: a warm hit is little more than this and a stat, and
     # each pathlib join re-parses the whole path.
-    out = root.joinpath(*_CACHE, generation(), f"{_key(src, st, width, root)}.webp")
-    if out.exists():
+    stem = root.joinpath(*_CACHE, generation(), _key(src, st, width, root))
+    if out := _published(stem):
         return out
     _sweep_in_background(root)
-    with _single_flight(str(out)) as flight:
-        if out.exists():  # published by the request this one waited behind
+    with _single_flight(str(stem)) as flight:
+        if out := _published(stem):  # published by the request this one waited behind
             return out
         if flight.failed:  # ... or given up on by it: no second decode to fail
             return None
         try:
             with Image.open(src) as im:
+                if im.format in _ANIMATES and getattr(im, "is_animated", False):
+                    return None
+                # Both read off the source before the downscale, which builds
+                # new images that need not carry its metadata along.
+                upright, profile = _orientation(im), _rgb_profile(im)
                 small = _downscale(im, width)
+                if upright is not None:
+                    small = small.transpose(upright)
+                fmt, suffix, options = _encoding(small)
                 # Encode to memory, then publish through the shared writer. PIL
                 # accepts a file object, so nothing ever hands out the temp's
                 # *pathname* -- which is what let an attacker with write access
                 # to the cache dir swap a symlink in before im.save() opened it
                 # (PR review). A tile is a few KB; buffering it is free.
+                #
+                # The profile and the EXIF are both said outright: PNG would
+                # otherwise copy whatever profile the image still carries, and
+                # an orientation tag on a picture already turned upright would
+                # turn it again.
                 buf = io.BytesIO()
-                small.save(buf, format="WEBP", quality=QUALITY, method=METHOD)
+                small.save(buf, format=fmt, icc_profile=profile, exif=b"", **options)
+            out = stem.with_name(stem.name + suffix)
             out.parent.mkdir(parents=True, exist_ok=True)
             atomic.write_bytes(out, buf.getvalue())
         except Exception:  # noqa: BLE001 — undecodable/corrupt image: no thumb, caller serves original

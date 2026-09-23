@@ -4,12 +4,14 @@ import io
 import os
 import re
 import shutil
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops, ImageDraw, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
 from grimoire.routes.common import THUMB_BUCKETS, THUMB_W
 from grimoire.store import assets, thumbs
@@ -233,6 +235,26 @@ def test_the_sweep_retires_old_generations_and_nothing_else(tmp_path, monkeypatc
     _put(old / _hex(1))
     thumbs.sweep(tmp_path)
     assert not old.exists()
+
+
+def test_the_sweep_retires_only_generations_older_than_its_own(tmp_path, monkeypatch):
+    # A library synced between two devices holds both their generations. A
+    # sweep that retired every generation but its own had each device delete
+    # the other's whole cache at every process start -- and the other device
+    # regenerate it, and the sync client carry every create and delete across.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cache = tmp_path / ".cache" / "thumbs"
+    rev = thumbs.REVISION
+    other = thumbs.FALLBACK_ENCODER if thumbs._encodes_webp() else thumbs.ENCODER
+    kept = [_put(cache / f"r{rev}-{other}" / _hex(1)),      # a phone's, beside a desktop's
+            _put(cache / f"r{rev + 1}-webp-q75-m2" / _hex(2)),  # a newer build's
+            _put(cache / thumbs.generation() / _hex(3))]
+    gone = [_put(cache / f"r{rev - 1}-{thumbs.ENCODER}" / _hex(4)),
+            _put(cache / "webp-q80-m2-k2" / _hex(5)),  # named before generations carried a revision
+            _put(cache / _hex(6))]                       # the flat layout before generations
+    thumbs.sweep(tmp_path)
+    assert all(p.exists() for p in kept)
+    assert not any(p.exists() for p in gone)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="creating symlinks on Windows needs elevation")
@@ -512,6 +534,190 @@ def test_a_premultiplied_mode_needing_no_downscale_is_left_exact():
     assert thumbs._downscale(im.copy(), 320).tobytes() == im.tobytes()
 
 
+# ---- the picture a browser would have drawn ----
+def _oriented_jpeg(orientation: int) -> bytes:
+    """A landscape JPEG, as a camera sensor stores it, whose stored left third
+    is red, tagged with the EXIF `orientation` a browser applies to show it."""
+    im = Image.new("RGB", (1200, 800), (255, 255, 255))
+    ImageDraw.Draw(im).rectangle((0, 0, 399, 799), fill=(255, 0, 0))
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=95, exif=exif.tobytes())
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("orientation", range(1, 9))
+def test_a_thumbnail_stands_as_a_browser_draws_the_original(tmp_path, monkeypatch, orientation):
+    # Every avatar surface draws a thumbnail now. A phone portrait is stored
+    # landscape with Orientation 6, which the browser applied to the original
+    # it used to draw; a thumbnail that ignored it lay on its side everywhere.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    src = tmp_path / "photo.jpg"
+    src.write_bytes(_oriented_jpeg(orientation))
+    tp = thumbs.thumbnail(src, 256)
+    assert tp is not None
+    with Image.open(src) as im:
+        shown = ImageOps.exif_transpose(im)
+        shown.thumbnail((256, 256))
+    with Image.open(tp) as t:
+        # Turned already, so carrying the tag along would turn it twice.
+        assert t.getexif().get(0x0112) is None
+        assert t.size == shown.size, orientation
+        diff = ImageChops.difference(t.convert("RGB"), shown.convert("RGB"))
+        assert max(ImageStat.Stat(diff).mean) < 4, orientation
+
+
+def test_a_damaged_exif_block_is_an_upright_picture(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (600, 900), (10, 120, 200)).save(src, format="JPEG", exif=b"Exif\x00\x00garbage")
+    tp = thumbs.thumbnail(src, 256)
+    assert tp is not None
+    with Image.open(tp) as t:
+        assert t.size == (171, 256)
+
+
+def _rgb_profile() -> bytes:
+    cms = pytest.importorskip("PIL.ImageCms")
+    return cms.ImageCmsProfile(cms.createProfile("sRGB")).tobytes()
+
+
+def test_a_thumbnail_keeps_an_rgb_colour_profile(tmp_path, monkeypatch):
+    # A Display P3 or Adobe RGB picture is colour-managed as its original; a
+    # thumbnail that dropped the profile was read as sRGB and every colour moved.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    icc = _rgb_profile()
+    src = tmp_path / "wide.jpg"
+    Image.new("RGB", (600, 900), (200, 40, 90)).save(src, format="JPEG", icc_profile=icc)
+    tp = thumbs.thumbnail(src, 256)
+    assert tp is not None
+    with Image.open(tp) as t:
+        assert t.info.get("icc_profile") == icc
+
+
+def test_a_profile_for_another_colour_space_is_not_carried_onto_rgb(tmp_path, monkeypatch):
+    # A CMYK print profile describes ink, and the thumbnail is RGB by Pillow's
+    # plain conversion: embedded, it would tell the browser to read RGB pixels
+    # as ink. The colour space is the header's bytes 16-20.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    rgb = _rgb_profile()
+    cmyk = rgb[:16] + b"CMYK" + rgb[20:]
+    src = tmp_path / "print.jpg"
+    Image.new("CMYK", (600, 900), (0, 80, 40, 10)).save(src, format="JPEG", icc_profile=cmyk)
+    tp = thumbs.thumbnail(src, 256)
+    assert tp is not None
+    with Image.open(tp) as t:
+        assert not t.info.get("icc_profile")
+
+
+def _frames(size=(800, 1200)) -> list[Image.Image]:
+    return [Image.new("RGB", size, c) for c in ("red", "green", "blue")]
+
+
+@pytest.mark.parametrize("fmt", ["GIF", "PNG", "WEBP"])
+def test_an_animated_picture_is_left_to_its_original(tmp_path, monkeypatch, fmt):
+    # A still of the first frame stopped an animated avatar moving on every
+    # surface that used to draw the original; there is no thumbnail instead,
+    # and the route serves the original as before.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    src = tmp_path / f"moving.{fmt.lower()}"
+    first, *rest = _frames()
+    first.save(src, format=fmt, save_all=True, append_images=rest, duration=100, loop=0)
+    assert thumbs.thumbnail(src, 256) is None
+    still = tmp_path / f"still.{fmt.lower()}"
+    first.save(still, format=fmt)
+    assert thumbs.thumbnail(still, 256) is not None
+
+
+def test_a_multi_picture_jpeg_is_not_mistaken_for_an_animation(tmp_path, monkeypatch):
+    # Some cameras write MPO: a JPEG with a preview or depth map after it,
+    # which Pillow reports as a second frame. A browser draws the JPEG.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    src = tmp_path / "camera.jpg"
+    first, second, _ = _frames()
+    first.save(src, format="MPO", save_all=True, append_images=[second])
+    with Image.open(src) as im:
+        assert im.format == "MPO" and im.is_animated  # what makes this the case in question
+    tp = thumbs.thumbnail(src, 256)
+    assert tp is not None
+    with Image.open(tp) as t:
+        assert t.size == (171, 256)
+
+
+# ---- a Pillow without WebP ----
+def _noisy(mode: str, size=(1200, 800)) -> Image.Image:
+    """A picture that does not compress to nothing, so a thumbnail's size says
+    something about the encoder rather than about a flat colour."""
+    return Image.frombytes(mode, size, os.urandom(size[0] * size[1] * len(mode)))
+
+
+def test_a_pillow_without_webp_thumbnails_as_jpeg_or_png(tmp_path, monkeypatch):
+    # Chaquopy's Android wheel has no libwebp. Every tile there used to decode
+    # its source, fail the WebP save, and serve the original anyway -- the
+    # phone paid the decode and the full download both.
+    monkeypatch.setattr(thumbs, "_encodes_webp", lambda: False)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    assert thumbs.FALLBACK_ENCODER in thumbs.generation()
+    opaque, alpha = tmp_path / "opaque.png", tmp_path / "alpha.png"
+    _noisy("RGB").save(opaque)
+    _noisy("RGBA").save(alpha)
+    tp = thumbs.thumbnail(opaque, 320)
+    assert tp is not None and tp.suffix == ".jpg"
+    assert tp.parent == tmp_path / ".cache" / "thumbs" / thumbs.generation()
+    with Image.open(tp) as im:
+        assert im.format == "JPEG" and max(im.size) == 320
+    assert tp.stat().st_size < opaque.stat().st_size / 10
+    tq = thumbs.thumbnail(alpha, 320)
+    assert tq is not None and tq.suffix == ".png"
+    with Image.open(tq) as im:
+        assert im.format == "PNG" and im.mode == "RGBA" and max(im.size) == 320
+    opened = _counting_open(monkeypatch)
+    assert (thumbs.thumbnail(opaque, 320), thumbs.thumbnail(alpha, 320)) == (tp, tq)
+    assert opened == []  # both found again in their own formats, not decoded again
+
+
+def test_the_fallback_settings_are_what_the_key_says(tmp_path, monkeypatch):
+    monkeypatch.setattr(thumbs, "_encodes_webp", lambda: False)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    seen: dict = {}
+    real = Image.Image.save
+
+    def spy(self, fp, *args, **kw):
+        seen.update(kw)
+        return real(self, fp, *args, **kw)
+
+    monkeypatch.setattr(Image.Image, "save", spy)
+    assert thumbs.thumbnail(_greeting_art(tmp_path), 320) is not None
+    assert seen["format"] == "JPEG"
+    assert f"jpeg-q{seen['quality']}-png" == thumbs.FALLBACK_ENCODER
+
+
+def test_the_encoder_is_chosen_by_what_pillow_was_built_with(tmp_path):
+    # In a fresh interpreter, since the WebP writer is registered at import:
+    # blocking the module first is how Chaquopy's wheel looks from inside,
+    # the plugin's Python present and its `_webp` extension absent.
+    code = (
+        "import sys; sys.modules['PIL._webp'] = None\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "from grimoire.store import thumbs\n"
+        "src = Path(os.environ['GRIMOIRE_HOME']) / 'a.png'\n"
+        "Image.new('RGB', (600, 900), (10, 120, 200)).save(src)\n"
+        "tp = thumbs.thumbnail(src, 256)\n"
+        "with Image.open(tp) as im:\n"
+        "    print(thumbs.generation(), tp.suffix, im.format, im.size)\n"
+    )
+    src_dir = Path(thumbs.__file__).resolve().parents[2]
+    env = {**os.environ, "GRIMOIRE_HOME": str(tmp_path), "PYTHONPATH": str(src_dir)}
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                          text=True, check=False, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == [f"r{thumbs.REVISION}-{thumbs.FALLBACK_ENCODER}", ".jpg",
+                                   "JPEG", "(171,", "256)"]
+
+
 # ---- the route's width buckets ----
 def _avatar_route(client):
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
@@ -561,3 +767,12 @@ def test_the_client_buckets_are_server_buckets():
     assert client and set(client) <= set(THUMB_BUCKETS), (client, THUMB_BUCKETS)
     assert THUMB_W in THUMB_BUCKETS
     assert list(THUMB_BUCKETS) == sorted(THUMB_BUCKETS)
+
+
+def test_the_route_serves_a_fallback_thumbnail_as_what_it_is(client, monkeypatch):
+    monkeypatch.setattr(thumbs, "_encodes_webp", lambda: False)
+    base = _avatar_route(client)
+    r = client.get(f"{base}?w=128")
+    assert r.headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(r.content)) as im:
+        assert im.format == "JPEG" and max(im.size) == 128
