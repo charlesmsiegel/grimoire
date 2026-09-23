@@ -112,7 +112,9 @@ def test_a_row_carries_what_it_takes_to_render_and_place_the_tile(client, world)
     # Both URLs carry `?v=`, which is what makes them cacheable immutable; a
     # grid of bare URLs revalidates every tile on every render.
     assert row["url"].startswith(f"{base}?v=")
-    assert row["thumb"].startswith(f"{base}?w=320&v=")
+    # The thumb names the thumbnail pipeline's revision too: it is cached
+    # immutable, so one made the old way would otherwise outlive a fix to it.
+    assert row["thumb"].startswith(f"{base}?w=320&t={store.thumbs.REVISION}&v=")
     # And both are URLs this app actually answers.
     assert client.get(row["url"]).status_code == 200
     assert client.get(row["thumb"]).status_code == 200

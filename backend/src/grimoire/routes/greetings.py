@@ -12,7 +12,6 @@ from .. import store
 from ..llm import LLMClient, effective_model
 from . import runs
 from .common import (
-    THUMB_W,
     _campaign_root_or_404,
     _fresh_or_409,
     _record_prompt,
@@ -22,6 +21,7 @@ from .common import (
     _world_root_or_404,
     computes_only,
     get_llm,
+    thumb_query,
 )
 from .models import (
     CopyFromGreeting,
@@ -232,7 +232,7 @@ def _greeting_image_urls(root, wid: str, a: dict) -> dict:
     if p is None:  # vanished between sweep and stat: bare URLs, still renderable
         return {"url": base, "thumb": base}
     v = store.assets.image_version(p)
-    return {"url": f"{base}?v={v}", "thumb": f"{base}?w={THUMB_W}&v={v}"}
+    return {"url": f"{base}?v={v}", "thumb": f"{base}{thumb_query(v)}"}
 
 
 @router.get("/worlds/{wid}/subjects/untagged")

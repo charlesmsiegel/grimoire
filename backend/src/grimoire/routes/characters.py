@@ -24,7 +24,6 @@ from ..llm import LLMClient
 from ..llm_errors import LLMError
 from . import runs
 from .common import (
-    THUMB_W,
     _bounded_call,
     _campaign_root_or_404,
     _card_data,
@@ -37,6 +36,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    thumb_query,
 )
 from .models import (
     AvatarFocus,
@@ -836,7 +836,7 @@ def list_world_gallery(wid: str):
                     "ext": image["ext"], "record_name": "World library",
                     "described": image["name"] in descs,
                     "description": descs.get(image["name"], ""),
-                    "url": f"{url}?v={v}", "thumb": f"{url}?w={THUMB_W}&v={v}"})
+                    "url": f"{url}?v={v}", "thumb": f"{url}{thumb_query(v)}"})
     return out
 
 
@@ -914,7 +914,7 @@ def list_campaign_gallery(cid: str):
                        "described": item["name"] in desc,
                        "description": desc.get(item["name"], ""),
                        "url": f"{base_url}?v={v}",
-                       "thumb": f"{base_url}?w={THUMB_W}&v={v}"}
+                       "thumb": f"{base_url}{thumb_query(v)}"}
                 if base == "greetings":
                     row["subjects"] = subjects.lookup(rid, item["name"])
                 out.append(row)
@@ -945,7 +945,7 @@ def _campaign_library_rows(cid: str) -> list[dict]:
                                     else "Campaign library",
                      "described": image["name"] in descs,
                      "description": descs.get(image["name"], ""),
-                     "url": f"{url}?v={v}", "thumb": f"{url}?w={THUMB_W}&v={v}"})
+                     "url": f"{url}?v={v}", "thumb": f"{url}{thumb_query(v)}"})
     return rows
 
 
@@ -1042,7 +1042,7 @@ def _gallery_urls(wid: str, base: str, item: dict) -> dict:
     """
     base_url = _undescribed_url(wid, base, item)
     v = quote(item["v"], safe="")
-    return {"url": f"{base_url}?v={v}", "thumb": f"{base_url}?w={THUMB_W}&v={v}"}
+    return {"url": f"{base_url}?v={v}", "thumb": f"{base_url}{thumb_query(v)}"}
 
 
 def _record_name_and_versions(root, base: str, rid: str) -> tuple[str, set[str]] | None:

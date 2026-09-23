@@ -107,9 +107,13 @@ FALLBACK_ENCODER = f"jpeg-q{JPEG_QUALITY}-png"
 #: thumbnail upright, kept its colour profile and left animation to the
 #: original.
 #:
-#: It orders generations, so a sweep retires only those OLDER than its own
-#: (`sweep`): two devices on one synced library, one a build behind, would
-#: otherwise each delete the other's cache at every process start.
+#: It does two jobs. It orders generations, so a sweep retires only those
+#: OLDER than its own (`sweep`): two devices on one synced library, one a
+#: build behind, would otherwise each delete the other's cache at every
+#: process start. And the client puts it in every `?w=` URL
+#: (`THUMB_REV` in `frontend/src/api/thumbs.ts`, held equal by
+#: test_thumbs.py), since a `?v=` thumbnail is cached immutable and a browser
+#: that holds one made the old way would never ask for the new.
 REVISION = 3
 
 #: The shape of an entry's name.

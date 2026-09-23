@@ -1,6 +1,7 @@
 import { api, ApiError, invalidateConfigCache } from "./client";
 import { onCampaignsChanged, onConfigChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
+import { THUMB_REV } from "./thumbs";
 
 function sseResponse(chunks: string[]) {
   let i = 0;
@@ -1071,10 +1072,12 @@ test("actor and entity image URLs take the same {w, v} query the cover builders 
   const scope = { kind: "world", id: "realm" } as const;
   const actor = "/api/worlds/realm/characters/seraphine/versions/v1/images/avatar";
   expect(api.actorImageUrl(scope, "characters", "seraphine", "v1", "avatar")).toBe(actor);
+  // A `w` carries the thumbnail pipeline's revision as `t`, so a browser's
+  // cache is keyed on how the thumbnail was made as well as on its source.
   expect(api.actorImageUrl(scope, "characters", "seraphine", "v1", "avatar", { w: 512, v: "abc" }))
-    .toBe(`${actor}?w=512&v=abc`);
+    .toBe(`${actor}?w=512&t=${THUMB_REV}&v=abc`);
   expect(api.actorImageUrl(scope, "characters", "seraphine", "v1", "avatar", { w: 128 }))
-    .toBe(`${actor}?w=128`);
+    .toBe(`${actor}?w=128&t=${THUMB_REV}`);
   expect(api.actorImageUrl(scope, "pcs", "mara", "v1", "avatar", { v: "t1" }))
     .toBe("/api/worlds/realm/pcs/mara/versions/v1/images/avatar?v=t1");
   // Empty options are no options: a missing token is a bare (revalidated) URL,
@@ -1086,7 +1089,7 @@ test("actor and entity image URLs take the same {w, v} query the cover builders 
     .toBe(loc);
   expect(api.entityImageUrl({ kind: "campaign", id: "run" }, "locations", "saltmarch", "avatar",
                             { w: 256, v: "abc" }))
-    .toBe(`${loc}?w=256&v=abc`);
+    .toBe(`${loc}?w=256&t=${THUMB_REV}&v=abc`);
 });
 
 test("the campaign image library's four URLs are the four routes that serve it", async () => {
@@ -1099,7 +1102,7 @@ test("the campaign image library's four URLs are the four routes that serve it",
 
   expect(api.campaignImageUrl("run", "coastline")).toBe("/api/campaigns/run/images/coastline");
   expect(api.campaignImageUrl("run", "coastline", { w: 160 }))
-    .toBe("/api/campaigns/run/images/coastline?w=160");
+    .toBe(`/api/campaigns/run/images/coastline?w=160&t=${THUMB_REV}`);
   expect(api.campaignImageUrl("run", "coastline", { v: "a1" }))
     .toBe("/api/campaigns/run/images/coastline?v=a1");
 

@@ -18,6 +18,16 @@
  *    bucket over a DPR of 3, so a fixed slot stays sharp on a phone.
  */
 export const THUMB = { row: 128, face: 256, tile: 512, large: 1024 } as const;
+
+/** The server's thumbnail pipeline revision, sent as `t` beside every `w`
+ *  (`withImageQuery` in `api/client.ts`). Mirrors `REVISION` in
+ *  `backend/src/grimoire/store/thumbs.py`, which test_thumbs.py holds this to.
+ *
+ *  No route reads it. It is in the URL for the browser, whose cache is keyed on
+ *  the URL: a `?v=` thumbnail is cached immutable, so one made before a change
+ *  to how thumbnails are made -- a phone photo on its side, from before they
+ *  were stood upright -- would otherwise go on being drawn for a year. */
+export const THUMB_REV = 3;
 export type Thumb = (typeof THUMB)[keyof typeof THUMB];
 const BUCKETS: readonly Thumb[] = Object.values(THUMB);
 
