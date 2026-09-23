@@ -407,13 +407,19 @@ test("image urls carry per-record version tokens for immutable caching", async (
   const rowImg = container.querySelector(".loc-row-img")!;
   expect(rowImg.getAttribute("src")).toBe("/img/locations/warehouse/avatar?w=512&v=aaa1");
   expect(rowImg.getAttribute("srcset")).toContain("/img/locations/warehouse/avatar?w=1024&v=aaa1 682w");
+  // Stacked on a phone the rail is the full width, past what the 1024 fills
+  // for portrait art; the original is on offer for exactly that slot.
+  expect(rowImg.getAttribute("srcset")).toContain("/img/locations/warehouse/avatar?v=aaa1 1536w");
   expect(rowImg.getAttribute("loading")).toBe("lazy");
   rerender(<Wrap wid="w" kind="locations" selected="warehouse" />);
   await screen.findByText("Images");
-  expect(screen.getByAltText("Warehouse Nine primary").getAttribute("src"))
-    .toBe("/img/locations/warehouse/avatar?w=512&v=aaa1");
+  const head = screen.getByAltText("Warehouse Nine primary");
+  expect(head.getAttribute("src")).toBe("/img/locations/warehouse/avatar?w=512&v=aaa1");
+  expect(head.getAttribute("srcset")).toContain("/img/locations/warehouse/avatar?v=aaa1 1536w");
   const gallery = screen.getByAltText("gallery_1");
   expect(gallery.getAttribute("src")).toBe("/img/locations/warehouse/gallery_1?w=512&v=bbb2");
+  // A 154px shelf tile has no use for it.
+  expect(gallery.getAttribute("srcset")).not.toContain("1536w");
   // ...but the link out is the original: that is where the reader goes to
   // look at the picture itself.
   expect(gallery.closest("a")!.getAttribute("href")).toBe("/img/locations/warehouse/gallery_1?v=bbb2");

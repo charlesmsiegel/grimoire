@@ -46,6 +46,13 @@ const coverWidth = (bucket: number) => Math.floor((bucket * 2) / 3);
 
 export type ThumbSet = { src: string; srcSet: string; sizes: string };
 
+/** The width the original is described by when a slot offers it as the top
+ *  candidate (`thumbSet`'s `original`). Nobody measured the original, so this
+ *  claims only "more than the 1024 bucket guarantees" -- enough that a browser
+ *  reaches for it where the 1024 would be drawn soft, and never where the 1024
+ *  fills the slot. */
+export const ORIGINAL_W = 1536;
+
 /** `src`, `srcSet` and `sizes` for art cover-cropped into a slot `sizes` wide.
  *
  *  For any slot that can be large, rather than a fixed bucket: a 134px dossier
@@ -58,11 +65,14 @@ export type ThumbSet = { src: string; srcSet: string; sizes: string };
  *  one a test reads.
  *
  *  The 1024 is a ceiling, not a guarantee: a slot wider than 682 device pixels
- *  (a full-width card on a DPR-3 phone) gets it and is drawn a little under
- *  device resolution. The original is never a candidate -- a `srcset` cannot
- *  describe a width nobody measured, and a list thumbnail is not where the
- *  reader goes to look at the picture itself. A slot routinely wider than
- *  that (the inspector's location picture) keeps the original instead.
+ *  (a full-width card on a DPR-3 phone) gets it and is drawn under device
+ *  resolution -- for a portrait cover-cropped into a wide slot, half again
+ *  under. A slot that can be that wide passes `original`, the full-size URL,
+ *  which joins the candidates at `ORIGINAL_W`: the browser takes it only where
+ *  the 1024 falls short, so a desktop keeps the thumbnail and a phone gets the
+ *  sharpness it had before thumbnails. A grid of small cards passes nothing,
+ *  and a slot routinely wider than that (the inspector's location picture)
+ *  keeps the original outright.
  *
  *  The keys are in the order they must reach the element: spread onto an
  *  `<img>`, React 18 sets attributes in prop order, and an engine that starts
@@ -71,10 +81,8 @@ export type ThumbSet = { src: string; srcSet: string; sizes: string };
  *  one. For the same reason `loading="lazy"` goes BEFORE the spread (Firefox
  *  ignores a `loading` set after `src`). */
 export function thumbSet(url: (w: Thumb) => string, sizes: string,
-                         src: Thumb = THUMB.tile): ThumbSet {
-  return {
-    sizes,
-    srcSet: BUCKETS.map((w) => `${url(w)} ${coverWidth(w)}w`).join(", "),
-    src: url(src),
-  };
+                         src: Thumb = THUMB.tile, original?: string): ThumbSet {
+  const candidates = BUCKETS.map((w) => `${url(w)} ${coverWidth(w)}w`);
+  if (original) candidates.push(`${original} ${ORIGINAL_W}w`);
+  return { sizes, srcSet: candidates.join(", "), src: url(src) };
 }
