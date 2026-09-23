@@ -251,25 +251,65 @@ def test_every_domain_router_is_composed():
     assert len(router.routes) > 0
 
 
-def test_domain_routes_are_composed_by_reference_not_rebuilt():
-    """`routes.__init__` moves each domain's route objects into the aggregate
-    rather than `include_router`-ing them. On FastAPI < 0.116 -- the Android
-    pin -- every `include_router` re-analyses each route it copies (signature,
-    dependencies, response model), so an aggregate of includes paid for the
-    whole API a second time at every cold start, before the app's own include
-    paid a third. Checked by identity, so a reverted loop fails here on every
-    FastAPI and not only on the one where it costs; the order is the business
-    of the tests above."""
-    originals = set()
+def _domain_routers() -> list[APIRouter]:
+    out = []
     for info in pkgutil.iter_modules(routes.__path__):
         sub = getattr(importlib.import_module(f"{routes.__name__}.{info.name}"), "router", None)
         if sub is not None:
-            originals.update(id(r) for r in sub.routes)
+            out.append(sub)
+    return out
+
+
+def test_domain_routes_are_composed_by_reference_not_rebuilt():
+    """Where `include_router` copies routes -- FastAPI < 0.116, the Android pin
+    -- `routes.__init__` moves each domain's route objects into the aggregate
+    instead: every include there re-analyses each route it copies (signature,
+    dependencies, response model), so an aggregate of includes paid for the
+    whole API a second time at every cold start, before the app's own include
+    paid a third. Where includes nest, each domain is one branch holding its
+    own router (the next test says why). Checked by identity either way, so a
+    change of composition fails here on every FastAPI and not only on the one
+    where it costs; the order is the business of the tests above."""
+    domains = _domain_routers()
+    if routes._NESTED:
+        held = [id(getattr(r, "original_router", None)) for r in router.routes]
+        assert len(held) == len(set(held)), "a domain router is composed twice"
+        assert set(held) == {id(d) for d in domains}, (
+            "the aggregate holds something other than one branch per domain router")
+        return
+    originals = {id(r) for d in domains for r in d.routes}
     composed = [id(r) for r in router.routes]
     assert len(composed) == len(set(composed)), "a route object is composed twice"
     assert set(composed) == originals, (
         "the aggregate holds route objects no domain router declared -- "
         "copies, or include wrappers")
+
+
+def test_a_first_request_analyses_only_the_domains_it_walks(client, monkeypatch):
+    """Where includes nest, FastAPI analyses a branch's routes on the first
+    request that walks into it. The aggregate was one flat branch, so the first
+    request a fresh backend served -- a world's character list, from a tab left
+    open across a restart -- paid for all ~450 routes before it was answered,
+    over twice as long as the list itself. Counted in analyses rather than
+    time: `get_dependant` runs once per route and once per sub-dependency. On
+    a FastAPI that analyses at include time both counts are zero, which holds
+    the same property."""
+    import fastapi.routing
+
+    calls: list[int] = []
+    real = fastapi.routing.get_dependant
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(fastapi.routing, "get_dependant", counting)
+    assert client.get("/api/config").status_code == 200
+    first = len(calls)
+    # A path nothing matches walks every branch, analysing all the rest.
+    assert client.get("/api/no/route/is/shaped/like/this").status_code == 404
+    rest = len(calls) - first
+    assert first * 4 <= rest, (first, rest)
 
 
 @pytest.mark.parametrize("kwargs", ["on_startup", "on_shutdown", "lifespan"])
@@ -306,4 +346,5 @@ def test_the_refusal_reads_the_domain_router_not_the_aggregate(monkeypatch):
         return None
 
     routes._compose(plain)
-    assert aggregate.routes[-1] is plain.routes[0]
+    last = aggregate.routes[-1]
+    assert (last.original_router is plain) if routes._NESTED else (last is plain.routes[0])
