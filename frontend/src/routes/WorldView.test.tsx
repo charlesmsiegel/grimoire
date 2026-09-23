@@ -1,10 +1,11 @@
 import { useEffect } from "react";
-import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, cleanup, act } from "@testing-library/react";
 import {
   MemoryRouter, Routes, Route, useLocation, useNavigate, Outlet,
   createMemoryRouter, RouterProvider,
 } from "react-router-dom";
 import WorldView from "./WorldView";
+import { resetPrefetch } from "../api/prefetch";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 import { PaletteProvider, usePalette, type PaletteItem } from "../components/palette";
 
@@ -58,7 +59,8 @@ vi.mock("../api/client", () => ({
     libraryDependents: vi.fn().mockResolvedValue([]),
     demoteFromLibrary: vi.fn(),
     pushToLibrary: vi.fn(),
-    listUndescribedImages: vi.fn(),
+    listUndescribedImages: vi.fn(), countUndescribedImages: vi.fn(),
+    rememberedWorld: vi.fn(), rememberedCharacters: vi.fn(), rememberedAppearances: vi.fn(),
     listPCs: vi.fn(), readPC: vi.fn(),
     listPCImages: vi.fn(), getCalendarMonths: vi.fn(),
     listTags: vi.fn(),
@@ -115,7 +117,16 @@ const POOL_BASIC: ModuleDetail = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Drowned Realm" }, body: "", counts: {} });
+  resetPrefetch();
+  // The world read carries how many campaigns play the world, which is the
+  // only place the page reads that number from.
+  (api.getWorld as any).mockResolvedValue(
+    { meta: { id: "w", name: "Drowned Realm" }, body: "", counts: {}, campaigns: 2 });
+  // A first visit, unless a test remembers something.
+  (api.rememberedWorld as any).mockReturnValue(undefined);
+  (api.rememberedCharacters as any).mockReturnValue(undefined);
+  (api.rememberedAppearances as any).mockReturnValue(undefined);
+  (api.countUndescribedImages as any).mockResolvedValue(0);
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" } });
   (api.listCampaigns as any).mockResolvedValue([
     { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" },
@@ -278,6 +289,7 @@ function worldWithCounts(counts: Record<string, number>) {
     meta: { id: "w", name: "Drowned Realm" }, body: "",
     counts: { characters: 0, pcs: 0, creatures: 0, groups: 0, locations: 0,
               items: 0, lore: 0, greetings: 0, ...counts },
+    campaigns: 2,
   };
 }
 
@@ -1192,4 +1204,139 @@ test("a campaign is redirected before its world id has arrived", async () => {
   (api.getCampaign as any).mockReturnValue(new Promise(() => {}));
   renderCampaignAtUrl("/campaigns/c/world");
   await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
+});
+
+// ---- the world read's campaign count ----
+
+test("the world shape counts its campaigns off the world read, not the campaign shelf", async () => {
+  // It used to fetch every campaign's shelf row -- a scene listing each -- to
+  // filter down to this world's; the world read carries the number now.
+  (api.getWorld as any).mockResolvedValue({ ...worldWithCounts({}), campaigns: 5 });
+  renderAtUrl("/worlds/w/characters");
+  await screen.findByText(/5 campaigns/);
+  expect(indexRow("Push to campaigns")).toHaveTextContent("5");
+  expect(api.listCampaigns).not.toHaveBeenCalled();
+});
+
+test("a campaign count the world read could not give is a dash, never a zero", async () => {
+  (api.getWorld as any).mockResolvedValue({ ...worldWithCounts({}), campaigns: null });
+  renderAtUrl("/worlds/w/characters");
+  await screen.findByText("Drowned Realm");
+  expect(screen.getByText(/— campaigns/)).toBeInTheDocument();
+  expect(indexRow("Push to campaigns")).toHaveTextContent("—");
+  expect(indexRow("Push to campaigns")).not.toHaveTextContent("0");
+});
+
+test("a server older than the campaign count reads as unknown too", async () => {
+  const { campaigns: _omitted, ...older } = worldWithCounts({});
+  (api.getWorld as any).mockResolvedValue(older);
+  renderAtUrl("/worlds/w/characters");
+  await screen.findByText("Drowned Realm");
+  expect(screen.getByText(/— campaigns/)).toBeInTheDocument();
+});
+
+// ---- remembered header ----
+
+test("a revisit paints the header and its numbers before the world read lands", async () => {
+  (api.rememberedWorld as any).mockImplementation((wid: string) =>
+    (wid === "w" ? { ...worldWithCounts({ characters: 4 }), campaigns: 3 } : undefined));
+  (api.getWorld as any).mockReturnValue(new Promise(() => {}));
+  renderAtUrl("/worlds/w/characters");
+  // Before any await: nothing has been read, and the page already says what
+  // it last said about this world.
+  expect(screen.getAllByText("Drowned Realm").length).toBeGreaterThan(0);
+  expect(indexRow("Characters")).toHaveTextContent("4");
+  expect(indexRow("Push to campaigns")).toHaveTextContent("3");
+  expect(api.getWorld).toHaveBeenCalledWith("w");
+  await screen.findByRole("heading", { name: "Characters" });
+});
+
+test("a world with nothing remembered opens on dashes, not on another world's numbers", async () => {
+  (api.rememberedWorld as any).mockImplementation((wid: string) =>
+    (wid === "other" ? { ...worldWithCounts({ characters: 9 }), campaigns: 7 } : undefined));
+  (api.getWorld as any).mockReturnValue(new Promise(() => {}));
+  renderAtUrl("/worlds/w/characters");
+  expect(indexRow("Characters")).toHaveTextContent("—");
+  expect(indexRow("Push to campaigns")).toHaveTextContent("—");
+  expect(api.rememberedWorld).not.toHaveBeenCalledWith("other");
+  await screen.findByRole("heading", { name: "Characters" });
+});
+
+// ---- deferred module reads ----
+
+const SHEETED = { modules: ["pool-basic"], default: "pool-basic" };
+
+test("the roster asks for the module only once its list is in -- and still gets it", async () => {
+  // On a single-threaded server every read started beside the character list
+  // is time the list waits behind, and the grid spends the module on one
+  // button.
+  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
+  let land: (rows: unknown) => void = () => {};
+  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  renderAtUrl("/worlds/w/characters");
+  await screen.findByText("Drowned Realm");
+  expect(api.getWorldSheetsIndex).not.toHaveBeenCalled();
+  expect(api.listModules).not.toHaveBeenCalled();
+  expect(api.readModule).not.toHaveBeenCalled();
+  await act(async () => {
+    land([{ id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] }]);
+  });
+  await screen.findByText("Mira");
+  await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
+  expect(await screen.findByRole("button", { name: /New character with sheet/ })).toBeInTheDocument();
+});
+
+test("a section that takes the module asks for it on arrival", async () => {
+  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
+  renderAtUrl("/worlds/w/pcs");
+  expect(await screen.findByRole("button", { name: /New PC with sheet/ })).toBeInTheDocument();
+  expect(api.getWorldSheetsIndex).toHaveBeenCalledWith("w");
+});
+
+test("a section that takes no module never reads one", async () => {
+  renderAtUrl("/worlds/w/greetings");
+  await screen.findByRole("heading", { name: "Greetings" });
+  expect(api.getWorldSheetsIndex).not.toHaveBeenCalled();
+  expect(api.listModules).not.toHaveBeenCalled();
+  expect(api.readModule).not.toHaveBeenCalled();
+});
+
+test("moving from a section without the module to one with it asks then", async () => {
+  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
+  renderAtUrl("/worlds/w/greetings");
+  await screen.findByRole("heading", { name: "Greetings" });
+  fireEvent.click(indexRow("PCs"));
+  expect(await screen.findByRole("button", { name: /New PC with sheet/ })).toBeInTheDocument();
+});
+
+test("a campaign's roster defers its module the same way", async () => {
+  (api.getCampaignModule as any).mockResolvedValue(
+    { setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
+  let land: (rows: unknown) => void = () => {};
+  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  renderCampaignAtUrl("/campaigns/c1/world/characters");
+  await screen.findByText(/World Copy/);
+  expect(api.getCampaignModule).not.toHaveBeenCalled();
+  await act(async () => { land([]); });
+  await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
+});
+
+// ---- intent prefetch ----
+
+test("pressing the Characters row starts the roster's read before the click lands", async () => {
+  // Tags, because it is a section that lists no characters of its own.
+  renderAtUrl("/worlds/w/tags");
+  await screen.findByRole("heading", { name: "Tags" });
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  fireEvent.pointerDown(indexRow("Characters"));
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w" }));
+});
+
+test("the Characters row prefetches nothing while it is the page already open", async () => {
+  renderAtUrl("/worlds/w/characters");
+  await screen.findByRole("heading", { name: "Characters" });
+  const before = (api.listCharacters as any).mock.calls.length;
+  fireEvent.pointerDown(indexRow("Characters"));
+  await screen.findByRole("heading", { name: "Characters" });
+  expect((api.listCharacters as any).mock.calls.length).toBe(before);
 });

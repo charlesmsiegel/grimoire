@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { SceneDatetime, SceneLocation, SceneWeather } from "../../api/client";
 import { sectionHref } from "../../worldPaths";
+import { intentProps } from "../../api/prefetch";
 
 function Line({ label, value }: { label: string; value: string }) {
   return (
@@ -51,6 +52,8 @@ export default function Conditions(
           here reaches this campaign only, and the label is where that gets
           said before the click rather than after. */}
       <Link className="world-copy"
+            // It opens on the copy's roster: intent starts that grid's reads.
+            {...intentProps({ kind: "campaign", id: cid })}
             to={sectionHref({ kind: "campaign", id: cid }, { kind: "section", at: "characters" })}>
         <span className="section-label">World copy</span>
         <span className="world-copy-name">

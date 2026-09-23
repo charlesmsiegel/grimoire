@@ -13,6 +13,7 @@ import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
 import { sectionHref } from "../worldPaths";
+import { intentProps } from "../api/prefetch";
 
 /** The campaign's front door.
  *
@@ -309,7 +310,9 @@ export default function CampaignHub() {
         {camp?.sheets && (
           <Link className="column-row" to={`/campaigns/${cid}/sheets`}>Sheets</Link>
         )}
+        {/* Opens on the copy's roster, so intent starts that grid's reads. */}
         <Link className="column-row"
+              {...intentProps({ kind: "campaign", id: cid })}
               to={sectionHref({ kind: "campaign", id: cid }, { kind: "section", at: "characters" })}>
           World
         </Link>

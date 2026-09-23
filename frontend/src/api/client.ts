@@ -64,7 +64,7 @@ import {
   type WeatherSpan,
   type CalendarYear, type ChoreItems,
   type ShellPayload, type TodoPayload,
-  type WorldCampaignPending, type WorldImage, type WorldMeta,
+  type WorldCampaignPending, type WorldDetail, type WorldImage, type WorldMeta,
 } from "./types";
 
 /** Announce a campaign mutation once it has actually landed, passing the
@@ -122,6 +122,13 @@ export class ApiError extends Error {
 // difference between finding the run and starting a second one.
 async function requestRaw<T>(method: string, path: string, body?: unknown,
                              signal?: AbortSignal, attempt?: string): Promise<T> {
+  if (method === "GET") return fetchJson<T>(method, path, body, signal, attempt);
+  // Anything else may change what a remembered read says (see `writing`).
+  return writing(path, () => fetchJson<T>(method, path, body, signal, attempt));
+}
+
+async function fetchJson<T>(method: string, path: string, body?: unknown,
+                            signal?: AbortSignal, attempt?: string): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: {
@@ -180,6 +187,124 @@ function retireInflight(path: string): void {
  *  file has already been bitten by. */
 function retireAllInflight(): void {
   inflightGets.clear();
+}
+
+// ---- remembered reads ------------------------------------------------------
+//
+// The last good answer to the few reads a world's page paints from -- the
+// world record (`getWorld`), a scope's character rows (`listCharacters`) and a
+// campaign's roster (`listAppearances`) -- so that a page seen once paints on
+// its FIRST render the next time it opens, instead of an empty grid for as
+// long as the round trip takes, and so that an intent prefetch (`prefetch.ts`)
+// has somewhere to leave what it fetched.
+//
+// This is not a cache anybody reads INSTEAD of asking. Every page that paints
+// from it also issues the read, and the answer replaces what was painted
+// wholesale; so a remembered value is on screen for at most one revalidation,
+// and that bound is the whole safety argument. It is also why it lives in
+// memory only: it goes with the tab, and the first paint after a reload waits
+// for the server like every other.
+//
+// What it must never do is paint one library's or one scope's rows for
+// another, because a card's handlers act on the scope the page is showing.
+// Hence:
+//
+// - Keys name the read's scope kind and id, and nothing is ever looked up
+//   under a key other than the page's own.
+// - Everything belongs to one store root: the `data_dir` a config read
+//   reported. A different one -- a move made here (`putDataDir`) or one made
+//   elsewhere and noticed by the next config read, which the app makes on
+//   every navigation -- forgets all of it, and until a root is known nothing
+//   is remembered or recalled at all.
+// - A read only lands if nothing was forgotten while it was in flight: a
+//   root change or a write (`writing`) bumps `memoEpoch`, and an answer
+//   issued before the bump describes a store that may no longer be the one
+//   being shown.
+let memoRoot: string | null = null;
+let memoEpoch = 0;
+const memo = new Map<string, unknown>();
+/** How many answers are kept, the least recently used going first. A reader
+ *  moves between a handful of worlds and campaigns at a time, and that
+ *  handful is all the memo has to cover; without a bound, a long session
+ *  across a large library would keep every roster it ever opened -- each a
+ *  summary row per character, which on a phone's WebView is heap that
+ *  nothing is going to paint again. Worth tuning against real navigation. */
+const MEMO_MAX = 24;
+
+function memoKey(...parts: string[]): string {
+  // Ids cannot hold a colon (`paths.safe_id`), but a key that relied on it
+  // would be one rule away from colliding; JSON says where each part ends.
+  return JSON.stringify(parts);
+}
+
+function forgetRemembered(): void {
+  memo.clear();
+  memoEpoch += 1;
+}
+
+/** The store root a config response describes. Called with every config the
+ *  client receives, so the memo notices a root change the first time any of
+ *  them reports one. */
+function noteRoot(root: string | undefined): void {
+  if (!root || root === memoRoot) return;
+  memoRoot = root;
+  forgetRemembered();
+}
+
+/** `read`, with its answer remembered under `key` if it lands before anything
+ *  is forgotten. The outcome is passed through untouched, a failure included
+ *  -- which also drops what was remembered under `key`: a read that could not
+ *  confirm those rows is no reason to go on painting them on the next visit
+ *  (a world deleted elsewhere would flash its old cast every time). */
+function remembering<T>(key: string, read: Promise<T>): Promise<T> {
+  const epoch = memoEpoch;
+  return read.then((value) => {
+    if (epoch === memoEpoch && memoRoot !== null) {
+      memo.delete(key);   // re-inserted at the young end
+      memo.set(key, value);
+      if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value as string);
+    }
+    return value;
+  }, (err: unknown) => {
+    if (epoch === memoEpoch) memo.delete(key);
+    throw err;
+  });
+}
+
+function recall<T>(key: string): T | undefined {
+  if (memoRoot === null || !memo.has(key)) return undefined;
+  // Painting from an answer is using it: it moves to the young end too.
+  const value = memo.get(key);
+  memo.delete(key);
+  memo.set(key, value);
+  return value as T;
+}
+
+/** A write under a world or a campaign forgets everything remembered, both
+ *  when it is sent and when it settles.
+ *
+ *  All of it, rather than the entry for the write's own scope: a campaign's
+ *  character rows are an overlay union over its world's, so a write to a
+ *  world's roster changes every campaign's that inherits it -- and which
+ *  campaigns those are is something this client does not know. The other way
+ *  round, a library move from a campaign writes the world. Forgetting is
+ *  cheap (the next visit paints after its read, the way every visit did
+ *  before anything was remembered); a precise rule would be a list of which
+ *  endpoints touch which reads, which is the enumeration `retireAllInflight`
+ *  declines for the same reason.
+ *
+ *  Twice, because a read issued while the write is on the wire can be
+ *  answered from before it and land after the first forget. The second
+ *  forget drops that answer too; a page open across the write re-reads for
+ *  itself, as it always has. */
+async function writing<T>(path: string, send: () => Promise<T>): Promise<T> {
+  const scoped = path.startsWith("/api/worlds") || path.startsWith("/api/campaigns");
+  if (scoped) forgetRemembered();
+  try {
+    return await send();
+  } finally {
+    if (scoped) forgetRemembered();
+  }
 }
 
 // `signal` aborts the request. Only non-GETs and `fresh` GETs take one, and
@@ -769,19 +894,23 @@ async function parseReply<T>(res: Response): Promise<T> {
 
 async function requestForm<T>(path: string, form: FormData, method = "POST",
                               attempt?: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, {
-    method, body: form,
-    headers: attempt ? { "X-Grimoire-Attempt": attempt } : undefined,
-    signal,
+  return writing(path, async () => {
+    const res = await fetch(path, {
+      method, body: form,
+      headers: attempt ? { "X-Grimoire-Attempt": attempt } : undefined,
+      signal,
+    });
+    return parseReply<T>(res);
   });
-  return parseReply<T>(res);
 }
 
 /** POST an archive as the whole request body -- the two import endpoints. */
 async function postZip<T>(path: string, file: Blob): Promise<T> {
-  const res = await fetch(path, { method: "POST", body: file,
-                                  headers: { "content-type": "application/zip" } });
-  return parseReply<T>(res);
+  return writing(path, async () => {
+    const res = await fetch(path, { method: "POST", body: file,
+                                    headers: { "content-type": "application/zip" } });
+    return parseReply<T>(res);
+  });
 }
 
 function entityBase(scope: EntityScope): string {
@@ -820,7 +949,21 @@ function withImageQuery(path: string, opts?: ImageOpts): string {
 // client able to find the run (`api.findRun`) and stop it. It doubles as the
 // idempotency key -- re-sending the same id replays the original outcome
 // instead of running the turn twice.
-async function streamPost<T = ChatEvent>(
+//
+// A POST, so it goes through `writing`: a turn, a localize or a tagline batch
+// all write the store as they stream.
+function streamPost<T = ChatEvent>(
+  path: string,
+  body: unknown,
+  onEvent: (e: T) => void,
+  signal?: AbortSignal,
+  attempt?: string,
+  onIndex?: (index: number) => void,
+): Promise<void> {
+  return writing(path, () => streamPostRaw(path, body, onEvent, signal, attempt, onIndex));
+}
+
+async function streamPostRaw<T>(
   path: string,
   body: unknown,
   onEvent: (e: T) => void,
@@ -887,6 +1030,12 @@ export const api = {
   getConfig: (opts?: { fresh?: boolean }) => {
     if (!configCache || opts?.fresh) {
       configCache = request<Config>("GET", "/api/config", undefined, { fresh: true })
+        .then((cfg) => {
+          // Every config names the store it describes, and this is how the
+          // remembered reads hear that it is no longer the one they came from.
+          noteRoot(cfg.data_dir);
+          return cfg;
+        })
         .catch((err) => {
           configCache = null; // never cache a failure
           throw err;
@@ -897,6 +1046,7 @@ export const api = {
   putConfig: (body: ConfigUpdate) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
+      noteRoot(cfg.data_dir);
       return notifyConfig(cfg);
     }),
   getPromptLayout: () => request<PromptLayout>("GET", "/api/prompt-layout"),
@@ -925,6 +1075,12 @@ export const api = {
         // Library hub's counts are the clearest case: five GETs that would
         // otherwise resolve with the previous store's totals and be adopted.
         retireAllInflight();
+        // ...and everything remembered from it, unconditionally: the old root
+        // and the new one can be spelled the same (a move back, a pointer
+        // cleared to a default that matches), and the rows are not the same
+        // rows. `noteRoot` then adopts the new root as the memo's owner.
+        forgetRemembered();
+        noteRoot(info.data_dir);
         // ...and both things the shell's chrome is showing. A new root has its
         // own campaigns and its own connections, so the sidebar's links point
         // at campaigns that need not exist here and the status bar names a
@@ -1467,8 +1623,14 @@ export const api = {
     request<{ ok: boolean; resolution: CheckResolution; message: string }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/check`, body),
 
+  /** Remembered (see "remembered reads" above), which is what lets the world
+   *  page paint its header and its column's numbers on the first render of a
+   *  revisit. */
   getWorld: (wid: string) =>
-    request<{ meta: WorldMeta; body: string; counts: Record<string, number> }>("GET", `/api/worlds/${wid}`),
+    remembering(memoKey("world", wid), request<WorldDetail>("GET", `/api/worlds/${wid}`)),
+  /** The last `getWorld(wid)` answer from this store, or `undefined`. A value
+   *  to paint while that read is in flight -- never instead of making it. */
+  rememberedWorld: (wid: string) => recall<WorldDetail>(memoKey("world", wid)),
 
   /** Every category an entity may be filed under, server-side and in its own
    *  order. Read by the import review tables so their per-row Category
@@ -1529,7 +1691,15 @@ export const api = {
   deleteTag: (wid: string, tid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/tags/${tid}`),
 
   // characters
-  listCharacters: (scope: EntityScope) => request<CharacterSummary[]>("GET", `${entityBase(scope)}/characters`),
+  /** Remembered per scope, like `getWorld`: every caller's answer feeds the
+   *  next paint of the roster grid, a prefetch's included. */
+  listCharacters: (scope: EntityScope) =>
+    remembering(memoKey("characters", scope.kind, scope.id),
+                request<CharacterSummary[]>("GET", `${entityBase(scope)}/characters`)),
+  /** The last `listCharacters(scope)` answer from this store, or `undefined`.
+   *  For painting while that read is in flight -- never instead of it. */
+  rememberedCharacters: (scope: EntityScope) =>
+    recall<CharacterSummary[]>(memoKey("characters", scope.kind, scope.id)),
   // Both scopes since #60: a campaign-scoped create makes a character who
   // exists only here, with no world counterpart and no sync ref — which is
   // exactly what "emergent" means. `promoteToLibrary` is what ends that.
@@ -1828,6 +1998,12 @@ export const api = {
    *  which hangs off no record, and art it has diverged. */
   listUndescribedImages: (scope: EntityScope) =>
     request<UndescribedImage[]>("GET", `${entityBase(scope)}/images/undescribed`),
+  /** How long that backlog is, without it: the same filter, answered as
+   *  `{count}`. What a button label needs -- the list is every entry with its
+   *  record's name and URL, which is a lot to download to print one number. */
+  countUndescribedImages: (scope: EntityScope) =>
+    request<{ count: number }>("GET", `${entityBase(scope)}/images/undescribed?count=1`)
+      .then((r) => r.count),
   /** Every image in a world, from all eight bases, in one response (#200).
    *  World-scoped only: a campaign reaches most of its art through its world,
    *  and the art it has diverged is listed in its own editors — the same split
@@ -1927,7 +2103,13 @@ export const api = {
     withImageQuery(`${entityBase(scope)}/${kind}/${aid}/versions/${vid}/images/${name}`, opts),
 
   // campaign cast & play
-  listAppearances: (cid: string) => request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`),
+  /** Remembered, because a campaign's roster grid will not paint without it:
+   *  it filters to who has appeared, and painting the unfiltered cast first
+   *  would show every inherited character and then yank most of them away. */
+  listAppearances: (cid: string) =>
+    remembering(memoKey("appearances", cid),
+                request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`)),
+  rememberedAppearances: (cid: string) => recall<RosterEntry[]>(memoKey("appearances", cid)),
   addCastBatch: (cid: string, sid: string, refs: { kind: string; id: string; version?: string; role?: string }[]) =>
     request<{ ok: boolean; added: number; skipped: string[] }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/cast/batch`, { refs }),
