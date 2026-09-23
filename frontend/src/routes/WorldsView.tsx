@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
 import { errorText } from "../api/errors";
+import { intentProps } from "../api/prefetch";
 import LibraryPage from "../components/LibraryPage";
 import { byName } from "../sortByName";
 import { sectionHref } from "../worldPaths";
@@ -190,7 +191,12 @@ export default function WorldsView() {
                   onKeyDown={(e) => { if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }}
                 />
               ) : (
+                // A rest on the card, or the press itself, starts the world's
+                // reads -- its record and its character rows, which the
+                // overview reads too -- so the page it opens has them in
+                // hand, or in flight, by the time it mounts.
                 <button className="world-card-main"
+                        {...intentProps({ kind: "world", id: w.id })}
                         onClick={() => navigate(sectionHref({ kind: "world", id: w.id },
                                                             { kind: "section", at: "overview" }))}>
                   <div className="shelf-cover">

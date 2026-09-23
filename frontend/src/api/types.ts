@@ -243,6 +243,21 @@ export type WorldMeta = {
    *  campaigns list makes, and for the same reason. */
   cover?: string;
 };
+/** `GET /worlds/{wid}`: the world page's header and its column's numbers in
+ *  one read.
+ *
+ *  `counts` is a directory tally per record kind. `campaigns` is how many
+ *  campaigns are played in the world -- the one fact on that page that is not
+ *  a record inside it, and the only field the route reads from outside the
+ *  world. `null` when a campaign it had to look at could not be read, and
+ *  absent from a server older than the field: both are "unknown" to the page,
+ *  a dash, never a 0. */
+export type WorldDetail = {
+  meta: WorldMeta;
+  body: string;
+  counts: Record<string, number>;
+  campaigns?: number | null;
+};
 export type CampaignMeta = {
   id: string;
   name: string;

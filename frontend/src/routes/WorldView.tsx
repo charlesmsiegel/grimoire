@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, ENTITY_KINDS, type EntityKind, type EntityScope, type ModuleDetail } from "../api/client";
+import { api, ENTITY_KINDS, type EntityKind, type EntityScope, type ModuleDetail,
+         type WorldDetail } from "../api/client";
+import { intentProps } from "../api/prefetch";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
@@ -66,6 +68,24 @@ function storedCounts(counts: Record<string, number> | undefined): Record<string
     return [k, typeof n === "number" ? n : null];
   }));
 }
+
+/** How many campaigns a world read says are played in the world. `null` for
+ *  "unknown" -- the route could not read a campaign, or is older than the
+ *  field -- which draws the same dash as a read that failed outright. */
+function campaignsOf(w: WorldDetail | undefined): number | null {
+  return typeof w?.campaigns === "number" ? w.campaigns : null;
+}
+
+/** The sections whose editors are handed the module context -- a sheet-aware
+ *  create, the module's content to instantiate, a record's sheet -- plus the
+ *  overview, which is where the world's module is picked. The characters grid
+ *  takes it too, but only for its "+ New character with sheet…" button, so it
+ *  asks after its own list has landed: on a single-threaded server every read
+ *  started beside that list is time the list waits behind. Sections not named
+ *  here never read it at all. */
+const NEEDS_MODULE: readonly Section[] = [
+  "overview", "pcs", "locations", "lore", "items", "groups", "creatures",
+];
 
 /** How many records a row stands for, read from the row's own list.
  *
@@ -145,17 +165,32 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  blank form. Read nowhere else, so it cannot ride along to Items or sit
    *  beside a record that already has owners of its own. */
   const newOwner = section === "lore" && !rid ? (params.get("owner") ?? "") : "";
-  const [wid, setWid] = useState(campaign ? "" : widParam);
+  /** The campaign shape's world, which only its campaign read can say. */
+  const [campaignWid, setCampaignWid] = useState("");
+  // The world shape's is the route's own, read synchronously rather than
+  // copied into state by an effect: a copy is one render behind a world
+  // switch, which hands every section the world being left for a frame -- and
+  // the character grid would start its read for that world first.
+  const wid = campaign ? campaignWid : widParam;
+  /** Which world, or which campaign's copy of one, the index is counting. */
+  const scopeKey = campaign ? `campaign:${cid}` : `world:${widParam}`;
+  // What the world's header and column last read, when this tab has read them
+  // before: a revisit paints its name, cover and numbers on the first render,
+  // and the world read below replaces them. See "remembered reads" in
+  // `api/client.ts` for why that is at most one read stale, and never
+  // another world's.
+  const seed = campaign ? undefined : api.rememberedWorld(widParam);
   const [campaignName, setCampaignName] = useState("");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(seed?.meta.name ?? "");
   // The world's cover token, for the header thumbnail. "" when it has none and
   // when the campaign branch below is what set the name -- that branch reads an
   // embedded meta rather than fetching the world, and a header picture is not
   // worth a second request on a path that deliberately avoids one.
-  const [cover, setCover] = useState("");
+  const [cover, setCover] = useState(seed?.meta.cover ?? "");
   const [coverBroken, setCoverBroken] = useState(false);
-  const [counts, setCounts] = useState<Record<string, number | null>>({});
-  const [campaignCount, setCampaignCount] = useState<number | null>(null);
+  const [counts, setCounts] = useState<Record<string, number | null>>(
+    () => (seed ? storedCounts(seed.counts) : {}));
+  const [campaignCount, setCampaignCount] = useState<number | null>(campaignsOf(seed));
   const [importOpen, setImportOpen] = useState(false);
   const [scenarioOpen, setScenarioOpen] = useState(false);
   /** Bumped by a scenario import, which is the one action here that creates
@@ -184,6 +219,30 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [mapWriting, setMapWriting] = useState(false);
   const [moduleCtx, setModuleCtx] = useState<ModuleDetail | null>(null);
   const [worldMid, setWorldMid] = useState("");
+  /** The scope whose module context has been asked for (see `NEEDS_MODULE`).
+   *  A scope key rather than a flag, so a world switch un-asks by itself. */
+  const [moduleFor, setModuleFor] = useState<string | null>(null);
+  const moduleWanted = moduleFor === scopeKey;
+
+  // A new scope, in the render that first shows it -- the route keeps this
+  // instance across a world switch, and an effect-time reset would commit a
+  // frame of the previous world's name, numbers and module over the new
+  // world's sections. Its remembered header when there is one; otherwise the
+  // dashes and blanks of a first visit.
+  const [seededFor, setSeededFor] = useState(scopeKey);
+  if (seededFor !== scopeKey) {
+    setSeededFor(scopeKey);
+    setModuleCtx(null);
+    setWorldMid("");
+    if (!campaign) {
+      setName(seed?.meta.name ?? "");
+      setCover(seed?.meta.cover ?? "");
+      setCounts(seed ? storedCounts(seed.counts) : {});
+      setCampaignCount(campaignsOf(seed));
+    } else {
+      setCounts({});
+    }
+  }
 
   // Editing a campaign's world is still being in that campaign, but it is a
   // different route: CampaignView unmounts and clears the context, so without
@@ -192,8 +251,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // about a page the reader has left.
   usePublishShellContext(campaign && campaignName ? { campaign: campaignName, scene: "" } : null);
 
-  /** Which world, or which campaign's copy of one, the index is counting. */
-  const scopeKey = campaign ? `campaign:${cid}` : `world:${widParam}`;
   /** Bumped when `scopeKey` changes, so a count still in flight for the world
    *  being left cannot land in the one being entered -- the route keeps this
    *  instance across a world switch. A generation rather than a per-effect
@@ -206,43 +263,81 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     if (countGen.current === gen) setCounts((c) => ({ ...c, ...patch }));
   }, []);
   // Before the world read below, which captures the generation this starts.
+  // The numbers themselves were reset (or seeded) in the render that showed
+  // the new scope, above.
   useEffect(() => {
     countGen.current += 1;
-    // Dashes rather than the previous scope's numbers while the new ones load.
-    setCounts((c) => (Object.keys(c).length ? {} : c));
   }, [scopeKey]);
 
   useEffect(() => {
+    // Guarded: the route keeps this instance across a world switch, and the
+    // header read for the world being left must not name the one entered.
+    let live = true;
     if (campaign) {
       api.getCampaign(cid).then((c) => {
+        if (!live) return;
         setCampaignName(c.meta.name);
-        setWid(c.meta.world);
+        setCampaignWid(c.meta.world);
         setName(c.meta.world_name ?? c.meta.world); // embedded: no second fetch
       });
-      api.getCampaignModule(cid)
-        .then(({ resolved }) => (resolved ? api.readModule(resolved) : null))
-        .then((m) => setModuleCtx(m))
-        .catch(() => setModuleCtx(null));
     } else {
-      setWid(widParam);
       // The header's read carries the index's numbers too: every record row
-      // is a stored tally on it, so a visit lists nothing to count it.
+      // is a stored tally on it, so a visit lists nothing to count it -- and
+      // the campaign count, which used to cost a read of every campaign's
+      // shelf row to filter down to this world's.
       const apply = countsFor(countGen.current);
       api.getWorld(widParam)
-        .then((w) => { setName(w.meta.name); setCover(w.meta.cover ?? ""); apply(storedCounts(w.counts)); })
-        .catch(() => { setName(widParam); setCover(""); apply(storedCounts(undefined)); });
-      Promise.all([api.getWorldSheetsIndex(widParam), api.listModules()])
-        .then(([index, installed]) =>
-          setWorldMid(index.default || index.modules[0] || installed[0]?.id || ""))
-        .catch(() => setWorldMid(""));
+        .then((w) => {
+          if (!live) return;
+          setName(w.meta.name); setCover(w.meta.cover ?? "");
+          setCampaignCount(campaignsOf(w));
+          apply(storedCounts(w.counts));
+        })
+        .catch(() => {
+          if (!live) return;
+          setName(widParam); setCover(""); setCampaignCount(null);
+          apply(storedCounts(undefined));
+        });
     }
+    return () => { live = false; };
   }, [campaign, cid, widParam, countsFor]);
+
+  // Ask for the module context once a section wants it (`NEEDS_MODULE`); the
+  // characters grid says so itself, through `onListed`, once its list is in.
+  useEffect(() => {
+    if (NEEDS_MODULE.includes(section)) setModuleFor(scopeKey);
+  }, [section, scopeKey]);
+  const onGridListed = useCallback(() => setModuleFor(scopeKey), [scopeKey]);
+
+  useEffect(() => {
+    if (!moduleWanted) return;
+    // Guarded: a world switch un-asks, and a module read for the world being
+    // left must not land on the one being entered.
+    let live = true;
+    if (campaign) {
+      api.getCampaignModule(cid)
+        .then(({ resolved }) => (resolved ? api.readModule(resolved) : null))
+        .then((m) => { if (live) setModuleCtx(m); })
+        .catch(() => { if (live) setModuleCtx(null); });
+    } else {
+      Promise.all([api.getWorldSheetsIndex(widParam), api.listModules()])
+        .then(([index, installed]) => {
+          if (live) setWorldMid(index.default || index.modules[0] || installed[0]?.id || "");
+        })
+        .catch(() => { if (live) setWorldMid(""); });
+    }
+    return () => { live = false; };
+  }, [moduleWanted, campaign, cid, widParam]);
 
   // world path: re-resolve the module context whenever the picked module id changes
   useEffect(() => {
     if (campaign) return;
     if (!worldMid) { setModuleCtx(null); return; }
-    api.readModule(worldMid).then((m) => setModuleCtx(m)).catch(() => setModuleCtx(null));
+    let live = true;
+    api.readModule(worldMid)
+      .then((m) => { if (live) setModuleCtx(m); })
+      .catch(() => { if (live) setModuleCtx(null); });
+    return () => { live = false; };
   }, [campaign, worldMid]);
 
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
@@ -310,18 +405,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                campaign ? { kind: "campaign", id: cid } : { kind: "world", id: widParam },
                widParam, countsFor(countGen.current));
   }, [scopeKey, section, populated, campaign, cid, widParam, groups, countsFor]);
-
-  // How many campaigns are played in this world: the one fact about a world
-  // that is not a record inside it. Only on the world shape -- a campaign
-  // already knows which campaign it is, and this read scans every campaign.
-  useEffect(() => {
-    if (campaign || !wid) return;
-    let live = true;
-    api.listCampaigns()
-      .then((cs) => { if (live) setCampaignCount(cs.filter((c) => c.world === wid).length); })
-      .catch(() => { if (live) setCampaignCount(null); });
-    return () => { live = false; };
-  }, [campaign, wid]);
 
   // A present-character link from the greeting view, an owner chip, or a search
   // hit. A character has a page of its own now, so this LEAVES this route
@@ -521,6 +604,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             <Link key={r.key}
                   className={"column-row" + (section === r.key ? " active" : "")}
                   aria-current={section === r.key ? "page" : undefined}
+                  // The roster is the screen a reader most often opens a world
+                  // for, so its row starts that screen's reads on intent --
+                  // unless it is the screen already open.
+                  {...(r.key === "characters"
+                    ? intentProps(section === "characters" ? null : scopeForPaths) : {})}
                   to={hrefFor(r.key)}>
               <span className="column-row-label">{r.label}</span>
               <span className="column-row-count">{dash(counts[r.key])}</span>
@@ -601,7 +689,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             indefinitely if one stalls. */}
         {!campaign && section === "images"
           && <ImagesView key={wid} wid={wid} forCampaign={params.get("for")} />}
-        {section === "characters" && <CharacterGrid scope={scope} wid={wid} reveal={reveal} module={moduleCtx} />}
+        {section === "characters" && <CharacterGrid scope={scope} wid={wid} reveal={reveal}
+                                                    module={moduleCtx} onListed={onGridListed} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid}
                                        selected={rid}
                                        recordHref={(r) => sectionHref(scopeForPaths,

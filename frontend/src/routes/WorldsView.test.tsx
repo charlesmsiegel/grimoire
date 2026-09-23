@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorldsView from "./WorldsView";
+import { INTENT_DWELL_MS, resetPrefetch } from "../api/prefetch";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => ({
@@ -17,12 +18,21 @@ vi.mock("../api/client", () => ({
     exportWorldUrl: vi.fn(),
     importWorld: vi.fn(),
     forkWorld: vi.fn(),
+    // What a world card's intent prefetch asks for.
+    getWorld: vi.fn(), listCharacters: vi.fn(), listAppearances: vi.fn(),
+    rememberedWorld: vi.fn(), rememberedCharacters: vi.fn(), rememberedAppearances: vi.fn(),
   },
 }));
 import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPrefetch();
+  (api.getWorld as any).mockResolvedValue({ meta: { id: "w1", name: "Saltmarch" }, body: "", counts: {} });
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.rememberedWorld as any).mockReturnValue(undefined);
+  (api.rememberedCharacters as any).mockReturnValue(undefined);
+  (api.rememberedAppearances as any).mockReturnValue(undefined);
   (api.listWorlds as any).mockResolvedValue([]);
   (api.createWorld as any).mockResolvedValue({ id: "w1" });
   (api.renameWorld as any).mockResolvedValue({ id: "w1", name: "New" });
@@ -307,4 +317,78 @@ test("a failed refresh after a successful fork says the copy exists", async () =
   // And the button comes back, rather than being stuck disabled by the throw.
   await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());
   prompt.mockRestore();
+});
+
+// ---- intent prefetch ----
+
+const SALTMARCH = { id: "w1", name: "Saltmarch", created: "", updated: "", counts: {} };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function worldCard() {
+  (api.listWorlds as any).mockResolvedValue([SALTMARCH]);
+  renderView();
+  await screen.findByText("Saltmarch");
+  return screen.getByText("Saltmarch").closest("button") as HTMLElement;
+}
+
+test("resting on a world card starts its reads, once", async () => {
+  // The world page's record and its character rows, started while the reader
+  // is still deciding: the page that mounts on the click joins them in flight
+  // or paints what they brought back.
+  const card = await worldCard();
+  fireEvent.pointerEnter(card);
+  await waitFor(() => expect(api.getWorld).toHaveBeenCalledWith("w1"));
+  expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w1" });
+  // The press that follows, and a second rest, ask for nothing more.
+  fireEvent.pointerDown(card);
+  fireEvent.pointerLeave(card);
+  fireEvent.pointerEnter(card);
+  await sleep(INTENT_DWELL_MS * 2);
+  expect(api.getWorld).toHaveBeenCalledTimes(1);
+  expect(api.listCharacters).toHaveBeenCalledTimes(1);
+});
+
+test("a pointer passing over a card on its way elsewhere asks for nothing", async () => {
+  const card = await worldCard();
+  fireEvent.pointerEnter(card);
+  fireEvent.pointerLeave(card);
+  await sleep(INTENT_DWELL_MS * 2);
+  expect(api.getWorld).not.toHaveBeenCalled();
+  expect(api.listCharacters).not.toHaveBeenCalled();
+});
+
+test("a press prefetches at once, with no dwell -- on a phone nothing hovers", async () => {
+  const card = await worldCard();
+  fireEvent.touchStart(card);
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w1" }));
+  fireEvent.pointerDown(card);
+  await sleep(10);
+  expect(api.getWorld).toHaveBeenCalledTimes(1);
+  expect(api.listCharacters).toHaveBeenCalledTimes(1);
+});
+
+test("keyboard focus resting on a card is intent too", async () => {
+  const card = await worldCard();
+  fireEvent.focus(card);
+  await waitFor(() => expect(api.getWorld).toHaveBeenCalledWith("w1"));
+});
+
+test("what is already remembered is not prefetched again", async () => {
+  (api.rememberedWorld as any).mockReturnValue({ meta: SALTMARCH, body: "", counts: {} });
+  (api.rememberedCharacters as any).mockReturnValue([]);
+  const card = await worldCard();
+  fireEvent.pointerDown(card);
+  await sleep(10);
+  expect(api.getWorld).not.toHaveBeenCalled();
+  expect(api.listCharacters).not.toHaveBeenCalled();
+});
+
+test("a prefetch that fails is swallowed -- the page's own read is the one that reports", async () => {
+  (api.getWorld as any).mockRejectedValue(new Error("offline"));
+  (api.listCharacters as any).mockRejectedValue(new Error("offline"));
+  const card = await worldCard();
+  fireEvent.pointerDown(card);
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  await sleep(10);
+  expect(screen.queryByText(/offline/)).toBeNull();
 });
