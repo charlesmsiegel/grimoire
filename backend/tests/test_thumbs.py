@@ -314,6 +314,42 @@ def test_concurrent_requests_for_one_thumbnail_decode_it_once(tmp_path, monkeypa
     assert thumbs._flights == {}  # a key's lock goes when its last asker does
 
 
+def test_concurrent_requests_for_an_undecodable_source_try_it_once(tmp_path, monkeypatch):
+    # The waiters behind a decode that failed would each take the lock in turn
+    # and fail it again -- one after another, where before single-flight they
+    # at least failed side by side. They serve the original, as it did.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    src = _greeting_art(tmp_path, b"not an image")
+    n = 6
+    real, opened = Image.open, []
+
+    def open_once_all_are_waiting(*args, **kwargs):
+        # Fail only once every asker has joined the flight: a late one would
+        # find it gone and rightly try again, which is not what this measures.
+        opened.append(args[0])
+        deadline = time.monotonic() + 5
+        while sum(f.users for f in list(thumbs._flights.values())) < n and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(thumbs.Image, "open", open_once_all_are_waiting)
+    barrier = threading.Barrier(n)
+    got: list = ["unset"] * n
+
+    def ask(i):
+        barrier.wait()
+        got[i] = thumbs.thumbnail(src, 320)
+
+    threads = [threading.Thread(target=ask, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert got == [None] * n
+    assert len(opened) == 1
+    assert thumbs._flights == {}
+
+
 def test_a_failed_decode_does_not_wedge_the_key(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     src = _greeting_art(tmp_path, b"not an image")
@@ -325,6 +361,15 @@ def test_a_failed_decode_does_not_wedge_the_key(tmp_path, monkeypatch):
 
 
 # ---- downscale before converting ----
+def _with_black(rgb: Image.Image) -> Image.Image:
+    """CMYK the way a print file carries it: the grey component moved into K.
+    Pillow's own RGB->CMYK writes K=0, which hides the one thing that makes the
+    order of CMYK's conversion matter."""
+    c, m, y, _k = rgb.convert("CMYK").split()
+    k = ImageChops.darker(ImageChops.darker(c, m), y)
+    return Image.merge("CMYK", [ImageChops.subtract(ch, k) for ch in (c, m, y)] + [k])
+
+
 def _art(mode: str, size=(600, 900)) -> Image.Image:
     """Gradients with hard edges: flat colour would hide a resampling change."""
     w, h = size
@@ -350,7 +395,7 @@ def _art(mode: str, size=(600, 900)) -> Image.Image:
         # a palette with transparency: what a quantized RGBA saves as
         "P-alpha": lambda: with_alpha(rgb).quantize(64),
         "1": lambda: rgb.convert("1"),
-        "CMYK": lambda: rgb.convert("CMYK"),
+        "CMYK": lambda: _with_black(rgb),
         "I;16": lambda: rgb.convert("L").point(lambda v: v * 200, "I").convert("I;16"),
     }[mode]()
 
@@ -416,7 +461,7 @@ def test_every_mode_thumbnails_through_the_cache(tmp_path, monkeypatch, mode, fm
         assert im.format == "WEBP" and im.size == (171, 256)
 
 
-@pytest.mark.parametrize("mode,fmt", [("L", "PNG"), ("L", "JPEG"), ("CMYK", "JPEG")])
+@pytest.mark.parametrize("mode,fmt", [("L", "PNG"), ("L", "JPEG")])
 def test_no_full_size_conversion_runs_before_the_downscale(mode, fmt, monkeypatch):
     # Converting first made every palette-less non-RGB source pay a full
     # resolution pass (and 4 bytes a pixel) before anything shrank it, and for
@@ -437,12 +482,34 @@ def test_no_full_size_conversion_runs_before_the_downscale(mode, fmt, monkeypatc
     assert all(max(s) <= 256 for s in converted), converted
 
 
+@pytest.mark.parametrize("width", [128, 256])
+def test_cmyk_line_art_keeps_its_tone(width):
+    # Pillow takes CMYK to RGB by a product of ink and black, so shrinking in
+    # CMYK and converting after comes out darker wherever C and K change
+    # together: dark line work over a pale ground, as any real print file has.
+    im = Image.new("CMYK", (600, 900), (10, 5, 25, 0))
+    d = ImageDraw.Draw(im)
+    for i in range(30):
+        d.line([(0, i * 30), (600, i * 30 + 150)], fill=(200, 160, 40, 190), width=3)
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=92)
+    data = buf.getvalue()
+    with Image.open(io.BytesIO(data)) as im:
+        new = thumbs._downscale(im, width).convert("L")
+    with Image.open(io.BytesIO(data)) as im:
+        old = _old_downscale(im, width).convert("L")
+    assert new.size == old.size
+    assert abs(ImageStat.Stat(new).mean[0] - ImageStat.Stat(old).mean[0]) <= 0.5
+
+
 def test_a_premultiplied_mode_needing_no_downscale_is_left_exact():
     # Premultiplying and back loses precision wherever alpha is low; a picture
     # already inside the box must not pay that for nothing.
     px = bytes(v for y in range(80) for x in range(100) for v in (x * 2, y * 3, 77, (x + y) % 256))
     im = Image.frombytes("RGBA", (100, 80), px)
-    assert ImageChops.difference(thumbs._downscale(im.copy(), 320), im).getbbox() is None
+    # Bytes, not `ImageChops.difference(...).getbbox()`: on an RGBA image that
+    # looks at the alpha band alone, which the round trip keeps exactly.
+    assert thumbs._downscale(im.copy(), 320).tobytes() == im.tobytes()
 
 
 # ---- the route's width buckets ----
