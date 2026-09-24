@@ -741,7 +741,9 @@
       "id": "after-the-tide",
       "location": "",
       "name": "After the tide",
+      "optional": false,
       "pcless": false,
+      "phase": "",
       "predecessor_join": "all",
       "present": [
         "seraphine"
@@ -749,6 +751,7 @@
       "requires_tags": [
         "coastal"
       ],
+      "sequence": null,
       "version": "default"
     },
     {
@@ -756,12 +759,15 @@
       "id": "at-the-ledger",
       "location": "",
       "name": "At the ledger",
+      "optional": false,
       "pcless": false,
+      "phase": "",
       "predecessor_join": "all",
       "present": [
         "seraphine"
       ],
       "requires_tags": [],
+      "sequence": null,
       "version": "default"
     }
   ],
@@ -772,7 +778,9 @@
       "id": "after-the-tide",
       "location": "",
       "name": "After the tide",
+      "optional": false,
       "pcless": false,
+      "phase": "",
       "predecessor_join": "all",
       "present": [
         "seraphine"
@@ -780,6 +788,7 @@
       "requires_tags": [
         "coastal"
       ],
+      "sequence": null,
       "version": "default"
     }
   },
@@ -790,12 +799,15 @@
       "id": "at-the-ledger",
       "location": "",
       "name": "At the ledger",
+      "optional": false,
       "pcless": false,
+      "phase": "",
       "predecessor_join": "all",
       "present": [
         "seraphine"
       ],
       "requires_tags": [],
+      "sequence": null,
       "version": "default"
     }
   },
@@ -872,7 +884,9 @@
       "id": "after-the-tide",
       "location": "",
       "name": "After the tide",
+      "optional": false,
       "pcless": false,
+      "phase": "",
       "predecessor_join": "all",
       "present": [
         "seraphine"
@@ -880,6 +894,7 @@
       "requires_tags": [
         "coastal"
       ],
+      "sequence": null,
       "version": "default"
     },
     {
@@ -887,12 +902,15 @@
       "id": "at-the-ledger",
       "location": "",
       "name": "At the ledger",
+      "optional": false,
       "pcless": false,
+      "phase": "",
       "predecessor_join": "all",
       "present": [
         "seraphine"
       ],
       "requires_tags": [],
+      "sequence": null,
       "version": "default"
     }
   ],
