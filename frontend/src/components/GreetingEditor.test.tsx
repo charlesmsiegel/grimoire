@@ -413,11 +413,33 @@ test("clicking a present character opens that character at the right version", a
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const present = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Present characters").closest(".side-section") as HTMLElement;
-  // source character's chip carries its variant label; co-present stays plain
-  fireEvent.click(within(present).getByRole("button", { name: "Seraphine (alt)" }));
+  // every chip names the character AND the version it opens at: the primary at
+  // the greeting's version, a co-present character at its default
+  fireEvent.click(within(present).getByRole("button", { name: "Seraphine:Seraphine (alt)" }));
   expect(onOpenCharacter).toHaveBeenCalledWith("seraphine", "v2");        // primary -> greeting version
-  fireEvent.click(within(present).getByRole("button", { name: "Rowan" }));
+  fireEvent.click(within(present).getByRole("button", { name: "Rowan:Rowan" }));
   expect(onOpenCharacter).toHaveBeenCalledWith("rowan", "main");          // co-present -> its default
+});
+
+test("a present chip whose version cannot be resolved falls back to the bare name", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
+  ]);
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "gone", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "gone", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
+  });
+  const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
+  const present = within(container.querySelector(".detail-sidebar") as HTMLElement)
+    .getByText("Present characters").closest(".side-section") as HTMLElement;
+  // the primary's stored version is no longer offered; an unknown co-present
+  // character has no name to resolve at all -- neither gets a ":" with nothing after it
+  expect(within(present).getByRole("button", { name: "Seraphine" })).toBeInTheDocument();
+  expect(within(present).getByRole("button", { name: "rowan" })).toBeInTheDocument();
 });
 
 test("the view sidebar shows the full dependency picture", async () => {
