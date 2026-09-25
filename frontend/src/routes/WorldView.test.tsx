@@ -1263,6 +1263,66 @@ test("a revisit paints the header and its numbers before the world read lands", 
   await screen.findByRole("heading", { name: "Characters" });
 });
 
+test("moving to another campaign holds its sections until that campaign names its world", async () => {
+  // The route keeps one WorldView across a campaign→campaign move. With the
+  // previous campaign's world still set, the new campaign's sections mounted
+  // at once and asked world-scoped questions of the WRONG world -- the
+  // greetings' tag vocabulary here -- whose answers could land last (Codex
+  // review).
+  let nameSecond: (c: unknown) => void = () => {};
+  (api.getCampaign as any).mockImplementation((cid: string) => (cid === "c1"
+    ? Promise.resolve({ meta: { id: "c1", name: "Winifred", world: "w1", world_name: "Realm" } })
+    : new Promise((r) => { nameSecond = r; })));
+  function Jump() {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate("/campaigns/c2/world/greetings")}>jump</button>;
+  }
+  render(
+    <MemoryRouter initialEntries={["/campaigns/c1/world/greetings"]}>
+      <Jump />
+      <Routes><Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} /></Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByRole("heading", { name: "Greetings" });
+  await waitFor(() => expect(api.listTags).toHaveBeenCalledWith("w1"));
+  const askedOfW1 = () => (api.listTags as any).mock.calls.filter((c: unknown[]) => c[0] === "w1").length;
+  const before = askedOfW1();
+
+  fireEvent.click(screen.getByText("jump"));
+  await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("c2"));
+  expect(screen.queryByRole("heading", { name: "Greetings" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Realm")).not.toBeInTheDocument();
+  expect(askedOfW1()).toBe(before);
+
+  await act(async () => {
+    nameSecond({ meta: { id: "c2", name: "Seraphine", world: "w2", world_name: "Saltmarch" } });
+  });
+  await screen.findByRole("heading", { name: "Greetings" });
+  await waitFor(() => expect(api.listTags).toHaveBeenCalledWith("w2"));
+  expect(askedOfW1()).toBe(before);
+});
+
+test("a campaign whose read fails says so, and can be asked again", async () => {
+  // The `!wid` gate holds the sections until the campaign names its world; a
+  // read that fails never names one, so without this the page stayed blank
+  // for good (adversarial review).
+  let attempt = 0;
+  (api.getCampaign as any).mockImplementation(() => {
+    attempt += 1;
+    return attempt === 1
+      ? Promise.reject(new Error("503"))
+      : Promise.resolve({ meta: { id: "c2", name: "Seraphine", world: "w2", world_name: "Saltmarch" } });
+  });
+  renderCampaignAtUrl("/campaigns/c2/world/greetings");
+  expect(await screen.findByText(/This campaign could not be read/)).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Greetings" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByRole("heading", { name: "Greetings" });
+  expect(screen.queryByText(/This campaign could not be read/)).not.toBeInTheDocument();
+  expect(attempt).toBe(2);
+});
+
 test("a world with nothing remembered opens on dashes, not on another world's numbers", async () => {
   (api.rememberedWorld as any).mockImplementation((wid: string) =>
     (wid === "other" ? { ...worldWithCounts({ characters: 9 }), campaigns: 7 } : undefined));

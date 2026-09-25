@@ -489,9 +489,6 @@
   "frontend/src/routes/TimelineView.tsx": {
     "react/no-array-index-key": 1
   },
-  "frontend/src/routes/WorldView.tsx": {
-    "@typescript-eslint/no-floating-promises": 1
-  },
   "frontend/src/routes/WorldsView.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
     "@typescript-eslint/no-floating-promises": 3,

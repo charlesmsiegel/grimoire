@@ -167,6 +167,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const newOwner = section === "lore" && !rid ? (params.get("owner") ?? "") : "";
   /** The campaign shape's world, which only its campaign read can say. */
   const [campaignWid, setCampaignWid] = useState("");
+  /** That read failed, so there is no world to show -- which has to say so
+   *  rather than hold the page blank behind the `!wid` gate forever. */
+  const [campaignFailed, setCampaignFailed] = useState(false);
+  /** Bumped by Try again, to ask for the campaign once more. */
+  const [campaignTry, setCampaignTry] = useState(0);
   // The world shape's is the route's own, read synchronously rather than
   // copied into state by an effect: a copy is one render behind a world
   // switch, which hands every section the world being left for a frame -- and
@@ -241,6 +246,18 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       setCampaignCount(campaignsOf(seed));
     } else {
       setCounts({});
+      // ...and the campaign's world with the rest of its header. Left set, a
+      // campaign→campaign move mounts every section for the NEW campaign with
+      // the OLD campaign's world id until `getCampaign` answers, and the
+      // world-scoped reads they start at once (the greetings' and PCs' tag
+      // vocabulary) can land after the right ones. Cleared, the `!wid` gate
+      // below holds the sections until the new campaign names its world
+      // (Codex review).
+      setCampaignWid("");
+      setCampaignFailed(false);
+      setCampaignName("");
+      setName("");
+      setCover("");
     }
   }
 
@@ -279,7 +296,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         setCampaignName(c.meta.name);
         setCampaignWid(c.meta.world);
         setName(c.meta.world_name ?? c.meta.world); // embedded: no second fetch
-      });
+      }).catch(() => { if (live) setCampaignFailed(true); });
     } else {
       // The header's read carries the index's numbers too: every record row
       // is a stored tally on it, so a visit lists nothing to count it -- and
@@ -300,7 +317,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         });
     }
     return () => { live = false; };
-  }, [campaign, cid, widParam, countsFor]);
+  }, [campaign, cid, widParam, countsFor, campaignTry]);
 
   // Ask for the module context once a section wants it (`NEEDS_MODULE`); the
   // characters grid says so itself, through `onListed`, once its list is in.
@@ -529,7 +546,24 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const greetingView: "list" | "graph" =
     params.get("view") === "graph" ? "graph" : "list";
 
-  if (campaign && !wid) return null;
+  if (campaign && !wid) {
+    if (!campaignFailed) return null;
+    // The campaign names the world; without it there is nothing to index, and
+    // a blank page would read as one still loading, forever.
+    return (
+      <PageShell column={null} columnLabel="World index">
+        <div className="page-wide view-anim">
+          <div className="banner error-banner">
+            This campaign could not be read.{" "}
+            <button className="subtle" onClick={() => {
+              setCampaignFailed(false);
+              setCampaignTry((n) => n + 1);
+            }}>Try again</button>
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
 
   const rows = groups.flatMap((g) => g.rows);
   const groupOf = (key: Section) =>
