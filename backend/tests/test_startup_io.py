@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 
 import grimoire.store as store
-from grimoire.store import backups, fetch, frontmatter, migrations, statcache, tokens
+from grimoire.store import atomic, backups, fetch, frontmatter, migrations, statcache, tokens
 from grimoire.store.campaigns import read as campaigns_read
 from grimoire.store.scenes import identity as scenes_identity
 
@@ -71,6 +71,29 @@ def _marks(tmp_path: Path) -> dict:
     return json.loads((tmp_path / ".cache" / "scene-identities.json").read_text(encoding="utf-8"))
 
 
+def _files_record(tmp_path: Path, cid: str) -> Path:
+    return tmp_path / ".cache" / "scene-identities" / f"{cid}.json"
+
+
+def _later(monkeypatch) -> None:
+    """Measure the per-scene record's racy window from a minute ahead. It
+    requires ctime out of the window as well as mtime, and nothing outside the
+    kernel sets a ctime -- so a test that wants a scene recorded cannot age it,
+    only move the clock it is judged by."""
+    real = time.time_ns
+    monkeypatch.setattr(migrations, "_clock", lambda: real() + 60_000_000_000)
+
+
+def _age_scenes(cid: str, seconds: float = 30.0) -> None:
+    """`_age` for every transcript as well as the directory: a file written
+    inside the racy window is (correctly) never recorded, so a test about what
+    the per-file record lets the next boot skip has to age the files too."""
+    d = _scenes_dir(cid)
+    for p in d.glob("*.md"):
+        _age(p, seconds)
+    _age(d, seconds)
+
+
 def test_a_second_backfill_over_an_unchanged_store_opens_no_scene(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = _new_campaign()
@@ -86,6 +109,196 @@ def test_a_second_backfill_over_an_unchanged_store_opens_no_scene(tmp_path, monk
     reads.clear()
     migrations.backfill_scene_identities()      # nothing moved: skipped
     assert reads == []
+
+
+def test_a_played_campaign_re_reads_only_the_scenes_that_changed(tmp_path, monkeypatch):
+    """Every transcript write this app makes renames a temp into `scenes/`,
+    which moves the directory's signature -- so the campaign actually being
+    played failed the watermark on every launch after it was played, and paid
+    a head-read per scene it holds: the exact cost the watermark was meant to
+    remove (Codex review). The per-file record keeps the scenes that did not
+    change out of it."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    _later(monkeypatch)
+    cid = _new_campaign()
+    sids = [store.scenes.create_scene(cid, name) for name in ("Mara", "Winifred", "Seraphine")]
+    _age_scenes(cid)
+    reads = _count_head_reads(monkeypatch)
+    migrations.backfill_scene_identities()
+    assert sorted(reads) == sorted(sids)
+    assert set(json.loads(_files_record(tmp_path, cid).read_text(encoding="utf-8"))) == set(sids)
+
+    played = sids[1]
+    p = store.scenes.paths._scene_path(cid, played)
+    meta, body = frontmatter.parse_frontmatter(p.read_text(encoding="utf-8"))
+    # What every transcript write in the app does: a temp renamed over it.
+    atomic.write_text(p, frontmatter.dump_frontmatter(meta, body + "\nMara: Late again.\n"))
+    # Only what the play touched: `utime` on the others would move their
+    # ctime, which is exactly the change the record is there to notice.
+    _age(p)
+    _age(_scenes_dir(cid))
+    assert _marks(tmp_path)[cid] != migrations._scenes_signature(cid), "the premise: it moved"
+
+    reads.clear()
+    migrations.backfill_scene_identities()
+    assert reads == [played]
+    assert cid in _marks(tmp_path) and _marks(tmp_path)[cid] == migrations._scenes_signature(cid)
+
+
+def test_a_duplicate_of_a_recorded_scene_is_still_re_minted(tmp_path, monkeypatch):
+    """The token a recorded scene answers with is the one checked for
+    duplicates: a copy landing beside it is read (it has no record) and
+    re-minted exactly as when every scene was read."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    _later(monkeypatch)
+    cid = _new_campaign()
+    a = store.scenes.create_scene(cid, "Mara")
+    _age_scenes(cid)
+    migrations.backfill_scene_identities()
+    assert a in json.loads(_files_record(tmp_path, cid).read_text(encoding="utf-8"))
+
+    d = _scenes_dir(cid)
+    copy = d / "0099--copy-of-mara.md"
+    shutil.copyfile(d / f"{a}.md", copy)
+    _age(copy)
+    _age(d)
+    reads = _count_head_reads(monkeypatch)
+    migrations.backfill_scene_identities()
+
+    assert reads == [copy.stem]
+    ia, ib = store.scenes.scene_identity(cid, a), store.scenes.scene_identity(cid, copy.stem)
+    assert ia and ib and ia != ib
+
+
+@pytest.mark.skipif(os.name == "nt", reason="st_ctime is the creation time on Windows")
+def test_a_scene_rewritten_with_its_old_mtime_put_back_is_still_read(tmp_path, monkeypatch):
+    """A foreign tool that replaces a transcript and hands it its old mtime
+    back keeps mtime (and, written in place, size and inode) -- the stamp's
+    ctime is what still moves, because nothing outside the kernel sets it."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    _later(monkeypatch)
+    cid = _new_campaign()
+    a = store.scenes.create_scene(cid, "Mara")
+    b = store.scenes.create_scene(cid, "Winifred")
+    _age_scenes(cid)
+    migrations.backfill_scene_identities()
+
+    p = store.scenes.paths._scene_path(cid, b)
+    recorded = p.stat()
+    meta, body = frontmatter.parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta.pop("identity", None)
+    with open(p, "r+", encoding="utf-8") as f:    # in place: the inode stays
+        f.write(frontmatter.dump_frontmatter(meta, body))
+        f.truncate()
+    deadline = time.monotonic() + 2.0
+    os.utime(p, ns=(recorded.st_atime_ns, recorded.st_mtime_ns))
+    while p.stat().st_ctime_ns == recorded.st_ctime_ns and time.monotonic() < deadline:
+        os.utime(p, ns=(recorded.st_atime_ns, recorded.st_mtime_ns))
+    assert p.stat().st_mtime_ns == recorded.st_mtime_ns
+    _age(_scenes_dir(cid))
+    os.utime(_scenes_dir(cid), None)              # the directory moves, as any write moves it
+    _age(_scenes_dir(cid))
+
+    reads = _count_head_reads(monkeypatch)
+    migrations.backfill_scene_identities()
+    assert reads == [b]
+    assert store.scenes.scene_identity(cid, b) not in (None, store.scenes.scene_identity(cid, a))
+
+
+def test_a_scene_written_inside_the_racy_window_is_not_recorded(tmp_path, monkeypatch):
+    """A file touched within the timestamp granularity may be touched again
+    without its stamp moving, so it is read again next boot rather than
+    trusted -- the rule `statcache.memo` applies to the files it memoizes."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    _age(_scenes_dir(cid))                        # the directory, not the file
+    reads = _count_head_reads(monkeypatch)
+    migrations.backfill_scene_identities()
+    assert not _files_record(tmp_path, cid).exists() or sid not in json.loads(
+        _files_record(tmp_path, cid).read_text(encoding="utf-8"))
+    os.utime(_scenes_dir(cid), None)
+    _age(_scenes_dir(cid))
+    migrations.backfill_scene_identities()
+    assert reads == [sid, sid]
+
+
+def test_a_scene_whose_ctime_is_inside_the_racy_window_is_not_recorded(tmp_path, monkeypatch):
+    """An old mtime is not enough: this record outlives the process, and a file
+    whose ctime is still fresh could be rewritten in place and handed its mtime
+    back within that same tick -- a record taken then would vouch for the new
+    bytes for good (adversarial review). `os.utime` ages the mtime and stamps
+    ctime with now, which is exactly that state."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    _age_scenes(cid)
+    assert time.time_ns() - store.scenes.paths._scene_path(cid, sid).stat().st_mtime_ns \
+        > statcache.RACY_WINDOW_NS, "the premise: the mtime is old"
+    migrations.backfill_scene_identities()
+    rec = _files_record(tmp_path, cid)
+    assert not rec.exists() or sid not in json.loads(rec.read_text(encoding="utf-8"))
+
+
+def test_a_scene_deleted_between_listing_and_reading_does_not_stop_startup(tmp_path, monkeypatch):
+    """`_lifespan` catches only StoreBusy, and `ensure_identity` answers a scene
+    that is no longer there with `SceneNotFound` -- not an OSError -- so a sync
+    client deleting one mid-launch stopped the server starting (adversarial
+    review). It is skipped, the rest are backfilled, and nothing is recorded
+    for the campaign while it is moving."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    gone = store.scenes.create_scene(cid, "Mara")
+    kept = store.scenes.create_scene(cid, "Winifred")
+    _age(_scenes_dir(cid))
+    real = migrations._scene_ids
+
+    def listed_then_deleted(c: str) -> list[str]:
+        ids = real(c)
+        store.scenes.paths._scene_path(c, gone).unlink()
+        return ids
+
+    monkeypatch.setattr(migrations, "_scene_ids", listed_then_deleted)
+    migrations.backfill_scene_identities()          # must not raise
+
+    assert store.scenes.scene_identity(cid, kept)
+    marks = tmp_path / ".cache" / "scene-identities.json"
+    assert not marks.exists() or cid not in _marks(tmp_path)
+
+
+@pytest.mark.parametrize("garbage", ["{not json", "[1, 2]", '{"x": [1]}', '{"x": 1'])
+def test_a_corrupt_per_file_record_costs_a_read_and_is_replaced(tmp_path, monkeypatch, garbage):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    _later(monkeypatch)
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    _age_scenes(cid)
+    rec = _files_record(tmp_path, cid)
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(garbage.replace('"x"', json.dumps(sid)), encoding="utf-8")
+
+    reads = _count_head_reads(monkeypatch)
+    migrations.backfill_scene_identities()
+    assert reads == [sid]
+    entry = json.loads(rec.read_text(encoding="utf-8"))[sid]
+    assert len(entry) == 5 and entry[4] == store.scenes.scene_identity(cid, sid)
+
+
+def test_a_deleted_campaign_leaves_its_per_file_record(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    _later(monkeypatch)
+    keep = _new_campaign("Saltmarch")
+    gone = _new_campaign("Winifred")
+    for cid in (keep, gone):
+        store.scenes.create_scene(cid, "Mara")
+        _age_scenes(cid)
+    migrations.backfill_scene_identities()
+    assert _files_record(tmp_path, gone).exists()
+
+    store.campaigns.delete_campaign(gone)
+    migrations.backfill_scene_identities()
+    assert not _files_record(tmp_path, gone).exists()
+    assert _files_record(tmp_path, keep).exists()
 
 
 def test_a_copied_scene_with_a_duplicate_identity_is_re_minted_next_boot(

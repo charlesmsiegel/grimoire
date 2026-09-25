@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -34,6 +35,11 @@ from .scenes import paths as scenes_paths
 
 _log = logging.getLogger(__name__)
 
+#: What the per-scene record's racy window is measured against. A name of its
+#: own so a test can stand in a later "now": nothing but the kernel sets a
+#: file's ctime, so a test cannot age one the way `os.utime` ages an mtime.
+_clock = time.time_ns
+
 
 def migrate_scene_ids() -> None:
     """Rename legacy real-date scene files (<real-date>-<slug>.md) into the
@@ -50,7 +56,10 @@ def backfill_scene_identities() -> None:
     one is skipped, so re-running costs a read per scene -- and a campaign
     whose scenes directory has not moved since a pass that found nothing to do
     is skipped whole, so the steady state costs a stat per campaign rather than
-    a head-read per scene in the library (see `_identity_marks_path`). This runs
+    a head-read per scene in the library (see `_identity_marks_path`). A
+    campaign whose directory did move -- the one being played, always -- opens
+    only the scene files whose own stamp moved, and stats the rest
+    (`_identity_files_path`). This runs
     before the server accepts its first connection -- on Android the WebView's
     first page waits on it too -- so a read per scene was paid on every launch.
 
@@ -61,8 +70,10 @@ def backfill_scene_identities() -> None:
     """
     marks = _read_identity_marks()
     settled: dict[str, list[int]] = {}
+    live: set[str] = set()
     for c in campaigns_read.list_campaigns():
         cid = c["id"]
+        live.add(cid)
         before = _scenes_signature(cid)
         if before is not None and marks.get(cid) == before:
             settled[cid] = before
@@ -92,6 +103,7 @@ def backfill_scene_identities() -> None:
     # a deleted campaign drops out here rather than accumulating.
     if settled != marks:
         _write_identity_marks(settled)
+    _prune_identity_files(live)
 
 
 def _identity_marks_path() -> Path:
@@ -149,6 +161,87 @@ def _write_identity_marks(settled: dict[str, list[int]]) -> None:
                      "start will rescan every campaign", exc)
 
 
+def _identity_files_path(cid: str) -> Path:
+    """Per campaign, each scene file's stamp and the identity it carried, as of
+    the last pass that read it.
+
+    The directory mark above only answers "did anything change here", and for
+    the campaign being played the answer is always yes: every transcript write
+    renames a temp into `scenes/`. Without this, that campaign -- the one a
+    reader is about to open -- head-read every scene it holds on each launch
+    after it was played, however few of them the play touched (Codex review).
+    With it, a pass over a moved directory opens only the files whose stamp
+    moved: the scenes played, created, copied in or restored since the last.
+
+    The stamp is `statcache.stamp`'s -- mtime, ctime, size and inode -- taken
+    before the read, so a write landing during it leaves the record older than
+    the file and the next pass reads again. ctime is what catches a transcript
+    rewritten in place and handed its old mtime back, since nothing outside the
+    kernel sets it; the inode, a replacement that kept both. A stamp whose
+    mtime OR ctime is still inside the racy window is never recorded -- the
+    rule `statcache.memo` keeps, widened to ctime because this record outlives
+    the process. (On Windows `st_ctime` is the creation time, so there a
+    same-size rewrite in place that restores its mtime keeps the old stamp --
+    the residual `_identity_marks_path` already accepts for a directory, and
+    the one `statcache.stamp` names. A missing identity from one is still
+    repaired lazily, by `ensure_identity`, when a run reserves the scene.) The
+    token is recorded too, because the duplicate check
+    needs every scene's token and reading one to learn it is the cost this
+    exists to avoid.
+
+    One file per campaign, beside the marks rather than inside them: the marks
+    are read on every boot, and this is read only for a campaign whose
+    directory moved -- a library's worth of per-scene stamps in the marks file
+    would put back, as a JSON parse, the cost its directory stats removed.
+    Derived and deletable like the marks: a missing or corrupt record costs one
+    read per scene, which is what the pass cost without it.
+    """
+    return home() / ".cache" / "scene-identities" / f"{cid}.json"
+
+
+def _read_identity_files(cid: str) -> dict:
+    """The recorded per-scene entries, or {} -- quietly, as `_read_identity_marks`."""
+    try:
+        data = json.loads(_identity_files_path(cid).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_identity_files(cid: str, files: dict[str, list]) -> None:
+    """Replace one campaign's per-scene record, fail-soft like the marks."""
+    path = _identity_files_path(cid)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic.write_text(path, json.dumps(files, sort_keys=True))
+    except OSError as exc:
+        _log.warning("could not record the identity backfill for %s -- %s; its "
+                     "next pass will read every scene", cid, exc)
+
+
+def _prune_identity_files(live: set[str]) -> None:
+    """Drop the per-scene record of a campaign that no longer exists. A reused
+    slug could not be misled by one -- a new file cannot share an old one's
+    inode and ctime -- but the directory would grow for the life of the
+    install."""
+    d = _identity_files_path("x").parent
+    try:
+        stale = [p for p in d.glob("*.json") if p.stem not in live]
+    except OSError:
+        return
+    for p in stale:
+        with contextlib.suppress(OSError):   # derived; the next boot tries again
+            p.unlink(missing_ok=True)
+
+
+def _recorded_token(entry: object, stamp: statcache.Stamp | None) -> str | None:
+    """The identity `entry` recorded, if the file still stamps as it did then."""
+    if (stamp is None or not isinstance(entry, list) or len(entry) != 5
+            or not isinstance(entry[4], str) or not entry[4]):
+        return None
+    return entry[4] if entry[:4] == list(stamp[1:]) else None
+
+
 def _scenes_signature(cid: str) -> list[int] | None:
     """`[st_mtime_ns, st_ctime_ns, st_ino]` of the campaign's scenes directory,
     or None if it has none -- nothing to backfill, and nothing worth recording.
@@ -185,7 +278,13 @@ def _backfill_campaign(cid: str) -> bool:
     clean = True
     with locks.campaign_lock(cid):
         seen: set[str] = set()
-        for sid in _scene_ids(cid):
+        sids = _scene_ids(cid)
+        known = _read_identity_files(cid) if sids else {}
+        kept: dict[str, list] = {}
+        scenes_dir = scenes_paths._scenes_dir(cid)
+        for sid in sids:
+            # Stamped BEFORE anything reads it (see `_identity_files_path`).
+            stamp = statcache.stamp(scenes_dir / f"{sid}.md")
             # Check with the head-only read before calling `ensure_identity`,
             # which reads the whole file. This runs at every startup for the
             # life of the install, and after the first pass every scene already
@@ -197,21 +296,46 @@ def _backfill_campaign(cid: str) -> bool:
             # stops the app booting at all. One stubborn file must cost that
             # file its identity until the lazy path repairs it, nothing more.
             try:
-                token = scenes_identity.scene_identity(cid, sid)
+                token = (_recorded_token(known.get(sid), stamp)
+                         or scenes_identity.scene_identity(cid, sid))
                 if token is None:
                     token = scenes_identity.ensure_identity(cid, sid)
+                    stamp = None    # rewritten just now: read it again next time
                 elif token in seen:
                     # Two scenes carrying the same token: the reverse lookup
                     # would answer with whichever file sorts first, so a
                     # notification for one would open the other. Re-mint the
                     # later one.
                     token = scenes_identity.ensure_identity(cid, sid, replace=True)
+                    stamp = None
             except OSError as exc:
                 _log.warning("identity backfill skipped for scene %s in %s -- %s",
                              sid, cid, exc)
                 clean = False
                 continue
+            except scenes_paths.SceneNotFound:
+                # Listed, then gone before it could be read -- a sync client or
+                # another backend deleting it mid-launch. Not an OSError, and
+                # `_lifespan` catches only StoreBusy, so letting it out stopped
+                # the server starting (adversarial review). A scene that is not
+                # there needs no identity; the directory it left has moved, so
+                # nothing is recorded for the campaign this time either.
+                _log.info("scene %s in %s vanished during the identity backfill", sid, cid)
+                clean = False
+                continue
             seen.add(token)
+            # Both clocks out of the racy window. The record outlives the
+            # process, unlike `statcache.memo`'s, so it is held to more: a
+            # stamp whose ctime is still fresh could be rewritten in place and
+            # handed its mtime back inside that same ctime tick, and a record
+            # taken then would vouch for the new bytes for good.
+            if (stamp is not None
+                    and _clock() - max(stamp[1], stamp[2]) > statcache.RACY_WINDOW_NS):
+                kept[sid] = [*stamp[1:], token]
+        # Under the campaign lock, like the reads it records: a second backend
+        # passing over the same campaign waits rather than interleaving.
+        if kept != known:
+            _write_identity_files(cid, kept)
     return clean
 
 
