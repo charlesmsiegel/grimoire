@@ -7,6 +7,7 @@
 // forgets everything remembered under the last one.
 import { api } from "./client";
 import { prefetchScope, resetPrefetch } from "./prefetch";
+import { onCampaignsChanged, onConfigChanged, onStoreMovedElsewhere } from "../appEvents";
 
 const WORLD = { kind: "world", id: "realm" } as const;
 const OTHER_WORLD = { kind: "world", id: "saltmarch" } as const;
@@ -136,6 +137,42 @@ test("a key other than the store move leaves the memo alone", async () => {
   await api.listCharacters(WORLD);
   window.dispatchEvent(new StorageEvent("storage", { key: "grimoire.focus", newValue: "1" }));
   expect(api.rememberedCharacters(WORLD)).toHaveLength(1);
+});
+
+test("a store moved in another tab re-reads the config and remounts the page, not just the rail", async () => {
+  // `campaignsChanged` alone moved the rail to the new library while the
+  // header, the open campaign and the page itself stayed on the old one --
+  // and a save from that page lands in the new library under the old one's
+  // ids (Codex review).
+  const heard = { campaigns: 0, config: 0, moved: 0 };
+  const off = [
+    onCampaignsChanged(() => { heard.campaigns += 1; }),
+    onConfigChanged(() => { heard.config += 1; }),
+    onStoreMovedElsewhere(() => { heard.moved += 1; }),
+  ];
+  try {
+    window.dispatchEvent(new StorageEvent("storage", { key: "grimoire.focus", newValue: "2" }));
+    expect(heard).toEqual({ campaigns: 0, config: 0, moved: 0 });
+    window.dispatchEvent(new StorageEvent("storage", { key: "grimoire.store.moved", newValue: "y" }));
+    expect(heard).toEqual({ campaigns: 1, config: 1, moved: 1 });
+  } finally {
+    off.forEach((f) => f());
+  }
+});
+
+test("moving the store in this tab does not remount the page that moved it", async () => {
+  // The page open is the one that made the move -- Configuration, or the
+  // setup wizard halfway through -- and it owns its own state.
+  const root = await freshRoot();
+  let moved = 0;
+  const off = onStoreMovedElsewhere(() => { moved += 1; });
+  try {
+    stubFetch(() => ({ data_dir: root, default: root, is_default: true, source: "default", exists: true }));
+    await api.putDataDir(root);
+    expect(moved).toBe(0);
+  } finally {
+    off();
+  }
 });
 
 test("moving the store here tells this origin's other tabs", async () => {
