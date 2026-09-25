@@ -63,6 +63,60 @@ test("an HTML comment spanning a blank line is never cut", () => {
   streamAndCompare("Mara smiles.\n\n<!-- a note on its own -->\n\nWinifred nods.");
 });
 
+test("a raw HTML block spanning a blank line is never cut", () => {
+  // CommonMark's `<pre>`/`<script>`/`<style>`/`<textarea>` blocks, and the
+  // `<?`, `<!X` and CDATA ones, run past blank lines to their end marker. Cut
+  // there, the tail parsed as its own paragraph while streaming and reflowed
+  // when the stored post replaced it (Codex review).
+  streamAndCompare("The ledger read:\n\n<pre>\nSaltmarch  12\n\n\nRealm       4\n</pre>\n\n"
+    + "After it.\n\n<SCRIPT type=\"x\">\none\n\ntwo\n</script> tail\n\nThen.\n\n"
+    + "<style>\na\n\nb</style>\n\nAnd <textarea>\n\nis prose.\n\n<textarea\nx\n\ny\n</textarea>\n\n"
+    + "<?proc\n\n?>\n\n<!DOCTYPE\n\nhtml>\n\n<![CDATA[\nraw\n\n]]>\n\nDone.");
+});
+
+test("an HTML block read as open when it is closed cannot hide a fence and cut inside it", () => {
+  // A block wrongly held open misses the fence that starts under it, then
+  // "closes" on a marker inside the fence, and the next blank line was taken
+  // as a boundary in the middle of the code (adversarial review).
+  const FENCED = "\n```\n%\n\nfoo\n```\n\nend";
+  // `<?>` closes on its own line.
+  streamAndCompare("<?>" + FENCED.replace("%", "?>"));
+  // Only a space, a tab, `>` or the end of the line may follow the tag name.
+  streamAndCompare("<pre x>" + FENCED.replace("%", "</pre>"));
+  // What follows a block's end marker on its line opens nothing, a comment
+  // opener included.
+  streamAndCompare("<pre>x</pre><!--" + FENCED.replace("%", "-->"));
+  streamAndCompare("<!DOCTYPE html><!--" + FENCED.replace("%", "-->"));
+  streamAndCompare("<!-- a --> b <!--" + FENCED.replace("%", "-->"));
+  // An inline comment in a paragraph is not a block: a blank line ends it.
+  streamAndCompare("Mara said <!-- x" + FENCED.replace("%", "-->"));
+  // ...and the comment block's own overlapping closes.
+  streamAndCompare("<!-->" + FENCED.replace("%", "-->"));
+  streamAndCompare("<!--->" + FENCED.replace("%", "-->"));
+  // Two a differential fuzz found: `</pre>` opens a block that ends at a blank
+  // line, and hides the fence under it until then.
+  streamAndCompare("<!-->\n</pre>\n```\n\n```\n<!DOCTYPE html><!--\nfoo\n\n-->\nend");
+  streamAndCompare("foo\n<pre x>\n<?\n-->\n-->\n\n<pre>x</pre><!--\n\n<?\nend");
+});
+
+test("a line that could open an HTML block ends splitting, and keeps what came before", () => {
+  // Every kind but the comment hides the lines under it from the fence and
+  // list rules until an end condition of its own, so nothing after one is cut
+  // -- a longer open tail, never a wrong cut. What came before it stands.
+  const text = "The tide came in.\n\n<pre>one line</pre>\n\nMara waited.\n\nWinifred left.";
+  expect(blockBoundaries(text)).toEqual([text.indexOf("<pre>")]);
+  for (const opener of ["</pre>", "<div>", "<b>", "<?x?>", "<!DOCTYPE html>", "   <p>"]) {
+    expect(blockBoundaries(`${opener}\n\nMara waited.\n\nWinifred left.`)).toEqual([]);
+  }
+  // A comment is tracked exactly, so the blocks after one closed still split.
+  const commented = "<!-- a note -->\n\nMara waited.\n\nWinifred left.";
+  expect(blockBoundaries(commented)).toEqual(
+    [commented.indexOf("Mara"), commented.indexOf("Winifred")]);
+  // Inline HTML is not a block: a line that does not start with `<` splits on.
+  const inline = "Mara said <b>no</b>.\n\nWinifred left.";
+  expect(blockBoundaries(inline)).toEqual([inline.indexOf("Winifred")]);
+});
+
 test("a reference definition arriving later re-parses the reply whole", () => {
   streamAndCompare("See the [harbour map] for the route.\n\nIt is old.\n\n[harbour map]: /maps/saltmarch\n");
 });
