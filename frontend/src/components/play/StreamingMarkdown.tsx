@@ -38,12 +38,31 @@ const DEFINITION = /^ {0,3}\[[^\]]+\]:/m;
 // Enough of a line to answer LIST_ITEM for it: nine digits, the delimiter and
 // the space after it, plus a character of slack.
 const DECIDABLE = 12;
+// A line that could start a CommonMark HTML block: `<` after at most three
+// spaces. Seven kinds, and each hides the lines under it from everything else
+// -- a fence opener inside one is not a fence -- until its own end condition:
+// an end tag, a marker, or a blank line, depending on the kind. A splitter
+// that got any of that wrong read a block as open or closed when it was not,
+// missed or invented a fence, and cut in the middle of code (Codex review;
+// then an adversarial review and a differential fuzz, each of which found a
+// kind the previous model had missed). So only the comment is modelled; any
+// other such line ends splitting for the rest of the reply, which costs a
+// longer open tail for a reply carrying one and never a wrong cut.
+const HTML_START = /^ {0,3}</;
+// The comment, the one kind prose plausibly carries a line of -- and whose
+// rules are short enough to hold exactly: it starts on a line beginning
+// `<!--`, and ends with the first line containing `-->`, looked for from just
+// after the `<` so that `<!-->` and `<!--->` close where they stand. What
+// follows the marker on that line belongs to the comment and opens nothing.
+const COMMENT_START = /^ {0,3}<!--/;
 
 /** Where `text` can be cut into blocks that parse the same apart as together.
  *
  *  A boundary is the start of the first line after a blank one, and only where
  *  nothing in front of it is still open — a fenced block carries its blank
- *  lines inside it, and so does an HTML comment. The line it starts must also
+ *  lines inside it, and so does an HTML comment; and none comes after a line
+ *  that could start any other HTML block (`HTML_START`). The line it starts
+ *  must also
  *  be known not to continue the block above: not indented (a list item's
  *  continuation, or indented code) and not a list item (the next item of a
  *  list, which would split one loose list into two tight ones). A line still
@@ -70,7 +89,7 @@ export function blockBoundaries(text: string): number[] {
       const m = FENCE.exec(line);
       if (m && m[1][0] === fence.char && m[1].length >= fence.len && !m[2].trim()) fence = null;
     } else if (inComment) {
-      inComment = !closesComment(line);
+      inComment = !line.includes("-->");
     } else if (!line.trim()) {
       sawBlank = true;
     } else {
@@ -82,32 +101,18 @@ export function blockBoundaries(text: string): number[] {
       const m = FENCE.exec(line);
       if (m && !(m[1][0] === "`" && m[2].includes("`"))) {
         fence = { char: m[1][0], len: m[1].length };
-      } else {
-        inComment = opensComment(line);
+      } else if (COMMENT_START.test(line)) {
+        inComment = !line.slice(line.indexOf("<") + 1).includes("-->");
+      } else if (HTML_START.test(line)) {
+        // Every boundary found so far stands: nothing below a line can change
+        // how the blocks above it parsed. None is taken after it.
+        return out;
       }
     }
     if (nl === -1) break;
     at = nl + 1;
   }
   return out;
-}
-
-/** Whether a line leaves an HTML comment open, read left to right. */
-function opensComment(line: string): boolean {
-  let i = 0;
-  for (;;) {
-    const open = line.indexOf("<!--", i);
-    if (open === -1) return false;
-    const close = line.indexOf("-->", open + 4);
-    if (close === -1) return true;
-    i = close + 3;
-  }
-}
-
-/** Whether a line inside an open comment closes it and opens no other. */
-function closesComment(line: string): boolean {
-  const close = line.indexOf("-->");
-  return close !== -1 && !opensComment(line.slice(close + 3));
 }
 
 /** A reply that is still arriving, parsed a block at a time.
