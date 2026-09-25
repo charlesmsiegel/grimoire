@@ -82,6 +82,21 @@ def test_read_pc_and_list_pcs_carry_image_fields(tmp_path):
     assert (row["has_avatar"], row["gallery_count"], row["avatar_focus"]) == (True, 1, 30)
 
 
+def test_list_pcs_carries_the_avatar_cache_token(tmp_path):
+    """The rail's portrait builds `?w=…&v=<token>`, and only a URL carrying
+    `v` is served immutable -- without it every PC portrait is revalidated on
+    every visit, where a character's is not (Codex review). The token must
+    name the BYTES, so it moves when they do."""
+    pid, vid = pcs.create_pc(tmp_path, "Winifred", [])
+    assert pcs.list_pcs(tmp_path)[0]["avatar_v"] is None
+    assets.put_image(tmp_path, pid, vid, assets.AVATAR, b"\x89PNG-one", "png", pcs.ASSET_BASE)
+    first = pcs.list_pcs(tmp_path)[0]["avatar_v"]
+    assert first == assets.image_version(
+        assets.image_path(tmp_path, pid, vid, assets.AVATAR, pcs.ASSET_BASE))
+    assets.put_image(tmp_path, pid, vid, assets.AVATAR, b"\x89PNG-two!", "png", pcs.ASSET_BASE)
+    assert pcs.list_pcs(tmp_path)[0]["avatar_v"] not in (None, first)
+
+
 def test_pc_images_live_under_the_pcs_base(tmp_path):
     """`ASSET_BASE` is what keeps a PC's art out of the character folder -- a
     character and a PC can share an id, and their portraits must not."""

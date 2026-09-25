@@ -672,7 +672,7 @@ test("a face is a face-sized thumbnail, token and all", async () => {
   ]);
   (api.listCampaignPCs as any).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "v2", versions: [], tags: [],
-      has_avatar: true },
+      has_avatar: true, avatar_v: "def" },
   ]);
   (api.listAppearances as any).mockResolvedValue([
     appeared("characters", "mara"), appeared("pcs", "seraphine"),
@@ -683,10 +683,10 @@ test("a face is a face-sized thumbnail, token and all", async () => {
   await within(card).findByRole("link", { name: "Mara Vance" });
   expect(api.actorImageUrl).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "characters", "mara", "v1", "avatar", { w: 256, v: "abc" });
-  // A PC has no token to spend -- only a character's avatar is swapped by a
-  // promote -- so its face is the bare, revalidated thumbnail.
+  // A PC's summary carries its avatar's token too, and a face without one is
+  // revalidated on every visit rather than served immutable (Codex review).
   expect(api.actorImageUrl).toHaveBeenCalledWith(
-    { kind: "campaign", id: "run" }, "pcs", "seraphine", "v2", "avatar", { w: 256 });
+    { kind: "campaign", id: "run" }, "pcs", "seraphine", "v2", "avatar", { w: 256, v: "def" });
   for (const img of card.querySelectorAll("img.hub-face-avatar")) {
     expect(img.getAttribute("loading")).toBe("lazy");
   }

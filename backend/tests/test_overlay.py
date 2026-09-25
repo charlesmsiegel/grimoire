@@ -542,6 +542,30 @@ def test_list_pcs_patches_an_inherited_pc_too(monkeypatch, tmp_path):
     assert next(p for p in overlay.list_pcs(cid) if p["id"] == pid)["has_avatar"] is True
 
 
+def test_list_pcs_takes_the_avatar_token_from_the_side_that_has_the_avatar(monkeypatch, tmp_path):
+    """A thin campaign's PC wears the world's avatar, so its `?v=` has to be the
+    world file's token: the campaign root has no such file, and `?v=` is
+    served immutable. Once the campaign holds its own avatar, the token is its
+    own."""
+    wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, pid, "default", "avatar", PNG, "png", pcs.ASSET_BASE)
+    world_v = assets.image_version(
+        assets.image_path(wroot, pid, "default", assets.AVATAR, pcs.ASSET_BASE))
+    row = next(p for p in overlay.list_pcs(cid) if p["id"] == pid)
+    assert row["avatar_v"] == world_v
+
+    overlay.materialize_actor(cid, "pcs", pid)   # personas in campaign, assets in world
+    row = next(p for p in overlay.list_pcs(cid) if p["id"] == pid)
+    assert row["avatar_v"] == world_v
+
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, pid, "default", "avatar", PNG + b"-mine", "png", pcs.ASSET_BASE)
+    mine_v = assets.image_version(
+        assets.image_path(croot, pid, "default", assets.AVATAR, pcs.ASSET_BASE))
+    row = next(p for p in overlay.list_pcs(cid) if p["id"] == pid)
+    assert row["avatar_v"] == mine_v != world_v
+
+
 def test_pc_promote_copies_up_and_leaves_the_world_alone(monkeypatch, tmp_path):
     wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
     base = pcs.ASSET_BASE

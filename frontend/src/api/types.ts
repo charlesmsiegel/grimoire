@@ -613,6 +613,8 @@ export type PCSummary = {
   // Same derived image fields a CharacterSummary carries, bar `localized_count`
   // — only a character card's text is localized, so a PC has no `embed-` images.
   has_avatar?: boolean; avatar_focus?: number | null; gallery_count?: number;
+  /** See `CharacterSummary.avatar_v`: the avatar's bytes, spent as `?v=`. */
+  avatar_v?: string | null;
 };
 export type PCDetail = {
   meta: { id: string; name: string; tags: string[]; default_version: string };

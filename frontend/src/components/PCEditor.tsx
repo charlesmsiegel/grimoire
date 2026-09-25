@@ -363,7 +363,7 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
               <Portrait name={p.name} focus={p.avatar_focus}
                         src={p.has_avatar
                           ? api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar",
-                                              { w: THUMB.row })
+                                              { w: THUMB.row, v: p.avatar_v })
                           : null} />
             </span>
             <span className="row-name">{p.name}</span>
