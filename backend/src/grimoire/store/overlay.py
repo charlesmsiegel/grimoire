@@ -1328,10 +1328,14 @@ def _patch_pc_item(v: View, item: dict) -> dict:
     because `pcs.list_pcs` is also the world route's answer, where the values
     it computes are the ones served; `_patch_char_item` has carried the same
     cost since characters got theirs."""
-    names = [i["name"] for i in list_images(v.cid, item["id"], item["default_version"],
-                                            pcs.ASSET_BASE, v=v)]
+    images = list_images(v.cid, item["id"], item["default_version"], pcs.ASSET_BASE, v=v)
+    names = [i["name"] for i in images]
     return {**item,
             "has_avatar": assets.AVATAR in names,
+            # From the union, so the token is the one of whichever side
+            # answered for the avatar: a thin campaign's PC wears the world's
+            # file, and `?v=` is served immutable.
+            "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
             "avatar_focus": read_focus(v.cid, item["id"], item["default_version"],
                                        pcs.ASSET_BASE, v=v),
             "gallery_count": sum(1 for n in names if n.startswith("gallery_"))}

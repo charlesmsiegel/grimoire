@@ -111,7 +111,7 @@ function faces(cast: { chars: CharacterSummary[]; pcs: PCSummary[] }): Face[] {
   return [
     ...cast.pcs.map((p): Face => ({
       key: `pcs:${p.id}`, id: p.id, name: p.name, kind: "pcs",
-      version: p.default_version, avatar: !!p.has_avatar,
+      version: p.default_version, avatar: !!p.has_avatar, v: p.avatar_v,
     })),
     ...cast.chars.map((c): Face => ({
       key: `characters:${c.id}`, id: c.id, name: c.name, kind: "characters",

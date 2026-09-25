@@ -243,10 +243,16 @@ def list_pcs(root: Path) -> list[dict]:
         # `list_images` and `read_focus` return early on a directory or
         # sidecar that is not there, so the scan and the parse are only
         # paid by PCs that actually have images.
-        names = [i["name"] for i in assets.list_images(root, pid, default, ASSET_BASE)]
+        images = assets.list_images(root, pid, default, ASSET_BASE)
+        names = [i["name"] for i in images]
         out.append({"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
                     "default_version": default,
                     "has_avatar": assets.AVATAR in names,
+                    # The token `list_images` already computed, for the rail's
+                    # `?v=`: a portrait URL without one is never served
+                    # immutable, so every visit revalidated every PC's.
+                    "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR),
+                                     None),
                     "avatar_focus": assets.read_focus(root, pid, default, ASSET_BASE),
                     "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
                     "versions": [{"id": v, "name": read_persona(root, pid, v)["name"]}

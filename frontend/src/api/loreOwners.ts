@@ -89,7 +89,7 @@ async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<Record
       ref: `pcs:${p.id}`, label: p.name, kind,
       ...(p.has_avatar
         ? { avatar: api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar",
-                                      { w: THUMB.row }) }
+                                      { w: THUMB.row, v: p.avatar_v }) }
         : {}),
     }));
   }

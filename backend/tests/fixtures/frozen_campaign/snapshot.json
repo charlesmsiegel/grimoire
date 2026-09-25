@@ -917,6 +917,7 @@
   "overlay.list_pcs[the-drowned-ledger]": [
     {
       "avatar_focus": null,
+      "avatar_v": null,
       "default_version": "default",
       "gallery_count": 0,
       "has_avatar": false,

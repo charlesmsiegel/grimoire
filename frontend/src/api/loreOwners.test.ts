@@ -40,7 +40,8 @@ test("actors with avatars get an avatar url; others get none", async () => {
   // A PC resolves its own art under `pcs`, not the character folder (#219) --
   // before PCs had images at all, every owner chip for one showed initials.
   (api.listPCs as any).mockResolvedValue([
-    { id: "wren", name: "Wren", tags: [], default_version: "v2", has_avatar: true, versions: [] },
+    { id: "wren", name: "Wren", tags: [], default_version: "v2", has_avatar: true, versions: [],
+      avatar_v: "w2" },
     { id: "brack", name: "Brack", tags: [], default_version: "v1", has_avatar: false, versions: [] },
   ]);
   (api.listEntities as any).mockResolvedValue([]);
@@ -51,9 +52,8 @@ test("actors with avatars get an avatar url; others get none", async () => {
   expect(opts.find((o) => o.ref === "characters:maren")?.avatar)
     .toBe("/api/worlds/w/characters/maren/versions/v1/images/avatar?w=128&v=m1");
   expect(opts.find((o) => o.ref === "characters:hedde")?.avatar).toBeUndefined();
-  // A PC summary carries no token (only a character's avatar is swapped by a
-  // promote), so its thumbnail is the bare, revalidated one.
+  // ...and so does a PC's now that its summary carries one (Codex review).
   expect(opts.find((o) => o.ref === "pcs:wren")?.avatar)
-    .toBe("/api/worlds/w/pcs/wren/versions/v2/images/avatar?w=128");
+    .toBe("/api/worlds/w/pcs/wren/versions/v2/images/avatar?w=128&v=w2");
   expect(opts.find((o) => o.ref === "pcs:brack")?.avatar).toBeUndefined();
 });

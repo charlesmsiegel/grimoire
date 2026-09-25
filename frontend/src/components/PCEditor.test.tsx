@@ -598,15 +598,17 @@ it("images follow the viewed version, not the PC", async () => {
 it("the rail draws each PC's portrait from its summary, at its own crop", async () => {
   (api.listPCs as any).mockResolvedValue([
     { id: "elara", name: "Elara", tags: [], default_version: "v2", has_avatar: true,
-      avatar_focus: 20, versions: [] },
+      avatar_focus: 20, avatar_v: "tok", versions: [] },
     { id: "rook", name: "Rook", tags: [], default_version: "default", has_avatar: false,
       avatar_focus: null, versions: [] },
   ]);
   const { container } = renderPCs();
   await screen.findByText("Rook");
   const thumb = container.querySelector(".pc-row-portrait img") as HTMLImageElement;
-  // A 28px row: the smallest bucket, never the original.
-  expect(thumb.getAttribute("src")).toBe("/img/realm/pcs/elara/v2/avatar?w=128");
+  // A 28px row: the smallest bucket, never the original -- and the summary's
+  // token, without which the server never answers immutable and every visit
+  // revalidates every portrait (Codex review).
+  expect(thumb.getAttribute("src")).toBe("/img/realm/pcs/elara/v2/avatar?w=128&v=tok");
   expect(thumb.style.objectPosition).toBe("20% 20%");
   // the one with no avatar falls back to initials rather than a broken img
   expect(container.querySelectorAll(".pc-row-portrait img")).toHaveLength(1);
