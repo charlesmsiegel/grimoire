@@ -1838,8 +1838,18 @@ def delete_pin(cid: str, ref: str, scope: str = "scene", sid: str = ""):
 # ---- campaign cast & suggestions ----
 @router.get("/campaigns/{cid}/appearances")
 def get_appearances(cid: str):
+    """The appearance record, each row with its portrait's `avatar_v`.
+
+    The token is added here rather than in `appearances.roster`, which drift
+    measurement and sync also walk and which has no use for art. The play view
+    draws every portrait off these rows -- the cast grid, the speaker plates,
+    the inspector -- and a URL without `?v=` is never served immutable, so a
+    reopened scene revalidated one image per actor on it.
+    """
     _campaign_root_or_404(cid)
-    return store.appearances.roster(cid)
+    v = store.overlay.view(cid)       # one for every row
+    return [{**r, "avatar_v": store.overlay.avatar_v(cid, r["id"], r["version"], r["kind"], v=v)}
+            for r in store.appearances.roster(cid)]
 
 
 @router.get("/campaigns/{cid}/pcs")

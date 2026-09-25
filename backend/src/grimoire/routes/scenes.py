@@ -4620,16 +4620,18 @@ def get_cast_casefile(cid: str, sid: str, kind: str, id: str):
     state from a guessed id.
 
     Thin on purpose: the joins, the tolerance and the lock all live in
-    `store.casefile`, whose docstring carries the argument for each.
+    `store.casefile`, whose docstring carries the argument for each. The one
+    field added here is the portrait's token, for `_with_avatar_v`'s reason.
     """
     _require_scene(cid, sid)
     if kind not in store.appearances.ACTOR_KINDS:
         raise HTTPException(status_code=404, detail="unknown actor kind")
     try:
-        return store.casefile.build(cid, sid, kind, id)
+        built = store.casefile.build(cid, sid, kind, id)
     except (store.appearances.AppearError, store.characters.CharacterNotFound,
             store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
+    return _with_avatar_v(cid, built)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}")
@@ -4638,10 +4640,21 @@ def get_cast_detail(cid: str, sid: str, kind: str, id: str):
     if kind not in store.appearances.ACTOR_KINDS:
         raise HTTPException(status_code=404, detail="unknown actor kind")
     try:
-        return store.appearances.cast_detail(cid, sid, kind, id)
+        detail = store.appearances.cast_detail(cid, sid, kind, id)
     except (store.appearances.AppearError, store.characters.CharacterNotFound,
             store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
+    return _with_avatar_v(cid, detail)
+
+
+def _with_avatar_v(cid: str, actor: dict) -> dict:
+    """`actor` with the token of the portrait its `version` resolves to, which
+    the dossier and the record drawer spend as `?v=` -- the same field and the
+    same reason as `GET /appearances`, for the one actor these two read. A
+    casefile that could not name a version draws no portrait, so asks nothing."""
+    vid = actor["version"]
+    return {**actor, "avatar_v": (store.overlay.avatar_v(cid, actor["id"], vid, actor["kind"])
+                                  if vid else None)}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/messages/{index}")

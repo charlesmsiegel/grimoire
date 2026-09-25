@@ -16,13 +16,15 @@ export function SceneCastList({ cid, cast, roster }: {
       <div className="role">In this scene</div>
       {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
       {cast.map((a) => {
-        const ver = roster.find((r) => r.kind === a.kind && r.id === a.id)?.version;
+        const locked = roster.find((r) => r.kind === a.kind && r.id === a.id);
+        const ver = locked?.version;
         return (
           <div className="cast-row" key={`${a.kind}/${a.id}`}>
             {ver
               ? <img className="row-avatar" alt={`${a.id} avatar`} loading="lazy" decoding="async"
                      src={api.actorImageUrl({ kind: "campaign", id: cid },
-                                            a.kind, a.id, ver, "avatar", { w: THUMB.row })}
+                                            a.kind, a.id, ver, "avatar",
+                                            { w: THUMB.row, v: locked?.avatar_v })}
                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
               : null}
             <span>{a.id}</span>

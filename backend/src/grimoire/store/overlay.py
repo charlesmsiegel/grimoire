@@ -1598,6 +1598,44 @@ def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters"
     return v.wroot
 
 
+def avatar_v(cid: str, aid: str, vid: str, base: str = "characters",
+             *, v: View | None = None) -> str | None:
+    """The `?v=` token of the avatar bytes the campaign's image route serves
+    for this actor version, or None when it serves none.
+
+    `image_root`'s rule, read off a listing rather than a path probe: the
+    campaign's own avatar when it holds one; else nothing when the campaign
+    has tombstoned the image or the record, or detached the record; else the
+    world's. A token taken from the other side would name bytes the route does
+    not return, and `?v=` is served immutable -- a year of the wrong portrait.
+
+    Characters read each side's memoized `characters.version_facts`, so the
+    appearance roster -- every actor a campaign has ever seen -- costs a few
+    stats per row once warm instead of a folder scan per root. Asked with the
+    `crop` each side's listing asks with (`_patch_char_item`), so the roster
+    and the character list warm one entry apiece rather than two. PCs list
+    the folder: a roster holds a handful of them.
+    """
+    v = _view(cid, v)
+
+    def token(root: Path, crop: bool) -> str | None:
+        if base == "characters":
+            try:
+                return characters.version_facts(root, aid, vid, crop=crop)["avatar_v"]
+            except characters.CharacterNotFound:    # an id no resolver accepts
+                return None
+        return next((i["v"] for i in assets.list_images(root, aid, vid, base)
+                     if i["name"] == assets.AVATAR), None)
+
+    mine = token(v.croot, True)
+    if mine is not None:
+        return mine
+    if (_asset_ref(base, aid, vid, assets.AVATAR) in v.gone or _flat_ref(base, aid) in v.gone
+            or _flat_ref(base, aid) in v.off):
+        return None
+    return token(v.wroot, False)
+
+
 def read_focus(cid: str, aid: str, vid: str, base: str = "characters",
                *, v: View | None = None) -> int | None:
     v = _view(cid, v)

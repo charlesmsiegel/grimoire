@@ -32,7 +32,8 @@ vi.mock("../api/client", async () => {
       // the inspector, not on the bill.
       getSceneUsage: vi.fn(), getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, _n: string,
-                      o?: { w?: number }) => `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}`,
+                      o?: { w?: number; v?: string | null }) =>
+        `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
       entityImageUrl: (_sc: unknown, _k: string, _e: string, _n: string, o?: { w?: number }) =>
         `/loc-img${o?.w ? `?w=${o.w}` : ""}`,
     },
@@ -383,6 +384,18 @@ test("a PC in the roster gets a portrait like anyone else", async () => {
   const portrait = await screen.findByAltText("yara portrait");
   // A 34px row: the face bucket, which a DPR-3 screen still fills sharply.
   expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v3?w=256");
+});
+
+test("a cast row's portrait carries the roster's avatar token", async () => {
+  // Without it the row is served no-cache and revalidated on every open.
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" }]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", version: "v2", role: "npc", scenes: ["s"],
+      avatar_v: "1a-2b" }]);
+  renderInspector();
+  const portrait = await screen.findByAltText("Seraphine portrait");
+  expect(portrait.getAttribute("src")).toBe("/img/characters/seraphine/v2?w=256&v=1a-2b");
 });
 
 test("location with a primary image renders a clickable thumbnail", async () => {

@@ -5,8 +5,8 @@ import type { Actor, Briefing, RosterEntry } from "../../api/client";
 vi.mock("../../api/client", () => ({
   api: {
     actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string,
-                    o?: { w?: number }) =>
-      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}${o?.w ? `?w=${o.w}` : ""}`,
+                    o?: { w?: number; v?: string | null }) =>
+      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
   },
 }));
 
@@ -103,6 +103,22 @@ test("a tile's portrait is a thumbnail its screen picks the size of", () => {
   expect(img.getAttribute("srcset")).toContain(`${base}?w=1024 682w`);
   expect(img.getAttribute("sizes")).toBe("(max-width: 720px) 52px, 120px");
   expect(img.getAttribute("loading")).toBe("lazy");
+});
+
+test("a tile's portrait carries the roster's avatar token, so it is cached immutable", () => {
+  // A URL without `?v=` is served no-cache, so every reopened scene asked the
+  // server about every face on it again. Each candidate carries the token,
+  // whichever one the browser picks.
+  renderColumn({ roster: ROSTER.map((r) => (r.id === "aud" ? { ...r, avatar_v: "1a-2b" } : r)) });
+  const img = screen.getByText("Sister Aud").closest(".cast-tile")!.querySelector("img")!;
+  const base = "/api/campaigns/saltmarch/characters/aud/versions/v1/images/avatar";
+  expect(img.getAttribute("src")).toBe(`${base}?w=512&v=1a-2b`);
+  const candidates = img.getAttribute("srcset")!.split(", ");
+  expect(candidates.length).toBeGreaterThan(1);
+  for (const c of candidates) expect(c).toContain("&v=1a-2b ");
+  // No token, no `v`: a portrait nobody could version is still drawn.
+  const pc = screen.getByText("Ferrant Wyle").closest(".cast-tile")!.querySelector("img")!;
+  expect(pc.getAttribute("src")).not.toContain("v=");
 });
 
 test("a tile says where its actor stands", () => {

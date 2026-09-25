@@ -1293,7 +1293,8 @@ export const SceneInspector = memo(function SceneInspector({
         {cast.map((a) => {
           // The roster carries the locked version for either actor kind, and
           // so does the image route, so a PC gets a portrait here too (#219).
-          const ver = roster.find((r) => r.kind === a.kind && r.id === a.id)?.version;
+          const locked = roster.find((r) => r.kind === a.kind && r.id === a.id);
+          const ver = locked?.version;
           const pc = a.role === "player";
           const ref = `${a.kind}:${a.id}`;
           return (
@@ -1302,7 +1303,8 @@ export const SceneInspector = memo(function SceneInspector({
                       onClick={() => setDrawer({ type: "actor", kind: a.kind, id: a.id })}>
                 <Portrait src={ver ? api.actorImageUrl({ kind: "campaign", id: cid },
                                                             a.kind, a.id, ver, "avatar",
-                                                            { w: THUMB.face }) : null}
+                                                            { w: THUMB.face, v: locked?.avatar_v })
+                                 : null}
                           name={nameOf(a)} />
                 <span className="inspector-name">{nameOf(a)}</span>
                 <span className="role-chip">{pc ? "player" : "npc"}</span>
