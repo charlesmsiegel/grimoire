@@ -5,8 +5,8 @@ import type { Casefile, Provenance } from "../../api/client";
 vi.mock("../../api/client", () => ({
   api: {
     actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string,
-                    o?: { w?: number }) =>
-      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}${o?.w ? `?w=${o.w}` : ""}`,
+                    o?: { w?: number; v?: string | null }) =>
+      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
   },
 }));
 
@@ -113,6 +113,14 @@ test("the portrait is a thumbnail sized for the 134px frame, not the original", 
   expect(img.getAttribute("src")).toBe(`${base}?w=512`);
   expect(img.getAttribute("srcset")).toContain(`${base}?w=1024 682w`);
   expect(img.getAttribute("sizes")).toBe("134px");
+});
+
+test("the portrait carries the casefile's avatar token, so it is cached immutable", () => {
+  renderDossier({ ...AUD, avatar_v: "1a-2b" });
+  const img = screen.getByAltText("Sister Aud portrait");
+  const base = "/api/campaigns/saltmarch/characters/aud/versions/v1/images/avatar";
+  expect(img.getAttribute("src")).toBe(`${base}?w=512&v=1a-2b`);
+  expect(img.getAttribute("srcset")).toContain(`${base}?w=1024&v=1a-2b 682w`);
 });
 
 test("‹ All cast returns to the grid", () => {

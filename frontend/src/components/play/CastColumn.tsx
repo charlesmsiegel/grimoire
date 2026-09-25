@@ -14,6 +14,8 @@ export type CastTile = {
   id: string;
   name: string;
   version: string;
+  /** The roster's token for that version's avatar, for the portrait's `?v=`. */
+  avatar_v?: string | null;
   state: CastState;
 };
 
@@ -32,11 +34,14 @@ export type CastTile = {
  *  Exported for its own test — it is much easier to state as a function than to
  *  reach through a rendered grid of portraits. */
 export function tiers(cast: Actor[], roster: RosterEntry[]): CastTile[] {
-  return cast.map((a) => ({
-    kind: a.kind, id: a.id, name: a.name,
-    version: roster.find((r) => r.kind === a.kind && r.id === a.id)?.version ?? "",
-    state: a.role === "player" ? "PLAYER" : "IN SCENE",
-  }));
+  return cast.map((a) => {
+    const locked = roster.find((r) => r.kind === a.kind && r.id === a.id);
+    return {
+      kind: a.kind, id: a.id, name: a.name,
+      version: locked?.version ?? "", avatar_v: locked?.avatar_v,
+      state: a.role === "player" ? "PLAYER" : "IN SCENE",
+    };
+  });
 }
 
 function Tile(
@@ -46,7 +51,7 @@ function Tile(
   // circle once the grid becomes a strip at phone width.
   const src = tile.version
     ? thumbSet((w) => api.actorImageUrl({ kind: "campaign", id: cid }, tile.kind, tile.id,
-                                        tile.version, "avatar", { w }),
+                                        tile.version, "avatar", { w, v: tile.avatar_v }),
                "(max-width: 720px) 52px, 120px")
     : null;
   return (

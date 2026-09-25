@@ -516,6 +516,68 @@ def test_pc_images_union_campaign_wins_and_tombstones(monkeypatch, tmp_path):
     assert overlay.image_root(cid, pid, "default", "gallery_1", base) == croot   # 404, no fallthrough
 
 
+def _served_avatar_v(cid, aid, base):
+    """The token of the avatar file the campaign's image route would serve --
+    `image_root` then `image_path`, the pair it resolves with -- or None where
+    it answers 404."""
+    root = overlay.image_root(cid, aid, "default", assets.AVATAR, base)
+    p = assets.image_path(root, aid, "default", assets.AVATAR, base)
+    return None if p is None else assets.image_version(p)
+
+
+@pytest.mark.parametrize("base", ["characters", pcs.ASSET_BASE])
+def test_avatar_v_names_the_file_the_image_route_serves(monkeypatch, tmp_path, base):
+    """`avatar_v` is spent as `?v=`, which is served immutable: a token read off
+    the side the route does not serve from pins the wrong portrait for a year.
+    Held to the route's own resolution through the states a roster row meets --
+    nothing yet, the world's inherited file, that file replaced, then the
+    campaign's own shadowing it."""
+    if base == "characters":
+        wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    else:
+        wroot, cid, aid = _pc_pair(monkeypatch, tmp_path)
+    assert overlay.avatar_v(cid, aid, "default", base) is None
+    assert _served_avatar_v(cid, aid, base) is None
+
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png", base)
+    world_v = overlay.avatar_v(cid, aid, "default", base)
+    assert world_v is not None and world_v == _served_avatar_v(cid, aid, base)
+
+    # Replaced world-side: the memo under the character side must not answer
+    # with the token of bytes that are gone.
+    assets.put_image(wroot, aid, "default", "avatar", PNG + b"-redrawn", "png", base)
+    redrawn_v = overlay.avatar_v(cid, aid, "default", base)
+    assert redrawn_v != world_v and redrawn_v == _served_avatar_v(cid, aid, base)
+
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, "default", "avatar", PNG + b"-mine, and longer", "png", base)
+    mine_v = overlay.avatar_v(cid, aid, "default", base)
+    assert mine_v != redrawn_v and mine_v == _served_avatar_v(cid, aid, base)
+
+
+@pytest.mark.parametrize("base", ["characters", pcs.ASSET_BASE])
+@pytest.mark.parametrize("hide", ["image tombstone", "record tombstone", "detached"])
+def test_avatar_v_is_none_where_the_campaign_hides_the_world_avatar(monkeypatch, tmp_path,
+                                                                     base, hide):
+    """Each of `image_root`'s three reasons not to fall through to the world
+    makes the route 404 -- so there are no bytes for a token to name, and the
+    world file's token would be a lie about a portrait nobody is shown."""
+    if base == "characters":
+        wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    else:
+        wroot, cid, aid = _pc_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png", base)
+    assert overlay.avatar_v(cid, aid, "default", base) is not None
+    if hide == "image tombstone":
+        overlay.delete_image(cid, aid, "default", "avatar", base)
+    elif hide == "record tombstone":
+        overlay.add_deleted(cid, f"{base}/{aid}")
+    else:
+        overlay.add_detached(cid, f"{base}/{aid}")
+    assert _served_avatar_v(cid, aid, base) is None
+    assert overlay.avatar_v(cid, aid, "default", base) is None
+
+
 def test_read_pc_patches_images_from_union(monkeypatch, tmp_path):
     """`materialize_actor` copies persona files and never assets, so a
     materialized PC still wears the world's avatar -- reading the detail off

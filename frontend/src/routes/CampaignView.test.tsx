@@ -366,6 +366,26 @@ test("a PC speaker's plate carries their portrait once the roster locks a versio
   expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v2/avatar?w=128");
 });
 
+test("a plate's portrait carries the roster's avatar token, so it is cached immutable", async () => {
+  // Every plate of one speaker is the same URL; without `?v=` it is served
+  // no-cache, so reopening the scene revalidated it for every actor who spoke.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "yara", role: "player", name: "Yara" },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "pcs", id: "yara", version: "v2", role: "player", scenes: ["s1"], avatar_v: "1a-2b" },
+  ]);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [{ role: "user", content: "Hello.", speaker: "Yara" }],
+  });
+  renderCampaign();
+  const stream = within(await screen.findByTestId("stream"));
+  const portrait = await stream.findByAltText("Yara portrait");
+  expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v2/avatar?w=128&v=1a-2b");
+});
+
 /** A scene whose transcript has one post, spoken by a cast member. */
 function speakingScene() {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);

@@ -12,7 +12,8 @@ vi.mock("../api/client", async () => {
       getCastDetail: vi.fn(),
       readEntity: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, _n: string,
-                      o?: { w?: number }) => `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}`,
+                      o?: { w?: number; v?: string | null }) =>
+        `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
     },
   };
 });
@@ -57,6 +58,13 @@ test("the avatar is a downscale, not the original file", async () => {
   open();
   const img = await screen.findByAltText("Seraphine avatar");
   expect(img.getAttribute("src")).toBe("/img/characters/seraphine/default?w=1024");
+});
+
+test("the avatar carries the detail's token, so it is cached immutable", async () => {
+  (api.getCastDetail as any).mockResolvedValue({ ...detail("library"), avatar_v: "1a-2b" });
+  open();
+  const img = await screen.findByAltText("Seraphine avatar");
+  expect(img.getAttribute("src")).toBe("/img/characters/seraphine/default?w=1024&v=1a-2b");
 });
 
 test("an unrecognized source renders no badge at all", async () => {

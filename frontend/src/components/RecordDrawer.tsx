@@ -69,7 +69,7 @@ export function RecordDrawer({ cid, sid, target, onClose }:
         // The large bucket, because this is the one portrait on screen and
         // the reader opened it to look at this person.
         setAvatar(api.actorImageUrl({ kind: "campaign", id: cid }, d.kind, d.id, d.version, "avatar",
-                                    { w: THUMB.large }));
+                                    { w: THUMB.large, v: d.avatar_v }));
       });
     } else {
       api.readEntity({ kind: "campaign", id: cid }, "locations", target.id).then((e) => {

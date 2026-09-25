@@ -4000,21 +4000,25 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     return out;
   }, [messages, firstIndex]);
 
-  /** The version the roster has locked for each actor, keyed `kind/id`: a
-   *  lookup per plate rather than a scan of the roster per plate. */
-  const lockedVersion = useMemo(
-    () => new Map(roster.map((r) => [`${r.kind}/${r.id}`, r.version])), [roster]);
+  /** Each actor's roster row -- the version the campaign has locked, and its
+   *  avatar's token -- keyed `kind/id`: a lookup per plate rather than a scan
+   *  of the roster per plate. */
+  const lockedEntry = useMemo(
+    () => new Map(roster.map((r) => [`${r.kind}/${r.id}`, r])), [roster]);
 
   const plateAvatar = useCallback((run: TranscriptRunData): string | null => {
     if (!run.actor) return null;
     // Either actor kind: a speaker plate used to fall back to initials for
     // every PC, because PCs had no images to point at (#219).
     const { kind, id } = run.actor;
-    const ver = lockedVersion.get(`${kind}/${id}`);
-    // A 26px plate: the smallest bucket, never the original.
-    return ver ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, ver, "avatar",
-                                   { w: THUMB.row }) : null;
-  }, [lockedVersion, cid]);
+    const locked = lockedEntry.get(`${kind}/${id}`);
+    // A 26px plate: the smallest bucket, never the original. The token makes
+    // it immutable, so a reopened scene asks nothing for any of its plates.
+    return locked?.version
+      ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, locked.version, "avatar",
+                          { w: THUMB.row, v: locked.avatar_v })
+      : null;
+  }, [lockedEntry, cid]);
 
   /** Whose images the picker offers for a post by `speaker` (#376).
    *
@@ -4026,7 +4030,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  is the one scope that is always there, and an empty picker would be worse
    *  than a general one. */
   function pickerTarget(actor: Actor | undefined, speaker: string): PickerTarget {
-    const ver = actor && lockedVersion.get(`${actor.kind}/${actor.id}`);
+    const ver = actor && lockedEntry.get(`${actor.kind}/${actor.id}`)?.version;
     return actor && ver
       ? { kind: actor.kind, id: actor.id, version: ver, name: speaker }
       : { kind: "campaign", name: speaker };

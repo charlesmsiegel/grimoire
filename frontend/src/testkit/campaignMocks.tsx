@@ -112,7 +112,8 @@ export async function campaignApiMock() {
       // The width a portrait asks for is part of the URL a test reads, so a
       // plate that fell back to the full-size original says so.
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string,
-                      o?: { w?: number }) => `/img/${k}/${a}/${v}/${n}${o?.w ? `?w=${o.w}` : ""}`,
+                      o?: { w?: number; v?: string | null }) =>
+        `/img/${k}/${a}/${v}/${n}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
       entityImageUrl: () => "/loc-img",
     },
   };

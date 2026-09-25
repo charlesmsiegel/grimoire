@@ -14,8 +14,9 @@ vi.mock("../api/client", async () => {
       addToCast: vi.fn(),
       getSuggestions: vi.fn(), dismissSuggestion: vi.fn(),
       opener: vi.fn(), firstPost: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
-      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
-        `/cimg/${sc.id}/${k}/${a}/${v}/${n}`,
+      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string,
+                      o?: { w?: number; v?: string | null }) =>
+        `/cimg/${sc.id}/${k}/${a}/${v}/${n}${o?.v ? `?v=${o.v}` : ""}`,
     },
   };
 });
@@ -65,6 +66,17 @@ test("character cast row shows the locked-version avatar", async () => {
   renderPanel();
   const img = await screen.findByAltText("sera avatar");
   expect(img.getAttribute("src")).toContain("/cimg/c/characters/sera/default/avatar");
+});
+
+test("a cast row's avatar carries the roster's token, so it is cached immutable", async () => {
+  (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "sera", role: "npc" }]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "sera", version: "default", role: "npc", scenes: ["s"],
+      avatar_v: "1a-2b" },
+  ]);
+  renderPanel();
+  const img = await screen.findByAltText("sera avatar");
+  expect(img.getAttribute("src")).toBe("/cimg/c/characters/sera/default/avatar?v=1a-2b");
 });
 
 test("initialPrompt seeds the opener prompt", async () => {

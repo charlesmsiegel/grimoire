@@ -67,7 +67,7 @@ function DossierColumn(
   // `.dossier-portrait` is a fixed 134px frame.
   const src = c.version
     ? thumbSet((w) => api.actorImageUrl({ kind: "campaign", id: cid }, c.kind, c.id, c.version,
-                                        "avatar", { w }),
+                                        "avatar", { w, v: c.avatar_v }),
                "134px")
     : null;
   // The dossier paragraph is written by a later absorb phase, which rests on no

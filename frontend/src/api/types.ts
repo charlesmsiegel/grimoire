@@ -835,6 +835,9 @@ export type CastChanges = {
 export type Suggestion = { character: string; name: string; mentioned_by: string[] };
 export type RosterEntry = {
   kind: string; id: string; version: string; role: string; scenes: string[];
+  /** The token of the avatar `version` resolves to, spent as `?v=` so the
+   *  portrait is cached immutable; null when there is no avatar. */
+  avatar_v?: string | null;
 };
 export type SceneLocationRef = { id: string; name: string };
 export type SceneLocation = { current: SceneLocationRef | null; visited: SceneLocationRef[] };
@@ -1324,6 +1327,8 @@ export type CastSource = "library" | "override" | "emergent";
 export type CastDetail = {
   kind: "characters" | "pcs"; id: string; name: string; version: string; body: string;
   source: CastSource;
+  /** As `RosterEntry.avatar_v`: the drawer portrait's `?v=`. */
+  avatar_v?: string | null;
 };
 /** One feeling this actor holds toward another in the room. The three axes run
  *  0–5 and the column draws them as five pips each. */
@@ -1339,6 +1344,8 @@ export type Casefile = {
   // The casefile route only ever answers for an actor, and its portrait URL
   // keys on this, so it names the two actor kinds rather than any string.
   kind: "characters" | "pcs"; id: string; name: string; version: string; role: string;
+  /** As `RosterEntry.avatar_v`: the dossier portrait's `?v=`. */
+  avatar_v?: string | null;
   /** The scenes she is cast in, oldest first, labelled — a scene id is a
    *  filename, and the column puts these in a sentence. */
   scenes: { id: string; title: string }[];
