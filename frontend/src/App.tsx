@@ -14,7 +14,7 @@ import { FocusProvider, FocusRestore, useFocus } from "./components/focus";
 import { PaletteProvider } from "./components/palette";
 import { ShellStatusProvider } from "./components/ShellStatus";
 import ShortcutsHelp from "./shortcuts/ShortcutsHelp";
-import { onConfigChanged } from "./appEvents";
+import { onConfigChanged, onStoreMovedElsewhere } from "./appEvents";
 import { RAIL_PX, railless } from "./shell/rail";
 import { useOpenCampaign } from "./shell/useOpenCampaign";
 import { useShellPayload } from "./shell/useShellPayload";
@@ -141,6 +141,15 @@ const Shell = memo(function Shell(
   // Campaigns, Library and Configuration before setup has been answered.
   const noRail = railless(location.pathname) || focus;
 
+  /** Bumped when another tab moves the store, and the routed page's key. The
+   *  page open here was read from the library that just stopped being served,
+   *  and its handlers would write into the new one under the old one's ids --
+   *  so it is remounted rather than left to notice, which it has no way to
+   *  do. The chrome around it is not: the rail and the header refresh through
+   *  their own signals and keep their scroll and drawer state. */
+  const [storeGen, setStoreGen] = useState(0);
+  useEffect(() => onStoreMovedElsewhere(() => setStoreGen((n) => n + 1)), []);
+
   return (
     <>
       {/* Focus mode swaps the 52px strip for the pill that undoes it, and that
@@ -181,7 +190,7 @@ const Shell = memo(function Shell(
                    dataDir={dataDir} docked={docked} open={railOpen}
                    onClose={closeRail} onRetry={shell.retry} />
         )}
-      <AppRoutes inSetup={inSetup} rerunSetup={rerunSetup} ready={ready}
+      <AppRoutes key={storeGen} inSetup={inSetup} rerunSetup={rerunSetup} ready={ready}
                  dataDir={dataDir} openCid={openCid} onLeftSetup={onLeftSetup} />
       </div>
       </ShellPayloadProvider>

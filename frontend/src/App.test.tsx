@@ -2,7 +2,7 @@ import { render, screen, within, fireEvent, waitFor, act } from "@testing-librar
 import { MemoryRouter, useNavigate, useParams } from "react-router-dom";
 import { Profiler, StrictMode, useEffect } from "react";
 import App from "./App";
-import { configChanged } from "./appEvents";
+import { configChanged, storeMovedElsewhere } from "./appEvents";
 
 vi.mock("./api/client", () => ({
   api: {
@@ -365,6 +365,27 @@ test("opening another campaign from the palette remounts the view instead of reu
   // instance; a remount is what makes the previous campaign's state
   // unreachable. The unmount/remount is observable as a fresh mount effect.
   expect(campaignMounts).toEqual(["saltmarch", "realm"]);
+});
+
+test("a store moved in another tab remounts the routed page", async () => {
+  // The page was read from the library that stopped being served, and its
+  // handlers would write into the new one under the old one's ids. A config
+  // change alone must NOT do this -- that is covered below -- only a move.
+  campaignMounts.length = 0;
+  render(
+    <MemoryRouter initialEntries={["/campaigns/saltmarch/scenes/s1"]}>
+      <App />
+    </MemoryRouter>);
+  await screen.findByTestId("campaign-view");
+  await waitFor(() => expect(campaignMounts).toEqual(["saltmarch"]));
+
+  act(() => { configChanged(); });
+  await waitFor(() => expect(api.getConfig).toHaveBeenCalledTimes(2));
+  expect(campaignMounts).toEqual(["saltmarch"]);
+
+  act(() => { storeMovedElsewhere(); });
+  await waitFor(() => expect(campaignMounts).toEqual(["saltmarch", "saltmarch"]));
+  expect(screen.getByTestId("campaign-view-cid")).toHaveTextContent("saltmarch");
 });
 
 test("a slow pre-mutation config response cannot revert the header behind a newer one", async () => {

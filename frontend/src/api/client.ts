@@ -2,7 +2,7 @@ import { isAbortError, newAttemptId, parseSSEChunk, type ChatEvent,
   type LocalizeEvent, type ChubGalleryEvent, type RunHandle,
   type TaglineBatchEvent } from "./stream";
 import { campaignsChanged, configChanged, noticesChanged,
-  shellChanged } from "../appEvents";
+  shellChanged, storeMovedElsewhere } from "../appEvents";
 import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
 import { THUMB_REV } from "./thumbs";
@@ -271,7 +271,16 @@ function announceRootMoved(): void {
 /** A move another tab announced: what this tab remembers, what it has in
  *  flight and its config all describe the old store. The root is forgotten
  *  with the rows, so nothing is recalled until a config read names the new
- *  one. */
+ *  one.
+ *
+ *  The same three signals `putDataDir` gives its own tab, and then one more.
+ *  `campaignsChanged` alone re-read the rail from the new store while `App`
+ *  kept the old one's data dir, connection and open campaign until the next
+ *  navigation -- chrome describing two libraries at once. `configChanged` is
+ *  what makes `App` read the config again. And the routed page is the one
+ *  thing neither signal reaches: it was built from the old library's records,
+ *  and a save from it would land in the new one under the old one's ids, so
+ *  `storeMovedElsewhere` has `App` remount it (Codex review). */
 function hearRootMoved(e: StorageEvent): void {
   if (e.key !== ROOT_MOVED_KEY) return;
   memoRoot = null;
@@ -279,6 +288,8 @@ function hearRootMoved(e: StorageEvent): void {
   retireAllInflight();
   invalidateConfigCache();
   campaignsChanged();
+  configChanged();
+  storeMovedElsewhere();
 }
 if (typeof window !== "undefined") window.addEventListener("storage", hearRootMoved);
 

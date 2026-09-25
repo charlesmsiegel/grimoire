@@ -27,6 +27,7 @@ const campaigns = channel();
 const config = channel();
 const shell = channel();
 const notices = channel();
+const storeMoves = channel();
 
 /** The set of campaigns, or one of their names, changed. */
 export const campaignsChanged = campaigns.emit;
@@ -73,3 +74,18 @@ export const onShellChanged = shell.subscribe;
  *  forget -- including the next one somebody adds. */
 export const noticesChanged = notices.emit;
 export const onNoticesChanged = notices.subscribe;
+
+/** Another tab of this origin moved the store root to a different library.
+ *
+ *  A fifth channel because the other four refresh the CHROME, and this is the
+ *  one change the page under it cannot survive: whatever route is open was
+ *  built from the old library's records -- its ids, its drafts, its selection
+ *  -- and every write it can still make goes to the new one, where the same id
+ *  may name a different record entirely. `App` answers it by remounting the
+ *  routed page, so nothing on screen outlives the store it was read from.
+ *
+ *  Only a move HEARD from another tab: a move made in this one is made from the
+ *  page that is open, which owns its own state -- remounting it would, among
+ *  other things, restart the setup wizard at step one halfway through. */
+export const storeMovedElsewhere = storeMoves.emit;
+export const onStoreMovedElsewhere = storeMoves.subscribe;
