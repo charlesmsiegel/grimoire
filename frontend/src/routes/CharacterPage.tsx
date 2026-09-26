@@ -8,7 +8,7 @@ import {
 import { errorText } from "../api/errors";
 import { thumbSet } from "../api/thumbs";
 import { AvatarFocusPicker } from "../components/AvatarFocusPicker";
-import { CalendarDatePicker } from "../components/CalendarDatePicker";
+import { BirthdateDisplay, BirthdatePicker } from "../components/BirthdatePicker";
 import { ErrorNote } from "../components/ErrorNote";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
@@ -86,7 +86,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
   /** The world behind the record — the same id in world scope, and the
    *  campaign's world in campaign scope. Several routes (export, localize,
-   *  chub, taglines, birthdate) hang off `/worlds` whatever scope you read in. */
+   *  chub, taglines) hang off `/worlds` whatever scope you read in. */
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
@@ -94,6 +94,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   const [card, setCard] = useState<Card | null>(null);
   const [greetings, setGreetings] = useState<string[]>([]);
   const [birthdate, setBirthdate] = useState("");
+  const [editingBirthdate, setEditingBirthdate] = useState(false);
+  const [savingBirthdate, setSavingBirthdate] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notFound, setNotFound] = useState(false);
   const [tab, setTab] = useState<CardTabKey>("card");
@@ -378,10 +380,16 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   }
 
   async function saveBirthdate(value: string) {
-    setBirthdate(value);
+    setSavingBirthdate(true);
     try {
-      await api.setCharacterBirthdate(wid, eid, value);
-    } catch (err: unknown) { setError(err); }
+      await api.setCharacterBirthdate(scope, eid, value);
+      if (live.current) {
+        setDetail((current) => current && current.meta.id === eid
+          ? { ...current, meta: { ...current.meta, birthdate: value } } : current);
+        setEditingBirthdate(false);
+      }
+    } catch (err: unknown) { if (live.current) setError(err); }
+    finally { if (live.current) setSavingBirthdate(false); }
   }
 
   async function runLocalize(version: string) {
@@ -585,17 +593,27 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     <VoiceAnchorSection key={`${scope.kind}:${scope.id}:${eid}`}
                         scope={scope} cid={eid} cap={voiceAnchorCap} onError={setError} />
 
-    {worldScope && (
-      <ColumnSection label="Birthdate">
-        {/* Persist only complete dates: the picker emits "" for every
-            intermediate state, which must never blank the stored value. */}
-        <CalendarDatePicker scope={{ kind: "world", id: wid }} value={birthdate}
-                            onChange={(v) => { setBirthdate(v); if (v) void saveBirthdate(v); }}
-                            ariaLabel="Birthdate" />
-        {birthdate && <button className="subtle" type="button"
-                              onClick={() => void saveBirthdate("")}>Clear</button>}
-      </ColumnSection>
-    )}
+    <ColumnSection label="Birthdate">
+        {editingBirthdate ? <>
+          <BirthdatePicker scope={scope} value={birthdate}
+                           onChange={setBirthdate} ariaLabel="Birthdate" />
+          <button className="subtle" type="button" disabled={savingBirthdate}
+                  onClick={() => void saveBirthdate(birthdate)}>Save birthdate</button>
+          <button className="subtle" type="button" disabled={savingBirthdate}
+                  onClick={() => { setBirthdate(detail?.meta.birthdate ?? ""); setEditingBirthdate(false); }}
+                  aria-label="Cancel birthdate edit">Cancel</button>
+          {birthdate && <button className="subtle" type="button" disabled={savingBirthdate}
+                                onClick={() => setBirthdate("")}>Clear</button>}
+        </> : <>
+          {detail?.meta.birthdate
+            ? <BirthdateDisplay scope={scope} value={detail.meta.birthdate} />
+            : <p className="field-hint">Not set.</p>}
+          <button className="subtle" type="button"
+                  onClick={() => { setBirthdate(detail?.meta.birthdate ?? ""); setEditingBirthdate(true); }}>
+            {detail?.meta.birthdate ? "Edit birthdate" : "Add birthdate"}
+          </button>
+        </>}
+    </ColumnSection>
 
     {/* An emergent NPC's way into the library (#60). Only promote can apply to
         an actor, and `libraryStatus` is what says so, so this renders nothing

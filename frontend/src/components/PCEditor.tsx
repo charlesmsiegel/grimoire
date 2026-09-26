@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
 import { THUMB, thumbSet } from "../api/thumbs";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
-import { CalendarDatePicker } from "./CalendarDatePicker";
+import { BirthdatePicker } from "./BirthdatePicker";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { LibraryPanel } from "./LibraryPanel";
@@ -570,7 +570,7 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
               <input type="text" value={persona.summary} onChange={(e) => setPersona({ ...persona, summary: e.target.value })} />
             </Field>
             <Field label="Birthdate">
-              <CalendarDatePicker scope={scope} value={persona.birthdate ?? ""}
+              <BirthdatePicker scope={scope} value={persona.birthdate ?? ""}
                                   onChange={(v) => setPersona({ ...persona, birthdate: v })}
                                   ariaLabel="Birthdate" />
             </Field>

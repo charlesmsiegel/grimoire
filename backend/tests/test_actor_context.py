@@ -51,6 +51,15 @@ def test_actor_secrets_are_excluded_before_render(cast_scene):
     assert any(row["id"] == "response_actor" for row in detail["sections"])
 
 
+def test_assigned_npc_can_answer_a_birthday_question(cast_scene):
+    cid, sid = cast_scene
+    characters.set_birthdate(campaigns.campaign_root(cid), "mara", "--05-09")
+    scenes.append_message(cid, sid, "user", "When is Mara's birthday?")
+
+    messages, _ = context.compose_turn(cid, sid, actor_ref="characters:mara")
+    assert "May 9" in str(messages)
+
+
 def test_arrival_and_reentry_bound_observed_history(cast_scene):
     cid, sid = cast_scene
     appearances.leave(cid, sid, "characters", "mara")

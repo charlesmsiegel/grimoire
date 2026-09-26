@@ -24,6 +24,7 @@ from typing import NamedTuple
 
 from ... import model_guidance, prompts
 from .. import (
+    birthdays,
     characters,
     commitments,
     config,
@@ -267,6 +268,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     recent_text = "\n".join(m["content"] for m in history[-depth:]) if depth else ""
     if wi_seed:  # opener: the prompt stands in for the (absent) recent history
         recent_text = (recent_text + "\n" + wi_seed).strip()
+    # Birthday names belong to the current question. World-info activation
+    # deliberately scans several turns, but an earlier name must not widen a
+    # direct question about somebody else.
+    birthday_text = wi_seed or next((m["content"] for m in reversed(history)
+                                     if m["role"] == "user"), "")
 
     history_ids = scenes_read.get_location_history(cid, sid)
     current_loc = history_ids[-1] if history_ids else None
@@ -359,11 +365,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "transient_tracker": config.turnstate_depth() > 0,
         "transient_fields": list(turnstate.FIELDS),
         "players": players, "ref_names": ref_names, "refs": refs,
-        # The recap, the archive, both ledgers, the calendar, the relationship
-        # graph, group state, the off-scene cast and the art catalogue: what
-        # only a campaign-wide voice is shown, and so not gathered at all for
-        # an actor-scoped compose -- see `_campaign_view`.
-        **_campaign_view(cid, sid, croot, cast, recent_text, full_recap, activated_wi,
+        # The recap, archive, ledgers, calendar, relationship graph, group
+        # state, off-scene cast and art catalogue are campaign-wide. Birthday
+        # metadata is retrieved for the current question in either voice.
+        **_campaign_view(cid, sid, croot, cast, recent_text, birthday_text,
+                         full_recap, activated_wi,
                          recalled_wi, current_loc if not loc_excluded else None,
                          actor_scoped=actor_scoped),
         "weather": world_state._weather_data(cid, sid),
@@ -427,11 +433,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
 
 def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str,
+                   birthday_text: str,
                    full_recap: int, activated_wi: list[dict], recalled_wi: list[dict],
                    art_loc: str | None, *, actor_scoped: bool) -> dict:
     """The template data only a campaign-wide voice is shown.
 
-    Every key here is one `_assemble` blanks for an actor-scoped compose -- an
+    Except `birthdates`, every key here is one `_assemble` blanks for an actor-scoped compose -- an
     assigned NPC's reply, which is every response of an automatic round -- so
     for one it is not gathered at all: blanks come back, and the blanking block
     blanks them again as the contract. It used to be gathered and thrown away,
@@ -440,16 +447,17 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
     sidecars and may make an embeddings call, and the rest read the chronicle,
     both ledgers, group state, the relationship graph and the calendar.
 
-    Nothing here draws from the macro RNG or writes, and macro expansion runs
-    later over whatever is present, so skipping it changes no byte of an NPC's
-    prompt; `test_actor_scoped_skip.py` composes the same NPC turn with the
-    skip switched off and requires every variant to match.
+    Birthday metadata is a character field and can answer a direct question
+    in either voice. It uses the latest question, not the wider activation
+    window. Nothing here draws from the macro RNG or writes; the other skipped
+    producers remain byte-for-byte equivalent under `test_actor_scoped_skip.py`.
     """
     if actor_scoped:
         return {"offscene_active": [], "offscene_known": [], "available_art": [],
                 "story_entries": [], "archive_entries": [], "plot_lines": [],
                 "commitment_lines": [], "group_states": [], "secret_group_states": [],
-                "relationship_lines": [], "today": None}
+                "relationship_lines": [], "today": None,
+                "birthdates": birthdays.relevant(cid, birthday_text)}
     offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
     return {
         "offscene_active": offscene_active, "offscene_known": offscene_known,
@@ -493,6 +501,7 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
         # own outgoing feelings instead, from the blanking block.
         "relationship_lines": story._relationship_lines(cid, cast),
         "today": world_state._today_data(cid, sid, croot),
+        "birthdates": birthdays.relevant(cid, birthday_text),
     }
 
 
@@ -690,6 +699,7 @@ SECTIONS = [
     Section("plot_threads", "Plot threads", "scene/sections/plot_threads.j2", pack.SPOTLIGHT),
     Section("commitments", "Commitments", "scene/sections/commitments.j2", pack.SPOTLIGHT),
     Section("today", "Today", "scene/sections/today.j2", pack.SPOTLIGHT),
+    Section("birthdates", "Birthdates", "scene/sections/birthdates.j2", pack.RECALLED),
     Section("weather", "Weather", "scene/sections/weather.j2", pack.SPOTLIGHT),
     Section("current_setting", "Current setting",
             "scene/sections/current_setting.j2", pack.SPOTLIGHT),

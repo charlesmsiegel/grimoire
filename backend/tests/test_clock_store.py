@@ -266,6 +266,20 @@ def test_digest_names_the_birthdays_the_skip_crossed(monkeypatch, tmp_path):
                                    "native": "2026-06-29", "friendly": "29 June 2026"}]
 
 
+def test_digest_crosses_yearless_birthday_without_claiming_an_age(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    chid, _ = characters.create_character(wroot, "Mara", "default", characters.blank_card("Mara"))
+    characters.set_birthdate(wroot, chid, "--05-09")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", chid, "default", "npc")
+    clock.advance(cid, to="2026-05-08")
+
+    digest = clock.advance(cid, days=1)["digest"]
+    assert digest["birthdays"] == [{"name": "Mara", "age": None,
+                                   "native": "2026-05-09", "friendly": "9 May 2026"}]
+
+
 def test_digest_survives_a_provider_that_answers_a_range_with_rubbish(monkeypatch, tmp_path):
     """A calendar provider can be user-authored plugin code, so its `holidays`
     rows are validated rather than trusted: a non-integer `fixed` would reach
