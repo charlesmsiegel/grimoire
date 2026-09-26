@@ -154,8 +154,8 @@ def test_skipping_changes_no_byte_of_any_variant(saltmarch, monkeypatch):
     real = assemble._campaign_view
     gathered: list[dict] = []
 
-    def unguarded(*args, actor_scoped):
-        view = real(*args, actor_scoped=False)
+    def unguarded(*args, actor_scoped, excluded_refs):
+        view = real(*args, actor_scoped=False, excluded_refs=excluded_refs)
         gathered.append(view)
         return view
 
@@ -165,12 +165,12 @@ def test_skipping_changes_no_byte_of_any_variant(saltmarch, monkeypatch):
     assert shipped == reference
     # Not two empty prompts agreeing: with the skip off, every producer the
     # skip bypasses had something to say. Two exceptions, both structural: the
-    # art catalogue (this fixture has no assets; the next test covers it), and
+    # art catalogue (this fixture has no assets; the next test covers it),
     # the relationship graph among those present, which for an actor-scoped
-    # compose is one actor.
+    # compose is one actor, and birthdates (nobody asked a birthday question).
     assert len(gathered) == 1
     assert {k for k, v in gathered[0].items() if not v} == {"available_art",
-                                                             "relationship_lines"}
+                                                            "relationship_lines", "birthdates"}
 
 
 def test_what_an_npc_compose_discards_is_never_computed(saltmarch, monkeypatch):

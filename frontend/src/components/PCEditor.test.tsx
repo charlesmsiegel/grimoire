@@ -28,7 +28,7 @@ vi.mock("../api/client", async () => {
       listEntities: vi.fn().mockResolvedValue([]),
       listPCs: vi.fn(), listTags: vi.fn(), readPC: vi.fn(), createPC: vi.fn(),
       updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),
-      getCalendarMonths: vi.fn(), putSheetCreation: vi.fn(), getSheet: vi.fn(),
+      getCalendarMonths: vi.fn(), getCalendarConfig: vi.fn(), putSheetCreation: vi.fn(), getSheet: vi.fn(),
       listPCImages: vi.fn(), putPCImage: vi.fn(), deletePCImage: vi.fn(),
       setPCImageDescription: vi.fn(),
       draftPCImageDescription: vi.fn(),
@@ -96,6 +96,7 @@ beforeEach(() => {
   (api.updatePCVersion as any).mockResolvedValue({ ok: true });
   (api.createPCVersion as any).mockResolvedValue({ version: "young" });
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
+  (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "gregorian" } });
   (api.getSheet as any).mockResolvedValue({ sheet: null });
   (api.listPCImages as any).mockResolvedValue([]);
   (api.setPCImageDescription as any).mockResolvedValue({ ok: true });
@@ -303,6 +304,30 @@ test("editing the birthdate saves it on the persona", async () => {
     expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "elara", "default",
       expect.objectContaining({ birthdate: "1990-06-29" })),
   );
+});
+
+test("PC persona saves a month and day without a year", async () => {
+  renderPCs({ selected: "elara" });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  const month = await screen.findByLabelText("Birthdate month");
+  await waitFor(() => expect(month).not.toBeDisabled());
+  fireEvent.change(month, { target: { value: "05" } });
+  fireEvent.change(screen.getByLabelText("Birthdate day"), { target: { value: "9" } });
+  fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
+  await waitFor(() => expect(api.updatePCVersion).toHaveBeenCalledWith(
+    { kind: "world", id: "realm" }, "elara", "default",
+    expect.objectContaining({ birthdate: "--05-09" })));
+});
+
+test("read-only PC details show a partial birthdate as a date", async () => {
+  (api.readPC as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ ...DETAIL.versions[0],
+      persona: { ...DETAIL.versions[0].persona, birthdate: "--05-09" } }],
+  });
+  renderPCs({ selected: "elara" });
+  expect(await screen.findByText("May 9")).toBeTruthy();
+  expect(screen.queryByText("--05-09")).toBeNull();
 });
 
 test("toggling a tag chip in the form updates the PC tags", async () => {

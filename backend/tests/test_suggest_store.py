@@ -83,6 +83,50 @@ def test_build_snapshot_tolerates_empty_campaign(monkeypatch, tmp_path):
     assert snap["now"] == "" and snap["birthdays"] == []
 
 
+def test_campaign_only_character_with_partial_birthdate_reaches_suggestions(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Seraphine")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "--05-09")
+    clock.advance(cid, to="2026-05-08")
+
+    snap = suggest.build_snapshot(cid)
+    assert snap["birthdays"] == [{"name": "Seraphine", "age": None, "when": "in 1 days"}]
+    assert "Seraphine" in suggest.build_prompt(snap)[1]["content"]
+
+
+def test_month_only_birthdate_suggests_without_inventing_day_or_age(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "--05")
+    clock.advance(cid, to="2026-05-08")
+
+    snap = suggest.build_snapshot(cid)
+    assert snap["birthdays"] == [{"name": "Mara", "age": None, "when": "this month"}]
+    prompt = suggest.build_prompt(snap)[1]["content"]
+    assert "Mara" in prompt and "this month" in prompt
+    assert "age None" not in prompt
+
+
+def test_year_and_month_without_day_does_not_claim_an_exact_birthday(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "1985-05")
+    clock.advance(cid, to="2026-05-08")
+
+    assert suggest.build_snapshot(cid)["birthdays"] == [
+        {"name": "Mara", "age": None, "when": "this month"}]
+
+
+def test_full_birthdate_suggestion_uses_age_on_the_upcoming_day(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "1985-05-09")
+    clock.advance(cid, to="2026-05-08")
+
+    assert suggest.build_snapshot(cid)["birthdays"] == [
+        {"name": "Mara", "age": 41, "when": "in 1 days"}]
+
+
 def test_build_snapshot_dormancy_counts_scenes_since_last_advance(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)

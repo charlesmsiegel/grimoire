@@ -8,7 +8,7 @@ import {
 import { errorText } from "../api/errors";
 import { thumbSet } from "../api/thumbs";
 import { AvatarFocusPicker } from "../components/AvatarFocusPicker";
-import { CalendarDatePicker } from "../components/CalendarDatePicker";
+import { BirthdateDisplay, BirthdatePicker } from "../components/BirthdatePicker";
 import { ErrorNote } from "../components/ErrorNote";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
@@ -86,7 +86,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
   /** The world behind the record — the same id in world scope, and the
    *  campaign's world in campaign scope. Several routes (export, localize,
-   *  chub, taglines, birthdate) hang off `/worlds` whatever scope you read in. */
+   *  chub, taglines) hang off `/worlds` whatever scope you read in. */
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
@@ -94,6 +94,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   const [card, setCard] = useState<Card | null>(null);
   const [greetings, setGreetings] = useState<string[]>([]);
   const [birthdate, setBirthdate] = useState("");
+  const [editingBirthdate, setEditingBirthdate] = useState(false);
+  const [savingBirthdate, setSavingBirthdate] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notFound, setNotFound] = useState(false);
   const [tab, setTab] = useState<CardTabKey>("card");
@@ -108,6 +110,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
    *  can happen while the first is still saving. So the page holds the lock,
    *  and every edit affordance is disabled until the write has been re-read. */
   const [saving, setSaving] = useState(false);
+  const [versionWriting, setVersionWriting] = useState(false);
+  const busy = saving || savingBirthdate || versionWriting;
   const [cropOpen, setCropOpen] = useState(false);
   const [voiceAnchorCap, setVoiceAnchorCap] = useState<number | null>(null);
   const [module, setModule] = useState<ModuleDetail | null>(null);
@@ -316,7 +320,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
    *  that exactly one field is ever open, and that the result is re-read rather
    *  than assumed. */
   async function saveField(patch: Record<string, unknown>): Promise<boolean> {
-    if (!detail || !card || saving) return false;
+    if (!detail || !card || busy) return false;
     setError(null);
     setSaving(true);
     const next = { ...card, data: { ...card.data, ...patch } };
@@ -349,7 +353,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   /** The greeting list is the one card field that is not a string, so it saves
    *  through its own path rather than `saveField`'s patch. */
   async function saveGreetings(next: string[]): Promise<boolean> {
-    if (!detail || !card || saving) return false;
+    if (!detail || !card || busy) return false;
     setError(null);
     setSaving(true);
     try {
@@ -378,10 +382,14 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   }
 
   async function saveBirthdate(value: string) {
-    setBirthdate(value);
+    if (busy) return;
+    setSavingBirthdate(true);
     try {
-      await api.setCharacterBirthdate(wid, eid, value);
-    } catch (err: unknown) { setError(err); }
+      await api.setCharacterBirthdate(scope, eid, value);
+      await reload();
+      if (live.current) setEditingBirthdate(false);
+    } catch (err: unknown) { if (live.current) setError(err); }
+    finally { if (live.current) setSavingBirthdate(false); }
   }
 
   async function runLocalize(version: string) {
@@ -575,7 +583,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                  onOpenVersion={openVersion}
                  onImportFile={() => versionFileRef.current?.click()}
                  onImportUrl={() => setImportUrlOpen(true)}
-                 busy={saving}
+                 busy={busy} onWritingChange={setVersionWriting}
                  onChanged={refresh} onError={setError} />
     <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
            aria-label="Import version" onChange={onImportVersionFile} />
@@ -585,17 +593,27 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     <VoiceAnchorSection key={`${scope.kind}:${scope.id}:${eid}`}
                         scope={scope} cid={eid} cap={voiceAnchorCap} onError={setError} />
 
-    {worldScope && (
-      <ColumnSection label="Birthdate">
-        {/* Persist only complete dates: the picker emits "" for every
-            intermediate state, which must never blank the stored value. */}
-        <CalendarDatePicker scope={{ kind: "world", id: wid }} value={birthdate}
-                            onChange={(v) => { setBirthdate(v); if (v) void saveBirthdate(v); }}
-                            ariaLabel="Birthdate" />
-        {birthdate && <button className="subtle" type="button"
-                              onClick={() => void saveBirthdate("")}>Clear</button>}
-      </ColumnSection>
-    )}
+    <ColumnSection label="Birthdate">
+        {editingBirthdate ? <>
+          <BirthdatePicker scope={scope} value={birthdate}
+                           onChange={setBirthdate} ariaLabel="Birthdate" />
+          <button className="subtle" type="button" disabled={busy}
+                  onClick={() => void saveBirthdate(birthdate)}>Save birthdate</button>
+          <button className="subtle" type="button" disabled={busy}
+                  onClick={() => { setBirthdate(detail?.meta.birthdate ?? ""); setEditingBirthdate(false); }}
+                  aria-label="Cancel birthdate edit">Cancel</button>
+          {birthdate && <button className="subtle" type="button" disabled={busy}
+                                onClick={() => setBirthdate("")}>Clear</button>}
+        </> : <>
+          {detail?.meta.birthdate
+            ? <BirthdateDisplay scope={scope} value={detail.meta.birthdate} />
+            : <p className="field-hint">Not set.</p>}
+          <button className="subtle" type="button" disabled={busy}
+                  onClick={() => { setBirthdate(detail?.meta.birthdate ?? ""); setEditingBirthdate(true); }}>
+            {detail?.meta.birthdate ? "Edit birthdate" : "Add birthdate"}
+          </button>
+        </>}
+    </ColumnSection>
 
     {/* An emergent NPC's way into the library (#60). Only promote can apply to
         an actor, and `libraryStatus` is what says so, so this renders nothing
@@ -680,7 +698,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         {tab === "card" && (
           <CardTab scope={scope} wid={wid} cid={eid} vid={vid} card={card} detail={detail}
                    module={module}
-                   editing={editing} onEditingChange={setEditing} busy={saving}
+                   editing={editing} onEditingChange={setEditing} busy={busy}
                    onSaveField={saveField} onRefresh={refresh} onError={setError}
                    galleryProg={galleryProg} setGalleryProg={setGalleryProg}
                    setImportMsg={setImportMsg}
@@ -705,7 +723,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         {tab === "greetings" && (
           <GreetingsTab name={name} cid={eid} firstMes={firstMes} greetings={greetings}
                         worldGreetings={featuringGreetings}
-                        editing={editing} onEditingChange={setEditing} busy={saving}
+                        editing={editing} onEditingChange={setEditing} busy={busy}
                         onSaveFirstMes={(v) => saveField({ first_mes: v })}
                         onSaveGreetings={saveGreetings}
                         worldGreetingHref={greetingHref} />

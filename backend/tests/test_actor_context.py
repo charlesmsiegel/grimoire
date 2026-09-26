@@ -12,6 +12,7 @@ from grimoire.store import (
     context,
     entities,
     overlay,
+    pins,
     playstate,
     relationships,
     scenes,
@@ -49,6 +50,26 @@ def test_actor_secrets_are_excluded_before_render(cast_scene):
     assert "Winifred" in text and "PUBLIC_DIALOGUE" in text
     assert "```handoff" in text
     assert any(row["id"] == "response_actor" for row in detail["sections"])
+
+
+def test_assigned_npc_can_answer_a_birthday_question(cast_scene):
+    cid, sid = cast_scene
+    characters.set_birthdate(campaigns.campaign_root(cid), "mara", "--05-09")
+    scenes.append_message(cid, sid, "user", "When is Mara's birthday?")
+
+    messages, _ = context.compose_turn(cid, sid, actor_ref="characters:mara")
+    assert "May 9" in str(messages)
+
+
+def test_assigned_npc_birthdate_lookup_obeys_exclusion(cast_scene):
+    cid, sid = cast_scene
+    characters.set_birthdate(campaigns.campaign_root(cid), "winifred", "--05-09")
+    pins.set_rule(cid, "characters:winifred", pins.EXCLUDE, sid=sid)
+    scenes.append_message(cid, sid, "user", "When is Winifred's birthday?")
+
+    _messages, detail = context.compose_turn(cid, sid, actor_ref="characters:mara")
+    assert not any(s["id"] == "birthdates" and "May 9" in s["text"]
+                   for s in detail["sections"])
 
 
 def test_arrival_and_reentry_bound_observed_history(cast_scene):

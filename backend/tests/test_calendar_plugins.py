@@ -2,6 +2,7 @@ import textwrap
 
 import pytest
 
+from grimoire.store import birthdays
 from grimoire.store.calendars import CalendarError, get_provider, list_providers
 
 _PROVIDER_SRC = textwrap.dedent(
@@ -49,6 +50,19 @@ def test_loads_a_custom_provider_dropped_into_the_store(tmp_path, monkeypatch):
     names = {p["id"]: p["name"] for p in list_providers()}
     assert names["plugin-test-calendar"] == "Plugin Test Calendar"
     assert "gregorian" in names  # built-ins still show up alongside the user-authored one
+
+
+def test_numeric_native_birthdate_remains_a_full_date(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    calendars_dir = tmp_path / "calendars"
+    calendars_dir.mkdir()
+    (calendars_dir / "plugin_test.py").write_text(_PROVIDER_SRC, encoding="utf-8")
+    provider = get_provider(_cfg("plugin-test-calendar"))
+
+    assert birthdays.facts(provider, "5", "5") == (0, True)
+    assert birthdays._when(provider, "5", 5) == ("today", 0)
+    assert birthdays.crossed(provider, 4, 5, [{"name": "Mara", "birth": "5"}]) == [
+        {"name": "Mara", "native": "5", "friendly": "day 5", "age": 0}]
 
 
 def test_unknown_provider_still_raises_after_scanning_for_plugins(tmp_path, monkeypatch):

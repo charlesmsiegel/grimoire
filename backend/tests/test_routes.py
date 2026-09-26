@@ -5,6 +5,7 @@ import io
 import json
 import re
 import shutil
+import threading
 import time
 import zipfile
 from collections import Counter
@@ -6253,6 +6254,35 @@ def test_character_birthdate_route_sets_meta(client):
     r = client.put(f"/api/worlds/{wid}/characters/{chid}/birthdate", json={"birthdate": "1985-03-14"})
     assert r.json() == {"ok": True}
     assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["birthdate"] == "1985-03-14"
+
+
+def test_campaign_character_birthdate_is_editable_without_changing_world(client):
+    wid, cid = _campaign(client)
+    world_id = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    local_id = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Mara"}).json()["character"]
+    for aid, value in ((world_id, "--05-09"), (local_id, "--05")):
+        response = client.put(f"/api/campaigns/{cid}/characters/{aid}/birthdate",
+                              json={"birthdate": value})
+        assert response.json() == {"ok": True}
+        assert client.get(f"/api/campaigns/{cid}/characters/{aid}").json()["meta"]["birthdate"] == value
+    assert client.get(f"/api/worlds/{wid}/characters/{world_id}").json()["meta"]["birthdate"] == ""
+
+
+def test_campaign_birthdate_write_waits_for_the_campaign_lock(client):
+    wid, cid = _campaign(client)
+    aid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    result: dict = {}
+    with store.locks.campaign_lock(cid):
+        def putter():
+            result["response"] = client.put(f"/api/campaigns/{cid}/characters/{aid}/birthdate",
+                                            json={"birthdate": "--05-09"})
+        thread = threading.Thread(target=putter)
+        thread.start()
+        thread.join(0.5)
+        assert thread.is_alive()  # materialization and metadata edit share the lock
+    thread.join(2)
+    assert not thread.is_alive()
+    assert result["response"].status_code == 200
 
 
 def test_character_name_route_renames_the_container(client):

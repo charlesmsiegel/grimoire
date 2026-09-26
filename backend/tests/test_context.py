@@ -1,4 +1,6 @@
-from grimoire.store import context
+import pytest
+
+from grimoire.store import context, pins
 
 
 def test_activate_keyword_and_always_on():
@@ -114,6 +116,7 @@ from grimoire.store import (  # noqa: E402
     chronicle,
     entities,
     groupstate,
+    overlay,
     pcs,
     plot,
     scenes,
@@ -1241,6 +1244,96 @@ def test_today_block_includes_present_cast_age(monkeypatch, tmp_path):
     sid = scenes.set_datetime(cid, sid, "2026-12-25")["id"]  # first date set renames the scene
     today = next(s["text"] for s in context.context_sections(cid, sid) if s["label"] == "Today")
     assert "Seraphine" in today and "36" in today and "birthday" in today.lower()
+
+
+def test_birthday_question_retrieves_campaign_only_character_birthdate(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "--05-09")
+    scenes.append_message(cid, sid, "user", "When is Mara's birthday?")
+
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert "Mara" in sections["Birthdates"] and "May 9" in sections["Birthdates"]
+
+
+def test_yearless_birthdate_marks_today_without_an_age(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    aid, vid = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "--05-09")
+    ap.appear(cid, sid, "characters", aid, vid, "npc")
+    sid = scenes.set_datetime(cid, sid, "2026-05-09")["id"]
+
+    today = next(s["text"] for s in context.context_sections(cid, sid) if s["label"] == "Today")
+    assert "Mara's birthday" in today
+    assert "age None" not in today
+
+
+def test_birthday_lookup_uses_a_characters_given_name(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    root = campaigns.campaign_root(cid)
+    winifred, _ = overlay.create_character(cid, "Winifred Vance")
+    mara, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(root, winifred, "--05-09")
+    characters.set_birthdate(root, mara, "--06-29")
+    scenes.append_message(cid, sid, "user", "When is Winifred's birthday?")
+
+    text = next(s["text"] for s in context.context_sections(cid, sid)
+                if s["label"] == "Birthdates")
+    assert "Winifred Vance" in text
+    assert "Mara" not in text
+
+
+def test_birthday_lookup_uses_the_latest_question(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    root = campaigns.campaign_root(cid)
+    for name, birth in (("Mara", "--06-29"), ("Winifred", "--05-09")):
+        aid, _ = overlay.create_character(cid, name)
+        characters.set_birthdate(root, aid, birth)
+    scenes.append_message(cid, sid, "user", "Mara told me about the harbor.")
+    scenes.append_message(cid, sid, "user", "When is Winifred's birthday?")
+
+    text = next(s["text"] for s in context.context_sections(cid, sid)
+                if s["label"] == "Birthdates")
+    assert "Winifred" in text
+    assert "Mara" not in text
+
+
+def test_birthday_lookup_does_not_substitute_another_characters_date(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    root = campaigns.campaign_root(cid)
+    overlay.create_character(cid, "Mara")
+    winifred, _ = overlay.create_character(cid, "Winifred")
+    characters.set_birthdate(root, winifred, "--05-09")
+    scenes.append_message(cid, sid, "user", "When is Mara's birthday?")
+
+    text = next(s["text"] for s in context.context_sections(cid, sid)
+                if s["label"] == "Birthdates")
+    assert "Mara: not recorded" in text
+    assert "Winifred" not in text
+
+
+@pytest.mark.parametrize("question", ["When was Mara born?", "How old is Mara?",
+                                      "What is Mara's date of birth?", "What is Mara's age?"])
+def test_birthdate_lookup_answers_other_direct_birth_questions(monkeypatch, tmp_path, question):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "1985-05-09")
+    scenes.append_message(cid, sid, "user", question)
+
+    text = next(s["text"] for s in context.context_sections(cid, sid)
+                if s["label"] == "Birthdates")
+    assert "Mara" in text and "9 May 1985" in text
+
+
+def test_birthdate_lookup_obeys_character_exclusion(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "--05-09")
+    pins.set_rule(cid, "characters:mara", pins.EXCLUDE, sid=sid)
+    scenes.append_message(cid, sid, "user", "Whose birthday is in May?")
+
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert "Birthdates" not in sections
 
 
 def test_story_so_far_section_is_injected(monkeypatch, tmp_path):
@@ -4458,7 +4551,6 @@ def test_the_packer_drops_by_tier_not_by_the_reader_s_order(monkeypatch, tmp_pat
     assert all(r["tier"] != context.LOCK_IN for r in rows if r["dropped"])
 
 
-from grimoire.store import overlay  # noqa: E402
 
 
 # ---- names the voice blocks may safely carry ----

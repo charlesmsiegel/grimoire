@@ -1,0 +1,6 @@
+{%- if birthdates -%}
+# Birthdates
+{%- for entry in birthdates %}
+{{ entry.name }}: {{ entry.birthdate }}
+{%- endfor -%}
+{%- endif -%}
