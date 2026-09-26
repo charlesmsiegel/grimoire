@@ -34,7 +34,8 @@ from .campaigns import paths as campaigns_paths
 
 
 def gather(cid: str, roster: list[dict], *, visible_characters: bool = False,
-           include_undated: bool = False) -> list[dict]:
+           include_undated: bool = False,
+           excluded_refs: frozenset[str] = frozenset()) -> list[dict]:
     """`[{name, birth}]` for dated roster actors, or all when requested.
 
     The character path reads only container metadata, so the visible-roster
@@ -52,6 +53,8 @@ def gather(cid: str, roster: list[dict], *, visible_characters: bool = False,
     out: list[dict] = []
     seen: set[str] = set()
     for a in roster:
+        if f"{a['kind']}:{a['id']}" in excluded_refs:
+            continue
         try:
             if a["kind"] == "pcs":
                 birth = pcs.read_persona(aroot, a["id"], a["version"]).get("birthdate", "")
@@ -65,16 +68,18 @@ def gather(cid: str, roster: list[dict], *, visible_characters: bool = False,
         if a["kind"] == "characters":
             seen.add(a["id"])
     if visible_characters:
-        out.extend(_visible_birthdates(cid, seen, include_undated=include_undated))
+        out.extend(_visible_birthdates(cid, seen, include_undated=include_undated,
+                                       excluded_refs=excluded_refs))
     return out
 
 
-def _visible_birthdates(cid: str, seen: set[str], *, include_undated: bool) -> list[dict]:
+def _visible_birthdates(cid: str, seen: set[str], *, include_undated: bool,
+                        excluded_refs: frozenset[str]) -> list[dict]:
     # Suggestions include characters who have never appeared, including
     # campaign-created NPCs. The appearance roster cannot name either.
     out = []
     for a in overlay.character_roster(cid):
-        if a["id"] in seen:
+        if a["id"] in seen or f"characters:{a['id']}" in excluded_refs:
             continue
         try:
             name, birth = characters.birthdate_meta(overlay.char_root(cid, a["id"]), a["id"])
@@ -85,7 +90,7 @@ def _visible_birthdates(cid: str, seen: set[str], *, include_undated: bool) -> l
     return out
 
 
-def _parts(birth: str) -> tuple[int | None, str, int | None] | None:
+def _parts(birth: str, provider=None) -> tuple[int | None, str, int | None] | None:
     """Incomplete year/month/day parts, or None for a full date.
 
     The leading `--` is disjoint from a provider's year-first native form and
@@ -103,6 +108,14 @@ def _parts(birth: str) -> tuple[int | None, str, int | None] | None:
             return None, raw, None
         raise calendars.CalendarError(f"bad birthdate: {birth!r}")
     if re.fullmatch(r"-?\d+", birth):
+        # A plugin may use a numeric string as its *complete* native date.
+        # Ask it before treating the same syntax as a partial year.
+        if provider is not None:
+            try:
+                provider.parse(birth)
+                return None
+            except calendars.CalendarError:
+                pass
         return int(birth), "", None
     if re.fullmatch(r"-?\d+-.+-\d{1,2}", birth):
         return None  # complete provider-native date; let the provider validate it
@@ -113,7 +126,7 @@ def _parts(birth: str) -> tuple[int | None, str, int | None] | None:
 
 
 def _birth_fixed(provider, birth: str, asof_fixed: int) -> int | None:
-    parts = _parts(birth)
+    parts = _parts(birth, provider)
     if parts is None:
         return calendars.fixed_of(provider, birth)
     _, month, day = parts
@@ -136,22 +149,24 @@ def facts(provider, birth: str, asof: str) -> tuple[int | None, bool]:
     born = _birth_fixed(provider, birth, asof_fixed)
     if born is None:
         return None, False
-    return (None if _parts(birth) is not None else provider.age(born, asof_fixed),
+    return (None if _parts(birth, provider) is not None else provider.age(born, asof_fixed),
             provider.is_anniversary(born, asof_fixed))
 
 
-def relevant(cid: str, recent_text: str) -> list[dict]:
+def relevant(cid: str, recent_text: str,
+             excluded_refs: frozenset[str] = frozenset()) -> list[dict]:
     """Birthdate metadata retrieved only when the conversation asks for it.
 
     A named actor narrows the block to that actor, including an explicit
     unknown when the date is unset. A generic question gets dated actors only.
     Campaign-only characters are part of that union.
     """
-    if not re.search(r"\b(?:birthday|birthdays|birthdate|birthdates|born)\b|\bhow old\b",
+    if not re.search(r"\b(?:birthday|birthdays|birthdate|birthdates|born|age)\b"
+                     r"|\bdate of birth\b|\bhow old\b",
                      recent_text, re.IGNORECASE):
         return []
     rows = gather(cid, appearances_cast.roster(cid), visible_characters=True,
-                  include_undated=True)
+                  include_undated=True, excluded_refs=excluded_refs)
     named = [r for r in rows if _named(r["name"], recent_text)]
     rows = named or [r for r in rows if r["birth"]]
     provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
@@ -176,7 +191,7 @@ def _named(name: str, text: str) -> bool:
 
 def _friendly_birthdate(provider, birth: str) -> str:
     try:
-        parts = _parts(birth)
+        parts = _parts(birth, provider)
         if parts is None:
             return calendars.friendly(provider, birth)
         year_value, month, day = parts
@@ -198,7 +213,7 @@ def _friendly_birthdate(provider, birth: str) -> str:
 
 
 def _when(provider, birth: str, now_fixed: int) -> tuple[str | None, int | None]:
-    parts = _parts(birth)
+    parts = _parts(birth, provider)
     born = _birth_fixed(provider, birth, now_fixed)
     if parts is not None and not parts[1]:
         return None, None  # a year alone has no anniversary month

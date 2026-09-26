@@ -110,6 +110,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
    *  can happen while the first is still saving. So the page holds the lock,
    *  and every edit affordance is disabled until the write has been re-read. */
   const [saving, setSaving] = useState(false);
+  const [versionWriting, setVersionWriting] = useState(false);
+  const busy = saving || savingBirthdate || versionWriting;
   const [cropOpen, setCropOpen] = useState(false);
   const [voiceAnchorCap, setVoiceAnchorCap] = useState<number | null>(null);
   const [module, setModule] = useState<ModuleDetail | null>(null);
@@ -318,7 +320,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
    *  that exactly one field is ever open, and that the result is re-read rather
    *  than assumed. */
   async function saveField(patch: Record<string, unknown>): Promise<boolean> {
-    if (!detail || !card || saving) return false;
+    if (!detail || !card || busy) return false;
     setError(null);
     setSaving(true);
     const next = { ...card, data: { ...card.data, ...patch } };
@@ -351,7 +353,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   /** The greeting list is the one card field that is not a string, so it saves
    *  through its own path rather than `saveField`'s patch. */
   async function saveGreetings(next: string[]): Promise<boolean> {
-    if (!detail || !card || saving) return false;
+    if (!detail || !card || busy) return false;
     setError(null);
     setSaving(true);
     try {
@@ -380,14 +382,12 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   }
 
   async function saveBirthdate(value: string) {
+    if (busy) return;
     setSavingBirthdate(true);
     try {
       await api.setCharacterBirthdate(scope, eid, value);
-      if (live.current) {
-        setDetail((current) => current && current.meta.id === eid
-          ? { ...current, meta: { ...current.meta, birthdate: value } } : current);
-        setEditingBirthdate(false);
-      }
+      await reload();
+      if (live.current) setEditingBirthdate(false);
     } catch (err: unknown) { if (live.current) setError(err); }
     finally { if (live.current) setSavingBirthdate(false); }
   }
@@ -583,7 +583,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                  onOpenVersion={openVersion}
                  onImportFile={() => versionFileRef.current?.click()}
                  onImportUrl={() => setImportUrlOpen(true)}
-                 busy={saving}
+                 busy={busy} onWritingChange={setVersionWriting}
                  onChanged={refresh} onError={setError} />
     <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
            aria-label="Import version" onChange={onImportVersionFile} />
@@ -597,18 +597,18 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         {editingBirthdate ? <>
           <BirthdatePicker scope={scope} value={birthdate}
                            onChange={setBirthdate} ariaLabel="Birthdate" />
-          <button className="subtle" type="button" disabled={savingBirthdate}
+          <button className="subtle" type="button" disabled={busy}
                   onClick={() => void saveBirthdate(birthdate)}>Save birthdate</button>
-          <button className="subtle" type="button" disabled={savingBirthdate}
+          <button className="subtle" type="button" disabled={busy}
                   onClick={() => { setBirthdate(detail?.meta.birthdate ?? ""); setEditingBirthdate(false); }}
                   aria-label="Cancel birthdate edit">Cancel</button>
-          {birthdate && <button className="subtle" type="button" disabled={savingBirthdate}
+          {birthdate && <button className="subtle" type="button" disabled={busy}
                                 onClick={() => setBirthdate("")}>Clear</button>}
         </> : <>
           {detail?.meta.birthdate
             ? <BirthdateDisplay scope={scope} value={detail.meta.birthdate} />
             : <p className="field-hint">Not set.</p>}
-          <button className="subtle" type="button"
+          <button className="subtle" type="button" disabled={busy}
                   onClick={() => { setBirthdate(detail?.meta.birthdate ?? ""); setEditingBirthdate(true); }}>
             {detail?.meta.birthdate ? "Edit birthdate" : "Add birthdate"}
           </button>
@@ -698,7 +698,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         {tab === "card" && (
           <CardTab scope={scope} wid={wid} cid={eid} vid={vid} card={card} detail={detail}
                    module={module}
-                   editing={editing} onEditingChange={setEditing} busy={saving}
+                   editing={editing} onEditingChange={setEditing} busy={busy}
                    onSaveField={saveField} onRefresh={refresh} onError={setError}
                    galleryProg={galleryProg} setGalleryProg={setGalleryProg}
                    setImportMsg={setImportMsg}
@@ -723,7 +723,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         {tab === "greetings" && (
           <GreetingsTab name={name} cid={eid} firstMes={firstMes} greetings={greetings}
                         worldGreetings={featuringGreetings}
-                        editing={editing} onEditingChange={setEditing} busy={saving}
+                        editing={editing} onEditingChange={setEditing} busy={busy}
                         onSaveFirstMes={(v) => saveField({ first_mes: v })}
                         onSaveGreetings={saveGreetings}
                         worldGreetingHref={greetingHref} />

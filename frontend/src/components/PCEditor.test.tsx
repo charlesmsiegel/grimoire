@@ -319,6 +319,17 @@ test("PC persona saves a month and day without a year", async () => {
     expect.objectContaining({ birthdate: "--05-09" })));
 });
 
+test("read-only PC details show a partial birthdate as a date", async () => {
+  (api.readPC as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ ...DETAIL.versions[0],
+      persona: { ...DETAIL.versions[0].persona, birthdate: "--05-09" } }],
+  });
+  renderPCs({ selected: "elara" });
+  expect(await screen.findByText("May 9")).toBeTruthy();
+  expect(screen.queryByText("--05-09")).toBeNull();
+});
+
 test("toggling a tag chip in the form updates the PC tags", async () => {
   renderPCs({ selected: "elara" });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
