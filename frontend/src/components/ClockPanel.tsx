@@ -787,7 +787,7 @@ function AdvanceDigestView({ digest, outcome }: { digest: AdvanceDigest; outcome
               every digest, never reordered in place. */}
           {digest.birthdays.map((b, i) => (
             <div className="field-hint" key={i}>
-              {b.name} turns {b.age} — {b.friendly}
+              {b.age === null ? `${b.name}'s birthday` : `${b.name} turns ${b.age}`} — {b.friendly}
             </div>
           ))}
         </div>

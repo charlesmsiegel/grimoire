@@ -18,7 +18,7 @@
 {%- if today.cast -%}
 {%- set bits = [] -%}
 {%- for c in today.cast -%}
-{%- if c.birthday_today -%}{%- set _ = bits.append("it is " ~ c.name ~ "'s birthday (age " ~ c.age ~ ")") -%}
+{%- if c.birthday_today -%}{%- set _ = bits.append("it is " ~ c.name ~ "'s birthday" ~ ((" (age " ~ c.age ~ ")") if c.age is not none else "")) -%}
 {%- else -%}{%- set _ = bits.append(c.name ~ " (age " ~ c.age ~ ")") -%}{%- endif -%}
 {%- endfor -%}
 {%- set _ = lines.append("Present today: " ~ (bits | join("; ")) ~ ".") -%}

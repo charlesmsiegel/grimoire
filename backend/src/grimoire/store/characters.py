@@ -164,6 +164,13 @@ def set_birthdate(root: Path, cid: str, birthdate: str) -> None:
     atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
 
 
+def birthdate_meta(root: Path, cid: str) -> tuple[str, str]:
+    """(display name, birthdate) without reading versions or image sidecars."""
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    return meta.get("name", cid), meta.get("birthdate", "")
+
+
 def set_chub_source(root: Path, cid: str, vid: str, full_path: str) -> None:
     """Link one version to a chub.ai card. Stored in that version's own card
     (extensions, same spot as grimoire_label) so each variant of a character

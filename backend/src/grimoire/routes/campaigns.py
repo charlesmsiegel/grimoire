@@ -56,6 +56,7 @@ from .models import (
     AvatarFocus,
     CalendarConfig,
     CampaignClimate,
+    CharacterBirthdate,
     CharacterCreate,
     CopyFromGreeting,
     DefaultVersion,
@@ -2160,6 +2161,20 @@ def put_campaign_character_name(cid: str, char: str, body: NameBody):
         store.characters.set_name(root, char, name)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
+    return {"ok": True}
+
+
+@router.put("/campaigns/{cid}/characters/{char}/birthdate")
+def put_campaign_character_birthdate(cid: str, char: str, body: CharacterBirthdate):
+    """Save on the campaign copy, including characters created only here."""
+    _campaign_root_or_404(cid)
+    try:
+        # Materialization and the metadata read-modify-write are one edit.
+        with store.locks.campaign_lock(cid):
+            root = store.overlay.ensure_actor_writable(cid, "characters", char)
+            store.characters.set_birthdate(root, char, body.birthdate)
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     return {"ok": True}
 
 

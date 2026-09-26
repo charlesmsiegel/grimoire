@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from .. import calendars, characters, config, dossiers, overlay, pcs, voice_drift
+from .. import birthdays, calendars, characters, config, dossiers, overlay, pcs, voice_drift
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..appearances import transitions as appearances_transitions
@@ -336,9 +336,11 @@ def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
         if not birth:
             continue
         try:
+            age, birthday_today = birthdays.facts(provider, birth, native)
+            if age is None and not birthday_today:
+                continue
             out.append({"kind": a["kind"], "id": a["id"], "name": name,
-                        "age": calendars.age(provider, birth, native),
-                        "birthday_today": calendars.is_anniversary(provider, birth, native)})
+                        "age": age, "birthday_today": birthday_today})
         except calendars.CalendarError:
             continue
     return out

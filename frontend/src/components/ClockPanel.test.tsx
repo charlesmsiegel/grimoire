@@ -128,6 +128,19 @@ test("previews the digest without advancing", async () => {
   expect(api.advanceTime).not.toHaveBeenCalled();
 });
 
+test("a yearless birthday in the clock preview does not claim an age", async () => {
+  vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: {
+    ...DIGEST, birthdays: [{ name: "Mara", age: null,
+      native: "2026-12-26", friendly: "26 December 2026" }],
+  } });
+  render(<ClockPanel cid="c" />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "3" } });
+  fireEvent.click(screen.getByText("Preview"));
+  expect(await screen.findByText(/Mara's birthday/)).toBeInTheDocument();
+  expect(screen.queryByText(/Mara turns/)).not.toBeInTheDocument();
+});
+
 test("advancing needs a reason", async () => {
   render(<ClockPanel cid="c" />);
   await screen.findByText(/Now: 24 December 2026/);

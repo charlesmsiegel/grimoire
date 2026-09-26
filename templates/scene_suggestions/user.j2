@@ -37,7 +37,7 @@
 {%- endif -%}
 {%- if s.birthdays -%}
 {%- set bits = [] -%}
-{%- for b in s.birthdays -%}{%- set _ = bits.append(b.name ~ " (age " ~ b.age ~ ") " ~ b.when) -%}{%- endfor -%}
+{%- for b in s.birthdays -%}{%- set _ = bits.append(b.name ~ ((" (age " ~ b.age ~ ")") if b.age is not none else "") ~ " " ~ b.when) -%}{%- endfor -%}
 {%- set _ = parts.append("Birthdays: " ~ (bits | join("; "))) -%}
 {%- endif -%}
 {%- if s.open_threads -%}

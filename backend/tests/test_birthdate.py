@@ -1,4 +1,4 @@
-from grimoire.store import characters, pcs, worlds
+from grimoire.store import birthdays, calendars, characters, pcs, worlds
 
 
 def test_pc_persona_roundtrips_birthdate(monkeypatch, tmp_path):
@@ -27,3 +27,14 @@ def test_character_meta_birthdate_set_and_read(monkeypatch, tmp_path):
     assert characters.read_character(root, cid)["meta"]["birthdate"] == ""
     characters.set_birthdate(root, cid, "1985-03-14")
     assert characters.read_character(root, cid)["meta"]["birthdate"] == "1985-03-14"
+
+
+def test_yearless_hebrew_leap_month_follows_provider_anniversary_rule():
+    provider = calendars.get_provider({"provider": "hebrew", "region": "",
+                                       "custom_holidays": [], "anchor": None})
+    lo = calendars.fixed_of(provider, "5785-Adar-28")
+    hi = calendars.fixed_of(provider, "5785-Adar-29")
+
+    assert birthdays.crossed(provider, lo, hi, [{"name": "Mara", "birth": "--Adar1-30"}]) == [
+        {"name": "Mara", "age": None, "native": "5785-Adar-29",
+         "friendly": "29 Adar 5785"}]

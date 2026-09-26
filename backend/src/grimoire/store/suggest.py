@@ -208,7 +208,8 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     return {"now": now, "friendly": friendly, "notation": notation,
             "holidays_today": holidays_today,
             "events_today": events_today,
-            "upcoming": upcoming, "birthdays": birthdays.upcoming(cid, now, roster),
+            "upcoming": upcoming, "birthdays": birthdays.upcoming(
+                cid, now, roster, visible_characters=True),
             "story_so_far": story_so_far, "open_threads": open_threads,
             "cast": cast, "available_locations": available_locations}
 

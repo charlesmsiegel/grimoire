@@ -974,7 +974,7 @@ export type AdvanceDigest = {
   from: string; to: string; from_friendly: string; to_friendly: string;
   elapsed_days: number; backward: boolean; truncated: boolean;
   holidays: { name: string; native: string; friendly: string; in_days: number }[];
-  birthdays: { name: string; age: number; native: string; friendly: string }[];
+  birthdays: { name: string; age: number | null; native: string; friendly: string }[];
   events: (ScheduledEvent & { in_days: number })[];
   // The ledger's rows without the resolved scene label: the digest reads the
   // stores directly and joins no scene titles, so the type says so rather than

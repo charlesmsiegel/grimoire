@@ -1771,13 +1771,11 @@ export const api = {
     request<CharacterDetail>("GET", `${entityBase(scope)}/characters/${cid}`),
   setDefaultVersion: (scope: EntityScope, cid: string, vid: string) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}`, { default_version: vid }),
-  /** Rename the container (#13). Scope-aware, unlike `setCharacterBirthdate`:
-   *  the Name field is editable in campaign scope too, where the write
-   *  materializes the campaign's own copy and leaves the world's name alone. */
+  /** Rename the container (#13). Campaign edits materialize a local copy. */
   setCharacterName: (scope: EntityScope, cid: string, name: string) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}/name`, { name }),
-  setCharacterBirthdate: (wid: string, cid: string, birthdate: string) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/birthdate`, { birthdate }),
+  setCharacterBirthdate: (scope: EntityScope, cid: string, birthdate: string) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}/birthdate`, { birthdate }),
   // Both scopes since #60: campaign scope removes the character from THIS
   // campaign -- an emergent NPC outright, an inherited one by tombstone --
   // and leaves the library's alone. Creating one you cannot delete was the

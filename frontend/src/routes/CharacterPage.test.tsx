@@ -19,6 +19,7 @@ vi.mock("../api/client", async () => {
       readCharacter: vi.fn(), listCharacters: vi.fn(), deleteCharacter: vi.fn(),
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
+      getCalendarConfig: vi.fn(),
       importCharacter: vi.fn(), localizeImages: vi.fn(),
       putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
       setCharacterImageDescription: vi.fn(), draftCharacterImageDescription: vi.fn(),
@@ -111,6 +112,7 @@ beforeEach(() => {
   (api.getWorldSheetsIndex as any).mockResolvedValue({ default: "", modules: [] });
   (api.listModules as any).mockResolvedValue([]);
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
+  (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "gregorian" } });
   (api.entityKinds as any).mockResolvedValue({ kinds: ["locations", "lore", "items"] });
   (api.libraryStatus as any).mockResolvedValue(
     { in_library: true, diverged: false, can_promote: false, can_push: false });
@@ -944,9 +946,102 @@ test("back returns to the roster, in this scope", async () => {
     .toBe("/campaigns/run/world/characters");
 });
 
-test("the birthdate picker is world-only and persists a complete date", async () => {
+test("campaign characters can save a yearless birthday", async () => {
   await renderCampaign();
-  expect(screen.queryByLabelText(/Birthdate/)).toBeNull();
+  expect(screen.queryByLabelText("Birthdate month")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
+  const month = await screen.findByLabelText("Birthdate month");
+  await waitFor(() => expect(month).not.toBeDisabled());
+  fireEvent.change(month, { target: { value: "05" } });
+  const day = screen.getByLabelText("Birthdate day");
+  expect(day.tagName).toBe("INPUT");
+  fireEvent.change(day, { target: { value: "9" } });
+  expect(api.setCharacterBirthdate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenLastCalledWith(
+    { kind: "campaign", id: "run" }, "seraphine", "--05-09"));
+  await screen.findByText("May 9");
+  expect(screen.queryByLabelText("Birthdate month")).toBeNull();
+});
+
+test("a month alone is saved as a birthdate", async () => {
+  await renderWorld();
+  fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
+  const month = await screen.findByLabelText("Birthdate month");
+  await waitFor(() => expect(month).not.toBeDisabled());
+  fireEvent.change(month, { target: { value: "05" } });
+  expect(api.setCharacterBirthdate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenLastCalledWith(
+    { kind: "world", id: "realm" }, "seraphine", "--05"));
+  await screen.findByText("May");
+  expect(screen.queryByLabelText("Birthdate month")).toBeNull();
+});
+
+test("a typed day saves a complete birthdate", async () => {
+  await renderWorld();
+  fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
+  fireEvent.change(screen.getByLabelText("Birthdate year"), { target: { value: "1985" } });
+  const month = screen.getByLabelText("Birthdate month");
+  await waitFor(() => expect(month).not.toBeDisabled());
+  fireEvent.change(month, { target: { value: "05" } });
+  fireEvent.change(screen.getByLabelText("Birthdate day"), { target: { value: "9" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenLastCalledWith(
+    { kind: "world", id: "realm" }, "seraphine", "1985-05-09"));
+  await screen.findByText("May 9, 1985");
+  expect(screen.queryByLabelText("Birthdate day")).toBeNull();
+});
+
+test("a two-digit day can be typed one digit at a time", async () => {
+  await renderWorld();
+  fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
+  const month = screen.getByLabelText("Birthdate month");
+  await waitFor(() => expect(month).not.toBeDisabled());
+  fireEvent.change(month, { target: { value: "05" } });
+  const day = screen.getByLabelText("Birthdate day");
+  fireEvent.change(day, { target: { value: "3" } });
+  expect(day).toHaveDisplayValue("3");
+  fireEvent.change(day, { target: { value: "31" } });
+  expect(day).toHaveDisplayValue("31");
+  fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenLastCalledWith(
+    { kind: "world", id: "realm" }, "seraphine", "--05-31"));
+});
+
+test("a saved full birthdate is displayed until Edit is chosen", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL, meta: { ...DETAIL.meta, birthdate: "1985-05-09" },
+  });
+  await renderWorld();
+  await screen.findByText("May 9, 1985");
+  expect(screen.queryByLabelText("Birthdate month")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Edit birthdate" }));
+  expect(await screen.findByLabelText("Birthdate day")).toHaveValue(9);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel birthdate edit" }));
+  expect(screen.queryByLabelText("Birthdate month")).toBeNull();
+  await screen.findByText("May 9, 1985");
+  expect(api.setCharacterBirthdate).not.toHaveBeenCalled();
+});
+
+test("changing to a year without the selected month clears that month and day", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL, meta: { ...DETAIL.meta, birthdate: "--Adar1-30" },
+  });
+  (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "hebrew" } });
+  (api.getCalendarMonths as any).mockImplementation((_scope: unknown, year: number) =>
+    Promise.resolve({ months: year === 5785
+      ? [{ key: "Adar", name: "Adar", days: 29 }]
+      : [{ key: "Adar1", name: "Adar I", days: 30 }] }));
+  await renderWorld();
+  fireEvent.click(screen.getByRole("button", { name: "Edit birthdate" }));
+  await waitFor(() => expect(screen.getByLabelText("Birthdate month")).not.toBeDisabled());
+  fireEvent.change(screen.getByLabelText("Birthdate year"), { target: { value: "5785" } });
+  await waitFor(() => expect(screen.getByLabelText("Birthdate month")).toHaveValue(""));
+  await screen.findByRole("option", { name: "Adar" });
+  fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenLastCalledWith(
+    { kind: "world", id: "realm" }, "seraphine", "5785"));
 });
 
 // ------------------------------------------- what the review found (round 2)
