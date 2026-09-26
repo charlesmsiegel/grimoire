@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
 import { THUMB, thumbSet } from "../api/thumbs";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
-import { BirthdatePicker } from "./BirthdatePicker";
+import { BirthdateDisplay, BirthdatePicker } from "./BirthdatePicker";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { LibraryPanel } from "./LibraryPanel";
@@ -521,7 +521,7 @@ export function PCEditor({ scope, wid, selected, recordHref, module = null }:
               {persona.birthdate && (
                 <div className="side-section">
                   <h4>Birthdate</h4>
-                  <div className="field-hint">{persona.birthdate}</div>
+                  <div className="field-hint"><BirthdateDisplay scope={scope} value={persona.birthdate} /></div>
                 </div>
               )}
               <div className="side-section">

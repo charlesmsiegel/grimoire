@@ -371,7 +371,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         **_campaign_view(cid, sid, croot, cast, recent_text, birthday_text,
                          full_recap, activated_wi,
                          recalled_wi, current_loc if not loc_excluded else None,
-                         actor_scoped=actor_scoped),
+                         actor_scoped=actor_scoped, excluded_refs=excluded_refs),
         "weather": world_state._weather_data(cid, sid),
         "current_setting": current_setting,
         "current_setting_secret": current_setting_secret,
@@ -435,7 +435,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str,
                    birthday_text: str,
                    full_recap: int, activated_wi: list[dict], recalled_wi: list[dict],
-                   art_loc: str | None, *, actor_scoped: bool) -> dict:
+                   art_loc: str | None, *, actor_scoped: bool,
+                   excluded_refs: frozenset[str]) -> dict:
     """The template data only a campaign-wide voice is shown.
 
     Except `birthdates`, every key here is one `_assemble` blanks for an actor-scoped compose -- an
@@ -457,7 +458,7 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
                 "story_entries": [], "archive_entries": [], "plot_lines": [],
                 "commitment_lines": [], "group_states": [], "secret_group_states": [],
                 "relationship_lines": [], "today": None,
-                "birthdates": birthdays.relevant(cid, birthday_text)}
+                "birthdates": birthdays.relevant(cid, birthday_text, excluded_refs)}
     offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
     return {
         "offscene_active": offscene_active, "offscene_known": offscene_known,
@@ -501,7 +502,7 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
         # own outgoing feelings instead, from the blanking block.
         "relationship_lines": story._relationship_lines(cid, cast),
         "today": world_state._today_data(cid, sid, croot),
-        "birthdates": birthdays.relevant(cid, birthday_text),
+        "birthdates": birthdays.relevant(cid, birthday_text, excluded_refs),
     }
 
 

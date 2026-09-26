@@ -84,9 +84,14 @@ const CASEFILE = {
   tagline: "", feels_toward: [], standing_facts: [],
 };
 
+let storedBirthdate = "";
+
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.readCharacter as any).mockResolvedValue(DETAIL);
+  storedBirthdate = "";
+  (api.readCharacter as any).mockImplementation(async () => ({
+    ...DETAIL, meta: { ...DETAIL.meta, birthdate: storedBirthdate },
+  }));
   (api.listCharacters as any).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [] },
     { id: "mara", name: "Mara", default_version: "default", versions: [] },
@@ -95,7 +100,10 @@ beforeEach(() => {
   (api.createVersion as any).mockResolvedValue({ version: "young" });
   (api.setDefaultVersion as any).mockResolvedValue({ ok: true });
   (api.setCharacterName as any).mockResolvedValue({ ok: true });
-  (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
+  (api.setCharacterBirthdate as any).mockImplementation(async (_scope: unknown, _cid: string, value: string) => {
+    storedBirthdate = value;
+    return { ok: true };
+  });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
   (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
@@ -1022,6 +1030,40 @@ test("a saved full birthdate is displayed until Edit is chosen", async () => {
   expect(screen.queryByLabelText("Birthdate month")).toBeNull();
   await screen.findByText("May 9, 1985");
   expect(api.setCharacterBirthdate).not.toHaveBeenCalled();
+});
+
+test("birthdate save waits for an in-flight card write", async () => {
+  let release: (value: unknown) => void = () => {};
+  (api.updateVersion as any).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
+  const box = await editField("Personality");
+  fireEvent.change(box, { target: { value: "slower" } });
+  fireEvent.click(within(fieldBlock("Personality")).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save birthdate" })).toBeDisabled());
+  await act(async () => { release({ ok: true }); });
+});
+
+test("a birthdate save holds other character edits", async () => {
+  let release: (value: unknown) => void = () => {};
+  (api.setCharacterBirthdate as any).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  await renderCampaign();
+  fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
+  await waitFor(() => expect(within(fieldBlock("Personality"))
+    .getByRole("button", { name: "Edit" })).toBeDisabled());
+  await act(async () => { release({ ok: true }); });
+});
+
+test("birthdate save waits for a default-version update", async () => {
+  let release: (value: unknown) => void = () => {};
+  (api.setDefaultVersion as any).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  await renderWorld();
+  fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
+  fireEvent.click(screen.getByRole("button", { name: "veiled" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Set default" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save birthdate" })).toBeDisabled());
+  await act(async () => { release({ ok: true }); });
 });
 
 test("changing to a year without the selected month clears that month and day", async () => {

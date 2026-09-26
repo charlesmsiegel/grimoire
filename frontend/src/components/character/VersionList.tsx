@@ -27,7 +27,7 @@ function withLabel(card: Card, label: string): Card {
  */
 export function VersionList(
   { scope, detail, vid, locked, campaignLabel, worldVersions, onPick, onImportFromWorld,
-    onOpenVersion, onImportFile, onImportUrl, busy, onChanged, onError }: {
+    onOpenVersion, onImportFile, onImportUrl, busy, onWritingChange, onChanged, onError }: {
     scope: EntityScope;
     detail: CharacterDetail;
     vid: string;
@@ -48,6 +48,7 @@ export function VersionList(
     /** A whole-card write is in flight elsewhere on the page. A rename is one
      *  too, so it waits rather than racing it. */
     busy: boolean;
+    onWritingChange: (writing: boolean) => void;
     onChanged: () => Promise<void> | void;
     onError: (err: unknown) => void;
   },
@@ -60,9 +61,11 @@ export function VersionList(
   const held = busy || writing;
 
   async function rename(id: string) {
+    if (held) return;
     const card = detail.versions.find((v) => v.id === id)?.card;
     if (!card) return;
     setWriting(true);
+    onWritingChange(true);
     try {
       await api.updateVersion(scope, detail.meta.id, id, withLabel(card, draft));
       setRenaming(null);
@@ -71,13 +74,16 @@ export function VersionList(
       onError(err);
     } finally {
       setWriting(false);
+      onWritingChange(false);
     }
   }
 
   async function addVersion() {
+    if (held) return;
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
     setWriting(true);
+    onWritingChange(true);
     try {
       const current = detail.versions.find((v) => v.id === vid)?.card;
       if (!current) return;
@@ -91,15 +97,22 @@ export function VersionList(
       onError(err);
     } finally {
       setWriting(false);
+      onWritingChange(false);
     }
   }
 
   async function setDefault() {
+    if (held) return;
+    setWriting(true);
+    onWritingChange(true);
     try {
       await api.setDefaultVersion(scope, detail.meta.id, vid);
       await onChanged();
     } catch (err: unknown) {
       onError(err);
+    } finally {
+      setWriting(false);
+      onWritingChange(false);
     }
   }
 
@@ -155,7 +168,8 @@ export function VersionList(
           <button className="subtle" type="button" onClick={onImportUrl}>+ From URL…</button>
         </>}
         {vid !== detail.meta.default_version && (
-          <button className="subtle" type="button" onClick={() => void setDefault()}>Set default</button>
+          <button className="subtle" type="button" disabled={held}
+                  onClick={() => void setDefault()}>Set default</button>
         )}
       </div>
 

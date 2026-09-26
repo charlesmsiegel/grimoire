@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import context
+from grimoire.store import context, pins
 
 
 def test_activate_keyword_and_always_on():
@@ -1312,7 +1312,8 @@ def test_birthday_lookup_does_not_substitute_another_characters_date(monkeypatch
     assert "Winifred" not in text
 
 
-@pytest.mark.parametrize("question", ["When was Mara born?", "How old is Mara?"])
+@pytest.mark.parametrize("question", ["When was Mara born?", "How old is Mara?",
+                                      "What is Mara's date of birth?", "What is Mara's age?"])
 def test_birthdate_lookup_answers_other_direct_birth_questions(monkeypatch, tmp_path, question):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     aid, _ = overlay.create_character(cid, "Mara")
@@ -1322,6 +1323,17 @@ def test_birthdate_lookup_answers_other_direct_birth_questions(monkeypatch, tmp_
     text = next(s["text"] for s in context.context_sections(cid, sid)
                 if s["label"] == "Birthdates")
     assert "Mara" in text and "9 May 1985" in text
+
+
+def test_birthdate_lookup_obeys_character_exclusion(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "--05-09")
+    pins.set_rule(cid, "characters:mara", pins.EXCLUDE, sid=sid)
+    scenes.append_message(cid, sid, "user", "Whose birthday is in May?")
+
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert "Birthdates" not in sections
 
 
 def test_story_so_far_section_is_injected(monkeypatch, tmp_path):
