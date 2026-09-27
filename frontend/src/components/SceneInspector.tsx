@@ -1245,7 +1245,7 @@ export const SceneInspector = memo(function SceneInspector({
           if (b && b.every === 0) {
             return (
               <div className="field-hint">
-                Turned off — set “Scene-break check” in Configuration to switch it on.
+                Turned off — set “Scene-break check” in Settings to switch it on.
                 <br />Ask now still works.
               </div>
             );

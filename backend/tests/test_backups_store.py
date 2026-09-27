@@ -50,6 +50,58 @@ def test_the_archive_holds_the_store_relative_to_its_root(monkeypatch, tmp_path)
     }
 
 
+def test_image_backup_uses_resolved_home_and_preserves_paths(monkeypatch, tmp_path):
+    root = tmp_path / "chosen"
+    home(monkeypatch, root)
+    small_store(root)
+    image = root / "campaigns" / "saltmarch" / "portrait.PNG"
+    image.write_bytes(b"picture")
+    (root / "worlds" / "realm" / "map.svg").write_text("<svg/>", encoding="utf-8")
+    (root / "worlds" / "realm" / "scan.dng").write_bytes(b"raw")
+    (root / "worlds" / "realm" / "layers.psd").write_bytes(b"layered")
+    (root / ".cache").mkdir()
+    (root / ".cache" / "thumbnail.webp").write_bytes(b"derived")
+
+    archive = backups.create_image_backup(when=AT)
+
+    assert archive == root / "backups" / "grimoire-images-20260814T210000Z.zip"
+    assert names_in(archive) == {
+        "campaigns/saltmarch/portrait.PNG", "worlds/realm/map.svg",
+        "worlds/realm/scan.dng", "worlds/realm/layers.psd",
+    }
+    with zipfile.ZipFile(archive) as z:
+        assert z.read("campaigns/saltmarch/portrait.PNG") == b"picture"
+    assert [row["name"] for row in backups.list_image_backups()] == [archive.name]
+    assert backups.list_backups() == []
+
+
+def test_image_archive_survives_full_backup_retention(monkeypatch, tmp_path):
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    image_archive = backups.create_image_backup(when=AT)
+    backups.create_backup(when=AT)
+    backups.create_backup(when=AT + timedelta(days=1))
+
+    assert len(backups.sweep(keep=1)) == 1
+    assert image_archive.exists()
+    assert backups.due(AT + timedelta(days=1, hours=1)) is False
+
+
+def test_image_archive_is_not_copied_into_full_backup_when_output_is_store_root(
+        monkeypatch, tmp_path):
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    (root / "portrait.png").write_bytes(b"image")
+    config.write_config(backup_dir=str(root))
+
+    image_archive = backups.create_image_backup(when=AT)
+    full_archive = backups.create_backup(when=AT)
+
+    assert names_in(image_archive) == {"portrait.png"}
+    assert image_archive.name not in names_in(full_archive)
+    assert "portrait.png" in names_in(full_archive)
+
+
 def test_the_archive_excludes_the_backups_dir_and_the_derived_cache(monkeypatch, tmp_path):
     """Its own output dir, or archives swallow archives; `.cache/` because it is
     rebuildable and can outweigh the library it was derived from."""

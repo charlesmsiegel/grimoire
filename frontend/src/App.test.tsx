@@ -127,7 +127,7 @@ beforeEach(() => {
   (api.listWorlds as any).mockResolvedValue([]);
 });
 
-test("the header keeps the brand and the pill; Configuration moved to the rail", async () => {
+test("the header keeps the brand and the pill; Settings lives on the rail", async () => {
   widthOf(1400);
   render(<MemoryRouter><App /></MemoryRouter>);
   expect(await screen.findByText(/GRIMOIRE/)).toBeInTheDocument();
@@ -141,7 +141,7 @@ test("the header keeps the brand and the pill; Configuration moved to the rail",
   // Connections are now reachable from the same surface.
   expect(header().queryByRole("link", { name: /^config$/i })).not.toBeInTheDocument();
   const rail = screen.getByRole("navigation", { name: /^main$/i });
-  expect(within(rail).getByRole("link", { name: /configuration/i }))
+  expect(within(rail).getByRole("link", { name: /settings/i }))
     .toHaveAttribute("href", "/config");
 });
 

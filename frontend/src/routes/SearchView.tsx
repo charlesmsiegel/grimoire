@@ -456,7 +456,7 @@ export default function SearchView() {
         {fellBack && (
           <p className="empty-state">
             <span className="empty-what">Answered with keywords.</span>{" "}
-            {result?.note} <Link to="/config">Configuration →</Link>
+            {result?.note} <Link to="/config">Settings →</Link>
           </p>
         )}
 

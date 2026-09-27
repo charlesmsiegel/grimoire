@@ -199,7 +199,7 @@ export function CostsView() {
                 </ul>
                 <p className="field-hint">
                   A pricing entry is matched on the model string exactly. Add one
-                  under <Link to="/config">Configuration → Pricing</Link>, or a
+                  under <Link to="/config">Settings → Pricing</Link>, or a
                   wildcard like <code>vendor/*</code>.
                 </p>
               </div>

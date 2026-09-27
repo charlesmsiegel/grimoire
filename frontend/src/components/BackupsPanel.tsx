@@ -29,7 +29,8 @@ export function formatSize(bytes: number): string {
 export function BackupsPanel({ dir }: { dir: string }) {
   const [where, setWhere] = useState("");
   const [rows, setRows] = useState<BackupEntry[] | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [imageRows, setImageRows] = useState<BackupEntry[] | null>(null);
+  const [busy, setBusy] = useState<"full" | "images" | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -37,10 +38,12 @@ export function BackupsPanel({ dir }: { dir: string }) {
       const body = await api.listBackups();
       setWhere(body.dir);
       setRows(body.backups);
+      setImageRows(body.image_backups);
     } catch (e) {
       // Never an empty list on failure: "no restore points" and "could not
       // look" are opposite answers to the only question this block is asked.
       setRows(null);
+      setImageRows(null);
       setMsg({
         kind: "err",
         text: e instanceof ApiError ? e.detail : "Could not read the backups folder",
@@ -52,12 +55,13 @@ export function BackupsPanel({ dir }: { dir: string }) {
 
   async function backUpNow() {
     if (busy) return;
-    setBusy(true);
+    setBusy("full");
     setMsg(null);
     try {
       const run = await api.createBackup();
       setWhere(run.dir);
       setRows(run.backups);
+      setImageRows(run.image_backups);
       // The archive landed either way, so this is never an error state — but a
       // retention failure that only showed up as a growing folder would be the
       // kind of silence this whole block exists to break.
@@ -76,7 +80,31 @@ export function BackupsPanel({ dir }: { dir: string }) {
         text: e instanceof ApiError ? e.detail : "Could not write a backup",
       });
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  }
+
+  async function backUpImages() {
+    if (busy) return;
+    setBusy("images");
+    setMsg(null);
+    try {
+      const run = await api.createImageBackup();
+      setWhere(run.dir);
+      if (run.listing_error === null) {
+        setRows(run.backups);
+        setImageRows(run.image_backups);
+      }
+      setMsg(run.listing_error === null
+        ? { kind: "ok", text: `Images backed up to ${run.created}` }
+        : { kind: "warn", text: `Images backed up to ${run.created}. ${run.listing_error}` });
+    } catch (e) {
+      setMsg({
+        kind: "err",
+        text: e instanceof ApiError ? e.detail : "Could not back up images",
+      });
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -89,8 +117,12 @@ export function BackupsPanel({ dir }: { dir: string }) {
       <p className="field-hint">
         Archives are written to <code>{where}</code>.
       </p>
-      <button className="btn-accent" onClick={backUpNow} disabled={busy}>
-        {busy ? "Backing up…" : "Back up now"}
+      <button className="btn-accent" onClick={backUpNow} disabled={busy !== null}>
+        {busy === "full" ? "Backing up…" : "Back up now"}
+      </button>
+      <button className="btn-outline" onClick={() => { void backUpImages(); }}
+              disabled={busy !== null}>
+        {busy === "images" ? "Backing up images…" : "Back up images"}
       </button>
       {msg && (
         <p role={msg.kind === "ok" ? undefined : "alert"}
@@ -99,7 +131,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
         </p>
       )}
       {rows !== null && rows.length === 0 && (
-        <p className="field-hint">No backups yet.</p>
+        <p className="field-hint">No full backups yet.</p>
       )}
       {rows !== null && rows.length > 0 && (
         <ul className="backup-list">
@@ -114,7 +146,25 @@ export function BackupsPanel({ dir }: { dir: string }) {
         </ul>
       )}
       <p className="field-hint">
-        Restoring is manual: unzip an archive into an empty folder and point the
+        Image archives contain image files from the storage location, with their
+        folder structure preserved. The rebuildable thumbnail cache is left
+        out. These archives are separate from full backups and are not removed
+        by automatic retention.
+      </p>
+      {imageRows !== null && imageRows.length > 0 && (
+        <ul className="backup-list" aria-label="Image backups">
+          {imageRows.map((b) => (
+            <li key={b.name} className="backup-row">
+              <span className="backup-name">{b.name}</span>
+              <span className="backup-meta">
+                {new Date(b.created).toLocaleString()} · {formatSize(b.size)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="field-hint">
+        Restoring a full backup is manual: unzip it into an empty folder and point the
         storage location above at it. Nothing is restored in place while the app
         is running — that would be a race against whatever it is serving.
       </p>

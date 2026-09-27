@@ -4,7 +4,7 @@ FastAPI backend (`backend/`, pytest) + Vite/React frontend (`frontend/`, vitest)
 The app and its data live in a markdown/JSON store rooted at `~/.grimoire` by
 default. The root is resolved by `store.home()`: `GRIMOIRE_HOME` env var (tests /
 overrides) → the user-chosen path recorded in the bootstrap pointer
-`~/.grimoire.json` → `~/.grimoire`. The path is editable from the Configuration
+`~/.grimoire.json` → `~/.grimoire`. The path is editable from the Settings
 page (Storage location); point it at a synced folder to share a library across
 devices.
 
@@ -314,7 +314,7 @@ subscriber. **Twenty-one handlers** start detached runs, in three classes:
   call site, and the doors an inventory misses are the ones in another module.
 - **`PUT /config/data-dir` is refused while any run is live**, anywhere
   (`runs_in_flight`). The frontend registry deliberately lets a turn survive
-  navigation, so the player can now reach Configuration mid-turn; the root is
+  navigation, so the player can now reach Settings mid-turn; the root is
   global, so a run in any campaign would be persisted into the wrong tree.
 - `store.attempts` is the durable half: whether a send's post is still in the
   transcript, recorded beside the append and cleared inside the rollback. It is
@@ -366,7 +366,7 @@ Four rules that are easy to undo by accident:
   full request URLs at DEBUG, an OpenAI-compatible endpoint can carry its key
   in one, and this is a file a user may hand to someone else. What it *does*
   carry is campaign and scene ids, and occasionally a character name — that is
-  what makes a failure findable, and Configuration says so where sharing it is
+  what makes a failure findable, and Settings says so where sharing it is
   decided, rather than leaving the file to look emptier than it is.
 - **`logs.record` may not raise and may not re-enter itself.** It runs beside a
   turn and inside exception handlers, and writing a row resolves the store root
@@ -374,7 +374,7 @@ Four rules that are easy to undo by accident:
   thread-local latch is what makes that terminate.
 - **The level floor stops at `error`** (`logs.FLOORS`). The error store is a
   view over ERROR rows, so a floor above them would be a setting that silently
-  switches #156 off — which the size backstop and Configuration both promise it
+  switches #156 off — which the size backstop and Settings both promise it
   cannot.
 - **Instrument LLM failures at `usage.Meter.done`, not at call sites.** Every
   LLM call in the app runs under a meter, so that is the one place that sees
@@ -387,7 +387,7 @@ record decoded SSE lines or SDK messages before selecting content and usage
 fields. Long payloads are split into numbered parts rather than clipped; the
 monthly cap still applies. Request bodies, URLs and headers are never passed
 to the sink. Response bodies can include private prose and reasoning, so the
-Configuration page describes that sharing boundary. See
+Settings page describes that sharing boundary. See
 [`docs/incoming-llm-capture.md`](docs/incoming-llm-capture.md) for reconstruction
 and completeness limits.
 

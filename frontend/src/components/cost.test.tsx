@@ -109,7 +109,7 @@ test("a mix says how many of them no rate can reach", () => {
   const { container } = render(
     <Footnotes bucket={{ ...ZERO, calls: 3, unpriced_calls: 3, unmetered_calls: 1 }} />);
 
-  expect(container.textContent).toMatch(/Set per-token rates in Configuration/);
+  expect(container.textContent).toMatch(/Set per-token rates in Settings/);
   expect(container.textContent).toMatch(/1 of them reported no token counts/);
 });
 

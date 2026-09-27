@@ -42,7 +42,7 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
             Cut short: {budgetCutPhases.map((p) => PHASE_LABELS[p.name]).join(", ")}. The
             summary and its edits above are complete and safe to save. Where a step
             below offers a Retry, that re-runs it alone on a fresh budget; otherwise
-            raise the absorb budget on the Configuration page so the next scene gets
+            raise the absorb budget on the Settings page so the next scene gets
             the rest.
           </p>
         </div>)}

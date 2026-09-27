@@ -1,6 +1,6 @@
 # Incoming LLM capture
 
-Set **Configuration → Logging → Debug** before starting a generation. The
+Set **Settings → Logging → Debug** before starting a generation. The
 next call captures the full incoming response body in the existing
 `<library>/logs/YYYY-MM.jsonl` file, under `kind: "llm_incoming"` and
 `module: "llm.capture"`. Returning the floor to Info stops capture.

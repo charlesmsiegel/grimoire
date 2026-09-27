@@ -68,7 +68,7 @@ export default function AppPaletteSource() {
                meta: "library section", to: "/connections" });
     out.push({ id: "action:new-campaign", group: "ELSEWHERE", label: "New campaign",
                meta: "start one", action: true, to: "/campaigns/new" });
-    out.push({ id: "section:/config", group: "ELSEWHERE", label: "Configuration",
+    out.push({ id: "section:/config", group: "ELSEWHERE", label: "Settings",
                meta: "storage, model, appearance", to: "/config" });
     // The rail carries the routes worth a permanent row. For everything else,
     // a route that is not typeable here is a route with

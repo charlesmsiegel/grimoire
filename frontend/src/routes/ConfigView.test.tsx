@@ -6,7 +6,7 @@ vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
   api: {
     getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(),
-    listBackups: vi.fn(), createBackup: vi.fn(),
+    listBackups: vi.fn(), createBackup: vi.fn(), createImageBackup: vi.fn(),
     getStoreConflicts: vi.fn(),
     listStyles: vi.fn(), listConnections: vi.fn(), checkConnection: vi.fn(),
     listCampaigns: vi.fn(), listScenes: vi.fn(),
@@ -66,7 +66,9 @@ beforeEach(() => {
     { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
   ]);
   (api.listConnections as any).mockResolvedValue(connections);
-  (api.listBackups as any).mockResolvedValue({ dir: "/home/u/.grimoire/backups", backups: [] });
+  (api.listBackups as any).mockResolvedValue({
+    dir: "/home/u/.grimoire/backups", backups: [], image_backups: [],
+  });
   // The context bar's source: no campaigns unless a test says otherwise, which
   // is also the "nothing to draw" case.
   (api.listCampaigns as any).mockResolvedValue([]);
@@ -717,7 +719,7 @@ test("the backups row says off until the setting is on", async () => {
   expect(await screen.findByRole("button", { name: /^Backups off$/ })).toBeInTheDocument();
 
   await open(/^Backups/);
-  await screen.findByText("No backups yet.");     // let the panel's read settle
+  await screen.findByText("No full backups yet.");     // let the panel's read settle
   fireEvent.click(screen.getByLabelText(/back up automatically/i));
 
   // The row follows the DRAFT, so the label agrees with the checkbox you are
@@ -728,7 +730,7 @@ test("the backups row says off until the setting is on", async () => {
 test("the backup settings save as one patch of only what changed", async () => {
   renderView();
   await open(/^Backups/);
-  await screen.findByText("No backups yet.");
+  await screen.findByText("No full backups yet.");
   fireEvent.click(screen.getByLabelText(/back up automatically/i));
   fireEvent.change(screen.getByLabelText(/^every$/i), { target: { value: "6" } });
   fireEvent.change(screen.getByLabelText(/^keep$/i), { target: { value: "3" } });
@@ -748,12 +750,14 @@ test("the archives are listed, and Back up now writes one", async () => {
     dir: "/home/u/.grimoire/backups",
     backups: [{ name: "grimoire-20260814T210000Z.zip", size: 2_097_152,
                 created: "2026-08-14T21:00:00Z" }],
+    image_backups: [],
   });
   (api.createBackup as any).mockResolvedValue({
     dir: "/home/u/.grimoire/backups", created: "grimoire-20260815T090000Z.zip",
     swept: [], retention_error: null,
     backups: [{ name: "grimoire-20260815T090000Z.zip", size: 2_097_152,
                 created: "2026-08-15T09:00:00Z" }],
+    image_backups: [],
   });
   renderView();
   await open(/^Backups/);

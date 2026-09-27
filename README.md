@@ -48,7 +48,7 @@ assembled from a dozen moving sources, and by the time a reply looks wrong every
 one of them has changed. A breakdown that is only current is not evidence about
 anything that already happened.
 
-Configurable under Configuration → Context (Kept turn prompts; `0` records none).
+Configurable under Settings → Context (Kept turn prompts; `0` records none).
 
 ## What it does
 
@@ -86,7 +86,7 @@ threads, and character state — so the next scene starts from an up-to-date wor
 - **LLM-generated taglines** and **image localization** for characters.
 - **Model routing** — scene prose, absorb, dossier refreshes, summaries and the
   one-shot utilities can each run on a connection of their own, set under
-  Configuration → Model routing and overridable per campaign from the scene
+  Settings → Model routing and overridable per campaign from the scene
   inspector. Anything left on inherit uses the active connection, so an install
   that never opens the page keeps the single model it always had.
 - **EPUB export** — turn a finished campaign into a readable book.

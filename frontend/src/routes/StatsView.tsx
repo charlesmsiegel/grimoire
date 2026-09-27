@@ -663,7 +663,7 @@ export default function StatsView() {
             {configured && configured !== "debug" && (
               <p className="field-hint stats-threshold">
                 Recording at <strong>{configured}</strong> and above — anything quieter is
-                never written. Change it under Configuration.
+                never written. Change it under Settings.
               </p>
             )}
 

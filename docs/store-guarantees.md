@@ -336,7 +336,7 @@ their edit survived.
 
 `store/external.py` finds them. `GET /api/store/conflicts` runs the scan on
 demand — its own route rather than a field on `GET /config`, because it costs a
-directory walk of the whole library — and the Configuration page's Storage
+directory walk of the whole library — and the Settings page's Storage
 section asks for it and renders the result in `StoreConflictNotice.tsx`.
 
 **It never opens, moves, renames or deletes one.** Which side of a conflict to

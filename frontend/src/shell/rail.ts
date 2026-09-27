@@ -191,7 +191,7 @@ export const APP_ROWS: RailRow[] = [
     match: (p) => isUnder(p, "/stats"),
   },
   {
-    id: "config", label: "Configuration", icon: "⚙",
+    id: "config", label: "Settings", icon: "⚙",
     to: () => "/config",
     match: (p) => isUnder(p, "/config"),
   },
@@ -354,7 +354,7 @@ export const TITLES: [(p: string) => boolean, string][] = [
   [(p) => isUnder(p, "/connections"), "Connections"],
   [(p) => isUnder(p, "/search"), "Search"],
   [(p) => isUnder(p, "/stats"), "Stats"],
-  [(p) => isUnder(p, "/config"), "Configuration"],
+  [(p) => isUnder(p, "/config"), "Settings"],
   [(p) => isUnder(p, "/open"), "Opening"],
   // Last of the campaign-scoped entries, and only reachable when the page
   // itself publishes nothing: `CampaignView` names the campaign and the scene,

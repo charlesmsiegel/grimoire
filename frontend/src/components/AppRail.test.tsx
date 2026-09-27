@@ -103,7 +103,7 @@ test("a failed read keeps the rail usable and offers a retry", () => {
   const onRetry = vi.fn();
   renderRail({ status: "failed", onRetry });
   expect(screen.getByText(/counts may be out of date/i)).toBeInTheDocument();
-  expect(within(main()).getByText("Configuration")).toBeInTheDocument();
+  expect(within(main()).getByText("Settings")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /retry/i }));
   expect(onRetry).toHaveBeenCalled();
 });
@@ -130,7 +130,7 @@ describe("as a drawer", () => {
   test("picking a row closes it", () => {
     const onClose = vi.fn();
     renderRail({ docked: false, open: true, onClose });
-    fireEvent.click(within(main()).getByText("Configuration"));
+    fireEvent.click(within(main()).getByText("Settings"));
     expect(onClose).toHaveBeenCalled();
   });
 

@@ -16,7 +16,7 @@ import { THUMB_REV } from "./thumbs";
 export * from "./types";
 import {
   type Actor, type AdvanceDigest, type AdvanceRequest, type Appearance, type Availability,
-  type BackupList, type BackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
+  type BackupList, type BackupRun, type ImageBackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignImage, type CampaignLibrary,
   type CampaignMeta,
   type CampaignModule, type Card,
@@ -1119,6 +1119,7 @@ export const api = {
    *  re-read it — and it names what retention removed, which is the half of
    *  the operation nobody sees happen. */
   createBackup: () => request<BackupRun>("POST", "/api/backups"),
+  createImageBackup: () => request<ImageBackupRun>("POST", "/api/backups/images"),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
   // `fresh`: the whole reason to ask is to see the store as it is *now* --
   // after a move, or after the user has been out to their file manager to

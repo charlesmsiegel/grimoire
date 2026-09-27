@@ -75,7 +75,7 @@ optional action during play and adds no mandatory closeout generation.
 
 ## Comparing the modes
 
-In Configuration, **Scene responses** can be changed to **Combined scene
+In Settings, **Scene responses** can be changed to **Combined scene
 response**. This keeps the shared scene writer available for comparison while
 retaining the updated continuity and voice prompts.
 

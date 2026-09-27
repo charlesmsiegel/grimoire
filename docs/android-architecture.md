@@ -192,7 +192,7 @@ Two modes, mirroring the existing "Storage location" config page:
 
 The bootstrap pointer (`~/.grimoire.json`) still works — `Path.home()` under Chaquopy
 resolves inside the app sandbox — so the existing pointer/env/default resolution
-order in `store/paths.py` runs unchanged. The Configuration page's data-dir editor
+order in `store/paths.py` runs unchanged. The Settings page's data-dir editor
 functions as-is; Phase 3 adds a native folder-picker affordance.
 
 **Sync-conflict posture:** unchanged from PC. The store is file-per-record, so

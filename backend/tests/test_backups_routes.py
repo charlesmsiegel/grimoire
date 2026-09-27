@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import zipfile
 from datetime import UTC, datetime, timedelta
 
 import anyio
@@ -44,6 +45,36 @@ def test_backing_up_now_returns_the_refreshed_listing(client):
     assert body["swept"] == []
     assert [b["name"] for b in body["backups"]] == [body["created"]]
     assert client.get("/api/backups").json()["backups"] == body["backups"]
+
+
+def test_image_backup_route_lists_separately_and_uses_configured_folder(client, tmp_path):
+    image = tmp_path / "worlds" / "realm" / "portrait.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    elsewhere = tmp_path / "elsewhere"
+    client.put("/api/config", json={"backup_dir": str(elsewhere)})
+
+    body = client.post("/api/backups/images").json()
+
+    assert body["created"].startswith("grimoire-images-")
+    assert body["backups"] == []
+    assert [row["name"] for row in body["image_backups"]] == [body["created"]]
+    with zipfile.ZipFile(elsewhere / body["created"]) as z:
+        assert z.namelist() == ["worlds/realm/portrait.jpg"]
+
+
+def test_image_backup_reports_listing_failure_after_writing(client, tmp_path, monkeypatch):
+    def unreadable():
+        raise PermissionError("listing denied")
+
+    monkeypatch.setattr(backups, "list_image_backups", unreadable)
+    response = client.post("/api/backups/images")
+    body = response.json()
+
+    assert response.status_code == 200
+    assert (tmp_path / "backups" / body["created"]).exists()
+    assert "image archive written" in body["listing_error"]
+    assert "image_backups" not in body
 
 
 def test_backing_up_now_applies_retention(client, tmp_path):

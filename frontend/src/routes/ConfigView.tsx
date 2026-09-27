@@ -456,7 +456,7 @@ export default function ConfigView() {
   const column = (
     <>
       <div className="column-head">
-        <div className="eyebrow">Configuration</div>
+        <div className="eyebrow">Settings</div>
         {config && <div className="column-head-sub">{config.data_dir}</div>}
       </div>
       {GROUPS.map((group) => (
@@ -562,7 +562,7 @@ export default function ConfigView() {
         {draft && section === "backups" && (
           <>
             <p className="config-copy">
-              A backup is the whole library zipped into one file — worlds, campaigns,
+              A full backup is the whole library zipped into one file — worlds, campaigns,
               scenes, settings. Everything grimoire knows is plain files under the
               storage location, so an archive is a complete restore point and nothing
               else has to be running to use it. The rebuildable thumbnail cache and the

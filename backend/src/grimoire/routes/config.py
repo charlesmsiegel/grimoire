@@ -299,7 +299,8 @@ def _backups_body() -> dict:
     directory rides along because it is a *setting* — the answer to "why is
     this list empty" is often "you moved it"."""
     return {"dir": str(store.backups.backup_dir()),
-            "backups": store.backups.list_backups()}
+            "backups": store.backups.list_backups(),
+            "image_backups": store.backups.list_image_backups()}
 
 
 @router.get("/backups")
@@ -336,6 +337,22 @@ def post_backup():
         retention_error = f"backup written, but old archives could not be removed: {exc}"
     return {**_backups_body(), "created": made.name, "swept": swept,
             "retention_error": retention_error}
+
+
+@router.post("/backups/images")
+def post_image_backup():
+    """Create a separate image archive from the currently resolved store."""
+    try:
+        made = store.backups.create_image_backup()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not back up images: {exc}") from exc
+    try:
+        return {**_backups_body(), "created": made.name, "listing_error": None}
+    except OSError as exc:
+        # The archive has already landed. Tell the caller where it is without
+        # claiming that the write failed or inventing an empty listing.
+        return {"dir": str(made.parent), "created": made.name,
+                "listing_error": f"image archive written, but backups could not be listed: {exc}"}
 
 
 @router.get("/store/conflicts")

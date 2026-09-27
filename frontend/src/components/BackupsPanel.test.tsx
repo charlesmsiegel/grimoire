@@ -5,7 +5,7 @@ vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {
     constructor(public status: number, public detail: string) { super(detail); }
   },
-  api: { listBackups: vi.fn(), createBackup: vi.fn() },
+  api: { listBackups: vi.fn(), createBackup: vi.fn(), createImageBackup: vi.fn() },
 }));
 import { ApiError, api } from "../api/client";
 
@@ -15,6 +15,7 @@ const listing = {
     { name: "grimoire-20260815T210000Z.zip", size: 5_242_880, created: "2026-08-15T21:00:00Z" },
     { name: "grimoire-20260814T210000Z.zip", size: 5_000_000, created: "2026-08-14T21:00:00Z" },
   ],
+  image_backups: [],
 };
 
 beforeEach(() => {
@@ -35,10 +36,10 @@ test("shows where the archives live and lists them newest first", async () => {
 });
 
 test("a store with no archives says so rather than showing an empty box", async () => {
-  (api.listBackups as any).mockResolvedValue({ dir: "/x/backups", backups: [] });
+  (api.listBackups as any).mockResolvedValue({ dir: "/x/backups", backups: [], image_backups: [] });
   render(<BackupsPanel dir="" />);
 
-  expect(await screen.findByText("No backups yet.")).toBeInTheDocument();
+  expect(await screen.findByText("No full backups yet.")).toBeInTheDocument();
   expect(document.querySelector(".backup-list")).toBeNull();
 });
 
@@ -47,7 +48,7 @@ test("a folder that cannot be read is reported, never shown as no backups", asyn
   render(<BackupsPanel dir="" />);
 
   expect(await screen.findByText(/could not list backups: denied/)).toBeInTheDocument();
-  expect(screen.queryByText("No backups yet.")).toBeNull();
+  expect(screen.queryByText("No full backups yet.")).toBeNull();
 });
 
 test("Back up now adopts the response as the new listing", async () => {
@@ -58,6 +59,7 @@ test("Back up now adopts the response as the new listing", async () => {
     retention_error: null,
     backups: [{ name: "grimoire-20260816T090000Z.zip", size: 5_300_000,
                 created: "2026-08-16T09:00:00Z" }],
+    image_backups: [],
   });
   render(<BackupsPanel dir="" />);
   fireEvent.click(await screen.findByRole("button", { name: /back up now/i }));
@@ -68,6 +70,38 @@ test("Back up now adopts the response as the new listing", async () => {
   expect(api.listBackups).toHaveBeenCalledTimes(1);
 });
 
+test("image backup creates and displays a separate archive", async () => {
+  (api.createImageBackup as any).mockResolvedValue({
+    ...listing,
+    created: "grimoire-images-20260816T090000Z.zip",
+    listing_error: null,
+    image_backups: [{ name: "grimoire-images-20260816T090000Z.zip", size: 1024,
+                      created: "2026-08-16T09:00:00Z" }],
+  });
+  render(<BackupsPanel dir="" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Back up images" }));
+
+  expect(await screen.findByText("Images backed up to grimoire-images-20260816T090000Z.zip"))
+    .toBeInTheDocument();
+  expect(screen.getByRole("list", { name: "Image backups" }))
+    .toHaveTextContent("grimoire-images-20260816T090000Z.zip");
+});
+
+test("a listing failure after writing reports the archive as written", async () => {
+  (api.createImageBackup as any).mockResolvedValue({
+    dir: "/home/u/.grimoire/backups",
+    created: "grimoire-images-20260816T090000Z.zip",
+    listing_error: "image archive written, but backups could not be listed: denied",
+  });
+  render(<BackupsPanel dir="" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Back up images" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /Images backed up to grimoire-images-20260816T090000Z.zip/);
+  expect(screen.getByRole("alert")).toHaveTextContent(/could not be listed/);
+  expect(screen.getByText("grimoire-20260815T210000Z.zip")).toBeInTheDocument();
+});
+
 test("retention is reported, because nobody sees a file get deleted", async () => {
   (api.createBackup as any).mockResolvedValue({
     dir: "/home/u/.grimoire/backups",
@@ -76,6 +110,7 @@ test("retention is reported, because nobody sees a file get deleted", async () =
     retention_error: null,
     backups: [{ name: "grimoire-20260816T090000Z.zip", size: 5_300_000,
                 created: "2026-08-16T09:00:00Z" }],
+    image_backups: [],
   });
   render(<BackupsPanel dir="" />);
   fireEvent.click(await screen.findByRole("button", { name: /back up now/i }));
@@ -123,6 +158,7 @@ test("a backup that landed but could not be pruned is not called a failure", asy
     retention_error: "backup written, but old archives could not be removed: denied",
     backups: [{ name: "grimoire-20260816T090000Z.zip", size: 5_300_000,
                 created: "2026-08-16T09:00:00Z" }],
+    image_backups: [],
   });
   render(<BackupsPanel dir="" />);
   fireEvent.click(await screen.findByRole("button", { name: /back up now/i }));

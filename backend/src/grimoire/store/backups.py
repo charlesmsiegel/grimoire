@@ -1,4 +1,4 @@
-"""Zipped snapshots of the whole store, and the retention sweep (#32).
+"""Zipped snapshots of the whole store, manual image subsets, and retention (#32).
 
 The entire app state is plain files under one root (`paths.home()`), so a zip
 of that tree *is* a complete, restorable backup — nothing else has to be
@@ -39,11 +39,18 @@ of those and then found it gone has not lost any state, because the state it
 named stopped existing before it could be copied. Failing there would mean a
 backup could not be taken while anyone was playing, which is precisely when
 one is worth having.
+
+An image archive is a filtered view of that same resolved store walk, with the
+same relative paths and failure policy. Its distinct filename series keeps it
+out of full-backup retention and scheduling; another manual subset would follow
+the same rule. Selection is by image filename type (common suffixes and MIME
+types), so an image saved without an image extension is outside this archive.
 """
 
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
 import re
 import time
@@ -58,11 +65,35 @@ from .paths import home
 #: Windows and names an NTFS alternate data stream when it is accepted at all.
 _STAMP = "%Y%m%dT%H%M%SZ"
 _PREFIX = "grimoire-"
+_IMAGE_PREFIX = "grimoire-images-"
 #: What this module recognizes as *its own* archive. Everything the listing
 #: shows and everything the sweep may delete has to match: the backup directory
 #: is a real directory a user can put things in, and a retention rule that
 #: deleted "the oldest file" would eventually delete one of those.
 _NAME_RE = re.compile(r"^grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
+_IMAGE_NAME_RE = re.compile(r"^grimoire-images-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
+
+# Images can also be attached directly to a store folder, so select by file
+# type throughout the tree rather than assuming an assets/ layout.
+_IMAGE_SUFFIXES = frozenset({
+    ".apng", ".arw", ".avif", ".bmp", ".cr2", ".cr3", ".dng", ".eps",
+    ".exr", ".gif", ".hdr", ".heic", ".heif", ".ico", ".jfif", ".jpe",
+    ".jpeg", ".jpg", ".jxl", ".nef", ".orf", ".pef", ".png", ".psb",
+    ".psd", ".qoi", ".raf", ".raw", ".rw2", ".svg", ".tif", ".tiff",
+    ".webp", ".xcf",
+})
+
+
+def _is_image_file(path: Path) -> bool:
+    """Recognize image filenames, including formats outside the app's own set.
+
+    The explicit list covers formats that platform MIME tables commonly omit;
+    MIME lookup catches others without making the archive depend on Pillow.
+    """
+    if path.suffix.lower() in _IMAGE_SUFFIXES:
+        return True
+    media_type, _encoding = mimetypes.guess_type(path.name)
+    return bool(media_type and media_type.startswith("image/"))
 
 #: Rebuildable derived data, relative to the store root.
 _DERIVED = ".cache"
@@ -167,8 +198,8 @@ def _is_backup_artifact(name: str) -> bool:
     half-written temp into itself. The cost is a user's own
     `grimoire-<stamp>.zip` parked at the store root, which nobody will notice.
     """
-    return bool(_NAME_RE.match(name)) or (
-        name.startswith(f".{_PREFIX}") and name.endswith(".tmp"))
+    return bool(_NAME_RE.match(name) or _IMAGE_NAME_RE.match(name)) or (
+        name.startswith((f".{_PREFIX}", f".{_IMAGE_PREFIX}")) and name.endswith(".tmp"))
 
 
 def _is_abandoned_temp(path: Path, cutoff: float) -> bool:
@@ -181,7 +212,9 @@ def _is_abandoned_temp(path: Path, cutoff: float) -> bool:
     shape `streaming_write` gives it, and `_NAME_RE` for the archive name it
     embeds. A `.grimoire-notes.tmp` is neither, and is not ours to delete."""
     name = path.name
-    if not (atomic.is_write_temp(path) and _NAME_RE.match(name[1:].rsplit(".", 2)[0])):
+    archive_name = name[1:].rsplit(".", 2)[0]
+    if not (atomic.is_write_temp(path) and
+            (_NAME_RE.match(archive_name) or _IMAGE_NAME_RE.match(archive_name))):
         return False
     try:
         return path.stat().st_mtime < cutoff
@@ -249,7 +282,8 @@ def _walk_error(exc: OSError) -> None:
     raise exc
 
 
-def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path) -> None:
+def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path,
+                  *, images_only: bool = False) -> None:
     """Write the store at `root` into the open binary file `fh`.
 
     ``os.walk(followlinks=False)``, not ``rglob``: a directory symlink pointing
@@ -290,6 +324,8 @@ def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path) -> No
                 path = here / name
                 if in_backup_dir and _is_backup_artifact(name):
                     continue
+                if images_only and not _is_image_file(path):
+                    continue
                 try:
                     if not path.is_file():
                         continue
@@ -309,7 +345,7 @@ def _utc(when: datetime | None) -> datetime:
     return when.astimezone(UTC)
 
 
-def _allocate(directory: Path, when: datetime) -> Path:
+def _allocate(directory: Path, when: datetime, prefix: str = _PREFIX) -> Path:
     """A free archive path for `when`.
 
     Two backups in the same second are reachable — a scheduled one and the
@@ -324,7 +360,7 @@ def _allocate(directory: Path, when: datetime) -> Path:
     stamp = when.strftime(_STAMP)
     n = 1
     while True:
-        name = f"{_PREFIX}{stamp}.zip" if n == 1 else f"{_PREFIX}{stamp}-{n}.zip"
+        name = f"{prefix}{stamp}.zip" if n == 1 else f"{prefix}{stamp}-{n}.zip"
         candidate = directory / name
         if not candidate.exists():
             return candidate
@@ -357,7 +393,25 @@ def create_backup(when: datetime | None = None) -> Path:
         return target
 
 
-def _parsed(name: str) -> tuple[datetime, int] | None:
+def create_image_backup(when: datetime | None = None) -> Path:
+    """Zip image files under the resolved store root, preserving relative paths.
+
+    This is an independent, manual archive. Full-backup retention never removes
+    it, and it never counts as a complete restore point for the scheduler.
+    """
+    with locks.backup_lock():
+        root = home()
+        directory = backup_dir()
+        _sweep_abandoned_temps(directory)
+        target = _allocate(directory, _utc(when), _IMAGE_PREFIX)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with atomic.streaming_write(target) as fh:
+            _archive_into(fh, root, _skips(root, directory), directory,
+                          images_only=True)
+        return target
+
+
+def _parsed(name: str, pattern: re.Pattern[str] = _NAME_RE) -> tuple[datetime, int] | None:
     """`(taken_at, same-second ordinal)` if `name` is one of our archives.
 
     Parsing IS the recognition, deliberately. The pattern alone accepts digit
@@ -372,7 +426,7 @@ def _parsed(name: str) -> tuple[datetime, int] | None:
     *before* `.zip` bytewise, so plain name sorting inverts every pair of
     archives taken in the same second.
     """
-    m = _NAME_RE.match(name)
+    m = pattern.match(name)
     if not m:
         return None
     try:
@@ -393,7 +447,12 @@ def list_backups() -> list[dict]:
     return _list_in(backup_dir())
 
 
-def _list_in(directory: Path) -> list[dict]:
+def list_image_backups() -> list[dict]:
+    """Manual image archives, newest first, separate from restore points."""
+    return _list_in(backup_dir(), _IMAGE_NAME_RE)
+
+
+def _list_in(directory: Path, pattern: re.Pattern[str] = _NAME_RE) -> list[dict]:
     """`list_backups` against an already-resolved directory, so a caller that
     is going to *act* on the result reads and acts on the same one."""
     try:
@@ -405,7 +464,7 @@ def _list_in(directory: Path) -> list[dict]:
     # is only safe here because of the filter three lines above it.
     found = []
     for path in entries:
-        parsed = _parsed(path.name)
+        parsed = _parsed(path.name, pattern)
         if parsed is None:
             continue
         try:

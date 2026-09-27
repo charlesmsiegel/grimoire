@@ -176,7 +176,7 @@ export function Footnotes({ bucket, showRatesHint = true }: {
               a reader to go and set one sends them to an action that cannot
               resolve the warning they are reading. */}
           {showRatesHint && n(bucket.unpriced_calls) > n(bucket.unmetered_calls)
-            && "Set per-token rates in Configuration to estimate them. "}
+            && "Set per-token rates in Settings to estimate them. "}
           {n(bucket.unmetered_calls) > 0 && (
             n(bucket.unmetered_calls) === n(bucket.unpriced_calls)
               ? "No rate can price these — their provider reported no token counts."
