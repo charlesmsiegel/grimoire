@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Chore, ChoreItems, TodoPayload } from "../api/types";
 import { PageShell, ColumnSection } from "../components/PageShell";
+import ReportScopeSelector from "../components/ReportScopeSelector";
 
 /** Everything the app noticed that would make play better.
  *
@@ -34,7 +35,7 @@ const SCOPE_LABEL: Record<Chore["scope"], string> = {
 };
 
 function Row({ chore, onIgnore, busy, restore, cid, showScope }: {
-  chore: Chore; onIgnore: (id: string, on: boolean) => void;
+  chore: Chore; onIgnore: (chore: Chore, on: boolean) => void;
   busy: boolean; restore?: boolean; cid: string | null; showScope?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -48,13 +49,13 @@ function Row({ chore, onIgnore, busy, restore, cid, showScope }: {
   useEffect(() => {
     if (!open || items || failed) return;
     let live = true;
-    api.getChoreItems(chore.id, cid)
+    api.getChoreItems(chore.id, chore.campaign_id ?? (chore.scope === "campaign" ? cid : null))
       .then((r) => { if (live) setItems(r); })
       .catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
-  }, [open, items, failed, chore.id, cid]);
+  }, [open, items, failed, chore.id, chore.campaign_id, chore.scope, cid]);
 
-  const panelId = `chore-items-${chore.id}`;
+  const panelId = `chore-items-${chore.campaign_id ?? "library"}-${chore.id}`;
   return (
     <li className={"chore chore-" + chore.severity}>
       <div className="chore-line">
@@ -70,7 +71,7 @@ function Row({ chore, onIgnore, busy, restore, cid, showScope }: {
                 accessible name, which is the version of the collision a screen
                 reader gets and cannot see its way around. */}
             {showScope && (
-              <span className="chore-scope">{SCOPE_LABEL[chore.scope]}</span>
+              <span className="chore-scope">{chore.campaign_name ?? SCOPE_LABEL[chore.scope]}</span>
             )}
           </button>
           {/* The half a bare count cannot carry. A number with no consequence
@@ -82,7 +83,7 @@ function Row({ chore, onIgnore, busy, restore, cid, showScope }: {
             <Link className="chore-fix" to={chore.fix}>{chore.fix_label} →</Link>
           )}
           <button type="button" className="chore-ignore" disabled={busy}
-                  onClick={() => onIgnore(chore.id, !restore)}>
+                  onClick={() => onIgnore(chore, !restore)}>
             {restore ? "Restore" : "Ignore"}
           </button>
         </div>
@@ -128,6 +129,7 @@ export default function TodoView({ cid }: { cid: string | null }) {
 
   const load = useCallback(() => {
     let live = true;
+    setData(null);
     setFailed(false);
     api.getTodo(cid)
       .then((d) => { if (live) setData(d); })
@@ -137,12 +139,13 @@ export default function TodoView({ cid }: { cid: string | null }) {
 
   useEffect(load, [load]);
 
-  function ignore(id: string, on: boolean) { void ignoreAsync(id, on); }
+  function ignore(chore: Chore, on: boolean) { void ignoreAsync(chore, on); }
 
-  async function ignoreAsync(id: string, on: boolean) {
+  async function ignoreAsync(chore: Chore, on: boolean) {
     setBusy(true);
     try {
-      await api.setChoreIgnored(id, on);
+      await api.setChoreIgnored(chore.id, on, chore.campaign_id ??
+        (chore.scope === "campaign" ? cid ?? undefined : undefined));
       // Re-read rather than patching in place: ignoring is not the only thing
       // that can have changed the list, and the counts are the point.
       setData(await api.getTodo(cid));
@@ -178,9 +181,9 @@ export default function TodoView({ cid }: { cid: string | null }) {
   // predating it would not carry, and an `undefined` in the set would turn the
   // chip on and then render nothing.
   const scopeLabels = new Set(
-    [...chores, ...(data?.ignored ?? [])].map((c) => SCOPE_LABEL[c.scope]).filter(Boolean),
+    [...chores, ...(data?.ignored ?? [])].map((c) => c.campaign_name ?? SCOPE_LABEL[c.scope]),
   );
-  const showScope = scopeLabels.size > 1;
+  const showScope = cid === null || scopeLabels.size > 1;
 
   const column = (
     <ColumnSection label="Groups" count={data?.count ?? undefined}>
@@ -203,6 +206,7 @@ export default function TodoView({ cid }: { cid: string | null }) {
       <div className="page-wide view-anim">
         <div className="eyebrow">Everything that would make play better</div>
         <h1 className="screen-title">To do</h1>
+        <ReportScopeSelector report="todo" cid={cid} />
 
         {failed && (
           <div className="banner error-banner">
@@ -223,12 +227,6 @@ export default function TodoView({ cid }: { cid: string | null }) {
                 there is something here to read; what is missing is the half
                 about the campaign being played. Saying only "open a campaign
                 first" here used to hide a list that had entries. */}
-            {!cid && (
-              <>
-                {" "}Chores about a campaign need one open:{" "}
-                <Link to="/">pick a campaign</Link>.
-              </>
-            )}
           </p>
         )}
 
@@ -237,7 +235,7 @@ export default function TodoView({ cid }: { cid: string | null }) {
             <h2 className="chore-group">{g}</h2>
             <ul className="chore-list">
               {chores.filter((c) => c.group === g).map((c) => (
-                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} cid={cid}
+                <Row key={`${c.campaign_id ?? "library"}:${c.id}`} chore={c} onIgnore={ignore} busy={busy} cid={cid}
                      showScope={showScope} />
               ))}
             </ul>
@@ -253,7 +251,7 @@ export default function TodoView({ cid }: { cid: string | null }) {
             </p>
             <ul className="chore-list">
               {data.ignored.map((c) => (
-                <Row key={c.id} chore={c} onIgnore={ignore} busy={busy} restore cid={cid}
+                <Row key={`${c.campaign_id ?? "library"}:${c.id}`} chore={c} onIgnore={ignore} busy={busy} restore cid={cid}
                      showScope={showScope} />
               ))}
             </ul>

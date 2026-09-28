@@ -70,6 +70,76 @@ def _seed(day: str, **fields):
     usage.record(ts=f"{day}T12:00:00Z", **fields)
 
 
+def test_monthly_campaigns_project_all_price_sources_and_keep_unassigned(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    _seed("2026-08-31", campaign="saltmarch", cost_usd=5)
+    _seed("2026-09-01", campaign="saltmarch", cost_usd=1)
+    _seed("2026-09-02", campaign="", cost_usd=2, cost_basis="equivalent")
+    _seed("2026-09-03", campaign="realm")
+    out = usage.monthly_campaigns("2026-09")
+    assert out["since"] == "2026-09-01" and out["until"] == "2026-09-30"
+    assert out["totals"]["estimated_total_usd"] == 3
+    assert out["totals"]["unpriced_calls"] == 1
+    assert out["unassigned"]["estimated_usd"] == 2
+    assert {row["campaign_id"] for row in out["campaigns"]} == {"saltmarch", "realm"}
+    assert out["trend"][-2]["month"] == "2026-08"
+    assert out["trend"][-1]["estimated_total_usd"] == 3
+    assert "2026-09" in out["available_months"]
+
+
+def test_modelled_only_month_still_has_an_estimated_total(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    _rates(home, {"realm/opus": {"prompt_usd_per_1k": 1.0,
+                                   "completion_usd_per_1k": 2.0}})
+    _seed("2026-09-03", campaign="saltmarch", prompt_tokens=1000,
+          completion_tokens=500)
+    out = usage.monthly_campaigns("2026-09")
+    assert out["totals"]["cost_usd"] == 0
+    assert out["totals"]["modelled_usd"] == 2
+    assert out["totals"]["estimated_total_usd"] == 2
+    assert out["trend"][-1]["estimated_total_usd"] == 2
+
+
+def test_monthly_projection_sums_mixed_sources_without_changing_accounting(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    _rates(home, {"realm/opus": {"prompt_usd_per_1k": 1.0,
+                                   "completion_usd_per_1k": 2.0}})
+    _seed("2026-09-01", cost_usd=1)
+    _seed("2026-09-02", cost_usd=2, cost_basis="equivalent")
+    _seed("2026-09-03", prompt_tokens=1000, completion_tokens=500)
+    total = usage.monthly_campaigns("2026-09")["totals"]
+    assert (total["cost_usd"], total["estimated_usd"], total["modelled_usd"]) == (1, 2, 2)
+    assert total["estimated_total_usd"] == 5
+    accounting = usage.summary(days=30)["totals"]
+    assert accounting["cost_usd"] == 1
+    assert "estimated_total_usd" not in accounting
+
+
+def test_month_bounds_rejects_bad_input_and_handles_year_rollover(home):
+    assert usage.month_bounds("2025-12") == ("2025-12-01", "2025-12-31")
+    assert usage.month_bounds("2026-01") == ("2026-01-01", "2026-01-31")
+    assert usage.month_bounds("9999-12") == ("9999-12-01", "9999-12-31")
+    for bad in ("2026-00", "2026-13", "2026-1", "2026-01-01", "hello"):
+        with pytest.raises(ValueError):
+            usage.month_bounds(bad)
+
+
+def test_monthly_report_defaults_to_current_utc_month_even_when_empty(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    out = usage.monthly_campaigns()
+    assert out["month"] == "2026-09"
+    assert out["totals"]["calls"] == 0
+    assert out["available_months"] == ["2026-09"]
+
+
+def test_monthly_scene_read_limits_rows_but_all_time_read_still_sees_both(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    _seed("2026-08-31", campaign="saltmarch", scene="one", cost_usd=5)
+    _seed("2026-09-01", campaign="saltmarch", scene="two", cost_usd=1)
+    assert usage.campaign_scenes("saltmarch", month="2026-09")["totals"]["cost_usd"] == 1
+    assert usage.campaign_scenes("saltmarch")["totals"]["cost_usd"] == 6
+
+
 def test_summary_totals_the_window(home, monkeypatch):
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", prompt_tokens=100, completion_tokens=20, cost_usd=0.01)

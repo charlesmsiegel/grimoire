@@ -1,4 +1,3 @@
-import { money } from "../components/cost";
 import { formatChord } from "../shortcuts/keys";
 import { LIBRARY_SECTIONS, inLibrary, isUnder } from "../librarySections";
 import type { ShellPayload } from "../api/types";
@@ -87,6 +86,11 @@ const LIBRARY_SECTION_COUNT = LIBRARY_SECTIONS.length;
 const campaignPath = (ctx: RailCtx, suffix = "") =>
   ctx.cid ? `/campaigns/${ctx.cid}${suffix}` : null;
 
+export type Report = "todo" | "costs" | "stats";
+export function reportHref(report: Report, cid: string | null): string {
+  return cid ? `/campaigns/${encodeURIComponent(cid)}/${report}` : `/${report}`;
+}
+
 /** The chord that opens Search, named once.
  *
  *  Bound in `App.tsx` and printed here, so the rail can never advertise a key
@@ -137,14 +141,8 @@ export const APP_ROWS: RailRow[] = [
     id: "todo", label: "To do", icon: "✓",
     to: () => "/todo",
     match: (p) => isUnder(p, "/todo"),
-    // The count of what has NOT been waved off, campaign open or not. It used
-    // to be `null` outside one, because every chore the app could compute was
-    // about a campaign; the library's own chores -- an undescribed image
-    // backlog, a world whose cast has no taglines -- answer before a campaign
-    // is chosen, which is exactly when a freshly imported world's backlog is
-    // largest. A zero here is now a real zero rather than "cannot say".
-    tail: (s) => num(s?.todo),
-    tailLabel: (s) => lbl(s?.todo, "things noticed"),
+    // A global count would sweep every campaign on every navigation, so the
+    // page supplies its live count and the rail makes no count claim.
   },
   {
     id: "search", label: "Search", icon: "⌕",
@@ -164,26 +162,11 @@ export const APP_ROWS: RailRow[] = [
     tailLabel: () => `shortcut ${formatChord(SEARCH_CHORD)}`,
   },
   {
-    // Scoped to the open campaign, which is what the design's figure is. With
-    // none open there is nowhere for it to go, so it does not render.
+    // A global monthly page, independent of whichever campaign is open.
     id: "costs", label: "Costs", icon: "$",
-    to: (ctx) => campaignPath(ctx, "/costs"),
-    match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/costs`),
-    // The all-time figure the design asks for, and it is all-time rather than
-    // a bounded window on purpose: a 30-day number under an unlabelled `$4.82`
-    // would mean something else than the page it links to. `store.usage_rollup`
-    // is what made it affordable here — a byte bookmark into each month file,
-    // so the rail pays for what has been played since the last navigation
-    // instead of for the library's age.
-    //
-    // SPEND ONLY. One tail cannot carry three columns that may never be added,
-    // so it carries the one that is money somebody was actually charged and
-    // leaves the other two to the hub's card, which has room to keep them
-    // apart. A campaign whose calls were all subscription-billed or all
-    // unpriced therefore shows no tail rather than `$0.00` — which is the cost
-    // rule itself, not an omission.
-    tail: (s) => railMoney(s)?.[0],
-    tailLabel: (s) => railMoney(s)?.[1],
+    to: () => "/costs",
+    match: (p) => isUnder(p, "/costs"),
+    // The old campaign spend tail would mislabel this global monthly report.
   },
   {
     id: "stats", label: "Stats", icon: "▦",
@@ -198,6 +181,12 @@ export const APP_ROWS: RailRow[] = [
 ];
 
 export const CAMPAIGN_ROWS: RailRow[] = [
+  ...(["todo", "costs", "stats"] as const).map((report): RailRow => ({
+    id: report, label: report === "todo" ? "To do" : report === "costs" ? "Costs" : "Stats",
+    icon: report === "todo" ? "✓" : report === "costs" ? "$" : "▫",
+    to: (ctx) => ctx.cid ? reportHref(report, ctx.cid) : null,
+    match: (p, ctx) => !!ctx.cid && isUnder(p, reportHref(report, ctx.cid)),
+  })),
   {
     // The campaign's front door. Exact, because every other campaign row lives
     // underneath this path -- a prefix test here would light Overview on every
@@ -325,11 +314,6 @@ function lbl(v: number | null | undefined, noun: string): string | undefined {
  *
  *  Returned as a pair rather than computed twice, so the tail and its label
  *  cannot disagree about whether there is one. */
-function railMoney(s: ShellPayload | null): [string, string] | undefined {
-  const m = s?.campaign?.money;
-  if (!m || m.partial || !m.calls || !(m.cost_usd > 0)) return undefined;
-  return [money(m.cost_usd), `${money(m.cost_usd)} spent`];
-}
 
 /** What the ⌘K pill calls the screen you are on.
  *

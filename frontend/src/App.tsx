@@ -27,6 +27,7 @@ import CampaignHub from "./routes/CampaignHub";
 import ScenesView from "./routes/ScenesView";
 import TodoView from "./routes/TodoView";
 import CostsView from "./routes/CostsView";
+import GlobalCostsView from "./routes/GlobalCostsView";
 import LedgerView from "./routes/LedgerView";
 import SheetsView from "./routes/SheetsView";
 import TimelineView from "./routes/TimelineView";
@@ -44,6 +45,16 @@ import ClimatesView from "./routes/ClimatesView";
 import ConnectionsView from "./routes/ConnectionsView";
 import ConfigView from "./routes/ConfigView";
 import StatsView from "./routes/StatsView";
+
+function ScopedTodoView() {
+  const { cid = "" } = useParams();
+  return <TodoView key={cid} cid={cid} />;
+}
+
+function ScopedStatsView() {
+  const { cid = "" } = useParams();
+  return <StatsView key={cid} cid={cid} />;
+}
 import SetupWizard from "./routes/SetupWizard";
 
 /** The shell's own body: header, palette, routes. Split out from `App` only so
@@ -191,7 +202,7 @@ const Shell = memo(function Shell(
                    onClose={closeRail} onRetry={shell.retry} />
         )}
       <AppRoutes key={storeGen} inSetup={inSetup} rerunSetup={rerunSetup} ready={ready}
-                 dataDir={dataDir} openCid={openCid} onLeftSetup={onLeftSetup} />
+                 dataDir={dataDir} onLeftSetup={onLeftSetup} />
       </div>
       </ShellPayloadProvider>
       {/* The phone's half of the same decision, and a ROW of the shell rather
@@ -222,9 +233,9 @@ const Shell = memo(function Shell(
  *  chrome; the pages that draw the shell's numbers read them from
  *  `ShellPayloadContext`, which reaches them through this boundary on its own. */
 const AppRoutes = memo(function AppRoutes(
-  { inSetup, rerunSetup, ready, dataDir, openCid, onLeftSetup }: {
+  { inSetup, rerunSetup, ready, dataDir, onLeftSetup }: {
     inSetup: boolean; rerunSetup: boolean; ready: boolean; dataDir: string;
-    openCid: string | null; onLeftSetup: (dir: string) => void;
+    onLeftSetup: (dir: string) => void;
   },
 ) {
   const location = useLocation();
@@ -322,7 +333,9 @@ const AppRoutes = memo(function AppRoutes(
           top to bottom, and a drawer over the transcript is not where a list
           like that goes. */}
       <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
-      <Route path="/todo" element={<TodoView cid={openCid} />} />
+      <Route path="/todo" element={<TodoView cid={null} />} />
+      <Route path="/campaigns/:cid/todo" element={<ScopedTodoView />} />
+      <Route path="/costs" element={<GlobalCostsView />} />
       <Route path="/library" element={<LibraryView />} />
       {/* Search keeps its query in the URL, so a result page is a link and
           the back button returns to it after following a hit. */}
@@ -353,6 +366,7 @@ const AppRoutes = memo(function AppRoutes(
           only thing on it that can be changed -- the log's own level -- is
           saved through Configuration like every other setting. */}
       <Route path="/stats" element={<StatsView />} />
+      <Route path="/campaigns/:cid/stats" element={<ScopedStatsView />} />
     </Routes>
   );
 });

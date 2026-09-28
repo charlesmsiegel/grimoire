@@ -206,6 +206,13 @@ first if you think one should be skipped.
 
 ## Costs: three money columns, and no two of them may be added
 
+The monthly Costs trend has one narrowly scoped projection named **Estimated
+total**. It sums the three columns before display rounding to show the estimated
+cost of all activity, including modelled-only months. It is a graph reading,
+never spend, and never enters budgets or the accounting columns. An unpriced
+call makes this projection incomplete and must be labelled as such. All other
+money surfaces keep the three sources separate under the rule below.
+
 `store/usage.py` is an append-only ledger of what each LLM call reported, and
 every rollup over it carries **three** separate money figures. Adding any two
 of them together produces a number that is wrong in a direction nobody can

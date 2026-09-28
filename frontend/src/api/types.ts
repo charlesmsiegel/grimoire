@@ -1154,6 +1154,7 @@ export type SceneCostRow = UsageBucket & {
  *  `since`/`until` is the window that could actually be scanned — a library
  *  whose oldest month file was deleted by hand cannot reach past what is left. */
 export type CampaignSceneCosts = {
+  available_months?: string[];
   /** Model strings the ledger holds that no pricing entry matches, and whose
    *  calls DO carry token counts — so a rate would price them. Names the
    *  reason behind `unpriced_calls`, which is otherwise just a number. */
@@ -1164,6 +1165,14 @@ export type CampaignSceneCosts = {
   order: string;
   totals: UsageBucket; scenes: SceneCostRow[];
   listed: number; truncated: boolean;
+};
+export type MonthlyCostBucket = UsageBucket & { estimated_total_usd: number };
+export type MonthlyCosts = {
+  month: string; since: string; until: string; available_months: string[];
+  totals: MonthlyCostBucket;
+  campaigns: (MonthlyCostBucket & { campaign_id: string; campaign_name: string })[];
+  unassigned: MonthlyCostBucket;
+  trend: (MonthlyCostBucket & { month: string })[];
 };
 /** One model's per-token rates (#158), in dollars per 1,000 tokens. The cache
  *  pair is optional, and its absence is not zero: cache counts are slices of
@@ -2057,6 +2066,7 @@ export type ErrorModule = {
 export type ErrorSummary = {
   since: string; until: string; days: number;
   total: number;
+  by_campaign?: { campaign_id: string; count: number }[];
   modules: ErrorModule[];
   kinds: ErrorKindCount[];
   daily: { day: string; count: number }[];
@@ -2089,8 +2099,10 @@ export type Stats = {
   totals: PerfBucket;
   by_task: PerfBucket[];
   by_model: PerfBucket[];
+  by_campaign?: PerfBucket[];
   /** Chronological: a trend is read left to right. */
-  by_day: PerfBucket[];
+  by_day: (PerfBucket & { rerolls?: number; eligible_turns?: number;
+                          reroll_rate?: number | null })[];
   /** Failures RECORDED ANYWHERE, from the error store — including the ones
    *  that were never a call, so this total and `totals.errors` differ on
    *  purpose. */
@@ -2190,6 +2202,8 @@ export type ShellPayload = {
  *  zero leaves the list, so a label's number is always this request's. */
 export type Chore = {
   id: string;
+  campaign_id?: string;
+  campaign_name?: string;
   /** What the chore is about, which is what decides whether it can be answered
    *  with no campaign open. `campaign` needs one; `world` is a fact about a
    *  world and `library` about the whole store, so both answer either way — and

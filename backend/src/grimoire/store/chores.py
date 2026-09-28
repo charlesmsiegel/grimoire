@@ -60,7 +60,9 @@ def ignored() -> set[str]:
     return {str(x) for x in out} if isinstance(out, list) else set()
 
 
-def set_ignored(chore_id: str, on: bool) -> set[str]:
+def set_ignored(chore_id: str, on: bool, *, campaign: str = "",
+                campaign_ids: tuple[str, ...] = (),
+                campaign_chore_ids: frozenset[str] = frozenset()) -> set[str]:
     """Add or remove one id, returning the new set.
 
     Read-modify-write of one small file, unlocked: this is a per-user display
@@ -69,10 +71,17 @@ def set_ignored(chore_id: str, on: bool) -> set[str]:
     and takes no campaign lock -- there is no campaign in scope to take one on.
     """
     now = ignored()
+    # Old campaign ignores were library-wide. Preserve their effect for the
+    # campaigns that exist at migration time, then let later campaigns start
+    # with a clean preference.
+    for legacy in now & campaign_chore_ids:
+        now.remove(legacy)
+        now.update(f"{cid}:{legacy}" for cid in campaign_ids)
+    key = f"{campaign}:{chore_id}" if campaign else chore_id
     if on:
-        now.add(chore_id)
+        now.add(key)
     else:
-        now.discard(chore_id)
+        now.discard(key)
     atomic.write_text(_path(),
                       json.dumps({"ignored": sorted(now)}, indent=2) + "\n")
     return now

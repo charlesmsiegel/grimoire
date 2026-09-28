@@ -81,6 +81,7 @@ somebody enabled this feature to have.
 
 from __future__ import annotations
 
+import calendar
 import json
 import re
 import time
@@ -544,7 +545,8 @@ def calls(days: int = 30, campaign: str = "", *,
             yield row
 
 
-def _read_rows(since: str, until: str, campaign: str = "", kind: str = ""):
+def _read_rows(since: str, until: str, campaign: str = "", kind: str = "",
+               *, strict: bool = False):
     """Every well-formed row stamped in ``[since, until]``, oldest file first.
 
     Tolerant by design, in both directions. A file that cannot be read is
@@ -586,9 +588,13 @@ def _read_rows(since: str, until: str, campaign: str = "", kind: str = ""):
                             or (kind and row.get("kind") != kind):
                         continue
                     yield row
-        except (OSError, ValueError):    # ValueError covers invalid UTF-8
+        except FileNotFoundError:
+            continue  # An untouched month has no ledger file yet.
+        except (OSError, ValueError) as exc:    # ValueError covers invalid UTF-8
             # Mid-file as well as on open: a decode error surfaces on the read
             # that hits the bad bytes, and a report drawn short beats no report.
+            if strict:
+                raise OSError(f"cost ledger could not be read: {path.name}") from exc
             continue
 
 
@@ -620,6 +626,8 @@ def _window_files(since: str, until: str) -> list[Path]:
     end = date.fromisoformat(until).replace(day=1)
     while cursor <= end:
         months.append(root / f"{cursor.strftime('%Y-%m')}.jsonl")
+        if cursor == end:
+            break
         # First of the next month, without a calendar table: day 28 is in every
         # month, and +4 days from it is always in the next one.
         cursor = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -1227,7 +1235,7 @@ def lifetime_since() -> str:
     return min(days) if days else _today()
 
 
-def campaign_scenes(campaign: str, *, since: str = "", order: str = "cost",
+def campaign_scenes(campaign: str, *, since: str = "", month: str = "", order: str = "cost",
                     limit: int = CAMPAIGN_SCENES) -> dict:
     """What each of a campaign's scenes has cost, and what the campaign has.
 
@@ -1248,12 +1256,14 @@ def campaign_scenes(campaign: str, *, since: str = "", order: str = "cost",
     """
     until = _today()
     start = min(_valid_day(since) or lifetime_since(), until)
+    if month:
+        start, until = month_bounds(month)
     forward = _rename_trail(campaign, start, until)
     rates = Rates.current()
     totals = dict(_ZERO)
     buckets: dict[str, dict] = {}
     seen: dict[str, list[str]] = {}
-    for row in _read_rows(start, until, campaign):
+    for row in _read_rows(start, until, campaign, strict=bool(month)):
         if not _is_call(row):
             continue
         _add(totals, row, rates)
@@ -1269,10 +1279,79 @@ def campaign_scenes(campaign: str, *, since: str = "", order: str = "cost",
     order = order if order in SCENE_ORDERS else SCENE_ORDERS[0]
     _sort_scenes(scenes, order)
     limit = max(0, int(limit))
-    return {"campaign": campaign, "since": start, "until": until,
+    result = {"campaign": campaign, "since": start, "until": until,
             "generated_at": _now(), "totals": _rounded(totals), "order": order,
             "scenes": scenes[:limit], "listed": min(len(scenes), limit),
             "truncated": len(scenes) > limit}
+    if month:
+        result["available_months"] = available_months(month)
+    return result
+
+
+def month_bounds(month: str) -> tuple[str, str]:
+    """The inclusive UTC dates for a strictly formatted calendar month."""
+    if len(month) != 7 or month[4] != "-" or not (month[:4] + month[5:]).isdigit():
+        raise ValueError("month must be YYYY-MM")
+    try:
+        first = date.fromisoformat(month + "-01")
+    except ValueError as exc:
+        raise ValueError("month must be YYYY-MM") from exc
+    last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
+    return first.isoformat(), last.isoformat()
+
+
+def _projected(bucket: dict) -> dict:
+    # Only the trend calls this a total. Accounting and budgets continue to
+    # keep the three provenance columns apart.
+    return {**_rounded(bucket), "estimated_total_usd": _money(
+        bucket["cost_usd"] + bucket["estimated_usd"] + bucket["modelled_usd"])}
+
+
+def available_months(selected: str = "") -> list[str]:
+    existing = {p.stem for p in ledger_dir().glob("*.jsonl")
+                if len(p.stem) == 7 and p.stem[4] == "-"}
+    return sorted({key for key in existing if _valid_day(key + "-01")}
+                  | {_today()[:7]} | ({selected} if selected else set()))
+
+
+def monthly_campaigns(month: str = "") -> dict:
+    selected = month or _today()[:7]
+    since, until = month_bounds(selected)
+    rates = Rates.current()
+    totals = dict(_ZERO)
+    by_campaign: dict[str, dict] = {}
+    for row in _read_rows(since, until, strict=True):
+        if not _is_call(row):
+            continue
+        _add(totals, row, rates)
+        cid = row.get("campaign")
+        key = cid if isinstance(cid, str) and cid else ""
+        _add(by_campaign.setdefault(key, dict(_ZERO)), row, rates)
+    campaigns_out = [
+        {"campaign_id": cid, **_projected(bucket)}
+        for cid, bucket in sorted(by_campaign.items()) if cid
+    ]
+    # The trend ends at the selected month, including an empty selected month.
+    trend = []
+    cursor = date.fromisoformat(since)
+    for _ in range(12):
+        key = cursor.strftime("%Y-%m")
+        lo, hi = month_bounds(key)
+        bucket = totals if key == selected else dict(_ZERO)
+        if key != selected:
+            for row in _read_rows(lo, hi, strict=True):
+                if _is_call(row):
+                    _add(bucket, row, rates)
+        trend.append({"month": key, **_projected(bucket)})
+        if cursor.year == 1 and cursor.month == 1:
+            break
+        cursor = cursor - timedelta(days=1)
+        cursor = cursor.replace(day=1)
+    return {"month": selected, "since": since, "until": until,
+            "available_months": available_months(selected), "totals": _projected(totals),
+            "campaigns": campaigns_out,
+            "unassigned": _projected(by_campaign.get("", dict(_ZERO))),
+            "trend": list(reversed(trend))}
 
 
 # ---- budgets ----

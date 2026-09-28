@@ -7,14 +7,15 @@ import {
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
+import ReportScopeSelector from "../components/ReportScopeSelector";
+import ReportMonth, { useReportMonth } from "../components/ReportMonth";
 
-/** What a campaign has cost, scene by scene, over its whole life (#153).
+/** What a campaign has cost, scene by scene, in a selected UTC month (#153).
  *
  *  The scene inspector's Cost section answers "what is this scene costing me"
  *  while you are in it. This answers the question you cannot ask from inside
  *  one scene: which scenes were expensive, and what has the campaign cost in
- *  total. Both read the same ledger; only the window differs — this one is not
- *  windowed at all, because "over all time" is the question.
+ *  total. Both read the same ledger; the selected month is part of the URL.
  *
  *  A page rather than another section of the inspector, and that is the one
  *  design call here worth stating. The inspector is read mid-turn and its
@@ -53,6 +54,7 @@ function day(ts: string): string {
 
 export function CostsView() {
   const { cid = "" } = useParams();
+  const [month, chooseMonth] = useReportMonth();
   // Held WITH its cid, like the report below: this route is not keyed on `cid`,
   // so a campaign switch keeps the component mounted, and a name read whose
   // response settles after the new one's would label this campaign's spend --
@@ -64,11 +66,11 @@ export function CostsView() {
   // campaign past the cap would be missing a recent cheap scene from a list
   // headed "most recent".
   const [sort, setSort] = useState<Sort>("cost");
-  // Held WITH the campaign the rows came from, the way `LedgerView` holds its
+  // Held WITH the campaign and month the rows came from, the way `LedgerView` holds its
   // ledger: this route is not keyed on `cid`, so a campaign switch keeps the
   // component mounted and a bare `CampaignSceneCosts | null` would show one
   // game's spend under the other's name until the new read settled.
-  const [loaded, setLoaded] = useState<{ cid: string; data: CampaignSceneCosts } | null>(null);
+  const [loaded, setLoaded] = useState<{ cid: string; month: string; data: CampaignSceneCosts } | null>(null);
   /** The read failed, so there is no report — as distinct from a report saying
    *  the campaign has spent nothing. Degrading to `EMPTY` printed a `$0.00`
    *  headline and "Nothing has been generated" over a campaign with real
@@ -91,13 +93,13 @@ export function CostsView() {
   useEffect(() => {
     let live = true;
     setFailed(false);
-    api.getCampaignSceneCosts(cid, sort)
-      .then((d) => { if (live) setLoaded({ cid, data: d }); })
+    api.getCampaignSceneCosts(cid, sort, month)
+      .then((d) => { if (live) setLoaded({ cid, month, data: d }); })
       .catch(() => { if (!live) return; setLoaded(null); setFailed(true); });
     return () => { live = false; };
-  }, [cid, sort, reload]);
+  }, [cid, month, sort, reload]);
 
-  const report = loaded && loaded.cid === cid ? loaded.data : null;
+  const report = loaded && loaded.cid === cid && loaded.month === month ? loaded.data : null;
   const rows = report?.scenes ?? [];
 
   const paletteSource = useCallback((): PaletteItem[] =>
@@ -122,7 +124,7 @@ export function CostsView() {
           the body now (`<Money/>` below), and what is left in the column is
           the campaign, the order, and a summary line that says whether the
           headline can be trusted at all. */}
-      <ColumnSection label="All time">
+      <ColumnSection label={month}>
         {failed && <p className="column-empty">Unread — no total to show.</p>}
         {!failed && totals === undefined
           && <p className="column-empty">Reading the ledger…</p>}
@@ -160,7 +162,7 @@ export function CostsView() {
         <div className="shelf-head">
           <div>
             {/* Keyed to what came BACK, not to what was just clicked. An
-                all-time rescan can be slow, and until it lands the rows are
+                monthly rescan can be slow, and until it lands the rows are
                 still in the previous order — a heading following `sort` would
                 describe them wrongly for the length of the request. */}
             <div className="eyebrow">
@@ -168,6 +170,9 @@ export function CostsView() {
               {report && report.order !== sort && " · REORDERING…"}
             </div>
             <h1 className="screen-title">Costs by scene</h1>
+            <ReportScopeSelector report="costs" cid={cid} suffix={`?month=${month}`} />
+            <ReportMonth month={month} available={report?.available_months ?? [month]}
+              onChange={chooseMonth} />
           </div>
         </div>
 
@@ -223,7 +228,7 @@ export function CostsView() {
 
         {!failed && report !== null && rows.length === 0 && (
           <p className="empty-state">
-            <span className="empty-what">Nothing has been generated in this campaign yet.</span>{" "}
+            <span className="empty-what">Nothing has been generated in this campaign this month.</span>{" "}
             <Link to={`/campaigns/${cid}`}>Back to play →</Link>
           </p>
         )}
@@ -298,7 +303,7 @@ export function CostsView() {
           <p className="ledger-lead">
             Showing the {report.listed} scenes that came first by{" "}
             {SORTS.find((s) => s.key === report.order)?.label.toLowerCase()
-              ?? "spend"}. The all-time total beside them covers every one.
+              ?? "spend"}. The monthly total beside them covers every one.
           </p>
         )}
 
@@ -319,7 +324,7 @@ export function CostsView() {
         {!failed && totals !== undefined && totals.calls > 0
           && totals.priced_calls <= totals.subscription_calls && (
           <p className="ledger-lead">
-            No provider reported a charge for this campaign — everything here was
+            No provider reported a charge for this campaign this month — everything here was
             billed to a subscription, estimated from your own rates, or came back
             with no price at all. None of it is money anybody was invoiced for.
           </p>

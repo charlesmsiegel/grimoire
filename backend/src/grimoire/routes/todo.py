@@ -486,6 +486,7 @@ LIBRARY_IDS = frozenset(i for i, _b in LIBRARY_BUILDERS)
 #: than accepting an id blind: a set that accumulates ids nothing emits grows
 #: forever and silences things nobody can name.
 KNOWN = frozenset(i for i, _b in BUILDERS)
+CAMPAIGN_IDS = frozenset(i for i, _b in CAMPAIGN_BUILDERS)
 
 #: The order the groups are read in, most urgent first.
 #:
@@ -509,96 +510,22 @@ GROUP_ORDER = (
 )
 
 
-def _any_undescribed(ctx: _Ctx) -> bool:
-    """`_chore_world_describe` at `n > 0`, stopping at the first image it finds.
-
-    The `try` is per world and catches what `_world_describe_counts` catches,
-    which is the whole point of it being here rather than inline: a world that
-    cannot be read is skipped there, so it has to be skipped here too. Letting
-    an `OSError` out instead would not merely disagree with the page -- the
-    badge is computed for `/api/shell`, so an unreadable world directory would
-    500 every navigation over a backlog the page below it shrugs off and
-    renders without.
-    """
-    for w in ctx.worlds():
-        try:
-            root = store.worlds.paths.world_root(w["id"])
-            # `has_undescribed`, never a count: this probe exists because the
-            # `_CHEAP` roster is for chores whose COUNT costs far more than
-            # their presence, and summing a backlog to answer "is it empty" is
-            # the thing that roster avoids.
-            if (any(store.image_descriptions.has_undescribed(root, base)
-                    for base in _DESCRIBE_BASES)
-                    or store.world_images.has_undescribed(w["id"])):
-                return True
-        except (OSError, store.worlds.paths.WorldNotFound):
-            continue
-    return False
-
-
-#: Cheap yes/no tests for chores whose COUNT costs far more than their
-#: presence. Only the rail's badge may use these, and only because it counts
-#: chores rather than instances -- `live` always computes the real number,
-#: because the number is what the row says out loud.
-#:
-#: `test_todo_route.py` holds `badge_count` and `live(...)["count"]` to the
-#: same answer, including over a world neither of them can read. A badge that
-#: can disagree with the page under it is the stale number this module is
-#: arranged to not have, arrived at from the other side.
-PRESENCE = {
-    "world-describe": _any_undescribed,
-}
-
-
-def _builders_for(ctx: _Ctx):
-    """Which tables answer for this request.
-
-    The library builders always; the campaign ones only where there is a
-    campaign to read. With no campaign open, or an id naming none, a campaign
-    builder would answer zero -- which is the same output for "nothing waiting"
-    as for "nothing to ask", and the second is what is true.
-    """
-    return BUILDERS if ctx.has_campaign() else LIBRARY_BUILDERS
-
-
-def _chores(cid: str) -> list[dict]:
-    """Every chore with a non-zero count. A chore at zero is not in the list."""
-    ctx = _Ctx(cid)
-    return [c for c in (b(ctx) for _i, b in _builders_for(ctx)) if c]
+def _library_chores() -> list[dict]:
+    """Library chores once per global report, independent of an open campaign."""
+    ctx = _Ctx("")
+    return [c for c in (b(ctx) for _i, b in LIBRARY_BUILDERS) if c]
 
 
 def badge_count(cid: str, ctx: _Ctx | None = None) -> int:
-    """`live(cid)["count"]`, without paying for the totals behind the labels.
+    """A compatibility read for callers of the old rail count.
 
-    The rail reads this on every navigation and renders one number: how many
-    chores are outstanding. Summing a whole-library image backlog to learn that
-    one of them is non-empty is the walk that would make the badge cost more
-    than the page it sits beside -- so a chore with an entry in `PRESENCE` is
-    asked the yes/no directly and stops at the first instance it finds.
-
-    Identical output to `live`, by construction and by test: same builders,
-    same ignore set, and a presence test that is the same predicate as
-    `n > 0`.
-
-    `ctx` lets `/api/shell` share the one it built for its campaign block, so a
-    derivation both halves ask for (the sheet tally) is computed once for the
-    request. It must be a fresh ctx of THIS request for `cid`; one for another
-    campaign is refused rather than used, since its memo answers for a
-    different cast.
+    The global rail omits its badge because counting every campaign on each
+    navigation would defeat its cheap-read budget. A direct count still agrees
+    with the page's current scope, including its scoped ignore preferences.
     """
-    if ctx is None:
-        ctx = _Ctx(cid)
-    elif ctx.cid != cid:
+    if ctx is not None and ctx.cid != cid:
         raise ValueError(f"a to-do context for {ctx.cid!r} cannot count for {cid!r}")
-    off = store.chores.ignored()
-    n = 0
-    for cid_, builder in _builders_for(ctx):
-        if cid_ in off:
-            continue
-        test = PRESENCE.get(cid_)
-        if test(ctx) if test else builder(ctx) is not None:
-            n += 1
-    return n
+    return live(cid)["count"]
 
 
 #: How many instances one chore will list. A chore can cover a whole roster,
@@ -765,14 +692,39 @@ ITEMS = {
 def live(cid: str) -> dict:
     """The chore list split into what counts and what has been waved off."""
     off = store.chores.ignored()
-    every = _chores(cid)
-    live_chores = [c for c in every if c["id"] not in off]
+    if cid:
+        ctx = _Ctx(cid)
+        if not ctx.has_campaign():
+            raise HTTPException(404, f"campaign not found: {cid}")
+        every = [c for c in (b(ctx) for _i, b in CAMPAIGN_BUILDERS) if c]
+        name = store.campaigns.read_campaign(cid)["meta"].get("name") or cid
+        for chore in every:
+            chore["campaign_id"] = cid
+            chore["campaign_name"] = name
+    else:
+        every = _library_chores()
+        for campaign in store.campaigns.read.list_campaigns():
+            campaign_id = campaign["id"]
+            ctx = _Ctx(campaign_id)
+            if not ctx.has_campaign():
+                continue
+            for _id, builder in CAMPAIGN_BUILDERS:
+                candidate = builder(ctx)
+                if candidate:
+                    candidate["campaign_id"] = campaign_id
+                    candidate["campaign_name"] = campaign.get("name") or campaign_id
+                    every.append(candidate)
+    def is_ignored(chore: dict) -> bool:
+        campaign_id = chore.get("campaign_id", "")
+        key = f"{campaign_id}:{chore['id']}" if campaign_id else chore["id"]
+        return key in off or (campaign_id and chore["id"] in off)
+    live_chores = [c for c in every if not is_ignored(c)]
     return {
         "chores": live_chores,
-        "ignored": [c for c in every if c["id"] in off],
+        "ignored": [c for c in every if is_ignored(c)],
         # The badge number, and it is the one the reader still cares about:
         # an ignored chore is not counted anywhere.
-        "count": sum(1 for c in every if c["id"] not in off),
+        "count": len(live_chores),
         # The headings, in reading order, and only the ones that have
         # something under them. Sent rather than inferred by the view: a view
         # that derived the order from the chore list would reorder its own
@@ -835,6 +787,14 @@ def put_todo_ignored(chore_id: str, body: dict):
     """
     if chore_id not in KNOWN:
         raise HTTPException(400, f"unknown chore: {chore_id}")
+    campaign = str(body.get("campaign") or "")
+    if chore_id in CAMPAIGN_IDS:
+        if not campaign or not _Ctx(campaign).has_campaign():
+            raise HTTPException(404, f"campaign not found: {campaign}")
+    elif campaign:
+        raise HTTPException(400, "library chores cannot have a campaign")
     on = bool(body.get("ignored"))
-    store.chores.set_ignored(chore_id, on)
+    ids = tuple(row["id"] for row in store.campaigns.read.list_campaigns())
+    store.chores.set_ignored(chore_id, on, campaign=campaign,
+                             campaign_ids=ids, campaign_chore_ids=CAMPAIGN_IDS)
     return {"ok": True, "ignored": sorted(store.chores.ignored())}

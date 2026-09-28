@@ -28,6 +28,23 @@ def _call(ms: int, *, task: str = "chat", model: str = "realm/opus",
                  campaign=campaign, ts=f"{day or _today()}T10:00:00Z")
 
 
+def test_manual_rerolls_exclude_replay_and_have_a_visible_denominator(home):
+    _call(100, task="chat", campaign="saltmarch")
+    _call(200, task="retry", campaign="saltmarch")
+    _call(300, task="regenerate")
+    _call(400, task="replay")
+    report = metrics.performance(1)
+    day = report["by_day"][0]
+    assert (day["rerolls"], day["eligible_turns"], day["reroll_rate"]) == (2, 3, 2 / 3)
+    assert {row["key"]: row["calls"] for row in report["by_campaign"]} == {
+        "saltmarch": 2, "Outside a campaign": 2}
+
+
+def test_replay_only_day_has_no_manual_reroll_rate(home):
+    _call(100, task="replay")
+    assert metrics.performance(1)["by_day"][0]["reroll_rate"] is None
+
+
 # ---- the percentile itself ----
 def test_a_known_distribution_gives_the_textbook_cut_points():
     """1..100 by the inclusive method: rank (n-1)·q, interpolated, then rounded

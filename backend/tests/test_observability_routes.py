@@ -61,6 +61,18 @@ def test_stats_can_be_scoped_to_one_campaign_and_window(client):
     assert body["totals"]["calls"] == 1 and body["totals"]["max"] == 100
 
 
+def test_global_error_rows_partition_campaign_and_unassigned_activity(client):
+    logs.record("error", "llm", "first", campaign="saltmarch")
+    logs.record("error", "llm", "second", campaign="realm")
+    logs.record("error", "runner", "third")
+    global_rows = client.get("/api/errors").json()["by_campaign"]
+    assert {row["campaign_id"]: row["count"] for row in global_rows} == {
+        "saltmarch": 1, "realm": 1, "": 1}
+    scoped = client.get("/api/errors?campaign=saltmarch").json()
+    assert scoped["total"] == 1
+    assert scoped["by_campaign"] == [{"campaign_id": "saltmarch", "count": 1}]
+
+
 def test_a_silly_window_draws_a_chart_rather_than_a_422(client):
     assert client.get("/api/stats?days=100000").json()["days"] == logs.MAX_DAYS
 

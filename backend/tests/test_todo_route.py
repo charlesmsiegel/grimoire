@@ -51,6 +51,43 @@ def test_a_clean_campaign_has_no_chores(client, campaign):
     assert body["count"] == 0
 
 
+def test_global_rows_keep_campaigns_separate_and_scoped_rows_exclude_library(client, campaign):
+    first, wid = campaign
+    second = client.post("/api/campaigns", json={"name": "Realm", "world": wid}).json()["id"]
+    for cid in (first, second):
+        for i in range(2):
+            client.post(f"/api/campaigns/{cid}/scenes", json={"title": f"Scene {i}"})
+    rows = [row for row in _todo(client, "")["chores"] if row["id"] == "open-scenes"]
+    assert {row["campaign_id"] for row in rows} == {first, second}
+    assert {row["campaign_name"] for row in rows} == {"A Long Run", "Realm"}
+    scoped = _todo(client, first)
+    assert all(row["campaign_id"] == first for row in scoped["chores"])
+    assert all(row["scope"] == "campaign" for row in scoped["chores"])
+    items = client.get("/api/todo/open-scenes/items", params={"campaign": second}).json()
+    assert items["total"] == 2
+    assert all(item["fix"].startswith(f"/campaigns/{second}/") for item in items["items"])
+
+
+def test_campaign_ignore_is_scoped_and_legacy_ids_migrate_on_write(client, campaign):
+    first, wid = campaign
+    second = client.post("/api/campaigns", json={"name": "Realm", "world": wid}).json()["id"]
+    for cid in (first, second):
+        for i in range(2):
+            client.post(f"/api/campaigns/{cid}/scenes", json={"title": f"Scene {i}"})
+    client.put("/api/todo/open-scenes/ignored", json={"ignored": True, "campaign": first})
+    assert "open-scenes" in {row["id"] for row in _todo(client, first)["ignored"]}
+    assert "open-scenes" in {row["id"] for row in _todo(client, second)["chores"]}
+    store.chores.set_ignored("open-scenes", True)
+    assert "open-scenes" in {row["id"] for row in _todo(client, second)["ignored"]}
+    client.put("/api/todo/open-scenes/ignored", json={"ignored": False, "campaign": first})
+    assert "open-scenes" in {row["id"] for row in _todo(client, first)["chores"]}
+    assert "open-scenes" in {row["id"] for row in _todo(client, second)["ignored"]}
+    later = client.post("/api/campaigns", json={"name": "Winifred", "world": wid}).json()["id"]
+    for i in range(2):
+        client.post(f"/api/campaigns/{later}/scenes", json={"title": f"Scene {i}"})
+    assert "open-scenes" in {row["id"] for row in _todo(client, later)["chores"]}
+
+
 def test_a_chore_at_zero_leaves_the_list(client, campaign):
     """The property the whole page rests on.
 
@@ -85,7 +122,7 @@ def test_ignoring_moves_a_chore_and_stops_counting_it(client, campaign):
         client.post(f"/api/campaigns/{cid}/scenes", json={"title": f"Scene {i}"})
     assert _todo(client, cid)["count"] == 1
 
-    r = client.put("/api/todo/open-scenes/ignored", json={"ignored": True})
+    r = client.put("/api/todo/open-scenes/ignored", json={"ignored": True, "campaign": cid})
     assert r.status_code == 200
 
     body = _todo(client, cid)
@@ -100,8 +137,8 @@ def test_restoring_puts_it_back(client, campaign):
     cid, _ = campaign
     for i in range(2):
         client.post(f"/api/campaigns/{cid}/scenes", json={"title": f"Scene {i}"})
-    client.put("/api/todo/open-scenes/ignored", json={"ignored": True})
-    client.put("/api/todo/open-scenes/ignored", json={"ignored": False})
+    client.put("/api/todo/open-scenes/ignored", json={"ignored": True, "campaign": cid})
+    client.put("/api/todo/open-scenes/ignored", json={"ignored": False, "campaign": cid})
     assert _todo(client, cid)["count"] == 1
 
 
@@ -115,9 +152,9 @@ def test_the_shell_badge_does_not_count_an_ignored_chore(client, campaign):
     cid, _ = campaign
     for i in range(2):
         client.post(f"/api/campaigns/{cid}/scenes", json={"title": f"Scene {i}"})
-    assert client.get("/api/shell", params={"campaign": cid}).json()["todo"] == 1
-    client.put("/api/todo/open-scenes/ignored", json={"ignored": True})
-    assert client.get("/api/shell", params={"campaign": cid}).json()["todo"] == 0
+    assert client.get("/api/shell", params={"campaign": cid}).json()["todo"] is None
+    client.put("/api/todo/open-scenes/ignored", json={"ignored": True, "campaign": cid})
+    assert client.get("/api/shell", params={"campaign": cid}).json()["todo"] is None
 
 
 def test_an_unknown_chore_id_is_refused(client):
@@ -332,7 +369,7 @@ def test_a_campaigns_own_world_is_reported_once_not_twice(client, campaign):
 
     # A second world the campaign does not use is reported, from the world side.
     _world_with_a_character(client, "Elsewhere")
-    ids = {c["id"] for c in _todo(client, cid)["chores"]}
+    ids = {c["id"] for c in _todo(client, "")["chores"]}
     assert {"taglines", "world-taglines"} <= ids
 
 
@@ -344,22 +381,17 @@ def test_the_image_backlog_is_not_excluded_for_the_campaigns_world(client, campa
     the backlog rather than de-duplicate it. This is the rule a later reader is
     most likely to "fix" into consistency with `world-taglines`.
     """
-    cid, wid = campaign
+    _cid, wid = campaign
     ch = client.post(f"/api/worlds/{wid}/characters",
                      json={"name": "Winifred"}).json()["character"]
     _add_images(client, wid, ch, "gallery_1")
 
-    ids = {c["id"] for c in _todo(client, cid)["chores"]}
+    ids = {c["id"] for c in _todo(client, "")["chores"]}
     assert "world-describe" in ids
 
 
 def test_the_badge_never_disagrees_with_the_page(client, campaign):
-    """`badge_count` short-circuits; `live` counts. They must still agree.
-
-    The rail reads the cheap one on every navigation and the page computes the
-    real totals. A badge saying 4 over a page showing 5 is precisely the stale
-    number this module is arranged to not have, arrived at from the other side.
-    """
+    """The compatibility count still agrees with the live report at either scope."""
     from grimoire.routes import todo as todo_routes
 
     cid, wid = campaign
@@ -368,43 +400,31 @@ def test_the_badge_never_disagrees_with_the_page(client, campaign):
     _add_images(client, wid, ch, "gallery_1")
     _world_with_a_character(client, "Elsewhere")
 
-    for c in (cid, "", "no-such-campaign"):
+    for c in (cid, ""):
         assert todo_routes.badge_count(c) == todo_routes.live(c)["count"], c
 
 
-def test_a_world_that_cannot_be_read_does_not_break_the_badge(client, campaign,
-                                                              monkeypatch):
-    """The page skips an unreadable world. The badge has to skip the same one.
-
-    `_world_describe_counts` wraps each world in a `try`, so a directory that
-    has gone unreadable -- permissions, a store mid-sync, a folder replaced
-    under the walk -- costs that world's backlog and nothing else. The badge
-    takes the short-circuit path instead, and if that path let the `OSError`
-    out it would not merely disagree with the page: the badge is computed for
-    `/api/shell`, so every navigation would 500 over a world the page below it
-    renders without.
-    """
-    from grimoire.routes import todo as todo_routes
-
-    cid, wid = campaign
+def test_a_world_that_cannot_be_read_does_not_break_the_global_page(client, campaign,
+                                                                     monkeypatch):
+    """One unreadable world costs only its row, not the whole global report."""
+    _cid, wid = campaign
     ch = client.post(f"/api/worlds/{wid}/characters",
                      json={"name": "Winifred"}).json()["character"]
     _add_images(client, wid, ch, "gallery_1")
     bad_wid, _ = _world_with_a_character(client, "Unreadable")
     bad_root = store.worlds.paths.world_root(bad_wid)
 
-    real = store.image_descriptions.has_undescribed
+    real = store.image_descriptions.undescribed_count
 
     def explode(root, base="characters"):
         if root == bad_root:
             raise PermissionError(f"cannot read {root}")
         return real(root, base)
 
-    monkeypatch.setattr(store.image_descriptions, "has_undescribed", explode)
+    monkeypatch.setattr(store.image_descriptions, "undescribed_count", explode)
 
-    # Still the readable world's backlog, and still the same number the page
-    # would draw -- which `live` reaches without going through `explode`.
-    assert todo_routes.badge_count(cid) == todo_routes.live(cid)["count"]
+    rows = _todo(client, "")["chores"]
+    assert "world-describe" in {row["id"] for row in rows}
 
 
 def test_expanding_a_world_chore_lists_worlds_not_images(client, campaign):
@@ -514,7 +534,7 @@ def test_an_ignored_chore_takes_its_heading_with_it(client, campaign):
     victim = body["chores"][0]
     same_group = [c for c in body["chores"] if c["group"] == victim["group"]]
 
-    client.put(f"/api/todo/{victim['id']}/ignored", json={"ignored": True})
+    client.put(f"/api/todo/{victim['id']}/ignored", json={"ignored": True, "campaign": cid})
     after = client.get("/api/todo", params={"campaign": cid}).json()
 
     if len(same_group) == 1:

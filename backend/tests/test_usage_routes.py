@@ -60,6 +60,26 @@ def _rows(home):
             for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def test_monthly_cost_route_validates_month_and_keeps_empty_month(client):
+    bad = client.get("/api/usage/monthly", params={"month": "2026-13"})
+    assert bad.status_code == 400
+    empty = client.get("/api/usage/monthly", params={"month": "2026-01"})
+    assert empty.status_code == 200
+    report = empty.json()
+    assert report["month"] == "2026-01"
+    assert report["since"] == "2026-01-01" and report["until"] == "2026-01-31"
+    assert report["totals"]["calls"] == 0
+    assert report["trend"][-1]["estimated_total_usd"] == 0
+
+
+def test_monthly_cost_route_does_not_report_zero_for_a_failed_read(client, monkeypatch):
+    def unreadable(*args, **kwargs):
+        raise OSError("ledger unavailable")
+        yield  # pragma: no cover - make this a generator like the real reader
+    monkeypatch.setattr(store.usage, "_read_rows", unreadable)
+    assert client.get("/api/usage/monthly", params={"month": "2026-01"}).status_code == 503
+
+
 def _campaign(client, name="Run"):
     wid = client.post("/api/worlds", json={"name": name}).json()["id"]
     return wid, client.post("/api/campaigns",

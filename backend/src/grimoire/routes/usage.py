@@ -111,7 +111,7 @@ _ORDER = Query("cost", description="How to order the scenes before the list is "
 
 
 @router.get("/campaigns/{cid}/usage/scenes")
-def get_campaign_scene_costs(cid: str, order: str = _ORDER):
+def get_campaign_scene_costs(cid: str, order: str = _ORDER, month: str = ""):
     """What each of this campaign's scenes has cost, over the whole ledger.
 
     The all-time view, and the only read here that is not windowed: "what has
@@ -137,7 +137,12 @@ def get_campaign_scene_costs(cid: str, order: str = _ORDER):
     with a recent cheap scene missing from a list that claims to show it.
     """
     _campaign_root_or_404(cid)
-    rollup = store.usage.campaign_scenes(cid, order=order)
+    try:
+        rollup = store.usage.campaign_scenes(cid, order=order, month=month)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(503, "cost ledger could not be read") from exc
     titles = {s["id"]: s for s in store.scenes.list_scenes(cid)}
     named = []
     for bucket in rollup["scenes"]:
@@ -157,6 +162,21 @@ def get_campaign_scene_costs(cid: str, order: str = _ORDER):
     # `z.ai/...` where the ledger recorded `z-ai/...`.
     return {**rollup, "scenes": named,
             "unpriced_models": store.usage.unpriced_models()}
+
+
+@router.get("/usage/monthly")
+def get_monthly_costs(month: str = ""):
+    try:
+        rollup = store.usage.monthly_campaigns(month)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(503, "cost ledger could not be read") from exc
+    names = {c["id"]: c.get("name") or c["id"]
+             for c in store.campaigns.read.list_campaigns()}
+    return {**rollup, "campaigns": [
+        {**row, "campaign_name": names.get(row["campaign_id"], row["campaign_id"])}
+        for row in rollup["campaigns"]]}
 
 
 @router.get("/pricing")

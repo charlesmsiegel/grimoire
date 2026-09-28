@@ -222,6 +222,8 @@ def performance(days: int = DEFAULT_DAYS, campaign: str = "") -> dict:
     by_task: dict[str, _Series] = {}
     by_model: dict[str, _Series] = {}
     by_day: dict[str, _Series] = {}
+    by_campaign: dict[str, _Series] = {}
+    attempts: dict[str, dict[str, int]] = {}
     for row in usage.calls(span, campaign, since=since, until=until):
         ms = _int(row.get("duration_ms"))
         failed = row.get("status") == "error"
@@ -229,6 +231,20 @@ def performance(days: int = DEFAULT_DAYS, campaign: str = "") -> dict:
         _label_series(by_task, row.get("task"), MAX_BUCKETS).add(ms, failed)
         _label_series(by_model, row.get("model"), MAX_BUCKETS).add(ms, failed)
         _label_series(by_day, str(row.get("ts", ""))[:10], 0).add(ms, failed)
+        _label_series(by_campaign, row.get("campaign") or "Outside a campaign", 0).add(ms, failed)
+        day = str(row.get("ts", ""))[:10]
+        task = row.get("task")
+        if task in ("chat", "retry", "regenerate"):
+            count = attempts.setdefault(day, {"rerolls": 0, "eligible_turns": 0})
+            count["eligible_turns"] += 1
+            if task in ("retry", "regenerate"):
+                count["rerolls"] += 1
+    daily = []
+    for day in sorted(by_day):
+        count = attempts.get(day, {"rerolls": 0, "eligible_turns": 0})
+        eligible = count["eligible_turns"]
+        daily.append({**by_day[day].report(day), **count,
+                      "reroll_rate": count["rerolls"] / eligible if eligible else None})
     return {
         "days": span, "since": since, "until": until, "campaign": campaign,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -238,7 +254,8 @@ def performance(days: int = DEFAULT_DAYS, campaign: str = "") -> dict:
         "totals": overall.report(""),
         "by_task": _ranked(by_task),
         "by_model": _ranked(by_model),
-        "by_day": [by_day[day].report(day) for day in sorted(by_day)],
+        "by_campaign": [by_campaign[key].report(key) for key in sorted(by_campaign)],
+        "by_day": daily,
         # From the error STORE, not the ledger -- see the module docstring on
         # why the two totals differ and why that is the point.
         "errors": errors.summary(span, campaign=campaign,

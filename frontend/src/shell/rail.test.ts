@@ -195,11 +195,22 @@ describe("Images points at the world section that holds it", () => {
   });
 });
 
-test("Costs is absent with no campaign open, present with one", () => {
+test("Grimoire Costs stays global and Open campaign Costs is scoped", () => {
   const none = { cid: null };
-  expect(APP_ROWS.find((r) => r.id === "costs")!.to(none, WITH_MODULE)).toBeNull();
+  expect(APP_ROWS.find((r) => r.id === "costs")!.to(none, WITH_MODULE)).toBe("/costs");
   expect(APP_ROWS.find((r) => r.id === "costs")!.to(ctx, WITH_MODULE))
+    .toBe("/costs");
+  expect(CAMPAIGN_ROWS.find((r) => r.id === "costs")!.to(ctx, WITH_MODULE))
     .toBe("/campaigns/c1/costs");
+});
+
+test("each report URL lights one rail row in the right tier", () => {
+  for (const report of ["todo", "costs", "stats"]) {
+    expect(activeIn(APP_ROWS, `/${report}`)).toEqual([report]);
+    expect(activeIn(CAMPAIGN_ROWS, `/${report}`)).toEqual([]);
+    expect(activeIn(CAMPAIGN_ROWS, `/campaigns/c1/${report}`)).toEqual([report]);
+    expect(activeIn(APP_ROWS, `/campaigns/c1/${report}`)).toEqual([]);
+  }
 });
 
 test("Search advertises the chord the app actually answers", () => {
@@ -214,62 +225,8 @@ test("Search advertises the chord the app actually answers", () => {
   expect(SEARCH_CHORD).toBe("mod+shift+f");
 });
 
-describe("the Costs tail", () => {
-  const costs = () => APP_ROWS.find((r) => r.id === "costs")!;
-  const withMoney = (over: Record<string, unknown>) => ({
-    campaigns: 1, todo: null,
-    campaign: {
-      id: "c1", name: "A Run", world_name: "Saltmarch", scenes: 2,
-      open: [], ledger_open: 0, sheets: null, unreviewed: null,
-      pending: [], images_undescribed: null,
-      money: {
-        calls: 4, cost_usd: 4.82, estimated_usd: 0, modelled_usd: 0,
-        unpriced_calls: 0, unmetered_calls: 0, subscription_calls: 0,
-        modelled_calls: 0, priced_calls: 4, total_tokens: 900,
-        partial: false, ...over,
-      },
-    },
-  } as any);
-
-  test("spend is what it carries", () => {
-    expect(costs().tail!(withMoney({}))).toBe("$4.82");
-    expect(costs().tailLabel!(withMoney({}))).toBe("$4.82 spent");
-  });
-
-  test("only spend — the other two columns are never added into it", () => {
-    // Three separate claims about money. A tail summing any two of them is the
-    // one number nobody can recover, so the estimate and the model stay on the
-    // hub's card where they can be labelled.
-    const tail = costs().tail!(withMoney(
-      { cost_usd: 1, estimated_usd: 10, modelled_usd: 100 }));
-    expect(tail).toBe("$1.00");
-  });
-
-  test("a subscription-billed campaign draws nothing rather than $0.00", () => {
-    // Real usage, no money paid. Rendering the spend column as $0.00 here
-    // would say a played campaign was free.
-    expect(costs().tail!(withMoney(
-      { cost_usd: 0, estimated_usd: 1.25, subscription_calls: 4, priced_calls: 4 })))
-      .toBeUndefined();
-  });
-
-  test("an aggregate that could not be counted draws nothing", () => {
-    expect(costs().tail!(withMoney({ partial: true, cost_usd: 4.82 })))
-      .toBeUndefined();
-  });
-
-  test("a campaign that has run nothing draws nothing", () => {
-    expect(costs().tail!(withMoney({ calls: 0, cost_usd: 0 }))).toBeUndefined();
-  });
-
-  test("a payload from before the field existed draws nothing", () => {
-    const old = { campaigns: 1, todo: null,
-                  campaign: { id: "c1", name: "A Run", world_name: "S",
-                              scenes: 0, open: [], ledger_open: 0, sheets: null,
-                              unreviewed: null, pending: [],
-                              images_undescribed: null } } as any;
-    expect(costs().tail!(old)).toBeUndefined();
-  });
+test("the global Costs rail omits a campaign-specific money tail", () => {
+  expect(APP_ROWS.find((r) => r.id === "costs")!.tail).toBeUndefined();
 });
 
 test("no OTHER row carries a money tail", () => {

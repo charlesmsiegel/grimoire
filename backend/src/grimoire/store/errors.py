@@ -177,6 +177,7 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
     since, until = logs.span(since, until, days)
     by_module: dict[str, dict] = {}
     by_kind: dict[str, int] = {}
+    by_campaign: dict[str, int] = {}
     daily: dict[str, int] = {}
     # `logs.Newest` rather than "the last `cap` rows `scan` yielded": that
     # would be the newest only while the file's order matches its timestamps,
@@ -187,6 +188,9 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
     for row in logs.scan(level="error", module=module, campaign=campaign,
                          since=since, until=until):
         total += 1
+        raw_cid = row.get("campaign")
+        cid = raw_cid if isinstance(raw_cid, str) else ""
+        by_campaign[cid] = by_campaign.get(cid, 0) + 1
         name = str(row.get("module") or "app")
         kind = str(row.get("kind") or "unspecified")
         bucket = by_module.setdefault(name, {"module": name, "count": 0, "kinds": {},
@@ -207,6 +211,8 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
         # cannot describe three different spans when `since`/`until` name one.
         "since": since, "until": until, "days": _days_between(since, until),
         "total": total,
+        "by_campaign": [{"campaign_id": key, "count": count}
+                        for key, count in sorted(by_campaign.items())],
         "modules": sorted(
             ({**b, "kinds": _ranked(b["kinds"])} for b in by_module.values()),
             key=lambda b: (-b["count"], b["module"])),

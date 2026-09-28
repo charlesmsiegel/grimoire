@@ -44,11 +44,9 @@ test("the current section is marked for a screen reader, not only coloured", () 
   expect(todo).toHaveAttribute("aria-current", "page");
 });
 
-test("a badge is never the only carrier of its count", () => {
+test("the global To do tab does not display an open-campaign count", () => {
   at("/campaigns/run");
-  // "14" is drawn; "14 things noticed" is what is announced.
-  expect(screen.getByText("14")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: /to do.*14 things noticed/i })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /^to do$/i })).toBeInTheDocument();
 });
 
 test("More opens the rail rather than going anywhere", async () => {

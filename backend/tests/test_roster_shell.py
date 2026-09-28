@@ -225,11 +225,11 @@ def _count_calls(monkeypatch, owner, name):
 
 
 def test_the_shell_builds_no_full_listing_and_tallies_sheets_once(shell_client, monkeypatch):
-    """`/api/shell` runs on every navigation. It used to build the full
-    character listing three times (twice inside two sheet tallies, once for
-    the to-do gaps) and the PC listing twice, to count ids and read two
-    sidecar facts. The tally is shared through one to-do context now, and
-    nothing on the route needs a full row."""
+    """`/api/shell` runs on every navigation and reads no full roster rows.
+
+    The report's global To do count is deliberately absent from the shell:
+    obtaining it would sweep all campaigns on every navigation.
+    """
     client, cid = shell_client
     full_chars = _count_calls(monkeypatch, store.overlay, "list_characters")
     full_pcs = _count_calls(monkeypatch, store.overlay, "list_pcs")
@@ -241,9 +241,7 @@ def test_the_shell_builds_no_full_listing_and_tallies_sheets_once(shell_client, 
     assert body["campaign"]["sheets"] == {"sheeted": 1, "total": 4}
     assert len(tallies) == 1
     assert full_chars == [] and full_pcs == []
-    # The sheet chore still counts from the shared tally: three of the cast
-    # are unsheeted, so the badge includes it.
-    assert body["todo"] == todo_routes.live(cid)["count"]
+    assert body["todo"] is None
     assert "sheets" in {c["id"] for c in todo_routes.live(cid)["chores"]}
 
 

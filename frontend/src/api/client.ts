@@ -22,6 +22,7 @@ import {
   type CampaignModule, type Card,
   type CampaignBudget,
   type CampaignSceneCosts,
+  type MonthlyCosts,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkGuards, type ForkReport,
   type CatalogDraft, type CharacterDetail, type ChronicleLineSave,
@@ -1228,10 +1229,10 @@ export const api = {
   /** Wave a chore off, or take it back. `notifyShell` because the rail's badge
    *  is the count of what is NOT ignored, and this moves it without a
    *  navigation. */
-  setChoreIgnored: (choreId: string, ignoredOn: boolean) =>
+  setChoreIgnored: (choreId: string, ignoredOn: boolean, campaign?: string) =>
     request<{ ok: boolean; ignored: string[] }>(
       "PUT", `/api/todo/${encodeURIComponent(choreId)}/ignored`,
-      { ignored: ignoredOn }).then(notifyShell),
+      { ignored: ignoredOn, ...(campaign ? { campaign } : {}) }).then(notifyShell),
 
   // campaigns
   // `fresh` for the caller refetching *because* a campaign just changed: the
@@ -2483,9 +2484,13 @@ export const api = {
   // `order` goes to the server because the list is capped there, after the
   // sort: re-ordering the response here would make every ordering but the
   // default mean "…of the most expensive N".
-  getCampaignSceneCosts: (cid: string, order = "cost") =>
+  getCampaignSceneCosts: (cid: string, order = "cost", month = "") =>
     request<CampaignSceneCosts>(
-      "GET", `/api/campaigns/${cid}/usage/scenes?order=${encodeURIComponent(order)}`),
+      "GET", `/api/campaigns/${cid}/usage/scenes?order=${encodeURIComponent(order)}`
+      + (month ? `&month=${encodeURIComponent(month)}` : "")),
+  getMonthlyCosts: (month = "") =>
+    request<MonthlyCosts>("GET", `/api/usage/monthly${month ? `?month=${encodeURIComponent(month)}` : ""}`,
+                          undefined, { fresh: true }),
   // The per-model rate table (#158). `fresh` on the read, because saving a rate
   // and seeing the old table is the one thing an editor must not do.
   getPricing: () => request<PricingTable>("GET", "/api/pricing", undefined, { fresh: true }),

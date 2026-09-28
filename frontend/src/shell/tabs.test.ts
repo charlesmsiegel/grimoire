@@ -73,10 +73,10 @@ describe("badges come from the rail, not from a second table", () => {
     expect(todo?.badge).toBeUndefined();
   });
 
-  test("a zero is a badge", () => {
+  test("a campaign count is not shown on the global To do tab", () => {
     const p = payload({ todo: 0 });
     const todo = phoneTabs({ cid: "run" }, p).find((t) => t.id === "todo");
-    expect(todo?.badge).toBe("0");
+    expect(todo?.badge).toBeUndefined();
   });
 });
 

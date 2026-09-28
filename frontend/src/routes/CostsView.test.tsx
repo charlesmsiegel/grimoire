@@ -7,6 +7,7 @@ vi.mock("../api/client", () => ({
   api: {
     getCampaign: vi.fn(),
     getCampaignSceneCosts: vi.fn(),
+    listCampaigns: vi.fn().mockResolvedValue([]),
   },
 }));
 import { api } from "../api/client";
@@ -117,7 +118,7 @@ test("re-ordering asks the SERVER, because the list is capped there", async () =
   fireEvent.click(column().getByRole("button", { name: /most recent/i }));
 
   await waitFor(() => expect(api.getCampaignSceneCosts)
-    .toHaveBeenCalledWith("run", "recent"));
+    .toHaveBeenCalledWith("run", "recent", expect.stringMatching(/^\d{4}-\d{2}$/)));
   expect(within(bodyRows()[0]).getByText("The Priory Door")).toBeInTheDocument();
 });
 
@@ -246,7 +247,7 @@ test("a campaign that has generated nothing says so rather than showing $0.00", 
     { ...REPORT, totals: ZERO, scenes: [], listed: 0 });
   renderCosts();
 
-  expect(await screen.findByText(/Nothing has been generated in this campaign yet/))
+  expect(await screen.findByText(/Nothing has been generated in this campaign this month/))
     .toBeInTheDocument();
 });
 

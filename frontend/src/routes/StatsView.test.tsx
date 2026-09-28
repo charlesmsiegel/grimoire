@@ -8,6 +8,7 @@ vi.mock("../api/client", () => ({
     getLogs: vi.fn(),
     getLogLevel: vi.fn(),
     streamLogTail: vi.fn(),
+    listCampaigns: vi.fn().mockResolvedValue([]),
   },
 }));
 vi.mock("../api/errors", () => ({ errorText: (e: unknown) => String(e) }));
@@ -68,12 +69,44 @@ beforeEach(() => {
   // Call counts are not reset between tests by this project's vitest config,
   // and half the assertions here are about how many times a stream was opened.
   vi.clearAllMocks();
+  vi.mocked(api.listCampaigns).mockResolvedValue([]);
   vi.mocked(api.getStats).mockResolvedValue(structuredClone(STATS) as never);
   vi.mocked(api.getLogs).mockResolvedValue(structuredClone(PAGE) as never);
   vi.mocked(api.getErrorSummary).mockResolvedValue(structuredClone(ERRORS) as never);
   vi.mocked(api.getLogLevel).mockResolvedValue(
     { level: "info", levels: ["debug", "info", "warning", "error"] } as never);
   vi.mocked(api.streamLogTail).mockReturnValue(new Promise(() => {}) as never);
+});
+
+it("filters performance, errors, log pages and the live tail to its route campaign", async () => {
+  vi.mocked(api.listCampaigns).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }] as never);
+  render(<MemoryRouter><StatsView cid="saltmarch" /></MemoryRouter>);
+  await waitFor(() => expect(api.getStats).toHaveBeenCalledWith(30, "saltmarch"));
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  await waitFor(() => expect(api.getErrorSummary).toHaveBeenCalledWith(
+    30, expect.objectContaining({ campaign: "saltmarch" })));
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await waitFor(() => expect(api.getLogs).toHaveBeenCalledWith(
+    expect.objectContaining({ campaign: "saltmarch" })));
+  fireEvent.click(screen.getByLabelText("Live"));
+  await waitFor(() => expect(api.streamLogTail).toHaveBeenCalledWith(
+    expect.objectContaining({ campaign: "saltmarch" }), expect.any(Function), expect.anything()));
+});
+
+it("shows separate global campaign rows and a daily reroll rate with its denominator", async () => {
+  vi.mocked(api.listCampaigns).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }] as never);
+  vi.mocked(api.getStats).mockResolvedValue({ ...STATS,
+    by_campaign: [bucket({ key: "saltmarch", calls: 2 }),
+                  bucket({ key: "Outside a campaign", calls: 1 })],
+    by_day: [bucket({ key: "2026-09-28", rerolls: 1,
+      eligible_turns: 3, reroll_rate: 1 / 3 })],
+  } as never);
+  view();
+  expect(await screen.findByRole("heading", { name: "By campaign" })).toBeInTheDocument();
+  expect(screen.getAllByText("Saltmarch").length).toBeGreaterThan(0);
+  expect(screen.getByText("Outside a campaign")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Manual rerolls by day" })).toBeInTheDocument();
+  expect(screen.getByText(/33.3% of 3 eligible attempts/)).toBeInTheDocument();
 });
 
 // ---- performance (#154) ----
@@ -122,12 +155,12 @@ it("says so when the window held no calls at all, rather than showing bare zeroe
 it("re-reads the window when the day control moves", async () => {
   view();
   await screen.findByRole("heading", { name: "Performance" });
-  expect(api.getStats).toHaveBeenCalledWith(30);
+  expect(api.getStats).toHaveBeenCalledWith(30, "");
 
   fireEvent.change(screen.getByLabelText("How many days to report on"),
                    { target: { value: "7" } });
 
-  await waitFor(() => expect(api.getStats).toHaveBeenCalledWith(7));
+  await waitFor(() => expect(api.getStats).toHaveBeenCalledWith(7, ""));
 });
 
 // ---- errors (#156) ----
@@ -168,7 +201,7 @@ it("filters the error report to one module, from its own read", async () => {
                    { target: { value: "dossier" } });
 
   await waitFor(() => expect(api.getErrorSummary).toHaveBeenLastCalledWith(
-    30, { module: "dossier" }));
+    30, { module: "dossier", campaign: "" }));
 });
 
 it("keeps every module in the picker after one of them is picked", async () => {
@@ -288,7 +321,7 @@ it("counts the whole window in the rail, never the module filter", async () => {
                    { target: { value: "dossier" } });
 
   await waitFor(() => expect(api.getErrorSummary).toHaveBeenLastCalledWith(
-    30, { module: "dossier" }));
+    30, { module: "dossier", campaign: "" }));
   // 3 is the window's total from /stats; 2 is the filtered read.
   expect(screen.getByRole("button", { name: /Errors/ })).toHaveTextContent("3");
 });

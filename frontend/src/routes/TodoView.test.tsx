@@ -2,7 +2,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../api/client", () => ({
-  api: { getTodo: vi.fn(), setChoreIgnored: vi.fn(), getChoreItems: vi.fn() },
+  api: { getTodo: vi.fn(), setChoreIgnored: vi.fn(), getChoreItems: vi.fn(),
+         listCampaigns: vi.fn().mockResolvedValue([]) },
 }));
 
 import { api } from "../api/client";
@@ -55,7 +56,7 @@ test("ignoring re-reads the list rather than patching it", async () => {
   renderTodo();
   await screen.findByText("3 cast members without a sheet");
   fireEvent.click(screen.getByRole("button", { name: /^ignore$/i }));
-  await waitFor(() => expect(api.setChoreIgnored).toHaveBeenCalledWith("sheets", true));
+  await waitFor(() => expect(api.setChoreIgnored).toHaveBeenCalledWith("sheets", true, "run"));
   expect(await screen.findByText("Ignored")).toBeInTheDocument();
 });
 
@@ -74,7 +75,7 @@ test("restoring sends the ignore back off", async () => {
   (api.getTodo as any).mockResolvedValue({ chores: [], ignored: [chore()], count: 0 });
   renderTodo();
   fireEvent.click(await screen.findByRole("button", { name: /restore/i }));
-  await waitFor(() => expect(api.setChoreIgnored).toHaveBeenCalledWith("sheets", false));
+  await waitFor(() => expect(api.setChoreIgnored).toHaveBeenCalledWith("sheets", false, "run"));
 });
 
 test("nothing outstanding reads as an answer", async () => {
@@ -98,11 +99,7 @@ test("with no campaign open the library's own chores are still listed", async ()
   });
   renderTodo(null);
   expect(await screen.findByText("4 characters with no tagline")).toBeInTheDocument();
-  // and the campaign half is named as missing rather than left to be inferred
-  expect(screen.getByText(/chores about a campaign need one open/i)).toBeInTheDocument();
-  // ...but not a scope chip on every row. With no campaign open they are all
-  // the library's, and a label repeated down the whole page says nothing.
-  expect(screen.queryByText(/your library/i)).toBeNull();
+  expect(screen.getByRole("option", { name: "All campaigns" })).toBeInTheDocument();
 });
 
 test("two chores with the same sentence are told apart by scope", async () => {

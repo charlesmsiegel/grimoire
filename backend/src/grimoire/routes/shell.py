@@ -302,6 +302,7 @@ def get_shell(campaign: str = ""):
         # before a campaign is chosen, and that is exactly when a freshly
         # imported world's backlog is largest. A `null` here would draw no
         # tail over a list that has entries.
-        "todo": (todo_routes.badge_count(cid, ctx) if block
-                 else todo_routes.badge_count("")),
+        # The rail's To do row is global; a badge for the open campaign would
+        # claim to count that global page. The page performs its own live read.
+        "todo": None,
     }

@@ -6,6 +6,7 @@ import {
 import { errorText } from "../api/errors";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
+import ReportScopeSelector from "../components/ReportScopeSelector";
 
 type SectionKey = "performance" | "errors" | "log";
 
@@ -79,7 +80,8 @@ function day(ts: string): string {
  *  because they are the same five columns over the same shape and three
  *  copies is three places for those columns to drift apart. */
 function BucketTable(
-  { buckets, heading, label }: { buckets: PerfBucket[]; heading: string; label: string },
+  { buckets, heading, label, names = {} }: { buckets: PerfBucket[]; heading: string; label: string;
+                                           names?: Record<string, string> },
 ) {
   if (buckets.length === 0) return null;
   return (
@@ -102,7 +104,7 @@ function BucketTable(
             {buckets.map((b) => (
               <tr key={b.key}>
                 <td className="stats-key">
-                  {b.key}
+                  {names[b.key] ?? (b.key || "Outside a campaign")}
                   {/* A percentile over a sample is still a percentile, but a
                       reader comparing two rows deserves to know which one was
                       measured over everything. */}
@@ -237,7 +239,7 @@ function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
  *  `PageShell` column pattern like every other page: the column says what you
  *  are navigating, main says what you are reading.
  */
-export default function StatsView() {
+export default function StatsView({ cid = null }: { cid?: string | null }) {
   const [section, setSection] = useState<SectionKey>("performance");
   const [days, setDays] = useState(30);
   // Bumped to re-read everything. A scene turn is detached and deliberately
@@ -247,6 +249,19 @@ export default function StatsView() {
   // remounted.
   const [reading, setReading] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [campaignNames, setCampaignNames] = useState<Record<string, string>>({});
+  const [campaignsReady, setCampaignsReady] = useState(false);
+  const [campaignsFailed, setCampaignsFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    api.listCampaigns().then((rows) => {
+      if (active) {
+        setCampaignNames(Object.fromEntries(rows.map((row) => [row.id, row.name])));
+        setCampaignsReady(true);
+      }
+    }).catch(() => { if (active) { setCampaignsFailed(true); setCampaignsReady(true); } });
+    return () => { active = false; };
+  }, []);
   // One banner per SECTION. A single string meant a successful `/stats` read
   // could clear a banner about a failed `/errors` refresh -- leaving stale
   // numbers on screen with nothing to say they were stale -- and the reverse
@@ -272,11 +287,11 @@ export default function StatsView() {
   useEffect(() => {
     let alive = true;
     setStats(null);
-    api.getStats(days)
+    api.getStats(days, cid ?? "")
       .then((s) => { if (alive) { setStats(s); setFailure("performance", ""); } })
       .catch((e) => { if (alive) setFailure("performance", errorText(e)); });
     return () => { alive = false; };
-  }, [days, reading, setFailure]);
+  }, [days, cid, reading, setFailure]);
 
   // The errors section reads `/api/errors` rather than leaning on the copy
   // `/api/stats` already carries. The embedded one is #154's headline count
@@ -290,18 +305,18 @@ export default function StatsView() {
     // showing the previous window's answer under the new one's heading is a
     // page stating something that has stopped being true.
     setErrorSummary(null);
-    api.getErrorSummary(days, { module: errorModule })
+    api.getErrorSummary(days, { module: errorModule, campaign: cid ?? "" })
       .then((e) => { if (alive) { setErrorSummary(e); setFailure("errors", ""); } })
       .catch((e) => { if (alive) setFailure("errors", errorText(e)); });
     return () => { alive = false; };
-  }, [section, days, errorModule, reading, setFailure]);
+  }, [section, days, errorModule, cid, reading, setFailure]);
 
   // The WINDOW changing drops the page; a filter changing does not. Rows from
   // the old window under the new window's heading is the page describing
   // something it no longer is — but blanking on every filter change would take
   // `modules` with it, and the module dropdown would empty itself on each
   // keystroke, which is how the control loses the option you are choosing.
-  useEffect(() => { setPage(null); }, [days]);
+  useEffect(() => { setPage(null); setErrorSummary(null); setTailed([]); }, [days, cid]);
 
   // Coming back to the tab is the moment a stale reading is most likely and
   // most noticed: the turn finished while this page was in the background.
@@ -328,11 +343,11 @@ export default function StatsView() {
   useEffect(() => {
     if (section !== "log") return;
     let alive = true;
-    api.getLogs({ days, level, module, q: settled, limit: LOG_LIMIT })
+    api.getLogs({ days, level, module, q: settled, campaign: cid ?? "", limit: LOG_LIMIT })
       .then((p) => { if (alive) { setPage(p); setFailure("log", ""); } })
       .catch((e) => { if (alive) setFailure("log", errorText(e)); });
     return () => { alive = false; };
-  }, [section, days, level, module, settled, reading, setFailure]);
+  }, [section, days, level, module, settled, cid, reading, setFailure]);
 
   useEffect(() => {
     let alive = true;
@@ -370,8 +385,9 @@ export default function StatsView() {
       reopen = setTimeout(() => setAttempt((n) => n + 1), TAIL_REOPEN_MS);
     };
     api.streamLogTail(
-      { cursor: tailCursor.current, level, module, q: settled },
+      { cursor: tailCursor.current, level, module, q: settled, campaign: cid ?? "" },
       (event) => {
+        if (abort.signal.aborted) return;
         if (event.cursor) tailCursor.current = event.cursor;
         if (event.error) {
           // The stream is still open -- the server keeps polling -- so this is
@@ -399,11 +415,11 @@ export default function StatsView() {
       again();
     });
     return () => { abort.abort(); clearTimeout(reopen); };
-  }, [live, section, level, module, settled, attempt, setFailure]);
+  }, [live, section, level, module, settled, cid, attempt, setFailure]);
 
   // A filter change restarts the tail from scratch rather than resuming: the
   // cursor belongs to the old query's position in the file.
-  useEffect(() => { setAttempt(0); }, [live, section, level, module, settled]);
+  useEffect(() => { setAttempt(0); }, [live, section, level, module, settled, cid]);
 
   const paletteSource = useCallback((): PaletteItem[] =>
     SECTIONS.map((s) => ({
@@ -413,6 +429,8 @@ export default function StatsView() {
   usePaletteSource(paletteSource);
 
   const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
+  const unavailable = !!cid && campaignsReady && !campaignsFailed && !campaignNames[cid];
+  const scopeReady = !cid || campaignsReady;
   // The section's own read once it lands. The stats copy stands in ONLY while
   // nothing is filtered -- it is the same unfiltered window, so opening Errors
   // does not blank the page. With a module picked it must not stand in at all:
@@ -420,7 +438,8 @@ export default function StatsView() {
   // "reading…", and that is exactly what a pending or failed
   // `/api/errors?module=…` used to render.
   const errors: ErrorSummary | null =
-    errorSummary ?? (errorModule ? null : stats?.errors ?? null);
+    errorSummary ?? (errorModule || (stats?.campaign && stats.campaign !== (cid ?? ""))
+      ? null : stats?.errors ?? null);
   // The RAIL counts the window, never the filter. `errors` above is the
   // filtered read, and a rail row labelled just "Errors" showing one module's
   // total is a number that does not say what it is counting.
@@ -495,10 +514,14 @@ export default function StatsView() {
             <h1 className="screen-title">{current.label}</h1>
           </div>
         </div>
+        <ReportScopeSelector report="stats" cid={cid} />
+
+        {!scopeReady && <p className="column-empty">Checking campaign…</p>}
+        {unavailable && <p className="empty-state">Campaign unavailable: {cid}</p>}
 
         {failed && <p className="empty-state"><span className="empty-what">{failed}</span></p>}
 
-        {section === "performance" && (
+        {scopeReady && !unavailable && section === "performance" && (
           stats === null
             ? <p className="column-empty">Reading the ledger…</p>
             : <>
@@ -522,11 +545,20 @@ export default function StatsView() {
                 )}
                 <BucketTable buckets={stats.by_task} heading="By task" label="Task" />
                 <BucketTable buckets={stats.by_model} heading="By model" label="Model" />
+                {!cid && <BucketTable buckets={stats.by_campaign ?? []}
+                  heading="By campaign" label="Campaign" names={campaignNames} />}
                 <Trend heading="Median latency by day" format={duration}
                        rows={stats.by_day.map((d) => ({
                          key: d.key, value: d.p50,
                          note: `${d.calls} call${d.calls === 1 ? "" : "s"}`,
                        }))} />
+                <Trend heading="Manual rerolls by day" format={(n) => String(n)}
+                  rows={stats.by_day.map((d) => ({
+                    key: d.key, value: d.rerolls ?? 0,
+                    note: d.eligible_turns
+                      ? `${percent(d.reroll_rate ?? 0)} of ${d.eligible_turns} eligible attempts`
+                      : "No eligible attempts · rate unavailable",
+                  }))} />
                 <p className="ledger-lead">
                   Latency is measured around the whole call, retries included — what the
                   person waiting experienced, not the provider's own service time.
@@ -538,7 +570,7 @@ export default function StatsView() {
               </>
         )}
 
-        {section === "errors" && (errorModules.length > 1 || errorModule !== "") && (
+        {scopeReady && !unavailable && section === "errors" && (errorModules.length > 1 || errorModule !== "") && (
           // Above the empty check, deliberately: filtering to a module with
           // nothing in it must not also remove the control that would undo
           // that. Built from the unfiltered copy for the same reason.
@@ -561,7 +593,7 @@ export default function StatsView() {
           </div>
         )}
 
-        {section === "errors" && (
+        {scopeReady && !unavailable && section === "errors" && (
           errors === null
             ? <p className="column-empty">Reading the log…</p>
             : errors.total === 0
@@ -610,6 +642,12 @@ export default function StatsView() {
                   </section>
                   <Trend heading="Failures by day" format={(v) => String(v)}
                          rows={errors.daily.map((d) => ({ key: d.day, value: d.count }))} />
+                  {!cid && !!errors.by_campaign?.length && <section className="stats-block">
+                    <h2 className="section-label">By campaign</h2>
+                    <ul>{errors.by_campaign.map((row) => <li key={row.campaign_id}>
+                      {campaignNames[row.campaign_id] ?? (row.campaign_id || "Outside a campaign")}: {row.count}
+                    </li>)}</ul>
+                  </section>}
                   <section className="stats-block">
                     <h2 className="section-label">
                       Most recent
@@ -624,7 +662,7 @@ export default function StatsView() {
                 </>
         )}
 
-        {section === "log" && (
+        {scopeReady && !unavailable && section === "log" && (
           <>
             <div className="stats-filters">
               <label>
