@@ -1,6 +1,6 @@
 """Read-only cast queries: who has appeared, who is in a given scene, and
-their display names -- all from the appearance record and the locked actor
-root. Touches no scene state, unlike ``transitions.py``'s ``appear``/``leave``/
+their display names -- from the appearance record and actor cards. Touches no
+scene state, unlike ``transitions.py``'s ``appear``/``leave``/
 ``suggestions``; that separation is what lets ``scenes`` import this module at
 module scope once it is split.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .. import characters, pcs
+from .. import characters, overlay, pcs
 from . import paths, versions
 
 
@@ -135,11 +135,13 @@ def player_label(cid: str, scene_id: str) -> str:
 
 
 def scene_cast(cid: str, scene_id: str) -> list[dict]:
-    aroot = paths.locked_actor_root(cid)
     out = []
     for ref, r in paths.record(cid).items():
         if scene_id in r["scenes"]:
             kind, actor_id = paths._split(ref)
+            # A campaign may hold only sidecars here; the card still inherits
+            # from its world, so a raw campaign-root read would show the slug.
+            aroot = overlay.actor_root(cid, kind, actor_id)
             out.append({"kind": kind, "id": actor_id, "role": r["role"],
                         "name": _actor_name(aroot, kind, actor_id, r["version"]) or actor_id})
     return sorted(out, key=lambda a: (a["kind"], a["id"]))

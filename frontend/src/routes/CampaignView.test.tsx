@@ -8067,13 +8067,30 @@ test("Continue sends one empty request; Respond as sends the selected present NP
   await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
   expect(vi.mocked(api.chat).mock.calls[0][2]).toBe("");
   await waitFor(() => expect(screen.getByRole("button", { name: "Respond as" })).toBeDisabled());
-  const picker = screen.getByLabelText("Respond as character");
+  const picker = screen.getByLabelText("Respond as speaker");
   expect(within(picker).queryByRole("option", { name: "Winifred" })).not.toBeInTheDocument();
   fireEvent.change(picker, { target: { value: "characters:mara" } });
   await waitFor(() => expect(screen.getByRole("button", { name: "Respond as" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Respond as" }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledTimes(2));
   expect(vi.mocked(api.chat).mock.calls[1][9]).toBe("characters:mara");
+});
+
+test("Respond as can select Grimoire with no NPC in the scene", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([]);
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+
+  const picker = screen.getByLabelText("Respond as speaker");
+  expect(within(picker).getByRole("option", { name: "Grimoire" })).toBeInTheDocument();
+  fireEvent.change(picker, { target: { value: "grimoire" } });
+  const respond = screen.getByRole("button", { name: "Respond as" });
+  expect(respond).toBeEnabled();
+  fireEvent.click(respond);
+
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.chat).mock.calls[0][9]).toBe("grimoire");
 });
 
 test("individual response deletion uses its stable id and keeps cut-from-here separate", async () => {

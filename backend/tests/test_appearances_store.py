@@ -63,6 +63,18 @@ def test_second_scene_appends_only(monkeypatch, tmp_path):
         {"kind": "characters", "id": "seraphine", "role": "npc", "name": "Seraphine"}]
 
 
+def test_scene_cast_name_inherits_world_card_when_campaign_has_only_sidecars(monkeypatch, tmp_path):
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
+    actor = campaigns.campaign_root(cid) / "characters" / "seraphine"
+    (actor / "character.md").unlink()
+    (actor / "corrupted.json").unlink()
+    (actor / "state.md").write_text("Campaign state", encoding="utf-8")
+
+    assert ap.scene_cast(cid, "s1") == [
+        {"kind": "characters", "id": "seraphine", "role": "npc", "name": "Seraphine"}]
+
+
 def test_leave_removes_scene_but_keeps_appearance_record(monkeypatch, tmp_path):
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")

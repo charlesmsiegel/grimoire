@@ -3362,7 +3362,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   async function respondAs() {
     if (!activeId || busy || rolling || sceneLocked || renamesInFlight || !transcriptIsActive) return;
     const actor = cast.find((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor);
-    if (!actor) return;
+    if (responseActor !== "grimoire" && !actor) return;
     const sid = activeId;
     const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
       api.chat(cid, sid, "", onEvent, pendingResponse ?? undefined, signal, attempt, onIndex, false, responseActor),
@@ -5119,16 +5119,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
             />
-            {activeId && cast.some((a) => a.role === "npc") && <div className="form-actions">
-              <select aria-label="Respond as character" value={responseActor}
+            {activeId && <div className="form-actions">
+              <select aria-label="Respond as speaker" value={responseActor}
                 disabled={busy || rolling || sceneLocked}
                 onChange={(e) => setResponseActor(e.target.value)}>
-                <option value="">Choose NPC…</option>
+                <option value="">Choose speaker…</option>
+                <option value="grimoire">Grimoire</option>
                 {cast.filter((a) => a.role === "npc").map((a) =>
                   <option key={`${a.kind}:${a.id}`} value={`${a.kind}:${a.id}`}>{a.name}</option>)}
               </select>
               <button onClick={() => void respondAs()} disabled={busy || rolling || sceneLocked || renamesInFlight > 0
-                || !cast.some((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor)}>Respond as</button>
+                || (responseActor !== "grimoire" && !cast.some((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor))}>Respond as</button>
             </div>}
             {/* Selection and every handoff share the run's busy latch. Keep
                 Continue visible but unavailable until the entire run settles;
