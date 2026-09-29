@@ -143,6 +143,10 @@ class ResponseSettings(BaseModel):
     length_paragraphs: str | None = None
     length_speakers: str | None = None
     length_blocks_per_speaker: str | None = None
+    response_opening_words: str | None = None
+    response_opening_paragraphs: str | None = None
+    response_continuation_words: str | None = None
+    response_continuation_paragraphs: str | None = None
 
 
 class RoutingUpdate(BaseModel):

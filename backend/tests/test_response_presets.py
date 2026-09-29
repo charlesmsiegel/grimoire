@@ -1,6 +1,34 @@
 import pytest
 
 from grimoire.store import response_presets as rp
+from grimoire.store import response_targets
+
+
+def test_response_targets_default_and_reject_nonpositive_writes(client):
+    response = client.get("/api/response")
+    assert response.status_code == 200
+    assert response.json()["effective"]["opening"] == {"words": 400, "paragraphs": 3}
+    assert response.json()["effective"]["continuation"] == {"words": 150, "paragraphs": 2}
+    invalid = client.put("/api/response", json={"response_continuation_words": "0"})
+    assert invalid.status_code == 400
+
+
+def test_response_targets_new_values_outrank_legacy_and_inherit_per_field(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    old_scene = {"response_preset": "cinematic", "response_opening_words": "bad",
+                 "response_continuation_paragraphs": "4"}
+    resolved = response_targets.resolve(
+        scene_meta=old_scene,
+        campaign_meta={"response_opening_paragraphs": "2"},
+        config={"response_opening_words": "350", "response_continuation_words": "180"},
+    )
+    assert resolved["opening"] == {"words": 350, "paragraphs": 2}
+    assert resolved["continuation"] == {"words": 180, "paragraphs": 4}
+    legacy = response_targets.resolve(scene_meta={"response_preset": "cinematic"})
+    assert legacy["opening"] == {"words": 400, "paragraphs": 3}
+    assert legacy["continuation"] == {"words": 900, "paragraphs": 3}
 
 
 def _isolate(tmp_path, monkeypatch):
