@@ -1172,6 +1172,9 @@ def test_natural_prose_section_in_system_prompt(monkeypatch, tmp_path):
     msgs = context.build_messages(cid, sid)
     assert msgs[0]["role"] == "system"
     assert "# Natural prose" in msgs[0]["content"]
+    assert "Prefer direct, conversational phrasing to formal or technical language" in (
+        " ".join(msgs[0]["content"].split())
+    )
 
 
 def test_natural_prose_section_in_opener_prompt(monkeypatch, tmp_path):
