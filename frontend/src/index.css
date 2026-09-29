@@ -3740,6 +3740,16 @@ a.search-hit { text-decoration: none; color: inherit; }
 .cost-trend-series { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .cost-trend-series-row { display: flex; align-items: center; gap: 12px; }
 .cost-trend-series-row > .field-hint { width: 142px; flex: none; }
+.cost-line-wrap {
+  margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+}
+.cost-line-chart { display: block; width: 100%; min-width: 640px; height: auto; }
+.cost-line-grid { stroke: var(--line); stroke-dasharray: 3 4; }
+.cost-line-label { fill: var(--muted); font: 11px var(--fm); }
 .cost-chart {
   padding: 12px 16px;
   border: 1px solid var(--line);
