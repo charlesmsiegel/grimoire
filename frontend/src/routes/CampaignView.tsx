@@ -1080,7 +1080,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     : "Continuation targets";
 
   function chooseResponseOverride(key: "response_continuation_words" | "response_continuation_paragraphs", value: string) {
-    setPendingResponse((current) => ({ ...current, [key]: value }));
+    if (value && !/^[1-9]\d*$/.test(value)) return;
+    setPendingResponse((current) => {
+      const next = { ...current };
+      if (value) next[key] = value;
+      else delete next[key];
+      return Object.keys(next).length ? next : null;
+    });
   }
   function clearResponseOverride() {
     setPendingResponse(null);
@@ -4931,13 +4937,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               </span>
             )}
             <label className="composer-meta-label" htmlFor="response-words">Response</label>
-            <input id="response-words" type="number" min="1" aria-label="Next reply words"
+            <input id="response-words" type="number" min="1" step="1" aria-label="Next reply words"
               className="response-target-input"
               value={pendingResponse?.response_continuation_words ?? ""}
               placeholder={String(sceneResponse?.effective.continuation.words ?? 150)}
               onChange={(event) => chooseResponseOverride("response_continuation_words", event.target.value)} />
             <label className="composer-meta-label" htmlFor="response-paragraphs">paragraphs</label>
-            <input id="response-paragraphs" type="number" min="1" aria-label="Next reply paragraphs"
+            <input id="response-paragraphs" type="number" min="1" step="1" aria-label="Next reply paragraphs"
               className="response-target-input"
               value={pendingResponse?.response_continuation_paragraphs ?? ""}
               placeholder={String(sceneResponse?.effective.continuation.paragraphs ?? 2)}

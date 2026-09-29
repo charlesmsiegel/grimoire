@@ -11,18 +11,12 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.routes import runs as runs_mod
 from grimoire.routes import scenes as routes_scenes
-from tests.llm_fakes import FailingOpenRouter
+from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter
 
 
 @pytest.fixture
 def client(client):
-    """These legacy route assertions describe combined generation.
-
-    Individual speaker selection, response boundaries and isolated knowledge
-    have their own default-mode integration tests in test_character_turns.
-    """
-    response = client.put("/api/config", json={"character_response_mode": "combined"})
-    assert response.status_code == 200
+    """Use the active actor-scoped generation path."""
     return client
 
 
@@ -416,8 +410,8 @@ def test_a_send_that_fails_before_starting_frees_the_scene(client, sending_scene
                                                            monkeypatch):
     """A refusal raised after the reservation used to strand it.
 
-    `_chat_stream` claims the turn synchronously and raises `StoreBusy` on a
-    contended campaign, which the global handler turns into a 409 -- the one
+    The actor-round producer claims the turn synchronously and raises `StoreBusy`
+    on a contended campaign, which the global handler turns into a 409 -- the one
     failure in this window that already had a test, and the one that made the
     scene permanently unusable. What the player then saw was every subsequent
     send refused with `run_in_flight` naming a turn that never began.
@@ -427,10 +421,10 @@ def test_a_send_that_fails_before_starting_frees_the_scene(client, sending_scene
     def busy(*_a, **_k):
         raise store.locks.StoreBusy("campaign is busy")
 
-    real = routes_scenes._chat_stream
-    monkeypatch.setattr(routes_scenes, "_chat_stream", busy)
+    real = routes.character_turns.start
+    monkeypatch.setattr(routes.character_turns, "start", busy)
     assert _chat(client, cid, sid).status_code == 409
-    monkeypatch.setattr(routes_scenes, "_chat_stream", real)
+    monkeypatch.setattr(routes.character_turns, "start", real)
 
     run = _latest(client, cid, sid)
     assert run is not None and run.state == "failed", \
@@ -450,10 +444,10 @@ def test_a_send_refused_outright_frees_the_scene(client, sending_scene, monkeypa
     def refuse(*_a, **_k):
         raise HTTPException(status_code=400, detail="nothing to send")
 
-    real = routes_scenes._chat_stream
-    monkeypatch.setattr(routes_scenes, "_chat_stream", refuse)
+    real = routes.character_turns.start
+    monkeypatch.setattr(routes.character_turns, "start", refuse)
     assert _chat(client, cid, sid).status_code == 400
-    monkeypatch.setattr(routes_scenes, "_chat_stream", real)
+    monkeypatch.setattr(routes.character_turns, "start", real)
 
     run = _latest(client, cid, sid)
     assert run is not None and run.state == "failed"
@@ -807,7 +801,12 @@ def test_every_producer_emits_a_run_handle_and_detaches(client, sending_scene, r
     continuation`. Listing them here as skips would read as coverage.
     """
     cid, sid = sending_scene
-    _chat(client, cid, sid)                     # gives retry/regenerate a reply to work from
+    if route == "retry":
+        client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter(["Partial."])
+        _chat(client, cid, sid)  # leaves one incomplete response to resume
+        client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Finished."])
+    else:
+        _chat(client, cid, sid)  # a completed response to regenerate
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}", json=None)
 
@@ -853,26 +852,23 @@ def test_a_landed_send_is_still_answerable_after_its_run_is_reaped(client, sendi
         "a landed send became unanswerable the moment its run expired"
 
 
-def test_a_rolled_back_send_reports_its_post_gone_after_the_reap(client, sending_scene):
-    """The case this record exists for. A turn that failed after the post was
-    appended has that post taken back off, and the refetched transcript is then
-    *correctly* missing it -- so "the post is absent" means both "rolled back"
-    and "never landed". The client is holding the only copy of what the player
-    typed and has to decide whether to give it back."""
+def test_a_failed_actor_response_keeps_its_post_after_the_reap(client, sending_scene):
+    """An incomplete per-speaker response can be retried against the same post.
+    The durable attempt record must keep reporting that post after run expiry."""
     cid, sid = sending_scene
     client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter(
         kind="network", message="connection reset")
 
     body = _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-2"}).text
-    assert any(e.get("error", {}).get("post_returned") for e in _events(body)), \
-        "the premise failed: the post was not rolled back"
+    assert any(e.get("error") for e in _events(body))
+    assert not any(e.get("error", {}).get("post_returned") for e in _events(body))
     client.app.state.runs.reap(now=1e12)
 
     r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/attempt-state",
                    params={"attempt": "a-2"})
 
-    assert r.json()["retained"] is False, \
-        "a rolled-back send still claimed its post was in the transcript"
+    assert r.json()["retained"] is True, \
+        "a failed response lost the post its retry needs"
 
 
 def test_an_attempt_from_another_scene_is_not_answered_about(client, sending_scene):

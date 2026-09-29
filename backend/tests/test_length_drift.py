@@ -3,14 +3,37 @@ from grimoire.store import length_drift, scenes
 
 def test_actor_drift_counts_only_that_speakers_recent_contributions():
     messages = [
-        {"role": "assistant", "speaker": "Mara", "content": "word " * 210},
-        {"role": "assistant", "speaker": "Winifred", "content": "word " * 500},
+        {"role": "assistant", "speaker": "Mara", "content": "word " * 210,
+         "response_id": "generated-mara", "response_can_reroll": True},
+        {"role": "assistant", "speaker": "Winifred", "content": "word " * 500,
+         "response_id": "generated-winifred", "response_can_reroll": True},
     ]
     measured = length_drift.measure_contributions(
         messages, "Mara", {"words": 150, "paragraphs": 2})
     assert measured["totals"] == [210]
     assert measured["tier"] == "trim"
     assert measured["paragraphs"] is False
+
+
+def test_migrated_and_manual_posts_do_not_set_generation_drift():
+    messages = [
+        {"role": "assistant", "speaker": "Mara", "content": "word " * 500},
+        {"role": "assistant", "speaker": "Mara", "content": "word " * 500,
+         "response_id": "migrated", "response_can_reroll": False},
+    ]
+    assert length_drift.measure_contributions(
+        messages, "Mara", {"words": 150, "paragraphs": 2}) is None
+
+
+def test_narrator_drift_uses_speakerless_generated_posts():
+    messages = [{"role": "assistant", "speaker": None, "content": "word " * 500,
+                 "response_id": "narrator", "response_can_reroll": True},
+                {"role": "assistant", "speaker": "Mara", "content": "word " * 20,
+                 "response_id": "mara", "response_can_reroll": True}]
+    measured = length_drift.measure_contributions(
+        messages, "Grimoire", {"words": 150, "paragraphs": 2})
+    assert measured["totals"] == [500]
+    assert measured["tier"] == "cut"
 
 BUDGET = {"reply_words": 100, "blocks": 3, "paragraphs": 2,
           "speakers": 2, "blocks_per_speaker": 1}

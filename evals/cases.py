@@ -40,7 +40,6 @@ from grimoire import prompts
 from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
-    assets,
     campaigns,
     characters,
     checks,
@@ -51,19 +50,16 @@ from grimoire.store import (
     entities,
     facts,
     groupstate,
-    image_descriptions,
-    lengths,
     pcs,
     playstate,
     plot,
     relationships,
-    response_presets,
+    response_targets,
     scenes,
     sheets,
     steering,
     worlds,
 )
-from grimoire.store.context import art
 
 from . import graders, slop
 from .graders import Check
@@ -134,13 +130,12 @@ def _world_with_sera() -> tuple[str, Path, str]:
 
 
 def _budget(cid: str, sid: str) -> dict:
-    """The resolved length budget for a scene, via the same cascade
-    context._assemble runs."""
-    resolved = response_presets.resolve(
+    """The assigned actor's continuation target through the production cascade."""
+    resolved = response_targets.resolve(
         scene_meta=scenes.read_scene_meta(cid, sid),
         campaign_meta=campaigns.read_campaign(cid)["meta"],
         config=config.read_config())
-    return {k: resolved[k] for k in lengths.KNOBS}
+    return resolved["continuation"]
 
 
 def _npc_names(cid: str, sid: str) -> list[str]:
@@ -150,26 +145,16 @@ def _npc_names(cid: str, sid: str) -> list[str]:
 # ------------------------------------------------- case 1: scene length budget
 
 def build_scene_length() -> dict:
-    """A two-hander at the pier under the `terse` preset — the tightest budget
-    in lengths.PRESETS, so a violation is unambiguous rather than marginal."""
+    """One named NPC at the pier under a short continuation target."""
     wid, wroot, sera = _world_with_sera()
     pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
                                   "Fog-slick planks stacked with unlogged crates.",
                                   keys="pier, dock")
-    # A described picture of the pier, so the `available_art` section has
-    # something to render. Its wording deliberately shares two content words
-    # with the player's post below ("crates", "step") -- `context/art` offers a
-    # candidate only when two land, and a check that silently graded an EMPTY
-    # section would pass for the wrong reason.
-    assets.put_image(wroot, pier, "default", "gallery_1", b"art", "png", base="locations")
-    image_descriptions.set_description(
-        wroot, pier, "default", "gallery_1",
-        "Crates stacked on the planks, and a step down to the black water.",
-        base="locations")
     cid = campaigns.create_campaign("Saltmarch Nights", wid)
     # Campaign scope, not global: this also proves the resolution cascade
     # actually reaches the prompt, which is half of what the knobs are for.
-    campaigns.set_campaign_response(cid, {"response_preset": "terse"})
+    campaigns.set_campaign_response(cid, {"response_continuation_words": "40",
+                                          "response_continuation_paragraphs": "1"})
     croot = campaigns.campaign_root(cid)
 
     persona = pcs.blank_persona("Winifred")
@@ -185,38 +170,28 @@ def build_scene_length() -> dict:
                           "I step out of the fog and ask her whose crates those are.",
                           speaker="Winifred")
 
-    return {"cid": cid, "sid": sid, "budget": _budget(cid, sid),
+    return {"cid": cid, "sid": sid, "actor_ref": f"characters:{sera}",
+            "budget": _budget(cid, sid),
             "players": frozenset(appearances.player_names(cid, sid)),
-            "cast_names": _npc_names(cid, sid),
-            "art_handle": art.handle_for("locations", pier, "gallery_1")}
+            "cast_names": _npc_names(cid, sid)}
 
 
 def grade_scene_length(ctx: dict, output: str) -> list[Check]:
     budget = ctx["budget"]
-    # Whole sections, rendered from the templates themselves: this covers all
-    # FIVE resolved knobs reaching the model, where naming the word count alone
-    # would leave the structural limits unguarded. Delete either section from
-    # system.j2, or break a variable feeding it, and replay fails offline.
-    return (
-        graders.grade_prompt_section(ctx["messages"], "budget",
-                                     "scene/sections/response_budget.j2",
-                                     budget=budget)
-        # The marker convention the whole length measurement rests on: without
-        # it the model writes undifferentiated prose, split_reply sees one
-        # block, and every structural knob silently reads as satisfied.
-        + graders.grade_prompt_section(ctx["messages"], "reply_format",
-                                       "scene/sections/response_format.j2",
-                                       player_names=sorted(ctx["players"]))
-        # The art offer, whole. Replay can only ever prove the INSTRUCTION is
-        # in the prompt -- whether a model reaches for a picture when one fits
-        # is a question only --live can put -- but that is the half a template
-        # edit can break silently, and this is where it stops being silent.
-        + graders.grade_prompt_section(
-            ctx["messages"], "available_art", "scene/sections/available_art.j2",
-            available_art=[{"handle": ctx["art_handle"],
-                            "description": "Crates stacked on the planks, "
-                                           "and a step down to the black water."}])
-        + graders.grade_length(output, budget, ctx["players"], ctx["cast_names"]))
+    prose = graders.length_drift.prose(output)
+    words = len(prose.split())
+    paragraphs = max(len([p for p in prose.split("\n\n") if p.strip()]), 1)
+    ratio = words / budget["words"]
+    return [
+        *graders.grade_prompt_section(ctx["messages"], "budget",
+                                      "scene/sections/response_budget.j2",
+                                      budget=budget,
+                                      response_actor={"name": "Seraphine Vale"}),
+        Check("length.words", graders.COLLAPSE_RATIO <= ratio < graders.length_drift.TRIM,
+              f"{words} words vs target {budget['words']}"),
+        Check("length.paragraphs", paragraphs <= budget["paragraphs"],
+              f"{paragraphs} paragraphs vs target {budget['paragraphs']}"),
+    ]
 
 
 # ---------------------------------------------------- case 2: roll-fence shape
@@ -698,6 +673,9 @@ def grade_natural_prose(ctx: dict, output: str) -> list[Check]:
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
+    if ctx.get("actor_ref"):
+        return context.compose_turn(ctx["cid"], ctx["sid"], describe=False,
+                                    actor_ref=ctx["actor_ref"])[0]
     return context.build_messages(ctx["cid"], ctx["sid"])
 
 
@@ -716,17 +694,12 @@ def _absorb_prompt(ctx: dict) -> list[dict]:
 
 CASES: tuple[Case, ...] = (
     Case(id="scene-length",
-         hypothesis="a reply respects the resolved length budget (terse: "
-                    "150 words, 3 blocks, 1 paragraph, 2 speakers, 1 block each)",
+         hypothesis="one assigned actor's prose respects its approximate word and paragraph targets",
          build=build_scene_length, prompt=_scene_prompt, grade=grade_scene_length,
          recordings=(
              Recording(BASELINE),
-             # Long, five blocks, a doubled speaker and a two-paragraph block:
-             # the realistic shape of an unbudgeted reply, so it trips four
-             # knobs at once and all four are named.
-             Recording("bloated", ("length.reply_words", "length.blocks",
-                                   "length.paragraphs", "length.blocks_per_speaker")),
-             Recording("collapsed", ("length.reply_words",)))),
+             Recording("bloated", ("length.words", "length.paragraphs")),
+             Recording("collapsed", ("length.words",)))),
     Case(id="roll-fence",
          hypothesis="a roll-requiring prompt emits a closed, parseable ```roll "
                     "fence naming a check and actor the bound module defines",

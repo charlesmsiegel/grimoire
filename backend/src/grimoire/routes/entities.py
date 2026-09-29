@@ -588,7 +588,7 @@ def _library_move_or_409(fn):
         # forcing, and the UI must be able to offer that without matching prose.
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "push_conflict"}) from exc
-    except store.sync.LibraryMoveError as exc:
+    except (store.sync.LibraryMoveError, store.actor_names.ActorNameError) as exc:
         raise HTTPException(
             status_code=409,
             detail={"detail": str(exc), "kind": "library_move_refused"}) from exc

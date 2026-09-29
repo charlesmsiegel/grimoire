@@ -391,7 +391,14 @@ def _turn_override(body) -> dict | None:
     """
     if body is None or getattr(body, "response", None) is None:
         return None
-    return {k: v for k, v in _dump(body.response).items() if v is not None}
+    fields = {k: v for k, v in _dump(body.response).items() if v is not None}
+    for key in store.response_targets.FIELDS:
+        if key in fields and (not isinstance(fields[key], str)
+                              or not fields[key].strip().isascii()
+                              or not fields[key].strip().isdigit()
+                              or store.response_targets.coerce(fields[key]) is None):
+            raise HTTPException(400, detail=f"{key} must be a positive whole number")
+    return fields
 
 
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,

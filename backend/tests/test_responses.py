@@ -173,19 +173,20 @@ def test_the_first_open_assigns_a_legacy_post_its_response(client):
     assert store.responses.get(cid, sid, shown["response_id"])["content"] == "Under the table."
 
 
-def test_a_migrated_scene_opens_without_the_ledger_or_the_lock(client, monkeypatch):
+def test_a_migrated_scene_opens_without_the_campaign_lock(client, monkeypatch):
     cid, sid = _legacy_scene()
     base = f"/api/campaigns/{cid}/scenes/{sid}"
     first = client.get(base).json()
     first_window = client.get(base + "?limit=1").json()
 
     def refuse(*args, **kwargs):
-        raise AssertionError("a steady-state scene open reached the ledger or the lock")
+        raise AssertionError("a steady-state scene open reached the campaign lock")
 
     # A context, not the test-scoped patch: the client's lifespan shutdown runs
     # before monkeypatch's own teardown and is entitled to the real lock.
     with monkeypatch.context() as patch:
-        patch.setattr(store.responses, "_read", refuse)
+        # Actor portraits now need the response-to-actor index from the ledger.
+        # Reading it is safe here; scene opens must still avoid the writer lock.
         patch.setattr(store.locks, "campaign_lock", refuse)
         again = client.get(base)
         window = client.get(base + "?limit=1")

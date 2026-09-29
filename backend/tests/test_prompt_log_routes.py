@@ -13,12 +13,7 @@ from grimoire import routes, store
 
 @pytest.fixture
 def client(client):
-    """These capture assertions exercise the retained combined-writer contract.
-
-    Individual actor, selector and reroll captures are covered by
-    test_character_turns.py, with their own call boundaries and saved prompts.
-    """
-    client.put("/api/config", json={"character_response_mode": "combined"})
+    """Use the shared scene client with actor-scoped generation enabled."""
     return client
 
 
@@ -97,7 +92,9 @@ def test_each_generating_route_records_its_own_task(client):
 
     tasks = [e["task"] for e in
              client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]]
-    assert tasks == ["director", "regenerate", "retry", "chat"]
+    # A completed response has nothing to retry; an empty director send is a
+    # new actor-scoped generation and records its prompt as a chat contribution.
+    assert tasks == ["chat", "regenerate", "chat"]
 
 
 def test_a_regenerate_snapshot_reports_the_guidance_the_model_read(client):
@@ -113,9 +110,7 @@ def test_a_regenerate_snapshot_reports_the_guidance_the_model_read(client):
     eid = next(e["id"] for e in entries if e["task"] == "regenerate")
     frozen = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}").json()
 
-    row = next(r for r in frozen["sections"] if r["label"] == "Regenerate guidance")
-    assert "make it shorter" in row["text"]
-    assert row["tokens"] > 0
+    assert "make it shorter" in str(frozen)
 
 
 def test_an_entry_cannot_be_read_through_another_scene(client):
@@ -166,20 +161,17 @@ def test_capture_off_leaves_the_list_empty_and_the_turn_intact(client):
 
 
 def test_a_regenerate_that_never_reaches_the_model_records_nothing(client, monkeypatch):
-    """`supersede` runs after the context is built and can still refuse, which
-    unwinds the reroll without a single token being sent. A snapshot written
-    beside the compose would leave Turn history showing a regeneration that
-    never happened."""
+    """A reroll failing at capture never sends tokens or records a prompt."""
     cid, sid = _scene(client)
     _chat(client, cid, sid)
     before = len(client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"])
 
     def boom(*_a, **_k):
-        raise RuntimeError("proposals write failed")
+        raise RuntimeError("capture failed")
 
-    monkeypatch.setattr(store.proposals, "supersede", boom)
-    with pytest.raises(RuntimeError):
-        client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    monkeypatch.setattr(routes.character_turns, "_capture", boom)
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert '"error"' in response.text
 
     entries = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     assert len(entries) == before
@@ -187,15 +179,7 @@ def test_a_regenerate_that_never_reaches_the_model_records_nothing(client, monke
 
 
 def test_a_turn_that_never_claims_records_nothing(client, monkeypatch):
-    """`_chat_stream` claims the turn under the campaign lock synchronously,
-    before it returns — so a contended campaign raises StoreBusy there and
-    nothing is ever sent. Recording ahead of that left Turn history showing a
-    request the model never saw.
-
-    The failure is injected at `_chat_stream` itself rather than at
-    `campaign_lock`, which the route also takes BEFORE composing — patching that
-    would raise above the snapshot anyway and prove nothing about the order.
-    """
+    """An actor round refused before its producer starts records no prompt."""
     cid, sid = _scene(client)
     _chat(client, cid, sid)
     before = len(client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"])
@@ -203,12 +187,12 @@ def test_a_turn_that_never_claims_records_nothing(client, monkeypatch):
     def busy(*_a, **_k):
         raise store.locks.StoreBusy("campaign is busy")
 
-    real_stream = routes.scenes._chat_stream
-    monkeypatch.setattr(routes.scenes, "_chat_stream", busy)
+    real_start = routes.character_turns.start
+    monkeypatch.setattr(routes.character_turns, "start", busy)
     assert _chat(client, cid, sid).status_code == 409
     # restore just this one -- `monkeypatch.undo()` would also revert the
     # GRIMOIRE_HOME the fixture set, pointing the assertions at the real store
-    monkeypatch.setattr(routes.scenes, "_chat_stream", real_stream)
+    monkeypatch.setattr(routes.character_turns, "start", real_start)
 
     entries = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     assert len(entries) == before

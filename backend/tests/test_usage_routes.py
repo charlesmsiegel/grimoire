@@ -48,8 +48,6 @@ def client(home):
     # `with`, so the lifespan runs: producing routes hand their work to a
     # runner that lives on it, and a client without one cannot drive a turn.
     with TestClient(app) as c:
-        # Existing call-count tests exercise the combined compatibility path.
-        c.put("/api/config", json={"character_response_mode": "combined"})
         c.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
         yield c
 
@@ -611,7 +609,9 @@ def test_a_reroll_is_charged_to_the_same_post_as_the_reply_it_replaces(client, h
     sid = _scene(client, cid)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
     _use(client.app, FakeOpenRouter(["again"], usage=USAGE))
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry", json={})
+    messages = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    rid = next(m["response_id"] for m in reversed(messages) if m.get("response_id"))
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate", json={})
 
     assert [row["post"] for row in _rows(home)] == [0, 0]
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
@@ -770,9 +770,9 @@ def test_a_director_turn_is_charged_to_the_scene_and_to_no_post(client, home):
     # is never written to the transcript.
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": ""})
 
-    tasks = {row["task"]: row for row in _rows(home)}
-    assert "director" in tasks, "the director turn was recorded at all"
-    assert "post" not in tasks["director"]
+    rows = _rows(home)
+    assert len(rows) == 2, "the director turn was recorded at all"
+    assert "post" not in rows[-1]
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
     assert body["totals"]["calls"] == 2, "both turns are the scene's"
     bucket, = body["by_post"]

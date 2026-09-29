@@ -1,1 +1,1 @@
-**Seraphine Vale:** Mine.
+"Mine."

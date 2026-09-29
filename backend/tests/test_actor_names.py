@@ -2,6 +2,9 @@
 
 import io
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from grimoire import store
 
@@ -51,3 +54,40 @@ def test_scenario_import_rejects_pc_name_before_writing_any_character(client):
     })
     assert response.status_code == 409
     assert client.get(f"/api/worlds/{wid}/characters").json() == []
+
+
+def test_promotion_refuses_a_name_owned_by_a_sibling_campaign(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    first = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    second = client.post("/api/campaigns", json={"name": "Realm", "world": wid}).json()["id"]
+    actor = client.post(f"/api/campaigns/{first}/characters", json={"name": "Mara"}).json()
+    assert client.post(f"/api/campaigns/{second}/pcs",
+                       json={"name": "Mara", "tags": []}).status_code == 200
+    result = client.post(f"/api/campaigns/{first}/characters/{actor['character']}/promote")
+    assert result.status_code == 409
+    assert client.get(f"/api/worlds/{wid}/characters").json() == []
+
+
+def test_simultaneous_campaign_creates_cannot_claim_the_same_name(client, monkeypatch):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    entered = threading.Event()
+    release = threading.Event()
+    real_create = store.overlay.create_pc
+
+    def delayed_create(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(store.overlay, "create_pc", delayed_create)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(client.post, f"/api/campaigns/{cid}/pcs",
+                            json={"name": "Mara", "tags": []})
+        assert entered.wait(5)
+        second = pool.submit(client.post, f"/api/campaigns/{cid}/pcs",
+                             json={"name": "mara", "tags": []})
+        time.sleep(0.05)
+        release.set()
+        statuses = sorted((first.result().status_code, second.result().status_code))
+    assert statuses == [200, 409]

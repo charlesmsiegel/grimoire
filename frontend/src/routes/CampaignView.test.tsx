@@ -1142,6 +1142,18 @@ test("sends the one-shot override in the chat request payload", async () => {
     expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
 });
 
+test("the one-shot picker refuses nonpositive and fractional values", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  const picker = await screen.findByLabelText("Next reply words");
+  fireEvent.change(picker, { target: { value: "120" } });
+  expect(picker).toHaveValue(120);
+  for (const value of ["0", "-1", "1.5", "1e2"]) {
+    fireEvent.change(picker, { target: { value } });
+    expect(picker).toHaveValue(120);
+  }
+});
+
 test("a failed stream keeps the override, and retry carries it", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({

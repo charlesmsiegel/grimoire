@@ -51,7 +51,8 @@ def _rows(scope: str, scope_id: str) -> list[dict]:
 
 
 def require_unique(name: str, *, scope: str, scope_id: str,
-                   actor_ref: str | None = None) -> None:
+                   actor_ref: str | None = None,
+                   ignore_campaign: str | None = None) -> None:
     """Raise before a write if another visible actor owns this full name."""
     normalized = name.strip().casefold()
     if not normalized:
@@ -62,6 +63,8 @@ def require_unique(name: str, *, scope: str, scope_id: str,
                       if row.get("world") == scope_id)
     for at_scope, at_id in scopes:
         for row in _rows(at_scope, at_id):
-            if row["ref"] != actor_ref and row["name"].strip().casefold() == normalized:
+            own_actor = row["ref"] == actor_ref and (
+                ignore_campaign is None or (at_scope == "campaign" and at_id == ignore_campaign))
+            if not own_actor and row["name"].strip().casefold() == normalized:
                 raise ActorNameError(
                     f"{name!r} is already used by {row['ref']} in {at_scope} {at_id}")
