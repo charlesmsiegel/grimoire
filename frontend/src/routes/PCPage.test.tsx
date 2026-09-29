@@ -87,17 +87,17 @@ test("editing a PC saves its persona and returns to read mode", async () => {
     expect.objectContaining({ description: "At Realm." })));
 });
 
-test("Art shows the current version's large image and an original link", async () => {
+test("Art shows linked thumbnails for every image without a large viewer", async () => {
   (api.listPCImages as any).mockResolvedValue([
     { name: "gallery_2", v: "b" }, { name: "avatar", v: "a" }, { name: "gallery_1", v: "c" },
   ]);
   renderPC();
   fireEvent.click(await screen.findByRole("tab", { name: "Art 3" }));
-  expect(screen.getByRole("img", { name: "PC avatar" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "Open original PC avatar" }))
+  expect(screen.getByRole("link", { name: "avatar" }))
     .toHaveAttribute("href", "/img/realm/mara/default/avatar");
-  fireEvent.click(screen.getByRole("button", { name: "View gallery_2" }));
-  expect(screen.getByRole("img", { name: "PC gallery_2" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "gallery_2" }))
+    .toHaveAttribute("href", "/img/realm/mara/default/gallery_2");
+  expect(document.querySelector(".art-viewer")).not.toBeInTheDocument();
 });
 
 test("a campaign art upload writes to the campaign and stays on the selected PC", async () => {
@@ -153,8 +153,8 @@ test("a slower image list for another version cannot replace the current version
   fireEvent.change(selector, { target: { value: "second" } });
   fireEvent.click(await screen.findByRole("tab", { name: "Art 1" }));
   resolveOld([{ name: "avatar", v: "old" }]);
-  await waitFor(() => expect(screen.getByRole("img", { name: "PC gallery_1" })).toBeInTheDocument());
-  expect(screen.queryByRole("img", { name: "PC avatar" })).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("link", { name: "gallery_1" })).toBeInTheDocument());
+  expect(screen.queryByRole("link", { name: "avatar" })).not.toBeInTheDocument();
 });
 
 test("a late record refresh cannot restore a version after the reader switches versions", async () => {
@@ -184,5 +184,20 @@ test("the phone main area opens Art even when this PC has no image", async () =>
     fireEvent.click(screen.getByRole("button", { name: "View art" }));
     expect(screen.getByRole("tab", { name: "Art 0" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("No art for this version yet.")).toBeInTheDocument();
+  } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
+});
+
+test("the phone Art shortcut reaches linked PC thumbnails", async () => {
+  (api.listPCImages as any).mockResolvedValue([{ name: "avatar", v: "a" }]);
+  const width = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { value: 375, configurable: true });
+  try {
+    renderPC();
+    await screen.findByRole("heading", { name: "Mara", level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "View art" }));
+    expect(screen.getByRole("link", { name: "avatar" }))
+      .toHaveAttribute("href", "/img/realm/mara/default/avatar");
+    expect(screen.getByRole("link", { name: "avatar" }))
+      .toHaveAttribute("target", "_blank");
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });

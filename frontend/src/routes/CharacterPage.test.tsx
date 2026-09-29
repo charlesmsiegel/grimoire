@@ -83,7 +83,8 @@ test("the phone main area exposes character art and opens the Art tab", async ()
     expect(screen.getByRole("img", { name: "Seraphine art preview" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View art" }));
     expect(screen.getByRole("tab", { name: /Art/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("img", { name: "Character avatar" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "avatar" }))
+      .toHaveAttribute("href", "/img/realm/characters/seraphine/default/avatar?v=a1");
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });
 
@@ -98,7 +99,8 @@ test("a gallery-only character has a phone preview and a direct Art action", asy
     expect(screen.getByRole("img", { name: "Seraphine art preview" }))
       .toHaveAttribute("src", "/img/realm/characters/seraphine/default/gallery_1?w=512&v=g1");
     fireEvent.click(screen.getByRole("button", { name: "View art" }));
-    expect(screen.getByRole("img", { name: "Character gallery_1" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "gallery_1" }))
+      .toHaveAttribute("href", "/img/realm/characters/seraphine/default/gallery_1?v=g1");
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });
 
@@ -676,6 +678,7 @@ test("the art tab shows the avatar tile and offers a description per image", asy
   await screen.findByText("avatar");
   expect(screen.getByAltText("gallery_1")).toBeTruthy();
   expect(screen.getByText("a novice at the gate")).toBeTruthy();
+  expect(document.querySelector(".art-viewer")).not.toBeInTheDocument();
 });
 
 /** A campaign locked to `veiled`, whose world default version still holds art. */
