@@ -726,7 +726,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {section === "characters" && <CharacterGrid scope={scope} wid={wid} reveal={reveal}
                                                     module={moduleCtx} onListed={onGridListed} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid}
-                                       selected={rid}
                                        recordHref={(r) => sectionHref(scopeForPaths,
                                                                       { kind: "record", at: "pcs", rid: r })}
                                        module={moduleCtx} />}

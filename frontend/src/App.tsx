@@ -36,6 +36,7 @@ import SearchView from "./routes/SearchView";
 import WorldsView from "./routes/WorldsView";
 import WorldView from "./routes/WorldView";
 import CharacterPage from "./routes/CharacterPage";
+import PCPage from "./routes/PCPage";
 import { characterHref } from "./components/character/shared";
 import ModulesView from "./routes/ModulesView";
 import StyleGuidesView from "./routes/StyleGuidesView";
@@ -348,6 +349,8 @@ const AppRoutes = memo(function AppRoutes(
           splat on its own. */}
       <Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} />
       <Route path="/campaigns/:cid/world/characters/:eid" element={<CharacterPage campaign />} />
+      <Route path="/worlds/:wid/pcs/:pid" element={<PCPage />} />
+      <Route path="/campaigns/:cid/world/pcs/:pid" element={<PCPage campaign />} />
       {/* One splat per shape, so every section and record of a world is the
           same route object and React keeps ONE `WorldView` across all of
           them. Sibling routes per section would remount the page on every

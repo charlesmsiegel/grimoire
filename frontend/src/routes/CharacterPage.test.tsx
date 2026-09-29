@@ -74,6 +74,34 @@ const DETAIL = {
   ],
 };
 
+test("the phone main area exposes character art and opens the Art tab", async () => {
+  const width = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { value: 375, configurable: true });
+  try {
+    await renderWorld();
+    expect(document.querySelector(".shell.phone .mobile-art-entry")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Seraphine art preview" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View art" }));
+    expect(screen.getByRole("tab", { name: /Art/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("img", { name: "Character avatar" })).toBeInTheDocument();
+  } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
+});
+
+test("a gallery-only character has a phone preview and a direct Art action", async () => {
+  (api.readCharacter as any).mockResolvedValue({ ...DETAIL, versions: [
+    { ...DETAIL.versions[0], images: ["gallery_1"], image_v: { gallery_1: "g1" } },
+  ] });
+  const width = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { value: 375, configurable: true });
+  try {
+    await renderWorld();
+    expect(screen.getByRole("img", { name: "Seraphine art preview" }))
+      .toHaveAttribute("src", "/img/realm/characters/seraphine/default/gallery_1?w=512&v=g1");
+    fireEvent.click(screen.getByRole("button", { name: "View art" }));
+    expect(screen.getByRole("img", { name: "Character gallery_1" })).toBeInTheDocument();
+  } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
+});
+
 const CASEFILE = {
   kind: "characters", id: "seraphine", name: "Seraphine", version: "default", role: "npc",
   scenes: ["001--the-tide-gate", "004--the-priory-door"],

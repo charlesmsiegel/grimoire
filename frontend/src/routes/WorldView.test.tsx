@@ -5,6 +5,7 @@ import {
   createMemoryRouter, RouterProvider,
 } from "react-router-dom";
 import WorldView from "./WorldView";
+import PCPage from "./PCPage";
 import { resetPrefetch } from "../api/prefetch";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 import { PaletteProvider, usePalette, type PaletteItem } from "../components/palette";
@@ -202,6 +203,7 @@ function renderAt() {
     <MemoryRouter initialEntries={["/worlds/w"]}>
       <PathSpy />
       <Routes>
+        <Route path="/worlds/:wid/pcs/:pid" element={<PCPage />} />
         <Route path="/worlds/:wid/*" element={<WorldView />} />
         <Route path="*" element={<div>away</div>} />
       </Routes>
@@ -223,6 +225,7 @@ function renderAtUrl(url: string) {
     <MemoryRouter initialEntries={[url]}>
       <PathSpy />
       <Routes>
+        <Route path="/worlds/:wid/pcs/:pid" element={<PCPage />} />
         <Route path="/worlds/:wid/*" element={<WorldView />} />
         <Route path="*" element={<div>away</div>} />
       </Routes>
@@ -929,7 +932,9 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
   await waitFor(() =>
     expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "winifred"));
 
-  // ...and coming back to PCs from the column shows the list, not Winifred
+  // Returning to the PC section shows the list, not Winifred.
+  fireEvent.click(screen.getByRole("link", { name: /All PCs/ }));
+  await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Groups"));
   (api.readPC as any).mockClear();
   fireEvent.click(indexRow("PCs"));
@@ -958,8 +963,10 @@ test("a focused PC is not carried into another scope's render", async () => {
     meta: { id: "watch", name: "The Watch", leader: "pcs:winifred" }, body: "x", rev: "r1" });
   render(
     <MemoryRouter initialEntries={["/worlds/w"]}>
+      <GoTo to="/worlds/w2/pcs" />
       <Routes>
-        <Route path="/worlds/:wid/*" element={<><WorldView /><GoTo to="/worlds/w2/pcs" /></>} />
+        <Route path="/worlds/:wid/pcs/:pid" element={<PCPage />} />
+        <Route path="/worlds/:wid/*" element={<WorldView />} />
       </Routes>
     </MemoryRouter>,
   );

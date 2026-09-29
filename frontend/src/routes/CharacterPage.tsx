@@ -15,6 +15,7 @@ import { OwnedLorePanel } from "../components/OwnedLorePanel";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { useEntityKinds } from "../components/useEntityKinds";
 import { ArtTab } from "../components/character/ArtTab";
+import { MobileArtEntry } from "../components/MobileArtEntry";
 import { CampaignSection } from "../components/character/CampaignSection";
 import { CardTab } from "../components/character/CardTab";
 import { GreetingsTab } from "../components/character/GreetingsTab";
@@ -679,6 +680,12 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
       {error != null && <div className="banner"><ErrorNote err={error} /></div>}
       {importMsg && <p className="field-hint">{importMsg}</p>}
+
+      <MobileArtEntry name={name}
+        image={hasAvatar ? characterImage(scope, eid, vid, "avatar", imageTokens.avatar)
+          : galleryImages[0] ? characterImage(scope, eid, vid, galleryImages[0], imageTokens[galleryImages[0]])
+          : null}
+        onOpenArt={() => setTab("art")} />
 
       <div className="card-tabs" role="tablist" aria-label="Card">
         {([["card", "Card", null],
