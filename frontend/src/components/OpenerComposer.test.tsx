@@ -44,14 +44,14 @@ test("Generate sends what the box holds, premise or edit", async () => {
   renderComposer({ initialPrompt: "A debt-collector arrives." });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
   await waitFor(() => expect(api.opener).toHaveBeenCalledWith(
-    "c", "s1", "A debt-collector arrives.", expect.any(Function)));
+    "c", "s1", "A debt-collector arrives.", expect.any(Function), undefined, [], []));
   await screen.findByText("Rain on the marsh road.");
 
   fireEvent.change(screen.getByLabelText("Opener prompt"),
                    { target: { value: "A stranger returns." } });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
   await waitFor(() => expect(api.opener).toHaveBeenCalledWith(
-    "c", "s1", "A stranger returns.", expect.any(Function)));
+    "c", "s1", "A stranger returns.", expect.any(Function), undefined, [], []));
 });
 
 // The reset the seeding effect exists for: one scene's premise must not linger
@@ -69,4 +69,60 @@ test("without an LLM connection the box still seeds, and says why it cannot run"
   await screen.findByText(/Set up an LLM connection/);
   expect(screen.getByLabelText("Opener prompt")).toHaveValue("A debt-collector arrives.");
   expect(api.opener).not.toHaveBeenCalled();
+});
+
+test("actor-scoped preview adopts complete labeled contributions", async () => {
+  const cast = [
+    { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
+    { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
+  ];
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
+                                              on: (e: any) => void) => {
+    on({ snapshot: cast });
+    for (const [speaker, content] of [[cast[0], "Rain falls."], [cast[1], "I wait."]] as const) {
+      on({ speaker_start: speaker });
+      on({ delta: content });
+      on({ speaker_done: { ...speaker, content } });
+    }
+    on({ done: true });
+  });
+  (api.firstPost as any).mockResolvedValue({ ok: true });
+  renderComposer({ initialPrompt: "A meeting.",
+    characters: [{ ...CHARS[0], has_avatar: true, avatar_v: "v1-token" }] });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  expect(await screen.findByText("I wait.")).toBeInTheDocument();
+  expect(screen.getByAltText("Mara portrait")).toHaveAttribute("src",
+    expect.stringContaining("/characters/mara/versions/v1/images/avatar"));
+  fireEvent.click(screen.getByRole("button", { name: "Use" }));
+  await waitFor(() => expect(api.firstPost).toHaveBeenCalledWith("c", "s1",
+    "**Grimoire:** Rain falls.\n\n**Mara:** I wait.",
+    [{ ...cast[0], content: "Rain falls." }, { ...cast[1], content: "I wait." }], cast));
+});
+
+test("a failed later contribution keeps Use disabled and retries only the missing speaker", async () => {
+  const cast = [
+    { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
+    { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
+  ];
+  (api.opener as any).mockImplementationOnce(async (_c: string, _s: string, _p: string,
+                                                  on: (e: any) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_start: cast[0] });
+    on({ speaker_done: { ...cast[0], content: "Rain falls." } });
+    on({ error: { kind: "rate_limit", detail: "Wait" } });
+  }).mockImplementationOnce(async (_c: string, _s: string, _p: string,
+                                  on: (e: any) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_start: cast[1] });
+    on({ speaker_done: { ...cast[1], content: "I wait." } });
+    on({ done: true });
+  });
+  renderComposer({ initialPrompt: "A meeting." });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  const retry = await screen.findByRole("button", { name: "Retry remaining speakers" });
+  expect(screen.getByRole("button", { name: "Use" })).toBeDisabled();
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.opener).toHaveBeenLastCalledWith("c", "s1", "A meeting.",
+    expect.any(Function), undefined, [{ ...cast[0], content: "Rain falls." }], cast));
+  expect(screen.getByRole("button", { name: "Use" })).toBeEnabled();
 });

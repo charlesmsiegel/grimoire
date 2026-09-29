@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from . import (
@@ -1038,8 +1039,12 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
                 name: str | None = None, update_vid: str | None = None,
-                version_name: str | None = None) -> tuple[str, str]:
+                version_name: str | None = None,
+                validate_name: Callable[[str], None] | None = None) -> tuple[str, str]:
     card = cards.loads(data, fmt)  # raises cards.CardParseError on bad input
+    if validate_name is not None:
+        validate_name(name or str(cards.card_data(card).get("name") or "Imported"))
+        validate_name(str(cards.card_data(card).get("name") or ""))
     cards.bake_char_name(card)
     # Resolve (and unhook) a carried avatar BEFORE the card is written: the
     # writes below persist whatever `card` holds at that moment.
@@ -1186,7 +1191,8 @@ def download_card(url_or_path: str) -> tuple[bytes, str, str, dict | None]:
 
 def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
                       into_vid: str | None = None,
-                      version_name: str | None = None) -> dict:
+                      version_name: str | None = None,
+                      validate_name: Callable[[str], None] | None = None) -> dict:
     """Download a character card from a URL and import/update it. A chub.ai
     URL or "creator/slug" shorthand gets the full chub.ai treatment (avatar,
     gallery, linked lorebooks); any other URL is fetched directly and parsed
@@ -1216,9 +1222,11 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
 
     try:
         if updated:
-            cid, vid = import_card(root, data, fmt, into_cid, update_vid=into_vid)
+            cid, vid = import_card(root, data, fmt, into_cid, update_vid=into_vid,
+                                   validate_name=validate_name)
         else:
-            cid, vid = import_card(root, data, fmt, into_cid, version_name=version_name)
+            cid, vid = import_card(root, data, fmt, into_cid, version_name=version_name,
+                                   validate_name=validate_name)
     except cards.CardParseError as exc:
         raise chub.ChubFetchError(str(exc)) from exc
     if not updated:

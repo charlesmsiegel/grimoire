@@ -454,7 +454,7 @@ def test_empty_context_is_raw_history(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "plain message")
     msgs = context.build_messages(cid, sid)
     # an empty store still gets the Response format section; the history stays raw
-    assert msgs[0]["role"] == "system" and "Write your reply as a script" in msgs[0]["content"]
+    assert msgs[0]["role"] == "system" and "Write about 150 words" in msgs[0]["content"]
     assert msgs[1:] == [{"role": "user", "content": "plain message"}]
 
 
@@ -544,7 +544,7 @@ def test_build_opener_messages(monkeypatch, tmp_path):
     assert user_msg["content"] == "A storm over the salt marshes for Elara."
 
 
-def test_opener_shape_is_the_last_message_and_names_the_cast(monkeypatch, tmp_path):
+def test_opener_uses_narrator_target_and_does_not_request_labels(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Seraphine", "default",
                                 _npc_card("Seraphine", description="a harbor keeper"))
@@ -552,25 +552,24 @@ def test_opener_shape_is_the_last_message_and_names_the_cast(monkeypatch, tmp_pa
     msgs = context.build_opener_messages(cid, sid, "A storm.")
     last = msgs[-1]
     assert last["role"] == "system" and msgs[-2]["role"] == "user"  # rides last, after the prompt
-    assert "at most five short paragraphs" in last["content"]
-    assert "**Seraphine:**" in last["content"]              # names the present cast's markers
-    assert "never under **Grimoire:**" in last["content"]   # actions belong to the character
+    assert "Set the scene as narrator" in last["content"]
+    assert "**Seraphine:**" not in str(msgs)
+    assert "about 400 words" in msgs[0]["content"]
 
 
-def test_opener_shape_without_npcs_uses_generic_marker(monkeypatch, tmp_path):
+def test_opener_without_npcs_keeps_narrator_instruction(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     last = context.build_opener_messages(cid, sid, "A storm.")[-1]
     assert last["role"] == "system"
-    assert "**<Name>:**" in last["content"]
-    assert "at most five short paragraphs" in last["content"]
+    assert "Set the scene as narrator" in last["content"]
 
 
-def test_offscreen_opener_keeps_shape_last(monkeypatch, tmp_path):
+def test_offscreen_opener_keeps_actor_instruction_last(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     sid2 = scenes.create_scene(cid, "Off", pcless=True)
     msgs = context.build_opener_messages(cid, sid2, "A storm.")
     assert "offscreen" in msgs[0]["content"].split("\n\n")[0]
-    assert "at most five short paragraphs" in msgs[-1]["content"]
+    assert "Set the scene as narrator" in msgs[-1]["content"]
 
 
 def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
@@ -958,7 +957,7 @@ def test_a_section_between_the_tiers_gets_each_run_its_own_heading(monkeypatch, 
     Suppressing the second copy because the first already went out assumes the
     two tiers are still adjacent -- and once another section's own `# Heading`
     has closed the directory, what follows reads as part of THAT section: a
-    list of absent characters under `# Response budget`, which is the unframed
+    list of absent characters under `# Response target`, which is the unframed
     list #423 is about, reached from a third direction."""
     from grimoire.store import config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
@@ -977,7 +976,7 @@ def test_a_section_between_the_tiers_gets_each_run_its_own_heading(monkeypatch, 
     # ...and the run really was split by a section of its own, or this proves
     # nothing: it is the intervening `# Heading` that ends the directory.
     assert (sys.index("## Active in this campaign, elsewhere")
-            < sys.index("# Response budget")
+            < sys.index("# Response target")
             < sys.index("## Known to exist"))
 
 
@@ -1561,7 +1560,7 @@ def test_response_format_section_lists_players(monkeypatch, tmp_path):
     pid, pvid = pcs.create_pc(worlds.world_root(wid), "Elara Vane", [])
     ap.appear(cid, sid, "pcs", pid, pvid, "player")
     sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
-    assert "Write your reply as a script" in sections["Response format"]
+    assert "Write continuous prose" in sections["Response format"]
     assert "Elara Vane" in sections["Response format"]
 
 
@@ -1821,9 +1820,9 @@ def _user_style(tmp_path, sid, name, body):
 def test_budget_section_renders_with_resolved_numbers(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     text = context.build_messages(cid, sid)[0]["content"]
-    assert "# Response budget" in text
-    assert "550 words" in text                         # standard fallback
-    assert "at most 5 blocks" in text
+    assert "# Response target" in text
+    assert "150 words" in text
+    assert "about 2 paragraphs" in text
 
 
 def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
@@ -1831,7 +1830,7 @@ def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
     scenes.set_response(cid, sid, {"response_preset": "terse"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "150 words" in text
-    assert "do not return to a character you have already written" in text
+    assert "about 1 paragraph" in text
 
 
 def test_turn_override_beats_the_scene_setting(monkeypatch, tmp_path):
@@ -1853,7 +1852,8 @@ def test_repeats_allowed_wording(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response(cid, sid, {"response_preset": "cinematic"})
     text = context.build_messages(cid, sid)[0]["content"]
-    assert "No character takes more than 2 blocks." in text
+    assert "900 words" in text
+    assert "about 3 paragraphs" in text
 
 
 def test_legacy_style_id_still_resolves_identically(monkeypatch, tmp_path):
@@ -1882,6 +1882,9 @@ def test_budget_section_appears_in_the_token_breakdown(monkeypatch, tmp_path):
 
 
 def _bloat(cid, sid, turns, words):
+    characters.create_character(campaigns.campaign_root(cid), "Mara", "default",
+                                characters.blank_card("Mara"))
+    ap.appear(cid, sid, "characters", "mara", "default", "npc")
     for _ in range(turns):
         scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "w " * words}])
 
@@ -1896,7 +1899,7 @@ def test_no_corrective_while_replies_are_compliant(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response(cid, sid, {"response_preset": "cinematic"})   # 900-word budget
     _bloat(cid, sid, turns=3, words=200)
-    messages = context.build_messages(cid, sid)
+    messages = context.compose_turn(cid, sid, actor_ref="characters:mara")[0]
     assert not any("run long" in m["content"] for m in messages)
 
 
@@ -1904,21 +1907,21 @@ def test_corrective_lands_in_the_last_message(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response(cid, sid, {"response_preset": "terse"})       # 150-word budget
     _bloat(cid, sid, turns=3, words=600)
-    messages = context.build_messages(cid, sid)
+    messages = context.compose_turn(cid, sid, actor_ref="characters:mara")[0]
     last = messages[-1]
     assert last["role"] == "system"
     assert "run long" in last["content"]
-    assert "Cut hard" in last["content"]
-    assert "150 words total" in last["content"]
+    assert "Cut back substantially" in last["content"]
+    assert "150-word target" in last["content"]
 
 
 def test_trim_tier_wording(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response(cid, sid, {"response_preset": "terse"})       # 150 -> trim band 188..262
     _bloat(cid, sid, turns=3, words=220)
-    text = context.build_messages(cid, sid)[-1]["content"]
-    assert "Trim toward the budget" in text
-    assert "Cut hard" not in text
+    text = context.compose_turn(cid, sid, actor_ref="characters:mara")[0][-1]["content"]
+    assert "Trim toward the target" in text
+    assert "Cut back substantially" not in text
 
 
 def test_structural_lines_appear_only_when_violated(monkeypatch, tmp_path):
@@ -1927,7 +1930,7 @@ def test_structural_lines_appear_only_when_violated(monkeypatch, tmp_path):
     scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Short."},
                                    {"speaker": "Mara", "content": "Again."}])
     text = context.build_messages(cid, sid)[-1]["content"]
-    assert "give each character at most 1" in text
+    assert "give each character at most 1" not in text
     assert "speaking characters" not in text     # the speaker cap was NOT broken
     assert "run long" not in text                # nor the word budget
 
@@ -1955,70 +1958,9 @@ def test_corrective_rides_alone_when_cards_have_no_post_history(monkeypatch, tmp
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response(cid, sid, {"response_preset": "terse"})
     _bloat(cid, sid, turns=3, words=600)
-    messages = context.build_messages(cid, sid)
-    assert messages[-1]["role"] == "system"
-    assert "run long" in messages[-1]["content"]
-
-
-def test_speaker_canonicalization_survives_a_cast_departure(monkeypatch, tmp_path):
-    """A character who leaves still has blocks in the 3-turn window. Dropping
-    their name from the canonicalization set would split 'Winifred' and
-    'Winifred Vance' into two speakers on an ordinary departure — inventing a
-    speakers violation and hiding the real blocks_per_speaker one."""
-    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    croot = campaigns.campaign_root(cid)
-    characters.create_character(croot, "Winifred Vance", "default",
-                                characters.blank_card("Winifred Vance"))
-    ap.appear(cid, sid, "characters", "winifred-vance", "default", "npc")
-    scenes.set_response(cid, sid, {"response_preset": "terse"})   # speakers 2, blocks_per_speaker 1
-    scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "One."},
-                                   {"speaker": "Winifred Vance", "content": "Two."}])
-    ap.leave(cid, sid, "characters", "winifred-vance")
-    text = context.build_messages(cid, sid)[-1]["content"]
-    assert "give each character at most 1" in text   # one character, two blocks
-    assert "speaking characters" not in text         # NOT two distinct speakers
-
-
-def test_unrelated_world_character_does_not_poison_canonicalization(monkeypatch, tmp_path):
-    """The roster must cover campaign history, not every character the campaign
-    can SEE. An unrelated same-prefix world character would make 'Winifred'
-    ambiguous and split one on-screen actor into two speakers."""
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    croot = campaigns.campaign_root(cid)
-    characters.create_character(croot, "Winifred Vance", "default",
-                                characters.blank_card("Winifred Vance"))
-    # never in this campaign's history — but visible in the world
-    characters.create_character(worlds.world_root(wid), "Winifred Vale", "default",
-                                characters.blank_card("Winifred Vale"))
-    ap.appear(cid, sid, "characters", "winifred-vance", "default", "npc")
-    scenes.set_response(cid, sid, {"response_preset": "terse"})   # blocks_per_speaker 1
-    scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "One."},
-                                   {"speaker": "Winifred Vance", "content": "Two."}])
-    text = context.build_messages(cid, sid)[-1]["content"]
-    assert "give each character at most 1" in text   # still one character
-    assert "speaking characters" not in text         # not two
-
-
-def test_drift_roster_is_not_built_for_a_scene_with_nothing_to_measure(monkeypatch, tmp_path):
-    """Building the roster opens one card file per campaign actor. A scene with
-    no recorded turns is not measured at all, so that work must not happen —
-    it is pure I/O on the hot path of every single generation."""
-    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.append_message(cid, sid, "user", "hello")
-    calls = []
-    real = context_cast._drift_roster
-
-    def counted(*args):
-        calls.append(args)
-        return real(*args)
-
-    monkeypatch.setattr(context_cast, "_drift_roster", counted)
-    context.build_messages(cid, sid)
-    assert calls == []
-    # once a generation has been recorded there IS something to measure
-    scenes.append_reply(cid, sid, [{"speaker": None, "content": "A reply."}])
-    context.build_messages(cid, sid)
-    assert len(calls) == 1
+    actor_messages = context.compose_turn(cid, sid, actor_ref="characters:mara")[0]
+    assert actor_messages[-1]["role"] == "system"
+    assert "run long" in actor_messages[-1]["content"]
 
 
 # ---- POV filtering of NPC suspicions (#116) ---------------------------------
@@ -4027,13 +3969,12 @@ def test_two_flagged_npcs_render_one_listed_corrective(monkeypatch, tmp_path):
 def test_voice_corrective_precedes_the_length_corrective(monkeypatch, tmp_path):
     """Length is about trimming what was written; voice is about who is writing
     it. The identity correction has to land before the instruction to be brief."""
-    from grimoire.store import lengths, response_presets  # noqa: F401
     _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
     voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")
     # Three turns far over any budget -> the length corrective renders too.
     for _ in range(3):
-        scenes.append_reply(cid, sid, [{"speaker": None, "content": "word " * 4000}])
-    last = context.build_messages(cid, sid)[-1]["content"]
+        scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "word " * 4000}])
+    last = context.compose_turn(cid, sid, actor_ref="characters:winifred")[0][-1]["content"]
     assert "have run long" in last, "expected the length corrective to render too"
     assert last.index("drifted out of voice") < last.index("have run long")
 

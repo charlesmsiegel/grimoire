@@ -6,7 +6,7 @@ import LibraryView from "../routes/LibraryView";
 vi.mock("../api/client", () => ({
   api: {
     listWorlds: vi.fn(), listModules: vi.fn(), listStyles: vi.fn(),
-    listResponsePresets: vi.fn(), listClimates: vi.fn(), listConnections: vi.fn(),
+    listClimates: vi.fn(), listConnections: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -31,7 +31,6 @@ beforeEach(() => {
   (api.listWorlds as any).mockResolvedValue([{ id: "realm" }, { id: "saltmarch" }]);
   (api.listModules as any).mockResolvedValue([{ id: "d20" }]);
   (api.listStyles as any).mockResolvedValue([{ id: "a" }, { id: "b" }, { id: "c" }]);
-  (api.listResponsePresets as any).mockResolvedValue([]);
   (api.listClimates as any).mockResolvedValue({ climates: [{ id: "temperate" }, { id: "arid" }] });
   (api.listConnections as any).mockResolvedValue([{ id: "openrouter" }]);
 });
@@ -40,7 +39,7 @@ test("offers every section as a link to the page that already owns it", async ()
   renderColumn();
   for (const [name, href] of [
     ["Worlds", "/worlds"], ["Modules", "/modules"], ["Styles", "/styles"],
-    ["Response Presets", "/response-presets"], ["Climates", "/climates"],
+    ["Climates", "/climates"],
     // Connections used to sit outside the library entirely, beside it in the
     // nav rail. It is a thing a campaign is built from like the other five.
     ["Connections", "/connections"],
@@ -71,9 +70,10 @@ test("counts each section from the list endpoint that already serves it", async 
   expect(row(/connections/i)).toHaveTextContent("1");
 });
 
-test("an empty section counts zero rather than going blank", async () => {
+test("retired response presets have no library row", async () => {
   renderColumn();
-  await waitFor(() => expect(row(/response presets/i)).toHaveTextContent("0"));
+  await screen.findByRole("link", { name: /worlds/i });
+  expect(screen.queryByRole("link", { name: /response presets/i })).toBeNull();
 });
 
 test("one section failing to load leaves the others counted", async () => {

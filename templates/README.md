@@ -257,8 +257,8 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
    counterweights ride here rather than in the system prompt.
 5. Regenerate guidance or mechanics continuation blocks, when present,
    as extra system messages after the post-history.
-6. Opener only: `scene/opener_shape.j2` as the final system message (always
-   sent — last, right before generation, so it outranks the system prompt).
+6. Opener only: an actor-specific final system message after the player's
+   premise and completed contributions. The application writes speaker labels.
 
 `system.j2` takes one var, `sections` — the already-rendered section texts, in
 order, which it joins with blank lines. It used to `include` every section
@@ -284,11 +284,9 @@ substituted by code:
   per-field cascade (turn → scene → campaign → global) subsumes the older
   `styles.resolve_style()` chain and walks the same `style_id` /
   `default_style_id` keys when no response preset is set
-- `budget` — `{reply_words, blocks, paragraphs, speakers,
-  blocks_per_speaker}`, the resolved length budget from
-  `response_presets.resolve()`; feeds `sections/response_budget.j2`. Always
-  complete (StrictUndefined), falling back to the `standard` length preset.
-  Spec: docs/superpowers/specs/2026-07-26-response-presets-design.md
+- `budget` — `{words, paragraphs}` from `response_targets.resolve()`;
+  Opening applies to the opener narrator, Continuation to every NPC and later
+  response. It feeds `sections/response_budget.j2` as an approximate target.
 - (no vars) `sections/natural_prose.j2` — the always-on anti-AI-ism
   defaults (names at invention, banned stock phrases, beat-word rationing,
   banned constructions, rhythm); sits right after the prose style, which

@@ -42,12 +42,11 @@
   },
   "backend/src/grimoire/routes/common.py": {
     "B904": 6,
-    "RUF005": 1,
     "SIM105": 1
   },
   "backend/src/grimoire/routes/config.py": {
     "A002": 4,
-    "B904": 30,
+    "B904": 19,
     "PERF401": 1
   },
   "backend/src/grimoire/routes/entities.py": {

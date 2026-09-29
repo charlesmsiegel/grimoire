@@ -819,6 +819,8 @@ class StartFromGreeting(BaseModel):
 
 class Opener(BaseModel):
     prompt: str
+    completed: list[dict] = []
+    snapshot: list[dict] = []
 
 
 class SceneIntent(BaseModel):
@@ -845,7 +847,9 @@ class SceneIdeaStatus(BaseModel):
 
 
 class FirstPost(BaseModel):
-    text: str
+    text: str = ""
+    contributions: list[dict] = []
+    snapshot: list[dict] = []
 
 
 class LoreEntry(BaseModel):

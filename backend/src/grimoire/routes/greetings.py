@@ -4,12 +4,15 @@ routes that open a scene from a greeting."""
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import store
 from ..llm import LLMClient, effective_model
+from ..llm_errors import LLMError
 from . import runs
 from .common import (
     _campaign_root_or_404,
@@ -35,9 +38,85 @@ from .models import (
     StartFromGreeting,
     SubjectsBody,
 )
-from .streaming import StreamOutcome, _persist_reply, ephemeral_frames
+from .streaming import StreamOutcome, _persist_reply
 
 router = APIRouter()
+
+
+def _opener_cast(cid: str, sid: str) -> list[dict]:
+    """The draft order and its adoption fence, including locked versions."""
+    actors = [{"actor_ref": "grimoire", "speaker": "Grimoire", "version": ""}]
+    for entry in store.appearances.scene_cast(cid, sid):
+        if entry["role"] != "npc":
+            continue
+        ref = f"{entry['kind']}:{entry['id']}"
+        actors.append({"actor_ref": ref, "speaker": entry["name"],
+                       "version": store.appearances.locked_version(
+                           cid, entry["kind"], entry["id"]) or ""})
+    return actors
+
+
+def _opener_parts(parts: list[dict], cast: list[dict]) -> list[dict]:
+    """Only a complete prefix can be retried or adopted."""
+    if len(parts) > len(cast):
+        raise HTTPException(400, detail="too many opener contributions")
+    cleaned = []
+    for part, expected in zip(parts, cast, strict=False):
+        if part.get("actor_ref") != expected["actor_ref"] or part.get("speaker") != expected["speaker"]:
+            raise HTTPException(409, detail="opener cast changed")
+        prose = str(part.get("content", "")).strip()
+        own = re.compile(r"^\*\*" + re.escape(expected["speaker"]) + r":\*\*\s*", re.IGNORECASE)
+        prose = own.sub("", prose).strip()
+        if not prose or re.search(r"\*\*[^\n*]+:\*\*", prose):
+            raise HTTPException(400, detail="opener contribution needs unlabeled prose")
+        cleaned.append({**expected, "content": prose})
+    return cleaned
+
+
+def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
+                   completed: list[dict], conn: dict, client: LLMClient,
+                   outcome: StreamOutcome):
+    async def frames():
+        parts = list(completed)
+        try:
+            yield f"data: {json.dumps({'snapshot': cast})}\n\n"
+            for actor in cast[len(parts):]:
+                messages, breakdown = store.context.compose_opener(
+                    cid, sid, prompt, actor_ref=actor["actor_ref"], prior=parts,
+                    describe=store.prompt_log.capturing(), model=effective_model(conn))
+                _record_prompt(cid, sid, "opener", breakdown,
+                               model=effective_model(conn), messages=messages)
+                yield f"data: {json.dumps({'speaker_start': actor})}\n\n"
+                meter = store.usage.meter("opener", campaign=cid, scene=sid)
+                prose = ""
+                try:
+                    async for delta in client.stream(messages, conn, meter.usage):
+                        if delta:
+                            prose += delta
+                            yield f"data: {json.dumps({'delta': delta})}\n\n"
+                        else:
+                            yield ": heartbeat\n\n"
+                    meter.done()
+                except LLMError as exc:
+                    meter.done("error", exc.kind, detail=exc.detail)
+                    outcome.fail(exc.kind, exc.detail)
+                    yield f"data: {json.dumps({'error': {'kind': exc.kind, 'detail': exc.detail}})}\n\n"
+                    return
+                except BaseException:
+                    meter.done("aborted")
+                    raise
+                try:
+                    parts = _opener_parts([*parts, {**actor, "content": prose}], cast)
+                except HTTPException as exc:
+                    outcome.fail("invalid_response", str(exc.detail))
+                    yield f"data: {json.dumps({'error': {'kind': 'invalid_response', 'detail': str(exc.detail)}})}\n\n"
+                    return
+                yield f"data: {json.dumps({'speaker_done': parts[-1]})}\n\n"
+            outcome.land()
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except BaseException:
+            raise
+    return frames
 
 
 def _provided(model, field: str) -> bool:
@@ -434,8 +513,10 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
         return replay
     _require_scene(cid, sid)
     conn = _require_connection("opener", cid)
-    messages, breakdown = store.context.compose_opener(
-        cid, sid, body.prompt, describe=store.prompt_log.capturing(), model=effective_model(conn))
+    cast = _opener_cast(cid, sid)
+    if body.snapshot and body.snapshot != cast:
+        raise HTTPException(409, detail="opener cast changed")
+    completed = _opener_parts(body.completed, cast)
     run, fresh = runs.reserve_scene_draft(request.app, cid, sid, "opener",
                                           x_grimoire_attempt)
     if not fresh:
@@ -443,17 +524,15 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
         # than spend a second opener-length call on the same prompt.
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        _record_prompt(cid, sid, "opener", breakdown,
-                       model=effective_model(conn), messages=messages)
         # The box, not just the frames. `ephemeral_frames` handles an upstream
         # `LLMError` by emitting an error frame and finishing normally, so a
         # runner inferring success from a clean exhaustion would mark the run
         # `landed` with `error: null` -- and a client polling it would be told
         # an opener arrived whose only terminal frame says it did not.
         outcome = StreamOutcome()
-        runs.start_detached(request.app, run, ephemeral_frames(
-            messages, conn, client, task="opener", cid=cid, sid=sid,
-            outcome=outcome), outcome=outcome.result)
+        runs.start_detached(request.app, run, _opener_frames(
+            cid, sid, body.prompt, cast, completed, conn, client, outcome),
+            outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
@@ -468,8 +547,18 @@ def post_first_post(cid: str, sid: str, body: FirstPost, request: Request):
     # empty scene. It also puts the busy refusal ahead of the already-has-
     # messages one, which is the honest order -- a scene a turn is generating
     # into is refused for that reason, whatever else is true of it.
-    with runs.scene_held_free(request.app, cid, sid):
-        return _adopt_first_post(cid, sid, body.text)
+    with runs.scene_held_free(request.app, cid, sid), store.locks.campaign_lock(cid):
+            if body.contributions:
+                cast = _opener_cast(cid, sid)
+                if body.snapshot != cast:
+                    raise HTTPException(409, detail="opener cast changed")
+                parts = _opener_parts(body.contributions, cast)
+                if len(parts) != len(cast):
+                    raise HTTPException(409, detail="opener draft is incomplete")
+                text = "\n\n".join(f"**{part['speaker']}:** {part['content']}" for part in parts)
+            else:
+                text = body.text
+            return _adopt_first_post(cid, sid, text)
 
 
 def _adopt_first_post(cid: str, sid: str, text: str) -> dict:

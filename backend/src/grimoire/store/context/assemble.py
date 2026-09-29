@@ -58,7 +58,8 @@ OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
 
 def compose_opener(cid: str, sid: str, prompt: str,
-                   describe: bool = True, model: str = "") -> tuple[list[dict], dict | None]:
+                   describe: bool = True, model: str = "",
+                   actor_ref: str = "grimoire", prior: list[dict] | None = None) -> tuple[list[dict], dict | None]:
     """A full-turn-context opener: the instruction plus every assembled system section
     (cast, plot threads, date, current setting, world-info, a full 5-scene recap, …),
     then the prompt as the user turn. The prompt seeds world-info activation, since a new
@@ -67,17 +68,24 @@ def compose_opener(cid: str, sid: str, prompt: str,
 
     Returns the messages and the breakdown describing them — see `compose_turn`
     for why those two must come out of one pass."""
-    a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH)
+    a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH,
+                  actor_ref=actor_ref, opening_narrator=actor_ref == "grimoire")
     # Both trailing messages are rendered before packing so their tokens can be
     # reserved: neither is droppable, so neither may go uncounted.
     user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid,
                                      datetime_subs=a["datetime_subs"])
-    shape = prompts.render("scene/opener_shape.j2", npc_names=a["npc_names"])
-    extra = (("Opener prompt", user_text), ("Opener shape rules", shape))
-    # Shape rules stay last, right before generation, above the earlier framing.
+    prior_text = "\n\n".join(f"{part['speaker']}: {part['content']}" for part in (prior or []))
+    instruction = ("Set the scene as narrator. Do not write any NPC or PC actions or dialogue."
+                   if actor_ref == "grimoire" else
+                   "Write only this assigned NPC's contribution after the preceding opening. Do not write for other actors.")
+    extra = (("Opener prompt", user_text), ("Previous opening contributions", prior_text),
+             ("Assigned opener instruction", instruction))
+    before = [{"role": "user", "content": user_text}]
+    if prior_text:
+        before.append({"role": "assistant", "content": prior_text})
     return _prepare(a, cid, sid, model=model, describe=describe, opener=True,
-                    before_post=({"role": "user", "content": user_text},),
-                    after_post=({"role": "system", "content": shape},), extra=extra)
+                    before_post=tuple(before),
+                    after_post=({"role": "system", "content": instruction},), extra=extra)
 
 
 
@@ -88,7 +96,8 @@ def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> l
 
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
               turn: dict | None = None, actor_ref: str | None = None,
-              eligible_speakers: list[dict] | None = None) -> dict:
+              eligible_speakers: list[dict] | None = None,
+              opening_narrator: bool = False) -> dict:
     """One pass gathering the template data + projected history + post-history.
     build_* render templates/scene/system.j2 from data; context_sections renders
     the per-section templates for the token breakdown. `wi_seed` folds extra text
@@ -344,7 +353,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "global_system_prompt": cfg.get("system_prompt", ""),
         "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
-        "budget": targets["continuation"],
+        "budget": targets["opening" if opening_narrator else "continuation"],
         "npc_cards": npc_cards,
         "cast_blocks": cast_blocks,
         "named_npc_count": named_npc_count,
@@ -885,7 +894,10 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
                     "pinned": section.id in pinned,
                     "heading": section.heading, "heading_text": head})
         last_heading = section.heading
-    actor.add_contract(out, data)
+    # Openers have their own final actor instruction and no handoff protocol.
+    # The turn contract asks for a fenced handoff, which is invalid in a draft.
+    if not opener:
+        actor.add_contract(out, data)
     return out
 
 

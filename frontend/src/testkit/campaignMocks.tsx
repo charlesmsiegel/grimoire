@@ -88,7 +88,7 @@ export async function campaignApiMock() {
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listStyles: vi.fn(),
-      listResponsePresets: vi.fn(), getSceneResponse: vi.fn(),
+      getSceneResponse: vi.fn(),
       // the Mechanics panel's own reads/writes: CampaignView hosts
       // MechanicsConfig, and gates the dice button on the same binding
       getCampaignModule: vi.fn(), setCampaignModule: vi.fn(),
@@ -163,8 +163,8 @@ export const componentStubs = {
       </div>
     ),
   }),
-  ResponsePresetPicker: () =>
-    ({ ResponsePresetPicker: () => <div data-testid="response-preset-picker" /> }),
+  ResponseTargetsPicker: () =>
+    ({ ResponseTargetsPicker: () => <div data-testid="response-preset-picker" /> }),
   // Same reason as the rest: the picker makes its own API calls and is driven
   // for real by `PostImagePicker.test.tsx`. What CampaignView owns is WHO the
   // picker is opened for and what an insert does to the post, so that is all

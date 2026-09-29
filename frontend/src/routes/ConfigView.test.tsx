@@ -18,8 +18,8 @@ const setTheme = vi.fn();
 vi.mock("../theme/ThemeProvider", () => ({
   useTheme: () => ({ mode: "system", name: "light", setTheme }),
 }));
-vi.mock("../components/ResponsePresetPicker", () => ({
-  ResponsePresetPicker: () => <div data-testid="response-preset-picker" />,
+vi.mock("../components/ResponseTargetsPicker", () => ({
+  ResponseTargetsPicker: () => <div data-testid="response-preset-picker" />,
 }));
 vi.mock("../components/ModelRoutingPicker", () => ({
   ModelRoutingPicker: ({ scope }: { scope: string }) =>
@@ -108,7 +108,7 @@ test("the column indexes every section in three groups", async () => {
     /^Storage/, /^Backups/, /^Connection/, /^Model routing/, /^Timeouts/, /^Context/,
     /^Prompt layout/,
     /^Transient state/,
-    /^Semantic recall/, /^System prompt/, /^Response preset/, /^Transcript/,
+    /^Semantic recall/, /^System prompt/, /^Response targets/, /^Transcript/,
     /^While playing/, /^Appearance/,
   ]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
@@ -382,10 +382,11 @@ test("saves the system prompt", async () => {
     { system_prompt: "Never speak for the PC." }));
 });
 
-test("mounts the response preset picker for the global scope", async () => {
+test("mounts the response targets picker for the global scope", async () => {
   renderView();
-  await open(/^Response preset/);
+  await open(/^Response targets/);
   expect(await screen.findByTestId("response-preset-picker")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Scene response mode")).toBeNull();
 });
 
 test("moving the storage location still saves immediately", async () => {

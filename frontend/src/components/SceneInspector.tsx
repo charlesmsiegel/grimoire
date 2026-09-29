@@ -22,7 +22,7 @@ import { EventsPanel } from "./EventsPanel";
 import { WeatherWidget } from "./WeatherWidget";
 import { ModelRoutingPicker } from "./ModelRoutingPicker";
 import { NoticeBanner } from "./NoticeBanner";
-import { ResponsePresetPicker } from "./ResponsePresetPicker";
+import { ResponseTargetsPicker } from "./ResponseTargetsPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 import { taskLabel, whenLabel } from "./turnLabels";
 import { SuggestedCast } from "./SuggestedCast";
@@ -1468,7 +1468,7 @@ export const SceneInspector = memo(function SceneInspector({
       </SideSection>
 
       <SideSection id="style" title="Response preset" collapsed={!!collapsed.style} onToggle={toggleSection}>
-        <ResponsePresetPicker scope="scene" cid={cid} sid={sid} onChanged={onSceneChanged} />
+        <ResponseTargetsPicker scope="scene" cid={cid} sid={sid} onChanged={onSceneChanged} />
       </SideSection>
 
       {/* Beside the response preset, and campaign-scoped like the Cost section's

@@ -17,6 +17,7 @@ they had already read.
 
 from __future__ import annotations
 
+import json
 import time
 from unittest import mock
 
@@ -29,12 +30,71 @@ from grimoire.routes import runs as runs_mod
 from tests.llm_fakes import (
     FailingOpenRouter,
     FakeCatalog,
+    FakeLLM,
     FakeOpenRouter,
     FakeOpenRouterComplete,
     StallingOpenRouter,
 )
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+def test_opener_generates_separate_known_actors_and_adopts_canonical_posts(client, campaign):
+    _world, cid = campaign
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara"})
+    fake = FakeLLM(turns=[["A quiet road."], ["I wait at the gate."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    url = f"/api/campaigns/{cid}/scenes/{sid}"
+    with client.stream("POST", f"{url}/opener", json={"prompt": "Arrive"}) as response:
+        frames = [row[6:] for row in response.iter_lines() if row.startswith("data: ")]
+    events = [json.loads(row) for row in frames]
+    snapshot = next(event["snapshot"] for event in events if "snapshot" in event)
+    parts = [event["speaker_done"] for event in events if "speaker_done" in event]
+    assert [part["actor_ref"] for part in parts] == ["grimoire", "characters:mara"]
+    assert len(fake.requests) == 2
+    assert "A quiet road." in str(fake.requests[1]["messages"])
+    assert client.get(url).json()["messages"] == []
+    adopted = client.post(f"{url}/first-post", json={"contributions": parts, "snapshot": snapshot})
+    assert adopted.status_code == 200
+    messages = client.get(url).json()["messages"]
+    assert [message.get("speaker") for message in messages] == [None, "Mara"]
+    assert [message["content"] for message in messages] == ["A quiet road.", "I wait at the gate."]
+
+
+def test_opener_retry_keeps_complete_prefix_and_stale_cast_refuses_adoption(client, campaign):
+    _world, cid = campaign
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara"})
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM(
+        turns=[["The gate opens."], ["partial"]], error=LLMError("rate_limit", "Wait"), fail_after=1)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    with client.stream("POST", f"{base}/opener", json={"prompt": "Arrive"}) as response:
+        events = [json.loads(row[6:]) for row in response.iter_lines() if row.startswith("data: ")]
+    snapshot = next(event["snapshot"] for event in events if "snapshot" in event)
+    completed = [event["speaker_done"] for event in events if "speaker_done" in event]
+    assert len(completed) == 1
+    assert any(event.get("error", {}).get("kind") == "rate_limit" for event in events)
+    assert client.post(f"{base}/first-post",
+                       json={"snapshot": snapshot, "contributions": completed}).status_code == 409
+    retry = FakeLLM(turns=[["I wait at the gate."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: retry
+    with client.stream("POST", f"{base}/opener",
+                       json={"prompt": "Arrive", "snapshot": snapshot,
+                             "completed": completed}) as response:
+        events = [json.loads(row[6:]) for row in response.iter_lines() if row.startswith("data: ")]
+    assert retry.calls == 1
+    parts = [*completed, *[event["speaker_done"] for event in events if "speaker_done" in event]]
+    assert len(parts) == 2
+    # A new cast identity invalidates the preview even though its prose is complete.
+    client.post(f"/api/worlds/{_world}/characters",
+                json={"name": "Winifred", "version_name": "main"})
+    client.post(f"{base}/cast", json={"kind": "characters", "id": "winifred"})
+    assert client.post(f"{base}/first-post",
+                       json={"snapshot": snapshot, "contributions": parts}).status_code == 409
+    assert client.get(base).json()["messages"] == []
 
 
 @pytest.fixture

@@ -1,4 +1,5 @@
 import { isAbortError, newAttemptId, parseSSEChunk, type ChatEvent,
+  type OpenerContribution, type OpenerSpeaker,
   type LocalizeEvent, type ChubGalleryEvent, type RunHandle,
   type TaglineBatchEvent } from "./stream";
 import { campaignsChanged, configChanged, noticesChanged,
@@ -35,7 +36,7 @@ import {
   type GroupState, type HealthCheckResult,
   type CommitmentSave, type CompositionRow,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
-  type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
+  type LLMConnectionDetail, type LLMConnectionDraft, type Ledger,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
   type LogLevel, type LogLevelInfo, type LogPage, type LogTailEvent,
   type FactRecord, type FactSave,
@@ -49,8 +50,7 @@ import {
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
   type RecordChange, type RegenerateOverrides, type RelationshipChange,
   type RelationshipSave, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
-  type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
-  type ResponsePresetUsage, type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
+  type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type RoutingBundle, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneImportDraft, type SceneIntentResult,
@@ -2434,20 +2434,6 @@ export const api = {
   deleteStyle: (sid: string) => request<{ ok: boolean }>("DELETE", `/api/styles/${sid}`),
   duplicateStyle: (sid: string) => request<{ id: string }>("POST", `/api/styles/${sid}/duplicate`),
 
-  // response presets
-  listResponsePresets: () => request<ResponsePresetSummary[]>("GET", "/api/response-presets"),
-  createResponsePreset: (draft: ResponsePresetDraft) =>
-    request<{ id: string }>("POST", "/api/response-presets", draft),
-  getResponsePreset: (pid: string) => request<ResponsePresetDetail>("GET", `/api/response-presets/${pid}`),
-  updateResponsePreset: (pid: string, patch: Partial<ResponsePresetDraft>) =>
-    request<{ ok: boolean }>("PUT", `/api/response-presets/${pid}`, patch),
-  deleteResponsePreset: (pid: string) => request<{ ok: boolean }>("DELETE", `/api/response-presets/${pid}`),
-  duplicateResponsePreset: (pid: string) =>
-    request<{ id: string }>("POST", `/api/response-presets/${pid}/duplicate`),
-  responsePresetUsage: (pid: string) =>
-    request<ResponsePresetUsage>("GET", `/api/response-presets/${pid}/usage`),
-  listLengthPresets: () => request<Record<string, LengthPreset>>("GET", "/api/length-presets"),
-
   // response bundle (scoped preset + overrides + resolution), all three scopes
   getGlobalResponse: () => request<ResponseBundle>("GET", "/api/response"),
   setGlobalResponse: (patch: Partial<ResponseFields>) =>
@@ -2918,11 +2904,13 @@ export const api = {
    *  and reads the frames it missed. Nothing is written by this call — the
    *  text reaches the transcript through `firstPost`. */
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void,
-           signal?: AbortSignal) =>
+           signal?: AbortSignal, completed: OpenerContribution[] = [], snapshot: OpenerSpeaker[] = []) =>
     streamDraft(cid, sid, `/api/campaigns/${cid}/scenes/${sid}/opener`,
-                { prompt }, onEvent, signal),
-  firstPost: (cid: string, sid: string, text: string) =>
-    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/first-post`, { text }),
+                { prompt, completed, snapshot }, onEvent, signal),
+  firstPost: (cid: string, sid: string, text: string,
+              contributions?: OpenerContribution[], snapshot?: OpenerSpeaker[]) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/first-post`,
+      { text, contributions, snapshot }),
 
   // scene import (#92). The same split as the lorebook pair below: parse
   // writes NOTHING and hands back a draft to review, and only sceneImport

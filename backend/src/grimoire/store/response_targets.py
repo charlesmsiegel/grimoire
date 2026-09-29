@@ -38,7 +38,7 @@ def resolve(*, turn: dict | None = None, scene_meta: dict | None = None,
               ("campaign", campaign_meta or {}), ("global", config or {}))
     legacy = response_presets.resolve(turn=turn, scene_meta=scene_meta,
                                       campaign_meta=campaign_meta, config=config)
-    out = {"opening": {}, "continuation": {}, "provenance": {}}
+    out: dict[str, dict] = {"opening": {}, "continuation": {}, "provenance": {}}
     for phase in ("opening", "continuation"):
         for unit in ("words", "paragraphs"):
             key = f"response_{phase}_{unit}"

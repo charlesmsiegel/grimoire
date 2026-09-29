@@ -192,7 +192,7 @@
     "jsx-a11y/no-static-element-interactions": 1
   },
   "frontend/src/components/OpenerComposer.tsx": {
-    "@typescript-eslint/no-misused-promises": 3
+    "@typescript-eslint/no-misused-promises": 2
   },
   "frontend/src/components/OwnedLorePanel.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
@@ -219,17 +219,6 @@
   },
   "frontend/src/components/ReplayPanel.tsx": {
     "@typescript-eslint/no-misused-promises": 7
-  },
-  "frontend/src/components/ResponsePresetPicker.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
-    "@typescript-eslint/unbound-method": 3
-  },
-  "frontend/src/components/ResponsePresetPicker.tsx": {
-    "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 2,
-    "@typescript-eslint/no-unsafe-argument": 2,
-    "@typescript-eslint/no-unsafe-member-access": 2
   },
   "frontend/src/components/RollProposal.tsx": {
     "react/no-array-index-key": 1
@@ -462,14 +451,6 @@
     "@typescript-eslint/no-unsafe-argument": 3,
     "@typescript-eslint/no-unsafe-member-access": 3,
     "react/no-array-index-key": 2
-  },
-  "frontend/src/routes/ResponsePresetsView.tsx": {
-    "@typescript-eslint/no-explicit-any": 4,
-    "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 4,
-    "@typescript-eslint/no-unsafe-argument": 4,
-    "@typescript-eslint/no-unsafe-member-access": 4,
-    "react/no-array-index-key": 3
   },
   "frontend/src/routes/SearchView.tsx": {
     "react-hooks/exhaustive-deps": 1

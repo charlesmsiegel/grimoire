@@ -34,8 +34,6 @@ from .models import (
     ConnectionUpdate,
     DataDirUpdate,
     PromptLayoutUpdate,
-    ResponsePresetCreate,
-    ResponsePresetUpdate,
     ResponseSettings,
     RoutingUpdate,
     StyleCreate,
@@ -649,84 +647,7 @@ def post_style_duplicate(sid: str):
         raise HTTPException(status_code=404, detail="style not found")
 
 
-# ---- response presets ----
-@router.get("/response-presets")
-def get_response_presets():
-    return store.response_presets.list_presets()
-
-
-@router.post("/response-presets")
-def post_response_preset(body: ResponsePresetCreate):
-    try:
-        return {"id": store.response_presets.create_preset(
-            body.name, body.description, body.style_id, body.length_preset, body.knobs)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/response-presets/{pid}")
-def get_response_preset(pid: str):
-    # An unreadable file comes back as a damaged RECORD (validity.valid false),
-    # not an error: a scope can still be configured to it, and the view has to
-    # be able to show the row and say why it supplies nothing.
-    try:
-        return store.response_presets.read_preset(pid)
-    except store.response_presets.PresetNotFound:
-        raise HTTPException(status_code=404, detail="response preset not found")
-
-
-@router.put("/response-presets/{pid}")
-def put_response_preset(pid: str, body: ResponsePresetUpdate):
-    try:
-        store.response_presets.update_preset(
-            pid, name=body.name, description=body.description, style_id=body.style_id,
-            length_preset=body.length_preset, knobs=body.knobs)
-    except store.response_presets.PresetNotFound:
-        raise HTTPException(status_code=404, detail="response preset not found")
-    except store.response_presets.BuiltInPresetImmutable:
-        raise HTTPException(status_code=400,
-                            detail="built-in presets can't be edited — duplicate it first")
-    except (OSError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="response preset file could not be read")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True}
-
-
-@router.delete("/response-presets/{pid}")
-def delete_response_preset(pid: str):
-    try:
-        store.response_presets.delete_preset(pid)
-    except store.response_presets.PresetNotFound:
-        raise HTTPException(status_code=404, detail="response preset not found")
-    except store.response_presets.BuiltInPresetImmutable:
-        raise HTTPException(status_code=400, detail="built-in presets can't be deleted")
-    return {"ok": True}
-
-
-@router.post("/response-presets/{pid}/duplicate")
-def post_response_preset_duplicate(pid: str):
-    try:
-        return {"id": store.response_presets.duplicate_preset(pid)}
-    except store.response_presets.PresetNotFound:
-        raise HTTPException(status_code=404, detail="response preset not found")
-    except (store.response_presets.PresetUnreadable, OSError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="response preset file could not be read")
-
-
-@router.get("/response-presets/{pid}/usage")
-def get_response_preset_usage(pid: str):
-    # usage() reports individual unreadable campaigns/scenes in `unevaluated`
-    # (the caller must not render a partial list as a complete one); this is the
-    # backstop for a store-wide read failure. It must be a handled error, not a
-    # 500 — the caller renders this immediately before an irreversible delete
-    # and has to be able to tell "no impact" from "impact unknown".
-    try:
-        return store.response_presets.usage(pid)
-    except (OSError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="preset usage could not be computed")
-
-
+# ---- phase-specific response controls ----
 @router.get("/response")
 def get_global_response():
     cfg = store.read_config()
@@ -756,11 +677,6 @@ def put_global_routing(body: RoutingUpdate):
     if fields:
         store.write_config(**fields)
     return _routing_body("global", {})
-
-
-@router.get("/length-presets")
-def get_length_presets():
-    return store.lengths.PRESETS
 
 
 # ---- the entity kinds an import may route a row to (#138) ----

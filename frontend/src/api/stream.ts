@@ -74,6 +74,9 @@ export type RunHandle = {
 };
 export type ChatEvent = {
   delta?: string; done?: boolean; proposal?: RollProposalPayload;
+  snapshot?: OpenerSpeaker[];
+  speaker_start?: OpenerSpeaker;
+  speaker_done?: OpenerContribution;
   thinking_delta?: string;
   thinking_reset?: boolean;
   response_start?: { id: string; speaker: string; actor_ref: string };
@@ -81,6 +84,9 @@ export type ChatEvent = {
   run?: RunHandle;
   error?: { detail: string; kind: string; post_returned?: boolean };
 };
+
+export type OpenerSpeaker = { actor_ref: string; speaker: string; version: string };
+export type OpenerContribution = OpenerSpeaker & { content: string };
 
 export type LocalizeSummary = {
   total: number;

@@ -1604,11 +1604,11 @@ def test_pc_image_routes(client):
 
 
 def test_pc_images_land_beside_the_persona_not_under_characters(client):
-    """The base is `pcs`, so a PC and a character sharing an id keep separate
-    art -- the whole reason `assets` is base-parameterised."""
+    """The base is `pcs`, so distinct full names that slug to one id keep
+    separate art -- the whole reason `assets` is base-parameterised."""
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
-    client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara"})
+    client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara!"})
     pc_png, char_png = _png_bytes(color=(1, 2, 3)), _png_bytes(color=(4, 5, 6))
     client.put(f"/api/worlds/{wid}/pcs/mara/versions/default/images/avatar",
                files={"file": ("a.png", io.BytesIO(pc_png), "image/png")})
@@ -3258,7 +3258,8 @@ def test_emergent_character_is_created_campaign_side_and_seated(client):
 
 def test_emergent_character_never_shadows_a_world_character_id(client):
     _wid, cid, sid = _cast_change_campaign(client)
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent", json={"name": "Mara"})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent", json={"name": "Mara!"})
+    assert r.status_code == 200
     assert r.json()["character"] != "mara"
 
 
@@ -13534,107 +13535,9 @@ def test_regenerate_past_a_dice_roll_under_a_transition_is_a_clean_400(client):
     assert len(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == 4
 
 
-def test_response_preset_crud_roundtrip(client):
-    r = client.post("/api/response-presets",
-                    json={"name": "Slow Burn", "description": "Gothic dread.",
-                          "length_preset": "cinematic"})
-    assert r.status_code == 200
-    pid = r.json()["id"]
-    assert client.get(f"/api/response-presets/{pid}").json()["meta"]["name"] == "Slow Burn"
-    assert client.put(f"/api/response-presets/{pid}",
-                      json={"name": "Slower Burn"}).status_code == 200
-    assert client.delete(f"/api/response-presets/{pid}").status_code == 200
-    assert client.get(f"/api/response-presets/{pid}").status_code == 404
-
-
-def test_builtin_preset_edit_and_delete_are_400(client):
-    assert client.put("/api/response-presets/terse", json={"name": "No"}).status_code == 400
-    assert client.delete("/api/response-presets/terse").status_code == 400
-
-
-def test_creating_with_both_length_forms_is_400(client):
-    r = client.post("/api/response-presets",
-                    json={"name": "Both", "length_preset": "terse",
-                          "knobs": {"reply_words": 220}})
-    assert r.status_code == 400
-
-
-def test_length_presets_endpoint_exposes_the_numbers(client):
-    body = client.get("/api/length-presets").json()
-    assert body["terse"]["reply_words"] == 150
-    assert body["cinematic"]["blocks_per_speaker"] == 2
-
-
-def test_duplicate_builtin_yields_an_editable_copy(client):
-    pid = client.post("/api/response-presets/terse/duplicate").json()["id"]
-    assert client.put(f"/api/response-presets/{pid}",
-                      json={"name": "Mine"}).status_code == 200
-
-
-def _corrupt_preset_file(tmp_path, pid):
-    """Overwrite a preset's file with invalid UTF-8, simulating a damaged or
-    hand-edited record on disk."""
-    (tmp_path / "response_presets" / f"{pid}.md").write_bytes(
-        b"---\nname: \xff\xfe broken \xff\n---\n")
-
-
-def test_get_unreadable_preset_returns_the_damaged_record(client, tmp_path):
-    """A corrupt/undecodable preset must be OBSERVABLE, not an error: a scope
-    can still be configured to it, and the management view has to be able to
-    show the row and say why it supplies nothing. (This used to 400, which left
-    the damage invisible everywhere.)"""
-    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
-    _corrupt_preset_file(tmp_path, pid)
-    r = client.get(f"/api/response-presets/{pid}")
-    assert r.status_code == 200
-    assert r.json()["validity"]["valid"] is False
-    assert any("could not be read" in i for i in r.json()["validity"]["issues"])
-
-
-def test_unreadable_preset_is_listed_with_its_damage(client, tmp_path):
-    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
-    _corrupt_preset_file(tmp_path, pid)
-    rows = {p["id"]: p for p in client.get("/api/response-presets").json()}
-    assert rows[pid]["validity"]["valid"] is False
-
-
-def test_put_unreadable_preset_is_a_clean_400(client, tmp_path):
-    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
-    _corrupt_preset_file(tmp_path, pid)
-    r = client.put(f"/api/response-presets/{pid}", json={"name": "Slower Burn"})
-    assert r.status_code == 400
-
-
-def test_duplicate_unreadable_preset_is_a_clean_400(client, tmp_path):
-    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
-    _corrupt_preset_file(tmp_path, pid)
-    r = client.post(f"/api/response-presets/{pid}/duplicate")
-    assert r.status_code == 400
-
-
-def test_response_preset_usage_survives_an_unreadable_scene_file(client):
-    """The usage preview runs immediately before an irreversible delete. One
-    corrupt scene file must not turn it into a 500 — the campaign it belongs to
-    is still reported, and only the unreadable part is skipped."""
-    _wid, cid = _campaign(client, name="Saltmarch Run")
-    client.put(f"/api/campaigns/{cid}/response", json={"response_preset": "terse"})
-    bad_sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Corrupt"}).json()["id"]
-    (store.campaigns.campaign_root(cid) / "scenes" / f"{bad_sid}.md").write_bytes(
-        b"\xff\xfe not valid utf-8 \x00\x01")
-
-    r = client.get("/api/response-presets/terse/usage")
-    assert r.status_code == 200
-    assert any(a["scope"] == "campaign" and a["name"] == "Saltmarch Run"
-               for a in r.json()["affected"])
-
-
-def test_response_preset_usage_reports_a_store_wide_read_failure_as_400(client):
-    """An impact preview that cannot be computed must say so with a handled
-    error; a 500 leaves the delete confirmation with no information at all."""
-    _wid, cid = _campaign(client, name="Broken Run")
-    store.campaigns.campaign_meta_path(cid).write_bytes(b"\xff\xfe \x00\x01")
-    r = client.get("/api/response-presets/terse/usage")
-    assert r.status_code == 400
+def test_retired_preset_management_endpoints_are_absent(client):
+    assert client.get("/api/response-presets").status_code == 404
+    assert client.get("/api/length-presets").status_code == 404
 
 
 def test_turn_override_with_a_non_string_value_never_500s(client):
@@ -15125,7 +15028,10 @@ def test_creating_a_pc_with_any_version_name_leaves_one_the_reader_can_open(clie
     that 404s."""
     wid, cid = _campaign(client)
     for url in (f"/api/worlds/{wid}/pcs", f"/api/campaigns/{cid}/pcs"):
-        made = client.post(url, json={"name": "Winifred", "version_name": "PC"})
+        # The campaign inherits the first PC; its local actor needs another
+        # full name while still exercising the same unusual version id.
+        name = "Winifred!" if "/campaigns/" in url else "Winifred"
+        made = client.post(url, json={"name": name, "version_name": "PC"})
         assert made.status_code == 200, url
         pid, vid = made.json()["pc"], made.json()["version"]
         detail = client.get(f"{url}/{pid}")

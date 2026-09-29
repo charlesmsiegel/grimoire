@@ -81,6 +81,13 @@ def get_world_characters(wid: str):
 
 @router.post("/worlds/{wid}/characters")
 def post_world_character(wid: str, body: CharacterCreate):
+    try:
+        store.actor_names.require_unique(body.name, scope="world", scope_id=wid)
+        if body.card:
+            store.actor_names.require_unique(store.actor_names.card_name(body.card),
+                                             scope="world", scope_id=wid)
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     cid, vid = store.characters.create_character(
         _world_root_or_404(wid), body.name, body.version_name, body.card
     )
@@ -117,6 +124,11 @@ def put_world_character_name(wid: str, cid: str, body: NameBody):
     card; this is the name the grid, the cast panel and the `meta.name` prompt
     sections read, and the two used to be unable to agree."""
     name = _display_name_or_400(body.name)
+    try:
+        store.actor_names.require_unique(name, scope="world", scope_id=wid,
+                                         actor_ref=f"characters:{cid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     try:
         store.characters.set_name(_world_root_or_404(wid), cid, name)
     except store.characters.CharacterNotFound:
@@ -206,6 +218,12 @@ def delete_world_character(wid: str, cid: str):
 @router.post("/worlds/{wid}/characters/{cid}/versions")
 def post_world_version(wid: str, cid: str, body: VersionCreate):
     try:
+        store.actor_names.require_unique(store.actor_names.card_name(body.card),
+                                         scope="world", scope_id=wid,
+                                         actor_ref=f"characters:{cid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    try:
         vid = store.characters.create_version(_world_root_or_404(wid), cid, body.name, body.card)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
@@ -214,6 +232,12 @@ def post_world_version(wid: str, cid: str, body: VersionCreate):
 
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}")
 def put_world_version(wid: str, cid: str, vid: str, body: VersionUpdate):
+    try:
+        store.actor_names.require_unique(store.actor_names.card_name(body.card),
+                                         scope="world", scope_id=wid,
+                                         actor_ref=f"characters:{cid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     try:
         store.characters.update_version(_world_root_or_404(wid), cid, vid, body.card)
     except store.characters.CharacterNotFound:
@@ -543,6 +567,16 @@ def post_character_voice_anchor_generate(
 _EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "application/zip"}
 
 
+def _import_name_check(wid: str, into: str | None):
+    def check(name: str) -> None:
+        try:
+            store.actor_names.require_unique(name, scope="world", scope_id=wid,
+                                             actor_ref=f"characters:{into}" if into else None)
+        except store.actor_names.ActorNameError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+    return check
+
+
 @router.post("/worlds/{wid}/characters/import")
 async def post_character_import(wid: str, file: UploadFile = File(...),
                                 format: str = Form(...), into: str | None = Form(None),
@@ -555,7 +589,8 @@ async def post_character_import(wid: str, file: UploadFile = File(...),
     data = await file.read()
     try:
         cid, vid = store.characters.import_card(root, data, format, into_cid=into, name=name,
-                                                version_name=version_name)
+                                                version_name=version_name,
+                                                validate_name=_import_name_check(wid, into))
     except store.cards.CardParseError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
     except store.characters.CharacterNotFound:
@@ -569,7 +604,8 @@ def post_character_import_chub(wid: str, body: ChubImportBody):
     try:
         return store.characters.import_from_chub(root, body.url, into_cid=body.into,
                                                  into_vid=body.into_version,
-                                                 version_name=body.version_name)
+                                                 version_name=body.version_name,
+                                                 validate_name=_import_name_check(wid, body.into))
     except store.chub.ChubParseError:
         raise HTTPException(status_code=400, detail="not a valid URL")
     except store.chub.ChubFetchError:

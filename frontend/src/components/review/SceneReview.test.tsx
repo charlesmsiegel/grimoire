@@ -21,8 +21,8 @@ vi.mock("../CalendarConfig", async () =>
   (await import("../../testkit/campaignMocks")).componentStubs.CalendarConfig());
 vi.mock("../ReplayPanel", async () =>
   (await import("../../testkit/campaignMocks")).componentStubs.ReplayPanel());
-vi.mock("../ResponsePresetPicker", async () =>
-  (await import("../../testkit/campaignMocks")).componentStubs.ResponsePresetPicker());
+vi.mock("../ResponseTargetsPicker", async () =>
+  (await import("../../testkit/campaignMocks")).componentStubs.ResponseTargetsPicker());
 vi.mock("../../api/client", async () =>
   (await import("../../testkit/campaignMocks")).campaignApiMock());
 vi.mock("../../api/models", () => ({ getModels: vi.fn() }));

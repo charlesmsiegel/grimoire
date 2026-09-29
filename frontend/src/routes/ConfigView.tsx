@@ -11,7 +11,7 @@ import { ColumnSection, PageShell } from "../components/PageShell";
 import PricingEditor from "../components/PricingEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ModelRoutingPicker } from "../components/ModelRoutingPicker";
-import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
+import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
 import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
@@ -53,7 +53,7 @@ const DRAFT_FIELDS = [
   "llm_timeout", "absorb_budget", "llm_call_budget",
   "context_budget", "context_scan_depth", "archive_depth",
   "prompt_log_depth", "offscene_known_limit",
-  "speaker_turn_taking", "character_response_mode", "prompt_layout_enabled",
+  "speaker_turn_taking", "prompt_layout_enabled",
   "turnstate_depth", "promote_streak",
   "embeddings_connection_id", "embeddings_model",
   "semantic_recall_depth", "semantic_recall_threshold",
@@ -121,7 +121,7 @@ const SECTIONS: SectionDef[] = [
   { id: "setup", group: "The install", label: "First-run setup", fields: [] },
   { id: "context", group: "What the model sees", label: "Context",
     fields: ["context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
-             "offscene_known_limit", "speaker_turn_taking", "character_response_mode"] },
+             "offscene_known_limit", "speaker_turn_taking"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
   { id: "transient", group: "What the model sees", label: "Transient state",
@@ -131,7 +131,7 @@ const SECTIONS: SectionDef[] = [
              "semantic_recall_depth", "semantic_recall_threshold"] },
   { id: "system-prompt", group: "What the model sees", label: "System prompt",
     fields: ["system_prompt"] },
-  { id: "response", group: "What the model sees", label: "Response preset", fields: [] },
+  { id: "response", group: "What the model sees", label: "Response targets", fields: [] },
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
   { id: "playing", group: "What you see", label: "While playing",
@@ -872,14 +872,7 @@ export default function ConfigView() {
                         value={draft.offscene_known_limit}
                         onChange={(v) => edit("offscene_known_limit", v)} />
             </div>
-            <label>Scene responses
-              <select aria-label="Scene response mode" value={draft.character_response_mode ?? "individual"}
-                onChange={(e) => edit("character_response_mode", e.target.value)}>
-                <option value="individual">Individual character responses</option>
-                <option value="combined">Combined scene response</option>
-              </select>
-            </label>
-            <p className="config-copy">Individual mode gives each NPC one automatic response per player post. Continue and Respond as each request one additional response. Combined mode keeps the shared scene writer for comparison.</p>
+            <p className="config-copy">Each present character writes a separate response. Continue and Respond as request one additional contribution.</p>
             <label className="checkbox-row">
               <input
                 type="checkbox"
@@ -1068,7 +1061,7 @@ export default function ConfigView() {
               a scene or a single turn overrides. This block writes its own record rather
               than a config field, so — unlike everything else here — it saves as you set it.
             </p>
-            <ResponsePresetPicker scope="global" />
+            <ResponseTargetsPicker scope="global" />
           </>
         )}
 
