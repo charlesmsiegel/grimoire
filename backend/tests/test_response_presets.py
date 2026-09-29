@@ -23,6 +23,17 @@ def test_one_shot_response_rejects_invalid_targets(value):
     assert exc.value.status_code == 400
 
 
+def test_invalid_one_shot_is_rejected_before_a_player_post_is_written(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Mara"}).json()["id"]
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={
+        "content": "Hello", "response": {"response_continuation_words": "1.5"}})
+    assert response.status_code == 400
+    assert "positive whole number" in str(response.json())
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == []
+
+
 def test_response_targets_new_values_outrank_legacy_and_inherit_per_field(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     _write(tmp_path / "templates" / "response_presets", "cinematic",

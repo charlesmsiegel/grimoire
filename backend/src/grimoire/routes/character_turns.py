@@ -19,6 +19,7 @@ from .common import (
     _record_prompt,
     _require_connection,
     _require_scene,
+    _turn_override,
     get_llm,
 )
 from .models import RegenerateBody
@@ -786,6 +787,7 @@ def regenerate_response(
     replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
     if replay is not None:
         return replay
+    _turn_override(body)
     _require_scene(cid, sid)
     conn, _ = _override_connection(body, "regenerate", cid)
     run, fresh = runs.reserve_turn(request.app, cid, sid, "regenerate", x_grimoire_attempt)

@@ -606,6 +606,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
     if replay is not None:
         return replay
+    # A rejected one-shot target must leave the player's post untouched.
+    _turn_override(turn)
     _require_scene(cid, sid)
     if character_turns.enabled() or turn.speaker_ref:
         character_turns.validate_actor(cid, sid, turn.speaker_ref)
@@ -842,6 +844,7 @@ def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = No
     replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
     if replay is not None:
         return replay
+    _turn_override(body)
     scene = _require_scene(cid, sid)
     conn = _require_connection("retry", cid)
     # Ahead of the retirement, not behind it: a refusal must not cost a decision
@@ -947,6 +950,7 @@ def post_regenerate(cid: str, sid: str, request: Request,
     replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
     if replay is not None:
         return replay
+    _turn_override(body)
     _require_scene(cid, sid)
     if character_turns.enabled():
         messages = store.responses.migrate_if_needed(cid, sid)["messages"]
