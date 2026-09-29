@@ -623,14 +623,18 @@ def _response_body(scene_meta: dict, campaign_meta: dict, cfg: dict, own: dict) 
     """The shape every scope returns. `own` is that scope's raw frontmatter."""
     resolved = store.response_presets.resolve(
         scene_meta=scene_meta, campaign_meta=campaign_meta, config=cfg)
+    targets = store.response_targets.resolve(
+        scene_meta=scene_meta, campaign_meta=campaign_meta, config=cfg)
     fields = {k: own.get(k, "") for k in store.scenes.RESPONSE_FIELDS}
     # Global stores the style as default_style_id; normalize so the picker sees
     # one spelling at every scope. The on-disk key is deliberately unchanged.
     if not fields["style_id"]:
         fields["style_id"] = own.get("default_style_id", "")
     return {**fields,
-            "effective": {k: resolved[k] for k in ("style_id",) + store.lengths.KNOBS},
-            "provenance": resolved["provenance"]}
+            "effective": {**{k: resolved[k] for k in ("style_id", *store.lengths.KNOBS)},
+                          "opening": targets["opening"],
+                          "continuation": targets["continuation"]},
+            "provenance": {**resolved["provenance"], **targets["provenance"]}}
 
 
 # ---- routing bundle (#142) ----
@@ -719,6 +723,9 @@ def _connection_exists(conn_id: str) -> bool:
 
 def _write_response(setter, fields: dict, style_key: str = "style_id") -> None:
     """Map the picker's style_id back onto the scope's own spelling."""
+    for key in store.response_targets.FIELDS:
+        if key in fields and fields[key] != "" and store.response_targets.coerce(fields[key]) is None:
+            raise HTTPException(status_code=400, detail=f"{key} must be a positive integer")
     out = dict(fields)
     if style_key != "style_id" and "style_id" in out:
         out[style_key] = out.pop("style_id")

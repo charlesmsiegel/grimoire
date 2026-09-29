@@ -195,7 +195,9 @@ DEFAULT_ADVANCE_FORK_THRESHOLD = "30"
 # tuple is silently dropped and the global scope resolves as if unset — no
 # error, just the wrong budget.
 _LENGTH_KEYS = ("response_preset", "length_reply_words", "length_blocks",
-                "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
+                "length_paragraphs", "length_speakers", "length_blocks_per_speaker",
+                "response_opening_words", "response_opening_paragraphs",
+                "response_continuation_words", "response_continuation_paragraphs")
 
 _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "archive_depth", "context_budget",

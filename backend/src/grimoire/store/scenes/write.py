@@ -56,7 +56,9 @@ def set_pcless(cid: str, sid: str) -> None:
 
 
 RESPONSE_FIELDS = ("response_preset", "style_id", "length_reply_words", "length_blocks",
-                   "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
+                   "length_paragraphs", "length_speakers", "length_blocks_per_speaker",
+                   "response_opening_words", "response_opening_paragraphs",
+                   "response_continuation_words", "response_continuation_paragraphs")
 
 
 @locking._serialized
