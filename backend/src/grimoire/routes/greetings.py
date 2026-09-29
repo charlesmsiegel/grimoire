@@ -44,24 +44,31 @@ router = APIRouter()
 
 
 def _opener_cast(cid: str, sid: str) -> list[dict]:
-    """The draft order and its adoption fence, including locked versions."""
+    """The draft order and its adoption fence, including non-generated PCs."""
     actors = [{"actor_ref": "grimoire", "speaker": "Grimoire", "version": ""}]
     for entry in store.appearances.scene_cast(cid, sid):
-        if entry["role"] != "npc":
-            continue
         ref = f"{entry['kind']}:{entry['id']}"
-        actors.append({"actor_ref": ref, "speaker": entry["name"],
-                       "version": store.appearances.locked_version(
-                           cid, entry["kind"], entry["id"]) or ""})
+        actor = {"actor_ref": ref, "speaker": entry["name"],
+                 "version": store.appearances.locked_version(
+                     cid, entry["kind"], entry["id"]) or ""}
+        if entry["role"] == "npc":
+            actors.append(actor)
+        elif entry["role"] == "player":
+            actors.append({**actor, "role": "player"})
     return actors
+
+
+def _opener_speakers(cast: list[dict]) -> list[dict]:
+    return [actor for actor in cast if actor.get("role") != "player"]
 
 
 def _opener_parts(parts: list[dict], cast: list[dict]) -> list[dict]:
     """Only a complete prefix can be retried or adopted."""
-    if len(parts) > len(cast):
+    speakers = _opener_speakers(cast)
+    if len(parts) > len(speakers):
         raise HTTPException(400, detail="too many opener contributions")
     cleaned = []
-    for part, expected in zip(parts, cast, strict=False):
+    for part, expected in zip(parts, speakers, strict=False):
         if part.get("actor_ref") != expected["actor_ref"] or part.get("speaker") != expected["speaker"]:
             raise HTTPException(409, detail="opener cast changed")
         prose = str(part.get("content", "")).strip()
@@ -80,7 +87,7 @@ def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
         parts = list(completed)
         try:
             yield f"data: {json.dumps({'snapshot': cast})}\n\n"
-            for actor in cast[len(parts):]:
+            for actor in _opener_speakers(cast)[len(parts):]:
                 messages, breakdown = store.context.compose_opener(
                     cid, sid, prompt, actor_ref=actor["actor_ref"], prior=parts,
                     describe=store.prompt_log.capturing(), model=effective_model(conn))
@@ -553,7 +560,7 @@ def post_first_post(cid: str, sid: str, body: FirstPost, request: Request):
                 if body.snapshot != cast:
                     raise HTTPException(409, detail="opener cast changed")
                 parts = _opener_parts(body.contributions, cast)
-                if len(parts) != len(cast):
+                if len(parts) != len(_opener_speakers(cast)):
                     raise HTTPException(409, detail="opener draft is incomplete")
                 text = "\n\n".join(f"**{part['speaker']}:** {part['content']}" for part in parts)
             else:

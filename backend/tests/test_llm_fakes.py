@@ -212,7 +212,8 @@ def _rendered_prompts() -> list[str]:
                                         "voice_drift/system.j2", "tagline/system.j2")] + [
         prompts.render("scene_suggestions/system.j2", offscreen=False, s={"now": ""},
                        greeting_candidates=[], direction=""),
-        prompts.render("scene/sections/response_format.j2", player_names=[]),
+        prompts.render("scene/sections/response_format.j2", player_names=[],
+                       response_actor={"ref": "grimoire", "name": "Grimoire"}),
     ]
 
 

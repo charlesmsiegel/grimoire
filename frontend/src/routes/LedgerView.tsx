@@ -34,10 +34,13 @@ type Row = {
   what: ReactNode;
   /** The second line under `what`: a supersession, a beat, a diff. */
   note?: ReactNode;
+  /** Visible lifecycle label, including when the row's actions are gone. */
+  status?: string;
   asOf: string;
   scene: string;
   /** Struck through at 55%: this row is history, and it is still on the page. */
   retired?: boolean;
+  complete?: boolean;
   /** The alert colour — a threat is the one thing here that is owed AGAINST
    *  you, which the design gives its own weight for that reason. */
   alert?: boolean;
@@ -136,6 +139,7 @@ function factRows(ledger: Ledger, showRetired: boolean): Row[] {
     const ended = "superseded_by" in f ? f : null;
     out.push({
       key: f.id, mark: f.id, retired, what: f.text, edit: factSpec(f, retired),
+      status: retired ? (ended?.superseded_by ? "Superseded" : "Retired") : undefined,
       note: ended
         ? `RETIRED IN ${ended.retired_scene.title || "AN UNKNOWN SCENE"}`
           + (ended.superseded_by ? ` · REPLACED BY ${ended.superseded_by}` : "")
@@ -180,8 +184,11 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
   // no clock or dated scene to measure — an unbadged row is "cannot tell", the
   // same thing this table showed before aging existed.
   if (section === "threads")
-    return ledger.plot.map((t) => ({
+    return ledger.plot.filter((t) => showRetired || t.status.toLowerCase() !== "closed")
+      .map((t) => ({
       key: t.id, mark: "▸", what: t.title, edit: threadSpec(t),
+      status: t.status.toLowerCase() === "closed" ? "Closed" : undefined,
+      complete: t.status.toLowerCase() === "closed",
       note: joinNote(agingLabel(t.aging), t.latest_beat),
       // No `alert` here: a thread has no deadline, so it can only ever be
       // stale, and colouring a row for a state it cannot reach would imply the
@@ -189,8 +196,12 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       asOf: t.status.toUpperCase(), scene: t.scene.title,
     }));
   if (section === "commitments")
-    return ledger.commitments.map((c) => ({
+    return ledger.commitments.filter((c) => showRetired ||
+      !["fulfilled", "broken", "expired"].includes(c.status.toLowerCase())).map((c) => ({
       key: c.id, mark: c.kind === "threat" ? "◆" : "◇",
+      status: ["fulfilled", "broken", "expired"].includes(c.status.toLowerCase())
+        ? c.status : undefined,
+      complete: ["fulfilled", "broken", "expired"].includes(c.status.toLowerCase()),
       alert: c.kind === "threat" || c.aging?.state === "overdue",
       what: c.title, edit: commitmentSpec(c),
       note: joinNote(agingLabel(c.aging), c.kind.toUpperCase(), c.latest_beat),
@@ -568,7 +579,7 @@ export default function LedgerView() {
     <label className="ledger-toggle">
       <input type="checkbox" checked={showRetired}
              onChange={(e) => setShowRetired(e.target.checked)} />
-      <span>Show retired</span>
+      <span>Show retired and completed</span>
     </label>
   );
 
@@ -650,10 +661,11 @@ export default function LedgerView() {
                   const open = !!r.edit && openRow === key;
                   return (
                     <Fragment key={r.key}>
-                      <tr className={(r.retired ? "retired" : "") + (open ? " editing" : "")}>
+                      <tr className={(r.retired ? "retired" : "") + (r.complete ? " complete" : "") + (open ? " editing" : "")}>
                         <td className={"ledger-mark" + (r.alert ? " alert" : "")}>{r.mark}</td>
                         <td>
                           <div className="ledger-what">{r.what}</div>
+                          {r.status && <span className="ledger-status">{r.status}</span>}
                           {r.note && <div className="ledger-note">{r.note}</div>}
                         </td>
                         <td className="ledger-asof">{r.asOf}</td>

@@ -472,6 +472,11 @@ class CampaignBusy(StoreBusy):
         super().__init__(cid, "campaign")
 
 
+class WorldActorBusy(StoreBusy):
+    def __init__(self, wid: str):
+        super().__init__(wid, "world actor roster")
+
+
 class BackupBusy(StoreBusy):
     def __init__(self, name: str = "backups"):
         super().__init__(name, "store backup")
@@ -619,6 +624,22 @@ class _ProcessScopedLock:
 
 
 _campaign_locks: dict[str, _ProcessScopedLock] = {}
+_world_actor_locks: dict[str, _ProcessScopedLock] = {}
+
+
+def world_actor_lock(wid: str) -> _ProcessScopedLock:
+    """Serialize world actor name claims across characters and PCs.
+
+    Both kinds have separate directories, so their own file writes cannot
+    protect the shared name check. Use the same registry guard and process
+    lock as campaign writes to cover threads and a second server process.
+    """
+    with _registry_guard:
+        lock = _world_actor_locks.get(wid)
+        if lock is None:
+            lock = _world_actor_locks[wid] = _ProcessScopedLock(
+                "world-actors", wid, WorldActorBusy)
+        return lock
 
 
 def campaign_lock(cid: str) -> _ProcessScopedLock:

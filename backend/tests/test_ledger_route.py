@@ -62,11 +62,13 @@ def test_open_threads_and_commitments_carry_their_scene(client):
                                    "", "Repaid in full.", sid)
     body = client.get(f"/api/campaigns/{cid}/ledger").json()
 
-    assert [t["id"] for t in body["plot"]] == ["the-ledger"]      # closed thread gone
+    assert {t["id"]: t["status"] for t in body["plot"]} == {
+        "the-ledger": "advanced", "done": "closed"}
     assert body["plot"][0]["scene"]["title"] == "The Pier at Dusk"
 
-    assert [c["id"] for c in body["commitments"]] == ["the-deadline"]   # fulfilled gone
-    got = body["commitments"][0]
+    assert {c["id"]: c["status"] for c in body["commitments"]} == {
+        "the-deadline": "open", "paid": "fulfilled"}
+    got = next(c for c in body["commitments"] if c["id"] == "the-deadline")
     assert got["kind"] == "threat" and got["status"] == "open" and got["due"] == "midnight"
     assert got["latest_beat"] == "Seraphine gave her until midnight."
     assert got["scene"]["title"] == "The Pier at Dusk"

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   api, type Availability, type ModuleSummary, type PCSummary, type Persona, type WorldMeta,
 } from "../api/client";
-import type { ChatEvent } from "../api/stream";
+import type { ChatEvent, OpenerContribution, OpenerSpeaker } from "../api/stream";
 import { ErrorNote } from "../components/ErrorNote";
 import { PlainShell } from "../components/PageShell";
 import { byName } from "../sortByName";
@@ -11,6 +11,8 @@ import { byName } from "../sortByName";
 type LocationDraft = { name: string; body: string; keys: string };
 const blankPersona: Persona = { name: "", pronouns: "", summary: "", description: "" };
 const STEPS = ["Backdrop", "Character", "Locations", "Opening"];
+const showOpener = (parts: OpenerContribution[]) =>
+  parts.map((part) => `**${part.speaker}:** ${part.content}`).join("\n\n");
 
 export default function CampaignWizard({ ready }: { ready: boolean }) {
   const navigate = useNavigate();
@@ -52,6 +54,9 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   const [avail, setAvail] = useState<Availability[]>([]);
   const [prompt, setPrompt] = useState("");
   const [opener, setOpener] = useState("");
+  const [openerParts, setOpenerParts] = useState<OpenerContribution[]>([]);
+  const [openerSnapshot, setOpenerSnapshot] = useState<OpenerSpeaker[]>([]);
+  const [openerComplete, setOpenerComplete] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -173,30 +178,37 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     }
   }
 
-  async function generate() {
+  async function generate(resume = false) {
     if (!committed || !prompt.trim() || busy) return;
     setError(null);
-    setOpener("");
+    const existing = resume ? openerParts : [];
+    const snapshot = resume ? openerSnapshot : [];
+    if (!resume) { setOpener(""); setOpenerParts([]); setOpenerSnapshot([]); }
+    setOpenerComplete(false);
     setBusy(true);
     let acc = "";
-    let completed: string[] = [];
+    let completed = [...existing];
     let speaker = "";
     try {
       await api.opener(committed.cid, committed.sid, prompt, (e: ChatEvent) => {
+        if (e.snapshot) setOpenerSnapshot(e.snapshot);
         if (e.speaker_start) { speaker = e.speaker_start.speaker; acc = ""; }
         if (e.delta) {
           acc += e.delta;
-          setOpener([...completed, speaker ? `**${speaker}:** ${acc}` : acc].join("\n\n"));
+          setOpener(`${showOpener(completed)}${completed.length ? "\n\n" : ""}${speaker ? `**${speaker}:** ${acc}` : acc}`);
         }
         if (e.speaker_done) {
-          completed = [...completed, `**${e.speaker_done.speaker}:** ${e.speaker_done.content}`];
-          setOpener(completed.join("\n\n"));
+          completed = [...completed, e.speaker_done];
+          setOpenerParts(completed);
+          setOpener(showOpener(completed));
           speaker = "";
           acc = "";
         }
-        else if (e.error) setError(e.error);
-      });
+        else if (e.done) setOpenerComplete(true);
+        else if (e.error) { setOpener(showOpener(completed)); setError(e.error); }
+      }, undefined, existing, snapshot);
     } catch (err: unknown) {
+      setOpener(showOpener(completed));
       setError(err);
     } finally {
       setBusy(false);
@@ -441,11 +453,14 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
               <div className="picker">
                 <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
                        value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-                <button className="primary" disabled={!ready || busy || !prompt.trim()} onClick={generate}>
+                <button className="primary" disabled={!ready || busy || !prompt.trim()} onClick={() => void generate()}>
                   {busy ? "…" : "Generate"}
                 </button>
               </div>
               {opener && <div className="opener-preview">{opener}</div>}
+              {!openerComplete && openerParts.length > 0 && !busy && (
+                <button type="button" onClick={() => void generate(true)}>Retry remaining speakers</button>
+              )}
             </div>
             <div className="wizard-footer">
               <span />
