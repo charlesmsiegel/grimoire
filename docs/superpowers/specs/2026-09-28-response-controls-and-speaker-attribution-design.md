@@ -32,9 +32,9 @@ The two groups inherit per field through the existing scene, campaign, and
 global scopes, with narrower explicit values winning. The effective value and
 its source are visible where the user edits these settings. Prose style is a
 separate control and continues to inherit as it does today. The five old
-length knobs, named length bundles, custom response presets, and the combined
-generation switch leave the active UI. Existing preset files and stored
-references are not deleted. A read-only compatibility path uses their old
+length knobs, named length bundles, and custom response presets leave the
+active UI. Existing preset files and stored references are not deleted. A
+read-only compatibility path uses their old
 word and paragraph values for continuations when no new value overrides them,
 and continues to honor their style choice until a direct style setting
 overrides it. New Opening values do not inherit old preset budgets because
@@ -43,17 +43,21 @@ the old opener had its own independent shape rule.
 ## Generation and transcript flow
 
 Normal scene continuations already generate one actor at a time by default:
-the continuation engine selects an actor before each model call. The optional
-combined mode is the legacy exception. Make the existing individual path the
-only active continuation path. Prompts for an assigned
-NPC or narrator request unlabeled prose, spoken dialogue in quotes, and no
-actions or dialogue for PCs. Remove instructions that ask the model to divide
+the continuation engine selects an actor before each model call. Remove the
+deprecated combined generation mode entirely: its configuration control and
+API field, the branch that routes a turn to the combined engine, its
+script-format prompt rules, and tests specific to that path. An old stored
+`character_response_mode: combined` value is ignored; continuation always
+uses the individual actor path. Existing transcripts produced by that mode
+remain readable and editable. Prompts for an assigned NPC or narrator request
+unlabeled prose, spoken dialogue in quotes, and no actions or dialogue for
+PCs. Remove instructions that ask the model to divide
 a response into `**CharacterName:**` blocks. The application uses the selected
 actor's canonical full name when saving a response in the existing transcript
 format. Any internal handoff protocol remains separate from reader-visible
 prose.
 
-Generated openers are the remaining combined call today. Change that route to
+Generated openers still use one multi-speaker call today. Change that route to
 reuse the individual path's actor-scoped prompt composition and speaker
 attribution, while retaining the opener's draft-before-adoption lifecycle.
 An opener draft is one sequence: a narrator generation using Opening targets,
