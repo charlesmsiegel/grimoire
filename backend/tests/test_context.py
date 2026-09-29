@@ -1560,7 +1560,7 @@ def test_response_format_section_lists_players(monkeypatch, tmp_path):
     pid, pvid = pcs.create_pc(worlds.world_root(wid), "Elara Vane", [])
     ap.appear(cid, sid, "pcs", pid, pvid, "player")
     sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
-    assert "Write continuous prose" in sections["Response format"]
+    assert "For this legacy continuation" in sections["Response format"]
     assert "Elara Vane" in sections["Response format"]
 
 

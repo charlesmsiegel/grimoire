@@ -229,6 +229,7 @@ a stale field; refusing would cost the turn.
 
 | Lock | Scope | Notes |
 |---|---|---|
+| `locks.world_actor_lock(wid)` | world actor name claims | serializes character and PC creation against the same name in one World |
 | `locks.config_lock()` | global `config.md` | a leaf — nothing under it takes another lock |
 | `locks.backup_lock()` | one archive of one store at a time (#32) | a leaf; deliberately does **not** take the campaign locks |
 | `locks.module_edit_lock()` | whole-directory module-pack publication | outermost in the ordering above |
@@ -240,9 +241,10 @@ apart.** The archive is a coarse restore point, not a transactional snapshot.
 
 ### What a caller sees when a lock is contended
 
-Entering any of the four locks — campaign, config, backup, module-edit — raises
-that lock's subclass of `locks.StoreBusy` after `LOCK_TIMEOUT` (30 seconds):
-`CampaignBusy`, `ConfigBusy`, `BackupBusy`, `ModuleEditBusy`. One handler in
+Entering any of the five locks — campaign, world actor roster, config, backup,
+module-edit — raises that lock's subclass of `locks.StoreBusy` after
+`LOCK_TIMEOUT` (30 seconds): `CampaignBusy`, `WorldActorBusy`, `ConfigBusy`,
+`BackupBusy`, `ModuleEditBusy`. One handler in
 `main.create_app` turns any of them into **HTTP 409** with a message naming
 what is busy, so the failure is retryable rather than a wedged server. (The two
 non-blocking variants above never raise — they report with a boolean instead,
