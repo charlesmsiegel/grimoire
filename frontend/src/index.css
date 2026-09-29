@@ -3740,6 +3740,26 @@ a.search-hit { text-decoration: none; color: inherit; }
 .cost-trend-series { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .cost-trend-series-row { display: flex; align-items: center; gap: 12px; }
 .cost-trend-series-row > .field-hint { width: 142px; flex: none; }
+.cost-chart {
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+}
+.cost-chart li {
+  align-items: flex-start;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.cost-chart li:last-child { border-bottom: 0; }
+.cost-chart .stats-trend-day { padding-top: 5px; color: var(--ink); font-weight: 700; }
+.cost-chart .stats-trend-track { height: 18px; border-radius: 3px; overflow: hidden; }
+.cost-chart .stats-trend-value { font-weight: 700; }
+@media (max-width: 720px) {
+  .cost-chart li { flex-wrap: wrap; }
+  .cost-chart .cost-trend-series { flex-basis: 100%; }
+  .cost-chart .cost-trend-series-row > .field-hint { width: 108px; }
+}
 
 .stats-filters {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 18px; margin: 18px 0 10px;

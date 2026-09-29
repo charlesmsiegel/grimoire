@@ -7,6 +7,7 @@ vi.mock("../api/client", () => ({
   api: {
     getCampaign: vi.fn(),
     getCampaignSceneCosts: vi.fn(),
+    getMonthlyCosts: vi.fn(),
     listCampaigns: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -45,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
   (api.getCampaignSceneCosts as any).mockResolvedValue(REPORT);
+  (api.getMonthlyCosts as any).mockResolvedValue({ trend: [] });
 });
 
 function renderCosts() {
@@ -78,6 +80,17 @@ test("each scene is listed with what it cost", async () => {
   expect(within(first).getByText("$1.20")).toBeInTheDocument();
   expect(within(second).getByText("The Priory Door")).toBeInTheDocument();
   expect(within(second).getByText("$0.30")).toBeInTheDocument();
+});
+
+test("the campaign Costs page shows its own monthly cost chart", async () => {
+  (api.getMonthlyCosts as any).mockResolvedValue({ trend: [{
+    month: "2026-09", ...ZERO, cost_usd: 2, priced_calls: 1,
+    estimated_total_usd: 2,
+  }] });
+  renderCosts();
+  expect(await screen.findByRole("region", { name: "Monthly cost trend" }))
+    .toHaveTextContent("2026-09");
+  expect(api.getMonthlyCosts).toHaveBeenCalledWith(expect.any(String), "run");
 });
 
 test("the campaign's all-time total is the headline", async () => {

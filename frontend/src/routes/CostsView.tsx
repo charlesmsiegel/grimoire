@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type CampaignSceneCosts, type SceneCostRow } from "../api/client";
+import type { MonthlyCosts } from "../api/types";
 import {
   Footnotes, MoneyColumns, UNPRICED, about, bound, bucketPrice, headlineIsEstimate, money,
 } from "../components/cost";
@@ -9,6 +10,7 @@ import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
 import ReportScopeSelector from "../components/ReportScopeSelector";
 import ReportMonth, { useReportMonth } from "../components/ReportMonth";
+import CostTrend from "../components/CostTrend";
 
 /** What a campaign has cost, scene by scene, in a selected UTC month (#153).
  *
@@ -78,6 +80,18 @@ export function CostsView() {
    *  figure nobody measured, rendered as zero. */
   const [failed, setFailed] = useState(false);
   const [reload, setReload] = useState(0);
+  const [trend, setTrend] = useState<MonthlyCosts["trend"] | null>(null);
+  const [trendFailed, setTrendFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setTrend(null);
+    setTrendFailed(false);
+    api.getMonthlyCosts(month, cid)
+      .then((result) => { if (live) setTrend(result.trend); })
+      .catch(() => { if (live) setTrendFailed(true); });
+    return () => { live = false; };
+  }, [cid, month, reload]);
 
   const name = named && named.cid === cid ? named.name : "";
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
@@ -175,6 +189,9 @@ export function CostsView() {
               onChange={chooseMonth} />
           </div>
         </div>
+
+        {trend && <CostTrend rows={trend} />}
+        {trendFailed && <p className="field-hint">Monthly trend could not be read.</p>}
 
         {/* Across the body, above the table it is the total of. Three separate
             claims about money and no total, exactly as everywhere else — this

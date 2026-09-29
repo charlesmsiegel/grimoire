@@ -1314,13 +1314,13 @@ def available_months(selected: str = "") -> list[str]:
                   | {_today()[:7]} | ({selected} if selected else set()))
 
 
-def monthly_campaigns(month: str = "") -> dict:
+def monthly_campaigns(month: str = "", *, campaign: str = "") -> dict:
     selected = month or _today()[:7]
     since, until = month_bounds(selected)
     rates = Rates.current()
     totals = dict(_ZERO)
     by_campaign: dict[str, dict] = {}
-    for row in _read_rows(since, until, strict=True):
+    for row in _read_rows(since, until, campaign, strict=True):
         if not _is_call(row):
             continue
         _add(totals, row, rates)
@@ -1339,7 +1339,7 @@ def monthly_campaigns(month: str = "") -> dict:
         lo, hi = month_bounds(key)
         bucket = totals if key == selected else dict(_ZERO)
         if key != selected:
-            for row in _read_rows(lo, hi, strict=True):
+            for row in _read_rows(lo, hi, campaign, strict=True):
                 if _is_call(row):
                     _add(bucket, row, rates)
         trend.append({"month": key, **_projected(bucket)})

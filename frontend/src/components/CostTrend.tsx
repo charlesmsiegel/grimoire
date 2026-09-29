@@ -19,9 +19,9 @@ export default function CostTrend({ rows }: { rows: MonthlyCosts["trend"] }) {
   };
   return <section className="stats-block" aria-label="Monthly cost trend">
     <h2 className="section-label">Estimated cost by month</h2>
-    <ol className="stats-trend">
-      {rows.map((row) => <li key={row.month}>
-        <span className="stats-trend-day">{row.month}</span>
+    <ol className="stats-trend cost-chart">
+      {[...rows].sort((a, b) => b.month.localeCompare(a.month)).map((row) => <li key={row.month}>
+        <span className="stats-trend-day" data-testid="cost-trend-month">{row.month}</span>
         <span className="cost-trend-series">{series.map(({ key, label, color }) =>
           <span key={key} className="cost-trend-series-row">
             <span className="field-hint">{label}</span>

@@ -2488,8 +2488,8 @@ export const api = {
     request<CampaignSceneCosts>(
       "GET", `/api/campaigns/${cid}/usage/scenes?order=${encodeURIComponent(order)}`
       + (month ? `&month=${encodeURIComponent(month)}` : "")),
-  getMonthlyCosts: (month = "") =>
-    request<MonthlyCosts>("GET", `/api/usage/monthly${month ? `?month=${encodeURIComponent(month)}` : ""}`,
+  getMonthlyCosts: (month = "", campaign = "") =>
+    request<MonthlyCosts>("GET", `/api/usage/monthly?month=${encodeURIComponent(month)}${campaign ? `&campaign=${encodeURIComponent(campaign)}` : ""}`,
                           undefined, { fresh: true }),
   // The per-model rate table (#158). `fresh` on the read, because saving a rate
   // and seeing the old table is the one thing an editor must not do.

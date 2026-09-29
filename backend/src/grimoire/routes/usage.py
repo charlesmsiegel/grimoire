@@ -165,9 +165,11 @@ def get_campaign_scene_costs(cid: str, order: str = _ORDER, month: str = ""):
 
 
 @router.get("/usage/monthly")
-def get_monthly_costs(month: str = ""):
+def get_monthly_costs(month: str = "", campaign: str = ""):
+    if campaign:
+        _campaign_root_or_404(campaign)
     try:
-        rollup = store.usage.monthly_campaigns(month)
+        rollup = store.usage.monthly_campaigns(month, campaign=campaign)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OSError as exc:

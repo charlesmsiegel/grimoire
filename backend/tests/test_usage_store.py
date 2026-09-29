@@ -87,6 +87,17 @@ def test_monthly_campaigns_project_all_price_sources_and_keep_unassigned(home, m
     assert "2026-09" in out["available_months"]
 
 
+def test_monthly_trend_can_be_scoped_to_one_campaign(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    _seed("2026-08-31", campaign="saltmarch", cost_usd=5)
+    _seed("2026-09-01", campaign="saltmarch", cost_usd=1)
+    _seed("2026-09-02", campaign="realm", cost_usd=9)
+    report = usage.monthly_campaigns("2026-09", campaign="saltmarch")
+    assert report["totals"]["estimated_total_usd"] == 1
+    assert report["trend"][-2]["estimated_total_usd"] == 5
+    assert report["trend"][-1]["estimated_total_usd"] == 1
+
+
 def test_modelled_only_month_still_has_an_estimated_total(home, monkeypatch):
     monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
     _rates(home, {"realm/opus": {"prompt_usd_per_1k": 1.0,

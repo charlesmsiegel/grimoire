@@ -80,6 +80,12 @@ def test_monthly_cost_route_does_not_report_zero_for_a_failed_read(client, monke
     assert client.get("/api/usage/monthly", params={"month": "2026-01"}).status_code == 503
 
 
+def test_monthly_cost_route_rejects_an_unknown_campaign(client):
+    response = client.get("/api/usage/monthly", params={"month": "2026-09",
+                                                         "campaign": "missing"})
+    assert response.status_code == 404
+
+
 def _campaign(client, name="Run"):
     wid = client.post("/api/worlds", json={"name": name}).json()["id"]
     return wid, client.post("/api/campaigns",

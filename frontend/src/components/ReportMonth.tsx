@@ -32,7 +32,7 @@ export function useReportMonth(): [string, (month: string) => void] {
 export default function ReportMonth({ month, available, onChange }: {
   month: string; available: string[]; onChange: (month: string) => void;
 }) {
-  const options = [...new Set([...available, month])].sort();
+  const options = [...new Set([...available, month])].sort().reverse();
   return <nav aria-label="Cost month" className="stats-footer">
     <button type="button" onClick={() => onChange(shiftMonth(month, -1))}>Previous month</button>
     <select aria-label="Cost month" value={month} onChange={(e) => onChange(e.target.value)}>
