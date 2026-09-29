@@ -20,6 +20,7 @@ import grimoire.store as store
 from grimoire import llm, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
+from grimoire.routes import character_turns
 from grimoire.store import atomic
 from tests import draft_runs as drafts
 from tests import review_runs
@@ -36,14 +37,15 @@ from tests.llm_fakes import (  # the shared gateway fakes (#204)
 
 
 @pytest.fixture
-def client(client):
+def client(client, monkeypatch):
     """These legacy route assertions describe combined generation.
 
     Individual speaker selection, response boundaries and isolated knowledge
     have their own default-mode integration tests in test_character_turns.
     """
-    response = client.put("/api/config", json={"character_response_mode": "combined"})
-    assert response.status_code == 200
+    # Legacy route assertions below exercise the retired producer directly;
+    # the public config switch no longer selects it in a running app.
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
     return client
 
 

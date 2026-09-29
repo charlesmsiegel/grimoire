@@ -386,13 +386,12 @@ from grimoire.store import (  # noqa: E402
     entities,
     events,
     groupstate,
-    length_drift,
-    lengths,
     modules,
     pcs,
     playstate,
     plot,
     response_presets,
+    response_targets,
     scenes,
     sheets,
     steering,
@@ -825,16 +824,18 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             f"so shrink the fixture or teach gather() the relevance rule")
 
     campaign_meta = campaigns.read_campaign(cid)["meta"]
-    # Mirrors context._assemble: one per-field cascade resolves both the prose
-    # style and the length budget.
+    # Mirrors context._assemble: style keeps its legacy cascade; the new
+    # continuation target resolves separately from it.
     budget = response_presets.resolve(scene_meta=scene["meta"],
                                       campaign_meta=campaign_meta, config=cfg)
+    targets = response_targets.resolve(scene_meta=scene["meta"],
+                                       campaign_meta=campaign_meta, config=cfg)
     try:
         resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
     except styles.StyleNotFound:
         resolved_style = None
     return {"global_system_prompt": cfg.get("system_prompt", ""),
-            "budget": {k: budget[k] for k in lengths.KNOBS},
+            "budget": targets["continuation"],
             "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
             "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
             "npc_cards": npc_cards,
@@ -973,12 +974,9 @@ def rendered_messages(scene_id: str, data: dict, note: str | None = None,
     # Mirrors context._assemble exactly — this script's whole point is proving
     # the templates render what the real path renders, so the corrective is
     # measured from the same scene rather than injected from a fixture.
-    drift = length_drift.measure(scenes.read_scene(cid, scene_id)["messages"],
-                                 scenes.get_turn_sizes(cid, scene_id),
-                                 [d.get("name", "") for d in data["npc_cards"] if d.get("name")],
-                                 data["budget"])
-    correction = (render("scene/length_correction.j2", drift=drift, budget=data["budget"])
-                  if drift else "")
+    # This mirror has no assigned response actor, so the actor-scoped drift
+    # corrective is absent just as it is in context._assemble.
+    correction = ""
     # Same mirroring for the voice corrective: read off the scene's own cast and
     # flag files, not injected, so a change to either half shows up here.
     voice_notes = [{"name": characters.read_character(croot, a["id"])["meta"]["name"],

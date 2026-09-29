@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 def enabled():
-    return store.config.read_config().get("character_response_mode", "individual") != "combined"
+    return True
 
 
 def roster(cid, sid):

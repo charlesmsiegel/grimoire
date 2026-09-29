@@ -30,13 +30,13 @@ from .. import (
     config,
     entities,
     length_drift,
-    lengths,
     locks,
     overlay,
     pcs,
     pins,
     plot,
     response_presets,
+    response_targets,
     styles,
     tokens,
     turnstate,
@@ -48,7 +48,6 @@ from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..scenes import read as scenes_read
-from ..scenes import turns as scenes_turns
 
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
@@ -319,6 +318,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # migration is a no-op.
     budget = response_presets.resolve(turn=turn or {}, scene_meta=scene["meta"],
                                       campaign_meta=campaign_meta, config=cfg)
+    targets = response_targets.resolve(turn=turn or {}, scene_meta=scene["meta"],
+                                       campaign_meta=campaign_meta, config=cfg)
     try:
         resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
     except (styles.StyleNotFound, OSError, UnicodeDecodeError):
@@ -343,7 +344,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "global_system_prompt": cfg.get("system_prompt", ""),
         "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
-        "budget": {k: budget[k] for k in lengths.KNOBS},
+        "budget": targets["continuation"],
         "npc_cards": npc_cards,
         "cast_blocks": cast_blocks,
         "named_npc_count": named_npc_count,
@@ -404,15 +405,14 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         data["mechanics_sheets"] = [s for s in data["mechanics_sheets"] if s.get("ref") == actor_ref]
         data["mechanics_checks"] = [c for c in data["mechanics_checks"] if c.get("ref") == actor_ref]
 
-    # The roster is passed as a thunk: it opens one card file per campaign actor,
-    # and measure() bails out immediately on a scene with no recorded turns —
-    # which is every scene until its first tracked generation lands.
-    drift = length_drift.measure(history, scenes_turns.get_turn_sizes(cid, sid),
-                                 lambda: cast_data._drift_roster(cid, npc_names, player_names),
-                                 {k: budget[k] for k in lengths.KNOBS})
+    # One assigned speaker per call makes whole-turn block limits irrelevant.
+    # Measure only that speaker's recent prose.
+    drift = (length_drift.measure_contributions(
+        history, response_actor["name"], targets["continuation"])
+        if response_actor else None)
     length_correction = (prompts.render("scene/length_correction.j2",
                                         drift=drift,
-                                        budget={k: budget[k] for k in lengths.KNOBS})
+                                        budget=targets["continuation"])
                          if drift else "")
 
     voice_notes = cast_data._voice_notes(cid, croot, cast)

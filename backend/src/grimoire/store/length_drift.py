@@ -83,6 +83,21 @@ def _paragraphs(content: str) -> int:
     return max(len([p for p in prose(content).split("\n\n") if p.strip()]), 1)
 
 
+def measure_contributions(messages: list[dict], speaker: str, target: dict,
+                          window: int = WINDOW) -> dict | None:
+    """Recent prose by one known speaker, for actor-scoped response control."""
+    recent = [m for m in messages if _is_model_block(m)
+              and str(m.get("speaker", "")).casefold() == speaker.casefold()][-window:]
+    if not recent:
+        return None
+    totals = [_words(m["content"]) for m in recent]
+    peak = max(total / target["words"] for total in totals)
+    return {"totals": totals, "max_ratio": peak,
+            "tier": "cut" if peak >= CUT else ("trim" if peak >= TRIM else ""),
+            "paragraphs": any(_paragraphs(m["content"]) > target["paragraphs"]
+                              for m in recent)}
+
+
 def _identity(speaker: str, cast_names) -> str:
     """Canonicalize a label to a cast member. split_reply preserves whatever the
     model wrote, so one character can appear as 'Winifred' and 'Winifred Vance';
