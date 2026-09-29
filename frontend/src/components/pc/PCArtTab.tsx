@@ -3,7 +3,6 @@ import { api, type EntityScope } from "../../api/client";
 import { errorText } from "../../api/errors";
 import { thumbSet } from "../../api/thumbs";
 import { AvatarFocusPicker } from "../AvatarFocusPicker";
-import { CurrentArtViewer } from "../CurrentArtViewer";
 import { ImageDescriptionField } from "../ImageDescriptionField";
 
 type Image = { name: string; v: string };
@@ -35,9 +34,7 @@ export function PCArtTab({ scope, wid, pid, vid, images, descriptions, imageErro
   }
   return <>
     {imageError && <div className="banner">Could not load art: {imageError}</div>}
-    {!imageError && <CurrentArtViewer key={vid} label="PC" images={ordered.map((image) => ({
-      name: image.name, url: (w) => url(image, w),
-    }))} />}
+    {!imageError && ordered.length === 0 && <p className="field-hint">No art for this version yet.</p>}
     {cropOpen && avatar && <AvatarFocusPicker src={url(avatar)} initial={avatarFocus ?? 50}
       onSave={(focus) => void write(async () => {
         await api.setPCAvatarFocus(scope, pid, vid, focus); setCropOpen(false);

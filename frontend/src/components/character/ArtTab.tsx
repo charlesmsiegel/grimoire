@@ -6,7 +6,6 @@ import { errorText } from "../../api/errors";
 import { ImageDescriptionField } from "../ImageDescriptionField";
 import { thumbSet } from "../../api/thumbs";
 import { characterImage } from "./shared";
-import { CurrentArtViewer } from "../CurrentArtViewer";
 
 /** The names a batch of newly-picked files lands under.
  *
@@ -187,9 +186,6 @@ export function ArtTab(
   );
 
   return <>
-    <CurrentArtViewer key={vid} label="Character" images={[
-      ...(hasAvatar ? ["avatar"] : []), ...galleryImages,
-    ].map((name) => ({ name, url: characterImage(scope, cid, vid, name, imageTokens[name]) }))} />
     <div className="card-field">
       <div className="card-field-head"><span className="data-label">Images</span></div>
       <div className="images-shelf">

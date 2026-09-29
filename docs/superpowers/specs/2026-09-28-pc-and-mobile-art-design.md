@@ -43,19 +43,15 @@ offers: avatar, gallery in numeric order, image descriptions, add, promote,
 remove, and avatar crop. World scope alone offers generated descriptions;
 campaign scope does not present a control whose endpoint is unavailable.
 Images and descriptions belong to the selected version. The tab's current
-version art is presented at a useful viewing size; choosing an image tile
-changes that viewer. The existing downscaled tiles and original-image links
-stay available for editing and inspection.
+version art appears as downscaled tiles that link directly to the original
+images in a new tab. The same tiles carry the editing controls.
 An image write refreshes the displayed bytes through the store's version
 tokens, rather than an unversioned browser-cache URL.
 
 CharacterPage keeps its Art tab and its existing world/campaign image sections,
-including inherited and shadowed art. Its current-version art also gets a
-large viewing area at the top of the tab, selectable from its current-version
-images; the existing shelves, descriptions,
-greeting-art actions, and localization controls stay below it. A missing
-avatar can fall back to the first gallery image for the viewing area. An
-image-free version shows a clear empty state and the existing add control.
+including inherited and shadowed art. Its shelves, descriptions, greeting-art
+actions, and localization controls stay available. An image-free version keeps
+the existing add control.
 
 ## Phone access
 
@@ -65,8 +61,8 @@ heading in main. The preview uses the current version's avatar, or its first
 gallery image when there is no avatar, with an initials fallback when neither
 exists. A visible **View art** action opens the Art tab; it is present even
 with no image so the add control can be reached. The Art tab itself must be
-reachable without horizontally scrolling a tab strip. The larger Art viewer
-fits the phone's main width, and the image tiles remain touch accessible.
+reachable without horizontally scrolling a tab strip. Its linked image tiles
+remain touch accessible without an inline large-image viewer.
 The desktop context-column portrait and its crop control remain available.
 
 ## Data and failure behavior
@@ -86,7 +82,7 @@ read/edit transitions, version switching, existing image writes, numeric
 gallery order, missing/read failures, and stale-response rejection. At phone
 width they assert that both pages show art and a direct Art action in main,
 including avatar, gallery-only, and image-free cases. Art tab tests assert
-that the large image and original link match the selected version while the
-existing editing controls remain. Run frontend typecheck, coverage, ESLint
+that thumbnail links open the selected version's originals while the editing
+controls remain. Run frontend typecheck, coverage, ESLint
 baseline, production build, and the repository gate where the environment
 supports it. Browser verification uses only an isolated placeholder store.
