@@ -15,8 +15,8 @@ vi.mock("../components/CalendarConfig", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.CalendarConfig());
 vi.mock("../components/ReplayPanel", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.ReplayPanel());
-vi.mock("../components/ResponsePresetPicker", async () =>
-  (await import("../testkit/campaignMocks")).componentStubs.ResponsePresetPicker());
+vi.mock("../components/ResponseTargetsPicker", async () =>
+  (await import("../testkit/campaignMocks")).componentStubs.ResponseTargetsPicker());
 vi.mock("../api/client", async () => (await import("../testkit/campaignMocks")).campaignApiMock());
 vi.mock("../components/PostImagePicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
@@ -33,7 +33,7 @@ import { onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import {
   here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
-  renderCampaign, RESPONSE_BUNDLE, RESPONSE_PRESETS, withPalette,
+  renderCampaign, withPalette,
 } from "../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
@@ -1039,7 +1039,7 @@ test("a complete scene replaces the composer with a notice", async () => {
   expect(screen.queryByRole("textbox")).toBeNull();
   expect(screen.queryByRole("button", { name: /continue ▶/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /send ▸/i })).toBeNull();
-  expect(screen.queryByLabelText("Response length")).toBeNull();
+  expect(screen.queryByLabelText("Next reply words")).toBeNull();
   expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull();
 });
 
@@ -1102,23 +1102,22 @@ test("the response length picker shows the scene's preset and reverts after a su
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({
     meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
+  const picker = await screen.findByLabelText("Next reply words");
   // Waited for, not asserted flat. The <select> renders as soon as `listScenes`
   // names the active scene; its VALUE arrives on the separate `getScene` chain,
   // so `findBy` returning the element says nothing about the preset being in it
   // yet. `findBy` polls on a timer, so under load a poll lands between the two
   // commits and the flat assert reads "" -- which is the whole of this file's
   // flakiness, one arbitrary victim per full-suite run.
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));
-  fireEvent.change(picker, { target: { value: "terse" } });
-  expect(picker).toHaveValue("terse");
+  await waitFor(() => expect(picker).toHaveValue(null));
+  fireEvent.change(picker, { target: { value: "120" } });
+  expect(picker).toHaveValue(120);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   // the picker's promise is "the next reply" — once it lands, the one-shot
   // pick is spent and it falls back to the scene's own setting.
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));
+  await waitFor(() => expect(picker).toHaveValue(null));
 });
 
 // The Escape-closes-the-dropdown test that stood here is gone with the custom
@@ -1129,18 +1128,17 @@ test("sends the one-shot override in the chat request payload", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({
     meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
+  const picker = await screen.findByLabelText("Next reply words");
   // Same wait, and for the same reason, as the test above: the scene's own
   // preset arrives on the `getScene` chain AFTER the <select> renders, so an
   // override picked before it lands is overwritten by it.
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));
-  fireEvent.change(picker, { target: { value: "terse" } });
+  await waitFor(() => expect(picker).toHaveValue(null));
+  fireEvent.change(picker, { target: { value: "120" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
-    "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" },
+    "run", "s1", "Go on.", expect.any(Function), { response_continuation_words: "120" },
     expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
 });
 
@@ -1148,18 +1146,17 @@ test("a failed stream keeps the override, and retry carries it", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({
     meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   (api.chat as any).mockRejectedValueOnce(new Error("stream failed"));
   renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));  // see above
-  fireEvent.change(picker, { target: { value: "terse" } });
+  const picker = await screen.findByLabelText("Next reply words");
+  await waitFor(() => expect(picker).toHaveValue(null));  // see above
+  fireEvent.change(picker, { target: { value: "120" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  await waitFor(() => expect(picker).toHaveValue("terse")); // NOT cleared by the failure
+  await waitFor(() => expect(picker).toHaveValue(120)); // NOT cleared by the failure
   fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
   await waitFor(() => expect(api.retry).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), { response_preset: "terse" }, expect.any(AbortSignal),
+    "run", "s1", expect.any(Function), { response_continuation_words: "120" }, expect.any(AbortSignal),
     expect.any(String), expect.any(Function)));
 });
 
@@ -2976,7 +2973,6 @@ test("Stop after the done frame is a finished turn, not a cancellation", async (
   // which handed back a one-shot response length the reply had already
   // consumed — and spent it again on the next turn.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, total: 0, messages: [] });
   (api.chat as any).mockImplementation(
     async (_c: string, _s: string, _t: string, onEvent: any, _r: unknown, signal: AbortSignal) => {
@@ -2991,20 +2987,14 @@ test("Stop after the done frame is a finished turn, not a cancellation", async (
       });
     });
   renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  // Waited for, like the picker tests above: the <select> renders as soon as
-  // `listScenes` names the scene, but its OPTIONS arrive on the
-  // `listResponsePresets` chain. Selecting a value the list does not carry yet
-  // leaves the native select on "" and reports that back as a CLEARED override,
-  // so the test would go green having exercised nothing.
-  await screen.findByRole("option", { name: "Terse" });
-  fireEvent.change(picker, { target: { value: "terse" } });
+  const picker = await screen.findByLabelText("Next reply words");
+  fireEvent.change(picker, { target: { value: "120" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
   // spent by the reply that did land, so it must not ride the next turn
-  await waitFor(() => expect(picker).not.toHaveValue("terse"));
+  await waitFor(() => expect(picker).not.toHaveValue(120));
 });
 
 test("a failed send that was rolled back gives the player their words back", async () => {
@@ -3161,7 +3151,6 @@ test("a body that ends before the done frame is an interrupted turn", async () =
   // cutting the body short used to look identical to a completed turn — the
   // one-shot override was spent and the flush never waited for.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   // The truncated turn is treated as interrupted, so the flush poll runs; let
   // the partial land so it exits on its first tick rather than sitting out the
   // whole budget — `runStream` awaits it before the override is settled either
@@ -3177,16 +3166,15 @@ test("a body that ends before the done frame is an interrupted turn", async () =
       onEvent({ delta: "The tide " });   // ...and then the body just ends
     });
   renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  await screen.findByRole("option", { name: "Terse" });
-  fireEvent.change(picker, { target: { value: "terse" } });
+  const picker = await screen.findByLabelText("Next reply words");
+  fireEvent.change(picker, { target: { value: "120" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   setTimeout(() => { flushed = true; }, 100);
   await screen.findByText("The tide");          // poll caught the flush and ended
   await new Promise((r) => setTimeout(r, 600)); // let the poll exit and send() settle
   // unspent: the reply never confirmed, so the override rides the retry
-  expect(picker).toHaveValue("terse");
+  expect(picker).toHaveValue(120);
 });
 
 test("the post-cancel poll stops once a new turn owns the view", async () => {
@@ -3216,16 +3204,14 @@ test("the post-cancel poll stops once a new turn owns the view", async () => {
 
 test("cancelling keeps a one-shot response override for the retry", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   (api.chat as any).mockImplementation(hangingChat());
   renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  await screen.findByRole("option", { name: "Terse" });
-  fireEvent.change(picker, { target: { value: "terse" } });
+  const picker = await screen.findByLabelText("Next reply words");
+  fireEvent.change(picker, { target: { value: "120" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await waitFor(() => expect(picker).toHaveValue("terse")); // unspent, like a failure
+  await waitFor(() => expect(picker).toHaveValue(120)); // unspent, like a failure
 });
 
 test("Reroll on the last assistant post replaces it with a fresh reply", async () => {
@@ -3469,17 +3455,15 @@ test("regenerate carries a pending override", async () => {
     meta: { id: "s1", title: "Old", response_preset: "cinematic" },
     messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "old reply" }],
   });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
   await screen.findByText("old reply");
-  const picker = await screen.findByLabelText("Response length");
-  await screen.findByRole("option", { name: "Terse" });
-  fireEvent.change(picker, { target: { value: "terse" } });
+  const picker = await screen.findByLabelText("Next reply words");
+  fireEvent.change(picker, { target: { value: "120" } });
   fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
     "run", "s1", expect.any(Function),
-    { guidance: "", response: { response_preset: "terse" }, connection_id: "", model: "" },
+    { guidance: "", response: { response_continuation_words: "120" }, connection_id: "", model: "" },
     expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
@@ -5188,13 +5172,12 @@ test("a Direct turn that produced nothing keeps the one-shot length override", a
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({
     meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [], total: 0 });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   (api.chat as any).mockImplementation(
     async (_c: string, _s: string, _t: string, onEvent: any) => { onEvent({ done: true }); });
   renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));
-  fireEvent.change(picker, { target: { value: "terse" } });
+  const picker = await screen.findByLabelText("Next reply words");
+  await waitFor(() => expect(picker).toHaveValue(null));
+  fireEvent.change(picker, { target: { value: "120" } });
 
   fireEvent.click(screen.getByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "the storm intensifies" } });
@@ -5203,7 +5186,7 @@ test("a Direct turn that produced nothing keeps the one-shot length override", a
   // the note came back for another attempt...
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
   // ...and so did the length chosen for the reply that never arrived
-  expect(screen.getByText(/next reply only/i)).toBeInTheDocument();
+  expect(picker).toHaveValue(120);
 });
 
 test("a running scene's director note does not show in another scene", async () => {
@@ -5276,7 +5259,7 @@ test("no dice button in a campaign with no mechanics pack bound", async () => {
   expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull();
   // the composer is otherwise intact
   expect(screen.getByRole("textbox")).toBeInTheDocument();
-  expect(screen.getByLabelText("Response length")).toBeInTheDocument();
+  expect(screen.getByLabelText("Next reply words")).toBeInTheDocument();
 });
 
 // A control that appears and then vanishes a beat later is worse than one that
@@ -5413,32 +5396,9 @@ test("a refresh whose read fails leaves the binding, and the roll form, alone", 
 // Codex review, finding 2. A native select with no option matching its value
 // silently displays the FIRST option, so a scene naming a deleted preset would
 // have the strip confidently report a preset that is not in effect.
-test("a preset the list does not contain is still named, not silently swapped", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({
-    meta: { id: "s1", title: "Old", response_preset: "ghost" }, messages: [] });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
-  renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  await waitFor(() => expect(picker).toHaveValue("ghost"));
-  expect(within(picker as HTMLSelectElement).getByRole("option", { selected: true }))
-    .toHaveTextContent("ghost");
-});
 
 // Codex review, finding 5. The badge used to sit inside the control and so
 // formed part of its accessible name; as a sibling it has to be tied back on.
-test("the one-shot badge is announced with the response picker", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({
-    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
-  renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  await screen.findByRole("option", { name: "Terse" });
-  expect(picker).not.toHaveAttribute("aria-describedby");
-  fireEvent.change(picker, { target: { value: "terse" } });
-  expect(picker).toHaveAccessibleDescription(/next reply only/i);
-});
 
 // The export menu and the Ledger link moved to the campaign hub, and their
 // coverage went with them (`CampaignHub.test.tsx`). They were campaign-level
@@ -5728,53 +5688,7 @@ test("the continuity the inspector used to hold is in the column, not behind a t
   expect(column.getByText("THREAT")).toHaveClass("alert");
 });
 
-test("the chip names the preset resolved at campaign scope, not a hardcoded Standard", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  // the scene itself names no preset — the campaign does, so nothing in the
-  // scene's frontmatter can tell the chip what the reply will actually be
-  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
-  (api.getSceneResponse as any).mockResolvedValue({
-    ...RESPONSE_BUNDLE,
-    effective: { ...RESPONSE_BUNDLE.effective, reply_words: 900 },
-    provenance: { reply_words: { scope: "campaign", source: "preset" } },
-  });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
-  renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  // Nothing is selected: the scene names no preset, so the only honest thing to
-  // show is the effective budget and where it came from. That lives in the
-  // placeholder option, which exists only in this state.
-  await waitFor(() => expect(picker).toHaveValue(""));
-  const inherited = within(picker as HTMLSelectElement).getByRole("option", { selected: true });
-  expect(inherited).toHaveTextContent("900 words");
-  expect(inherited).toHaveTextContent("this campaign");
-  expect(inherited).not.toHaveTextContent("Standard");
-});
 
-test("a pending one-shot pick is badged and can be cancelled without sending", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({
-    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
-  renderCampaign();
-  const picker = await screen.findByLabelText("Response length");
-  // an inherited/scene setting carries no badge...
-  // Waited for, for the reason the picker test above spells out: the <select>
-  // exists before its value does, and a flat assert here reads "" whenever a
-  // findBy poll lands between the two commits.
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));
-  expect(screen.queryByText(/next reply only/i)).toBeNull();
-  expect(screen.queryByLabelText(/cancel the one-shot/i)).toBeNull();
-  // ...a one-shot pick does, and is distinguishable from it
-  fireEvent.change(picker, { target: { value: "terse" } });
-  expect(picker).toHaveValue("terse");
-  expect(screen.getByText(/next reply only/i)).toBeInTheDocument();
-  // cancelling reverts to the scene's own setting without sending anything
-  fireEvent.click(screen.getByLabelText(/cancel the one-shot/i));
-  expect(picker).toHaveValue("cinematic");
-  expect(screen.queryByText(/next reply only/i)).toBeNull();
-  expect(api.chat).not.toHaveBeenCalled();
-});
 
 test("a scene transition renders as unlabelled narration, with no Scene plate", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
@@ -8114,7 +8028,6 @@ test("individual reroll keeps the old reply until accepted and spends its one-sh
   const message = { role: "assistant" as const, content: "The accepted response.", speaker: "Mara",
     response_id: "response-a", response_status: "complete" as const, response_can_reroll: true };
   vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [message] });
-  vi.mocked(api.listResponsePresets).mockResolvedValue(RESPONSE_PRESETS);
   let finish: (() => void) | undefined;
   vi.mocked(api.regenerateResponse).mockImplementation((_cid, _sid, _rid, onEvent) => new Promise((resolve) => {
     finish = () => {
@@ -8125,20 +8038,20 @@ test("individual reroll keeps the old reply until accepted and spends its one-sh
   }));
   renderCampaign();
   await screen.findByText("The accepted response.");
-  const picker = screen.getByLabelText("Response length");
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));
-  fireEvent.change(picker, { target: { value: "terse" } });
+  const picker = screen.getByLabelText("Next reply words");
+  await waitFor(() => expect(picker).toHaveValue(null));
+  fireEvent.change(picker, { target: { value: "120" } });
   fireEvent.click(screen.getByText("Response actions"));
   fireEvent.change(screen.getByLabelText("Response steer"), { target: { value: "Calmer" } });
   fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
   await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledOnce());
   expect(vi.mocked(api.regenerateResponse).mock.calls[0][2]).toBe("response-a");
-  expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual({ guidance: "Calmer", response: { response_preset: "terse" }, connection_id: "", model: "" });
+  expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual({ guidance: "Calmer", response: { response_continuation_words: "120" }, connection_id: "", model: "" });
   expect(screen.getByText("The accepted response.")).toBeInTheDocument();
   expect(api.regenerate).not.toHaveBeenCalled();
   await act(async () => finish?.());
   await screen.findByText("The revised response.");
-  await waitFor(() => expect(picker).toHaveValue("cinematic"));
+  await waitFor(() => expect(picker).toHaveValue(null));
 });
 
 test("streaming response boundaries display separate speakers and Stop remains the parent-run control", async () => {

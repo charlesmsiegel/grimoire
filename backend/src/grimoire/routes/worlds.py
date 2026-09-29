@@ -438,6 +438,13 @@ def get_world_pcs(wid: str):
 @router.post("/worlds/{wid}/pcs")
 def post_world_pc(wid: str, body: PCCreate):
     root = _world_root_or_404(wid)
+    try:
+        store.actor_names.require_unique(body.name, scope="world", scope_id=wid)
+        if body.persona:
+            store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                             scope="world", scope_id=wid)
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     _validate_tags(root, body.tags)
     pid, vid = store.pcs.create_pc(root, body.name, body.tags, body.version_name, body.persona)
     return {"pc": pid, "version": vid}
@@ -487,6 +494,12 @@ def delete_world_pc(wid: str, pid: str):
 @router.post("/worlds/{wid}/pcs/{pid}/versions")
 def post_pc_version(wid: str, pid: str, body: PersonaVersionCreate):
     try:
+        store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                         scope="world", scope_id=wid,
+                                         actor_ref=f"pcs:{pid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    try:
         vid = store.pcs.create_version(_world_root_or_404(wid), pid, body.name, body.persona)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
@@ -495,6 +508,12 @@ def post_pc_version(wid: str, pid: str, body: PersonaVersionCreate):
 
 @router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}")
 def put_pc_version(wid: str, pid: str, vid: str, body: PersonaVersionUpdate):
+    try:
+        store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                         scope="world", scope_id=wid,
+                                         actor_ref=f"pcs:{pid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     try:
         store.pcs.update_version(_world_root_or_404(wid), pid, vid, body.persona)
     except store.pcs.PCNotFound:
@@ -813,6 +832,21 @@ async def post_scenario_import(wid: str, body: ScenarioProposal):
     # body so the reviewer's "download the openers' images" checkbox needs no
     # second round trip, and is lifted back out here.
     prop.pop("art", None)
+    # The scenario importer reuses an existing character with the same full
+    # name, but a PC with that name is a different actor. Check the complete
+    # proposal before `apply` writes the first character or greeting.
+    existing = {row["name"].strip().casefold(): row["id"]
+                for row in store.characters.list_characters(root)}
+    try:
+        for row in prop.get("characters", []):
+            name = str(row.get("name") or "").strip()
+            if name:
+                known = existing.get(name.casefold())
+                store.actor_names.require_unique(
+                    name, scope="world", scope_id=wid,
+                    actor_ref=f"characters:{known}" if known else None)
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
         # Localizing the openers' art downloads one image per reference, so the
         # whole write goes to the threadpool: without it a card with a dozen

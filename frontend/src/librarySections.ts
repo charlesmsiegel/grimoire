@@ -37,11 +37,6 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
     count: () => api.listStyles().then((r) => r.length),
   },
   {
-    to: "/response-presets", label: "Response Presets", unit: "response preset",
-    blurb: "Reply length and shape presets scenes can pick from.",
-    count: () => api.listResponsePresets().then((r) => r.length),
-  },
-  {
     to: "/calendars", label: "Calendars", unit: "calendar",
     blurb: "How a world reckons time, and what each one observes.",
     count: () => api.listCalendarProviders().then((r) => r.length),

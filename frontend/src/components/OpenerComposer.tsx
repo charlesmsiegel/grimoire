@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type CharacterSummary } from "../api/client";
+import { THUMB, THUMB_REV } from "../api/thumbs";
+import type { OpenerContribution, OpenerSpeaker } from "../api/stream";
+import { Portrait } from "./Portrait";
+
+const serialize = (parts: OpenerContribution[]) =>
+  parts.map((part) => `**${part.speaker}:** ${part.content}`).join("\n\n");
 
 /** The "Generate an opener" block: stream a first post for an empty scene,
  *  then adopt it or keep it as a greeting. Split out of `CastPanel`. */
@@ -24,6 +30,9 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
 }) {
   const [prompt, setPrompt] = useState("");
   const [opener, setOpener] = useState("");
+  const [parts, setParts] = useState<OpenerContribution[]>([]);
+  const [snapshot, setSnapshot] = useState<OpenerSpeaker[]>([]);
+  const [complete, setComplete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [charId, setCharId] = useState("");
   const [versionPick, setVersionPick] = useState("");
@@ -56,21 +65,38 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   const live = useRef(`${cid}/${sid}`);
   useLayoutEffect(() => { live.current = `${cid}/${sid}`; }, [cid, sid]);
 
-  async function generate() {
+  async function generate(resume = false) {
     if (!prompt.trim() || busy) return;
     onError(null);
-    setOpener("");
+    const existing = resume ? parts : [];
+    const currentSnapshot = resume ? snapshot : [];
+    if (!resume) { setOpener(""); setParts([]); setSnapshot([]); }
+    setComplete(false);
     setBusy(true);
     let acc = "";
+    let active: OpenerSpeaker | null = null;
+    let assembled = [...existing];
     try {
       await api.opener(cid, sid, prompt, (e) => {
+        if (e.snapshot) setSnapshot(e.snapshot);
+        if (e.speaker_start) { active = e.speaker_start; acc = ""; }
         if (e.delta) {
           acc += e.delta;
-          setOpener(acc);
+          setOpener(active
+            ? `${serialize(assembled)}${assembled.length ? "\n\n" : ""}**${active.speaker}:** ${acc}`
+            : acc);
+        } else if (e.speaker_done) {
+          assembled = [...assembled, e.speaker_done];
+          setParts(assembled);
+          setOpener(serialize(assembled));
+          active = null;
+          acc = "";
+        } else if (e.done) {
+          setComplete(true);
         } else if (e.error) {
           onError(e.error);
         }
-      });
+      }, undefined, existing, currentSnapshot);
     } catch (err: unknown) {
       onError(err);
     } finally {
@@ -92,11 +118,12 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   }
 
   async function useOpener() {
-    if (!opener.trim() || busy) return;
+    if (!opener.trim() || busy || !complete || parts.length !== snapshot.length) return;
     onError(null);
     try {
-      await api.firstPost(cid, sid, opener);
+      await api.firstPost(cid, sid, opener, parts, snapshot);
       setOpener("");
+      setParts([]);
       onSeeded(); // the adopted opener now shows as the scene's first post
     } catch (err: unknown) {
       onError(err);
@@ -104,7 +131,7 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   }
 
   async function saveAsGreeting() {
-    if (!opener.trim() || !target) return;
+    if (!opener.trim() || !target || !complete || parts.length !== snapshot.length) return;
     const name = window.prompt("Name this greeting?", "Opener")?.trim();
     if (!name) return;
     onError(null);
@@ -128,13 +155,31 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
       <div className="picker">
         <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
                value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-        <button className="primary" onClick={generate} disabled={!ready || busy || !prompt.trim()}>
+        <button className="primary" onClick={() => void generate()} disabled={!ready || busy || !prompt.trim()}>
           {busy ? "…" : "Generate"}
         </button>
       </div>
       {opener && (
         <>
-          <div className="opener-preview">{opener}</div>
+          <div className="opener-preview">
+            {parts.length ? parts.map((part) => {
+              const id = part.actor_ref.split(":")[1];
+              const character = characters.find((entry) => entry.id === id);
+              const src = character?.has_avatar && part.actor_ref.startsWith("characters:")
+                ? `/api/campaigns/${cid}/characters/${id}/versions/${part.version}/images/avatar?w=${THUMB.face}&t=${THUMB_REV}${character.avatar_v ? `&v=${character.avatar_v}` : ""}`
+                : null;
+              return <div className="opener-contribution" key={part.actor_ref}>
+                <Portrait src={src} name={part.speaker} focus={character?.avatar_focus} />
+                <strong>{part.speaker}</strong><p>{part.content}</p>
+              </div>;
+            }) : opener}
+            {parts.length > 0 && opener.length > serialize(parts).length && (
+              <div className="opener-contribution pending">{opener.slice(serialize(parts).length).trim()}</div>
+            )}
+          </div>
+          {!complete && parts.length > 0 && !busy && (
+            <button type="button" onClick={() => void generate(true)}>Retry remaining speakers</button>
+          )}
           <div className="picker">
             <select aria-label="Greeting character" value={charId}
                     onChange={(e) => { setCharId(e.target.value); setVersionPick(""); }}>
@@ -152,8 +197,10 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
             )}
           </div>
           <div className="form-actions">
-            <button className="primary" onClick={useOpener} disabled={busy}>Use</button>
-            <button className="subtle" onClick={saveAsGreeting} disabled={!target}
+            <button className="primary" onClick={useOpener}
+              disabled={busy || !complete || parts.length !== snapshot.length}>Use</button>
+            <button className="subtle" onClick={saveAsGreeting}
+              disabled={!target || !complete || parts.length !== snapshot.length}
                     title={target ? "" : "Pick a character to attach the saved greeting to"}>
               Save as greeting
             </button>

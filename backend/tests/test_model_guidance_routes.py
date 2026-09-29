@@ -9,11 +9,7 @@ from tests.llm_fakes import FakeLLM, ScriptedProvider
 
 @pytest.fixture
 def client(client):
-    """These legacy route assertions describe combined generation.
-
-    Individual speaker selection, response boundaries and isolated knowledge
-    have their own default-mode integration tests in test_character_turns.
-    """
+    """An old mode value cannot change the individual generation paths."""
     response = client.put("/api/config", json={"character_response_mode": "combined"})
     assert response.status_code == 200
     return client
@@ -37,8 +33,6 @@ def _profile_rows(breakdown):
 @pytest.mark.parametrize("action,body", [
     ("chat", {"content": "Shall we go?"}),
     ("chat", {"content": ""}),
-    ("retry", {}),
-    ("regenerate", {}),
     ("opener", {"prompt": "Open at the harbor."}),
 ])
 def test_scene_routes_follow_current_model_not_historical_stamp(client, action, body):
@@ -68,17 +62,28 @@ def test_live_inspector_uses_campaign_route_and_needs_no_credentials(client):
     assert len(_profile_rows(live)) == 1
 
 
-def test_reroll_override_gets_guidance_without_changing_next_turn(client):
+def test_reroll_override_keeps_frozen_prompt_and_does_not_change_next_turn(client):
     cid, sid = _scene(client)
+    created = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Mara"})
+    assert created.status_code == 200
+    seated = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": "mara"})
+    assert seated.status_code == 200
+    first = FakeLLM([["Mara nods.\n```handoff\n{\"next\":null}\n```"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: first
+    landed = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                         json={"speaker_ref": "characters:mara"})
+    assert landed.status_code == 200
+    rid = next(m["response_id"] for m in store.scenes.read_scene(cid, sid)["messages"]
+               if m.get("response_id"))
     fake = FakeLLM([["Mara nods."]])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate",
                            json={"model": "glm-5.3", "guidance": "Keep it brief."})
     assert response.status_code == 200
     entries = store.prompt_log.list_entries(cid, sid)
     captured = store.prompt_log.read_entry(cid, entries[0]["id"], scene=sid)
     assert captured["model"] == "glm-5.3"
-    assert len(_profile_rows(captured)) == 1
+    assert _profile_rows(captured) == []  # regeneration reuses the response's frozen prompt
     assert fake.requests[0]["messages"][-1]["content"].find("Keep it brief.") >= 0
     live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert live["model"] == "vendor/unknown"

@@ -34,6 +34,10 @@ def test_round_rejects_repeated_actor(client):
     assert response.status_code == 200
     messages = store.scenes.read_scene(cid, sid)["messages"]
     assert [m.get("speaker") for m in messages if m.get("response_id")] == ["Mara", "Winifred"]
+    shown = client.get(f"/api/campaigns/{cid}/scenes/{sid}", params={"limit": 2}).json()
+    assert [m.get("actor_ref") for m in shown["messages"]] == [
+        "characters:mara", "characters:winifred"]
+    assert "actor_ref" not in store.scenes.read_scene(cid, sid)["messages"][-1]
     assert fake.calls == 2
 
 

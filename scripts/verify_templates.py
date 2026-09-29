@@ -951,6 +951,8 @@ def rendered_system(data: dict, opener: bool = False) -> str:
             body = render(head, **data).strip() + "\n\n" + body
         sections.append(body)
         last_head = head
+    if data.get("response_actor") and not opener:
+        sections.append(render("scene/response_actor.j2", **data).strip())
     return render("scene/system.j2", sections=sections).strip()
 
 
@@ -989,10 +991,9 @@ def rendered_messages(scene_id: str, data: dict, note: str | None = None,
                   voice_correction=voice, length_correction=correction)
     if post:
         out.append({"role": "system", "content": post})
-    if opener_prompt is not None:  # the shape rules always ride last on openers
-        npc_names = [d.get("name", "") for d in data["npc_cards"] if d.get("name")]
-        out.append({"role": "system",
-                    "content": render("scene/opener_shape.j2", npc_names=npc_names)})
+    if opener_prompt is not None:
+        out.append({"role": "system", "content":
+                    "Set the scene as narrator. Do not write any NPC or PC actions or dialogue."})
     return out
 
 
@@ -1023,7 +1024,8 @@ check_messages("director", context.build_director_messages(cid, sid, note),
 
 opener_prompt = "A storm rolls in while they reach the warehouse ledger."
 odata = {**gather(sid, pcless=False, wi_seed=opener_prompt, full_recap=context.OPENER_RECAP_DEPTH),
-         "opener": True}
+         "opener": True, "budget": response_targets.resolve()["opening"],
+         "response_actor": {"ref": "grimoire", "name": "Grimoire"}}
 check_messages("opener", context.build_opener_messages(cid, sid, opener_prompt),
                rendered_messages(sid, odata, opener_prompt=opener_prompt))
 
@@ -1036,7 +1038,9 @@ off_data = gather(sid_off, pcless=True)
 check_messages("offscreen chat", context.build_messages(cid, sid_off),
                rendered_messages(sid_off, off_data))
 off_odata = {**gather(sid_off, pcless=True, wi_seed="The pact at the pier.",
-                      full_recap=context.OPENER_RECAP_DEPTH), "opener": True}
+                      full_recap=context.OPENER_RECAP_DEPTH), "opener": True,
+             "budget": response_targets.resolve()["opening"],
+             "response_actor": {"ref": "grimoire", "name": "Grimoire"}}
 check_messages("offscreen opener",
                context.build_opener_messages(cid, sid_off, "The pact at the pier."),
                rendered_messages(sid_off, off_odata, opener_prompt="The pact at the pier."))

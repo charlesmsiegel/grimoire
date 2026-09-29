@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from . import (
     absorb,
+    actor_names,
     aging,
     alternates,
     appearances,
@@ -108,9 +109,9 @@ from . import (
     relationships,
     replay,
     response_presets,
-    response_targets,
     response_protocol,
     response_snapshots,
+    response_targets,
     responses,
     retcon,
     revision,
@@ -345,6 +346,7 @@ __all__ = [
     "lengths",
     "length_drift",
     "response_presets",
+    "actor_names",
     "response_targets",
     "routing",
     "voice_anchors",

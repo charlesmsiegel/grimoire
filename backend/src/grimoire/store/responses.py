@@ -66,6 +66,20 @@ def _scope(cid, sid, data):
     return data["scenes"].setdefault(token, {"responses": {}, "rounds": {}})
 
 
+def actor_refs(cid: str, sid: str) -> dict[str, str]:
+    """One read-side index for a scene window's response identities.
+
+    A scene with no ledger (including a manual opener) needs no migration or
+    write merely to render its transcript.
+    """
+    token = identity.scene_identity(cid, sid)
+    if not token:
+        return {}
+    records = _read(cid)["scenes"].get(token, {}).get("responses", {})
+    return {rid: record["actor_ref"] for rid, record in records.items()
+            if record.get("actor_ref")}
+
+
 def transcript_hash(messages):
     public = [{k: m[k] for k in ("role", "speaker", "content") if k in m} for m in messages]
     return hashlib.sha256(

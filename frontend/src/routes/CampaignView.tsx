@@ -6,7 +6,7 @@ import {
   api, ApiError, invalidateConfigCache, type Actor, type SceneMeta,
   type Message, type RosterEntry, type SceneAlternates,
   type SceneDatetime, type ProposalRecord, type SceneCheckActor,
-  type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
+  type ResponseOverride, type ResponseBundle,
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
   type CampaignBudget,
   type IncomingRef,
@@ -34,7 +34,7 @@ import { CampaignCover } from "../components/CoverPanel";
 import { SceneInspector } from "../components/SceneInspector";
 import { UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
-import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
+import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
 import { NO_REROLL_ROUTE, type RerollRoute } from "../components/RerollRoute";
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
@@ -141,20 +141,6 @@ function sceneUrl(cid: string, sid: string): string {
 function sceneNumber(id: string, fallback: number): number {
   return numberOf(id) ?? fallback;
 }
-
-// Where a resolved response field came from, for the composer chip. Mirrors
-// ResponsePresetPicker's scopeLabel, shortened for a chip's worth of space.
-function responseScopeLabel(scope: string | undefined): string {
-  switch (scope) {
-    case "turn": return "this turn";
-    case "scene": return "this scene";
-    case "campaign": return "this campaign";
-    case "global": return "global";
-    case "default": return "built-in default";
-    default: return "inherited";
-  }
-}
-
 
 // A superseded or narrated proposal is finished. `declined` is NOT, and used to
 // be filtered out with them: the backend keeps re-streaming a declined record's
@@ -741,8 +727,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // is never persisted — it rides the next chat/retry/regenerate call and is
   // cleared once a reply actually lands, but survives a failed stream so
   // retry/reroll still honour it (see runStream/send/retry/reroll below).
-  const [responsePresets, setResponsePresets] = useState<ResponsePresetSummary[]>([]);
-  const [sceneResponsePreset, setSceneResponsePreset] = useState("");
   // The server's resolved bundle for this scene — the ONLY source of truth for
   // what the next reply is actually budgeted at. The cascade (turn → scene →
   // campaign → global → built-in default) is deliberately not re-implemented
@@ -820,7 +804,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setColorQuotes(c.quote_color === "on");
       setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
     }).catch(() => {});
-    api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
     readModuleBound(true);   // new campaign: nothing known about it yet
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
@@ -1090,19 +1073,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // names nothing the scene knows about. Claiming "Standard" in that case is
   // simply false whenever a broader scope supplies something else — so with no
   // preset to name we report the effective budget and where it came from.
-  const responseChipPresetId = pendingResponse?.response_preset || sceneResponsePreset;
-  const responseChipPending = !!pendingResponse?.response_preset;
-  const presetName = (id: string) =>
-    responsePresets.find((p) => p.id === id)?.name ?? id;
-  const responseChipLabel = responseChipPresetId
-    ? presetName(responseChipPresetId)
-    : sceneResponse
-      ? `${sceneResponse.effective.reply_words} words · ${
-          responseScopeLabel(sceneResponse.provenance.reply_words?.scope)}`
-      : "Inherited";
+  const responseChipPending = !!pendingResponse;
+  const responseChipLabel = sceneResponse
+    ? `${pendingResponse?.response_continuation_words || sceneResponse.effective.continuation.words} words · ${
+        pendingResponse?.response_continuation_paragraphs || sceneResponse.effective.continuation.paragraphs} paragraphs`
+    : "Continuation targets";
 
-  function chooseResponseOverride(id: string) {
-    setPendingResponse({ response_preset: id });
+  function chooseResponseOverride(key: "response_continuation_words" | "response_continuation_paragraphs", value: string) {
+    setPendingResponse((current) => ({ ...current, [key]: value }));
   }
   function clearResponseOverride() {
     setPendingResponse(null);
@@ -1463,7 +1441,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
     setFirstIndex(scene.offset ?? 0);
     setHasUserPost(scene.has_user_message ?? null);
-    setSceneResponsePreset(scene.meta.response_preset ?? "");
     setStreaming("");
     setStreamingSpeakers([]);
     setCtxKey((n) => n + 1);
@@ -3930,7 +3907,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // or is a word-boundary prefix of exactly one name — "Winifred" is Winifred
   // Vance; an ambiguous or mid-word label matches no one. Mirrors the
   // backend's scenes.match_name so role attribution and plates agree.
-  const matchActor = useCallback((speaker: string): Actor | undefined => {
+  const matchActor = useCallback((speaker: string, actorRef?: string): Actor | undefined => {
+    if (actorRef) {
+      return cast.find((actor) => `${actor.kind}:${actor.id}` === actorRef);
+    }
     const low = speaker.trim().toLowerCase();
     if (!low) return undefined;
     const exact = cast.filter((a) => a.name.toLowerCase() === low);
@@ -3971,11 +3951,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       if (m.speaker === DIRECTOR_SPEAKER && !showNotes) return;
       const speaker = speakerOf(m);
       const last = out[out.length - 1];
-      if (last && last.speaker === speaker) {
+      if (last && last.speaker === speaker &&
+          last.posts[0].m.actor_ref === m.actor_ref) {
         last.posts.push({ m, index });
         return;
       }
-      const actor = matchActor(speaker);
+      const actor = matchActor(speaker, m.actor_ref);
       out.push({ speaker, pc: actor ? actor.role === "player" : m.role === "user",
                  actor, posts: [{ m, index }] });
     });
@@ -4634,7 +4615,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           )}
           {!focus && showStyle && (
             <div className="panel-slot">
-              <ResponsePresetPicker scope="campaign" cid={cid}
+              <ResponseTargetsPicker scope="campaign" cid={cid}
                                     onChanged={() => activeId && selectScene(activeId)} />
             </div>
           )}
@@ -4949,51 +4930,23 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 {" · clear the box to get it back"}
               </span>
             )}
-            <label className="composer-meta-label" htmlFor="response-length">Response</label>
-            <select id="response-length" aria-label="Response length"
-                    value={responseChipPresetId}
-                    aria-describedby={responseChipPending ? "response-length-oneshot" : undefined}
-                    onChange={(e) => (e.target.value
-                      ? chooseResponseOverride(e.target.value)
-                      : clearResponseOverride())}>
-              {/* Offered only while nothing is picked. With no preset named at
-                  scene level the value comes from campaign or global scope, which
-                  names nothing the scene knows about -- so this option reports the
-                  effective budget and its source instead of claiming a preset.
-                  Rendering it always would also turn it into a "revert to
-                  inherited" action, which this control has never had. */}
-              {!responseChipPresetId && <option value="">{responseChipLabel}</option>}
-              {responsePresets.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-              {/* Same fallback ResponsePresetPicker carries: a scene can name a
-                  preset the list has not loaded yet, or one since deleted. With no
-                  matching option a native select silently displays the FIRST one,
-                  so the strip would confidently name a preset that is not in
-                  effect. Show the id instead (Codex review). */}
-              {responseChipPresetId
-                && !responsePresets.some((p) => p.id === responseChipPresetId) && (
-                <option value={responseChipPresetId}>{responseChipPresetId}</option>
-              )}
-            </select>
-            {/* A one-shot pick and a standing setting read identically without
-                this — and they mean very different things: one is spent by the
-                next reply, the other is the scene's standing answer. It used to
-                sit INSIDE the control and so formed part of its accessible name;
-                as a sibling it has to be tied back on with `aria-describedby`, or
-                the distinction is visual only (Codex review). */}
+            <label className="composer-meta-label" htmlFor="response-words">Response</label>
+            <input id="response-words" type="number" min="1" aria-label="Next reply words"
+              className="response-target-input"
+              value={pendingResponse?.response_continuation_words ?? ""}
+              placeholder={String(sceneResponse?.effective.continuation.words ?? 150)}
+              onChange={(event) => chooseResponseOverride("response_continuation_words", event.target.value)} />
+            <label className="composer-meta-label" htmlFor="response-paragraphs">paragraphs</label>
+            <input id="response-paragraphs" type="number" min="1" aria-label="Next reply paragraphs"
+              className="response-target-input"
+              value={pendingResponse?.response_continuation_paragraphs ?? ""}
+              placeholder={String(sceneResponse?.effective.continuation.paragraphs ?? 2)}
+              onChange={(event) => chooseResponseOverride("response_continuation_paragraphs", event.target.value)} />
+            <span className="composer-meta-hint">{responseChipLabel}</span>
             {responseChipPending && (
-              <span className="chip-oneshot" id="response-length-oneshot">next reply only</span>
-            )}
-            {responseChipPending && (
-              <button type="button" className="chip-clear" title="Cancel the one-shot pick"
-                      aria-label="Cancel the one-shot response length"
-                      onClick={clearResponseOverride}>×</button>
-            )}
-            {!responseChipPending && responseChipPresetId && sceneResponse && (
-              <span className="composer-meta-hint">
-                {sceneResponse.effective.reply_words} words
-              </span>
+              <button type="button" className="chip-clear" title="Cancel the one-shot targets"
+                aria-label="Cancel the one-shot response targets"
+                onClick={clearResponseOverride}>?</button>
             )}
             <span className="header-spacer" />
             {/* Opening a dossier does not take the turn away from you, and this

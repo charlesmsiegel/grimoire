@@ -509,14 +509,23 @@ def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None =
             # turn's lock, on every open -- see `migrate_if_needed`.
             scene = store.responses.migrate_if_needed(cid, sid)
             if limit is None:
-                return scene
+                return _with_actor_refs(cid, sid, scene)
         if limit is None:
-            return store.scenes.read_scene(cid, sid)
-        return store.scenes.read_scene_window(cid, sid, limit, before)
+            return _with_actor_refs(cid, sid, store.scenes.read_scene(cid, sid))
+        return _with_actor_refs(cid, sid, store.scenes.read_scene_window(cid, sid, limit, before))
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
+
+
+def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
+    refs = store.responses.actor_refs(cid, sid)
+    for message in scene["messages"]:
+        ref = refs.get(message.get("response_id", ""))
+        if ref:
+            message["actor_ref"] = ref
+    return scene
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}")
@@ -4311,6 +4320,10 @@ def post_emergent_cast(cid: str, sid: str, body: EmergentCast, request: Request)
     # be settled before the create, or a rejected seat leaves an unseated
     # character in the campaign that nothing points at.
     role = _cast_role(cid, sid, "characters", body.role)
+    try:
+        store.actor_names.require_unique(name, scope="campaign", scope_id=cid)
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     char, version = store.overlay.create_character(cid, name)
     try:
         # The seat is the transcript-touching half (`appear` appends a

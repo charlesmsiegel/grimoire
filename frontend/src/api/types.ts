@@ -149,7 +149,6 @@ export type Config = {
   prompt_layout_enabled: string;
   /** "on" renders the active-speaker section in group scenes; "off" default. */
   speaker_turn_taking: string;
-  character_response_mode?: string;
   /** "on" once automatic backups are enabled (#32); "off" on every install
    *  until someone turns them on. */
   backup_enabled: string;
@@ -191,7 +190,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "offscene_known_limit" |
   "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
-  "prompt_layout_enabled" | "speaker_turn_taking" | "character_response_mode" |
+  "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
   "replay_fork_threshold" | "advance_fork_threshold" | "log_level">>;
 /** One archive written by `store/backups.py`. */
@@ -341,6 +340,7 @@ export type SceneMeta = {
   pcless?: boolean; done?: boolean;
 };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string;
+  actor_ref?: string;
   response_thinking?: string;
   response_id?: string; response_part?: string; response_status?: "complete" | "incomplete";
   context_changed?: boolean; response_can_reroll?: boolean };
@@ -723,7 +723,7 @@ export type Style = { id: string; name: string; description: string; tags: strin
 export type StyleDetail = { meta: Style; body: string };
 export type StyleDraft = { name: string; description?: string; tags?: string[]; body?: string };
 
-// response presets & the response bundle (scoped preset + overrides + resolution)
+// Response targets and the scoped response bundle.
 // The explicit "clear the inherited style" sentinel, mirroring
 // response_presets.STYLE_CLEAR byte for byte. "" is a different answer — "this
 // scope has no opinion, keep walking outward". The U+2063 prefix (invisible
@@ -731,42 +731,18 @@ export type StyleDraft = { name: string; description?: string; tags?: string[]; 
 // user style genuinely named "None" — id `none` — stays an ordinary style.
 // Defined here, not per-component, so the two pickers cannot drift apart.
 export const STYLE_CLEAR = "⁣none";
-export type ResponsePresetSummary = {
-  id: string; name: string; description?: string; built_in: boolean;
-  style_id?: string; length_preset?: string;
-  reply_words?: string; blocks?: string; paragraphs?: string;
-  speakers?: string; blocks_per_speaker?: string;
-  validity?: { valid: boolean; issues: string[] };
-};
-export type ResponsePresetDetail = { meta: ResponsePresetSummary; validity: { valid: boolean; issues: string[] } };
-export type ResponsePresetDraft = {
-  name: string; description?: string; style_id?: string; length_preset?: string;
-  knobs?: Record<string, number> | null;
-};
-export type LengthPreset = {
-  reply_words: number; blocks: number; paragraphs: number; speakers: number; blocks_per_speaker: number;
-};
-export type ResponsePresetUsageEntry = {
-  scope: "global" | "campaign" | "scene"; id: string; name: string;
-  before: Partial<ResponseEffective>; after: Partial<ResponseEffective>;
-};
-/** A scope the impact scan could not read. Rendering the affected list without
- * these turns a partial answer into a confident "nothing else changes" — the
- * one thing a preview shown before an irreversible delete must never do. */
-export type ResponsePresetUsageSkip = {
-  scope: "campaign" | "scene"; id: string; name: string; reason: string;
-};
-export type ResponsePresetUsage = {
-  affected: ResponsePresetUsageEntry[]; unevaluated?: ResponsePresetUsageSkip[];
-};
 export type ResponseFields = {
   response_preset: string; style_id: string;
   length_reply_words: string; length_blocks: string; length_paragraphs: string;
   length_speakers: string; length_blocks_per_speaker: string;
+  response_opening_words: string; response_opening_paragraphs: string;
+  response_continuation_words: string; response_continuation_paragraphs: string;
 };
 export type ResponseEffective = {
   style_id: string; reply_words: number; blocks: number; paragraphs: number;
   speakers: number; blocks_per_speaker: number;
+  opening: { words: number; paragraphs: number };
+  continuation: { words: number; paragraphs: number };
 };
 export type ResponseProvenance = Record<string, { scope: string; source?: string }>;
 // A one-shot, unpersisted per-turn override — the same scope-shaped dict

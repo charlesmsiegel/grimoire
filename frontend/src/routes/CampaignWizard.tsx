@@ -179,9 +179,21 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     setOpener("");
     setBusy(true);
     let acc = "";
+    let completed: string[] = [];
+    let speaker = "";
     try {
       await api.opener(committed.cid, committed.sid, prompt, (e: ChatEvent) => {
-        if (e.delta) { acc += e.delta; setOpener(acc); }
+        if (e.speaker_start) { speaker = e.speaker_start.speaker; acc = ""; }
+        if (e.delta) {
+          acc += e.delta;
+          setOpener([...completed, speaker ? `**${speaker}:** ${acc}` : acc].join("\n\n"));
+        }
+        if (e.speaker_done) {
+          completed = [...completed, `**${e.speaker_done.speaker}:** ${e.speaker_done.content}`];
+          setOpener(completed.join("\n\n"));
+          speaker = "";
+          acc = "";
+        }
         else if (e.error) setError(e.error);
       });
     } catch (err: unknown) {

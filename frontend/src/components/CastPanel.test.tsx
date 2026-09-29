@@ -112,6 +112,15 @@ function renderPanel(props: Partial<{ ready: boolean; onSeeded: () => void;
   );
 }
 
+function emitOpener(onEvent: (event: unknown) => void, content: string) {
+  const speaker = { actor_ref: "grimoire", speaker: "Grimoire", version: "" };
+  onEvent({ snapshot: [speaker] });
+  onEvent({ speaker_start: speaker });
+  onEvent({ delta: content });
+  onEvent({ speaker_done: { ...speaker, content } });
+  onEvent({ done: true });
+}
+
 test("renders the current cast", async () => {
   renderPanel();
   await screen.findByText("elara");
@@ -142,8 +151,7 @@ test("adding an actor posts kind + id (+ role for characters)", async () => {
 
 test("generating an opener streams into the preview and can be saved as a greeting", async () => {
   (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
-    onEvent({ delta: "Mist " });
-    onEvent({ delta: "rolls in." });
+    emitOpener(onEvent, "Mist rolls in.");
   });
   vi.spyOn(window, "prompt").mockReturnValue("Opener");
   renderPanel();
@@ -156,14 +164,14 @@ test("generating an opener streams into the preview and can be saved as a greeti
   fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
   await waitFor(() =>
     expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
-      character: "seraphine", version: "default", body: "Mist rolls in.",
+      character: "seraphine", version: "default", body: "**Grimoire:** Mist rolls in.",
     })),
   );
 });
 
 async function renderWithOpener(text = "Mist rolls in.") {
   (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
-    onEvent({ delta: text });
+    emitOpener(onEvent, text);
   });
   vi.spyOn(window, "prompt").mockReturnValue("Opener");
   renderPanel();
@@ -186,7 +194,7 @@ test("staging a PC for the scene does not block saving the opener as a greeting"
   fireEvent.click(save);
   await waitFor(() =>
     expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
-      character: "seraphine", version: "default", body: "Mist rolls in.",
+      character: "seraphine", version: "default", body: "**Grimoire:** Mist rolls in.",
     })),
   );
 });
@@ -261,7 +269,7 @@ test("a failed greeting save says so and keeps the opener", async () => {
   // The preview is the only copy of a generation that cost a call — dropping
   // it on a failed save would throw the reader's text away.
   (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
-    onEvent({ delta: "Mist rolls in." });
+    emitOpener(onEvent, "Mist rolls in.");
   });
   (api.createGreeting as any).mockRejectedValue({ detail: "name taken" });
   vi.spyOn(window, "prompt").mockReturnValue("Opener");
@@ -294,7 +302,7 @@ test("an opener the model could not be reached for offers the local-model recove
 
 test("Use adopts the generated opener as the scene's first post", async () => {
   (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
-    onEvent({ delta: "Mist rolls in." });
+    emitOpener(onEvent, "Mist rolls in.");
   });
   (api.firstPost as any).mockResolvedValue({ ok: true });
   const onSeeded = vi.fn();
@@ -303,7 +311,11 @@ test("Use adopts the generated opener as the scene's first post", async () => {
   fireEvent.click(screen.getByRole("button", { name: /generate/i }));
   await screen.findByText("Mist rolls in.");
   fireEvent.click(screen.getByRole("button", { name: /^Use$/ }));
-  await waitFor(() => expect(api.firstPost).toHaveBeenCalledWith("c", "s", "Mist rolls in."));
+  await waitFor(() => expect(api.firstPost).toHaveBeenCalledWith(
+    "c", "s", "**Grimoire:** Mist rolls in.",
+    [{ actor_ref: "grimoire", speaker: "Grimoire", version: "", content: "Mist rolls in." }],
+    [{ actor_ref: "grimoire", speaker: "Grimoire", version: "" }],
+  ));
   expect(onSeeded).toHaveBeenCalled();
 });
 
@@ -420,7 +432,7 @@ test("generating an opener refreshes, so its captured prompt becomes visible", a
   // history keeps saying "No captured turns yet" — and a preview the reader
   // rejects leaves the row invisible indefinitely.
   (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
-    onEvent({ delta: "Mist rolls in." });
+    emitOpener(onEvent, "Mist rolls in.");
   });
   const onSeeded = vi.fn();
   renderPanel({ onSeeded });

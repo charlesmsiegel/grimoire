@@ -38,23 +38,18 @@ export const PHASES_NONE_CUT = [
   { name: "audit", status: "ok", reason: null, attempted: true, budget_exhausted: false },
 ];
 
-// The built-ins response_presets.py ships (templates/response_presets/*.md) —
-// the chip's dropdown lists whatever listResponsePresets returns.
-export const RESPONSE_PRESETS = [
-  { id: "standard", name: "Standard", built_in: true },
-  { id: "brisk", name: "Brisk", built_in: true },
-  { id: "cinematic", name: "Cinematic", built_in: true },
-  { id: "terse", name: "Terse", built_in: true },
-];
-
 // What GET /api/campaigns/:cid/scenes/:sid/response returns: the scene's own
 // (here: empty) fields plus the SERVER-resolved bundle and its provenance.
 export const RESPONSE_BUNDLE = {
   response_preset: "", style_id: "",
   length_reply_words: "", length_blocks: "", length_paragraphs: "",
   length_speakers: "", length_blocks_per_speaker: "",
-  effective: { style_id: "", reply_words: 550, blocks: 5, paragraphs: 2, speakers: 4, blocks_per_speaker: 2 },
-  provenance: { reply_words: { scope: "default", source: "default" } },
+  response_opening_words: "", response_opening_paragraphs: "",
+  response_continuation_words: "", response_continuation_paragraphs: "",
+  effective: { style_id: "", reply_words: 550, blocks: 5, paragraphs: 2, speakers: 4, blocks_per_speaker: 2,
+    opening: { words: 400, paragraphs: 3 }, continuation: { words: 150, paragraphs: 2 } },
+  provenance: { reply_words: { scope: "default", source: "default" },
+    "continuation.words": { scope: "default", source: "default" } },
 };
 
 /** What `api.absorbScene` resolves to now (#396).
@@ -266,7 +261,6 @@ export function installCampaignMocks() {
   (api.rejectIncoming as any).mockResolvedValue({ ok: true });
   (api.campaignProvenance as any).mockResolvedValue({});
   (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
-  (api.listResponsePresets as any).mockResolvedValue([]);
   // A pack is bound by default, so the dice button is present for the tests
   // that predate it being conditional.
   (api.getCampaignModule as any).mockResolvedValue(

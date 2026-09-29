@@ -332,7 +332,6 @@ export const TITLES: [(p: string) => boolean, string][] = [
   [(p) => isUnder(p, "/library") || isUnder(p, "/worlds"), "The Library"],
   [(p) => isUnder(p, "/modules"), "Modules"],
   [(p) => isUnder(p, "/styles"), "Styles"],
-  [(p) => isUnder(p, "/response-presets"), "Response presets"],
   [(p) => isUnder(p, "/calendars"), "Calendars"],
   [(p) => isUnder(p, "/climates"), "Climates"],
   [(p) => isUnder(p, "/connections"), "Connections"],

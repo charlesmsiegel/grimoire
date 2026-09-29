@@ -40,8 +40,8 @@ vi.mock("../api/client", async () => {
   };
 });
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
-vi.mock("./ResponsePresetPicker", () => ({
-  ResponsePresetPicker: ({ scope, cid, sid }: any) => (
+vi.mock("./ResponseTargetsPicker", () => ({
+  ResponseTargetsPicker: ({ scope, cid, sid }: any) => (
     <div data-testid="response-preset-picker" data-scope={scope} data-cid={cid} data-sid={sid} />
   ),
 }));

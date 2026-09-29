@@ -10,7 +10,6 @@ vi.mock("../api/client", async () => ({
          listWorlds: vi.fn().mockResolvedValue([]),
          listModules: vi.fn().mockResolvedValue([]),
          listStyles: vi.fn().mockResolvedValue([]),
-         listResponsePresets: vi.fn().mockResolvedValue([]),
          listClimates: vi.fn().mockResolvedValue({ climates: [] }),
          listConnections: vi.fn().mockResolvedValue([]) },
 }));

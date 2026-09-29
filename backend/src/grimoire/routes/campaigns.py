@@ -1863,6 +1863,13 @@ def get_campaign_pcs(cid: str):
 def post_campaign_pc(cid: str, body: PCCreate):
     # Campaign-local PC overlay: tags are free strings (no world-vocabulary check).
     _campaign_root_or_404(cid)
+    try:
+        store.actor_names.require_unique(body.name, scope="campaign", scope_id=cid)
+        if body.persona:
+            store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                             scope="campaign", scope_id=cid)
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     pid, vid = store.overlay.create_pc(cid, body.name, body.tags, body.version_name, body.persona)
     return {"pc": pid, "version": vid}
 
@@ -2016,6 +2023,13 @@ def post_campaign_character(cid: str, body: CharacterCreate):
     ends that state.
     """
     _campaign_root_or_404(cid)
+    try:
+        store.actor_names.require_unique(body.name, scope="campaign", scope_id=cid)
+        if body.card:
+            store.actor_names.require_unique(store.actor_names.card_name(body.card),
+                                             scope="campaign", scope_id=cid)
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     aid, vid = store.overlay.create_character(cid, body.name, body.version_name, body.card)
     return {"character": aid, "version": vid}
 
@@ -2157,6 +2171,11 @@ def put_campaign_character_name(cid: str, char: str, body: NameBody):
     _campaign_root_or_404(cid)
     name = _display_name_or_400(body.name)
     try:
+        store.actor_names.require_unique(name, scope="campaign", scope_id=cid,
+                                         actor_ref=f"characters:{char}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    try:
         root = store.overlay.ensure_actor_writable(cid, "characters", char)
         store.characters.set_name(root, char, name)
     except store.characters.CharacterNotFound:
@@ -2181,6 +2200,12 @@ def put_campaign_character_birthdate(cid: str, char: str, body: CharacterBirthda
 @router.post("/campaigns/{cid}/characters/{char}/versions")
 def post_campaign_character_version(cid: str, char: str, body: VersionCreate):
     _campaign_root_or_404(cid)
+    try:
+        store.actor_names.require_unique(store.actor_names.card_name(body.card),
+                                         scope="campaign", scope_id=cid,
+                                         actor_ref=f"characters:{char}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     if store.appearances.locked_version(cid, "characters", char) is not None:
         raise HTTPException(status_code=409, detail="character is locked to one version")
     try:
@@ -2194,6 +2219,12 @@ def post_campaign_character_version(cid: str, char: str, body: VersionCreate):
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}")
 def put_campaign_character_version(cid: str, char: str, vid: str, body: VersionUpdate):
     _campaign_root_or_404(cid)
+    try:
+        store.actor_names.require_unique(store.actor_names.card_name(body.card),
+                                         scope="campaign", scope_id=cid,
+                                         actor_ref=f"characters:{char}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     try:
         root = store.overlay.ensure_actor_writable(cid, "characters", char)
         store.characters.update_version(root, char, vid, body.card)
@@ -2264,6 +2295,12 @@ def put_campaign_pc(cid: str, pid: str, body: PCUpdate):
 @router.post("/campaigns/{cid}/pcs/{pid}/versions")
 def post_campaign_pc_version(cid: str, pid: str, body: PersonaVersionCreate):
     _campaign_root_or_404(cid)
+    try:
+        store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                         scope="campaign", scope_id=cid,
+                                         actor_ref=f"pcs:{pid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     if store.appearances.locked_version(cid, "pcs", pid) is not None:
         raise HTTPException(status_code=409, detail="pc is locked to one version")
     try:
@@ -2277,6 +2314,12 @@ def post_campaign_pc_version(cid: str, pid: str, body: PersonaVersionCreate):
 @router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}")
 def put_campaign_pc_version(cid: str, pid: str, vid: str, body: PersonaVersionUpdate):
     _campaign_root_or_404(cid)
+    try:
+        store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                         scope="campaign", scope_id=cid,
+                                         actor_ref=f"pcs:{pid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     try:
         root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
         store.pcs.update_version(root, pid, vid, body.persona)
@@ -2432,6 +2475,15 @@ def post_import_version(cid: str, kind: str, aid: str, body: PickBody):
         raise HTTPException(status_code=404, detail="unknown actor kind")
     if store.appearances.actor_hash(_campaign_wroot(cid), kind, aid, body.version) is None:
         raise HTTPException(status_code=404, detail="actor or version not found in world")
+    wroot = _campaign_wroot(cid)
+    incoming = (store.actor_names.card_name(store.characters.read_card(wroot, aid, body.version))
+                if kind == "characters" else
+                store.actor_names.persona_name(store.pcs.read_persona(wroot, aid, body.version)))
+    try:
+        store.actor_names.require_unique(incoming, scope="campaign", scope_id=cid,
+                                         actor_ref=f"{kind}:{aid}")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
         store.appearances.import_version(cid, kind, aid, body.version)
     except store.appearances.AppearError as exc:
