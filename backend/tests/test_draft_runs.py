@@ -63,6 +63,29 @@ def test_opener_generates_separate_known_actors_and_adopts_canonical_posts(clien
     assert [message["content"] for message in messages] == ["A quiet road.", "I wait at the gate."]
 
 
+def test_opener_snapshot_fences_players_without_generating_them(client, campaign):
+    _world, cid = campaign
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    player = client.post(f"/api/campaigns/{cid}/pcs", json={"name": "Winifred", "tags": []}).json()
+    cast = f"/api/campaigns/{cid}/scenes/{sid}/cast"
+    client.post(cast, json={"kind": "pcs", "id": player["pc"], "role": "player"})
+    fake = FakeLLM(turns=[["A quiet road."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    with client.stream("POST", f"{base}/opener", json={"prompt": "Arrive"}) as response:
+        events = [json.loads(row[6:]) for row in response.iter_lines() if row.startswith("data: ")]
+    snapshot = next(event["snapshot"] for event in events if "snapshot" in event)
+    parts = [event["speaker_done"] for event in events if "speaker_done" in event]
+    assert len(fake.requests) == 1
+    assert len(parts) == 1
+    assert any(actor.get("role") == "player" and actor["speaker"] == "Winifred"
+               for actor in snapshot)
+    other = client.post(f"/api/campaigns/{cid}/pcs", json={"name": "Seraphine", "tags": []}).json()
+    client.post(cast, json={"kind": "pcs", "id": other["pc"], "role": "player"})
+    assert client.post(f"{base}/first-post",
+                       json={"snapshot": snapshot, "contributions": parts}).status_code == 409
+
+
 def test_opener_retry_keeps_complete_prefix_and_stale_cast_refuses_adoption(client, campaign):
     _world, cid = campaign
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]

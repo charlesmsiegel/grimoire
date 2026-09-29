@@ -172,6 +172,41 @@ test("Finish on the opener step navigates to the campaign", async () => {
   expect(navigate).toHaveBeenCalledWith("/campaigns/run");
 });
 
+test("a failed wizard opener retries only unfinished speakers", async () => {
+  const cast = [
+    { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
+    { actor_ref: "characters:mara", speaker: "Mara", version: "default" },
+  ];
+  const narrator = { ...cast[0], content: "Rain falls." };
+  (api.opener as any).mockImplementationOnce(async (_cid: string, _sid: string,
+                                                _prompt: string, on: (event: unknown) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_done: narrator });
+    on({ speaker_start: cast[1] });
+    on({ delta: "unfinished" });
+    on({ error: { kind: "rate_limit", detail: "Wait" } });
+  }).mockImplementationOnce(async (_cid: string, _sid: string,
+                             _prompt: string, on: (event: unknown) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_done: { ...cast[1], content: "I wait." } });
+    on({ done: true });
+  });
+  renderWizard(true);
+  await fillBackdropAndPC();
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await screen.findByRole("heading", { name: /opening/i });
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "Arrive" } });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  const retry = await screen.findByRole("button", { name: "Retry remaining speakers" });
+  expect(screen.getByText("**Grimoire:** Rain falls.")).toBeInTheDocument();
+  expect(screen.queryByText(/unfinished/)).toBeNull();
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.opener).toHaveBeenCalledTimes(2));
+  expect(api.opener).toHaveBeenLastCalledWith("run", "s1", "Arrive", expect.any(Function),
+                                            undefined, [narrator], cast);
+  expect(await screen.findByText(/I wait\./)).toBeInTheDocument();
+});
+
 test("a world with PCs offers them in step 2; picking one seats it and skips PC creation", async () => {
   (api.listPCs as any).mockResolvedValue([
     { id: "mara", name: "Mara", tags: ["rebel"], default_version: "default", versions: [] },

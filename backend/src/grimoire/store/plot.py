@@ -160,7 +160,7 @@ def _field(value, fallback: str = "") -> str:
     return fieldtext.text(value, fallback)
 
 
-def open_threads(cid: str) -> list[dict]:
+def open_threads(cid: str, include_closed: bool = False) -> list[dict]:
     # `isinstance(t, dict)`, and `_field` inside the sort key: a record that is
     # not a mapping has no `.get`, and a list-valued `last_scene` makes the
     # comparison raise -- either one costs every OTHER thread its row, since the
@@ -172,7 +172,8 @@ def open_threads(cid: str) -> list[dict]:
     # rescue a hand-edited `"Closed"` and cannot reinterpret anything the
     # pipeline produced. Stripping without folding was the gap that pass left.
     items = [(pid, t) for pid, t in read(cid).items()
-             if isinstance(t, dict) and _field(t.get("status")).lower() != "closed"]
+             if isinstance(t, dict) and
+             (include_closed or _field(t.get("status")).lower() != "closed")]
     items.sort(key=lambda kt: (_field(kt[1].get("last_scene")), kt[0]))
     out = []
     for pid, t in items:

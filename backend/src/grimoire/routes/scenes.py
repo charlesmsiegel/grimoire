@@ -4324,11 +4324,12 @@ def post_emergent_cast(cid: str, sid: str, body: EmergentCast, request: Request)
     # be settled before the create, or a rejected seat leaves an unseated
     # character in the campaign that nothing points at.
     role = _cast_role(cid, sid, "characters", body.role)
-    try:
-        store.actor_names.require_unique(name, scope="campaign", scope_id=cid)
-    except store.actor_names.ActorNameError as exc:
-        raise HTTPException(409, detail=str(exc)) from exc
-    char, version = store.overlay.create_character(cid, name)
+    with store.locks.campaign_lock(cid):
+        try:
+            store.actor_names.require_unique(name, scope="campaign", scope_id=cid)
+        except store.actor_names.ActorNameError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        char, version = store.overlay.create_character(cid, name)
     try:
         # The seat is the transcript-touching half (`appear` appends a
         # transition), so the guard belongs around it rather than around the

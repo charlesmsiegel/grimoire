@@ -3408,6 +3408,13 @@ a.column-back { text-decoration: none; }
    disagree about. */
 .ledger-table tr.retired td { opacity: 0.55; }
 .ledger-table tr.retired .ledger-what { text-decoration: line-through; }
+.ledger-table tr.complete .ledger-what { color: var(--muted); }
+.ledger-status {
+  display: inline-block; margin-top: 5px; padding: 2px 6px;
+  border: 1px solid var(--subtle); border-radius: 3px;
+  color: var(--muted); font-family: var(--fm); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
 
 /* ---- editing a row by hand ---- */
 /* Until these controls the only writer of any of this was the absorb pass, so

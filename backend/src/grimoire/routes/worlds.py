@@ -438,15 +438,16 @@ def get_world_pcs(wid: str):
 @router.post("/worlds/{wid}/pcs")
 def post_world_pc(wid: str, body: PCCreate):
     root = _world_root_or_404(wid)
-    try:
-        store.actor_names.require_unique(body.name, scope="world", scope_id=wid)
-        if body.persona:
-            store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
-                                             scope="world", scope_id=wid)
-    except store.actor_names.ActorNameError as exc:
-        raise HTTPException(409, detail=str(exc)) from exc
     _validate_tags(root, body.tags)
-    pid, vid = store.pcs.create_pc(root, body.name, body.tags, body.version_name, body.persona)
+    with store.locks.world_actor_lock(wid):
+        try:
+            store.actor_names.require_unique(body.name, scope="world", scope_id=wid)
+            if body.persona:
+                store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                                 scope="world", scope_id=wid)
+        except store.actor_names.ActorNameError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        pid, vid = store.pcs.create_pc(root, body.name, body.tags, body.version_name, body.persona)
     return {"pc": pid, "version": vid}
 
 
@@ -468,15 +469,22 @@ def put_world_pc(wid: str, pid: str, body: PCUpdate):
         # than after. No write token is involved on this side -- a world route
         # stamps none -- but a 404 that has already changed the record is the
         # same defect either way.
-        if body.default_version is not None:
-            store.pcs.set_default_version(root, pid, body.default_version)
-        if body.tags is not None:
-            _validate_tags(root, body.tags)
-            store.pcs.set_tags(root, pid, body.tags)
+        with store.locks.world_actor_lock(wid):
+            if body.default_version is not None:
+                selected = store.pcs.read_persona(root, pid, body.default_version)
+                store.actor_names.require_unique(store.actor_names.persona_name(selected),
+                                                 scope="world", scope_id=wid,
+                                                 actor_ref=f"pcs:{pid}")
+                store.pcs.set_default_version(root, pid, body.default_version)
+            if body.tags is not None:
+                _validate_tags(root, body.tags)
+                store.pcs.set_tags(root, pid, body.tags)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
 
 

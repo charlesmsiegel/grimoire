@@ -192,7 +192,9 @@ def recorded_after(rec, scene: str) -> bool:
     row labelled "New fact" and can act on, where the bug it replaces silently
     deleted a standing truth.
     """
-    return isinstance(rec, dict) and _field(rec.get("scene")) > scene
+    # A manual retirement has no scene anchor; its empty value means "now",
+    # not a scene earlier than every recorded fact in the campaign.
+    return bool(scene) and isinstance(rec, dict) and _field(rec.get("scene")) > scene
 
 
 def _next_id(data: dict) -> str:

@@ -6,6 +6,7 @@ import { Portrait } from "./Portrait";
 
 const serialize = (parts: OpenerContribution[]) =>
   parts.map((part) => `**${part.speaker}:** ${part.content}`).join("\n\n");
+const generatedCount = (cast: OpenerSpeaker[]) => cast.filter((actor) => actor.role !== "player").length;
 
 /** The "Generate an opener" block: stream a first post for an empty scene,
  *  then adopt it or keep it as a greeting. Split out of `CastPanel`. */
@@ -122,7 +123,7 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   }
 
   async function useOpener() {
-    if (!opener.trim() || busy || !complete || parts.length !== snapshot.length) return;
+    if (!opener.trim() || busy || !complete || parts.length !== generatedCount(snapshot)) return;
     onError(null);
     try {
       await api.firstPost(cid, sid, opener, parts, snapshot);
@@ -135,7 +136,7 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   }
 
   async function saveAsGreeting() {
-    if (!opener.trim() || !target || !complete || parts.length !== snapshot.length) return;
+    if (!opener.trim() || !target || !complete || parts.length !== generatedCount(snapshot)) return;
     const name = window.prompt("Name this greeting?", "Opener")?.trim();
     if (!name) return;
     onError(null);
@@ -202,9 +203,9 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
           </div>
           <div className="form-actions">
             <button className="primary" onClick={useOpener}
-              disabled={busy || !complete || parts.length !== snapshot.length}>Use</button>
+              disabled={busy || !complete || parts.length !== generatedCount(snapshot)}>Use</button>
             <button className="subtle" onClick={saveAsGreeting}
-              disabled={!target || !complete || parts.length !== snapshot.length}
+              disabled={!target || !complete || parts.length !== generatedCount(snapshot)}
                     title={target ? "" : "Pick a character to attach the saved greeting to"}>
               Save as greeting
             </button>

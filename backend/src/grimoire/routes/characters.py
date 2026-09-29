@@ -81,16 +81,17 @@ def get_world_characters(wid: str):
 
 @router.post("/worlds/{wid}/characters")
 def post_world_character(wid: str, body: CharacterCreate):
-    try:
-        store.actor_names.require_unique(body.name, scope="world", scope_id=wid)
-        if body.card:
-            store.actor_names.require_unique(store.actor_names.card_name(body.card),
-                                             scope="world", scope_id=wid)
-    except store.actor_names.ActorNameError as exc:
-        raise HTTPException(409, detail=str(exc)) from exc
-    cid, vid = store.characters.create_character(
-        _world_root_or_404(wid), body.name, body.version_name, body.card
-    )
+    with store.locks.world_actor_lock(wid):
+        try:
+            store.actor_names.require_unique(body.name, scope="world", scope_id=wid)
+            if body.card:
+                store.actor_names.require_unique(store.actor_names.card_name(body.card),
+                                                 scope="world", scope_id=wid)
+        except store.actor_names.ActorNameError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        cid, vid = store.characters.create_character(
+            _world_root_or_404(wid), body.name, body.version_name, body.card
+        )
     return {"character": cid, "version": vid}
 
 
@@ -110,11 +111,19 @@ def get_world_character(wid: str, cid: str):
 @router.put("/worlds/{wid}/characters/{cid}")
 def put_world_character(wid: str, cid: str, body: DefaultVersion):
     try:
-        store.characters.set_default_version(_world_root_or_404(wid), cid, body.default_version)
+        with store.locks.world_actor_lock(wid):
+            root = _world_root_or_404(wid)
+            selected = store.characters.read_card(root, cid, body.default_version)
+            store.actor_names.require_unique(store.actor_names.card_name(selected),
+                                             scope="world", scope_id=wid,
+                                             actor_ref=f"characters:{cid}")
+            store.characters.set_default_version(root, cid, body.default_version)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
 
 

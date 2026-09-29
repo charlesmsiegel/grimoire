@@ -85,7 +85,7 @@ export type ChatEvent = {
   error?: { detail: string; kind: string; post_returned?: boolean };
 };
 
-export type OpenerSpeaker = { actor_ref: string; speaker: string; version: string };
+export type OpenerSpeaker = { actor_ref: string; speaker: string; version: string; role?: "player" };
 export type OpenerContribution = OpenerSpeaker & { content: string };
 
 export type LocalizeSummary = {

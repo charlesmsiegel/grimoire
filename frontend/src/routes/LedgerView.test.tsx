@@ -550,8 +550,29 @@ const OWED = {
     { id: "pay", title: "Pay the Reeve", status: "open", kind: "promise",
       due: "midnight", last_scene: "004", latest_beat: "", aging: ok,
       scene: scene("004", "The Priory Door") },
+    { id: "done", title: "Debt repaid", status: "fulfilled", kind: "promise",
+      due: "", last_scene: "009", latest_beat: "Repaid", aging: ok,
+      scene: scene("009", "The Long Tide") },
   ],
 };
+
+test("completed threads and commitments show clear status when history is enabled", async () => {
+  await at(/Threads/, THREADS);
+  expect(screen.queryByText("The debt, settled")).toBeNull();
+  fireEvent.click(column().getByRole("checkbox", { name: /show retired and completed/i }));
+  const closed = rowFor(/The debt, settled/);
+  expect(closed).toHaveClass("complete");
+  expect(closed).toHaveTextContent("Closed");
+});
+
+test("fulfilled commitments remain identifiable in history", async () => {
+  await at(/Commitments/, OWED);
+  expect(screen.queryByText("Debt repaid")).toBeNull();
+  fireEvent.click(column().getByRole("checkbox", { name: /show retired and completed/i }));
+  const done = rowFor(/Debt repaid/);
+  expect(done).toHaveClass("complete");
+  expect(done).toHaveTextContent("fulfilled");
+});
 
 const BONDS = {
   ...EMPTY,
@@ -603,6 +624,7 @@ test("a thread closes from its own row, without opening anything", async () => {
 
 test("a thread that is already closed offers no Close", async () => {
   await at(/Threads/, THREADS);
+  fireEvent.click(column().getByRole("checkbox", { name: /show retired and completed/i }));
   const row = rowFor(/The debt, settled/);
   expect(within(row).queryByRole("button", { name: "Close" })).toBeNull();
   expect(within(row).getByRole("button", { name: /^Edit / })).toBeTruthy();

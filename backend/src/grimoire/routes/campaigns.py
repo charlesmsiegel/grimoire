@@ -1585,8 +1585,10 @@ def get_ledger(cid: str):
             chron = store.chronicle.read_chronicle(cid)
         except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
             chron = {}
-        open_threads = _tolerant(lambda: store.plot.open_threads(cid))
-        owed = _tolerant(lambda: store.commitments.open_commitments(cid))
+        # The ledger can show finished rows on demand; prompt context still
+        # uses the default open-only projections from these store readers.
+        open_threads = _tolerant(lambda: store.plot.open_threads(cid, include_closed=True))
+        owed = _tolerant(lambda: store.commitments.open_commitments(cid, include_resolved=True))
         standing = _tolerant(lambda: store.facts.active(cid))
         ended = _tolerant(lambda: store.facts.retired(cid))
         # The whole projection sits inside `_tolerant`, not just the read: it
@@ -2126,12 +2128,20 @@ def post_campaign_voice_anchor_generate(
 def put_campaign_character(cid: str, char: str, body: DefaultVersion):
     _campaign_root_or_404(cid)
     try:
-        root = store.overlay.ensure_actor_writable(cid, "characters", char)
-        store.characters.set_default_version(root, char, body.default_version)
+        with store.locks.campaign_lock(cid):
+            selected = store.characters.read_card(store.overlay.char_root(cid, char),
+                                                  char, body.default_version)
+            store.actor_names.require_unique(store.actor_names.card_name(selected),
+                                             scope="campaign", scope_id=cid,
+                                             actor_ref=f"characters:{char}")
+            root = store.overlay.ensure_actor_writable(cid, "characters", char)
+            store.characters.set_default_version(root, char, body.default_version)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -2270,28 +2280,36 @@ def put_campaign_pc(cid: str, pid: str, body: PCUpdate):
     # Campaign tags are free strings: no world-vocabulary check on this side.
     _campaign_root_or_404(cid)
     try:
-        root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
-        # The VERSION first, and that order is the fix rather than a
-        # preference: `set_default_version` validates before it writes
-        # (`require_version`), so an unknown or concurrently deleted version
-        # now refuses before anything has been saved. The other way round, the
-        # tags were already committed when the 404 went out -- a durable change
-        # answered non-2xx, which is the one shape a deliberate refusal shares
-        # with a crash and the one the middleware's failure stamp cannot see,
-        # because an `HTTPException` is a response rather than a raise (Codex
-        # review). Not stamped but PREVENTED: with nothing written there is
-        # nothing to record.
-        #
-        # The end state is unchanged when both are supplied: `set_tags` re-reads
-        # the metadata, so it carries the new default forward.
-        if body.default_version is not None:
-            store.pcs.set_default_version(root, pid, body.default_version)
-        if body.tags is not None:
-            store.pcs.set_tags(root, pid, body.tags)
+        with store.locks.campaign_lock(cid):
+            if body.default_version is not None:
+                selected = store.pcs.read_persona(store.overlay.pc_root(cid, pid),
+                                                  pid, body.default_version)
+                store.actor_names.require_unique(store.actor_names.persona_name(selected),
+                                                 scope="campaign", scope_id=cid,
+                                                 actor_ref=f"pcs:{pid}")
+            root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
+            # The VERSION first, and that order is the fix rather than a
+            # preference: `set_default_version` validates before it writes
+            # (`require_version`), so an unknown or concurrently deleted version
+            # now refuses before anything has been saved. The other way round, the
+            # tags were already committed when the 404 went out -- a durable change
+            # answered non-2xx, which is the one shape a deliberate refusal shares
+            # with a crash and the middleware's failure stamp cannot see (Codex
+            # review). Not stamped but PREVENTED: with nothing written there is
+            # nothing to record.
+            #
+            # The end state is unchanged when both are supplied: `set_tags` re-reads
+            # the metadata, so it carries the new default forward.
+            if body.default_version is not None:
+                store.pcs.set_default_version(root, pid, body.default_version)
+            if body.tags is not None:
+                store.pcs.set_tags(root, pid, body.tags)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -2459,15 +2477,22 @@ def post_pick_version(cid: str, kind: str, aid: str, body: PickBody):
     _campaign_root_or_404(cid)
     if kind not in store.appearances.ACTOR_KINDS:
         raise HTTPException(status_code=404, detail="unknown actor kind")
-    if store.appearances.locked_version(cid, kind, aid) is not None:
-        # checked before existence: the sibling versions were purged by the pick
-        raise HTTPException(status_code=409, detail=f"{kind}/{aid} is already locked")
-    if store.appearances.actor_hash(store.overlay.actor_root(cid, kind, aid), kind, aid, body.version) is None:
-        raise HTTPException(status_code=404, detail="actor or version not found in campaign")
-    try:
-        store.appearances.pick_version(cid, kind, aid, body.version)
-    except store.appearances.AppearError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+    with store.locks.campaign_lock(cid):
+        if store.appearances.locked_version(cid, kind, aid) is not None:
+            # checked before existence: the sibling versions were purged by the pick
+            raise HTTPException(status_code=409, detail=f"{kind}/{aid} is already locked")
+        root = store.overlay.actor_root(cid, kind, aid)
+        if store.appearances.actor_hash(root, kind, aid, body.version) is None:
+            raise HTTPException(status_code=404, detail="actor or version not found in campaign")
+        selected = (store.actor_names.card_name(store.characters.read_card(root, aid, body.version))
+                    if kind == "characters" else
+                    store.actor_names.persona_name(store.pcs.read_persona(root, aid, body.version)))
+        try:
+            store.actor_names.require_unique(selected, scope="campaign", scope_id=cid,
+                                             actor_ref=f"{kind}:{aid}")
+            store.appearances.pick_version(cid, kind, aid, body.version)
+        except (store.actor_names.ActorNameError, store.appearances.AppearError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
 
 

@@ -1,4 +1,9 @@
+{%- if response_actor is defined and response_actor %}
 {#- The application already knows the assigned actor and writes the transcript label. -#}
 Write continuous prose for the assigned speaker. The application supplies their name; omit speaker labels and script headings.
+{%- else %}
+{#- An unresolved roll from before actor-scoped rounds has no assigned speaker. -#}
+For this legacy continuation, begin each speaker's block with **Full Name:** on its own line. Use **Grimoire:** for narration. Keep each character's prose under their own label so the transcript can assign it correctly.
+{%- endif %}
 Enclose spoken dialogue in double quotation marks. Keep actions and narration outside the quotation marks, in ordinary prose.
 {%- if player_names %} Never write dialogue or actions for: {{ player_names | join(", ") }}.{% endif -%}

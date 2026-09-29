@@ -61,14 +61,15 @@ def test_a_thread_needs_a_title(client, cid):
     assert client.post(f"/api/campaigns/{cid}/ledger/threads", json={"title": "  "}).status_code == 400
 
 
-def test_closing_a_thread_takes_it_off_the_open_list(client, cid):
+def test_closing_a_thread_keeps_its_status_visible_in_the_ledger(client, cid):
     # The request that started all of this: a thread the absorb never noticed
     # had ended.
     pid = client.post(f"/api/campaigns/{cid}/ledger/threads",
                       json={"title": "The debt to the Reeve"}).json()["id"]
     r = client.put(f"/api/campaigns/{cid}/ledger/threads/{pid}", json={"status": "closed"})
     assert r.status_code == 200, r.text
-    assert client.get(f"/api/campaigns/{cid}/ledger").json()["plot"] == []
+    assert [row["status"] for row in client.get(f"/api/campaigns/{cid}/ledger").json()["plot"]] == ["closed"]
+    assert store.plot.open_threads(cid) == []
     assert store.plot.get(cid, pid)["status"] == "closed"
 
 
@@ -130,7 +131,8 @@ def test_a_commitment_can_be_written_and_marked_done(client, cid):
     assert store.commitments.get(cid, mid)["due"] == "the spring tides"
     client.put(f"/api/campaigns/{cid}/ledger/commitments/{mid}", json={"status": "fulfilled"})
     assert store.commitments.get(cid, mid)["status"] == "fulfilled"
-    assert client.get(f"/api/campaigns/{cid}/ledger").json()["commitments"] == []
+    assert [row["status"] for row in client.get(f"/api/campaigns/{cid}/ledger").json()["commitments"]] == ["fulfilled"]
+    assert store.commitments.open_commitments(cid) == []
 
 
 def test_a_due_date_is_three_valued_all_the_way_down(client, cid):
@@ -226,6 +228,14 @@ def test_retiring_a_fact_moves_it_to_the_retired_half(client, cid):
     assert body["facts"] == []
     assert [f["text"] for f in body["retired"]] == ["The gate is watched"]
     assert store.facts.get(cid, fid)["retired_scene"] == "s4"
+
+
+def test_retire_button_without_a_scene_retires_a_dated_fact(client, cid):
+    fid = client.post(f"/api/campaigns/{cid}/ledger/facts",
+                      json={"text": "The gate is watched", "scene": "s1"}).json()["id"]
+    response = client.post(f"/api/campaigns/{cid}/ledger/facts/{fid}/retire", json={"scene": ""})
+    assert response.status_code == 200, response.text
+    assert store.facts.get(cid, fid)["status"] == "retired"
 
 
 def test_retiring_an_already_retired_fact_says_so(client, cid):

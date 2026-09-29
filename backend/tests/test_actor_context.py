@@ -267,9 +267,11 @@ def test_reply_format_never_asks_for_script_labels(cast_scene, actor_ref):
                              if row["id"] == "response_format")
     combined_format = next(row["text"] for row in combined["sections"]
                            if row["id"] == "response_format")
-    # Labels belong to transcript serialization, never model-authored prose.
+    # Assigned calls never ask the model to provide a label. A stored roll
+    # proposal from before actor-scoped rounds still has no assigned speaker,
+    # so its compatibility continuation needs the parser's marker grammar.
     assert "**<Name>:**" not in individual_format
-    assert "**<Name>:**" not in combined_format
+    assert "**Full Name:**" in combined_format
 
 
 @pytest.mark.parametrize("actor_ref", ["characters:mara", "grimoire"])

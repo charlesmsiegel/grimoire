@@ -91,3 +91,68 @@ def test_simultaneous_campaign_creates_cannot_claim_the_same_name(client, monkey
         release.set()
         statuses = sorted((first.result().status_code, second.result().status_code))
     assert statuses == [200, 409]
+
+
+def test_simultaneous_world_character_and_pc_cannot_claim_the_same_name(client, monkeypatch):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    entered = threading.Event()
+    release = threading.Event()
+    real_create = store.pcs.create_pc
+
+    def delayed_create(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(store.pcs, "create_pc", delayed_create)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(client.post, f"/api/worlds/{wid}/pcs",
+                            json={"name": "Mara", "tags": []})
+        assert entered.wait(5)
+        second = pool.submit(client.post, f"/api/worlds/{wid}/characters",
+                             json={"name": "mara"})
+        time.sleep(0.05)
+        release.set()
+        statuses = sorted((first.result().status_code, second.result().status_code))
+    assert statuses == [200, 409]
+
+
+def test_simultaneous_emergent_casts_cannot_claim_the_same_name(client, monkeypatch):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Opening"}).json()["id"]
+    entered = threading.Event()
+    release = threading.Event()
+    real_create = store.overlay.create_character
+
+    def delayed_create(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(store.overlay, "create_character", delayed_create)
+    path = f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(client.post, path, json={"name": "Mara"})
+        assert entered.wait(5)
+        second = pool.submit(client.post, path, json={"name": "mara"})
+        time.sleep(0.05)
+        release.set()
+        statuses = sorted((first.result().status_code, second.result().status_code))
+    assert statuses == [200, 409]
+
+
+def test_legacy_colliding_version_cannot_be_selected(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    actor = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()
+    client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred", "tags": []})
+    vid = store.characters.create_version(store.worlds.world_root(wid), actor["character"],
+                                          "legacy", store.characters.blank_card("Winifred"))
+    world_pick = client.put(f"/api/worlds/{wid}/characters/{actor['character']}",
+                            json={"default_version": vid})
+    assert world_pick.status_code == 409
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    campaign_pick = client.post(
+        f"/api/campaigns/{cid}/characters/{actor['character']}/pick-version",
+        json={"version": vid})
+    assert campaign_pick.status_code == 409

@@ -229,7 +229,7 @@ def _field(value, fallback: str = "") -> str:
     return fieldtext.text(value, fallback)
 
 
-def open_commitments(cid: str) -> list[dict]:
+def open_commitments(cid: str, include_resolved: bool = False) -> list[dict]:
     # `_field` here too, not the raw value: every row this returns is projected
     # through it, so `"status": " fulfilled "` would be *shown* as fulfilled
     # while this predicate read it as something unrecognized and kept it on the
@@ -242,7 +242,8 @@ def open_commitments(cid: str) -> list[dict]:
     # member of `STATUSES`), so folding can only ever rescue a hand-edited one
     # -- it cannot reinterpret anything the pipeline produced.
     items = [(mid, c) for mid, c in read(cid).items()
-             if isinstance(c, dict) and _field(c.get("status")).lower() not in RESOLVED]
+             if isinstance(c, dict) and
+             (include_resolved or _field(c.get("status")).lower() not in RESOLVED)]
     items.sort(key=lambda mc: (_field(mc[1].get("last_scene")), mc[0]))
     out = []
     for mid, c in items:
