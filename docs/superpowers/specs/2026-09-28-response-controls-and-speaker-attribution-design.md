@@ -42,8 +42,10 @@ the old opener had its own independent shape rule.
 
 ## Generation and transcript flow
 
-The continuation engine already selects an actor before calling the model.
-Make individual actor generation the only active path. Prompts for an assigned
+Normal scene continuations already generate one actor at a time by default:
+the continuation engine selects an actor before each model call. The optional
+combined mode is the legacy exception. Make the existing individual path the
+only active continuation path. Prompts for an assigned
 NPC or narrator request unlabeled prose, spoken dialogue in quotes, and no
 actions or dialogue for PCs. Remove instructions that ask the model to divide
 a response into `**CharacterName:**` blocks. The application uses the selected
@@ -51,6 +53,9 @@ actor's canonical full name when saving a response in the existing transcript
 format. Any internal handoff protocol remains separate from reader-visible
 prose.
 
+Generated openers are the remaining combined call today. Change that route to
+reuse the individual path's actor-scoped prompt composition and speaker
+attribution, while retaining the opener's draft-before-adoption lifecycle.
 An opener draft is one sequence: a narrator generation using Opening targets,
 then one generation for every present NPC using Continuation targets. The
 sequence follows the scene's stable cast order. Each call receives the full
@@ -61,10 +66,10 @@ name, and prose; the stream identifies the current speaker before its text
 deltas. The UI previews each contribution under its known speaker and portrait.
 Acceptance is one scene operation: validate that the scene is still empty and
 the planned speaker identities, names, and locked versions still match, then
-serialize every contribution as
-the same `**Name:**` transcript blocks used today. It must not persist a
-partial opening. Saving a complete draft as a greeting serializes the same
-canonical labels into the existing greeting body format. Existing greetings
+serialize every contribution as the same `**Name:**` transcript blocks used
+today. It must not persist a partial opening. Saving a complete draft as a
+greeting serializes the same canonical labels into the existing greeting body
+format. Existing greetings
 and manually authored first posts continue to work.
 
 A failed or interrupted generation leaves completed contributions visible as
