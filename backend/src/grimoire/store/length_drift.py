@@ -86,8 +86,17 @@ def _paragraphs(content: str) -> int:
 def measure_contributions(messages: list[dict], speaker: str, target: dict,
                           window: int = WINDOW) -> dict | None:
     """Recent prose by one known speaker, for actor-scoped response control."""
-    recent = [m for m in messages if _is_model_block(m)
-              and str(m.get("speaker", "")).casefold() == speaker.casefold()][-window:]
+    # Migrated assistant posts can acquire ledger ids, but have no frozen
+    # generation snapshot and therefore cannot establish that this speaker
+    # ignored a target. Current generated responses carry both markers.
+    def matches(m: dict) -> bool:
+        if speaker == "Grimoire":
+            return m.get("speaker") is None
+        return str(m.get("speaker", "")).casefold() == speaker.casefold()
+
+    recent = [m for m in messages if _is_model_block(m) and m.get("response_id")
+              and m.get("response_can_reroll")
+              and matches(m)][-window:]
     if not recent:
         return None
     totals = [_words(m["content"]) for m in recent]

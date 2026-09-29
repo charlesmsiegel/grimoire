@@ -94,10 +94,14 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
         } else if (e.done) {
           setComplete(true);
         } else if (e.error) {
+          active = null;
+          acc = "";
+          setOpener(serialize(assembled));
           onError(e.error);
         }
       }, undefined, existing, currentSnapshot);
     } catch (err: unknown) {
+      setOpener(serialize(assembled));
       onError(err);
     } finally {
       setBusy(false);

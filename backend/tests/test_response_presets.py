@@ -1,5 +1,8 @@
 import pytest
+from fastapi import HTTPException
 
+from grimoire.routes.common import _turn_override
+from grimoire.routes.models import ChatTurn
 from grimoire.store import response_presets as rp
 from grimoire.store import response_targets
 
@@ -11,6 +14,13 @@ def test_response_targets_default_and_reject_nonpositive_writes(client):
     assert response.json()["effective"]["continuation"] == {"words": 150, "paragraphs": 2}
     invalid = client.put("/api/response", json={"response_continuation_words": "0"})
     assert invalid.status_code == 400
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "1e2", " "])
+def test_one_shot_response_rejects_invalid_targets(value):
+    with pytest.raises(HTTPException) as exc:
+        _turn_override(ChatTurn(response={"response_continuation_words": value}))
+    assert exc.value.status_code == 400
 
 
 def test_response_targets_new_values_outrank_legacy_and_inherit_per_field(tmp_path, monkeypatch):

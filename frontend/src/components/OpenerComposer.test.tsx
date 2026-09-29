@@ -126,3 +126,25 @@ test("a failed later contribution keeps Use disabled and retries only the missin
     expect.any(Function), undefined, [{ ...cast[0], content: "Rain falls." }], cast));
   expect(screen.getByRole("button", { name: "Use" })).toBeEnabled();
 });
+
+test("a failed contribution leaves only completed speakers in the preview", async () => {
+  const cast = [
+    { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
+    { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
+  ];
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
+                                             on: (e: any) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_start: cast[0] });
+    on({ speaker_done: { ...cast[0], content: "Rain falls." } });
+    on({ speaker_start: cast[1] });
+    on({ delta: "An unfinished sentence" });
+    on({ error: { kind: "network", detail: "Connection lost" } });
+  });
+  renderComposer({ initialPrompt: "A meeting." });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  await screen.findByRole("button", { name: "Retry remaining speakers" });
+  expect(screen.getByText("Rain falls.")).toBeInTheDocument();
+  expect(screen.queryByText(/An unfinished sentence/)).toBeNull();
+  expect(screen.getByRole("button", { name: "Use" })).toBeDisabled();
+});

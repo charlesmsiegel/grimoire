@@ -284,9 +284,8 @@ def frozen_client(frozen_home):
 
 
 def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client):
-    # This cassette demonstrates the historical combined-cast prompt.
-    # Individual NPC privacy is exercised separately with actor-owned evidence.
-    frozen_client.put("/api/config", json={"character_response_mode": "combined"})
+    # This cassette answers the actor-scoped prompt with prose for the
+    # selected speaker; the transcript still keeps its familiar block shape.
     before = len(frozen_client.get(f"/api/campaigns/{CAMPAIGN}/scenes/{SCENE}").json()["messages"])
     resp = frozen_client.post(f"/api/campaigns/{CAMPAIGN}/scenes/{SCENE}/chat",
                               json={"content": "I have brought the salt."})
@@ -299,12 +298,14 @@ def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client
     # The reply is stored one message per speaker block, so assert on the text
     # rather than on a count the serializer owns.
     reply = "\n".join(m["content"] for m in messages[before + 1:])
-    assert "Salt first" in reply and "over the lower step" in reply
+    assert "Salt first" in reply and "wet page faces you" in reply
     assert [m["role"] for m in messages[before + 1:]] == ["assistant"] * (len(messages) - before - 1)
     # and the request the route built carried the frozen campaign's own state
     system = frozen_client.llm.messages[0]["content"]
     assert "The drowned keeper of the tide ledger." in system
-    assert "Winifred touched the ledger." in system
+    # A named NPC receives only what they can observe; the old whole-cast
+    # prompt included player-only history that this actor view omits.
+    assert "Winifred touched the ledger." not in system
 
 
 def test_absorbing_a_frozen_scene_stages_the_movements_it_reports(frozen_client):

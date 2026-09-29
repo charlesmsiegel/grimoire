@@ -431,10 +431,8 @@ def test_prompt_contract_flags_an_instruction_that_left_the_prompt():
 
 
 def test_prompt_section_covers_every_value_the_section_interpolates():
-    """The point of rendering the template instead of naming a needle: all five
-    knobs are covered, so changing any one of them is detected."""
-    budget = {"reply_words": 150, "blocks": 3, "paragraphs": 1,
-              "speakers": 2, "blocks_per_speaker": 1}
+    """The prompt check tracks both current contribution targets."""
+    budget = {"words": 150, "paragraphs": 1}
     rendered = prompts.render("scene/sections/response_budget.j2", budget=budget)
     messages = [{"role": "system", "content": f"preamble\n\n{rendered.strip()}\n\ntail"}]
     assert failed(graders.grade_prompt_section(
@@ -448,8 +446,7 @@ def test_prompt_section_covers_every_value_the_section_interpolates():
 
 
 def test_prompt_section_flags_a_section_that_left_the_prompt():
-    budget = {"reply_words": 150, "blocks": 3, "paragraphs": 1,
-              "speakers": 2, "blocks_per_speaker": 1}
+    budget = {"words": 150, "paragraphs": 1}
     messages = [{"role": "system", "content": "be vivid"}]
     assert failed(graders.grade_prompt_section(
         messages, "budget", "scene/sections/response_budget.j2",

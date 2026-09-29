@@ -165,8 +165,9 @@ def test_a_reply_written_as_json_instead_of_as_a_string_is_rejected():
 
 async def test_a_cassette_reply_can_be_streamed_as_deltas():
     fake = from_cassette("campaign_flow")
-    deltas = await _drain(fake, [{"role": "system", "content": "Write your reply as a script."}])
-    assert len(deltas) > 1 and "".join(deltas).startswith("**Seraphine:**")
+    deltas = await _drain(fake, [{"role": "system", "content":
+                                  "Write continuous prose for the assigned speaker."}])
+    assert len(deltas) > 1 and "".join(deltas).startswith('"Salt first,')
 
 
 async def test_from_entries_answers_by_shape_not_order():

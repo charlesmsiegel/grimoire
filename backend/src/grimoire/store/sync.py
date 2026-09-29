@@ -24,7 +24,7 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import atomic, characters, entities, greetings, locks, overlay, pcs, revision
+from . import actor_names, atomic, characters, entities, greetings, locks, overlay, pcs, revision
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import lifecycle as campaigns_lifecycle
@@ -806,6 +806,18 @@ def _promote_actor(cid: str, kind: str, aid: str, wroot: Path) -> None:
     taken = overlay.actor_snapshot(cid, kind, aid)
     if taken is None:
         raise _actor_missing(kind, aid)
+    # Promotion changes what every campaign of this world can see. Validate
+    # every name in the promoted record before the first world-side write.
+    detail = (overlay.read_character(cid, aid) if kind == "characters"
+              else overlay.read_pc(cid, aid))
+    names = [detail["meta"]["name"]]
+    names.extend(actor_names.card_name(v["card"]) if kind == "characters"
+                 else actor_names.persona_name(v["persona"])
+                 for v in detail["versions"])
+    world_id = campaigns_read.read_campaign(cid)["meta"]["world"]
+    for name in names:
+        actor_names.require_unique(name, scope="world", scope_id=world_id,
+                                   actor_ref=f"{kind}:{aid}", ignore_campaign=cid)
     base, files = taken
     meta_name = _actor_meta_name(kind)
     ref = _ref_str(kind, aid)

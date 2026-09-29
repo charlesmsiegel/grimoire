@@ -296,9 +296,8 @@ def test_a_misrouted_extraction_still_refuses_the_whole_absorb(client):
 def test_a_scene_turn_and_its_retry_share_the_one_route(client):
     """#142 named the scene turn's retries and director turns as part of ONE
     task, so a reader who sets "Scene turns" gets all of them."""
-    # Legacy retry may regenerate a completed turn. Individual retry requires
-    # an unfinished contribution, covered by the character-turn engine tests.
-    client.put("/api/config", json={"character_response_mode": "combined"})
+    # A completed contribution is rerolled through its response identity;
+    # /retry is reserved for an unfinished one.
     _wid, cid, sid = _seed(client)
     routed = _connection(client, "prose")
     client.put("/api/routing", json={"routes": {"scene": routed}})
@@ -307,7 +306,10 @@ def test_a_scene_turn_and_its_retry_share_the_one_route(client):
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "hello"}) as r:
         _drain(r)
-    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/retry", json={}) as r:
+    messages = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    rid = next(m["response_id"] for m in reversed(messages) if m.get("response_id"))
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate",
+                       json={}) as r:
         _drain(r)
 
     assert {req["conn"]["id"] for req in fake.requests} == {routed}

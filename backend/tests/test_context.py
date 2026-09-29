@@ -1885,8 +1885,11 @@ def _bloat(cid, sid, turns, words):
     characters.create_character(campaigns.campaign_root(cid), "Mara", "default",
                                 characters.blank_card("Mara"))
     ap.appear(cid, sid, "characters", "mara", "default", "npc")
-    for _ in range(turns):
-        scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "w " * words}])
+    for n in range(turns):
+        scenes.append_messages(cid, sid, [{"role": "assistant", "speaker": "Mara",
+                                          "content": "w " * words,
+                                          "response_id": f"generated-{n}",
+                                          "response_can_reroll": True}])
 
 
 def test_no_corrective_on_a_fresh_scene(monkeypatch, tmp_path):
@@ -3973,7 +3976,10 @@ def test_voice_corrective_precedes_the_length_corrective(monkeypatch, tmp_path):
     voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")
     # Three turns far over any budget -> the length corrective renders too.
     for _ in range(3):
-        scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "word " * 4000}])
+        scenes.append_messages(cid, sid, [{"role": "assistant", "speaker": "Winifred",
+                                          "content": "word " * 4000,
+                                          "response_id": "generated-winifred",
+                                          "response_can_reroll": True}])
     last = context.compose_turn(cid, sid, actor_ref="characters:winifred")[0][-1]["content"]
     assert "have run long" in last, "expected the length corrective to render too"
     assert last.index("drifted out of voice") < last.index("have run long")
