@@ -1,5 +1,17 @@
 from grimoire.store import length_drift, scenes
 
+
+def test_actor_drift_counts_only_that_speakers_recent_contributions():
+    messages = [
+        {"role": "assistant", "speaker": "Mara", "content": "word " * 210},
+        {"role": "assistant", "speaker": "Winifred", "content": "word " * 500},
+    ]
+    measured = length_drift.measure_contributions(
+        messages, "Mara", {"words": 150, "paragraphs": 2})
+    assert measured["totals"] == [210]
+    assert measured["tier"] == "trim"
+    assert measured["paragraphs"] is False
+
 BUDGET = {"reply_words": 100, "blocks": 3, "paragraphs": 2,
           "speakers": 2, "blocks_per_speaker": 1}
 CAST = ["Winifred Vance", "Mara"]

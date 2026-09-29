@@ -260,26 +260,33 @@ def test_director_roll_resolution_is_packed_and_frozen(cast_scene):
 
 
 @pytest.mark.parametrize("actor_ref", ["characters:mara", "grimoire"])
-def test_assigned_reply_format_replaces_the_ensemble_script_contract(cast_scene, actor_ref):
+def test_reply_format_never_asks_for_script_labels(cast_scene, actor_ref):
     _, individual = context.compose_turn(*cast_scene, actor_ref=actor_ref)
     _, combined = context.compose_turn(*cast_scene)
     individual_format = next(row["text"] for row in individual["sections"]
                              if row["id"] == "response_format")
     combined_format = next(row["text"] for row in combined["sections"]
                            if row["id"] == "response_format")
-    # Ensemble labels are a serialization requirement only in combined mode.
-    # Keeping that instruction in an assigned writer's prompt invites it to
-    # imitate a whole script despite the one-actor contract appended later.
+    # Labels belong to transcript serialization, never model-authored prose.
     assert "**<Name>:**" not in individual_format
-    assert "**<Name>:**" in combined_format
+    assert "**<Name>:**" not in combined_format
 
 
 @pytest.mark.parametrize("actor_ref", ["characters:mara", "grimoire"])
-def test_assigned_budget_does_not_request_ensemble_blocks(cast_scene, actor_ref):
+def test_response_budget_never_requests_ensemble_blocks(cast_scene, actor_ref):
     _, individual = context.compose_turn(*cast_scene, actor_ref=actor_ref)
     _, combined = context.compose_turn(*cast_scene)
     budget = next(row["text"] for row in individual["sections"] if row["id"] == "response_budget")
     ensemble = next(row["text"] for row in combined["sections"] if row["id"] == "response_budget")
     assert "**Grimoire:**" not in budget
     assert "characters act or speak" not in budget
-    assert "**Grimoire:**" in ensemble
+    assert "**Grimoire:**" not in ensemble
+
+
+def test_actor_prompt_uses_approximate_continuation_targets(cast_scene):
+    _, detail = context.compose_turn(*cast_scene, actor_ref="characters:mara")
+    budget = next(row["text"] for row in detail["sections"] if row["id"] == "response_budget")
+    assert "about 150 words" in budget
+    assert "about 2 paragraphs" in budget
+    assert "at most" not in budget
+    assert "blocks" not in budget

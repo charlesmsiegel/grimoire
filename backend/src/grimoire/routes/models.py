@@ -24,7 +24,6 @@ from pydantic import BaseModel, PositiveInt
 
 # ---- models ----
 class ConfigUpdate(BaseModel):
-    character_response_mode: str | None = None
     theme: str | None = None
     system_prompt: str | None = None
     quote_color: str | None = None

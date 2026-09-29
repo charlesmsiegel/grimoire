@@ -61,6 +61,21 @@ def test_selector_can_stop(client):
     assert not any(m.get("response_id") for m in store.scenes.read_scene(cid, sid)["messages"])
 
 
+def test_old_combined_setting_cannot_disable_individual_generation(client):
+    cid, sid = seed(client)
+    store.config.write_config(character_response_mode="combined")
+    fake = FakeLLM([
+        ['{"next":"characters:mara"}'],
+        ['Mara answers.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
+    assert response.status_code == 200
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert [m["speaker"] for m in messages if m.get("response_id")] == ["Mara"]
+    assert fake.calls == 2
+
+
 def test_failure_second_preserves_first_and_retry_only_unfinished(client):
     from grimoire.llm_errors import LLMError
 
