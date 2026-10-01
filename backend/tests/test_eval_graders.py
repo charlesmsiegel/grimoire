@@ -544,14 +544,14 @@ def test_paragraphs_splits_on_blank_lines_and_drops_empty_ones():
 
 
 def _rendered_block() -> str:
-    return prompts.render("scene/sections/natural_prose.j2")
+    return prompts.render("styles/natural-prose-legacy.md")
 
 
 @pytest.mark.parametrize("entry", slop.ALL_ENTRIES, ids=lambda e: e.source[:40])
 def test_every_entry_source_is_still_in_the_template(entry):
     """The one-way drift guard, per entry so a failure names the culprit.
 
-    Grading a phrase the app has stopped banning is the failure this catches.
+    Grading a phrase the selected guide has stopped banning is the failure this catches.
     An entry ADDED to the template is not graded until it is mirrored here --
     a stated limitation, and the direction that actually gets exercised, since
     the pink-elephant remedy on record is trimming the ban list.

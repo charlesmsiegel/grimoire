@@ -288,11 +288,12 @@ substituted by code:
   Opening applies to the opener narrator, Continuation to every NPC and later
   response. It feeds `sections/response_budget.j2` as a prose ceiling with no minimum.
   This is prompt guidance, not an API token limit or enforced truncation.
-- (no vars) `sections/natural_prose.j2` — the always-on anti-AI-ism
-  defaults (names at invention, banned stock phrases, beat-word rationing,
-  banned constructions, rhythm); sits right after the prose style, which
-  may override only its rhythm guidance. Spec:
-  docs/superpowers/specs/2026-07-14-natural-prose-block-design.md.
+- (no vars) `sections/natural_prose.j2` ? the short roleplay brief and
+  continuity/knowledge boundaries; sits right after the prose style. Authored
+  style and character expression may override expression defaults, never
+  continuity, player control, knowledge, or reply format. The earlier phrase
+  and rhythm policy is now optional `styles/natural-prose-legacy.md`.
+  Experiment scope: docs/scene-dialogue-guidance.md.
 - `npc_cards` — locked card `data` dicts of in-scene NPCs (also feeds the
   card-level system prompts, descriptions, message examples, post-history)
 - `states` — `[{name, current_state, knows, suspects}]` from

@@ -36,7 +36,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from grimoire import prompts
 from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
@@ -58,6 +57,7 @@ from grimoire.store import (
     scenes,
     sheets,
     steering,
+    styles,
     worlds,
 )
 
@@ -608,14 +608,15 @@ def build_natural_prose() -> dict:
       noise. Its 900 words are a target and its 7 blocks a maximum, not a
       promised shape, which is why slop.measurable exists rather than the
       preset's numbers being trusted as a sample size.
-    - No prose style guide and no voice anchors. natural_prose.j2 says a style
-      guide overrides its rhythm guidance and that a character's established
-      voice wins where it conflicts; a fixture carrying either would be graded
-      against rules the template disclaims.
+    - The optional Natural Prose (Legacy) guide and no voice anchors. This
+      case exercises that specific phrase/rhythm policy, not every campaign's
+      defaults. A conflicting authored voice would exempt expression that this
+      fixture deliberately grades.
     - Every name invented, none colliding with slop.STOCK_NAMES, and all of
       them passed to the grader in `established` -- the template's rule is that
       names already in the scene, cast or world are reproduced exactly.
     """
+    config.write_config(default_style_id="natural-prose-legacy")
     wid, wroot, sera = _world_with_sera()
     pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
                                   "Fog-slick planks stacked with unlogged crates.",
@@ -660,14 +661,19 @@ def build_natural_prose() -> dict:
 
 
 def grade_natural_prose(ctx: dict, output: str) -> list[Check]:
-    # The whole section, rendered from the template itself. This is the half a
-    # template edit can break silently: verify_templates.py never pins template
-    # text, so an emptied natural_prose.j2 passes there.
+    # The legacy blacklist is opt-in. Verify the selected guide reaches the real
+    # assembled prompt before grading its recordings; otherwise this case would
+    # punish a model for rules the experiment intentionally stopped requesting.
+    guide = styles.read_style("natural-prose-legacy")
     return (
         graders.grade_prompt_section(ctx["messages"], "natural_prose",
                                      "scene/sections/natural_prose.j2")
+        + graders.grade_prompt_section(ctx["messages"], "prose_style",
+                                       "scene/sections/prose_style.j2",
+                                       prose_style_name=guide["meta"]["name"],
+                                       prose_style_body=guide["body"])
         + graders.grade_slop(output, ctx["players"], ctx["established"],
-                             prompts.render("scene/sections/natural_prose.j2")))
+                             guide["body"]))
 
 
 # ------------------------------------------------------------------- the suite
@@ -758,7 +764,7 @@ CASES: tuple[Case, ...] = (
              Recording("leaked", ("containment.output",)))),
     Case(id="natural-prose",
          hypothesis="a reply contains none of the stock names or literal "
-                    "banned phrases the natural-prose block lists, does not "
+                    "banned phrases the selected legacy prose guide lists, does not "
                     "repeat a single beat word past the cap or use the "
                     "enumerated not-X-but-Y forms, and does not flatten into "
                     "uniform sentence and paragraph length",

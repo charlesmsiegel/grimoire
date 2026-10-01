@@ -4866,8 +4866,9 @@ def test_shared_voice_boundaries_reach_an_actor_prompt(monkeypatch, tmp_path):
     assert "Do not perpetuate earlier exaggerated prose as a new character trait" in text
     assert "Clipped, practical answers." in text
     assert "Formal and deliberate." not in text
-    assert "For a routine exchange, a sentence or two often suffices" in text
-    assert "Do not announce compliance" in text
+    assert "next reply in an ongoing fictional roleplay" in text
+    assert "Actions, private reactions, and dialogue can share the contribution" in text
+    assert "Italicize actions and narration" in text
     assert "Never invent the player's speech" in text
 
 

@@ -1,67 +1,59 @@
-# Shared scene dialogue guidance
+# Scene generation experiments
 
-Scene replies use shared templates even when the global system prompt is empty.
-The guidance applies across models and covers three separate concerns:
+Each experiment is a separate commit on `improve-scene-generation`. Keep the
+commit hash with the private run record so a prompt variant can be replayed.
+Private transcripts, character cards, settings, and measurements stay outside
+this repository. Tests verify prompt construction and isolation; live reruns
+assess writing quality. A passing rendering test is not a successful voice eval.
 
-- `scene/sections/natural_prose.j2` distinguishes dialogue from narration and
-  requires an established source for each character's knowledge. Clearly
-  presented unquoted speech remains valid; quoted thoughts are not audible.
-- `scene/sections/voice_policy.j2` uses the assigned character's authored voice
-  evidence and treats dialogue history as event context rather than a style
-  template. Deliberate callbacks remain possible without spreading verbal
-  habits across the cast. Earlier stylization does not establish a new trait.
-  The existing precedence for authored constraints and voice corrections holds.
-- `scene/sections/response_budget.j2` presents resolved word and paragraph counts
-  as prose ceilings with no minimum. `scene/length_correction.j2` reinforces
-  the same interpretation when the existing drift detector finds overshoot.
+## Baseline: accumulated guidance
 
-These paths are relative to `templates/`. The voice policy keeps its existing
-render condition; it does not invent voice evidence for a lone bare character.
-No sampling settings, reasoning budgets, drift thresholds, or output parsers
-change. Required control blocks remain outside the prose-length instruction.
+Commit `a3fb9fe89` collects the knowledge-boundary, voice, prose-ceiling, and
+conversational-action guidance added before this branch was created. Several
+variables changed together, so it is a checkpoint rather than an isolated
+experiment. It is the comparison point for the experiments below.
 
-Tests establish that shared guidance reaches chat and opener prompts without
-custom global instructions, that actor prompts retain their own voice evidence,
-and that resolved length settings reach the templates. They do not establish
-that a live model follows the instructions. For a live comparison, check an easy
-practical question, sincere reassurance, and a reply after someone else's
-unusual metaphor. Look for brief complete answers, ordinary emotional expression,
-and distinct voices without forced quirks. Knowledge-boundary checks should
-include private thoughts, unquoted speech, and an unseen person's presence.
+## ST-01: lean roleplay framing
 
+Hypothesis: general style prohibitions and repeated instructions to explain less
+can crowd out character evidence. A short roleplay brief and explicit Markdown
+narration may encourage character-led action and speech without requiring every
+contribution to be a complete conversational explanation.
 
-Social uncertainty is situational: competence does not imply emotional ease,
-perfect self-understanding, or immediate trust. A reply can leave discomfort
-unresolved without making every character hesitant. Cosmetic nervous gestures
-do not substitute for uncertainty affecting what someone says or chooses.
-Personal testimony stays within the speaker's experience; group claims require
-checking each participant's history and the applicable mechanics.
+Changes, relative to the baseline:
 
-The assigned-NPC instruction also favors a sentence or two for routine exchanges,
-with detail justified by new information, decisions, or actions. It keeps
-compliance language out of dialogue. It does not require confident characters
-to become awkward or change the configured ceiling.
+- `scene/sections/natural_prose.j2` replaces the generic phrase blacklist,
+  construction bans, and detailed rhythm rules with a short scene-writing brief.
+  The earlier expression policy remains available as the optional built-in
+  Natural Prose (Legacy) style; its replay eval explicitly selects that style.
+  Continuity, player control, individual knowledge, and personal testimony
+  boundaries remain explicit. Configured prose style and character expression
+  retain precedence.
+- `scene/sections/voice_policy.j2` keeps attribution and authored-constraint
+  precedence while reducing general voice instruction. Actor-scoped cards,
+  anchors, examples, and outstanding corrections retain their existing wiring.
+- `scene/response_actor.j2` asks for the assigned character's next fictional
+  roleplay reply, using actions, private reactions, and dialogue. It replaces
+  the accumulated anti-polish advice. Narrator ownership, eligible speakers,
+  handoff rules, player decision stops, and roll/state ordering are unchanged.
+- `scene/sections/response_format.j2` requests italicized action and narration
+  in Markdown. Dialogue remains quoted so the existing transcript format and
+  speech distinction continue to work. Private thoughts remain narrator context.
+- `scene/model_guidance/glm-5.3.j2` retains a short instruction to keep reasoning
+  out of the contribution rather than adding another prose-style policy.
 
-Most conversational posts favor spontaneous, selective speech over a crafted
-opening, exhaustive explanation, and closing line. Uneven or unfinished replies
-are allowed without forcing awkwardness or overriding authored formality.
+This is an approximation of SillyTavern's roleplay framing, not a full transport
+clone. The configured word and paragraph ceilings, no-minimum instruction,
+message roles, sampling, reasoning parameters, context packing, and turn parser
+are unchanged. NoAss-style history folding, initial-system-role preservation,
+sampling changes, and additional thinking fields are separate experiments.
+Character-specific narration instructions and greetings are not copied or
+invented by this experiment; existing authored evidence remains the source.
 
-The word ceiling covers dialogue and narration together. Meaningful nonverbal
-action can carry a response without an accompanying explanation in dialogue.
-Brief speech with action, or action alone, is valid; there is no fixed ratio
-and no requirement to fill unused words with gestures or description.
-
-## Experiment checkpoints
-
-The initial checkpoint collects the prompt changes made before the experiment
-branch was created. It is a reproducible starting point, not a single-variable
-experiment. Live reruns still produced polished, dialogue-heavy contributions;
-the added guidance did not establish the desired naturalness.
-
-Each subsequent experiment gets a separate commit. Record its hypothesis,
-the variable changed, and validation in the commit message. Keep model,
-reasoning effort, sampling, character inputs, and the preceding transcript
-constant when comparing prompt variants. Record live results before starting
-the next experiment. Private prompts and transcripts stay outside this repo.
-Rendering tests verify prompt construction; live comparisons assess voice.
-Use the commit hash together with the private run record to identify a result.
+For a live comparison, rerun the same player cue against the same preceding
+transcript and character inputs at the baseline and experiment commits. Retain
+the same model, reasoning effort, sampling, and length settings. Check whether
+speech is selective, actions matter, private reactions remain private, and
+voices stay distinct. Also check required control blocks and player ownership.
+The output may differ even with identical inputs; compare multiple reruns before
+attributing a change to the experiment. Live outcome: pending.

@@ -19,7 +19,7 @@ stake in:
 | `absorb` | absorb returns JSON with every required section, and it materializes into applicable edits |
 | `owned-lore` | lore owned by an absent character stays out of both the prompt and the reply |
 | `turn-taking` | with four NPCs cast and `speaker_turn_taking` on, the reply is carried by the nominated speaker rather than by whoever has been monologuing |
-| `natural-prose` | a reply contains none of the stock names or literal banned phrases the natural-prose block lists, does not repeat a single beat word past the cap or use the enumerated not-X-but-Y forms, and does not flatten into uniform sentence and paragraph length |
+| `natural-prose` | a reply contains none of the stock names or literal banned phrases the selected Natural Prose (Legacy) guide lists, does not repeat a single beat word past the cap or use the enumerated not-X-but-Y forms, and does not flatten into uniform sentence and paragraph length |
 
 ## Running it
 
@@ -72,12 +72,13 @@ render, rather than pinning prose, is deliberate — a reword moves both sides
 together and stays green, because `templates/` is meant to be edited freely.
 What must not change silently is whether the instruction is there at all.
 
-The `natural-prose` case is the sharpest example of the limit above, and is
+The `natural-prose` case explicitly selects the optional Natural Prose (Legacy)
+style guide. It is the sharpest example of the limit above, and is
 worth stating plainly. Its output-side `slop.*` checks score a fixed recording,
-so **nothing they report says whether the natural-prose block works** — that is
+so **nothing they report says whether the selected prose guide works** — that is
 a live-behaviour question, and as with `turn-taking`, one live run is an
 anecdote. What they hold offline is that the graders still work, that the
-instructions they grade against are still in the template (`slop.list_current`,
+instructions they grade against are still in that guide (`slop.list_current`,
 a one-way guard: a phrase removed from the template fails loudly, a phrase
 added is ungraded until mirrored in `evals/slop.py`), and that a collapsed
 generation cannot score green (`slop.measurable`).
