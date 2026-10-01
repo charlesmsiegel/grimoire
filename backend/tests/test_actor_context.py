@@ -293,3 +293,14 @@ def test_actor_prompt_uses_continuation_ceilings(cast_scene):
     assert "There is no minimum length" in budget
     assert "blocks_per_speaker" not in budget
     assert "preserve required control blocks" in budget
+
+
+
+def test_structured_perception_is_assigned_npc_only(cast_scene):
+    for actor in ("characters:mara", "grimoire"):
+        messages, _ = context.compose_turn(*cast_scene, actor_ref=actor)
+        text = " ".join(" ".join(m["content"] for m in messages).split())
+        assert ("Before the roleplay prose, emit one short fenced perception block" in text) is (actor != "grimoire")
+        if actor != "grimoire":
+            assert "Keep continuity notes as facts for the writer" in text
+            assert "does not count toward the prose word budget" in text

@@ -203,7 +203,7 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             handoff=watcher.handoff if status == "complete" else None,
             issue=watcher.issue,
             part=continuation or "",
-            reasoning=watcher.reasoning,
+            reasoning=watcher.reasoning + watcher.preparation_note,
         )
         if continuation and status == "complete":
             if not store.proposals.commit_narration(cid, sid, continuation, saved):
@@ -453,7 +453,7 @@ async def _frames(
                 _prepare, cid, sid, run, token, round_record, actor, conn, appended
             )
             appended = ()
-            watcher = store.response_protocol.ResponseWatcher()
+            watcher = store.response_protocol.ResponseWatcher(perception=actor != "grimoire")
             yield streaming._sse(
                 {
                     "response_start": {
@@ -826,7 +826,7 @@ def regenerate_response(
 
 
 async def _reroll_frames(cid, sid, rid, client, conn, run, token, record, messages, outcome):
-    watcher = store.response_protocol.ResponseWatcher()
+    watcher = store.response_protocol.ResponseWatcher(perception=record["actor_ref"] != "grimoire")
     meter = store.usage.meter(
         "regenerate",
         campaign=cid,
@@ -896,7 +896,7 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher):
             handoff=watcher.handoff,
             issue=watcher.issue,
             activate=False,
-            reasoning=watcher.reasoning,
+            reasoning=watcher.reasoning + watcher.preparation_note,
         )
         store.responses.activate(cid, sid, rid, variant["id"])
         streaming._turn_settled(cid)

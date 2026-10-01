@@ -27,10 +27,69 @@ def validate_handoff(payload, eligible, used):
     return ref, None
 
 
+class _PreparationPrefix:
+    """Remove one leading preparation fence before response controls see it.
+
+    Only a leading fence is special; ordinary prose keeps its existing grammar.
+    Prefix bytes wait until distinguishable, and an interrupted hidden block
+    stays hidden. Completed lines are consumed once, avoiding rescans of the
+    preparation body. Future leading preparation fields can share this parser.
+    """
+
+    def __init__(self, enabled):
+        self.pending = ""
+        self.mode = "prefix" if enabled else "prose"
+        self.body = ""
+
+    @staticmethod
+    def _possible(text):
+        head = text.lstrip(" \t\r\n")
+        head = re.sub(r"^```[ \t]*", "```", head).rstrip(" \t\r").lower()
+        return "```perception".startswith(head)
+
+    def feed(self, text):
+        if self.mode == "prose":
+            return text
+        self.pending += text
+        if self.mode == "prefix":
+            candidate = self.pending.lstrip(" \t\r\n")
+            head, sep, rest = candidate.partition("\n")
+            if not sep and self._possible(candidate):
+                return ""
+            if sep and re.fullmatch(r"```[ \t]*perception[ \t\r]*", head, re.IGNORECASE):
+                self.mode = "hidden"
+                self.pending = rest
+            else:
+                self.mode = "prose"
+                out, self.pending = self.pending, ""
+                return out
+        while "\n" in self.pending:
+            line, _, self.pending = self.pending.partition("\n")
+            if line.strip(" \t\r") == "```":
+                self.mode = "prose"
+                out, self.pending = self.pending, ""
+                return out
+            self.body += line + "\n"
+        return ""
+
+    def finish(self):
+        if self.mode == "hidden":
+            if self.pending.strip(" \t\r") != "```":
+                self.body += self.pending
+            self.pending = ""
+            return ""
+        if self.mode == "prefix" and self._possible(self.pending) and self.pending.lstrip().startswith("```"):
+            self.pending = ""
+            return ""
+        out, self.pending = self.pending, ""
+        return out
+
+
 class ResponseWatcher:
     """Rolls interrupt first; state precedes the final handoff and stays hidden."""
 
-    def __init__(self):
+    def __init__(self, *, perception=False):
+        self.preparation = _PreparationPrefix(perception)
         self.roll = fence.FenceWatcher()
         self.redactor = turnstate.StreamRedactor()
         self.reasoning = ""
@@ -66,10 +125,11 @@ class ResponseWatcher:
         # one per SSE line -- so it is answered before any of them runs.
         if not text:
             return ""
-        return self._emit(self.roll.feed(text))
+        return self._emit(self.roll.feed(self.preparation.feed(text)))
 
     def finish(self):
-        out = self._emit(self.roll.finish())
+        out = self._emit(self.roll.feed(self.preparation.finish()))
+        out += self._emit(self.roll.finish())
         match = _HANDOFF.search(self.raw)
         self._narration = self.raw[: match.start()] if match else self.raw
         if match and not (self.roll.complete or self.roll.truncated):
@@ -84,6 +144,12 @@ class ResponseWatcher:
             out += self.redactor.feed(self.raw[self.visible :])
         out += self.redactor.finish()
         return out
+
+    @property
+    def preparation_note(self):
+        # The existing reasoning artifact keeps this inspectable without adding
+        # private preparation to the post or conversation history.
+        return "\n\n[Perception preparation]\n" + self.preparation.body if self.preparation.body else ""
 
     @property
     def narration(self):

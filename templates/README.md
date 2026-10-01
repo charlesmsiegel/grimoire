@@ -466,3 +466,15 @@ before save, even when no model description is requested. Synthetic director,
 roll and transition messages are excluded from neighboring observable dialogue.
 Colon attribution requires a line-start speaker label; an embedded addressee is
 not treated as a speaker. Exact source snapshots are rechecked on save.
+
+
+### Leading perception preparation
+
+Assigned NPCs emit a short `perception` JSON fence before prose in the same
+generation call. `store/response_protocol.py` removes this leading block before
+roll detection, streaming and narration persistence. Partial leading blocks
+remain hidden. Normal responses without preparation retain their existing
+protocol; only leading fences are treated as preparation. The preparation is
+retained in the response's existing reasoning artifact for inspection, not in
+scene history. JSON is advisory model output, not validated knowledge or a
+hard boundary. Existing ST-03 voice and perception guidance remain intact.
