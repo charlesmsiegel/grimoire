@@ -1,6 +1,6 @@
 # Scene generation experiments
 
-Each experiment is a separate commit on `improve-scene-generation`. Keep the
+Each experiment is a separate commit on a scene-generation experiment branch. Keep the
 commit hash with the private run record so a prompt variant can be replayed.
 Private transcripts, character cards, settings, and measurements stay outside
 this repository. Tests verify prompt construction and isolation; live reruns
@@ -57,3 +57,20 @@ speech is selective, actions matter, private reactions remain private, and
 voices stay distinct. Also check required control blocks and player ownership.
 The output may differ even with identical inputs; compare multiple reruns before
 attributing a change to the experiment. Live outcome: pending.
+
+
+## ST-03: actor perception at the response boundary
+
+Based directly on ST-01, independently of ST-02's transport change. Hypothesis:
+a knowledge reminder beside the assigned actor instructions helps distinguish
+speech, observable action, and private narrative context in mixed transcript
+contributions. The actor prompt explicitly permits unquoted speech and visible
+narrated actions while withholding private explanations and unsupported
+background knowledge. Missing sources must not be repaired with invented
+briefings. This instruction applies to NPC responses, not the scene narrator.
+
+All other ST-01 inputs and settings are held constant. Use the same opening,
+player cue, character inputs, model, and generation settings in a separate
+replay. Rendering checks establish instruction delivery only; live evaluation
+must check both private-information restraint and ordinary dialogue/action
+recognition. Length and prose polish remain separate evaluation dimensions.
