@@ -1,7 +1,7 @@
-"""Detectors for the natural-prose block, and the lists they read.
+"""Detectors for the optional legacy prose guide, and the lists they read.
 
 Eval-owned rather than production-owned, and deliberately: the app has no
-opinion about slop. templates/scene/sections/natural_prose.j2 is prescriptive
+opinion about slop. templates/styles/natural-prose-legacy.md is an optional prescriptive guide
 and feed-forward, so there is no production constant to borrow -- the same
 situation as graders.COLLAPSE_RATIO, which is eval-owned because "the app has
 no opinion about a reply being too SHORT". If a production store/slop_drift.py

@@ -370,7 +370,7 @@ def grade_containment(text: str, secret: str) -> list[Check]:
 
 def grade_slop(text: str, players: frozenset[str], established: frozenset[str],
                rendered_block: str) -> list[Check]:
-    """Score a reply against the graded subset of the natural-prose block.
+    """Score a reply against the graded subset of the selected prose guide.
 
     A strict subset, deliberately: the template's semantic instructions -- the
     rule of three, redundant adjective pairs, explaining an emotion just shown,
@@ -379,7 +379,7 @@ def grade_slop(text: str, players: frozenset[str], established: frozenset[str],
     that the block was obeyed. slop.not_x_but_y in particular is a floor on its
     family rather than a decision procedure for it.
 
-    `rendered_block` is the CURRENT render of natural_prose.j2, so the drift
+    `rendered_block` is the CURRENT selected prose guide, so the drift
     guard fails when an instruction this grader scores against has left the
     template.
     """
@@ -394,7 +394,7 @@ def grade_slop(text: str, players: frozenset[str], established: frozenset[str],
     p_ok, p_detail = slop.paragraph_variance(prose)
     return [
         Check("slop.list_current", not gone,
-              f"no longer in natural_prose.j2: {gone}"),
+              f"no longer in selected prose guide: {gone}"),
         Check("slop.measurable", measurable, m_detail),
         Check("slop.phrases", not phrases, f"banned phrases present: {phrases}"),
         Check("slop.stock_names", not stock,

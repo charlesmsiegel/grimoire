@@ -5,5 +5,6 @@ Write continuous prose for the assigned speaker. The application supplies their 
 {#- An unresolved roll from before actor-scoped rounds has no assigned speaker. -#}
 For this legacy continuation, begin each speaker's block with **Full Name:** on its own line. Use **Grimoire:** for narration. Keep each character's prose under their own label so the transcript can assign it correctly.
 {%- endif %}
-Enclose spoken dialogue in double quotation marks. Keep actions and narration outside the quotation marks, in ordinary prose.
+Enclose spoken dialogue in double quotation marks. Italicize actions and narration outside the quotation marks using Markdown.
+Private thoughts belong to narration, not spoken dialogue or shared knowledge.
 {%- if player_names %} Never write dialogue or actions for: {{ player_names | join(", ") }}.{% endif -%}
