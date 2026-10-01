@@ -286,7 +286,8 @@ substituted by code:
   `default_style_id` keys when no response preset is set
 - `budget` — `{words, paragraphs}` from `response_targets.resolve()`;
   Opening applies to the opener narrator, Continuation to every NPC and later
-  response. It feeds `sections/response_budget.j2` as an approximate target.
+  response. It feeds `sections/response_budget.j2` as a prose ceiling with no minimum.
+  This is prompt guidance, not an API token limit or enforced truncation.
 - (no vars) `sections/natural_prose.j2` — the always-on anti-AI-ism
   defaults (names at invention, banned stock phrases, beat-word rationing,
   banned constructions, rhythm); sits right after the prose style, which

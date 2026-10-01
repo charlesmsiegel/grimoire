@@ -285,10 +285,11 @@ def test_response_budget_never_requests_ensemble_blocks(cast_scene, actor_ref):
     assert "**Grimoire:**" not in ensemble
 
 
-def test_actor_prompt_uses_approximate_continuation_targets(cast_scene):
+def test_actor_prompt_uses_continuation_ceilings(cast_scene):
     _, detail = context.compose_turn(*cast_scene, actor_ref="characters:mara")
     budget = next(row["text"] for row in detail["sections"] if row["id"] == "response_budget")
-    assert "about 150 words" in budget
-    assert "about 2 paragraphs" in budget
-    assert "at most" not in budget
-    assert "blocks" not in budget
+    assert "at most 150 words" in budget
+    assert "at most 2 paragraphs" in budget
+    assert "There is no minimum length" in budget
+    assert "blocks_per_speaker" not in budget
+    assert "preserve required control blocks" in budget

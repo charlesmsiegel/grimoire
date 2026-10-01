@@ -3,12 +3,12 @@
 {%- if drift.tier -%}
 {%- set _ = lines.append(
   "Your recent contributions have run long: " ~ (drift.totals | join(", ")) ~
-  " words against an approximate " ~ budget.words ~ "-word target. " ~
-  ("Cut back substantially." if drift.tier == "cut" else "Trim toward the target.")) -%}
+  " words against a configured " ~ budget.words ~ "-word upper limit. " ~
+  ("Cut back substantially." if drift.tier == "cut" else "Stay within the limit; shorter is welcome.")) -%}
 {%- endif -%}
 {%- if drift.paragraphs -%}
 {%- set _ = lines.append(
-  "Recent contributions used more than about " ~ budget.paragraphs ~
-  " paragraphs. Keep this one closer to that target.") -%}
+  "Recent contributions used more than " ~ budget.paragraphs ~
+  " paragraphs. Use at most that many; do not fill them unnecessarily.") -%}
 {%- endif -%}
 {{ lines | join("\n") }}
