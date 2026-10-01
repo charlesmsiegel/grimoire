@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import context, pins
+from grimoire.store import config, context, pins
 
 
 def test_activate_keyword_and_always_on():
@@ -454,7 +454,7 @@ def test_empty_context_is_raw_history(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "plain message")
     msgs = context.build_messages(cid, sid)
     # an empty store still gets the Response format section; the history stays raw
-    assert msgs[0]["role"] == "system" and "Write about 150 words" in msgs[0]["content"]
+    assert msgs[0]["role"] == "system" and "Write at most 150 words" in msgs[0]["content"]
     assert msgs[1:] == [{"role": "user", "content": "plain message"}]
 
 
@@ -554,7 +554,7 @@ def test_opener_uses_narrator_target_and_does_not_request_labels(monkeypatch, tm
     assert last["role"] == "system" and msgs[-2]["role"] == "user"  # rides last, after the prompt
     assert "Set the scene as narrator" in last["content"]
     assert "**Seraphine:**" not in str(msgs)
-    assert "about 400 words" in msgs[0]["content"]
+    assert "at most 400 words" in msgs[0]["content"]
 
 
 def test_opener_without_npcs_keeps_narrator_instruction(monkeypatch, tmp_path):
@@ -1825,7 +1825,7 @@ def test_budget_section_renders_with_resolved_numbers(monkeypatch, tmp_path):
     text = context.build_messages(cid, sid)[0]["content"]
     assert "# Response target" in text
     assert "150 words" in text
-    assert "about 2 paragraphs" in text
+    assert "at most 2 paragraphs" in text
 
 
 def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
@@ -1833,7 +1833,7 @@ def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
     scenes.set_response(cid, sid, {"response_preset": "terse"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "150 words" in text
-    assert "about 1 paragraph" in text
+    assert "at most 1 paragraph" in text
 
 
 def test_turn_override_beats_the_scene_setting(monkeypatch, tmp_path):
@@ -1856,7 +1856,7 @@ def test_repeats_allowed_wording(monkeypatch, tmp_path):
     scenes.set_response(cid, sid, {"response_preset": "cinematic"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "900 words" in text
-    assert "about 3 paragraphs" in text
+    assert "at most 3 paragraphs" in text
 
 
 def test_legacy_style_id_still_resolves_identically(monkeypatch, tmp_path):
@@ -1918,7 +1918,7 @@ def test_corrective_lands_in_the_last_message(monkeypatch, tmp_path):
     assert last["role"] == "system"
     assert "run long" in last["content"]
     assert "Cut back substantially" in last["content"]
-    assert "150-word target" in last["content"]
+    assert "150-word upper limit" in last["content"]
 
 
 def test_trim_tier_wording(monkeypatch, tmp_path):
@@ -1926,7 +1926,7 @@ def test_trim_tier_wording(monkeypatch, tmp_path):
     scenes.set_response(cid, sid, {"response_preset": "terse"})       # 150 -> trim band 188..262
     _bloat(cid, sid, turns=3, words=220)
     text = context.compose_turn(cid, sid, actor_ref="characters:mara")[0][-1]["content"]
-    assert "Trim toward the target" in text
+    assert "Stay within the limit" in text
     assert "Cut back substantially" not in text
 
 
@@ -3653,7 +3653,12 @@ def test_every_appended_message_is_charged_to_the_budget(monkeypatch, tmp_path):
     # a note big enough that ignoring it would overrun -- but not so big the
     # packer cannot absorb it, which would overrun for the legitimate reason
     # (lock-in plus the history floor is the floor)
-    note = "Consider the Saltmarch road and everything on it. " * 60
+    # Size against the rendered prompt so adding shared instructions does
+    # not accidentally make this fixture too small to exercise packing.
+    sentence = "Consider the Saltmarch road and everything on it. "
+    note = sentence
+    while context.count_tokens(note) <= budget // 4:
+        note += sentence
     assert context.count_tokens(note) > budget // 4
     assert _fits(context.build_director_messages(cid, sid, note), budget)
 
@@ -4833,3 +4838,70 @@ def test_voice_safe_names_blanks_a_label_the_serializer_cannot_write_back():
     assert context_cast.voice_safe_names(["Mara*"], []) == [""]
     assert context_cast.voice_safe_names(["M" * 65], []) == [""]
     assert context_cast.voice_safe_names(["Mara"], []) == ["Mara"]
+
+
+# Shared prompt guidance must work without a user-authored global prompt.
+# These checks establish prompt delivery, not whether a live model obeys it.
+@pytest.mark.parametrize("opening", [False, True])
+def test_shared_knowledge_boundaries_reach_scene_prompts(monkeypatch, tmp_path, opening):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    config.write_config(system_prompt="")
+    messages = (context.build_opener_messages(cid, sid, "A storm rolls in.")
+                if opening else context.build_messages(cid, sid))
+    text = " ".join(messages[0]["content"].split())
+    assert "Quoted thoughts, memories, and written text are not automatically audible" in text
+    assert "Do not invent a source" in text
+    assert "Cast lists, summaries, lore, and other viewpoints" in text
+
+
+def test_shared_voice_boundaries_reach_an_actor_prompt(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {"mes_example": "Mara: Fine."}, "Clipped, practical answers."),
+        ("Winifred", {"mes_example": "Winifred: Quite."}, "Formal and deliberate."),
+    ])
+    config.write_config(system_prompt="")
+    messages = context.compose_turn(cid, sid, actor_ref="characters:mara")[0]
+    text = " ".join(messages[0]["content"].split())
+    assert "Use recent dialogue as event context, not a style template" in text
+    assert "Do not perpetuate earlier exaggerated prose as a new character trait" in text
+    assert "Clipped, practical answers." in text
+    assert "Formal and deliberate." not in text
+    assert "For a routine exchange, a sentence or two often suffices" in text
+    assert "Do not announce compliance" in text
+    assert "Never invent the player's speech" in text
+
+
+@pytest.mark.parametrize("opening, words, paragraphs", [(False, 83, 1), (True, 271, 3)])
+def test_shared_length_ceiling_uses_resolved_numbers(monkeypatch, tmp_path, opening, words, paragraphs):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    phase = "opening" if opening else "continuation"
+    config.write_config(**{f"response_{phase}_words": str(words),
+                           f"response_{phase}_paragraphs": str(paragraphs)})
+    messages = (context.build_opener_messages(cid, sid, "A storm rolls in.")
+                if opening else context.build_messages(cid, sid))
+    text = " ".join(messages[0]["content"].split())
+    assert f"at most {words} words in at most {paragraphs} paragraph" in text
+    assert "There is no minimum length" in text
+
+
+
+def test_social_uncertainty_guidance_reaches_actor_prompt(monkeypatch, tmp_path):
+    _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
+        ("Mara", {}, "Competent, direct, and reserved."),
+    ])
+    messages = context.compose_turn(cid, sid, actor_ref="characters:mara")[0]
+    text = " ".join(messages[0]["content"].split())
+    assert "Competence does not imply social ease or perfect self-understanding" in text
+    assert "Discomfort may remain unresolved across turns" in text
+    assert "Do not impose awkwardness on every character or every exchange" in text
+
+
+@pytest.mark.parametrize("opening", [False, True])
+def test_personal_testimony_and_group_claims_are_bounded(monkeypatch, tmp_path, opening):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    messages = (context.build_opener_messages(cid, sid, "A storm rolls in.")
+                if opening else context.build_messages(cid, sid))
+    text = " ".join(messages[0]["content"].split())
+    assert "Before making a group claim" in text
+    assert "verify each person's established history" in text
+    assert "Personal testimony covers only the speaker's own experience" in text

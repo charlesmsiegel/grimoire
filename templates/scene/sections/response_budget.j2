@@ -1,5 +1,11 @@
-{#- Approximate prose targets for one known actor. The app owns the speaker label. -#}
+{#- Configured prose ceilings for one known actor. The app owns the speaker label.
+    These are prompt instructions, not API token limits or output truncation. -#}
 # Response target
-{% if response_actor|default(none) %}Write one contribution by {{ response_actor.name }}, about {{ budget.words }} words in about {{ budget.paragraphs }} paragraph{{ "" if budget.paragraphs == 1 else "s" }}.
-{% else %}Write about {{ budget.words }} words in about {{ budget.paragraphs }} paragraph{{ "" if budget.paragraphs == 1 else "s" }}.
-{% endif %}A brief reaction may be shorter. Stop when the contribution is complete.
+{% if response_actor|default(none) %}Write one contribution by {{ response_actor.name }}, at most {{ budget.words }} words in at most {{ budget.paragraphs }} paragraph{{ "" if budget.paragraphs == 1 else "s" }}.
+{% else %}Write at most {{ budget.words }} words in at most {{ budget.paragraphs }} paragraph{{ "" if budget.paragraphs == 1 else "s" }}.
+{% endif %}These are upper limits, not amounts to fill. There is no minimum length.
+A complete contribution may be a short sentence, a brief action, or a few lines
+of dialogue. Stop when the immediate contribution is complete. Do not pad it
+with recaps, repeated logistics, decorative metaphors, or a closing joke.
+The word ceiling includes dialogue and narration together, not dialogue alone.
+The limits concern scene prose; preserve required control blocks.
