@@ -38,17 +38,29 @@ Visible tiredness can suggest fatigue; it does not reveal what someone privately
 tried to do earlier. If a relevant fact has not reached this actor, leave it
 unknown or let them ask naturally. Do not explain this distinction in the prose.
 
-Before the roleplay prose, emit one short fenced perception block. In at most
-80 words, identify this actor's established knowledge, what they just heard or
-observed, and relevant information that remains unknown to them. Reader-only
-facts are not observations. Use this JSON shape, with short strings in each list:
+Before the roleplay prose, emit one short fenced perception block, in at most
+80 words. First find the source evidence, then decide what this actor knows.
+Use these three fields, with this JSON shape:
 ```perception
-{"known": [], "heard_or_seen": [], "unknown": []}
+{"known": [], "heard_or_seen": [{"kind": "speech or action", "source": "exact excerpt", "access": "why this actor heard or saw it"}], "unknown": []}
 ```
-Then write the character's natural response using that perspective and their
-own voice. The application hides the perception block; it is preparation, not
-dialogue or narration, and does not count toward the prose word budget. Keep
-the ordinary handoff last. Do not emit a perception block for another actor.
+In known, give relevant established knowledge and its existing source.
+In heard_or_seen, copy a short exact excerpt from the transcript for each
+relevant perception. Identify it as speech explicitly presented as spoken,
+or an action/feature actually observable from this actor's established vantage.
+In access, cite the established circumstance that makes it audible or visible.
+Copying narration into a quote does not make it speech. A report of a past
+action is not witnessing that action. If the source or access is missing,
+omit that perception entry. Leave the fact unknown only if no independent
+established source exists; keep independently sourced prior knowledge in known.
+Do not invent tired eyes, bedroom sightlines, briefings or other evidence to
+expose a private fact.
+In unknown, list relevant gaps, including unsupported premises for questions.
+Then write the character's natural response using that evidence and their own
+voice. Grounded inference is welcome, but reader-only context is not evidence.
+The application hides the perception block; it is preparation, not dialogue
+or narration, and does not count toward the prose word budget. Keep the
+ordinary handoff last. Do not emit a perception block for another actor.
 {% endif %}Never invent the player's speech, thoughts, decisions or actions. Stop at a player decision.
 Do not complete another actor's contribution. These assigned-speaker rules take precedence over general ensemble instructions.
 
