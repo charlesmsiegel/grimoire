@@ -113,16 +113,18 @@ Two rules keep this honest, and both are enforced by tests:
 `length_drift.measure`, `fence.FenceWatcher`, `absorb.parse_output`. A grader
 that parsed output its own way would stop testing the app the moment the app's
 parser changed, and would sail straight through the regression it exists to
-catch. The length grader scores against `length_drift.TRIM` for the same
-reason: that constant *is* this codebase's definition of "this reply ran long",
-so tuning it moves the eval with it.
+catch. The actor-length case strips preparation and control blocks through
+`response_protocol.ResponseWatcher` and `turnstate.split_block`, then scores
+visible prose against exact word and paragraph ceilings, with no minimum
+beyond a nonempty reply. The legacy ensemble `grade_length` helper retains
+the production drift band as a diagnostic; it is not actor ceiling compliance.
 
 **Every case carries a counterexample, and names what it violates.** A
 counterexample declares the exact set of checks it must trip
-(`Recording("collapsed", ("length.reply_words",))`), and replay asserts set
+(`Recording("empty", ("length.words",))`), and replay asserts set
 equality. "It must fail somehow" is not enough: `scene-length.bloated` trips
-four knobs at once, so a bare fail-expectation stays green even if the word
-counter stops working entirely, hidden behind its three neighbours.
+both word and paragraph ceilings, so a bare fail-expectation stays green
+even if the word counter stops working, hidden behind its neighbour.
 `backend/tests/test_eval_graders.py` goes further and pins the graders on
 minimal inputs — one test per failure mode, including the ones no recording
 exercises. Two checks there are deliberately not independent gates and say so:
