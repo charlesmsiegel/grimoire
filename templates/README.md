@@ -478,3 +478,12 @@ protocol; only leading fences are treated as preparation. The preparation is
 retained in the response's existing reasoning artifact for inspection, not in
 scene history. JSON is advisory model output, not validated knowledge or a
 hard boundary. Existing ST-03 voice and perception guidance remain intact.
+
+
+Perception preparation retains `known`, `heard_or_seen`, and `unknown`.
+`known` entries name an existing source; each `heard_or_seen` entry includes
+an exact transcript excerpt, its `kind` (speech or action), and `access`
+(the established circumstance allowing this actor to hear or see it).
+Missing perception evidence leaves a fact unknown unless an independent
+established source already supplies it. These are advisory model claims,
+not server-validated citations; the leading-fence parser is unchanged.

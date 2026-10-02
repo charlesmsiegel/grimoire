@@ -304,3 +304,15 @@ def test_structured_perception_is_assigned_npc_only(cast_scene):
         if actor != "grimoire":
             assert "Keep continuity notes as facts for the writer" in text
             assert "does not count toward the prose word budget" in text
+
+
+
+def test_perception_requires_source_and_access_evidence(cast_scene):
+    messages, _ = context.compose_turn(*cast_scene, actor_ref="characters:mara")
+    text = " ".join(" ".join(m["content"] for m in messages).split())
+    assert "First find the source evidence" in text
+    assert '"kind": "speech or action", "source": "exact excerpt", "access": "why this actor heard or saw it"' in text
+    assert "Copying narration into a quote does not make it speech" in text
+    assert "Do not invent tired eyes" in text
+    assert "keep independently sourced prior knowledge in known" in text
+    assert "at most 80 words" in text
