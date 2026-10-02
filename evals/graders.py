@@ -52,7 +52,7 @@ def _chunks(text: str, size: int = CHUNK):
 
 def grade_length(text: str, budget: dict, players: frozenset[str],
                  cast_names: list[str]) -> list[Check]:
-    """Does the reply respect the resolved length budget?
+    """Legacy ensemble drift diagnostic, not actor ceiling conformance.
 
     Measured through the same two functions the app uses on every real turn:
     split_reply to find the blocks, length_drift.measure to score them. The

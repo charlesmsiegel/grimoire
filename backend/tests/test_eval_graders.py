@@ -924,3 +924,19 @@ def test_prompt_natural_prose_fails_when_the_section_is_absent():
         messages, "natural_prose", "scene/sections/natural_prose.j2")
     assert not checks[0].ok
     assert checks[0].name == "prompt.natural_prose"
+
+
+@pytest.mark.parametrize("count,passes", [(1, True), (150, True), (151, False), (0, False)])
+def test_actor_length_scores_exact_prose_ceiling(count, passes):
+    ctx = {"budget": {"words": 150, "paragraphs": 1}, "messages": []}
+    checks = cases.grade_scene_length(ctx, _words(count))
+    assert next(c.ok for c in checks if c.name == "length.words") is passes
+
+
+def test_actor_length_excludes_preparation_and_trailing_controls():
+    ctx = {"budget": {"words": 150, "paragraphs": 1}, "messages": []}
+    output = ('```perception\n' + _words(70) + '\n```\n' + _words(140)
+              + '\n```state\n{}\n```\n```handoff\n{"next":null}\n```')
+    checks = cases.grade_scene_length(ctx, output)
+    assert next(c.ok for c in checks if c.name == "length.words")
+    assert next(c.ok for c in checks if c.name == "length.paragraphs")

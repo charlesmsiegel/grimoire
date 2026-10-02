@@ -53,11 +53,13 @@ from grimoire.store import (
     playstate,
     plot,
     relationships,
+    response_protocol,
     response_targets,
     scenes,
     sheets,
     steering,
     styles,
+    turnstate,
     worlds,
 )
 
@@ -178,19 +180,22 @@ def build_scene_length() -> dict:
 
 def grade_scene_length(ctx: dict, output: str) -> list[Check]:
     budget = ctx["budget"]
-    prose = graders.length_drift.prose(output)
+    watcher = response_protocol.ResponseWatcher(perception=True)
+    watcher.feed(output)
+    watcher.finish()
+    narration, _ = turnstate.split_block(watcher.narration)
+    prose = graders.length_drift.prose(narration)
     words = len(prose.split())
     paragraphs = max(len([p for p in prose.split("\n\n") if p.strip()]), 1)
-    ratio = words / budget["words"]
     return [
         *graders.grade_prompt_section(ctx["messages"], "budget",
                                       "scene/sections/response_budget.j2",
                                       budget=budget,
                                       response_actor={"name": "Seraphine Vale"}),
-        Check("length.words", graders.COLLAPSE_RATIO <= ratio < graders.length_drift.TRIM,
-              f"{words} words vs target {budget['words']}"),
+        Check("length.words", 0 < words <= budget["words"],
+              f"{words} words vs ceiling {budget['words']}"),
         Check("length.paragraphs", paragraphs <= budget["paragraphs"],
-              f"{paragraphs} paragraphs vs target {budget['paragraphs']}"),
+              f"{paragraphs} paragraphs vs ceiling {budget['paragraphs']}"),
     ]
 
 
@@ -700,12 +705,13 @@ def _absorb_prompt(ctx: dict) -> list[dict]:
 
 CASES: tuple[Case, ...] = (
     Case(id="scene-length",
-         hypothesis="one assigned actor's prose respects its approximate word and paragraph targets",
+         hypothesis="one assigned actor's prose respects its word and paragraph ceilings",
          build=build_scene_length, prompt=_scene_prompt, grade=grade_scene_length,
          recordings=(
              Recording(BASELINE),
              Recording("bloated", ("length.words", "length.paragraphs")),
-             Recording("collapsed", ("length.words",)))),
+             Recording("collapsed"),
+             Recording("empty", ("length.words",)))),
     Case(id="roll-fence",
          hypothesis="a roll-requiring prompt emits a closed, parseable ```roll "
                     "fence naming a check and actor the bound module defines",
