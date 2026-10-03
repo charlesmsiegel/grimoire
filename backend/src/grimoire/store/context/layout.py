@@ -20,9 +20,9 @@ only function is to break that promise. Prompt order and drop order are two
 axes, and only the first is a preference.
 
 `except_opener` is the same kind of thing rather than a taste: the opener is
-streamed unpersisted into a box the reader adopts by hand, so the
-machine-readable tracker block must not render into it, and there is no reply
-after it to strip it from.
+streamed unpersisted into a box the reader adopts by hand, and the scene state
+is not shown to it -- a draft for a scene with no tracked posts would only be
+handed some earlier moment's state.
 
 The label is the INSPECTOR's row name and never reaches the model — each
 section template emits its own `# Heading`. Editing the text a section sends is
@@ -72,7 +72,10 @@ def _clean_label(entry: dict, default: str) -> str:
 
 #: Section ids that were RENAMED, old -> new. A stored layout naming the old id
 #: is rewritten before the merge sees it.
-_RENAMED = {"message_examples": "voice_examples"}
+_RENAMED = {"message_examples": "voice_examples",
+            # The retired turn-state ledger's section; the scene tracker's
+            # state took its place in the catalog and its place in a layout.
+            "transient_state": "tracker_state"}
 
 
 def _migrate(stored: list) -> list:

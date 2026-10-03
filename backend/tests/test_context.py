@@ -4420,7 +4420,9 @@ def test_the_speaker_section_sits_after_character_state(monkeypatch, tmp_path):
     cid, sid = _group_scene(monkeypatch, tmp_path)
     config.write_config(speaker_turn_taking="on")
     ids = [s.id for s in context.SECTIONS]
-    assert ids.index("active_speaker") == ids.index("character_state") + 1
+    # After BOTH state sections: the standing state, then the scene state.
+    assert ids.index("tracker_state") == ids.index("character_state") + 1
+    assert ids.index("active_speaker") == ids.index("tracker_state") + 1
 
 
 def test_the_speaker_section_names_the_named_npc(monkeypatch, tmp_path):
