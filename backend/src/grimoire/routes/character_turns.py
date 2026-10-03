@@ -460,9 +460,7 @@ async def _frames(
                 _prepare, cid, sid, run, token, round_record, actor, conn, appended
             )
             appended = ()
-            watcher = store.response_protocol.ResponseWatcher(
-                perception=actor != "grimoire" and store.config.perception_rider()
-            )
+            watcher = store.response_protocol.ResponseWatcher(perception=actor != "grimoire")
             yield streaming._sse(
                 {
                     "response_start": {
@@ -874,9 +872,7 @@ def regenerate_response(
 
 
 async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, messages, outcome):
-    watcher = store.response_protocol.ResponseWatcher(
-        perception=record["actor_ref"] != "grimoire" and store.config.perception_rider()
-    )
+    watcher = store.response_protocol.ResponseWatcher(perception=record["actor_ref"] != "grimoire")
     meter = store.usage.meter(
         "regenerate",
         campaign=cid,
