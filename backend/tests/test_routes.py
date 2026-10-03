@@ -10435,7 +10435,10 @@ def test_chat_without_pc_stays_unstamped(client):
                        json={"content": "hello"}) as r:
         r.read()
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs[0] == {"role": "user", "content": "hello"}
+    # Only the fields this test is about: the post also carries an opaque
+    # tracker `post_id` now (test_tracker_post_ids.py owns that).
+    assert (msgs[0]["role"], msgs[0]["content"]) == ("user", "hello")
+    assert "speaker" not in msgs[0]
 
 
 def test_reply_is_split_into_per_speaker_posts(client):

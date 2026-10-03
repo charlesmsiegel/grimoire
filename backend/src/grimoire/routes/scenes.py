@@ -745,8 +745,14 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # (retry, next turn, ...).
             content = store.context.expand_macros(
                 turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
+            # The id is minted here, in the same hold as the append, and only
+            # while tracking: the tracker keys a record to a user post by it
+            # (an index renumbers on every cut), and a campaign with the
+            # tracker off should not grow metadata nothing will read.
+            post_id = (uuid.uuid4().hex
+                       if store.tracker.settings.enabled(cid) else None)
             posted_at = store.scenes.append_message(
-                cid, sid, "user", content, speaker=speaker)
+                cid, sid, "user", content, speaker=speaker, post_id=post_id)
             # In the SAME hold as the append it describes. This is what lets a
             # recovery after the run record expired ask the only decisive
             # question -- is this attempt's post still here? -- rather than
