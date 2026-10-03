@@ -185,7 +185,11 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
         return record, messages
 
 
-def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None):
+def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None,
+          tracked=None):
+    """Persist this contribution's variant. A key the tracker marked `pending`
+    for it is appended to `tracked`, for the caller to start once the turn's
+    terminal frames are out (see `_start_tracking`)."""
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         text, authority_issue = _normalise(cid, sid, record, watcher.narration)
@@ -215,6 +219,13 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
         else:
             saved()
         streaming._turn_settled(cid)
+        if text and tracked is not None:
+            # Marked HERE, in the hold that wrote the variant, where the
+            # tracker's lock acquisition is reentrant: anywhere later on this
+            # path it would be a fresh wait in front of the player's frames.
+            key = tracker_routes.mark_response(cid, sid, record["id"])
+            if key:
+                tracked.append(key)
         return streaming._tail_length(cid, sid) if text else None
 
 
@@ -353,7 +364,8 @@ async def _stream_contribution(client, messages, conn, meter, watcher, run):
         raise anyio.get_cancelled_exc_class()()
 
 
-def _pause(cid, sid, run, token, record, watcher, round_record, continuation, outcome, actor):
+def _pause(cid, sid, run, token, record, watcher, round_record, continuation, outcome, actor,
+           tracked=None):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         if continuation:
@@ -370,7 +382,11 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
             proposal_id=proposal["id"],
         )
         # Proposal and paused identity survive before any pre-fence prose.
-        at = _save(cid, sid, run, token, record, watcher, "incomplete", round_record, continuation)
+        # The prose before the roll fence is a post the transcript shows, so it
+        # is tracked; the resumed part marks the finished variant again, over
+        # the whole response.
+        at = _save(cid, sid, run, token, record, watcher, "incomplete", round_record, continuation,
+                   tracked=tracked)
         _round_state(
             cid,
             sid,
@@ -382,7 +398,7 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
         )
         outcome.persisted(at)
         streaming._turn_settled(cid)
-        return proposal, at
+        return proposal
 
 
 async def _first_actor(cid, sid, client, round_record):
@@ -414,6 +430,10 @@ async def _frames(
     record = None
     watcher = None
     meter = None
+    # Tracker keys this turn marked `pending`, started in `finally` once the
+    # terminal frames are out -- in transcript order, which is the order the
+    # scene's tracker lock runs them in.
+    tracked: list[str] = []
     try:
         actor, round_record = await _first_actor(cid, sid, client, round_record)
         while actor and not run.cancel_requested:
@@ -465,7 +485,7 @@ async def _frames(
             paused = watcher.roll.complete or watcher.roll.truncated
             status = "incomplete" if paused or run.cancel_requested else "complete"
             if paused:
-                proposal, at = await run_in_threadpool(
+                proposal = await run_in_threadpool(
                     _pause,
                     cid,
                     sid,
@@ -477,22 +497,17 @@ async def _frames(
                     continuation,
                     outcome,
                     actor,
+                    tracked,
                 )
-                # The prose before the roll fence is a post the transcript
-                # shows, so it is tracked now; the resumed part schedules the
-                # finished variant again over the whole response.
-                await _track(app, cid, sid, record["id"], client, at)
                 yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
                 outcome.land()
                 yield streaming._sse({"done": True})
                 return
             at = await run_in_threadpool(
-                _save, cid, sid, run, token, record, watcher, status, round_record, continuation
+                _save, cid, sid, run, token, record, watcher, status, round_record, continuation,
+                tracked,
             )
             outcome.persisted(at)
-            # The response is on the transcript: track it. `at` is None when
-            # nothing was written (an empty reply), and then there is no post.
-            await _track(app, cid, sid, record["id"], client, at)
             if watcher.issue == "empty response":
                 await run_in_threadpool(_round_state, cid, sid, round_record, status="incomplete")
                 outcome.fail("empty_response", "The model returned no response prose.")
@@ -541,21 +556,22 @@ async def _frames(
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except LLMError as exc:
         await _rescue(
-            app, client, cid, sid, run, token, record, watcher, round_record, continuation,
-            outcome, meter, exc,
+            cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, exc,
+            tracked=tracked,
         )
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except BaseException:
         with anyio.CancelScope(shield=True):
             await _rescue(
-                app, client, cid, sid, run, token, record, watcher, round_record, continuation,
-                outcome, meter,
+                cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter,
+                tracked=tracked,
             )
         raise
     finally:
         with anyio.CancelScope(shield=True):
             await streaming._fire_follow_up(after_turn, outcome)
+            await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
 
 def _abort_meter(meter):
@@ -564,8 +580,8 @@ def _abort_meter(meter):
 
 
 async def _rescue(
-    app, client, cid, sid, run, token, record, watcher, round_record, continuation, outcome,
-    meter, error=None,
+    cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, error=None,
+    *, tracked=None,
 ):
     if meter:
         if error:
@@ -574,7 +590,6 @@ async def _rescue(
             meter.done("aborted")
 
     def save():
-        saved = None
         with store.locks.campaign_lock(cid):
             _fence(cid, sid, run, token)
             if watcher and record:
@@ -582,7 +597,7 @@ async def _rescue(
                 if current["status"] != "complete":
                     watcher.finish()
                     if watcher.roll.complete or watcher.roll.truncated:
-                        _, at = _pause(
+                        _pause(
                             cid,
                             sid,
                             run,
@@ -593,8 +608,9 @@ async def _rescue(
                             continuation,
                             outcome,
                             record["actor_ref"],
+                            tracked,
                         )
-                        return at
+                        return
                     at = _save(
                         cid,
                         sid,
@@ -605,33 +621,33 @@ async def _rescue(
                         "incomplete",
                         round_record,
                         continuation,
+                        tracked,
                     )
                     outcome.persisted(at)
-                    saved = at
             current_round = store.responses.unfinished(cid, sid)
             if current_round and current_round["status"] != "paused":
                 _round_state(cid, sid, round_record, status="incomplete")
-            return saved
 
-    at = await run_in_threadpool(save)
-    # A partial the rescue kept is a post the transcript shows. Scheduled
-    # after `save` returns, outside its campaign-lock hold.
-    if record:
-        await _track(app, cid, sid, record["id"], client, at)
+    await run_in_threadpool(save)
 
 
-async def _track(app, cid, sid, rid, client, at):
-    """Schedule the tracker update for response `rid` if a write landed (`at`).
+async def _start_tracking(app, cid, sid, client, tracked, identity):
+    """Start the tracker runs for the keys this turn marked `pending`.
 
-    In a worker thread: this is the event loop, and reserving a run goes
-    through the lifespan's portal, which raises from the loop thread (the same
-    reason `streaming._fire_follow_up` gives). `schedule_response` swallows its
-    own failures, so the turn's outcome cannot depend on it.
+    AFTER the terminal frames, for `streaming._fire_follow_up`'s reason: the
+    player's `done` (or proposal) frame must not wait on bookkeeping. Starting
+    a run takes no campaign lock (`tracker.start`); only its failure path does,
+    to mark the record `failed` rather than leave it `pending` behind a run
+    that does not exist. In a worker thread, because reserving a run goes
+    through the lifespan's portal, which raises from the loop thread.
 
     `app` is None only for a test driving `_frames` with no app behind it --
-    there is no lifespan to run an update on, so there is nothing to track."""
-    if at is not None and app is not None:
-        await run_in_threadpool(tracker_routes.schedule_response, app, cid, sid, rid, client)
+    there is no lifespan to run an update on. The keys stay `pending`, which is
+    the truth: nothing was started."""
+    if app is None:
+        return
+    for key in tracked:
+        await run_in_threadpool(tracker_routes.start, app, cid, sid, key, client, identity)
 
 
 def resume_roll(
@@ -855,6 +871,10 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
         round_id=record["round_id"] or "",
         response_id=rid,
     )
+    # The new variant's tracker key, marked inside `_accept_reroll`'s hold and
+    # started in `finally` once the terminal frames are out. The previous
+    # variant's record is kept, so swiping back to it is free.
+    tracked: list[str] = []
     try:
         await run_in_threadpool(_capture, cid, sid, "regenerate", messages, conn)
         yield streaming._sse(
@@ -871,14 +891,9 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
         meter.done()
 
         accepted = await run_in_threadpool(
-            _accept_reroll, cid, sid, rid, run, token, record, watcher
+            _accept_reroll, cid, sid, rid, run, token, record, watcher, tracked
         )
         if accepted:
-            # The new variant is the response's active one now, and gets its
-            # own record; the previous variant's record is kept, so swiping
-            # back to it reads a state already worked out instead of paying
-            # for a fresh run.
-            await _track(app, cid, sid, rid, client, True)
             outcome.land()
             yield streaming._sse({"response_end": {"id": rid, "status": "complete"}})
             yield streaming._sse({"done": True})
@@ -899,9 +914,12 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
     except BaseException:
         meter.done("aborted")
         raise
+    finally:
+        with anyio.CancelScope(shield=True):
+            await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
 
-def _accept_reroll(cid, sid, rid, run, token, record, watcher):
+def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         if run.cancel_requested or watcher.roll.complete or watcher.roll.truncated:
@@ -925,6 +943,13 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher):
         )
         store.responses.activate(cid, sid, rid, variant["id"])
         streaming._turn_settled(cid)
+        if tracked is not None:
+            # In this hold, for `_save`'s reason: reentrant here, a fresh wait
+            # in front of the frames anywhere after it.
+            key = tracker_routes.mark(
+                cid, sid, store.tracker.paths.response_key(rid, variant["id"]))
+            if key:
+                tracked.append(key)
         return True
 
 
