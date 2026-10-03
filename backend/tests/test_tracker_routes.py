@@ -131,6 +131,19 @@ def test_summary_lists_keys_in_order_with_entries(client):
     assert body["labels"]["visible_mood"] == "Visible mood"
 
 
+def test_a_mood_a_layer_made_a_list_reaches_the_tiles_as_text(client):
+    """A world may retype `visible_mood` to a list; the cast tiles take one
+    string, so a list is rendered as its items joined, never as an array."""
+    _use(client, _llm({"changes": {"Mara": {"visible_mood": ["fear", "", "uncertain"]}}}))
+    cid, sid = _scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    store.tracker.fields.write_world_layer(
+        wid, {"change": {"visible_mood": {"type": "list"}}})
+    _played(client, cid, sid, sends=1)
+    moods = client.get(_base(cid, sid)).json()["moods"]
+    assert moods == {"characters:mara": "fear, uncertain"}
+
+
 def test_summary_serves_a_hand_mangled_index_in_the_shape_it_promises(client):
     """The transcript reads `entry.changed.length` and `entry.flags.*` off
     every entry; one written by hand (or by an older version) must not reach
@@ -896,7 +909,7 @@ def test_a_hand_mangled_snapshot_is_served_in_the_shape_it_promises(client):
             "pose": {"value": 5, "aware": "present"}}}}}), encoding="utf-8")
     r = client.get(_base(cid, sid))
     assert r.status_code == 200, r.text
-    assert r.json()["moods"] == {"characters:winifred": ["calm"]}
+    assert r.json()["moods"] == {"characters:winifred": "calm"}
     r = client.get(f"{_base(cid, sid)}/records/{keys[-1]}")
     assert r.status_code == 200, r.text
     assert r.json()["snapshot"] == {"characters:winifred": {"present": True, "fields": {

@@ -739,17 +739,29 @@ def _flags(entry: dict) -> dict:
     return {**dict.fromkeys(store.tracker.records.FLAGS, False), **(entry.get("flags") or {})}
 
 
+def _mood_text(value) -> str:
+    """A stored mood as the one line a cast tile shows. A layer may retype
+    `visible_mood` to a list, so a list is its non-empty items joined; anything
+    that is neither is no mood at all."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return ", ".join(v.strip() for v in value if isinstance(v, str) and v.strip())
+    return ""
+
+
 def _moods(snapshot: dict, fields: list[dict]) -> dict:
     """`{ref: visible_mood}` for the characters present at the tail, for the
-    cast tiles. Nothing for a character with no mood yet, and nothing at all
-    when the field is switched off for this scene."""
+    cast tiles -- always a string, whatever type the field's layers gave it.
+    Nothing for a character with no mood yet, and nothing at all when the field
+    is switched off for this scene."""
     if not any(f["key"] == "visible_mood" for f in store.tracker.fields.active(fields)):
         return {}
     out = {}
     for ref, ent in snapshot.items():
-        value = ((ent.get("fields") or {}).get("visible_mood") or {}).get("value")
-        if ent.get("present") and value:
-            out[ref] = value
+        text = _mood_text(((ent.get("fields") or {}).get("visible_mood") or {}).get("value"))
+        if ent.get("present") and text:
+            out[ref] = text
     return out
 
 
