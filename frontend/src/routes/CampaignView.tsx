@@ -11,13 +11,15 @@ import {
   type CampaignBudget,
   type IncomingRef,
   type SceneUsage,
-  type UsagePostBucket,
+  type TrackerSummary, type UsagePostBucket,
 } from "../api/client";
 import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
 import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
+import { shareSummary } from "../components/tracker/share";
+import { lastOkKey, pendingAfter, type NowTracker } from "../components/tracker/TrackerNow";
 import { errorText, isProviderFailure } from "../api/errors";
 import { configChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
@@ -31,6 +33,7 @@ import { IncomingReview } from "../components/IncomingReview";
 import { CompositionPanel } from "../components/CompositionPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
+import { SceneTrackerPanel } from "../components/tracker/SceneTrackerPanel";
 import { SceneInspector } from "../components/SceneInspector";
 import { UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
@@ -103,6 +106,10 @@ const NO_ALTERNATES: ScopedAlternates = {
 // recent end. Older posts arrive by scrolling up (or the button that scroll
 // falls back to), which prepends the next page and holds the viewport still.
 const PAGE_SIZE = 60;
+
+/** The cast column's moods while there are none to show. A module-level object
+ *  so the memoized column is handed the same one every render. */
+const NO_MOODS: Readonly<Record<string, string>> = Object.freeze({});
 // How many extra rounds Stop will ask the server before giving the composer
 // back. The cancel route waits for the run itself, but that wait is bounded, so
 // a provider slow to unwind can answer while still `running`; each round is
@@ -240,6 +247,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [showMechanics, setShowMechanics] = useState(false);
   const [showStyle, setShowStyle] = useState(false);
   const [showCover, setShowCover] = useState(false);
+  /** The per-scene tracker fields: what this scene stops tracking, and what it adds. */
+  const [showTracker, setShowTracker] = useState(false);
   /** Whether this scene's director notes are visible.
    *
    *  Per scene and not persisted: it is a way of looking at what is on screen,
@@ -1633,6 +1642,91 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       .catch(() => { if (live) setPostCosts(null); });
     return () => { live = false; };
   }, [usageCid, usageSid, ctxKey]);
+
+  // The scene state tracker (routes/tracker.py), read for `loaded` like the
+  // costs above and for the same reason: it describes the posts on screen, so
+  // it is held WITH the scene it was read for and only shown where that is
+  // still the transcript on screen. Re-read on every `ctxKey` beat, which is
+  // what a landed turn bumps; `trackerTick` is the disclosures asking for one
+  // (a retry, a re-run, an edit). Swallowed on failure: a tracker that cannot
+  // be read is not a reason to put an error over a transcript.
+  const [trackerRead, setTrackerRead] =
+    useState<{ cid: string; sid: string; summary: TrackerSummary } | null>(null);
+  const [trackerTick, setTrackerTick] = useState(0);
+  const trackerCid = loaded?.cid ?? null;
+  const trackerSid = loaded?.sid ?? null;
+  // Reads can land out of order -- the main read and the poll are separate
+  // requests -- and an older answer that lacks a post the newer one has would
+  // overwrite it, read as "never tracked", and (nothing pending) end the poll
+  // for good. So each request is stamped when it is ISSUED, and an answer older
+  // than the newest one already landed is dropped, as is one for a scene that
+  // is no longer the loaded one.
+  const trackerSeq = useRef({ issued: 0, landed: 0 });
+  const trackerScene = useRef<{ cid: string | null; sid: string | null }>({ cid: null, sid: null });
+  trackerScene.current = { cid: trackerCid, sid: trackerSid };
+  const readTracker = useCallback((tcid: string, tsid: string) => {
+    const seq = ++trackerSeq.current.issued;
+    return api.getTracker(tcid, tsid).then((summary) => {
+      if (seq < trackerSeq.current.landed) return;
+      if (trackerScene.current.cid !== tcid || trackerScene.current.sid !== tsid) return;
+      trackerSeq.current.landed = seq;
+      setTrackerRead((prev) => {
+        const before = prev && prev.cid === tcid && prev.sid === tsid ? prev.summary : null;
+        const shared = shareSummary(before, summary);
+        // Nothing moved: keep the very state object, so no render follows.
+        if (prev && before === shared) return prev;
+        return { cid: tcid, sid: tsid, summary: shared };
+      });
+    });
+  }, []);
+  useEffect(() => {
+    if (!trackerCid || !trackerSid) return;
+    readTracker(trackerCid, trackerSid).catch(() => { /* see above */ });
+  }, [trackerCid, trackerSid, ctxKey, trackerTick, readTracker]);
+  const tracker = trackerRead && trackerRead.cid === trackerCid && trackerRead.sid === trackerSid
+    ? trackerRead.summary : null;
+  const trackerKeys = useMemo(
+    () => Object.fromEntries((tracker?.keys ?? []).map((k) => [k.index, k.key])),
+    [tracker?.keys]);
+  // How many tracked posts "Re-run tracker from here" covers at each key --
+  // that one and every one after it -- so the confirm can name the cost.
+  const trackerRerun = useMemo(() => {
+    const keys = tracker?.keys ?? [];
+    return Object.fromEntries(keys.map((k, i) => [k.key, keys.length - i]));
+  }, [tracker?.keys]);
+  // What the dossier's "Now" section reads: the latest post whose tracking
+  // landed, for the open actor. Memoized -- a literal here would hand the
+  // memoized dossier a new object on every keystroke and streamed delta.
+  const nowKey = tracker ? lastOkKey(tracker.keys, tracker.entries) : null;
+  const nowEntry = nowKey && tracker ? tracker.entries[nowKey] : undefined;
+  const nowEnabled = tracker?.enabled ?? false;
+  const nowUpdating = tracker ? pendingAfter(tracker.keys, tracker.entries, nowKey) : false;
+  const dossierTracker = useMemo<NowTracker | null>(
+    () => selectedActor && activeId
+      ? { cid, sid: activeId, key: nowKey, ref: `${selectedActor.kind}:${selectedActor.id}`,
+          enabled: nowEnabled, entry: nowEntry, updating: nowUpdating }
+      : null,
+    [cid, activeId, selectedActor, nowKey, nowEnabled, nowEntry, nowUpdating]);
+  // While a post is being tracked, ask again every two seconds: one timeout
+  // chain, re-armed only once the last read has settled so a slow server is
+  // never asked twice at once, and cleared with the scene or the view. A read
+  // that fails doubles the wait (to 30 s) rather than hammering a server that
+  // is struggling; the next success goes back to two seconds.
+  const trackerPending = Object.values(tracker?.entries ?? {}).some((e) => e.status === "pending");
+  useEffect(() => {
+    if (!trackerPending || !trackerCid || !trackerSid) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = (delay: number) => {
+      timer = setTimeout(() => {
+        void readTracker(trackerCid, trackerSid)
+          .then(() => 2000, () => Math.min(delay * 2, 30000))
+          .then((next) => { if (live) arm(next); });
+      }, delay);
+    };
+    arm(2000);
+    return () => { live = false; clearTimeout(timer); };
+  }, [trackerPending, trackerCid, trackerSid, readTracker]);
 
   /** The chips, but only where they describe the transcript on screen. */
   const sceneCosts =
@@ -4085,6 +4179,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     rerollResponse: (id, guidance, route) => void rerollResponse(id, guidance, route),
     activateVariant: (id, variant) => void mutateResponse(id, variant),
     createCharacter: (rid) => void openCharacterPassage(rid),
+    refreshTracker: () => setTrackerTick((n) => n + 1),
   });
 
   const editingAny = editing !== null;
@@ -4102,10 +4197,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     busy, rolling, active: transcriptIsActive,
     responseDisabled: busy || rolling || sceneLocked || editingAny || renamesInFlight > 0,
     lastIndex: firstIndex + messages.length - 1,
-    rerollAt, canReroll, postChips, citedNeedle, lastOfResponse,
+    rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
+    trackerRerun,
   }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, sceneLocked,
        editingAny, renamesInFlight, firstIndex, messages.length, rerollAt, canReroll,
-       postChips, citedNeedle, lastOfResponse]);
+       postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
 
   // The rows themselves, as one list built only when one of its inputs moves.
   // Each row would skip a keystroke on its own; this skips even asking them,
@@ -4251,15 +4347,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   /** Which panel is above the transcript, if any.
    *
-   *  Derived rather than stored beside the seven flags, so it cannot disagree
+   *  Derived rather than stored beside the eight flags, so it cannot disagree
    *  with them. Only ONE can be open at a time in practice — every menu item
    *  toggles and the panels stack — but the first match is what the Close
-   *  button names, and closing clears all seven anyway.
+   *  button names, and closing clears all eight anyway.
    */
   const openPanel = ([
     [showChanges, "Changes"], [showIncoming, "World updates"],
     [showComposition, "Composition"], [showMechanics, "Mechanics"],
     [showCalendar, "Calendar"], [showStyle, "Response"], [showCover, "Cover"],
+    [showTracker, "Tracker"],
   ] as const).flatMap(([open, label]) => (open ? [{ label }] : []))[0];
 
   /** Run a menu item, then shut the menu it was picked from.
@@ -4275,13 +4372,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   /** Shut everything the menu can open.
    *
-   *  All seven rather than the one `openPanel` named: two can be open at once
+   *  All eight rather than the one `openPanel` named: two can be open at once
    *  (nothing forbids it), and a Close that shut only the one it happened to
    *  name would leave the other with no control on the bar at all. */
   function closePanels() {
     setShowChanges(false); setShowIncoming(false); setShowComposition(false);
     setShowMechanics(false); setShowCalendar(false); setShowStyle(false);
-    setShowCover(false);
+    setShowCover(false); setShowTracker(false);
   }
 
   // The column is one swap zone: cast, or one actor. `columnMode` is derived
@@ -4295,9 +4392,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                      onHoverQuote={setCitedQuote} onGoToTurn={goToQuoteStable}
                      onBack={closeActorStable}
                      onOpenActor={openDrawerActor}
-                     onRemove={removeSelectedActorStable} busy={sceneLocked} />
+                     onRemove={removeSelectedActorStable} busy={sceneLocked}
+                     tracker={dossierTracker}
+                     onTrackerChanged={transcriptActions.refreshTracker} />
     : <CastColumn cid={cid} sid={activeId ?? ""} hasPosts={messages.length > 0} refreshKey={ctxKey}
                   cast={cast} roster={roster} briefing={briefing}
+                  moods={tracker?.moods ?? NO_MOODS}
                   onOpen={transcriptActions.openActor}
                   // A confirmed enter or leave writes a transition line into the
                   // transcript as well as moving the cast, so the scene is
@@ -4405,7 +4505,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               the chrome, on the page, and in the palette. What is left on this
               bar is what is about the SCENE in front of you; what belongs to
               the campaign moved to the hub. */}
-          {/* Seven panels behind one control (`Scene ⋯`), which is the design's
+          {/* Eight panels behind one control (`Scene ⋯`), which is the design's
               overflow and is the mobile-clutter half of the brief. The bar's
               own focus-mode comment already conceded the cost of not having
               one: "eleven controls at the 44px touch target this width
@@ -4446,6 +4546,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 ["Calendar", showCalendar, setShowCalendar],
                 ["Response", showStyle, setShowStyle],
                 ["Cover", showCover, setShowCover],
+                ["Tracker", showTracker, setShowTracker],
               ] as const).map(([label, open, set]) => (
                 <button key={label} className="scene-menu-item"
                         aria-pressed={open}
@@ -4592,7 +4693,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             </div>
           )}
           {!absorb && (<>
-          {/* Every one of these six is opened AND closed from the scene bar,
+          {/* Every one of these eight is opened AND closed from the scene bar,
               which focus mode does not render — so one left open when focus
               starts would be a panel above the transcript with no control that
               can shut it. They keep their state and come back with the bar. The
@@ -4635,6 +4736,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           {!focus && showCover && (
             <div className="panel-slot">
               <CampaignCover cid={cid} />
+            </div>
+          )}
+          {/* Keyed by scene as well as campaign: it holds one scene's layer, and
+              a rename or a switch must not show it another scene's fields. */}
+          {!focus && showTracker && activeId && (
+            <div className="panel-slot">
+              <SceneTrackerPanel key={`${cid}:${activeId}`} cid={cid} sid={activeId} />
             </div>
           )}
           {!focus && showChanges && <ChangesPanel cid={cid} />}

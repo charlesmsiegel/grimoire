@@ -314,7 +314,7 @@ def test_one_present_npc_needs_no_selector(client):
     assert store.scenes.read_scene(cid, sid)["messages"][-1]["speaker"] == "Mara"
 
 
-def test_foreign_state_is_not_recorded(client):
+def test_a_legacy_state_block_is_stripped_and_nothing_records_it(client):
     cid, sid = seed(client)
     fake = FakeLLM(
         [
@@ -329,8 +329,11 @@ def test_foreign_state_is_not_recorded(client):
         json={"content": "Hello", "speaker_ref": "characters:mara"},
     )
     assert "error" not in result.text, result.text
-    assert "FOREIGN_SENTINEL" not in str(store.turnstate.read(cid))
-    assert "watchful" in str(store.turnstate.read(cid))
+    stored = str(store.scenes.read_scene(cid, sid)["messages"])
+    assert "Wait." in stored
+    assert "```state" not in stored
+    assert "FOREIGN_SENTINEL" not in stored
+    assert "watchful" not in stored
 
 
 def test_declined_roll_whole_response_reroll_removes_old_parts(client):
@@ -559,3 +562,49 @@ def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client):
     roster, candidates = narrator.split("Present people:", 1)[1].split("Eligible next speakers:", 1)
     assert "characters:mara" in roster and "characters:winifred" in roster
     assert "characters:mara" not in candidates and "characters:winifred" in candidates
+
+
+PERCEPTION_REPLY = (
+    '```perception\n{"known": [], "heard_or_seen": [], "unknown": []}\n```\n'
+    'Mara answers.\n```handoff\n{"next":null}\n```'
+)
+
+
+def _chat_mara(client, cid, sid):
+    return client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/chat",
+        json={"content": "Hello", "speaker_ref": "characters:mara"},
+    )
+
+
+def test_perception_block_is_stripped_whatever_the_rider_setting(client):
+    # The setting gates only the prompt instruction; the watcher always strips
+    # a leading fence, which is harmless when nothing asked for one.
+    for rider in ("on", "off"):
+        store.config.write_config(perception_rider=rider)
+        cid, sid = seed(client)
+        client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[PERCEPTION_REPLY]])
+        assert _chat_mara(client, cid, sid).status_code == 200
+        messages = store.scenes.read_scene(cid, sid)["messages"]
+        assert messages[-1]["content"] == "Mara answers."
+
+
+def test_reroll_strips_a_fence_the_frozen_prompt_asked_for(client):
+    # The reroll prompt is a frozen snapshot taken with the rider on; switching
+    # it off afterwards must not leave the fence in the stored variant.
+    store.config.write_config(perception_rider="on")
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[PERCEPTION_REPLY]])
+    assert _chat_mara(client, cid, sid).status_code == 200
+    rid = store.scenes.read_scene(cid, sid)["messages"][-1]["response_id"]
+    store.config.write_config(perception_rider="off")
+    retry = FakeLLM([[PERCEPTION_REPLY.replace("Mara answers.", "Replacement.")]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: retry
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    result = client.post(base + f"/responses/{rid}/regenerate", json={})
+    assert "error" not in result.text, result.text
+    assert retry.calls == 1
+    content = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
+    assert content == "Replacement."
+    record = client.get(base + f"/responses/{rid}").json()
+    assert not any("perception" in str(v) for v in record["variants"])

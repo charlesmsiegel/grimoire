@@ -122,10 +122,6 @@ export type Config = {
    *  made about `first_run` belongs to a library it is no longer looking at. */
   data_dir: string;
   prompt_log_depth: string;
-  /** Posts of transcript tail the transient-state ledger is read over; "0" disables it. */
-  turnstate_depth: string;
-  /** Consecutive recorded values that promote a transient field to character state. */
-  promote_streak: string;
   /** Posts between live rolling-summary refreshes; "0" turns the automatic
    *  refresh off, leaving only the inspector's own Refresh button. */
   rolling_summary_every: string;
@@ -172,6 +168,12 @@ export type Config = {
    *  is not necessarily what is in force: an unrecognized value is narrowed to
    *  the default on the server, and `GET /logs/level` reports the real one. */
   log_level: string;
+  /** The GLOBAL scene-tracker switch, "on" | "off"; a campaign may override it
+   *  (`getCampaignTracker`). */
+  tracker: string;
+  /** "on" adds the perception rider to the prompt; "off" keeps the tracker's
+   *  record without that prompt cost. */
+  perception_rider: string;
 };
 /**
  * The subset of Config the Configuration page writes — the mirror of the
@@ -185,14 +187,15 @@ export type ConfigUpdate = Partial<Pick<Config,
   "llm_retries" | "fallback_connection_id" |
   "context_budget" | "context_scan_depth" | "archive_depth" |
   "setup_done" | "prompt_log_depth" |
-  "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
+  "rolling_summary_every" |
   "scene_break_every" |
   "offscene_known_limit" |
   "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
-  "replay_fork_threshold" | "advance_fork_threshold" | "log_level">>;
+  "replay_fork_threshold" | "advance_fork_threshold" | "log_level" |
+  "tracker" | "perception_rider">>;
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
@@ -343,7 +346,8 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
   actor_ref?: string;
   response_thinking?: string;
   response_id?: string; response_part?: string; response_status?: "complete" | "incomplete";
-  context_changed?: boolean; response_can_reroll?: boolean };
+  context_changed?: boolean; response_can_reroll?: boolean;
+  post_id?: string };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
   variants: { id: string; content: string; reasoning?: string; status: string; issue?: string | null }[] };
@@ -2272,3 +2276,61 @@ export type WorldImage = {
   name: string; ext: string; v: string;
   description?: string; described?: boolean;
 };
+
+// --- the scene state tracker (routes/tracker.py) ---------------------------------
+
+/** Who knows a value: everyone present, or exactly these refs. */
+export type TrackerAware = "present" | string[];
+export type TrackerValue = { value: string | string[]; aware: TrackerAware; set_by?: "user" };
+export type TrackerActor = { present: boolean; fields: Record<string, TrackerValue> };
+/** `{ref: actor}` -- one record's whole state of the scene. */
+export type TrackerSnapshot = Record<string, TrackerActor>;
+export type TrackerField = {
+  key: string; label: string; type: "text" | "list" | "enum";
+  aware: "present" | "self"; hint: string; options?: string[];
+  /** Switched off: kept in the list so a stored value still has a label. */
+  off?: boolean;
+};
+export type TrackerEntry = {
+  status: "pending" | "ok" | "failed";
+  changed: [string, string, string | string[]][];
+  flags: { upstream_changed: boolean; text_changed: boolean };
+  /** On a failed entry; "interrupted" for a `pending` one nothing is running. */
+  error?: string;
+};
+/** `GET .../tracker`: every tracked post's key in order, with its index entry. */
+export type TrackerSummary = {
+  enabled: boolean;
+  names: Record<string, string>;
+  keys: { index: number; key: string }[];
+  entries: Record<string, TrackerEntry>;
+  /** `{ref: visible_mood}` for the characters present at the tail. */
+  moods: Record<string, string>;
+  /** `{field key: label}`, switched-off fields included. */
+  labels: Record<string, string>;
+};
+export type TrackerRecord = {
+  key: string; status: TrackerEntry["status"]; flags: TrackerEntry["flags"];
+  /** Null for a record that failed before it ever landed. */
+  snapshot: TrackerSnapshot | null;
+  fields: TrackerField[]; names: Record<string, string>; error?: string;
+};
+/** One layer of field definitions. The world and campaign layers may add,
+ *  change or switch off; the scene layer may only switch off or add. */
+export type TrackerLayer = {
+  fields?: TrackerField[]; change?: Record<string, Partial<TrackerField>>; off?: string[];
+};
+export type TrackerLayerBundle = {
+  layer: TrackerLayer; effective: TrackerField[]; inherited: TrackerField[];
+};
+export type TrackerEdits = Record<string, Record<string, {
+  value?: string | string[]; aware?: TrackerAware;
+}>>;
+/** Where a field-definition layer lives. */
+export type TrackerScope =
+  | { kind: "world"; wid: string }
+  | { kind: "campaign"; cid: string }
+  | { kind: "scene"; cid: string; sid: string };
+/** A campaign's own switch: "" follows the global one. */
+export type TrackerSetting = "" | "on" | "off";
+export type CampaignTrackerSetting = { setting: TrackerSetting; enabled: boolean };

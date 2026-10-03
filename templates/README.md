@@ -201,6 +201,26 @@ whether anything was settled. The reply is a JSON object
 with empty prose, because this runs automatically off the play loop. Nothing
 here ends or splits a scene — the answer is a suggestion in the inspector.
 
+### `tracker/` — the scene state tracker's update call, after every post
+Mirrors `store/tracker/prompt.py:build_messages`. Messages: system, user. One
+small call per post: it is shown the tracked fields, each present character's
+current values and the new post, and replies with only what the post changes
+(`{"changes", "awareness"}`, parsed by `tracker.merge.parse_reply`).
+`update_system.j2` takes no vars; the cassette matches its first sentence.
+`update_user.j2` vars:
+- `fields` -- the **active** fields only (`fields.active`; a switched-off field
+  is never shown), as `{key, type, aware, options, hint}`. `options` is the
+  enum's list, empty otherwise; `aware == "self"` renders `[private by default]`
+- `characters` -- one block per **present** character, `{name, new, entries}`;
+  `entries` is `{key, text, user_set, private, known_to}` per non-empty value.
+  `user_set` renders `(user-set)`; `private` (a list-aware value) renders
+  `(private)` or `(private, known to: <names>)`; `new` marks a newcomer
+- `newcomers` -- `prompt.newcomer(cid, ref)` rows, `{ref, name, description,
+  state}`: the card (or persona) description and the standing state of a
+  character the tracker has not recorded yet. A read that fails is `""`
+- `context_posts` and `post` -- `{speaker, content}`; the new post is last in
+  the message, so the reply is anchored on it
+
 ### `scene/` — the context builder (`store/context/`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).
@@ -303,18 +323,23 @@ substituted by code:
   the model cannot tell from a fact. A `pcless` scene is the director's own
   view and gets the stored value unfiltered — `context/world_state.py:
   _visible_suspects`
-- `transient_states` — `[{name, fields: [{label, value}]}]`, the per-turn
-  mood/intent/posture ledger (#120) decayed to the last `turnstate_depth`
-  posts, newest value per field, labelled with the CAST name (what the model
-  keys its tracker block by). `[]` when `turnstate_depth` is `0`, which is the
-  shipped default — `store/turnstate.py`
-- `transient_tracker`, `transient_fields` — `bool` (is the ledger switched on)
-  and `["mood", "intent", "posture"]`, for `sections/transient_tracker.j2`: the
-  instruction asking the model to end each reply with a fenced `state` block.
-  `routes.streaming._persist_reply` strips that block before the reply is split
-  into posts, so it is never part of a transcript. The section carries
-  `except_opener=True` — the opener is streamed unpersisted into a box the user
-  adopts by hand, and there is no reply after it to strip the block from
+- `tracker_lines` — `[{name, own, values: [{label, text, private}]}]` from
+  `tracker.view.lines_for`, for `sections/tracker_state.j2` (Scene state): the
+  scene tracker's latest `ok` record at the transcript's tail, over the whole
+  scene cast less any excluded actor, filtered for this prompt's reader. An
+  assigned NPC gets its own line first (`own`, every value) and the others'
+  `present`-aware values plus the private ones whose awareness list names it;
+  the narrator — `grimoire`, or no assigned actor — gets every value, none
+  `own`. A character with an empty `values` renders no line. `[]` — and so no
+  section — when the tracker is off for the campaign, nothing has been
+  recorded, or the tracker could not be read (fail-soft). Never in the opener.
+  A reroll replays its frozen prompt, so it keeps the state it was first
+  composed with. Read `c["values"]`, not `c.values`: on a dict that names the
+  method. — `context/assemble.py: _tracker_read / _tracker_lines`
+- `tracker_narrator` — `True` when the reader is the narrator: no
+  "(what you can perceive)" on other characters' names, and private values
+  labelled "(private: never state or imply in narration)" instead of
+  "(known to you)"
 - `speaker` — `None`, or `{lead, quiet, reason, spoken, silent_for}`: who
   carries this turn in a group scene (#29), for `sections/active_speaker.j2`.
   `reason` is `"named"` (the turn's input named exactly one present NPC),
@@ -487,3 +512,18 @@ an exact transcript excerpt, its `kind` (speech or action), and `access`
 Missing perception evidence leaves a fact unknown unless an independent
 established source already supplies it. These are advisory model claims,
 not server-validated citations; the leading-fence parser is unchanged.
+
+The whole preparation paragraph in `scene/response_actor.j2` sits behind the
+`perception_rider` template variable, which `context.assemble` fills from the
+global `perception_rider` setting (on/off, default on) and `verify_templates.py`
+passes as `True`. The paragraph covers events only: what the actor heard or saw
+happen. For the visible state of the others (appearance, mood, injuries) it
+points at the Scene state section (`scene/sections/tracker_state.j2`) instead,
+so the two do not describe the same thing twice. With the rider off, the
+paragraph is absent. The setting gates only the prompt instruction, never the
+stripping: `routes/character_turns.py` always builds its `ResponseWatcher` with
+`perception=True` for an NPC, because a reroll replays a frozen prompt that may
+have been composed with the rider on, and a switch flipped between composing a
+prompt and reading the reply would otherwise leave a fence in the stored text.
+Stripping a leading fence nothing asked for is harmless. The surrounding "What
+this actor can perceive" and continuity-notes guidance stays either way.

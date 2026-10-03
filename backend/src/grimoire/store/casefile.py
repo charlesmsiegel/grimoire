@@ -137,9 +137,10 @@ def build(cid: str, sid: str, kind: str, actor_id: str) -> dict:
         scenes = [{"id": x, "title": titles.get(x, x)} for x in scene_ids]
 
         # Characters keep their play state and dossier beside the campaign's own
-        # copy of the card; a PC has neither -- she is the one actor whose state
-        # the player holds rather than the absorb pass.
-        state = _tolerant(lambda: playstate.read_state(aroot, actor_id), None) or {}
+        # copy of the card. A PC has a play state too (its current state only,
+        # filed under `pcs/`), read by kind so a PC whose id matches an NPC's is
+        # never shown that NPC's state.
+        state = _tolerant(lambda: playstate.read_state(aroot, actor_id, kind), None) or {}
         dossier = _tolerant(lambda: dossiers.read(croot, actor_id), "")
         # Only meaningful for someone who has never been played: once there is a
         # dossier, the tagline is the guess the dossier replaced.

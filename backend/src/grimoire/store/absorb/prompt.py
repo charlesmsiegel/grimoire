@@ -14,7 +14,12 @@ def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = Non
                  group_snapshot: str | None = None,
                  commitment_snapshot: str | None = None,
                  fact_snapshot: str | None = None,
-                 steering_snapshot: str | None = None) -> list[dict]:
+                 steering_snapshot: str | None = None,
+                 tracked_snapshot: list | None = None) -> list[dict]:
+    """`tracked_snapshot` is the scene tracker's final state as the narrator
+    reads it (`tracker.view.lines_for` with no viewer): every value, private
+    ones marked. Empty or None renders nothing, so a scene the tracker never
+    saw reads exactly as it did before there was a tracker."""
     return [{"role": "system",
              "content": prompts.render("absorb/system.j2",
                                        steering=bool(steering_snapshot))},
@@ -24,4 +29,5 @@ def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = Non
                 group_snapshot=group_snapshot,
                 commitment_snapshot=commitment_snapshot,
                 fact_snapshot=fact_snapshot,
-                steering_snapshot=steering_snapshot, transcript=transcript)}]
+                steering_snapshot=steering_snapshot,
+                tracked_snapshot=tracked_snapshot or [], transcript=transcript)}]

@@ -36,7 +36,7 @@ const cfg = {
   llm_retries: "2", fallback_connection_id: "",
   context_budget: "0", context_scan_depth: "6", archive_depth: "3",
   prompt_log_depth: "50", offscene_known_limit: "40",
-  turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
+  rolling_summary_every: "10",
   scene_break_every: "20", replay_fork_threshold: "10",
   advance_fork_threshold: "30",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
@@ -106,8 +106,7 @@ test("the column indexes every section in three groups", async () => {
     .toEqual(["The install", "What the model sees", "What you see"]);
   for (const label of [
     /^Storage/, /^Backups/, /^Connection/, /^Model routing/, /^Timeouts/, /^Context/,
-    /^Prompt layout/,
-    /^Transient state/,
+    /^Prompt layout/, /^Scene tracker/,
     /^Semantic recall/, /^System prompt/, /^Response targets/, /^Transcript/,
     /^While playing/, /^Appearance/,
   ]) {
@@ -432,17 +431,6 @@ test("edits the context scan depth", async () => {
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ context_scan_depth: "16" }));
 });
 
-test("saves the transient-state settings", async () => {
-  renderView();
-  await open(/^Transient state/);
-  expect(screen.getByLabelText(/tracked posts/i)).toHaveValue("0");
-  fireEvent.change(screen.getByLabelText(/tracked posts/i), { target: { value: "6" } });
-  fireEvent.change(screen.getByLabelText(/promote after/i), { target: { value: "2" } });
-  save();
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    { turnstate_depth: "6", promote_streak: "2" }));
-});
-
 test("semantic recall is off by default and offers only openai-compatible connections", async () => {
   renderView();
   await open(/^Semantic recall/);
@@ -611,6 +599,38 @@ test("the active-speaker toggle lives in Context and saves as on/off", async () 
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ speaker_turn_taking: "on" })));
+});
+
+test("tracker settings toggle and save", async () => {
+  (api.putConfig as any).mockResolvedValue({ ...cfg, tracker: "off" });
+  renderView();
+  await open(/^Scene tracker/);
+  fireEvent.click(await screen.findByRole("checkbox",
+    { name: "Track each character's state after every post" }));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ tracker: "off" })));
+});
+
+test("the perception rider toggle saves as off, never blank", async () => {
+  (api.getConfig as any).mockResolvedValue({ ...cfg, perception_rider: "on" });
+  (api.putConfig as any).mockResolvedValue({ ...cfg, perception_rider: "off" });
+  renderView();
+  await open(/^Scene tracker/);
+  fireEvent.click(await screen.findByRole("checkbox",
+    { name: /ask each character to note what it heard or saw/i }));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ perception_rider: "off" })));
+});
+
+test("an unset tracker reads as checked, since the default is on", async () => {
+  renderView();                                  // `cfg` carries neither key
+  await open(/^Scene tracker/);
+  expect(await screen.findByRole("checkbox",
+    { name: "Track each character's state after every post" })).toBeChecked();
+  expect(screen.getByRole("checkbox",
+    { name: /ask each character to note what it heard or saw/i })).toBeChecked();
 });
 
 const twoRows = () => ({

@@ -28,6 +28,7 @@ from .. import prompts, store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from . import character_turns, runs, streaming
+from . import tracker as tracker_routes
 from .common import (
     _campaign_root_or_404,
     _dump,
@@ -710,7 +711,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         if ephemeral:
             _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
-        posted_at, content, speaker = None, "", None
+        posted_at, content, speaker, post_id, tracked = None, "", None, None, None
         if note_text:
             # In the same locked, fenced hold the player's post is written in,
             # and for its reasons. Macros are expanded at persist time exactly
@@ -745,8 +746,19 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # (retry, next turn, ...).
             content = store.context.expand_macros(
                 turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
+            # The id is minted here, in the same hold as the append, for every
+            # new post whatever the tracker's setting: the tracker keys a
+            # record to a user post by it (an index renumbers on every cut),
+            # and a post written while it was off is still one a campaign that
+            # switches it back on can track (Retry on an untracked post).
+            post_id = uuid.uuid4().hex
             posted_at = store.scenes.append_message(
-                cid, sid, "user", content, speaker=speaker)
+                cid, sid, "user", content, speaker=speaker, post_id=post_id)
+            # The tracker's `pending` mark, in the hold that wrote the post:
+            # the acquisition is reentrant here, where after the hold it would
+            # be a second wait on the campaign lock in front of the turn.
+            # `None` with the tracker off.
+            tracked = tracker_routes.mark(cid, sid, store.tracker.paths.post_key(post_id))
             # In the SAME hold as the append it describes. This is what lets a
             # recovery after the run record expired ask the only decisive
             # question -- is this attempt's post still here? -- rather than
@@ -761,6 +773,17 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # transcript -- a duplicate, the recoverable side again.
             with contextlib.suppress(OSError):
                 store.attempts.remember(cid, run.scene_identity, run.attempt_id)
+    if tracked:
+        # The player's post is a tracked post of its own: what they said or did
+        # can change the scene's state before anyone answers. Marked `pending`
+        # inside the hold above; the run is started here, after it, because
+        # reserving one needs no campaign lock and goes through the lifespan
+        # portal. Started before the turn, so the post's update queues ahead of
+        # the reply's on the scene's tracker lock and the two run in transcript
+        # order. Fail-soft: a run that cannot start marks the record `failed`.
+        # If the turn later takes the post back, the update finds it gone and
+        # discards its record (`tracker._commit`).
+        tracker_routes.start(request.app, cid, sid, tracked, client, run.scene_identity)
     if character_turns.enabled() or turn.speaker_ref:
         return character_turns.start(
             cid,sid,request,client,conn,run,post=posted_at,
@@ -2199,8 +2222,9 @@ def _already_absorbed(scene: dict) -> bool:
     return str(scene.get("meta", {}).get("done", "")).lower() == "true"
 
 
-def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dict, list]:
-    """The scene, its commit epoch and its transient-state ledger as of one
+def _absorb_snapshot(cid: str, sid: str,
+                     identity: str | None) -> tuple[int, dict, list[dict]]:
+    """The scene, its commit epoch and its final tracked state as of one
     instant, under one lock hold.
 
     Split out of `post_absorb` so the whole of it is one critical section.
@@ -2219,17 +2243,47 @@ def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dic
     this read lands on the same `sid` -- ids are recycled by design -- and the
     review would then be built from the replacement's transcript and published
     onto it.
+
+    The tracked state is the latest `ok` tracker record at the transcript this
+    review is built from, read in the same hold so a turn landing in between
+    cannot hand absorb a state the transcript it reads does not reach.
     """
     with store.locks.campaign_lock(cid):
         scene = _require_scene(cid, sid)
         if streaming._scene_moved(cid, sid, identity):
             raise HTTPException(status_code=404, detail="scene not found")
-        # The ledger travels with the scene, not derived from it afterwards.
-        # An edit or a reroll landing while the extraction call is in flight
-        # rewrites entries *below* the tail, so a length is not a snapshot --
-        # only a copy taken under this same hold is one (#120/#121).
-        ledger = store.turnstate.entries(cid, sid, len(scene["messages"]))
-        return store.commits.scene_epoch(cid, sid), scene, ledger
+        return store.commits.scene_epoch(cid, sid), scene, _absorb_tracked(cid, sid)
+
+
+def _absorb_tracked(cid: str, sid: str) -> list[dict]:
+    """The scene tracker's final state as the narrator reads it -- every value,
+    private ones marked -- for absorb, which writes canonical state rather than
+    speaking for anyone. Characters with nothing recorded are left out; one
+    who left the scene keeps their last state, marked as having left (a
+    snapshot can still hold someone present who left after the last tracked
+    post, so presence is taken from the cast as it stands).
+
+    `[]` when the tracker is off for the campaign, and `[]` (logged) when it
+    cannot be read: `walk` raises on a malformed response ledger, and a review
+    that loses this section is a far better outcome than one that never starts.
+    """
+    try:
+        if not store.tracker.settings.enabled(cid):
+            return []
+        _key, snapshot = store.tracker.walk.current(cid, sid)
+        if not snapshot:
+            return []
+        here = store.tracker.walk.roster(cid, sid, departed=False)
+        snapshot = {ref: {**ent, "present": bool(ent.get("present")) and ref in here}
+                    for ref, ent in snapshot.items()}
+        lines = store.tracker.view.lines_for(
+            snapshot, store.tracker.fields.effective(cid, sid), None,
+            store.tracker.walk.roster(cid, sid), include_departed=True)
+        return [line for line in lines if line["values"]]
+    except Exception:
+        log.warning("absorb: tracker read failed for %s/%s; absorbing without it",
+                    cid, sid, exc_info=True)
+        return []
 
 
 def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
@@ -2287,7 +2341,9 @@ class _Prepared(NamedTuple):
 
     epoch: int
     scene: dict
-    ledger: list
+    #: The scene tracker's final state (`_absorb_tracked`), part of the snapshot
+    #: because it is read under the same hold as `scene`.
+    tracked: list
     facts: dict
     transcript: str
     messages: list
@@ -2459,7 +2515,7 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     `running` for the life of the process -- refusing every later turn and
     review on the scene.
     """
-    epoch, scene, ledger = _absorb_snapshot(cid, sid, run.scene_identity)
+    epoch, scene, tracked = _absorb_snapshot(cid, sid, run.scene_identity)
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
@@ -2480,7 +2536,7 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     player_label = store.appearances.player_label(cid, sid)
     transcript = store.chronicle.transcript_text(scene["messages"], player_label)
     prepared = _Prepared(
-        epoch=epoch, scene=scene, ledger=ledger, facts=facts, transcript=transcript,
+        epoch=epoch, scene=scene, tracked=tracked, facts=facts, transcript=transcript,
         player_label=player_label,
         messages=store.absorb.build_prompt(
             transcript, facts,
@@ -2488,7 +2544,8 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
             store.absorb.relationships_snapshot(cid, sid),
             store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
             store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid),
-            store.absorb.steering_snapshot(cid, sid)),
+            store.absorb.steering_snapshot(cid, sid),
+            tracked_snapshot=tracked),
         watermark=store.pending_reviews.watermark(scene["messages"]))
 
     async def work():
@@ -2570,13 +2627,11 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
             # than a state to report -- `_phase_or_raise` says so.
             raise text
         parsed = store.absorb.parse_output(text)
-        # Both halves come from the SAME snapshot, and for the same reason: a
-        # reroll or an append landing while the call was in flight would
-        # otherwise have the citations (#112) judged against text the model
-        # never saw, and promotion (#121) measure a ledger this review does not
-        # summarize.
+        # The transcript the citations (#112) are judged against comes from the
+        # SAME snapshot the model was shown: a reroll or an append landing while
+        # the call was in flight would otherwise have them judged against text
+        # it never saw.
         edits = store.absorb.materialize(cid, sid, parsed, prepared.scene["messages"],
-                                         turn_ledger=prepared.ledger,
                                          player_label=prepared.player_label)
         # Unpacked in the order the phases were listed, not the order they
         # finished, so `edits` reads the same way every time.
@@ -4701,21 +4756,15 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
                 except store.responses.ResponseConflict as exc:
                     raise HTTPException(409,detail={"kind":exc.kind,"detail":exc.detail}) from exc
             store.scenes.edit_message(cid, sid, index, content)
-            # Retire the transient-state ledger from this post on (#120). An
-            # edit is the one transcript change the tail filter cannot see:
-            # rewriting a furious exchange as a calm one leaves the entry at a
-            # perfectly valid index, so the discarded mood keeps being injected
-            # and can still be promoted into canonical state. Everything AFTER
-            # the edit goes too -- editing text can add or remove blocks, which
-            # shifts every later index onto a post it does not describe.
-            try:
-                store.turnstate.supersede(cid, sid, index)
-            except OSError:
-                pass          # same judgement as the sidecar below
             try:
                 store.alternates.reconcile(cid, sid)
             except OSError:
                 pass          # the edit is on disk; the sidecar is not a reason to fail it
+            # The post's tracker record describes text that is no longer there,
+            # and every later record was built on it. Flagged, not re-run (the
+            # spec's "nothing re-runs automatically"), and in this hold so no
+            # reader sees the new text beside unflagged records. Fail-soft.
+            tracker_routes.after_text_edit(cid, sid, index)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.scenes.RollMessageImmutable:
@@ -4762,7 +4811,11 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
         # campaign lock is reentrant, so the cascade's own acquisitions are
         # free, and a send cannot reserve a turn in the gap.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.cascade.delete_from(cid, sid, index)
+            report = store.cascade.delete_from(cid, sid, index)
+            # The cut posts' tracker records describe posts that no longer
+            # exist. Nothing is left after them to flag: a cut takes the tail.
+            tracker_routes.after_cut(cid, sid)
+            return report
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except (store.SceneNotFound, store.CampaignNotFound):
@@ -4796,7 +4849,11 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
     try:
         # One hold over check and rewrite, as for the cascade delete above.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.retcon.retcon(cid, sid, index, content)
+            report = store.retcon.retcon(cid, sid, index, content)
+            # A retcon is a text edit for the tracker: the rewritten post's
+            # record is stale and every later one was built on it.
+            tracker_routes.after_text_edit(cid, sid, index)
+            return report
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.scenes.RollMessageImmutable:
@@ -4880,7 +4937,11 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
         # live turn that is history moving out from under a reply already being
         # written.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.replay.begin(cid, sid, body.index)
+            report = store.replay.begin(cid, sid, body.index)
+            # The cut half of a replay: the held tail's records go with it, as
+            # for any cut (a restore brings the posts back untracked, Retry).
+            tracker_routes.after_cut(cid, sid)
+            return report
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.replay.ReplayError as exc:
@@ -4970,6 +5031,8 @@ def post_replay_accept(cid: str, sid: str, request: Request):
         # stays and the next original comes back out of the held tail.
         with runs.scene_held_free(request.app, cid, sid):
             session = store.replay.accept(cid)
+            # Accepting drops whatever the step superseded; its records go too.
+            tracker_routes.after_cut(cid, sid)
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})
@@ -4993,7 +5056,13 @@ def post_replay_cancel(cid: str, sid: str, request: Request,
         # Restoring the unreplayed originals appends them back, which is the
         # same shape change as the cut that removed them.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.replay.cancel(cid, restore=body.restore if body else True)
+            report = store.replay.cancel(cid, restore=body.restore if body else True)
+            # The replayed posts a cancel takes back leave the transcript, and
+            # their records go with them; restored originals come back
+            # untracked (Retry). `_replay_session` has checked the session's
+            # scene is this `sid`.
+            tracker_routes.after_cut(cid, sid)
+            return report
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})

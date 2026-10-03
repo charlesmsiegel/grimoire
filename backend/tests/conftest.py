@@ -48,6 +48,27 @@ def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
                         lambda: tmp_path / "bootstrap" / ".grimoire.json")
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "tracker: keep the scene tracker's shipped default (on) for this test")
+
+
+@pytest.fixture(autouse=True)
+def _tracker_off_unless_asked(request, monkeypatch):
+    """The scene tracker is shipped ON, and in the suite it is OFF unless a test
+    asks for it with `@pytest.mark.tracker`.
+
+    On, every post schedules a background `tracker-update` LLM call beside the
+    turn. A scripted fake answers by call order, so those calls would consume
+    the turns a test scripted and inflate every `calls ==` it asserts -- the
+    tracker would be under test in every suite that sends a message, racing the
+    turn it describes. The tracker's own suites opt in; the shipped default is
+    pinned by `test_tracker_settings.py`, which opts in too.
+    """
+    if request.node.get_closest_marker("tracker") is None:
+        monkeypatch.setattr(store.config, "DEFAULT_TRACKER", "off")
+
+
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     """An app over a throwaway store, with the gateway faked.

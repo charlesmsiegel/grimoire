@@ -114,7 +114,7 @@ Two rules keep this honest, and both are enforced by tests:
 that parsed output its own way would stop testing the app the moment the app's
 parser changed, and would sail straight through the regression it exists to
 catch. The actor-length case strips preparation and control blocks through
-`response_protocol.ResponseWatcher` and `turnstate.split_block`, then scores
+`response_protocol.ResponseWatcher` and `state_fence.split_block`, then scores
 visible prose against exact word and paragraph ceilings, with no minimum
 beyond a nonempty reply. The legacy ensemble `grade_length` helper retains
 the production drift band as a diagnostic; it is not actor ceiling compliance.

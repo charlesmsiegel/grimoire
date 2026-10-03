@@ -1,6 +1,13 @@
 """Per-character campaign play-state stored beside the character copy at
 <root>/characters/<cid>/state.md: a standing snapshot of `current_state` plus what the
-character `knows` / `suspects`, as optional `## `-headed prose sections. A body with no
+character `knows` / `suspects`, as optional `## `-headed prose sections.
+
+A player character has one too, at <root>/pcs/<pid>/play/state.md, holding the
+"Current state" section only (absorb composes it with no Knows/Suspects). It sits
+in a subdirectory rather than beside the persona files because a PC's versions ARE
+the `<vid>.md` files in its directory: a `state.md` there would be read as a version
+called "state", and would move the PC's sync hash (`pcs.dir_hash` and
+`overlay.materialize_actor` look at the top level only). A body with no
 recognized header is read wholesale as `current_state` (Phase-2 back-compat). Snapshot
 only — rewritten each absorb (discrete events live in the chronicle timeline). Mirrors
 dossiers.py: a per-character, campaign-local markdown artifact filed beside the character
@@ -18,8 +25,15 @@ from .paths import now_iso
 _HEADERS = {"current state": "current_state", "knows": "knows", "suspects": "suspects"}
 
 
-def state_path(root: Path, cid: str) -> Path:
-    return root / "characters" / cid / "state.md"
+#: The actor kinds that keep a play state, and where each one's file sits under
+#: `<root>/<kind>/<id>/`.
+_LAYOUT = {"characters": ("state.md",), "pcs": ("play", "state.md")}
+
+
+def state_path(root: Path, cid: str, kind: str = "characters") -> Path:
+    if not isinstance(kind, str) or kind not in _LAYOUT:
+        raise ValueError(f"no play state for kind {kind!r}")
+    return root.joinpath(kind, cid, *_LAYOUT[kind])
 
 
 def _is_header(line: str) -> str | None:
@@ -57,39 +71,6 @@ def parse_body(body: str) -> dict:
     return fields
 
 
-def fold_fields(current_state: str, fields: dict[str, str]) -> str:
-    """Set `Label: value` lines inside a `current_state` body.
-
-    The write side of #121's promotion: a transient value reinforced across
-    enough posts becomes a labelled line in the standing snapshot. A line
-    already carrying that label is REPLACED in place, keeping its own spelling
-    of the label and its position; only a genuinely new label is appended. That
-    is what makes promotion idempotent — the second absorb over the same ledger
-    composes the identical body, and `materialize` drops an edit whose
-    `before == after`, so nothing is staged twice.
-
-    Matching is on the text before the first colon, case-insensitively, and
-    only on a line that has one. Prose is left alone: a narrative line has no
-    leading `Word:` label, and one that happens to (`Mood: still furious`) is
-    exactly the line this is meant to update.
-    """
-    lines = current_state.strip().splitlines()
-    pending = {k.casefold(): (k, v) for k, v in fields.items() if v.strip()}
-    out = []
-    for line in lines:
-        label, sep, _ = line.partition(":")
-        key = label.strip().casefold()
-        if sep and key in pending:
-            out.append(f"{label.strip()}: {pending.pop(key)[1].strip()}")
-        else:
-            out.append(line)
-    for key, value in fields.items():
-        held = pending.pop(key.casefold(), None)
-        if held is not None:
-            out.append(f"{held[0][:1].upper()}{held[0][1:]}: {value.strip()}")
-    return "\n".join(out).strip()
-
-
 def compose_body(current_state: str, knows: str, suspects: str) -> str:
     current_state, knows, suspects = current_state.strip(), knows.strip(), suspects.strip()
     if not knows and not suspects:
@@ -101,15 +82,15 @@ def compose_body(current_state: str, knows: str, suspects: str) -> str:
     return "\n\n".join(parts)
 
 
-def read_state(root: Path, cid: str) -> dict | None:
-    p = state_path(root, cid)
+def read_state(root: Path, cid: str, kind: str = "characters") -> dict | None:
+    p = state_path(root, cid, kind)
     if not p.exists():
         return None
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     return {**parse_body(body), "updated": meta.get("updated", "")}
 
 
-def write_state(root: Path, cid: str, body: str) -> None:
-    p = state_path(root, cid)
+def write_state(root: Path, cid: str, body: str, kind: str = "characters") -> None:
+    p = state_path(root, cid, kind)
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(p, dump_frontmatter({"updated": now_iso()}, body.strip() + "\n"))

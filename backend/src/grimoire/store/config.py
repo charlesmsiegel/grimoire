@@ -71,6 +71,14 @@ DEFAULT_PROMPT_LAYOUT_ENABLED = "off"
 # default because it adds tokens to every group turn, and a cost may not
 # arrive by upgrade.
 DEFAULT_SPEAKER_TURN_TAKING = "off"
+# The scene state tracker (store/tracker/): a per-scene record of who is where
+# and what each character perceives, kept current by one extra call after each
+# turn. On by default -- it is the app's answer to continuity drift -- and a
+# campaign may override it either way (campaign.md `tracker`).
+DEFAULT_TRACKER = "on"
+# Whether the tracker's perception rider is added to the prompt. Separate from
+# the tracker itself so the record can be kept while its prompt cost is shed.
+DEFAULT_PERCEPTION_RIDER = "on"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -117,17 +125,6 @@ DEFAULT_SETUP_DONE = "off"
 # "0" disables capture. Counted per campaign rather than per scene because the
 # payloads hold whole prompts -- see that module for the tradeoff.
 DEFAULT_PROMPT_LOG_DEPTH = "50"
-# How many posts back the transient per-turn state ledger is injected over
-# (store/turnstate.py). This is the decay window AND the feature's switch: at
-# "0" no tracker instruction is added to the prompt and nothing is injected,
-# which is the default because the instruction asks the model to end every
-# reply with a machine-readable block — a real change to what it is being told
-# to write, and not one to turn on behind an existing install's back.
-DEFAULT_TURNSTATE_DEPTH = "0"
-# How many consecutive recorded values promote a transient field to canonical
-# character state at absorb (#121). Only reachable once the ledger has content,
-# so it is safe to default to something useful.
-DEFAULT_PROMOTE_STREAK = "3"
 # How many posts may land before the live per-scene rolling summary is refolded
 # (#85). Each refresh is one extra LLM call, so this is the knob that decides
 # what the feature costs; "0" turns it off, leaving only the panel's explicit
@@ -206,7 +203,6 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "llm_timeout", "absorb_budget", "absorb_concurrency", "setup_done",
                 "llm_retries", "fallback_connection_id",
                 "prompt_log_depth",
-                "turnstate_depth", "promote_streak",
                 "rolling_summary_every", "scene_break_every", "llm_call_budget",
                 "offscene_known_limit",
                 "embeddings_connection_id", "embeddings_model",
@@ -218,6 +214,7 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 # answered with its defaults no matter what anyone wrote.
                 "art_catalog_depth", "art_catalog_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking",
+                "tracker", "perception_rider",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
                 "advance_fork_threshold", "log_level") + _LENGTH_KEYS + routing.CONFIG_KEYS
@@ -245,9 +242,7 @@ def read_config() -> dict[str, str]:
                 "llm_retries": DEFAULT_LLM_RETRIES,
                 "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
-                "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
                 "character_response_mode": "individual",
-                "promote_streak": DEFAULT_PROMOTE_STREAK,
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
                 "scene_break_every": DEFAULT_SCENE_BREAK_EVERY,
                 "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
@@ -260,6 +255,8 @@ def read_config() -> dict[str, str]:
                 "art_catalog_threshold": DEFAULT_ART_CATALOG_THRESHOLD,
                 "prompt_layout_enabled": DEFAULT_PROMPT_LAYOUT_ENABLED,
                 "speaker_turn_taking": DEFAULT_SPEAKER_TURN_TAKING,
+                "tracker": DEFAULT_TRACKER,
+                "perception_rider": DEFAULT_PERCEPTION_RIDER,
                 "backup_enabled": DEFAULT_BACKUP_ENABLED,
                 "backup_interval_hours": DEFAULT_BACKUP_INTERVAL_HOURS,
                 "backup_keep": DEFAULT_BACKUP_KEEP,
@@ -379,12 +376,6 @@ def scan_depth() -> int:
     return _count("context_scan_depth", DEFAULT_SCAN_DEPTH)
 
 
-def turnstate_depth() -> int:
-    """Posts of transcript tail the transient-state ledger is read over. 0 turns
-    the whole feature off — no tracker instruction, no injected section."""
-    return _count("turnstate_depth", DEFAULT_TURNSTATE_DEPTH)
-
-
 def speaker_turn_taking() -> bool:
     """Whether the active-speaker section renders (#29, context/speaker.py).
 
@@ -395,12 +386,22 @@ def speaker_turn_taking() -> bool:
     return read_config().get("speaker_turn_taking") == "on"
 
 
-def promote_streak() -> int:
-    """Consecutive recorded values that promote a transient field to canonical
-    character state. 0 disables promotion. `turnstate.streaks` clamps this to
-    the ledger's per-scene memory — the ceiling belongs where the retention
-    limit is, not here."""
-    return _count("promote_streak", DEFAULT_PROMOTE_STREAK)
+def tracker_enabled() -> bool:
+    """The GLOBAL scene-tracker switch (store/tracker/settings.py decides per
+    campaign). Read this only through `tracker.settings.enabled`, which lets a
+    campaign's own setting win.
+
+    Anything but "off" is on, which is the rule the Settings checkbox reads
+    the stored value by: a hand-edited value that is neither must not show
+    ticked there while no tracker runs. `PUT /config` refuses such a value,
+    so only a hand edit reaches this branch."""
+    return read_config().get("tracker") != "off"
+
+
+def perception_rider() -> bool:
+    """Whether the tracker's perception rider is added to the prompt. The same
+    "anything but off" rule as `tracker_enabled`, for the same reason."""
+    return read_config().get("perception_rider") != "off"
 
 
 def replay_fork_threshold() -> int:

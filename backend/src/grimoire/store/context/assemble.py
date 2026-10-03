@@ -19,6 +19,7 @@ what it is handed.
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from typing import NamedTuple
 
@@ -39,7 +40,6 @@ from .. import (
     response_targets,
     styles,
     tokens,
-    turnstate,
     voice_anchors,
 )
 from ..appearances import cast as appearances_cast
@@ -48,6 +48,10 @@ from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..scenes import read as scenes_read
+from ..tracker import fields as tracker_fields
+from ..tracker import settings as tracker_settings
+from ..tracker import view as tracker_view
+from ..tracker import walk as tracker_walk
 
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
@@ -55,6 +59,8 @@ from . import actor, archive, art, layout, macros, mechanics, pack, speaker, sto
 from . import cast as cast_data
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
+
+log = logging.getLogger(__name__)
 
 
 def compose_opener(cid: str, sid: str, prompt: str,
@@ -69,7 +75,8 @@ def compose_opener(cid: str, sid: str, prompt: str,
     Returns the messages and the breakdown describing them — see `compose_turn`
     for why those two must come out of one pass."""
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH,
-                  actor_ref=actor_ref, opening_narrator=actor_ref == "grimoire")
+                  actor_ref=actor_ref, opening_narrator=actor_ref == "grimoire",
+                  opener=True)
     # Both trailing messages are rendered before packing so their tokens can be
     # reserved: neither is droppable, so neither may go uncounted.
     user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid,
@@ -97,31 +104,28 @@ def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> l
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
               turn: dict | None = None, actor_ref: str | None = None,
               eligible_speakers: list[dict] | None = None,
-              opening_narrator: bool = False) -> dict:
+              opening_narrator: bool = False, opener: bool = False) -> dict:
     """One pass gathering the template data + projected history + post-history.
     build_* render templates/scene/system.j2 from data; context_sections renders
     the per-section templates for the token breakdown. `wi_seed` folds extra text
     (the opener prompt) into the world-info activation window; `full_recap` (> 0)
     selects the full story-so-far variant over the compact recap. `turn` is a
     one-shot, unpersisted override (e.g. a per-turn response-length chip) that
-    outranks every stored scope in response_presets.resolve -- see build_messages."""
-    # The transcript and the transient-state ledger, read together (#120).
-    # `_persist_reply` appends the reply and files its tracker entry under one
-    # hold of this lock precisely so the two are never seen apart; a reader that
-    # took neither could land between them and send the new narration paired
-    # with the PREVIOUS turn's mood, or with none. Two file reads long, and the
-    # lock is reentrant, so a caller already holding it pays nothing.
-    #
+    outranks every stored scope in response_presets.resolve -- see build_messages.
+    `opener` skips the tracker read: its section is `except_opener`, and the
+    opener is composed inside an async generator on the event loop, where the
+    read's lock waits would stall every other request."""
     # BEST-EFFORT, not `campaign_lock`: `post_chat` appends the player's post
     # before calling this and only wires the undo that would take it back off
     # afterwards, so a `StoreBusy` raised here would strand that post with no
-    # reply and nothing able to remove it. This path had no lock at all before
-    # the pairing, and it must not become a new way for a turn to fail — under
-    # contention it reads unlocked and one prompt may carry a stale field.
+    # reply and nothing able to remove it. Under contention it reads unlocked.
     with locks.best_effort_campaign_lock(cid):
         scene = scenes_read.read_scene(cid, sid)
-        live_turnstate = turnstate.current(cid, sid, len(scene["messages"]),
-                                           config.turnstate_depth())
+        # The tracked state as of the transcript's tail, read beside the scene
+        # so the two describe one moment. A reroll never comes through here:
+        # it replays the prompt frozen for the response it replaces, which
+        # already holds the state that stood before that post.
+        tracker = _NO_TRACKER if opener else _tracker_read(cid, sid)
     history = [dict(m) for m in scene["messages"]]
     # {{date}}/{{weekday}}/{{time}}, resolved ONCE per compose and handed to
     # every `expand_macros` call below, in `_render_sections` and in `_prepare`.
@@ -145,6 +149,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # context rule, not a departure, and lifting it puts them straight back.
     cast = [a for a in appearances_cast.scene_cast(cid, sid)
             if f"{a['kind']}:{a['id']}" not in excluded_refs]
+    # BEFORE the cast is narrowed to an assigned NPC, because what that NPC can
+    # perceive of the others is the point of the section -- and filtered for
+    # it here, by `view`, rather than by blanking afterwards: a narrator reads
+    # every value, an NPC its own and what it was shown or told.
+    tracker_viewer = actor_ref if actor_ref not in (None, tracker_view.NARRATOR) else None
+    tracker_lines = _tracker_lines(cid, sid, tracker, tracker_viewer, excluded_refs)
 
     roster = actor.public_roster(cast)
     public_player_names = [a["name"] for a in cast if a["role"] == "player"]
@@ -347,6 +357,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
         "response_actor": response_actor,
+        "perception_rider": config.perception_rider(),
         "response_roster": roster,
         "response_candidates": [{"ref": e["ref"], "name": e["name"]}
                                 for e in (eligible_speakers or [])],
@@ -361,7 +372,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # the cast record: `npc_names`/`player_names` here are one name each and
         # the wrong one for it (see `world_state._actor_aliases`).
         "states": world_state._character_states(aroot, cid, cast, pcless),
-        "transient_states": world_state._transient_states(cast, live_turnstate),
+        # Already filtered for this prompt's reader (`_tracker_lines`), so the
+        # actor-scoped blanking below has nothing to take from it.
+        "tracker_lines": tracker_lines,
+        "tracker_narrator": tracker_viewer is None,
         # Derived on every pass and never stored -- see speaker.py. Off by
         # default because it adds tokens to every group turn, and `None`
         # (the toggle off, or fewer than two NPCs) renders no section at all.
@@ -372,8 +386,6 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # anyway -- and the blanking below says so regardless.
         "speaker": (speaker.nominate(npc_names, history, pending=wi_seed)
                     if not actor_scoped and config.speaker_turn_taking() else None),
-        "transient_tracker": config.turnstate_depth() > 0,
-        "transient_fields": list(turnstate.FIELDS),
         "players": players, "ref_names": ref_names, "refs": refs,
         # The recap, archive, ledgers, calendar, relationship graph, group
         # state, off-scene cast and art catalogue are campaign-wide. Birthday
@@ -439,6 +451,60 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             "post_history": post_history, "npc_names": npc_names,
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
                                                 current_loc if not loc_excluded else None, voiced_ids)}
+
+
+#: What `_tracker_read` answers when there is no state to show.
+_NO_TRACKER: tuple[dict, list, dict] = ({}, [], {})
+
+
+def _tracker_read(cid: str, sid: str) -> tuple[dict, list[dict], dict[str, str]]:
+    """The scene's tracked state, its fields and its cast, as of the tail --
+    or nothing, when the tracker is off for the campaign or cannot be read.
+
+    Fail-soft, unlike the walk itself. `walk` raises on a malformed response
+    ledger because a prune acting on a misread would discard records; a prompt
+    acting on one would only lose this section, and that is the right way to be
+    wrong -- a turn must not fail because the bookkeeping beside it did.
+    """
+    try:
+        if not tracker_settings.enabled(cid):
+            return _NO_TRACKER
+        _key, snapshot = tracker_walk.current(cid, sid)
+        if not snapshot:
+            return _NO_TRACKER
+        # The current cast only: the section describes who is in the scene
+        # now, and a snapshot can still hold someone present who left after
+        # the last tracked post.
+        return (snapshot, tracker_fields.effective(cid, sid),
+                tracker_walk.roster(cid, sid, departed=False))
+    except Exception:
+        # Logged with the traceback rather than marked `noqa`: BLE001 exempts a
+        # handler that keeps the failure for whoever reads the log.
+        log.warning("scene state: tracker read failed for %s/%s; composing without it",
+                    cid, sid, exc_info=True)
+        return _NO_TRACKER
+
+
+def _tracker_lines(cid: str, sid: str, tracker: tuple[dict, list[dict], dict[str, str]],
+                   viewer: str | None, excluded_refs: frozenset) -> list[dict]:
+    """`view.lines_for` over `_tracker_read`'s answer, for `viewer` (an NPC
+    ref, or `None` for the narrator).
+
+    The roster is the FULL scene cast, not the actor-narrowed one, less what the
+    reader excluded: an exclude takes a character's state out of the prompt
+    with everything else about them being on stage. Lines with no value this
+    reader may see are kept here and skipped by the template.
+    """
+    snapshot, fields, roster = tracker
+    if not snapshot:
+        return []
+    try:
+        shown = {ref: name for ref, name in roster.items() if ref not in excluded_refs}
+        return tracker_view.lines_for(snapshot, fields, viewer, shown)
+    except Exception:
+        log.warning("scene state: a malformed snapshot for %s/%s; composing without it",
+                    cid, sid, exc_info=True)
+        return []
 
 
 def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str,
@@ -522,13 +588,13 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
 #: exactly like a pin whose content did not activate.
 #:
 #: Everything else a pinned character feeds is already `lock-in` (their card,
-#: their persona), so naming those here would say nothing; these two are the
-#: droppable claims about that character, and a pin on someone is a request to
+#: their persona), so naming those here would say nothing; this one is the
+#: droppable claim about that character, and a pin on someone is a request to
 #: keep the model told who they currently are.
-_CAST_SECTIONS = ("character_state", "transient_state")
+_CAST_SECTIONS = ("character_state", "tracker_state")
 
 #: The voice sections, held up only by a pinned NPC. Per-character content like
-#: the two above -- a reader who pinned a character and then watched the packer
+#: the one above -- a reader who pinned a character and then watched the packer
 #: drop that character's anchor would have been told their pin meant something
 #: it did not -- but NPC-only, which `_CAST_SECTIONS` is not. `voice_policy` is
 #: absent deliberately: it is LOCK_IN, so no pin can make it any safer.
@@ -627,11 +693,11 @@ class Section(NamedTuple):
     tier: str
     pcless_only: bool = False
     opener_only: bool = False
-    #: Rendered on every turn EXCEPT the opener. Only the tracker instruction
-    #: (#120) wants this: the opener is streamed unpersisted into a box the user
-    #: reads and adopts by hand, so a machine-readable block there is something
-    #: they have to delete themselves — and there is no reply after it to strip
-    #: it from.
+    #: Rendered on every turn EXCEPT the opener. Only the scene state wants
+    #: this: the opener is streamed unpersisted into a box the user reads and
+    #: adopts by hand, for a scene with no tracked posts yet -- so whatever the
+    #: tracker last recorded belongs to some earlier moment, and an opener
+    #: draft is one of the side calls the tracker's state is not shown to.
     except_opener: bool = False
     #: A heading this section SHARES with every other section naming the same
     #: template. `_render_sections` opens each contiguous RUN of them with it —
@@ -688,10 +754,13 @@ SECTIONS = [
             "scene/sections/voice_examples.j2", pack.SPOTLIGHT),
     Section("character_state", "Character state",
             "scene/sections/character_state.j2", pack.SPOTLIGHT),
-    # Beside the standing state and at the same tier: the same kind of claim
-    # about the same characters, with a shorter half-life.
-    Section("transient_state", "Transient state",
-            "scene/sections/transient_state.j2", pack.SPOTLIGHT),
+    # What each present character looks like and is doing right now, as the
+    # scene tracker recorded it, filtered for the reader (`_tracker_lines`).
+    # Same tier and pin rule as the standing state above, which is the same
+    # kind of claim on a shorter clock. Not in the opener: a new scene has no
+    # tracked posts, and the opener is a draft the reader adopts by hand.
+    Section("tracker_state", "Scene state", "scene/sections/tracker_state.j2",
+            pack.SPOTLIGHT, except_opener=True),
     # Beside the state sections and at their tier, because it is the same kind
     # of claim: who is live right now. AFTER them, so the model reads what each
     # character is feeling before it reads which of them should carry the turn.
@@ -783,8 +852,6 @@ SECTIONS = [
             "scene/sections/mechanics_response_format.j2", pack.LOCK_IN),
     Section("response_format", "Response format",
             "scene/sections/response_format.j2", pack.LOCK_IN),
-    Section("transient_tracker", "Transient state tracker",
-            "scene/sections/transient_tracker.j2", pack.LOCK_IN, except_opener=True),
     Section("response_budget", "Response budget",
             "scene/sections/response_budget.j2", pack.LOCK_IN),
 ]

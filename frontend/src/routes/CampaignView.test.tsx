@@ -292,6 +292,236 @@ test("a failed cost read leaves the transcript alone", async () => {
   expect(await screen.findByText("hi")).toBeInTheDocument();
 });
 
+// ---- the per-post Tracker disclosure ----
+const TF = { upstream_changed: false, text_changed: false };
+function withTracker(over: Record<string, unknown> = {}) {
+  (api.getTracker as any).mockResolvedValue({
+    enabled: true, names: { "characters:mara": "Mara" }, moods: {},
+    labels: { visible_mood: "Visible mood" },
+    keys: [{ index: 0, key: "p-0" }, { index: 1, key: "p-1" }],
+    entries: { "p-0": { status: "ok", changed: [], flags: TF },
+               "p-1": { status: "ok", changed: [["characters:mara", "visible_mood", "fear"]], flags: TF } },
+    ...over });
+}
+function twoPosts() {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply", response_id: "r1" }] });
+}
+
+test("a tracked post shows its Tracker summary", async () => {
+  twoPosts();
+  withTracker();
+  renderCampaign();
+  expect(await screen.findByText("Tracker · no change")).toBeInTheDocument();
+  expect(screen.getByText("Tracker · Mara: Visible mood → fear")).toBeInTheDocument();
+  expect(api.getTracker).toHaveBeenCalledWith("run", "s1");
+});
+
+test("a cast tile shows the tracker's visible mood", async () => {
+  twoPosts();
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "mara", role: "npc", name: "Mara" },
+  ]);
+  withTracker({ moods: { "characters:mara": "fear" } });
+  renderCampaign();
+  const mood = await screen.findByText("fear");
+  expect(mood).toHaveClass("cast-mood");
+});
+
+test("Mara's dossier reads the latest ok key while the newest post is still pending", async () => {
+  twoPosts();
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "mara", role: "npc", name: "Mara" },
+  ]);
+  (api.getCasefile as any).mockResolvedValue({
+    kind: "characters", id: "mara", name: "Mara", version: "v1", role: "npc",
+    scenes: [], last_seen: "", standing: "Watchful.", knows: "", suspects: "",
+    dossier: "", tagline: "", feels_toward: [], standing_facts: [],
+  });
+  (api.getTrackerRecord as any).mockResolvedValue({
+    key: "p-0", status: "ok", flags: TF, names: { "characters:mara": "Mara" },
+    fields: [{ key: "visible_mood", label: "Visible mood", type: "text", aware: "present", hint: "" }],
+    snapshot: { "characters:mara": { present: true, fields: {
+      visible_mood: { value: "calm", aware: "present" } } } },
+  });
+  withTracker({ entries: { "p-0": { status: "ok", changed: [], flags: TF },
+                           "p-1": { status: "pending", changed: [], flags: TF } } });
+  renderCampaign();
+  await screen.findByText("Tracker · updating…");
+  fireEvent.click(document.querySelector(".cast-tile-name") as HTMLElement);
+  expect(await screen.findByText("Now")).toBeInTheDocument();
+  expect(api.getTrackerRecord).toHaveBeenCalledWith("run", "s1", "p-0");
+  expect(api.getTrackerRecord).not.toHaveBeenCalledWith("run", "s1", "p-1");
+  // p-1's update was built on p-0 as it stands: an edit now would land under it.
+  const now = (await screen.findByText(/calm/)).closest(".column-section") as HTMLElement;
+  expect(within(now).getByRole("button", { name: "Edit" })).toBeDisabled();
+});
+
+test("a post whose key the tracker does not list shows no disclosure", async () => {
+  twoPosts();
+  withTracker({ keys: [{ index: 0, key: "p-0" }] });
+  renderCampaign();
+  await screen.findByText("Tracker · no change");
+  expect(screen.queryByText(/Tracker · Mara/)).toBeNull();
+});
+
+test("with the tracker off, an untracked post shows nothing", async () => {
+  twoPosts();
+  withTracker({ enabled: false, entries: {} });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.queryByText(/^Tracker · /)).toBeNull();
+});
+
+// Fake timers, but with the clock still running (`shouldAdvanceTime`), the
+// repo's idiom for a view that also awaits real promises (StatsView.test).
+const PENDING = { "p-0": { status: "pending", changed: [], flags: TF },
+                  "p-1": { status: "ok", changed: [], flags: TF } };
+const DONE = { ...PENDING, "p-0": { status: "ok", changed: [], flags: TF } };
+const trackerCallsFor = (sid: string) =>
+  (api.getTracker as any).mock.calls.filter((c: string[]) => c[1] === sid).length;
+async function tick(ms: number) {
+  await act(async () => { vi.advanceTimersByTime(ms); });
+}
+
+test("a pending post is re-read every two seconds until it lands, then the chain stops", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    twoPosts();
+    withTracker({ entries: PENDING });
+    renderCampaign();
+    expect(await screen.findByText("Tracker · updating…")).toBeInTheDocument();
+    const before = trackerCallsFor("s1");
+    await tick(1500);
+    expect(trackerCallsFor("s1")).toBe(before);       // not before two seconds
+    withTracker({ entries: DONE });
+    await tick(600);
+    await waitFor(() => expect(screen.queryByText("Tracker · updating…")).toBeNull());
+    expect(screen.getAllByText("Tracker · no change")).toHaveLength(2);
+    const landed = trackerCallsFor("s1");
+    await tick(10_000);
+    expect(trackerCallsFor("s1")).toBe(landed);       // nothing pending, nothing asked
+  } finally { vi.useRealTimers(); }
+}, 15_000);
+
+test("a stale poll answer landing after a newer read does not overwrite it or stop the poll", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    twoPosts();
+    withTracker({ entries: PENDING });
+    renderCampaign();
+    await screen.findByText("Tracker · updating…");
+    // The poll's read is issued first and answers last.
+    let answerStale: (v: unknown) => void = () => {};
+    (api.getTracker as any).mockImplementationOnce(() => new Promise((res) => { answerStale = res; }));
+    await tick(2000);
+    // A newer read (a re-run asked for one) lands first, with news in it.
+    (api.getTrackerRecord as any).mockResolvedValue({
+      key: "p-1", status: "ok", flags: TF, snapshot: {}, fields: [], names: {} });
+    (api.rerunTrackerFrom as any).mockResolvedValue({});
+    fireEvent.click(await screen.findByText("Tracker · no change"));
+    const newer = { "p-0": PENDING["p-0"],
+      "p-1": { status: "ok", changed: [["characters:mara", "visible_mood", "fear"]], flags: TF } };
+    (api.getTracker as any).mockResolvedValueOnce({
+      enabled: true, names: { "characters:mara": "Mara" }, moods: {},
+      labels: { visible_mood: "Visible mood" },
+      keys: [{ index: 0, key: "p-0" }, { index: 1, key: "p-1" }], entries: newer });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
+    // p-1 is the second of two tracked posts: a re-run from it is one call.
+    expect(confirm).toHaveBeenCalledWith(
+      "Re-run the tracker for 1 post from here? That is 1 model call.");
+    confirm.mockRestore();
+    await screen.findByText("Tracker · Mara: Visible mood → fear");
+    // Now the older answer arrives, still showing the old state of p-1.
+    const calls = trackerCallsFor("s1");
+    await act(async () => {
+      answerStale({ enabled: true, names: { "characters:mara": "Mara" }, moods: {},
+        labels: { visible_mood: "Visible mood" },
+        keys: [{ index: 0, key: "p-0" }, { index: 1, key: "p-1" }], entries: PENDING });
+    });
+    expect(screen.getByText("Tracker · Mara: Visible mood → fear")).toBeInTheDocument();
+    expect(screen.getByText("Tracker · updating…")).toBeInTheDocument();
+    // And the poll carries on from it.
+    (api.getTracker as any).mockResolvedValue({
+      enabled: true, names: { "characters:mara": "Mara" }, moods: {},
+      labels: { visible_mood: "Visible mood" },
+      keys: [{ index: 0, key: "p-0" }, { index: 1, key: "p-1" }], entries: { ...newer, "p-0": DONE["p-0"] } });
+    await tick(2100);
+    await waitFor(() => expect(trackerCallsFor("s1")).toBeGreaterThan(calls));
+    await waitFor(() => expect(screen.queryByText("Tracker · updating…")).toBeNull());
+  } finally { vi.useRealTimers(); }
+}, 15_000);
+
+test("a failed poll backs off instead of asking every two seconds", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    twoPosts();
+    withTracker({ entries: PENDING });
+    renderCampaign();
+    await screen.findByText("Tracker · updating…");
+    (api.getTracker as any).mockRejectedValue(new Error("down"));
+    const before = trackerCallsFor("s1");
+    await tick(2000);                                  // fails: next wait is 4 s
+    await tick(2100);
+    expect(trackerCallsFor("s1")).toBe(before + 1);
+    await tick(2000);                                  // the 4 s are up
+    expect(trackerCallsFor("s1")).toBe(before + 2);
+  } finally { vi.useRealTimers(); }
+}, 15_000);
+
+test("leaving the view clears the poll", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    twoPosts();
+    withTracker({ entries: PENDING });
+    const { unmount } = renderCampaign();
+    await screen.findByText("Tracker · updating…");
+    unmount();
+    const before = trackerCallsFor("s1");
+    await tick(10_000);
+    expect(trackerCallsFor("s1")).toBe(before);
+  } finally { vi.useRealTimers(); }
+}, 15_000);
+
+test("changing scene clears the old scene's poll and reads the new one", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    (api.listScenes as any).mockResolvedValue([
+      { id: "s1", title: "First", model: "", created: "", updated: "2026-01-02" },
+      { id: "s2", title: "Second", model: "", created: "", updated: "2026-01-01" },
+    ]);
+    (api.getScene as any).mockImplementation(async (_cid: string, sid: string) => ({
+      meta: { id: sid, title: sid },
+      messages: [{ role: "user", content: `post of ${sid}` }] }));
+    (api.getTracker as any).mockImplementation(async (_cid: string, sid: string) => ({
+      enabled: true, names: {}, moods: {}, labels: {},
+      keys: [{ index: 0, key: "p-0" }],
+      entries: { "p-0": { status: sid === "s1" ? "pending" : "ok", changed: [], flags: TF } } }));
+    renderCampaign();
+    await screen.findByText("Tracker · updating…");
+    await openScene(/Second/);
+    await screen.findByText("post of s2");
+    await screen.findByText("Tracker · no change");
+    const before = trackerCallsFor("s1");
+    await tick(10_000);
+    expect(trackerCallsFor("s1")).toBe(before);
+  } finally { vi.useRealTimers(); }
+}, 15_000);
+
+test("Retry on an untracked post re-reads the tracker", async () => {
+  twoPosts();
+  withTracker({ entries: { "p-0": { status: "failed", changed: [], flags: TF, error: "interrupted" },
+                           "p-1": { status: "ok", changed: [], flags: TF } } });
+  (api.retryTracker as any).mockResolvedValue({});
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  const before = (api.getTracker as any).mock.calls.length;
+  await waitFor(() => expect(api.retryTracker).toHaveBeenCalledWith("run", "s1", "p-0"));
+  await waitFor(() => expect((api.getTracker as any).mock.calls.length).toBeGreaterThan(before));
+});
+
 test("⌘K numbers a scene by its id's own number, not by list position", async () => {
   // listScenes is sorted by `updated` descending — an earlier scene edited
   // most recently sorts first, which must not desync the displayed number
@@ -7728,7 +7958,7 @@ test("the reattach asks from one past what was read, not from the live tail", as
 
 // ---- the scene bar's overflow ----
 
-test("the seven panels are behind one control, and End scene is not", async () => {
+test("the eight panels are behind one control, and End scene is not", async () => {
   // The mobile-clutter half of the brief. The bar's own focus-mode comment
   // conceded the cost of not having this: "eleven controls at the 44px touch
   // target this width mandates wrap into four rows".
@@ -7742,12 +7972,30 @@ test("the seven panels are behind one control, and End scene is not", async () =
 
   // Everything that opens a panel is one control now.
   for (const label of ["Changes", "World updates", "Composition", "Mechanics",
-                       "Calendar", "Response", "Cover", "+ New scene"]) {
+                       "Calendar", "Response", "Cover", "Tracker", "+ New scene"]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   }
   // ...and they are inside the disclosure rather than beside it.
   const menu = screen.getByText("Scene ⋯").closest("details")!;
   expect(within(menu).getByRole("button", { name: "Calendar" })).toBeInTheDocument();
+});
+
+test("the Tracker panel edits this scene's fields, and Close shuts it", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+  ]);
+  const clothing = { key: "clothing", label: "Clothing", type: "text", aware: "present", hint: "" };
+  (api.getTrackerFields as any).mockResolvedValue(
+    { layer: {}, effective: [clothing], inherited: [clothing] });
+  renderCampaign();
+  await screen.findByText("Scene ⋯");
+
+  fireEvent.click(screen.getByRole("button", { name: "Tracker" }));
+
+  expect(await screen.findByRole("checkbox", { name: "Clothing" })).toBeChecked();
+  expect(api.getTrackerFields).toHaveBeenCalledWith({ kind: "scene", cid: "run", sid: "s1" });
+  fireEvent.click(screen.getByRole("button", { name: "Close Tracker" }));
+  expect(screen.queryByRole("checkbox", { name: "Clothing" })).not.toBeInTheDocument();
 });
 
 test("picking from the menu shuts the menu it was picked from", async () => {

@@ -182,7 +182,6 @@
     "assignment": 1
   },
   "backend/src/grimoire/store/undo.py": {
-    "arg-type": 4,
     "assignment": 1,
     "union-attr": 3
   },

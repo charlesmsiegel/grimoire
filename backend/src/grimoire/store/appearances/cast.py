@@ -134,10 +134,15 @@ def player_label(cid: str, scene_id: str) -> str:
     return names[0] if names else UNSTAMPED_PLAYER_LABEL
 
 
-def scene_cast(cid: str, scene_id: str) -> list[dict]:
+def scene_cast(cid: str, scene_id: str, *, include_departed: bool = False) -> list[dict]:
+    """The scene's cast, sorted by (kind, id). `include_departed` adds everyone
+    who left it: an actor whose record still holds a presence interval for the
+    scene though the scene is no longer among its `scenes` -- what a reader of
+    the scene's past (the tracker's earlier posts, absorb) still has to name."""
     out = []
     for ref, r in paths.record(cid).items():
-        if scene_id in r["scenes"]:
+        if scene_id in r["scenes"] or (include_departed
+                                       and r.get("presence", {}).get(scene_id)):
             kind, actor_id = paths._split(ref)
             # A campaign may hold only sidecars here; the card still inherits
             # from its world, so a raw campaign-root read would show the slug.

@@ -256,7 +256,10 @@ def current_value(cid: str, edit: dict) -> str | None:
         tid = target.get("id") or ""
         payload = edit.get("payload") or {}
         if kind == "character_state":
-            st = playstate.read_state(campaigns_paths.campaign_root(cid), tid)
+            # By the target's kind: a PC's state is its own file, and judging a
+            # PC edit against `characters/<id>` would call every one a conflict.
+            st = playstate.read_state(campaigns_paths.campaign_root(cid), tid,
+                                      target.get("kind", "characters"))
             if not st:
                 return ""
             return playstate.compose_body(st["current_state"], st["knows"], st["suspects"])

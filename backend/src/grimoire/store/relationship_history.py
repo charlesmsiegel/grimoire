@@ -57,7 +57,7 @@ stop. Two consequences worth stating:
   own absence.
   Scene ids are recycled -- ``scenes.lifecycle`` reuses the highest deleted
   number, which is why ``delete_scene`` drops the prompt snapshots, the commit
-  ledger's state, the turn state and the reader's pins rather than letting the
+  ledger's state and the reader's pins rather than letting the
   replacement adopt them. A retained row cannot be dropped (that is the history
   this store exists to keep) and must not be resolved either, or the next scene
   to take the number lends it a title and a date it never had, and a rename of

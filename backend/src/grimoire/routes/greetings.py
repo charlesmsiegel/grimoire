@@ -5,6 +5,7 @@ routes that open a scene from a greeting."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 
@@ -14,6 +15,7 @@ from .. import store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from . import runs
+from . import tracker as tracker_routes
 from .common import (
     _campaign_root_or_404,
     _fresh_or_409,
@@ -41,6 +43,8 @@ from .models import (
 from .streaming import StreamOutcome, _persist_reply
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
 
 
 def _opener_cast(cid: str, sid: str) -> list[dict]:
@@ -462,7 +466,8 @@ def post_campaign_greeting_mark(cid: str, gid: str, body: MarkBody):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/start-from-greeting")
-def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, request: Request):
+def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, request: Request,
+                             client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     try:
         # This module was the one an inventory of the freeze kept missing, for
@@ -477,7 +482,33 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
         raise HTTPException(status_code=404, detail="greeting not found")
     except (store.playing.PlayError, store.appearances.AppearError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    # `new_sid`: starting from a greeting may rename the scene.
+    _track_opening(request.app, cid, new_sid, client)
     return {"ok": True, "id": new_sid}
+
+
+def _track_opening(app, cid: str, sid: str, client: LLMClient) -> None:
+    """Track the posts a scene was just opened with -- a greeting, an adopted
+    opener -- once they are written and outside the hold that wrote them.
+
+    The scene was empty before, so every tracked post on it is new and
+    `schedule_untracked` is exactly right. The migration first: these posts are
+    written as plain replies, and a post is only trackable once the response
+    ledger has given it an id (which opening the scene would do anyway).
+
+    Never raises. The opening is on disk and the player is owed the 200; a
+    tracker that cannot start is not a scene that failed to open."""
+    try:
+        # Gated here as well as in `schedule_untracked`: with the tracker off
+        # nothing needs the ids yet, and the scene's next open assigns them as
+        # it always has -- so this route's write stays what it was.
+        if not store.tracker.settings.enabled(cid):
+            return
+        store.responses.migrate_if_needed(cid, sid)
+    except Exception as exc:  # noqa: BLE001 -- see the docstring
+        log.warning("tracker: could not assign response ids in %s/%s -- %s", cid, sid, exc)
+        return
+    tracker_routes.schedule_untracked(app, cid, sid, client)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/opener")
@@ -544,7 +575,8 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/first-post")
-def post_first_post(cid: str, sid: str, body: FirstPost, request: Request):
+def post_first_post(cid: str, sid: str, body: FirstPost, request: Request,
+                    client: LLMClient = Depends(get_llm)):
     """Adopt a generated opener as the scene's first (assistant) message. The cast is
     already set up in the panel, so this just persists the text onto an empty scene."""
     _require_scene(cid, sid)
@@ -565,7 +597,9 @@ def post_first_post(cid: str, sid: str, body: FirstPost, request: Request):
                 text = "\n\n".join(f"**{part['speaker']}:** {part['content']}" for part in parts)
             else:
                 text = body.text
-            return _adopt_first_post(cid, sid, text)
+            adopted = _adopt_first_post(cid, sid, text)
+    _track_opening(request.app, cid, sid, client)
+    return adopted
 
 
 def _adopt_first_post(cid: str, sid: str, text: str) -> dict:
@@ -574,8 +608,8 @@ def _adopt_first_post(cid: str, sid: str, text: str) -> dict:
     if not text.strip():
         raise HTTPException(status_code=400, detail="empty first post")
     # Judged on what LANDED, not on what was sent. Text can be non-empty and
-    # still produce no post: a trailing tracker block is split off before the
-    # reply is segmented (#120), and a bare speaker marker segments into
+    # still produce no post: a trailing ```state block is split off before the
+    # reply is segmented (`state_fence`), and a bare speaker marker segments into
     # nothing. Either way `append_reply` writes no message, and answering `ok`
     # over a scene that is still empty loses the opener the user was adopting
     # with no error to show for it. Nothing has been written when the count is

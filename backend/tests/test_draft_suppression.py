@@ -20,11 +20,19 @@ default), the usage ledger and the log file. None of them is campaign state,
 and the first is the one write the opener path is documented to make.
 """
 
+import functools
+
 import pytest
 
 import grimoire.store as store
 from grimoire import routes
 from tests.llm_fakes import FakeOpenRouter, FakeOpenRouterComplete
+
+# The tracker ON (its shipped default), which the suite otherwise turns off
+# (conftest). Without it `tracker.mark` returns before `mark_pending`, so a
+# draft path that scheduled an update would never reach the armed tracker
+# writers below and this guard could not fail.
+pytestmark = pytest.mark.tracker
 
 #: (module, function) pairs a draft must never reach: the extraction pipeline,
 #: the transcript, play state, relationships, plot, dossiers and voice drift.
@@ -43,20 +51,38 @@ _WRITERS = [
     ("dossiers", "stage_edit"),
     ("voice_drift", "write"),
     ("voice_drift", "stage_edit"),
+    ("tracker.records", "save"),
+    ("tracker.records", "mark_pending"),
 ]
+
+
+def _module(mod: str):
+    """`store.<mod>`, where `mod` may be dotted (`tracker.records`)."""
+    return functools.reduce(getattr, mod.split("."), store)
 
 
 @pytest.fixture
 def instrumented(client, monkeypatch):
-    """The route-test app, with every canonical campaign-state writer armed."""
+    """The route-test app, with every canonical campaign-state writer armed.
+
+    Each armed writer raises AND records the hit, and the hits are checked at
+    teardown. The raise alone is not enough: the tracker's scheduling is
+    fail-soft by contract (`tracker.mark` swallows whatever its write raises,
+    because the post it tracks has already landed), so a draft path reaching it
+    would have its AssertionError logged and discarded, and the test would pass.
+    """
+    hits: list[str] = []
+
     def _boom(name):
         def fail(*a, **k):  # pragma: no cover - reaching this IS the failure
+            hits.append(name)
             raise AssertionError(f"ephemeral draft path called {name}")
         return fail
 
     for mod, fn in _WRITERS:
-        monkeypatch.setattr(getattr(store, mod), fn, _boom(f"{mod}.{fn}"))
-    return client
+        monkeypatch.setattr(_module(mod), fn, _boom(f"{mod}.{fn}"))
+    yield client
+    assert hits == [], f"a draft path reached a campaign-state writer: {hits}"
 
 
 @pytest.fixture
@@ -145,4 +171,4 @@ def test_the_armed_writers_exist(client):
     """The list stays honest: a renamed writer must rename here too, not fall
     out of the guard as a silent getattr miss."""
     for mod, fn in _WRITERS:
-        assert callable(getattr(getattr(store, mod), fn)), f"{mod}.{fn}"
+        assert callable(getattr(_module(mod), fn)), f"{mod}.{fn}"

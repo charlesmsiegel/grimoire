@@ -18,6 +18,7 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
   ``usage``       /usage/summary, /campaigns/{cid}/usage cost rollups, /pricing
   ``search``      /search, the keyword sweep over content and facts
+  ``tracker``     /campaigns/{cid}/tracker, the scene state tracker
   ``entities``    the generic /{kind} entity surface for both scopes
 
 ORDERING: FastAPI matches in registration order and never backtracks, so the
@@ -71,6 +72,7 @@ from . import (
     shell,
     streaming,
     todo,
+    tracker,
     usage,
     weather,
     world_images,
@@ -160,7 +162,7 @@ def _compose(domain: APIRouter) -> None:
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, modules, worlds, characters, world_images, greetings,
                 runs, scenes, character_turns, passage_characters, weather, mechanics, usage, observability,
-                campaigns, ledger, search, shell, todo):
+                campaigns, ledger, search, shell, todo, tracker):
     _compose(_domain.router)
 
 _compose(entities.router)  # keep last: generic /{kind} catch-alls

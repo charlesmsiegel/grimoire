@@ -74,7 +74,6 @@ from . import (
     plot,
     provenance,
     scene_ids,
-    turnstate,
 )
 from .scenes import read as scenes_read
 from .scenes import write as scenes_write
@@ -317,13 +316,11 @@ def retcon(cid: str, sid: str, index: int, content: str) -> dict:
     the state this exists to prevent — and `cascade.revert_scene` takes the same
     reentrant lock again for its own span.
 
-    The two writes beside the edit are the ones `PUT /messages/{index}` makes,
-    and for its reasons rather than for this feature's: the transient-state
-    ledger from this post on describes text that no longer exists
-    (`turnstate.supersede`), and the reroll sidecar holds the pre-edit reply as
-    its only copy until `alternates.reconcile` files it. Both are best-effort
-    against `OSError` there and here — the edit is on disk, and a sidecar is not
-    a reason to fail it.
+    The write beside the edit is the one `PUT /messages/{index}` makes, and for
+    its reason rather than for this feature's: the reroll sidecar holds the
+    pre-edit reply as its only copy until `alternates.reconcile` files it. It is
+    best-effort against `OSError` there and here — the edit is on disk, and a
+    sidecar is not a reason to fail it.
 
     Macros are NOT expanded here, unlike that route: this takes the content it
     is given. The expansion is a route-layer concern (it needs the request's
@@ -346,10 +343,6 @@ def retcon(cid: str, sid: str, index: int, content: str) -> dict:
         # leaves the post rewritten and the stale review free to save.
         commits.retire_scene(cid, sid)
         scenes_write.edit_message(cid, sid, index, content)
-        try:
-            turnstate.supersede(cid, sid, index)
-        except OSError:
-            pass
         try:
             alternates.reconcile(cid, sid)
         except OSError:

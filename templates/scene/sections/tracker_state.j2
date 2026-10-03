@@ -1,0 +1,20 @@
+{#- The scene state tracker's snapshot as this prompt's reader may see it.
+    Vars: tracker_lines ([{name, own, values: [{label, text, private}]}],
+    store/tracker/view.lines_for -- the reader's own line first), and
+    tracker_narrator (bool: the narrator reads every value, private ones
+    labelled so it plays them as unspoken). A character with no value this
+    reader may see renders no line, and no lines renders nothing at all.
+    `c["values"]`, not `c.values`: on a dict that names the method. -#}
+{%- set lines = [] -%}
+{%- for c in tracker_lines if c["values"] -%}
+{%- set parts = [] -%}
+{%- for v in c["values"] -%}
+{%- set note = (" (private: never state or imply in narration)" if tracker_narrator else ("" if c["own"] else " (known to you)")) if v["private"] else "" -%}
+{%- set _ = parts.append(v["label"] ~ ": " ~ v["text"] ~ note) -%}
+{%- endfor -%}
+{%- set who = " (you)" if c["own"] else ("" if tracker_narrator else " (what you can perceive)") -%}
+{%- set _ = lines.append(c["name"] ~ who ~ " — " ~ parts | join("; ")) -%}
+{%- endfor -%}
+{%- if lines %}# Scene state
+What each character present looks like and is doing right now, as tracked from the scene so far.
+{{ lines | join("\n") }}{% endif -%}

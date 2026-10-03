@@ -311,8 +311,17 @@ for label, snap, cands, off, direction in (
           render("scene_suggestions/user.j2", s=snap, offscreen=off,
                  greeting_candidates=cands, direction=direction))
 
-for label, facts, st, rel, plt, grp, cmt, fct, strg in (
-        ("bare", {}, None, None, None, None, None, None, None),
+#: The scene tracker's final state as `routes.scenes._absorb_tracked` hands it
+#: over (`tracker.view.lines_for` for the narrator, empty lines dropped).
+TRACKED = [{"name": "Seraphine Vale", "own": False, "values": [
+               {"label": "Visible mood", "text": "fear", "private": False},
+               {"label": "Concealed", "text": "the ledger", "private": True}]},
+           {"name": "Hero", "own": False, "values": [
+               {"label": "Holding", "text": "a lantern", "private": False}]}]
+
+for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
+        ("bare", {}, None, None, None, None, None, None, None, None),
+        ("tracked", {}, None, None, None, None, None, None, None, TRACKED),
         ("full", {"location": "Night Dock", "date": "2026-07-05",
                   "cast": ["characters/seraphine-vale", "pcs/hero"]},
          {"Seraphine Vale": "Wounded. Knows: The ledger is real."},
@@ -322,8 +331,9 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg in (
          "the-deadline: Midnight deadline (threat, open), due midnight "
          "— Hero was given until midnight.",
          "f1: The warehouse belongs to the Salt Circle. (the third night)",
-         "- Seraphine was told about the tail at the Night Dock")):
-    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg)
+         "- Seraphine was told about the tail at the Night Dock", TRACKED)):
+    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg,
+                              tracked_snapshot=trk)
     check(f"absorb system ({label})", exp[0]["content"],
           render("absorb/system.j2", steering=bool(strg)))
     if strg:
@@ -335,7 +345,20 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg in (
     check(f"absorb user ({label})", exp[1]["content"],
           render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
                  plot_snapshot=plt, group_snapshot=grp, commitment_snapshot=cmt,
-                 fact_snapshot=fct, steering_snapshot=strg, transcript=transcript))
+                 fact_snapshot=fct, steering_snapshot=strg,
+                 tracked_snapshot=trk or [], transcript=transcript))
+    if trk:
+        assert ("Final tracked state (as the scene ended; private values marked):\n"
+                "- Seraphine Vale: Visible mood: fear; Concealed: the ledger (private)\n"
+                "- Hero: Holding: a lantern") in exp[1]["content"], \
+            f"absorb user ({label}) missing the Final tracked state block"
+    else:
+        assert "Final tracked state" not in exp[1]["content"], \
+            f"absorb user ({label}) renders a tracked-state block with no tracked state"
+        assert exp[1]["content"] == absorb.build_prompt(
+            transcript, facts, st, rel, plt, grp, cmt, fct, strg,
+            tracked_snapshot=[])[1]["content"], \
+            f"absorb user ({label}) changes with an empty tracked state"
     if grp:
         assert "Groups:" in exp[1]["content"], f"absorb user ({label}) missing Groups: head line"
     if cmt:
@@ -396,7 +419,6 @@ from grimoire.store import (  # noqa: E402
     sheets,
     steering,
     styles,
-    turnstate,
     worlds,
 )
 from grimoire.store import dossiers as dstore
@@ -405,17 +427,19 @@ from grimoire.store import taglines as tstore
 from grimoire.store import voice_anchors as vastore
 from grimoire.store import voice_drift as vdstore
 from grimoire.store import weather as wstore
+from grimoire.store.tracker import fields as tfields  # noqa: E402
+from grimoire.store.tracker import records as trecords  # noqa: E402
+from grimoire.store.tracker import settings as tsettings  # noqa: E402
+from grimoire.store.tracker import view as tview  # noqa: E402
+from grimoire.store.tracker import walk as twalk  # noqa: E402
 
 # recap_depth=1 narrows the recap window to the newest absorbed scene, which is
 # what leaves an older one outside it for archive retrieval (#127) to recall —
 # the archive section is empty by construction while every record is in recap.
-# turnstate_depth is non-zero for the same reason the fixture writes a playstate
-# and a group state: the transient-state sections (#120) ship disabled, and a
-# section that renders "" on both sides of the comparison proves nothing.
 # speaker_turn_taking is on for exactly that reason too (#29) — it ships off,
 # and the multi-NPC scenes below are what make its section non-empty.
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.", recap_depth="1",
-                    turnstate_depth="4", speaker_turn_taking="on")
+                    speaker_turn_taking="on")
 
 # a bound mechanics module (#162 Task 6): one sheet type, one check, one
 # always-on rules doc -- so mechanics_rules/mechanics_sheets/mechanics_checks
@@ -510,14 +534,24 @@ scenes.append_message(cid, sid, "user", "Where is the ledger?")
 scenes.append_message(cid, sid, "assistant", "Seraphine glances toward the warehouse.",
                       speaker="Seraphine Vale")
 scenes.append_message(cid, sid, "assistant", "Fog rolls in off the water.")
-scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero")
+scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero", post_id="c" * 32)
 
-# The transient ledger (#120), filed against the last post of the scene as
-# `_persist_reply` would. Two entries holding the same mood, so `streaks` has
-# something to see as well as `current`.
-turnstate.record(cid, sid, 1, {f"characters:{sera}": {"mood": "wary"}})
-turnstate.record(cid, sid, 3, {f"characters:{sera}": {"mood": "wary", "intent": "reach the warehouse first",
-                                                      "posture": "half-turned toward the door"}})
+# One tracker record, on the closing player post, so the Scene state section
+# renders here: two characters, both with a value anyone present can see and
+# Seraphine with a private one -- which the narrator's render labels, and which
+# is the branch of the template a leak would hide in.
+# The campaign opts in itself rather than leaning on the shipped default, which
+# the test suite switches off.
+campaigns.set_campaign_tracker(cid, "on")
+_tracker_key = twalk.ordered_keys(cid, sid)[-1][1]
+trecords.save(cid, scenes.ensure_identity(cid, sid), _tracker_key, {
+    f"characters:{sera}": {"present": True, "fields": {
+        "pose": {"value": "leaning on a piling", "aware": "present"},
+        "intent": {"value": "lose the tail before the warehouse", "aware": []}}},
+    f"pcs:{pid}": {"present": True, "fields": {
+        "holding": {"value": "a shuttered lantern", "aware": "present"},
+        "condition": {"value": ["soaked", "winded"], "aware": "present"}}},
+}, changed=[], fields_digest="fixture", model="fixture")
 
 relationships.set_feeling(cid, f"characters:{sera}", f"pcs:{pid}", 2, 3, 4, "suspects a tail")
 relationships.set_bond(cid, f"characters:{sera}", f"pcs:{pid}", "reluctant allies")
@@ -587,19 +621,6 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
         if st and (st["current_state"] or st["knows"] or st["suspects"]):
             name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             states.append({"name": name, **st})
-
-    # Mirror of context.world_state._transient_states: the ledger, decayed to
-    # `turnstate_depth` posts of the tail, labelled with the CAST name.
-    depth = max(int(cfg.get("turnstate_depth", "0")), 0)
-    live = turnstate.current(cid, scene_id, len(scene["messages"]), depth)
-    transient_states = []
-    for a in cast:
-        if a["role"] != "npc" or a["kind"] != "characters":
-            continue
-        held = live.get(f"characters:{a['id']}") or {}
-        rows = [{"label": f, "value": held[f]} for f in turnstate.FIELDS if held.get(f)]
-        if rows:
-            transient_states.append({"name": a["name"], "fields": rows})
 
     players, player_names = [], []
     for a in cast:
@@ -823,6 +844,16 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             f"offscene_known_limit of {limit}; this mirror does not implement the cut, "
             f"so shrink the fixture or teach gather() the relevance rule")
 
+    # Mirrors context._assemble's scene state: the record at the transcript's
+    # tail, seen by the narrator (this harness composes with no assigned actor),
+    # over the whole scene cast; nothing at all with the tracker off.
+    tracker_lines = []
+    if tsettings.enabled(cid):
+        _key, snapshot = twalk.current(cid, scene_id)
+        if snapshot:
+            tracker_lines = tview.lines_for(snapshot, tfields.effective(cid, scene_id), None,
+                                            twalk.roster(cid, scene_id))
+
     campaign_meta = campaigns.read_campaign(cid)["meta"]
     # Mirrors context._assemble: style keeps its legacy cascade; the new
     # continuation target resolves separately from it.
@@ -844,14 +875,17 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "cast_blocks": _cast_blocks(cid, npc_cards, npc_ids),
             "named_npc_count": sum(
                 1 for b in _cast_blocks(cid, npc_cards, npc_ids) if b["name"]),
-            "states": states, "transient_states": transient_states,
+            "states": states,
+            "tracker_lines": tracker_lines, "tracker_narrator": True,
+            # Mirrors context._assemble: the global switch, on by default. Only
+            # an NPC-assigned response_actor.j2 reads it; no case here is one.
+            "perception_rider": True,
             # Mirrors context._assemble: derived from the present NPCs' card
             # names and the raw transcript, and None while the toggle is off.
             "speaker": (context.speaker.nominate(
                 [d.get("name", "") for d in npc_cards if d.get("name")],
                 [dict(m) for m in scene["messages"]])
                 if config.speaker_turn_taking() else None),
-            "transient_tracker": depth > 0, "transient_fields": list(turnstate.FIELDS),
             "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
             "archive_entries": archive_entries,
@@ -910,9 +944,10 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/voice_policy.j2",
               "scene/sections/voice_anchors.j2",
               "scene/sections/voice_examples.j2",
-              "scene/sections/character_state.j2",
-              "scene/sections/transient_state.j2",
-              "scene/sections/active_speaker.j2",
+              "scene/sections/character_state.j2"]
+    if not opener:                    # Section(except_opener=True)
+        names.append("scene/sections/tracker_state.j2")
+    names += ["scene/sections/active_speaker.j2",
               "scene/sections/relationships.j2",
               "scene/sections/player_personas.j2"]
     if data["pcless"]:
@@ -934,11 +969,6 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/off_scene_cast_known.j2",
               "scene/sections/mechanics_response_format.j2",
               "scene/sections/response_format.j2"]
-    # The tracker instruction is the one section deliberately absent from an
-    # opener (Section.except_opener) — the opener is adopted by hand, so a
-    # machine-readable block there is the user's to delete.
-    if not opener:
-        names.append("scene/sections/transient_tracker.j2")
     names.append("scene/sections/response_budget.j2")
     sections: list[str] = []
     last_head = None
@@ -1018,6 +1048,12 @@ check_messages("chat unknown model", context.build_messages(cid, sid, model="ven
 # "" passes while proving nothing about scene/voice_correction.j2.
 assert any("drifted out of voice" in m["content"] for m in context.build_messages(cid, sid)), \
     "the voice corrective is missing from the assembled prompt -- check the fixture (#59)"
+# Same reasoning for the Scene state section: a byte-for-byte check over an
+# empty section proves nothing, and its private-value branch is the one a leak
+# would hide in.
+assert any("# Scene state" in m["content"] and "(private: never state or imply in narration)"
+           in m["content"] for m in context.build_messages(cid, sid)), \
+    "the Scene state section is missing from the assembled prompt -- check the tracker fixture"
 note = render("scene/director_note.j2")
 check_messages("director", context.build_director_messages(cid, sid, note),
                rendered_messages(sid, data, note=note))
@@ -1090,7 +1126,7 @@ check("absorb user (store)", exp[1]["content"],
       render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
              plot_snapshot=plot_snap, group_snapshot=grp_snap,
              commitment_snapshot=cmt_snap, fact_snapshot=fct_snap,
-             steering_snapshot=strg_snap, transcript=tr))
+             steering_snapshot=strg_snap, tracked_snapshot=[], transcript=tr))
 for name, line in st_snap.items():
     st = playstate.read_state(croot, sera)
     check(f"state snapshot line (store, {name})", line,

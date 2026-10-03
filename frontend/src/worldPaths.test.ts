@@ -49,7 +49,12 @@ describe("sectionHref", () => {
       .toBe("/worlds/a%20b/items/c%2Fd");
   });
 
+  test("the tracker is a world section with a screen of its own", () => {
+    expect(sectionHref(W, { kind: "section", at: "tracker" })).toBe("/worlds/realm/tracker");
+  });
+
   test("a campaign cannot address a world-only section", () => {
+    expect(() => sectionHref(C, { kind: "section", at: "tracker" })).toThrow(/tracker/);
     expect(() => sectionHref(C, { kind: "section", at: "tags" })).toThrow(/tags/);
     expect(() => sectionHref(C, { kind: "section", at: "overview" })).toThrow(/overview/);
     expect(() => sectionHref(C, { kind: "section", at: "push" })).toThrow(/push/);
@@ -63,6 +68,13 @@ describe("parseWorldTail", () => {
       .toEqual({ ok: true, section: "overview", rid: null });
     expect(parseWorldTail("", "campaign"))
       .toEqual({ ok: true, section: "characters", rid: null });
+  });
+
+  test("the tracker section round-trips on the world shape only", () => {
+    expect(parseWorldTail("tracker", "world"))
+      .toEqual({ ok: true, section: "tracker", rid: null });
+    expect(parseWorldTail("tracker", "campaign")).toEqual({ ok: false });
+    expect(parseWorldTail("tracker/x", "world")).toEqual({ ok: false });
   });
 
   test("a section, and a section with a record", () => {
@@ -143,6 +155,12 @@ describe("legacyTarget", () => {
   test("section=characters with no id is the grid, not an empty character", () => {
     expect(legacyTarget(new URLSearchParams("section=characters"), "world"))
       .toEqual({ kind: "section", at: "characters" });
+  });
+
+  test("a legacy link to the tracker section is read", () => {
+    expect(legacyTarget(new URLSearchParams("section=tracker"), "world"))
+      .toEqual({ kind: "section", at: "tracker" });
+    expect(legacyTarget(new URLSearchParams("section=tracker"), "campaign")).toBeNull();
   });
 
   test("images keeps `for`, and nothing else does", () => {

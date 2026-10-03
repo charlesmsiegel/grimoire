@@ -708,6 +708,12 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em; line-height: 1.45;
   color: var(--muted);
 }
+.cast-mood {
+  font-family: var(--fb); font-weight: 300; font-size: 11px; line-height: 1.3;
+  color: var(--muted); max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tracker-now { padding: 0 16px 10px; }
 
 .column-empty {
   margin: 0; padding: 0 16px 10px; color: var(--muted);
@@ -1143,6 +1149,8 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
    rule would have silently dropped its underline too. */
 .editor-list a.row { text-decoration: none; }
 .row.active { border-color: var(--accent); border-left: 4px solid var(--accent); }
+/* A tracker field switched off: still selectable, so it can be switched back on. */
+.editor-list .row.off { opacity: 0.55; }
 .row-label { flex: 1; cursor: pointer; overflow: hidden; }
 /* A row of [title][mark] rather than one clipped run: the ellipsis has to
    truncate the TITLE and leave the completion mark standing, so the mark is its
@@ -2373,6 +2381,22 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    A dashed rule rather than a speaker plate. A note is a stage direction in
    the margin: it is in the transcript so the turn it bought has an index to be
    charged against, not because it happened in the scene. */
+/* The per-post tracker disclosure, under the text it describes. Quiet when
+   closed -- one muted line -- and set off from the prose when open. */
+.tracker-wrap { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 6px; }
+.tracker { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--muted); }
+.tracker > summary { cursor: pointer; overflow-wrap: anywhere; }
+.tracker[open] { padding: 4px 0 4px 10px; border-left: 2px solid var(--muted); }
+.tracker .changed { font-weight: 600; }
+.tracker-actor { margin: 6px 0; padding: 0; border: 0; }
+.tracker-actor h5, .tracker-actor legend { margin: 0 0 2px; font-size: 12px; padding: 0; }
+.tracker-actor ul { margin: 0; padding-left: 16px; }
+.tracker-actor .chip { margin-left: 6px; }
+.tracker-field { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 4px; }
+.tracker-field label { display: flex; gap: 6px; align-items: baseline; flex: 1 1 14rem; }
+.tracker-field label input, .tracker-field label select { flex: 1 1 auto; min-width: 0; }
+.tracker-wrap > .field-hint { flex-basis: 100%; }
+
 .director-note .msg-body { opacity: 0.65; font-style: italic; }
 .director-note .msg { border-left: 1px dashed var(--muted); }
 /* No plate. The label would be a fourth kind of speaker in a column of three,
@@ -3289,6 +3313,7 @@ a.column-back { text-decoration: none; }
   /* The state label goes: at 52px it truncates to nothing useful, and the
      portrait's position in the row already carries the ordering. */
   .cast-state { display: none; }
+  .cast-mood { display: none; }
 
   /* Conditions become a 2×2 of label over value — the 44px label column is
      most of a phone's width. */

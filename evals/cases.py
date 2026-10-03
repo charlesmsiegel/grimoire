@@ -57,11 +57,13 @@ from grimoire.store import (
     response_targets,
     scenes,
     sheets,
+    state_fence,
     steering,
     styles,
-    turnstate,
     worlds,
 )
+from grimoire.store.tracker import records as tracker_records
+from grimoire.store.tracker import walk as tracker_walk
 
 from . import graders, slop
 from .graders import Check
@@ -183,7 +185,7 @@ def grade_scene_length(ctx: dict, output: str) -> list[Check]:
     watcher = response_protocol.ResponseWatcher(perception=True)
     watcher.feed(output)
     watcher.finish()
-    narration, _ = turnstate.split_block(watcher.narration)
+    narration, _ = state_fence.split_block(watcher.narration)
     prose = graders.length_drift.prose(narration)
     words = len(prose.split())
     paragraphs = max(len([p for p in prose.split("\n\n") if p.strip()]), 1)
@@ -543,7 +545,31 @@ def build_turn_taking() -> dict:
         scenes.append_message(cid, sid, "assistant", line, speaker=name)
     scenes.append_message(cid, sid, "user",
                           "I put the lamp on the crate and wait for somebody else "
-                          "to fill the silence.", speaker="Winifred")
+                          "to fill the silence.", speaker="Winifred", post_id="d" * 32)
+
+    # One tracker record on the closing post, so the Scene state section is in
+    # this prompt: a narrator's compose, so every value renders and the private
+    # one carries its label. The campaign opts in itself rather than leaning on
+    # the shipped default, which the test suite switches off.
+    campaigns.set_campaign_tracker(cid, "on")
+    sera, pc = f"characters:{ids['Seraphine Vale']}", f"pcs:{pid}"
+    tracker_records.save(cid, scenes.ensure_identity(cid, sid),
+                         tracker_walk.ordered_keys(cid, sid)[-1][1], {
+        sera: {"present": True, "fields": {
+            "pose": {"value": "arms folded on a crate", "aware": "present"},
+            "intent": {"value": "keep the buyer's name out of it", "aware": []}}},
+        pc: {"present": True, "fields": {
+            "holding": {"value": "a lamp", "aware": "present"}}},
+    }, changed=[], fields_digest="eval", model="eval")
+    # Spelled out rather than read back through `view.lines_for`, so the check
+    # below is a second opinion on the filter and not a copy of it.
+    tracker_lines = [
+        {"name": "Seraphine Vale", "own": False, "values": [
+            {"label": "Pose", "text": "arms folded on a crate", "private": False},
+            {"label": "Intent", "text": "keep the buyer's name out of it", "private": True}]},
+        {"name": "Winifred", "own": False, "values": [
+            {"label": "Holding", "text": "a lamp", "private": False}]},
+    ]
 
     # The layer is off by default, so a case that forgot this would assemble a
     # prompt carrying no Active speaker section at all and still pass its output
@@ -554,7 +580,8 @@ def build_turn_taking() -> dict:
     nomination = context.speaker.nominate(npc_names,
                                           scenes.read_scene(cid, sid)["messages"])
     return {"cid": cid, "sid": sid, "npc_names": npc_names, "nomination": nomination,
-            "players": frozenset(appearances.player_names(cid, sid))}
+            "players": frozenset(appearances.player_names(cid, sid)),
+            "tracker_lines": tracker_lines}
 
 
 def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
@@ -598,7 +625,14 @@ def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
                                          "scene/sections/voice_policy.j2",
                                          cast_blocks=data["cast_blocks"],
                                          named_npc_count=data["named_npc_count"])
-    return [control] + section + voice + graders.grade_turn_taking(
+    # The scene state, hosted here for the same reason as the voice policy: a
+    # several-character scene is what the section exists for. This prompt is
+    # the narrator's, so every value is in it and the private one is labelled.
+    tracker = graders.grade_prompt_section(ctx["messages"], "tracker_state",
+                                           "scene/sections/tracker_state.j2",
+                                           tracker_lines=ctx["tracker_lines"],
+                                           tracker_narrator=True)
+    return [control] + section + voice + tracker + graders.grade_turn_taking(
         output, nomination, ctx["players"], ctx["npc_names"])
 
 

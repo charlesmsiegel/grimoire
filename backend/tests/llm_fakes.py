@@ -533,3 +533,49 @@ class HeldOpenRouter(FakeLLM):
                 # called from the TEST thread, and setting an anyio event from
                 # off-loop is not safe.
                 await anyio.to_thread.run_sync(self._go.wait)
+
+
+#: How long `HeldCassette` holds a matching request before letting it through
+#: unreleased. A safety net, not a timing: a test that fails between holding
+#: and releasing would otherwise leave a worker thread parked on the hold, and
+#: the lifespan could not shut down -- burying the real failure under a hang.
+HOLD_SECONDS = 30
+
+
+class HeldCassette(FakeLLM):
+    """`from_entries`, except that requests matching `hold` wait for the test.
+
+    `HeldOpenRouter` holds every request, which is right when the turn is the
+    subject and wrong when the subject is a call made *beside* a turn: a
+    background update (the scene tracker's, say) runs after the post it
+    describes lands, so holding the turn too would hold the very write the
+    background call is meant to race. Here only the matching requests stop --
+    before any delta, and so before anything is recorded -- while every other
+    request answers from the cassette at once.
+
+    `hold` is a `when` dict, matched by the cassette's own predicates so the
+    held call is named exactly as its reply is. Once released, later matching
+    requests pass straight through.
+    """
+
+    def __init__(self, entries: list[dict], hold: dict, name: str = "<held>"):
+        super().__init__(cassette=Cassette({"entries": entries}, name))
+        self._hold = dict(hold)
+        self._reached = threading.Event()
+        self._go = threading.Event()
+
+    def await_held(self, timeout: float = 10.0) -> None:
+        assert self._reached.wait(timeout), "no request matching the hold arrived"
+
+    def release(self) -> None:
+        self._go.set()
+
+    async def stream(self, messages, conn, usage=None):
+        assert self.cassette is not None
+        if self.cassette._matches(self._hold, messages):
+            self._reached.set()
+            # A worker thread rather than an anyio Event, as in
+            # `HeldOpenRouter`: `release()` is called from the TEST thread.
+            await anyio.to_thread.run_sync(self._go.wait, HOLD_SECONDS)
+        async for delta in super().stream(messages, conn, usage):
+            yield delta

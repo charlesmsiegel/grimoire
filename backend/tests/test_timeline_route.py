@@ -233,7 +233,7 @@ def test_an_absorbed_scene_that_was_deleted_is_not_resurrected_by_its_record(cli
     gone = _absorbed(cid, "The Turning", "It ended.")
     store.scenes.delete_scene(cid, gone)
     # The premise, asserted rather than assumed: `delete_scene` retires the
-    # commit ledger, the turn state and the alternates sidecar and deliberately
+    # commit ledger and the alternates sidecar and deliberately
     # leaves the chronicle alone. If that ever changes this test passes for the
     # wrong reason, so it fails here instead.
     assert gone in store.chronicle.read_chronicle(cid)

@@ -45,7 +45,7 @@ since — so `state.md`, dossiers and lore edits go back to what they held, and
 where they cannot the refusal is reported rather than guessed at. It also buys
 the scene-keyed stores: chronicle records, plot and commitment beats, change
 rows and provenance citations for those scenes are removed, and `delete_scene`
-takes the prompt log, the commit ledger, the turn-state ledger, the reader's
+takes the prompt log, the commit ledger, the reader's
 pins and any parked alternates with them.
 
 What it does **not** restore is the same list `cascade` declines, and for the
@@ -488,7 +488,7 @@ def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
     """Duplicate the campaign directory and re-stamp the copy's `campaign.md`.
 
     `copytree` rather than a per-file walk on purpose: what a campaign holds
-    grows (weather overrides, the commit ledger, the turn-state ledger and the
+    grows (weather overrides, the commit ledger and the
     scene ledger all arrived after this issue was written), and a fork that
     enumerated the parts would silently stop copying the newest one. The rule
     is "everything, then fix up what is identity" — so a part added tomorrow

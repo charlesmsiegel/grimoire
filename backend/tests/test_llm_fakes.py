@@ -214,6 +214,7 @@ def _rendered_prompts() -> list[str]:
                        greeting_candidates=[], direction=""),
         prompts.render("scene/sections/response_format.j2", player_names=[],
                        response_actor={"ref": "grimoire", "name": "Grimoire"}),
+        prompts.render("tracker/update_system.j2"),
     ]
 
 

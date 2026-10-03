@@ -41,8 +41,6 @@ class ConfigUpdate(BaseModel):
     archive_depth: str | None = None
     setup_done: str | None = None
     prompt_log_depth: str | None = None
-    turnstate_depth: str | None = None
-    promote_streak: str | None = None
     rolling_summary_every: str | None = None
     scene_break_every: str | None = None
     offscene_known_limit: str | None = None
@@ -52,6 +50,8 @@ class ConfigUpdate(BaseModel):
     semantic_recall_threshold: str | None = None
     prompt_layout_enabled: str | None = None
     speaker_turn_taking: str | None = None
+    tracker: str | None = None
+    perception_rider: str | None = None
     backup_enabled: str | None = None
     backup_interval_hours: str | None = None
     backup_keep: str | None = None
@@ -146,6 +146,29 @@ class ResponseSettings(BaseModel):
     response_opening_paragraphs: str | None = None
     response_continuation_words: str | None = None
     response_continuation_paragraphs: str | None = None
+
+
+class TrackerLayer(BaseModel):
+    """One layer of tracker field definitions (world, campaign or scene)."""
+
+    fields: list[dict] = []
+    change: dict = {}
+    off: list[str] = []
+
+
+class CampaignTracker(BaseModel):
+    """A campaign's own scene-tracker setting: "on", "off", or "" to follow the
+    global one."""
+
+    setting: str
+
+
+class TrackerEdit(BaseModel):
+    """A person's hand edit of one tracker record:
+    `{ref: {field_key: {"value": ..., "aware": "present" | [refs]}}}`, either
+    half optional (`store.tracker.merge.apply_edit` validates it)."""
+
+    edits: dict
 
 
 class RoutingUpdate(BaseModel):

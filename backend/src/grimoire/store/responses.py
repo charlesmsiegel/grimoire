@@ -14,7 +14,7 @@ import hashlib
 import json
 import uuid
 
-from . import atomic, locks, proposals, response_snapshots, rolls, turnstate
+from . import atomic, locks, proposals, response_snapshots, rolls
 from .appearances import paths as appearance_paths
 from .campaigns import paths as campaign_paths
 from .paths import now_iso
@@ -78,6 +78,41 @@ def actor_refs(cid: str, sid: str) -> dict[str, str]:
     records = _read(cid)["scenes"].get(token, {}).get("responses", {})
     return {rid: record["actor_ref"] for rid, record in records.items()
             if record.get("actor_ref")}
+
+
+def variants_by_response(
+    cid: str, sid: str, *, token: str | None = None
+) -> dict[str, tuple[str | None, list[str]]]:
+    """Each response's active variant id and every variant id it has, for the
+    scene tracker's walk (which keys a character post by its active variant and
+    keeps every variant's record, so a swipe back finds its state).
+
+    Read-only, so it never mints: `_scope` would `ensure_identity`, writing the
+    scene file to answer a question about it. A scene with no identity has no
+    ledger scope either, which is `{}`.
+
+    Takes no lock, as `actor_refs` takes none: the ledger is one file written
+    whole through `atomic`, so a single read already sees the active pointer
+    and the variant list from one ledger state. A lock here would only add a
+    wait -- up to the lock timeout -- in front of every prompt composed while
+    something else holds the campaign (`context.assemble` reaches this through
+    the tracker's walk). A caller that must decide against what it read holds
+    the campaign lock itself, around this read and its write.
+
+    `token` is for a caller that has already resolved the identity and would
+    act on an empty answer. `scene_identity` is fail-soft -- an unreadable
+    scene file reads as "no identity" -- so resolving it a second time here
+    could turn a momentarily unreadable file into `{}`, and a prune would take
+    that as "no response has any variant" and discard every one of them.
+    """
+    if token is None:
+        token = identity.scene_identity(cid, sid)
+    if not token:
+        return {}
+    records = _read(cid)["scenes"].get(token, {}).get("responses", {})
+    return {rid: (record.get("active_variant"),
+                  [v["id"] for v in record.get("variants", [])])
+            for rid, record in records.items()}
 
 
 def transcript_hash(messages):
@@ -404,7 +439,7 @@ def editable(cid: str, sid: str, rid: str) -> int:
     return index
 
 
-def _invalidate(cid, sid, index):
+def _invalidate(cid, sid):
     data = _read(cid)
     scope = _scope(cid, sid, data)
     for round_record in scope["rounds"].values():
@@ -412,7 +447,6 @@ def _invalidate(cid, sid, index):
             round_record["status"] = "superseded"
     _write(cid, data)
     proposals.supersede(cid, sid)
-    turnstate.supersede(cid, sid, index)
     write.set_rolling_summary(cid, sid, "", 0, "")
     write.set_scene_break(cid, sid, 0, 0, 0)
 
@@ -429,7 +463,7 @@ def delete(cid: str, sid: str, rid: str) -> None:
         for message in messages[index:]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid, index)
+        _invalidate(cid, sid)
         write.replace_messages(cid, sid, messages)
 
 
@@ -453,7 +487,7 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid, index)
+        _invalidate(cid, sid)
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
         record.update(active_variant=vid, status="complete")

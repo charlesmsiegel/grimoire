@@ -66,6 +66,8 @@ import {
   type WeatherSpan,
   type CalendarYear, type ChoreItems,
   type ShellPayload, type TodoPayload,
+  type CampaignTrackerSetting, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
+  type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
   type WorldCampaignPending, type WorldDetail, type WorldImage, type WorldMeta,
 } from "./types";
 
@@ -1080,6 +1082,15 @@ export function invalidateConfigCache() {
 
 /** The `PCCreate` body, which both PC create routes take (#14). */
 type PCCreateBody = { name: string; tags?: string[]; version_name?: string; persona?: Persona };
+
+/** The tracker's three field-definition layers share one body and differ only in path. */
+function trackerFieldsPath(scope: TrackerScope): string {
+  switch (scope.kind) {
+    case "world": return `/api/worlds/${scope.wid}/tracker-fields`;
+    case "campaign": return `/api/campaigns/${scope.cid}/tracker-fields`;
+    case "scene": return `/api/campaigns/${scope.cid}/scenes/${scope.sid}/tracker-fields`;
+  }
+}
 
 export const api = {
   /** `fresh` forces a new request and re-seeds the cache with it. The cache is
@@ -3131,4 +3142,32 @@ export const api = {
       ...(opts.q ? { q: opts.q } : {}),
       ...(opts.campaign ? { campaign: opts.campaign } : {}),
     })), onEvent, signal),
+  // --- the scene state tracker ---------------------------------------------
+  /** Polled while an update is pending, so never the shared read. */
+  getTracker: (cid: string, sid: string) =>
+    request<TrackerSummary>("GET", `/api/campaigns/${cid}/scenes/${sid}/tracker`,
+                            undefined, { fresh: true }),
+  getTrackerRecord: (cid: string, sid: string, key: string) =>
+    request<TrackerRecord>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/tracker/records/${encodeURIComponent(key)}`,
+      undefined, { fresh: true }),
+  editTrackerRecord: (cid: string, sid: string, key: string, edits: TrackerEdits) =>
+    request<TrackerRecord>(
+      "PUT", `/api/campaigns/${cid}/scenes/${sid}/tracker/records/${encodeURIComponent(key)}`,
+      { edits }),
+  /** Both answer the scene's summary, with the record already `pending`. */
+  retryTracker: (cid: string, sid: string, key: string) =>
+    request<TrackerSummary>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/tracker/records/${encodeURIComponent(key)}/retry`),
+  rerunTrackerFrom: (cid: string, sid: string, key: string) =>
+    request<TrackerSummary>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/tracker/records/${encodeURIComponent(key)}/rerun-from`),
+  getTrackerFields: (scope: TrackerScope) =>
+    request<TrackerLayerBundle>("GET", trackerFieldsPath(scope)),
+  setTrackerFields: (scope: TrackerScope, layer: TrackerLayer) =>
+    request<TrackerLayerBundle>("PUT", trackerFieldsPath(scope), layer),
+  getCampaignTracker: (cid: string) =>
+    request<CampaignTrackerSetting>("GET", `/api/campaigns/${cid}/tracker`),
+  setCampaignTracker: (cid: string, setting: TrackerSetting) =>
+    request<CampaignTrackerSetting>("PUT", `/api/campaigns/${cid}/tracker`, { setting }),
 };

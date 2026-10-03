@@ -153,6 +153,23 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # of that has to be one critical section with the scene writes it brackets,
     # or a concurrent reply lands between the decision and the swap.
     "store.alternates",
+    # The campaign and scene field layers (`tracker.json`, `tracker/<identity>/
+    # fields.json`) sit beside `campaign.md` and are rewritten whole, and the
+    # scene one is validated against the campaign's effective list -- so the read
+    # of that list and the write have to be one hold, or a concurrent campaign
+    # layer edit lands between them.
+    "store.tracker.fields",
+    # The tracker's per-scene records: a snapshot file per post plus an
+    # `index.json` that is read-modify-written whole on every status or flag
+    # change -- two unserialized updates landing at once would lose one entry.
+    # Held across the snapshot-then-index pair so a reader never sees the index
+    # ahead of the file it describes. `store.tracker.walk` is deliberately NOT
+    # listed: it writes only through these mutators, so this guard does not
+    # count it as mutating, and its writers (`flag_edited`, `flag_after`,
+    # `prune`) take the same reentrant lock around deciding which keys to touch
+    # from the transcript and the write itself -- or a cut or a swipe lands
+    # between the two and the flags go to keys that are no longer there.
+    "store.tracker.records",
     # The steering log is a read-modify-write of one whole file, appended
     # beside `alternates.archive` inside the regenerate route's lock hold
     # (reentrant, so its own acquire is free) — two unserialized rerolls
@@ -267,12 +284,6 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # it starts inside the exclusion rather than joining the `UNREVIEWED`
     # backlog -- the same call `store.commitments` made.
     "store.prompt_log",
-    # turnstate.json is rewritten whole by `record`, `repoint_scenes` and
-    # `drop_scene`, exactly like commitments.json -- and it is written from
-    # inside `_persist_reply`, which already holds this lock, so the entry that
-    # files a reply's tracker block and the append that lands the reply are one
-    # critical section rather than two.
-    "store.turnstate",
     # scene_ideas.json is rewritten whole by `add`, `set_status` and
     # `repoint_scenes`, exactly like facts.json -- and `add` allocates the
     # idea's id from the keys it just read, so two unlocked saves can pick the
@@ -354,7 +365,8 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "`_finish`. Fixing the rest is a concurrency "
         "change that needs its own review, which is why this guard classifies "
         "them rather than closing them. `set_campaign_routing` (#142) writes "
-        "the same file and does NOT join them: it takes the lock. Inheriting a "
+        "the same file and does NOT join them: it takes the lock, as does "
+        "`set_campaign_tracker` (the scene tracker's switch). Inheriting a "
         "known gap and adding to it knowingly are not the same thing, and this "
         "module stays out here for the mutators above rather than for that one."
     ),
@@ -695,7 +707,7 @@ def best_effort_campaign_lock(cid: str, timeout: float = 2.0):
     consistent state. `campaign_lock` is the wrong tool there: it raises
     ``StoreBusy`` after ``LOCK_TIMEOUT``, and a reader that can 409 turns a
     nicety into a new way for a turn to fail. `context._assemble` is the case —
-    it pairs the transcript with the transient-state ledger, and `post_chat`
+    it reads the scene's transcript under it, and `post_chat`
     has already appended the player's post by the time it runs, with the undo
     that would take it back off not yet wired. A timeout there would strand
     that post with no reply and nothing able to remove it.

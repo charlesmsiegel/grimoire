@@ -2,7 +2,7 @@
 
 Each one renders stored state the model must rewrite from rather than recall:
 present-cast feelings and bonds, open plot threads, unresolved commitments,
-standing facts, every group's state, and the present NPCs' standing. All are read-only. Every
+standing facts, every group's state, and the present NPCs' and PCs' standing. All are read-only. Every
 one but `state_snapshot` is tolerant of a garbled file -- a broken snapshot
 omits its block instead of failing the absorb; `state_snapshot` catches only a
 missing character record.
@@ -127,10 +127,19 @@ def steering_snapshot(cid: str, sid: str) -> str:
 
 def state_snapshot(cid: str, sid: str) -> dict:
     """Present NPCs' existing standing snapshot — current_state with any Knows/Suspects
-    folded in (via _snapshot_line) — keyed by display name (feeds the prompt)."""
+    folded in (via _snapshot_line) — keyed by display name (feeds the prompt).
+
+    The present player characters' too: absorb now proposes a PC's current state,
+    and rewriting the FULL snapshot means seeing the one that stands. A PC's file
+    holds a current state only, so its line is just that."""
     aroot = appearances_paths.locked_actor_root(cid)   # cast actors are locked, so campaign-side
     out: dict[str, str] = {}
     for a in appearances_cast.scene_cast(cid, sid):
+        if a["kind"] == "pcs":
+            st = playstate.read_state(aroot, a["id"], "pcs")
+            if st and st["current_state"]:
+                out[a["name"]] = _snapshot_line({**st, "knows": "", "suspects": ""})
+            continue
         if a["role"] != "npc" or a["kind"] != "characters":
             continue
         st = playstate.read_state(aroot, a["id"])

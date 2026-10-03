@@ -11,7 +11,6 @@ from __future__ import annotations
 from .. import (
     characters,
     commitments,
-    config,
     entities,
     facts,
     groupstate,
@@ -20,14 +19,11 @@ from .. import (
     playstate,
     plot,
     relationships,
-    turnstate,
 )
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
-from ..scenes import paths as scenes_paths
-from ..scenes import read as scenes_read
 from . import conflicts, parse, routing, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")
@@ -215,98 +211,40 @@ def _fact_label(text: str, supersedes: str, date: str) -> str:
     """
     label = "Fact retired" if not text else ("Fact superseded" if supersedes else "New fact")
     return f"{label} — {date}" if date else label
-def _character_state_edit(cid: str, char_id: str, before: str, after: str) -> dict:
-    return {"id": f"character_state:{char_id}", "kind": "character_state",
-            "target": {"kind": "characters", "id": char_id},
-            "label": f"{_char_name(cid, char_id)} — current state",
+
+
+def _pc_name(cid: str, pid: str) -> str | None:
+    """The persona name at the version the campaign locked, or None when the PC
+    is not in the appearance record or its persona will not read -- which is
+    what a state edit for a PC requires, the way a character's requires its
+    card."""
+    vid = appearances_versions.locked_version(cid, "pcs", pid)
+    if vid is None:
+        return None
+    try:
+        persona = pcs.read_persona(overlay.pc_root(cid, pid), pid, vid)
+    except (pcs.PCNotFound, pcs.PCVersionNotFound):
+        return None
+    name = persona.get("name")
+    return name.strip() if isinstance(name, str) and name.strip() else pid
+
+
+def _character_state_edit(cid: str, kind: str, char_id: str, before: str, after: str,
+                          name: str | None = None) -> dict:
+    """A `character_state` row for a character or, with `kind="pcs"`, a player
+    character. The id keeps its old spelling for characters, so a review staged
+    before PCs had state still names the same row."""
+    eid = f"character_state:{char_id}" if kind == "characters" else f"character_state:pcs:{char_id}"
+    label = name or (_char_name(cid, char_id) if kind == "characters" else char_id)
+    return {"id": eid, "kind": "character_state",
+            "target": {"kind": kind, "id": char_id},
+            "label": f"{label} — current state",
             "field": "current_state",
             "before": before, "after": after, "authored": False}
 
 
-def _promote(cid: str, sid: str, out: list[dict], stage,
-             turn_ledger: list | None) -> None:
-    """Fold #121's reinforced transient values into the staged character-state
-    edits, in place.
-
-    Promotion is a SOURCE of StagedEdits, never a writer: it rides the same
-    review checklist, the same `apply_edits` and the same `changes.json` deltas
-    the model's own proposals do, so the "extraction proposes, the user
-    approves" invariant holds without a new path to audit.
-
-    Merged onto the model's edit for the same character rather than emitted
-    beside it. Two rows with the id `character_state:<id>` would be two
-    reviewer decisions over one file, and whichever applied second would erase
-    the other's body wholesale — `apply_edits` writes a composed snapshot, not
-    a patch.
-
-    `stage` is `materialize`'s `_staged`, and every row this touches goes
-    through it with an EMPTY citation (#112). A promoted value has no quote to
-    offer: its evidence is a streak across posts, not a line somebody said, and
-    synthesizing a speaker or an excerpt is precisely the lie `routing.authority`
-    checks the transcript to catch. Uncited lands the row in the collapsed
-    section, unchecked, which is the direction `routing` says every nudge must
-    run — a reviewer ticks it deliberately or it is never written.
-
-    A row promotion MERGES into is re-stamped for the same reason, losing the
-    model's own citation: its `after` is no longer the text that citation
-    corroborated, so leaving a `high` band on it would pre-approve a promoted
-    line nothing in the transcript ever quoted.
-    """
-    need = config.promote_streak()
-    # The feature switch, not just the promotion one. With `turnstate_depth` at
-    # 0 the tracker instruction and the prompt section are both gone, and the
-    # Configuration page says that turns the whole thing off -- so a retained
-    # ledger, or blocks a model volunteered while it was off all along, must not
-    # keep proposing canonical state behind that promise. `promote_streak` stays
-    # the narrower switch: promotion off, tracking still on.
-    if need <= 0 or config.turnstate_depth() <= 0:
-        return
-    if turn_ledger is None:
-        try:
-            tail = len(scenes_read.read_scene(cid, sid)["messages"])
-        except (scenes_paths.SceneNotFound, OSError, UnicodeDecodeError):
-            return
-        turn_ledger = turnstate.entries(cid, sid, tail)
-    promoted = turnstate.streaks_from(turn_ledger, need)
-    if not promoted:
-        return
-    croot = campaigns_paths.campaign_root(cid)
-    staged = {e["id"]: e for e in out}
-    for token, fields in sorted(promoted.items()):
-        kind, _, char_id = token.partition(":")
-        if kind != "characters" or not char_id:
-            continue
-        try:
-            characters.read_character(overlay.char_root(cid, char_id), char_id)
-        except characters.CharacterNotFound:
-            continue
-        st = playstate.read_state(croot, char_id)
-        edit = staged.get(f"character_state:{char_id}")
-        # The model's own edit is the base when it has one: promotion adjusts
-        # what this absorb is already proposing, not what is on disk, or the
-        # merged row would silently revert the extraction's prose.
-        base = playstate.parse_body(edit["after"]) if edit else (
-            st or {"current_state": "", "knows": "", "suspects": ""})
-        after = playstate.compose_body(
-            playstate.fold_fields(base["current_state"], fields),
-            base["knows"], base["suspects"])
-        before = edit["before"] if edit else (
-            playstate.compose_body(st["current_state"], st["knows"], st["suspects"]) if st else "")
-        if not after or before == after:
-            if edit is not None and before == after:
-                out.remove(edit)          # promotion cancelled the model's own edit out
-            continue
-        if edit is not None:
-            edit["after"] = after
-            stage(edit, {}, f"characters:{char_id}")
-        else:
-            out.append(stage(_character_state_edit(cid, char_id, before, after),
-                             {}, f"characters:{char_id}"))
-
-
 def materialize(cid: str, sid: str, parsed: dict,
                 messages: list[dict] | None = None,
-                turn_ledger: list | None = None,
                 player_label: str | None = None) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error).
@@ -317,17 +255,6 @@ def materialize(cid: str, sid: str, parsed: dict,
     `player_label` is the same snapshot one layer down: the name the prompt's
     transcript put on the player's unstamped posts, which a rename landing
     mid-call would otherwise change underneath the citations.
-
-    `turn_ledger` is the transient-state entries (#120) the caller's review is
-    being built from — named apart from the *fact* ledger this function also
-    reads below (#114), which is a local of the same name and would otherwise
-    shadow this parameter outright. `post_absorb` captures them WITH the scene, under one lock,
-    before awaiting the extraction call, so promotion (#121) measures the same
-    scene version the summary and the other edits describe. A length alone was
-    not enough: an edit or a reroll landing mid-absorb rewrites entries *below*
-    the tail, and only a copy taken at the same instant is immune to that.
-    Defaulting to a live read keeps every other caller — the ingest script, the
-    tests — working off the scene as it stands.
     """
     croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
@@ -354,42 +281,54 @@ def materialize(cid: str, sid: str, parsed: dict,
         if not raw_id:
             continue
         # The model echoes ids from the "Present: <kind>/<id>, ..." context line (or,
-        # less reliably, a bare id) — strip any "characters/" or "characters:" prefix so
-        # both forms resolve. playstate.py only tracks "characters" (not "pcs"), matching
-        # its own docstring scope, so a pcs-prefixed id is dropped rather than misfiled.
+        # less reliably, a bare id) — strip any "characters/", "characters:", "pcs/" or
+        # "pcs:" prefix so every form resolves. A bare id is a character's. A PC keeps
+        # its current state only (Knows/Suspects stay non-player), filed under pcs/ so
+        # it is never misfiled under characters/ with the PC's id as a character slug.
         kind, sep, rest = raw_id.partition("/")
         if not sep:
             kind, _, rest = raw_id.partition(":")
-        char_id = rest if kind in ("characters", "pcs") else raw_id
+        if kind not in ("characters", "pcs"):
+            kind, rest = "characters", raw_id
+        char_id = rest
+        name: str | None = None
         if kind == "pcs":
-            continue
-        try:
-            # overlay-aware: a thin campaign's NPC is usually still inherited
-            # (never appeared/materialized), and a state edit for it must not
-            # be silently dropped just because croot lacks the character dir
-            characters.read_character(overlay.char_root(cid, char_id), char_id)
-        except characters.CharacterNotFound:
-            continue
-        st = playstate.read_state(croot, char_id)
-        cur_knows = st["knows"] if st else ""
-        cur_suspects = st["suspects"] if st else ""
-        # Keep-on-omit: an omitted knows/suspects preserves the stored value; an explicit
-        # "" clears it. Prevents an absorb that only touches current_state from silently
-        # erasing established knowledge.
-        knows = e["knows"] if "knows" in e else cur_knows
-        suspects = e["suspects"] if "suspects" in e else cur_suspects
+            name = _pc_name(cid, char_id)
+            if name is None:
+                continue
+        else:
+            try:
+                # overlay-aware: a thin campaign's NPC is usually still inherited
+                # (never appeared/materialized), and a state edit for it must not
+                # be silently dropped just because croot lacks the character dir
+                characters.read_character(overlay.char_root(cid, char_id), char_id)
+            except characters.CharacterNotFound:
+                continue
+        st = playstate.read_state(croot, char_id, kind)
+        if kind == "pcs":
+            cur_knows = cur_suspects = knows = suspects = ""
+        else:
+            cur_knows = st["knows"] if st else ""
+            cur_suspects = st["suspects"] if st else ""
+            # Keep-on-omit: an omitted knows/suspects preserves the stored value; an
+            # explicit "" clears it. Prevents an absorb that only touches
+            # current_state from silently erasing established knowledge.
+            knows = e["knows"] if "knows" in e else cur_knows
+            suspects = e["suspects"] if "suspects" in e else cur_suspects
         after = playstate.compose_body(e.get("current_state", ""), knows, suspects)
-        if not after:
-            continue
         before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
+        # An empty result is dropped for a character, whose state the play
+        # loop also feeds. A PC's state.md is written by absorb and nothing
+        # else, so an explicit "" (the state is over) is the only way it ever
+        # stops standing: staged when there is a state to clear. An omitted
+        # current_state stays "nothing to say", as knows/suspects' omission is.
+        clears = kind == "pcs" and "current_state" in e and bool(before)
+        if not after and not clears:
+            continue
         if before == after:
             continue
-        out.append(_staged(_character_state_edit(cid, char_id, before, after),
-                           e, f"characters:{char_id}"))
-
-    # After the model's own proposals, so a reinforced value merges onto the row
-    # the reviewer would already have seen rather than opening a second one.
-    _promote(cid, sid, out, _staged, turn_ledger)
+        out.append(_staged(_character_state_edit(cid, kind, char_id, before, after, name),
+                           e, f"{kind}:{char_id}"))
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")

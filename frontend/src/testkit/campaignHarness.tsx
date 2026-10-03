@@ -107,6 +107,9 @@ export function installCampaignMocks() {
   }
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Run One", world: "w", world_name: "Saltmarch" }, body: "" });
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} });
+  (api.getTracker as any).mockResolvedValue({
+    enabled: true, names: {}, keys: [], entries: {}, moods: {}, labels: {},
+  });
   // One scene, not none: the play view mounts on a scene now, so an empty list
   // is a campaign whose play view does not exist rather than a useful default.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);

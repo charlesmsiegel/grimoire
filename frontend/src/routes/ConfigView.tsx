@@ -54,7 +54,6 @@ const DRAFT_FIELDS = [
   "context_budget", "context_scan_depth", "archive_depth",
   "prompt_log_depth", "offscene_known_limit",
   "speaker_turn_taking", "prompt_layout_enabled",
-  "turnstate_depth", "promote_streak",
   "embeddings_connection_id", "embeddings_model",
   "semantic_recall_depth", "semantic_recall_threshold",
   "system_prompt",
@@ -63,6 +62,7 @@ const DRAFT_FIELDS = [
   "advance_fork_threshold",
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "log_level",
+  "tracker", "perception_rider",
   // `theme` is deliberately NOT here. The look is persisted the moment it is
   // picked, by `useThemeSetting`, because three controls now offer it (this
   // page, the first-run wizard, the header toggle) and a draft field would let
@@ -91,10 +91,10 @@ function draftOf(c: Config): Draft {
 type SectionId =
   | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
   | "setup"
-  | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
+  | "context" | "layout" | "tracker" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
-/** The column, as data: three groups, thirteen sections, and which draft fields
+/** The column, as data: three groups, seventeen sections, and which draft fields
  *  each one owns — the last part is what lets a section carry an unsaved dot,
  *  so the footer's count is always findable rather than being a number about
  *  somewhere else. */
@@ -124,8 +124,8 @@ const SECTIONS: SectionDef[] = [
              "offscene_known_limit", "speaker_turn_taking"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
-  { id: "transient", group: "What the model sees", label: "Transient state",
-    fields: ["turnstate_depth", "promote_streak"] },
+  { id: "tracker", group: "What the model sees", label: "Scene tracker",
+    fields: ["tracker", "perception_rider"] },
   { id: "semantic", group: "What the model sees", label: "Semantic recall",
     fields: ["embeddings_connection_id", "embeddings_model",
              "semantic_recall_depth", "semantic_recall_threshold"] },
@@ -337,6 +337,8 @@ export default function ConfigView() {
       case "storage": return config?.data_dir ? "set" : "";
       case "appearance": return theme.mode;
       case "layout": return draft?.prompt_layout_enabled === "on" ? "on" : "off";
+      // Unset reads as on, like the checkbox: the shipped default is on.
+      case "tracker": return draft?.tracker === "off" ? "off" : "on";
       case "semantic": return recallOff ? "off" : "on";
       // Deliberately blank: the rate table, the routing records and the
       // response preset are each a document of their own, and "12 entries" is
@@ -961,24 +963,38 @@ export default function ConfigView() {
           </>
         )}
 
-        {draft && section === "transient" && (
+        {draft && section === "tracker" && (
           <>
             <p className="config-copy">
-              Asks the narrator to record each character's mood, intent and posture at the end of
-              every reply — stripped from the transcript, never shown in the scene — and feeds the
-              last few posts' worth back into the prompt. Tracked posts is how far back that reaches;
-              <code> 0</code> turns the whole thing off, which is the default. Promote after is how
-              many replies running a value has to hold before ending a scene offers it for the
-              character's standing state, alongside the other proposed edits.
+              After every post, the scene tracker keeps a small record of each character: where
+              they are, what they are holding and doing, and what they have seen or heard. It
+              costs one extra call per post, made on the <em>Scene state tracker</em> model route,
+              which you can point at a cheaper model from <em>Model routing</em>. A campaign can
+              switch it on or off for itself.
             </p>
-            <div className="config-fields">
-              <NumField id="cfg-turnstate-depth" label="Tracked posts" placeholder="0"
-                        caption="0 = off" value={draft.turnstate_depth}
-                        onChange={(v) => edit("turnstate_depth", v)} />
-              <NumField id="cfg-promote-streak" label="Promote after" unit="replies"
-                        placeholder="3" value={draft.promote_streak}
-                        onChange={(v) => edit("promote_streak", v)} />
-            </div>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Track each character's state after every post"
+                checked={draft.tracker !== "off"}
+                onChange={(e) => edit("tracker", e.target.checked ? "on" : "off")}
+              />
+              Track each character's state after every post
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Ask each character to note what it heard or saw before replying"
+                checked={draft.perception_rider !== "off"}
+                onChange={(e) => edit("perception_rider", e.target.checked ? "on" : "off")}
+              />
+              Ask each character to note what it heard or saw before replying
+            </label>
+            <p className="config-copy">
+              The second switch adds a short instruction to each character's turn, asking it to
+              note what it perceived before it replies. Turn it off to keep the tracker's record
+              while shedding that prompt cost.
+            </p>
           </>
         )}
 

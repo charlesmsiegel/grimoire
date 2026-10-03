@@ -1,0 +1,38 @@
+{#- Vars: fields ([{key, type, options, aware, hint}] — active fields only;
+    options is a list, empty unless the type is enum), characters ([{name, new,
+    entries: [{key, text, user_set, private, known_to}]}] — present characters
+    only; known_to is a list of names, empty for a private value nobody else
+    knows), newcomers ([{name, description, state}]), context_posts
+    ([{speaker, content}]), post ({speaker, content}). -#}
+# Fields
+{% for f in fields -%}
+{{ f.key }} ({{ f.type }}{% if f.type == "enum" and f.options %}: {{ f.options | join(", ") }}{% endif %}){% if f.aware == "self" %} [private by default]{% endif %}{% if f.hint %} — {{ f.hint }}{% endif %}
+{% endfor %}
+# Characters present
+{% for c in characters -%}
+{{ c.name }}{% if c.new %} (new){% endif %}
+{% for v in c.entries -%}
+{{ v.key }}: {{ v.text }}{% if v.user_set %} (user-set){% endif %}{% if v.private %} (private{% if v.known_to %}, known to: {{ v.known_to | join(", ") }}{% endif %}){% endif %}
+{% else -%}
+(nothing recorded yet)
+{% endfor %}
+{% else -%}
+(none)
+{% endfor -%}
+{% if newcomers -%}
+# New characters
+{% for n in newcomers -%}
+## {{ n.name }}
+Description: {{ n.description or "(none)" }}
+Standing state: {{ n.state or "(none)" }}
+
+{% endfor -%}
+{% endif -%}
+# Earlier posts (context only)
+{% for p in context_posts -%}
+{{ p.speaker }}: {{ p.content }}
+{% else -%}
+(none)
+{% endfor %}
+# New post
+{{ post.speaker }}: {{ post.content }}

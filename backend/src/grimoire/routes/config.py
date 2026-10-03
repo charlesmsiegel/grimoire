@@ -90,8 +90,6 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "archive_depth": cfg.get("archive_depth", store.config.DEFAULT_ARCHIVE_DEPTH),
             "prompt_log_depth": cfg.get("prompt_log_depth",
                                         store.config.DEFAULT_PROMPT_LOG_DEPTH),
-            "turnstate_depth": cfg.get("turnstate_depth", store.config.DEFAULT_TURNSTATE_DEPTH),
-            "promote_streak": cfg.get("promote_streak", store.config.DEFAULT_PROMOTE_STREAK),
             "rolling_summary_every": cfg.get("rolling_summary_every",
                                              store.config.DEFAULT_ROLLING_SUMMARY_EVERY),
             "scene_break_every": cfg.get("scene_break_every",
@@ -109,6 +107,9 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
                                              store.config.DEFAULT_PROMPT_LAYOUT_ENABLED),
             "speaker_turn_taking": cfg.get("speaker_turn_taking",
                                            store.config.DEFAULT_SPEAKER_TURN_TAKING),
+            "tracker": cfg.get("tracker", store.config.DEFAULT_TRACKER),
+            "perception_rider": cfg.get("perception_rider",
+                                        store.config.DEFAULT_PERCEPTION_RIDER),
             "backup_enabled": cfg.get("backup_enabled", store.config.DEFAULT_BACKUP_ENABLED),
             "backup_interval_hours": cfg.get("backup_interval_hours",
                                              store.config.DEFAULT_BACKUP_INTERVAL_HOURS),
@@ -214,9 +215,21 @@ def get_config(registry: health.ProviderHealth = Depends(get_health)):
     return _public_config(store.read_config(), registry)
 
 
+#: Config keys whose only meaningful values are "on" and "off".
+_ON_OFF_KEYS = ("tracker", "perception_rider")
+
+
 @router.put("/config")
 def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(update).items() if v is not None}
+    # The two tracker switches are a choice, not a string: the Settings
+    # checkbox and `store.config` both read anything but "off" as on, so a
+    # stored "maybe" would be a setting nobody chose. Refused as the campaign's
+    # own tracker setting is (`PUT /campaigns/{cid}/tracker`), before anything
+    # is written.
+    for key in _ON_OFF_KEYS:
+        if key in fields and fields[key] not in ("on", "off"):
+            raise HTTPException(status_code=400, detail=f"{key} must be 'on' or 'off'")
     saved = store.write_config(**fields)
     # `store.logs` holds the threshold in module state rather than reading the
     # config per row -- `record` is on the path of everything the app does --

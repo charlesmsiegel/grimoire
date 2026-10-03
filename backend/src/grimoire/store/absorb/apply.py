@@ -193,7 +193,8 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             if not weather._apply_weather(cid, e, after):
                 return {"state": "skipped"}   # skipped, not applied: nothing was written
         elif kind == "character_state":
-            playstate.write_state(croot, target["id"], after)
+            playstate.write_state(croot, target["id"], after,
+                                  kind=target.get("kind", "characters"))
         elif kind == "group_state":
             groupstate.write_state(croot, target["id"], after)
         elif kind == "dossier":

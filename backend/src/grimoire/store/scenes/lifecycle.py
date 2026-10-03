@@ -12,6 +12,7 @@ that loop.
 from __future__ import annotations
 
 import errno
+import logging
 
 from .. import (
     alternates,
@@ -26,7 +27,6 @@ from .. import (
     scene_ids,
     scene_refs,
     steering,
-    turnstate,
 )
 from ..appearances import paths as appearances_paths
 from ..audit import baselines
@@ -34,7 +34,10 @@ from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..llm_connections import get_active as _get_active_connection
 from ..paths import now_iso, safe_id, slugify, uniquify
+from ..tracker import records as tracker_records
 from . import identity, locking, paths, serialize
+
+log = logging.getLogger(__name__)
 
 
 @locking._serialized
@@ -205,6 +208,9 @@ def delete_scene(cid: str, sid: str) -> None:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
+    # The identity the tracker keyed this scene's records by, resolved while
+    # the transcript that carries it is certainly still there.
+    ident = identity.scene_identity(cid, sid)
     # FIRST, ahead of every destructive step, because it is the one here that can
     # refuse. Ids are recycled, so prompt snapshots left behind are adopted by the
     # next scene to take this id and listed as its own -- and unlike the sidecars
@@ -230,13 +236,6 @@ def delete_scene(cid: str, sid: str) -> None:
     # unlink fails -- costs an open review of a surviving scene a 409 it clears
     # by re-absorbing.
     commits.retire_scene(cid, sid)
-    # The per-turn state ledger goes for the same reason and in the same place:
-    # it is keyed by scene id, so a recycled id would hand the replacement scene
-    # a dead one's moods -- and at the low post indices a young scene's decay
-    # window covers, which is the worst case rather than a harmless one. Before
-    # the unlink, so a failure here leaves the scene intact rather than deleted
-    # with its ledger still claiming it.
-    turnstate.drop_scene(cid, sid)
     # The reader's pins and excludes for this scene (#129), for exactly the
     # recycled-id reason above: a rule left behind would be adopted by the next
     # scene to take this number and force one scene's lore -- or silence -- into
@@ -263,6 +262,19 @@ def delete_scene(cid: str, sid: str) -> None:
     _unlink_sidecar(paths._alts_path(cid, sid))
     _unlink_sidecar(paths._steering_path(cid, sid))
     p.unlink()
+    # The tracker's records and scene field layer, keyed by this scene's
+    # identity. AFTER the unlink, and fail-soft, unlike the sidecars: a
+    # replacement scene gets a fresh identity, so it can never read them, and
+    # a directory left behind is only disk. Dropped before the unlink, a
+    # removal that failed half-way would leave the scene standing with its
+    # sidecars already gone -- the half-delete the order above exists to
+    # prevent. Logged, so an orphan has a line saying where it came from.
+    if ident:
+        try:
+            tracker_records.drop(cid, ident)
+        except Exception:
+            log.warning("delete_scene: could not drop the tracker records of %s/%s (%s)",
+                        cid, sid, ident, exc_info=True)
     # AFTER the unlink, so a delete that raised records nothing. Deleting the
     # newest scene would otherwise drag the campaign's derived activity
     # *backwards* onto an older survivor -- a campaign you just edited sinking
