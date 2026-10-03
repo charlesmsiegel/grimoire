@@ -270,3 +270,102 @@ def test_writing_a_layer_that_shadows_a_built_in_is_still_refused(home):
     wid, _, _ = home
     with pytest.raises(fields.FieldLayerError, match="already exists"):
         fields.write_world_layer(wid, SHADOWING)
+
+
+# --- reading a layer against the base it was written on -----------------------
+
+POSE_ENUM = {"change": {"pose": {"type": "enum", "options": ["sitting", "standing"]}}}
+
+
+def test_a_campaign_change_valid_on_its_world_survives_a_read(client):
+    """The writer validates a campaign layer against its WORLD's fields, so the
+    reader must too: a change that only makes sense on what the world made of
+    a built-in is a valid layer, not a garbled one."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Quay")
+    assert client.put(f"/api/worlds/{wid}/tracker-fields", json=POSE_ENUM).status_code == 200
+    layer = {"change": {"pose": {"type": "enum", "label": "Stance"},
+                        "attention": {"label": "Focus"}},
+             "off": ["holding"]}
+    r = client.put(f"/api/campaigns/{cid}/tracker-fields", json=layer)
+    assert r.status_code == 200, r.text
+    got = client.get(f"/api/campaigns/{cid}/tracker-fields").json()
+    assert got["layer"]["change"] == layer["change"]
+    assert got["layer"]["off"] == ["holding"]
+    eff = {f["key"]: f for f in fields.effective(cid, sid)}
+    assert eff["pose"]["label"] == "Stance"
+    assert eff["pose"]["options"] == ["sitting", "standing"]
+    assert eff["holding"].get("off") is True
+
+
+def test_options_a_campaign_set_on_its_worlds_enum_survive_a_read(home):
+    wid, cid, sid = home
+    fields.write_world_layer(wid, POSE_ENUM)
+    fields.write_campaign_layer(cid, {"change": {"pose": {"options": ["kneeling", "lying"]}}})
+    assert fields.campaign_layer(cid)["change"] == {"pose": {"options": ["kneeling", "lying"]}}
+    pose = next(f for f in fields.effective(cid, sid) if f["key"] == "pose")
+    assert pose["options"] == ["kneeling", "lying"]
+
+
+def test_a_world_edit_costs_a_campaign_only_the_entries_it_invalidated(home, caplog):
+    """A world edited after the campaign layer was written can make one of the
+    campaign's entries invalid. That entry goes, logged; the rest stays."""
+    import logging
+
+    wid, cid, sid = home
+    fields.write_world_layer(wid, {**POSE_ENUM, "fields": [
+        {"key": "gait", "label": "Gait", "type": "text", "aware": "present", "hint": ""}]})
+    fields.write_campaign_layer(cid, {
+        "change": {"pose": {"type": "enum", "label": "Stance"}, "attention": {"label": "Focus"}},
+        "fields": [{"key": "grudge", "label": "Grudge", "type": "text", "aware": "self",
+                    "hint": ""}],
+        "off": ["holding"]})
+    # The world puts `pose` back to text, and adds the campaign's `grudge` itself.
+    fields.write_world_layer(wid, {"fields": [
+        {"key": "grudge", "label": "Old grudge", "type": "list", "aware": "self", "hint": ""}]})
+    with caplog.at_level(logging.WARNING, logger="grimoire.store.tracker.fields"):
+        layer = fields.campaign_layer(cid)
+    assert layer["change"] == {"attention": {"label": "Focus"}}
+    assert layer["fields"] == []
+    assert layer["off"] == ["holding"]
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "'pose'" in said and "'grudge'" in said
+    eff = {f["key"]: f for f in fields.effective(cid, sid)}
+    assert eff["attention"]["label"] == "Focus"
+    assert eff["holding"].get("off") is True
+    assert eff["grudge"]["label"] == "Old grudge"      # the world's, as `apply_layer` keeps it
+    assert eff["pose"]["type"] == "text"
+
+
+def test_a_campaign_edit_costs_a_scene_only_the_addition_it_shadowed(home, caplog):
+    import logging
+
+    _, cid, sid = home
+    fields.write_scene_layer(cid, sid, {"off": ["pose"], "fields": [
+        {"key": "rage", "label": "Rage", "type": "text", "aware": "self", "hint": ""},
+        {"key": "tide", "label": "Tide", "type": "text", "aware": "present", "hint": ""}]})
+    fields.write_campaign_layer(cid, {"fields": [
+        {"key": "rage", "label": "Fury", "type": "list", "aware": "self", "hint": ""}]})
+    with caplog.at_level(logging.WARNING, logger="grimoire.store.tracker.fields"):
+        layer = fields.scene_layer(cid, sid)
+    assert [f["key"] for f in layer["fields"]] == ["tide"]
+    assert layer["off"] == ["pose"]
+    assert any("'rage'" in r.getMessage() for r in caplog.records)
+
+
+def test_one_malformed_entry_costs_only_itself(home):
+    import json
+
+    _, cid, _ = home
+    p = paths.campaign_layer_path(cid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"version": 1,                       # test-only raw write
+        "fields": [{"key": "Bad Key"},
+                   {"key": "grudge", "label": "Grudge", "type": "text", "aware": "self"}],
+        "change": {"pose": {"label": ""}, "attention": {"label": "Focus"}},
+        "off": ["holding", 7]}), encoding="utf-8")
+    layer = fields.campaign_layer(cid)
+    assert [f["key"] for f in layer["fields"]] == ["grudge"]
+    assert layer["change"] == {"attention": {"label": "Focus"}}
+    assert layer["off"] == ["holding"]
