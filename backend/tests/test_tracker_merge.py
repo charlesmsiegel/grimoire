@@ -30,6 +30,18 @@ def test_parse_reply_fills_missing_keys_and_rejects_non_objects():
         merge.parse_reply('[{"changes": {}}]')
 
 
+def test_parse_reply_rejects_changes_without_their_wrapper():
+    """`{"Mara": {...}}` is the changes with the wrapper left off. Read as a
+    reply it would have no changes and land as a clean "nothing moved"."""
+    for text in ('{"Mara": {"pose": "kneeling"}}',
+                 '```json\n{"Mara": {"pose": "kneeling"}}\n```',
+                 '{"change": {"Mara": {"pose": "kneeling"}}}'):
+        with pytest.raises(merge.TrackerReplyError):
+            merge.parse_reply(text)
+    assert merge.parse_reply('{"awareness": {}}') == {"changes": {}, "awareness": {}}
+    assert merge.parse_reply("```json\n{}\n```") == {"changes": {}, "awareness": {}}
+
+
 def test_parse_reply_balances_braces_inside_strings():
     got = merge.parse_reply('Here: {"changes": {"Mara": {"pose": "a } b"}}} trailing {')
     assert got["changes"] == {"Mara": {"pose": "a } b"}}
