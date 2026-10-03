@@ -608,8 +608,8 @@ def _adopt_first_post(cid: str, sid: str, text: str) -> dict:
     if not text.strip():
         raise HTTPException(status_code=400, detail="empty first post")
     # Judged on what LANDED, not on what was sent. Text can be non-empty and
-    # still produce no post: a trailing tracker block is split off before the
-    # reply is segmented (#120), and a bare speaker marker segments into
+    # still produce no post: a trailing ```state block is split off before the
+    # reply is segmented (`state_fence`), and a bare speaker marker segments into
     # nothing. Either way `append_reply` writes no message, and answering `ok`
     # over a scene that is still empty loses the opener the user was adopting
     # with no error to show for it. Nothing has been written when the count is

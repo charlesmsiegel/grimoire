@@ -16,14 +16,22 @@ file however long the scene gets. Everything that changes often and in bulk --
 status, the change list, the two staleness flags -- lives in the index, so an
 edit that flags fifty later posts rewrites one file rather than fifty.
 
-Write order is **snapshot first, then index**. A crash between the two leaves a
-snapshot the index does not yet call `ok` (it is still `pending` from
-`mark_pending`), which the next run simply overwrites; the other order could
-leave an index saying `ok` about a snapshot that never landed. That ordering is
-also why the index is **rebuildable**: it holds no value that is not either in a
-snapshot file or regenerable, so a missing or garbled index is rebuilt from the
-snapshot files present, each counted `ok` and unflagged, rather than taking the
-play view down over a half-synced file.
+Write order is **snapshot first, then index**, each file written whole
+(`atomic`) but the pair not atomically. For an update run, a crash between the
+two leaves a snapshot the index does not yet call `ok` (it is still `pending`
+from `mark_pending`, and reads as interrupted), which a Retry overwrites; the
+other order could leave an index saying `ok` about a snapshot that never
+landed. A hand edit has no `pending` step, so a crash between its two writes
+leaves the new snapshot under the entry's previous `ok` (its change list and
+flags one write behind) -- stale bookkeeping about a value that did land, not
+a lost one.
+
+A missing or garbled index is **rebuilt** from the snapshot files present
+rather than taking the play view down over a half-synced file. That is a
+recovery, not a lossless one: the index's own fields -- status, change list,
+staleness flags, the counters -- are in no snapshot file, so every rebuilt
+entry reads `ok`, unflagged and with no changes, including one whose last run
+had failed and left an older snapshot behind.
 """
 
 from __future__ import annotations

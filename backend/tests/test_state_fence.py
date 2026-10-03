@@ -128,9 +128,6 @@ def test_an_unterminated_block_is_still_swallowed():
     assert _stream(['She waits.\n\n```state\n{"W": {"mo']) == "She waits.\n\n"
 
 
-# ---- the ledger ------------------------------------------------------------
-
-
 # ---- CRLF and end-of-stream edges ------------------------------------------
 
 def test_a_crlf_block_is_recognized():
@@ -216,3 +213,48 @@ def test_trailing_state_block_still_stripped_from_a_landed_turn(client):
     assert "She waits." in stored
     assert "```state" not in stored
     assert "calm" not in stored
+
+
+# ---- adopting an opener ----------------------------------------------------
+#
+# `first-post` judges an opener on what LANDED: a reply that is only a block
+# strips to nothing, and answering `ok` over a scene still empty would lose
+# the opener the user was adopting with no error to show for it.
+
+def _opener_scene(client) -> tuple[str, str]:
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Harbour")
+    actor = client.post(f"/api/campaigns/{cid}/characters",
+                        json={"name": "Winifred"}).json()["character"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"id": actor}).status_code == 200
+    assert store.scenes.read_scene(cid, sid)["messages"] == []
+    return cid, sid
+
+
+def test_adopting_an_opener_that_is_only_a_state_block_is_refused(client):
+    cid, sid = _opener_scene(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                    json={"text": _block('{"Winifred": {"mood": "guarded"}}')})
+    assert r.status_code == 400
+    assert store.scenes.read_scene(cid, sid)["messages"] == []
+
+
+def test_adopting_an_opener_that_is_only_an_unterminated_block_is_refused(client):
+    cid, sid = _opener_scene(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                    json={"text": '```state\n{"Winifred": {"mo'})
+    assert r.status_code == 400
+    assert store.scenes.read_scene(cid, sid)["messages"] == []
+
+
+def test_a_real_opener_with_a_trailing_block_is_still_adopted(client):
+    cid, sid = _opener_scene(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                    json={"text": "**Winifred:** The hall is cold.\n\n"
+                                  + _block('{"Winifred": {"mood": "guarded"}}')})
+    assert r.status_code == 200, r.text
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert len(messages) == 1 and "```" not in messages[0]["content"]
+    assert "The hall is cold." in messages[0]["content"]
