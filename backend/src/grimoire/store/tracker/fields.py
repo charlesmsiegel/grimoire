@@ -352,6 +352,8 @@ def write_scene_layer(cid: str, sid: str, layer: dict) -> dict:
     """Store a scene's layer, minting the scene's identity if it has none (the
     layer lives under it). Raises `SceneNotFound` for a scene that is not there."""
     with locks.campaign_lock(cid):
-        ident = scenes_identity.ensure_identity(cid, sid)
+        # Validate BEFORE minting: `ensure_identity` rewrites the scene file, and
+        # a rejected layer must leave no trace.
         clean = validate_layer(layer, scene=True, base=campaign_fields(cid))
+        ident = scenes_identity.ensure_identity(cid, sid)
         return _write(paths.scene_layer_path(cid, ident), clean)
