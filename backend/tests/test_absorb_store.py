@@ -436,16 +436,17 @@ def test_materialize_character_state_edit_label_uses_inherited_character_name(mo
     assert cs["label"] == "Seraphine — current state"
 
 
-def test_materialize_character_state_edit_ignores_pcs_prefix(monkeypatch, tmp_path):
-    """playstate.py only tracks NPCs (see its module docstring) — a pcs-prefixed id must
-    be dropped, not misfiled under the characters/ tree using the PC's id as if it were
-    a character slug."""
+def test_materialize_character_state_edit_drops_an_unknown_pc(monkeypatch, tmp_path):
+    """A pcs-prefixed id naming no PC in the campaign is dropped -- never misfiled
+    under the characters/ tree using the PC's id as if it were a character slug.
+    (A PC that IS cast gets its own state file: test_tracker_absorb.py.)"""
     cid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import scenes
     sid = scenes.create_scene(cid, "S")
     parsed = {"character_state_edits": [
-        {"id": "pcs/shia", "current_state": "Should not be applied."}]}
+        {"id": "pcs/mara", "current_state": "Should not be applied."}]}
     assert absorb.materialize(cid, sid, parsed) == []
+    assert not (campaigns.campaign_root(cid) / "characters" / "mara").exists()
 
 
 def test_materialize_composes_knowledge_blob(monkeypatch, tmp_path):

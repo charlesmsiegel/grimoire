@@ -211,10 +211,34 @@ def _fact_label(text: str, supersedes: str, date: str) -> str:
     """
     label = "Fact retired" if not text else ("Fact superseded" if supersedes else "New fact")
     return f"{label} — {date}" if date else label
-def _character_state_edit(cid: str, char_id: str, before: str, after: str) -> dict:
-    return {"id": f"character_state:{char_id}", "kind": "character_state",
-            "target": {"kind": "characters", "id": char_id},
-            "label": f"{_char_name(cid, char_id)} — current state",
+
+
+def _pc_name(cid: str, pid: str) -> str | None:
+    """The persona name at the version the campaign locked, or None when the PC
+    is not in the appearance record or its persona will not read -- which is
+    what a state edit for a PC requires, the way a character's requires its
+    card."""
+    vid = appearances_versions.locked_version(cid, "pcs", pid)
+    if vid is None:
+        return None
+    try:
+        persona = pcs.read_persona(overlay.pc_root(cid, pid), pid, vid)
+    except (pcs.PCNotFound, pcs.PCVersionNotFound):
+        return None
+    name = persona.get("name")
+    return name.strip() if isinstance(name, str) and name.strip() else pid
+
+
+def _character_state_edit(cid: str, kind: str, char_id: str, before: str, after: str,
+                          name: str | None = None) -> dict:
+    """A `character_state` row for a character or, with `kind="pcs"`, a player
+    character. The id keeps its old spelling for characters, so a review staged
+    before PCs had state still names the same row."""
+    eid = f"character_state:{char_id}" if kind == "characters" else f"character_state:pcs:{char_id}"
+    label = name or (_char_name(cid, char_id) if kind == "characters" else char_id)
+    return {"id": eid, "kind": "character_state",
+            "target": {"kind": kind, "id": char_id},
+            "label": f"{label} — current state",
             "field": "current_state",
             "before": before, "after": after, "authored": False}
 
@@ -257,38 +281,48 @@ def materialize(cid: str, sid: str, parsed: dict,
         if not raw_id:
             continue
         # The model echoes ids from the "Present: <kind>/<id>, ..." context line (or,
-        # less reliably, a bare id) — strip any "characters/" or "characters:" prefix so
-        # both forms resolve. playstate.py only tracks "characters" (not "pcs"), matching
-        # its own docstring scope, so a pcs-prefixed id is dropped rather than misfiled.
+        # less reliably, a bare id) — strip any "characters/", "characters:", "pcs/" or
+        # "pcs:" prefix so every form resolves. A bare id is a character's. A PC keeps
+        # its current state only (Knows/Suspects stay non-player), filed under pcs/ so
+        # it is never misfiled under characters/ with the PC's id as a character slug.
         kind, sep, rest = raw_id.partition("/")
         if not sep:
             kind, _, rest = raw_id.partition(":")
-        char_id = rest if kind in ("characters", "pcs") else raw_id
+        if kind not in ("characters", "pcs"):
+            kind, rest = "characters", raw_id
+        char_id = rest
+        name: str | None = None
         if kind == "pcs":
-            continue
-        try:
-            # overlay-aware: a thin campaign's NPC is usually still inherited
-            # (never appeared/materialized), and a state edit for it must not
-            # be silently dropped just because croot lacks the character dir
-            characters.read_character(overlay.char_root(cid, char_id), char_id)
-        except characters.CharacterNotFound:
-            continue
-        st = playstate.read_state(croot, char_id)
-        cur_knows = st["knows"] if st else ""
-        cur_suspects = st["suspects"] if st else ""
-        # Keep-on-omit: an omitted knows/suspects preserves the stored value; an explicit
-        # "" clears it. Prevents an absorb that only touches current_state from silently
-        # erasing established knowledge.
-        knows = e["knows"] if "knows" in e else cur_knows
-        suspects = e["suspects"] if "suspects" in e else cur_suspects
+            name = _pc_name(cid, char_id)
+            if name is None:
+                continue
+        else:
+            try:
+                # overlay-aware: a thin campaign's NPC is usually still inherited
+                # (never appeared/materialized), and a state edit for it must not
+                # be silently dropped just because croot lacks the character dir
+                characters.read_character(overlay.char_root(cid, char_id), char_id)
+            except characters.CharacterNotFound:
+                continue
+        st = playstate.read_state(croot, char_id, kind)
+        if kind == "pcs":
+            cur_knows = cur_suspects = knows = suspects = ""
+        else:
+            cur_knows = st["knows"] if st else ""
+            cur_suspects = st["suspects"] if st else ""
+            # Keep-on-omit: an omitted knows/suspects preserves the stored value; an
+            # explicit "" clears it. Prevents an absorb that only touches
+            # current_state from silently erasing established knowledge.
+            knows = e["knows"] if "knows" in e else cur_knows
+            suspects = e["suspects"] if "suspects" in e else cur_suspects
         after = playstate.compose_body(e.get("current_state", ""), knows, suspects)
         if not after:
             continue
         before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
         if before == after:
             continue
-        out.append(_staged(_character_state_edit(cid, char_id, before, after),
-                           e, f"characters:{char_id}"))
+        out.append(_staged(_character_state_edit(cid, kind, char_id, before, after, name),
+                           e, f"{kind}:{char_id}"))
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")

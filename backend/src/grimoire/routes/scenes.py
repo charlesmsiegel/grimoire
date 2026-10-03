@@ -2222,8 +2222,10 @@ def _already_absorbed(scene: dict) -> bool:
     return str(scene.get("meta", {}).get("done", "")).lower() == "true"
 
 
-def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dict]:
-    """The scene and its commit epoch as of one instant, under one lock hold.
+def _absorb_snapshot(cid: str, sid: str,
+                     identity: str | None) -> tuple[int, dict, list[dict]]:
+    """The scene, its commit epoch and its final tracked state as of one
+    instant, under one lock hold.
 
     Split out of `post_absorb` so the whole of it is one critical section.
     Raises `_require_scene`'s 404 like any other handler code.
@@ -2241,12 +2243,41 @@ def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dic
     this read lands on the same `sid` -- ids are recycled by design -- and the
     review would then be built from the replacement's transcript and published
     onto it.
+
+    The tracked state is the latest `ok` tracker record at the transcript this
+    review is built from, read in the same hold so a turn landing in between
+    cannot hand absorb a state the transcript it reads does not reach.
     """
     with store.locks.campaign_lock(cid):
         scene = _require_scene(cid, sid)
         if streaming._scene_moved(cid, sid, identity):
             raise HTTPException(status_code=404, detail="scene not found")
-        return store.commits.scene_epoch(cid, sid), scene
+        return store.commits.scene_epoch(cid, sid), scene, _absorb_tracked(cid, sid)
+
+
+def _absorb_tracked(cid: str, sid: str) -> list[dict]:
+    """The scene tracker's final state as the narrator reads it -- every value,
+    private ones marked -- for absorb, which writes canonical state rather than
+    speaking for anyone. Characters with nothing recorded are left out.
+
+    `[]` when the tracker is off for the campaign, and `[]` (logged) when it
+    cannot be read: `walk` raises on a malformed response ledger, and a review
+    that loses this section is a far better outcome than one that never starts.
+    """
+    try:
+        if not store.tracker.settings.enabled(cid):
+            return []
+        _key, snapshot = store.tracker.walk.current(cid, sid)
+        if not snapshot:
+            return []
+        lines = store.tracker.view.lines_for(
+            snapshot, store.tracker.fields.effective(cid, sid), None,
+            store.tracker.walk.roster(cid, sid))
+        return [line for line in lines if line["values"]]
+    except Exception:
+        log.warning("absorb: tracker read failed for %s/%s; absorbing without it",
+                    cid, sid, exc_info=True)
+        return []
 
 
 def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
@@ -2304,6 +2335,9 @@ class _Prepared(NamedTuple):
 
     epoch: int
     scene: dict
+    #: The scene tracker's final state (`_absorb_tracked`), part of the snapshot
+    #: because it is read under the same hold as `scene`.
+    tracked: list
     facts: dict
     transcript: str
     messages: list
@@ -2475,7 +2509,7 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     `running` for the life of the process -- refusing every later turn and
     review on the scene.
     """
-    epoch, scene = _absorb_snapshot(cid, sid, run.scene_identity)
+    epoch, scene, tracked = _absorb_snapshot(cid, sid, run.scene_identity)
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
@@ -2496,7 +2530,7 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     player_label = store.appearances.player_label(cid, sid)
     transcript = store.chronicle.transcript_text(scene["messages"], player_label)
     prepared = _Prepared(
-        epoch=epoch, scene=scene, facts=facts, transcript=transcript,
+        epoch=epoch, scene=scene, tracked=tracked, facts=facts, transcript=transcript,
         player_label=player_label,
         messages=store.absorb.build_prompt(
             transcript, facts,
@@ -2504,7 +2538,8 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
             store.absorb.relationships_snapshot(cid, sid),
             store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
             store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid),
-            store.absorb.steering_snapshot(cid, sid)),
+            store.absorb.steering_snapshot(cid, sid),
+            tracked_snapshot=tracked),
         watermark=store.pending_reviews.watermark(scene["messages"]))
 
     async def work():
