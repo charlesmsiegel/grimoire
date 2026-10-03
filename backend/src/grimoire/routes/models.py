@@ -50,6 +50,8 @@ class ConfigUpdate(BaseModel):
     semantic_recall_threshold: str | None = None
     prompt_layout_enabled: str | None = None
     speaker_turn_taking: str | None = None
+    tracker: str | None = None
+    perception_rider: str | None = None
     backup_enabled: str | None = None
     backup_interval_hours: str | None = None
     backup_keep: str | None = None
@@ -144,6 +146,13 @@ class ResponseSettings(BaseModel):
     response_opening_paragraphs: str | None = None
     response_continuation_words: str | None = None
     response_continuation_paragraphs: str | None = None
+
+
+class CampaignTracker(BaseModel):
+    """A campaign's own scene-tracker setting: "on", "off", or "" to follow the
+    global one."""
+
+    setting: str
 
 
 class RoutingUpdate(BaseModel):

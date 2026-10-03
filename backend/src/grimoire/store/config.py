@@ -71,6 +71,14 @@ DEFAULT_PROMPT_LAYOUT_ENABLED = "off"
 # default because it adds tokens to every group turn, and a cost may not
 # arrive by upgrade.
 DEFAULT_SPEAKER_TURN_TAKING = "off"
+# The scene state tracker (store/tracker/): a per-scene record of who is where
+# and what each character perceives, kept current by one extra call after each
+# turn. On by default -- it is the app's answer to continuity drift -- and a
+# campaign may override it either way (campaign.md `tracker`).
+DEFAULT_TRACKER = "on"
+# Whether the tracker's perception rider is added to the prompt. Separate from
+# the tracker itself so the record can be kept while its prompt cost is shed.
+DEFAULT_PERCEPTION_RIDER = "on"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -206,6 +214,7 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 # answered with its defaults no matter what anyone wrote.
                 "art_catalog_depth", "art_catalog_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking",
+                "tracker", "perception_rider",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
                 "advance_fork_threshold", "log_level") + _LENGTH_KEYS + routing.CONFIG_KEYS
@@ -246,6 +255,8 @@ def read_config() -> dict[str, str]:
                 "art_catalog_threshold": DEFAULT_ART_CATALOG_THRESHOLD,
                 "prompt_layout_enabled": DEFAULT_PROMPT_LAYOUT_ENABLED,
                 "speaker_turn_taking": DEFAULT_SPEAKER_TURN_TAKING,
+                "tracker": DEFAULT_TRACKER,
+                "perception_rider": DEFAULT_PERCEPTION_RIDER,
                 "backup_enabled": DEFAULT_BACKUP_ENABLED,
                 "backup_interval_hours": DEFAULT_BACKUP_INTERVAL_HOURS,
                 "backup_keep": DEFAULT_BACKUP_KEEP,
@@ -373,6 +384,18 @@ def speaker_turn_taking() -> bool:
     and the section renders empty, so it drops out in `_render_sections`.
     """
     return read_config().get("speaker_turn_taking") == "on"
+
+
+def tracker_enabled() -> bool:
+    """The GLOBAL scene-tracker switch (store/tracker/settings.py decides per
+    campaign). Read this only through `tracker.settings.enabled`, which lets a
+    campaign's own setting win."""
+    return read_config().get("tracker") == "on"
+
+
+def perception_rider() -> bool:
+    """Whether the tracker's perception rider is added to the prompt."""
+    return read_config().get("perception_rider") == "on"
 
 
 def replay_fork_threshold() -> int:

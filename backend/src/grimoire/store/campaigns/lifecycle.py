@@ -514,6 +514,34 @@ def set_campaign_routing(cid: str, fields: dict) -> None:
         atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
+def set_campaign_tracker(cid: str, value: str) -> None:
+    """This campaign's scene-tracker setting: "on", "off", or "" for "follow the
+    global one".
+
+    `set_campaign_routing`'s shape, for the same reasons: it takes the campaign
+    lock, a cleared value is REMOVED rather than written as "" (the reader treats
+    absent and empty identically), and a write that changes nothing neither
+    touches the file nor moves `updated`. The value is checked before the lock
+    is taken -- a bad one is the caller's mistake, not a question for the store.
+    """
+    if value not in ("", "on", "off"):
+        raise ValueError(f"tracker must be '', 'on' or 'off', not {value!r}")
+    with locks.campaign_lock(cid):
+        mp = paths.campaign_meta_path(cid)
+        if not mp.exists():
+            raise paths.CampaignNotFound(cid)
+        meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        before = dict(meta)
+        if value:
+            meta["tracker"] = value
+        else:
+            meta.pop("tracker", None)
+        if meta == before:
+            return
+        meta["updated"] = now_iso()
+        atomic.write_text(mp, dump_frontmatter(meta, body))
+
+
 #: The two campaign.md keys a cost budget occupies (#153). Named together
 #: because they are written and cleared together: a period with no limit beside
 #: it describes nothing, and a reader would have to invent a default for it.
