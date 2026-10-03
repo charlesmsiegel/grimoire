@@ -147,10 +147,39 @@ test("changing an enum's options is a change of options alone", async () => {
   serve({});
   await open("Visible mood");
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("Options"), { target: { value: "calm, fear, joy" } });
+  expect(screen.getByLabelText("Option 1")).toHaveValue("calm");
+  fireEvent.click(screen.getByRole("button", { name: "Add option" }));
+  fireEvent.change(screen.getByLabelText("Option 3"), { target: { value: "joy" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(
     CAMPAIGN, { fields: [], change: { visible_mood: { options: ["calm", "fear", "joy"] } }, off: [] }));
+});
+
+test("an option carrying a comma is edited as one option", async () => {
+  const flag: TrackerField = {
+    key: "flag", label: "Flag", type: "enum", aware: "present", hint: "Colours.",
+    options: ["red, white", "blue"],
+  };
+  serve({}, [flag]);
+  await open("Flag");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("Option 1")).toHaveValue("red, white");
+  fireEvent.change(screen.getByLabelText("Hint"), { target: { value: "Its colours." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(
+    CAMPAIGN, { fields: [], change: { flag: { hint: "Its colours." } }, off: [] }));
+
+  vi.mocked(api.setTrackerFields).mockClear();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Option 2"), { target: { value: "green" } });
+  fireEvent.click(screen.getByRole("button", { name: "Remove option 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add option" }));
+  fireEvent.change(screen.getByLabelText("Option 2"), { target: { value: "red, white" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add option" }));   // left blank: dropped
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(CAMPAIGN, {
+    fields: [], change: { flag: { hint: "Its colours.", options: ["green", "red, white"] } },
+    off: [] }));
 });
 
 test("an edit that restores the inherited field drops the change entry", async () => {
@@ -181,7 +210,10 @@ test("a new field is written to fields, with the key following the label", async
   fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Held Breath" } });
   expect(screen.getByLabelText("Key")).toHaveValue("held_breath");
   fireEvent.change(screen.getByLabelText("Type"), { target: { value: "enum" } });
-  fireEvent.change(screen.getByLabelText("Options"), { target: { value: "shallow, deep" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add option" }));
+  fireEvent.change(screen.getByLabelText("Option 1"), { target: { value: "shallow" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add option" }));
+  fireEvent.change(screen.getByLabelText("Option 2"), { target: { value: "deep" } });
   fireEvent.change(screen.getByLabelText("Default awareness"), { target: { value: "self" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(CAMPAIGN, {

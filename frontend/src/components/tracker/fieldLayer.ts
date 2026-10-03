@@ -41,21 +41,33 @@ export const withoutShadowed = (layer: FullLayer, inheritedKeys: ReadonlySet<str
     ? { ...layer, fields: layer.fields.filter((f) => !inheritedKeys.has(f.key)) }
     : layer;
 
-/** What a form edits. `options` is the comma list as typed. */
+/** One enum option as a form edits it, and the id React keys its row by: an
+ *  option has no identity of its own, and keyed by position, removing one
+ *  would hand the next option's row (and its caret) to the one after it. */
+export type OptionItem = { id: number; text: string };
+let lastOptionId = 0;
+
+/** `options` as items to edit one by one -- never as one comma list, because
+ *  an option may itself carry a comma ("red, white"). */
+export const optionItems = (options: readonly string[]): OptionItem[] =>
+  options.map((text) => ({ id: ++lastOptionId, text }));
+
+/** What a form edits. `options` is edited item by item (`OptionItem`). */
 export type FieldDraft = {
   key: string; label: string; hint: string;
-  type: TrackerField["type"]; options: string; aware: TrackerField["aware"];
+  type: TrackerField["type"]; options: OptionItem[]; aware: TrackerField["aware"];
 };
 
 export const BLANK_DRAFT: FieldDraft =
-  { key: "", label: "", hint: "", type: "text", options: "", aware: "present" };
+  { key: "", label: "", hint: "", type: "text", options: [], aware: "present" };
 
-export const splitOptions = (text: string): string[] =>
-  text.split(",").map((s) => s.trim()).filter(Boolean);
+/** The options a draft saves: trimmed, the blank ones dropped. */
+export const cleanOptions = (items: readonly OptionItem[]): string[] =>
+  items.map((o) => o.text.trim()).filter(Boolean);
 
 export const draftOf = (f: TrackerField): FieldDraft => ({
   key: f.key, label: f.label, hint: f.hint, type: f.type,
-  options: (f.options ?? []).join(", "), aware: f.aware,
+  options: optionItems(f.options ?? []), aware: f.aware,
 });
 
 /** A key from a label, for a form whose key box has not been touched. */
@@ -73,7 +85,7 @@ export function draftProblem(draft: FieldDraft, opts: { keyFixed: boolean; taken
     if (opts.taken.includes(draft.key)) return `A field with the key "${draft.key}" already exists.`;
   }
   if (!draft.label.trim()) return "A field needs a label.";
-  if (draft.type === "enum" && splitOptions(draft.options).length === 0) {
+  if (draft.type === "enum" && cleanOptions(draft.options).length === 0) {
     return "An enum needs at least one option.";
   }
   return null;
@@ -86,7 +98,7 @@ export function fieldOf(draft: FieldDraft): TrackerField {
     key: draft.key, label: draft.label.trim(), type: draft.type,
     aware: draft.aware, hint: draft.hint,
   };
-  if (draft.type === "enum") field.options = splitOptions(draft.options);
+  if (draft.type === "enum") field.options = cleanOptions(draft.options);
   return field;
 }
 
@@ -103,7 +115,7 @@ export function changeOf(inherited: TrackerField, draft: FieldDraft): Partial<Tr
   if (draft.type !== inherited.type) change.type = draft.type;
   if (draft.aware !== inherited.aware) change.aware = draft.aware;
   if (draft.type === "enum") {
-    const options = splitOptions(draft.options);
+    const options = cleanOptions(draft.options);
     if (inherited.type !== "enum" || !sameList(options, inherited.options)) change.options = options;
   }
   return change;

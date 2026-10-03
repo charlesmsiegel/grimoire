@@ -1,5 +1,5 @@
 import { Field } from "../Field";
-import type { FieldDraft } from "./fieldLayer";
+import { optionItems, type FieldDraft } from "./fieldLayer";
 
 /** The form over one field definition, shared by the world and campaign editor
  *  and by the scene panel's "+ Scene-only field". It holds no state of its own:
@@ -43,10 +43,29 @@ export function FieldForm({ draft, onChange, keyFixed, problem, saving, onSave, 
         </select>
       </Field>
       {draft.type === "enum" && (
-        <Field label="Options" hint="Comma-separated.">
-          <input type="text" value={draft.options}
-                 onChange={(e) => set({ options: e.target.value })} />
-        </Field>
+        // One input per option, as a list value is edited (`TrackerEditForm`):
+        // an option may carry a comma, so no comma list could hold it.
+        <div className="field">
+          <div role="group" aria-label="Options" className="tracker-list">
+            <span className="tracker-label">Options</span>
+            {draft.options.map((o, i) => (
+              <span key={o.id} className="tracker-list-item">
+                <input type="text" aria-label={`Option ${i + 1}`} value={o.text}
+                       onChange={(e) => set({ options: draft.options.map((p) =>
+                         (p.id === o.id ? { ...p, text: e.target.value } : p)) })} />
+                <button type="button" className="subtle" aria-label={`Remove option ${i + 1}`}
+                        onClick={() => set({ options: draft.options.filter((p) => p.id !== o.id) })}>
+                  ×
+                </button>
+              </span>
+            ))}
+            <button type="button" className="subtle" aria-label="Add option"
+                    onClick={() => set({ options: [...draft.options, ...optionItems([""])] })}>
+              + Add option
+            </button>
+          </div>
+          <div className="field-hint">One per box. Blank ones are dropped.</div>
+        </div>
       )}
       <Field label="Default awareness"
              hint="Who knows a value unless told otherwise: everyone present, or only the character it belongs to.">

@@ -1,4 +1,4 @@
-import { changeOf, draftOf, withoutShadowed, fullLayer } from "./fieldLayer";
+import { changeOf, draftOf, fieldOf, optionItems, withoutShadowed, fullLayer } from "./fieldLayer";
 import type { TrackerField } from "../../api/client";
 
 const MOOD: TrackerField = {
@@ -13,7 +13,7 @@ test("an enum made text is a change of type alone, with no options", () => {
 });
 
 test("a text field made an enum is a change of type and options", () => {
-  const draft = { ...draftOf(POSE), type: "enum" as const, options: "slouch, stand" };
+  const draft = { ...draftOf(POSE), type: "enum" as const, options: optionItems(["slouch", " stand ", ""]) };
   expect(changeOf(POSE, draft)).toEqual({ type: "enum", options: ["slouch", "stand"] });
 });
 
@@ -31,4 +31,17 @@ test("withoutShadowed drops only the additions a lower layer owns, and keeps the
   expect(next.change).toEqual({ visible_mood: { label: "M" } });
   // Nothing to drop: the very same object, so no needless churn.
   expect(withoutShadowed(layer, new Set(["x"]))).toBe(layer);
+});
+
+const FLAG: TrackerField = {
+  key: "flag", label: "Flag", type: "enum", aware: "present", hint: "h",
+  options: ["red, white", "blue"],
+};
+
+test("an option carrying a comma stays one option through an edit", () => {
+  expect(changeOf(FLAG, { ...draftOf(FLAG), hint: "colours" })).toEqual({ hint: "colours" });
+  const draft = draftOf(FLAG);
+  const options = draft.options.map((o) => (o.text === "blue" ? { ...o, text: "green" } : o));
+  expect(changeOf(FLAG, { ...draft, options })).toEqual({ options: ["red, white", "green"] });
+  expect(fieldOf({ ...draft, options }).options).toEqual(["red, white", "green"]);
 });
