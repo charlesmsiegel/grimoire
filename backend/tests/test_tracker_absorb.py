@@ -112,6 +112,22 @@ def test_absorb_prompt_carries_final_tracked_state(client):
     assert user.index("Final tracked state") < user.index("The tide is turning.")
 
 
+@pytest.mark.tracker
+def test_absorb_keeps_a_departed_characters_last_tracked_state(client):
+    """Mara left after the last tracked post: her record still says present,
+    and her cast membership is gone. Absorb reads the whole scene, so her last
+    state stays in, marked as having left -- not dropped as a stranger."""
+    cid, sid = _tracked_scene(client)
+    store.appearances.leave(cid, sid, "characters", "mara")
+    fake = _fake()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    assert review_runs.absorb(client, cid, sid).status_code == 200
+    user = _extraction_user(fake)
+    assert ("- Mara (left the scene): Visible mood: fear; Concealed: a forged pass (private)"
+            in user)
+    assert "- Seraphine: Holding: a lantern" in user
+
+
 def test_absorb_prompt_has_no_tracked_state_when_the_tracker_is_off(client):
     """The suite's default is the tracker off: records on disk are not read."""
     cid, sid = _tracked_scene(client)

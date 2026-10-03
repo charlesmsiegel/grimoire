@@ -41,22 +41,32 @@ def _values(entry: dict, fields: list[dict], all_: bool, viewer) -> list[dict]:
     return out
 
 
+LEFT = " (left the scene)"
+"""Appended to a departed character's name (`include_departed`)."""
+
+
 def lines_for(snapshot: dict, fields: list[dict], viewer: str | None,
-              roster: dict[str, str]) -> list[dict]:
+              roster: dict[str, str], *, include_departed: bool = False) -> list[dict]:
     """`[{"name", "own", "values": [{"label", "text", "private"}]}]` for the
     characters present in `snapshot`, as `viewer` may see them.
 
     `viewer` is a character ref, or `None`/`"grimoire"` for the narrator. The
     viewer's own line comes first and carries every value; the narrator's
     lines carry every value too, none `own`. A ref the roster does not name is
-    skipped -- there is nothing to call it."""
+    skipped -- there is nothing to call it.
+
+    `include_departed` also gives a line to each character the snapshot holds
+    as no longer present, named with `LEFT`: a reader of the whole scene
+    (absorb) needs the last state of someone who walked out, where a prompt
+    playing the scene on describes only who is in it."""
     narrator = viewer is None or viewer == NARRATOR
     lines = []
     for ref, entry in snapshot.items():
-        if not entry.get("present") or ref not in roster:
+        here = bool(entry.get("present"))
+        if not (here or include_departed) or ref not in roster:
             continue
         own = not narrator and ref == viewer
-        lines.append({"name": roster[ref], "own": own,
+        lines.append({"name": roster[ref] + ("" if here else LEFT), "own": own,
                       "values": _values(entry, fields, narrator or own, viewer)})
     lines.sort(key=lambda line: not line["own"])    # stable: the rest keep order
     return lines

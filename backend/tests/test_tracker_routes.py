@@ -754,3 +754,45 @@ def test_a_roll_pause_and_its_resumption_are_both_tracked(client):
     assert index[paused[1]]["status"] == "ok", "the pre-roll variant's record was lost"
     posts = _tracker_posts(llm)
     assert any("Wait." in p and "No roll." in p for p in posts), posts
+
+
+# --- characters who left ------------------------------------------------------
+
+def test_a_departed_character_keeps_a_name_in_the_scenes_records(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    r = client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/winifred")
+    assert r.status_code == 200, r.text
+    assert client.get(_base(cid, sid)).json()["names"]["characters:winifred"] == "Winifred"
+    body = client.get(f"{_base(cid, sid)}/records/{keys[0]}").json()
+    assert body["names"]["characters:winifred"] == "Winifred"
+
+
+def test_an_update_for_a_post_before_a_leave_keeps_the_leavers_changes(client):
+    """Winifred was in the room for the post; she walks out while its update
+    is still waiting on the model. The update names her in its prompt and
+    applies what the reply says about her -- she was present at the post."""
+    llm = _use(client, HeldCassette(
+        [{"when": dict(TRACKER),
+          "reply": json.dumps({"changes": {"Winifred": {"pose": "leaning on the rail"}}})},
+         {"when": {}, "reply": MARA_SAYS}], hold=TRACKER))
+    cid, sid = _scene(client)
+    try:
+        _send(client, cid, sid)
+        llm.await_held()
+        r = client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/winifred")
+        assert r.status_code == 200, r.text
+    finally:
+        llm.release()
+    _settle(client, cid, sid)
+    key = _keys(cid, sid)[0]
+    assert _index(cid, sid)[key]["status"] == "ok"
+    snap = client.get(f"{_base(cid, sid)}/records/{key}").json()["snapshot"]
+    assert snap["characters:winifred"]["fields"]["pose"]["value"] == "leaning on the rail"
+    users = [next(m["content"] for m in req["messages"] if m.get("role") == "user")
+             for req in llm.requests
+             if any(TRACKER["system_contains"] in m.get("content", "")
+                    for m in req["messages"] if m.get("role") == "system")]
+    assert users and all("characters:winifred" not in u for u in users), \
+        "the update prompt named a departed character by her raw ref"

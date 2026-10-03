@@ -266,7 +266,9 @@ def test_present_at_follows_intervals(home):
     assert walk.present_at(cid, sid, 3) == {mara, winifred}
     assert walk.present_at(cid, sid, 4) == {winifred}
     assert walk.present_at(cid, sid, 9) == {winifred}
-    assert walk.roster(cid, sid) == {winifred: "Winifred"}
+    # Mara left, and is still named: earlier posts' records describe her.
+    assert walk.roster(cid, sid) == {mara: "Mara", winifred: "Winifred"}
+    assert walk.roster(cid, sid, departed=False) == {winifred: "Winifred"}
 
     # A cast member with no intervals for this scene (a legacy appearance) counts
     # as present throughout.

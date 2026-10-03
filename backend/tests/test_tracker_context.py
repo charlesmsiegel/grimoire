@@ -188,6 +188,18 @@ def test_the_opener_carries_no_scene_state(cast_scene):
     assert all(row["id"] != "tracker_state" for row in detail["sections"])
 
 
+def test_a_character_who_left_is_not_in_the_scene_state(cast_scene):
+    """The record still holds Winifred as present -- she left after the last
+    tracked post -- but the section describes who is in the scene now."""
+    cid, sid = cast_scene
+    assert "grey cloak" in _text(cid, sid, MARA)
+    appearances.leave(cid, sid, "characters", "winifred")
+    for viewer in (MARA, None):
+        text = _text(cid, sid, viewer)
+        assert "# Scene state" in text
+        assert "grey cloak" not in text
+
+
 def test_the_opener_reads_no_tracker_state(cast_scene, monkeypatch):
     """Not only unrendered: unread. The opener is composed inside an async
     generator on the event loop, and the read waits on locks."""
