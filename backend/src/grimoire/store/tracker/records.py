@@ -198,16 +198,69 @@ def stored_keys(cid: str, identity: str) -> set[str]:
     return set(read_index(cid, identity)) | set(_rebuilt(cid, identity))
 
 
+def _value(value) -> str | list[str] | None:
+    """A stored value as text or a list of text, or `None` for anything else.
+    A list keeps its text items and drops the rest -- unlike a model's reply
+    (`merge._normalize`), there is nothing here to refuse it back to."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str)]
+    return None
+
+
+def _aware(aware) -> str | list[str]:
+    """`"present"` or a list of refs. Anything else -- missing included --
+    reads as `[]`, only the owner knows: the safe reading, the one the view
+    already gives a missing one, and present on every value so nothing that
+    dereferences it (`merge.apply_edit`) meets a hole."""
+    if aware == "present":
+        return "present"
+    if isinstance(aware, list):
+        return [r for r in aware if isinstance(r, str)]
+    return []
+
+
+def _normalised_snapshot(snapshot: dict) -> dict:
+    """`snapshot` in the shape `merge` documents, each part repaired on its
+    own as `_normalised` repairs an index entry: an actor entry that is not an
+    object is dropped, `present` is a boolean (only `True` is present), a
+    value that is not text or a list of text is dropped with its field, and
+    `set_by` survives only as `"user"`, the one thing it says."""
+    out: dict = {}
+    for ref, entry in snapshot.items():
+        if not isinstance(ref, str) or not isinstance(entry, dict):
+            continue
+        stored = entry.get("fields")
+        kept: dict = {}
+        for key, cur in (stored if isinstance(stored, dict) else {}).items():
+            if not isinstance(key, str) or not isinstance(cur, dict):
+                continue
+            value = _value(cur.get("value"))
+            if value is None:
+                continue
+            kept[key] = {"value": value, "aware": _aware(cur.get("aware"))}
+            if cur.get("set_by") == "user":
+                kept[key]["set_by"] = "user"
+        out[ref] = {"present": entry.get("present") is True, "fields": kept}
+    return out
+
+
 def read_snapshot(cid: str, identity: str, key: str) -> dict | None:
     """The snapshot file's body (`version`, `snapshot`, `fields_digest`, `model`,
-    `at`), or `None` when there is none or it cannot be read as one."""
+    `at`), or `None` when there is none or it cannot be read as one.
+
+    This is the one read path for a snapshot, so the snapshot is normalised
+    here (`_normalised_snapshot`): every reader -- the walk, the views, the
+    prompts, a merge -- dereferences it in the shape `merge` documents, and a
+    hand-written or older file must not reach one of them in any other."""
     try:
         body = json.loads(_snapshot_path(cid, identity, key).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(body, dict) or not isinstance(body.get("snapshot"), dict):
         return None
-    return body
+    return {**body, "snapshot": _normalised_snapshot(body["snapshot"])}
 
 
 def _write_json(path: Path, data: dict) -> None:

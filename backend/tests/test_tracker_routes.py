@@ -879,3 +879,25 @@ def test_an_update_for_a_post_before_a_leave_keeps_the_leavers_changes(client):
                     for m in req["messages"] if m.get("role") == "system")]
     assert users and all("characters:winifred" not in u for u in users), \
         "the update prompt named a departed character by her raw ref"
+
+
+def test_a_hand_mangled_snapshot_is_served_in_the_shape_it_promises(client):
+    """The cast tiles read each tail entry's `fields`, the disclosure each
+    value's `value` and `aware`; a snapshot file written by hand must not
+    turn either read into a 500."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    path = store.tracker.paths.scene_dir(cid, _ident(cid, sid)) / f"{keys[-1]}.json"
+    path.write_text(json.dumps({"version": 1, "snapshot": {
+        "characters:mara": "bad",
+        "characters:winifred": {"present": True, "fields": {
+            "visible_mood": {"value": ["calm", 2], "aware": {"x": 1}},
+            "pose": {"value": 5, "aware": "present"}}}}}), encoding="utf-8")
+    r = client.get(_base(cid, sid))
+    assert r.status_code == 200, r.text
+    assert r.json()["moods"] == {"characters:winifred": ["calm"]}
+    r = client.get(f"{_base(cid, sid)}/records/{keys[-1]}")
+    assert r.status_code == 200, r.text
+    assert r.json()["snapshot"] == {"characters:winifred": {"present": True, "fields": {
+        "visible_mood": {"value": ["calm"], "aware": []}}}}
