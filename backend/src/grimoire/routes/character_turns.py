@@ -952,6 +952,9 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None):
             reasoning=watcher.reasoning + watcher.preparation_note,
         )
         store.responses.activate(cid, sid, rid, variant["id"])
+        # A reroll is a swipe to a new variant: every later tracker record was
+        # built on the one it replaced. In this hold, with the swap; fail-soft.
+        tracker_routes.after_swipe(cid, sid, rid)
         streaming._turn_settled(cid)
         if tracked is not None:
             # In this hold, for `_save`'s reason: reentrant here, a fresh wait

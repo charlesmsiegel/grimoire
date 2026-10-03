@@ -498,6 +498,11 @@ def _prepare(cid: str, identity: str, hint: str, key: str) -> dict | None:
             return None
         index = located["index"]
         _, prior = walk.state_before(cid, sid, index)
+        # The flags are answered HERE, in the hold that reads the post and its
+        # prior -- not at save, a provider call later. An edit that lands
+        # while the model answers raises a flag this run never saw, and
+        # `_commit` keeps it (`keep_flags`), so the record still reads stale.
+        store.tracker.records.clear_flags(cid, identity, key)
         present = walk.present_at(cid, sid, index)
         return {
             "sid": sid, "post": located["post"], "rid": located["rid"],
@@ -551,8 +556,10 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
         if _locate(cid, sid, key) is None:
             _settle_unwritten(cid, sid, identity, key, "")
             return False
+        # `keep_flags`: `_prepare` cleared them when it read this result's
+        # inputs, so any flag raised since is a write the result never saw.
         store.tracker.records.save(cid, identity, key, snapshot, changed=changed,
-                                   fields_digest=digest, model=model)
+                                   fields_digest=digest, model=model, keep_flags=True)
         if flag_later:
             at = store.tracker.walk.index_of(cid, sid, key)
             if at is not None:
@@ -737,6 +744,11 @@ def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request:
         if entry is None or located is None:
             # No record, or one for a post that is gone (the next prune drops it).
             raise HTTPException(status_code=404, detail="tracker record not found")
+        if entry.get("status") == "pending" and _update_live(request.app, cid, ident):
+            # An update for this key is on its way, built on what the record
+            # said before this edit; its save would replace the edit without a
+            # trace. Refused rather than lost -- the person edits once it lands.
+            raise HTTPException(status_code=409, detail="tracker_busy")
         stored = records.read_snapshot(cid, ident, key)
         # A record with no snapshot (failed before it ever landed) is edited
         # from the state its post started from -- what the disclosure shows.
@@ -752,14 +764,12 @@ def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request:
         touched = {(c[0], c[1]) for c in changed}
         kept = ([c for c in entry.get("changed") or [] if (c[0], c[1]) not in touched]
                 if entry.get("status") == "ok" else [])
+        # `keep_flags`: clearing is a re-run's job. A hand edit of one value
+        # does not make the rest of the record agree with an edited post or an
+        # earlier change, so whatever was raised stays.
         records.save(cid, ident, key, snapshot, changed=kept + changed,
-                     fields_digest=store.tracker.fields.digest(fields), model="user")
-        # `save` clears the flags, which is right for a re-run and wrong here:
-        # a hand edit of one value does not make the rest of the record agree
-        # with an edited post or an earlier change, so whatever was raised stays.
-        for flag, raised in _flags(entry).items():
-            if raised:
-                records.set_flags(cid, ident, [key], flag)
+                     fields_digest=store.tracker.fields.digest(fields), model="user",
+                     keep_flags=True)
         at = walk.index_of(cid, sid, key)
         if at is not None:
             # Only from a key ON the walk: an inactive variant is not what any
