@@ -746,19 +746,19 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # (retry, next turn, ...).
             content = store.context.expand_macros(
                 turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
-            # The id is minted here, in the same hold as the append, and only
-            # while tracking: the tracker keys a record to a user post by it
-            # (an index renumbers on every cut), and a campaign with the
-            # tracker off should not grow metadata nothing will read.
-            post_id = (uuid.uuid4().hex
-                       if store.tracker.settings.enabled(cid) else None)
+            # The id is minted here, in the same hold as the append, for every
+            # new post whatever the tracker's setting: the tracker keys a
+            # record to a user post by it (an index renumbers on every cut),
+            # and a post written while it was off is still one a campaign that
+            # switches it back on can track (Retry on an untracked post).
+            post_id = uuid.uuid4().hex
             posted_at = store.scenes.append_message(
                 cid, sid, "user", content, speaker=speaker, post_id=post_id)
             # The tracker's `pending` mark, in the hold that wrote the post:
             # the acquisition is reentrant here, where after the hold it would
             # be a second wait on the campaign lock in front of the turn.
-            tracked = (tracker_routes.mark(cid, sid, store.tracker.paths.post_key(post_id))
-                       if post_id else None)
+            # `None` with the tracker off.
+            tracked = tracker_routes.mark(cid, sid, store.tracker.paths.post_key(post_id))
             # In the SAME hold as the append it describes. This is what lets a
             # recovery after the run record expired ask the only decisive
             # question -- is this attempt's post still here? -- rather than
