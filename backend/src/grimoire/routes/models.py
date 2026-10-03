@@ -148,6 +148,14 @@ class ResponseSettings(BaseModel):
     response_continuation_paragraphs: str | None = None
 
 
+class TrackerLayer(BaseModel):
+    """One layer of tracker field definitions (world, campaign or scene)."""
+
+    fields: list[dict] = []
+    change: dict = {}
+    off: list[str] = []
+
+
 class CampaignTracker(BaseModel):
     """A campaign's own scene-tracker setting: "on", "off", or "" to follow the
     global one."""
