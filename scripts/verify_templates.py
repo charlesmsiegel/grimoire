@@ -404,6 +404,11 @@ from grimoire.store import taglines as tstore
 from grimoire.store import voice_anchors as vastore
 from grimoire.store import voice_drift as vdstore
 from grimoire.store import weather as wstore
+from grimoire.store.tracker import fields as tfields  # noqa: E402
+from grimoire.store.tracker import records as trecords  # noqa: E402
+from grimoire.store.tracker import settings as tsettings  # noqa: E402
+from grimoire.store.tracker import view as tview  # noqa: E402
+from grimoire.store.tracker import walk as twalk  # noqa: E402
 
 # recap_depth=1 narrows the recap window to the newest absorbed scene, which is
 # what leaves an older one outside it for archive retrieval (#127) to recall —
@@ -506,7 +511,24 @@ scenes.append_message(cid, sid, "user", "Where is the ledger?")
 scenes.append_message(cid, sid, "assistant", "Seraphine glances toward the warehouse.",
                       speaker="Seraphine Vale")
 scenes.append_message(cid, sid, "assistant", "Fog rolls in off the water.")
-scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero")
+scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero", post_id="c" * 32)
+
+# One tracker record, on the closing player post, so the Scene state section
+# renders here: two characters, both with a value anyone present can see and
+# Seraphine with a private one -- which the narrator's render labels, and which
+# is the branch of the template a leak would hide in.
+# The campaign opts in itself rather than leaning on the shipped default, which
+# the test suite switches off.
+campaigns.set_campaign_tracker(cid, "on")
+_tracker_key = twalk.ordered_keys(cid, sid)[-1][1]
+trecords.save(cid, scenes.ensure_identity(cid, sid), _tracker_key, {
+    f"characters:{sera}": {"present": True, "fields": {
+        "pose": {"value": "leaning on a piling", "aware": "present"},
+        "intent": {"value": "lose the tail before the warehouse", "aware": []}}},
+    f"pcs:{pid}": {"present": True, "fields": {
+        "holding": {"value": "a shuttered lantern", "aware": "present"},
+        "condition": {"value": ["soaked", "winded"], "aware": "present"}}},
+}, changed=[], fields_digest="fixture", model="fixture")
 
 relationships.set_feeling(cid, f"characters:{sera}", f"pcs:{pid}", 2, 3, 4, "suspects a tail")
 relationships.set_bond(cid, f"characters:{sera}", f"pcs:{pid}", "reluctant allies")
@@ -799,6 +821,16 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             f"offscene_known_limit of {limit}; this mirror does not implement the cut, "
             f"so shrink the fixture or teach gather() the relevance rule")
 
+    # Mirrors context._assemble's scene state: the record at the transcript's
+    # tail, seen by the narrator (this harness composes with no assigned actor),
+    # over the whole scene cast; nothing at all with the tracker off.
+    tracker_lines = []
+    if tsettings.enabled(cid):
+        _key, snapshot = twalk.current(cid, scene_id)
+        if snapshot:
+            tracker_lines = tview.lines_for(snapshot, tfields.effective(cid, scene_id), None,
+                                            twalk.roster(cid, scene_id))
+
     campaign_meta = campaigns.read_campaign(cid)["meta"]
     # Mirrors context._assemble: style keeps its legacy cascade; the new
     # continuation target resolves separately from it.
@@ -821,6 +853,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "named_npc_count": sum(
                 1 for b in _cast_blocks(cid, npc_cards, npc_ids) if b["name"]),
             "states": states,
+            "tracker_lines": tracker_lines, "tracker_narrator": True,
             # Mirrors context._assemble: derived from the present NPCs' card
             # names and the raw transcript, and None while the toggle is off.
             "speaker": (context.speaker.nominate(
@@ -885,8 +918,10 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/voice_policy.j2",
               "scene/sections/voice_anchors.j2",
               "scene/sections/voice_examples.j2",
-              "scene/sections/character_state.j2",
-              "scene/sections/active_speaker.j2",
+              "scene/sections/character_state.j2"]
+    if not opener:                    # Section(except_opener=True)
+        names.append("scene/sections/tracker_state.j2")
+    names += ["scene/sections/active_speaker.j2",
               "scene/sections/relationships.j2",
               "scene/sections/player_personas.j2"]
     if data["pcless"]:
@@ -987,6 +1022,12 @@ check_messages("chat unknown model", context.build_messages(cid, sid, model="ven
 # "" passes while proving nothing about scene/voice_correction.j2.
 assert any("drifted out of voice" in m["content"] for m in context.build_messages(cid, sid)), \
     "the voice corrective is missing from the assembled prompt -- check the fixture (#59)"
+# Same reasoning for the Scene state section: a byte-for-byte check over an
+# empty section proves nothing, and its private-value branch is the one a leak
+# would hide in.
+assert any("# Scene state" in m["content"] and "(private: never state or imply in narration)"
+           in m["content"] for m in context.build_messages(cid, sid)), \
+    "the Scene state section is missing from the assembled prompt -- check the tracker fixture"
 note = render("scene/director_note.j2")
 check_messages("director", context.build_director_messages(cid, sid, note),
                rendered_messages(sid, data, note=note))

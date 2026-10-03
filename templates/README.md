@@ -323,6 +323,23 @@ substituted by code:
   the model cannot tell from a fact. A `pcless` scene is the director's own
   view and gets the stored value unfiltered — `context/world_state.py:
   _visible_suspects`
+- `tracker_lines` — `[{name, own, values: [{label, text, private}]}]` from
+  `tracker.view.lines_for`, for `sections/tracker_state.j2` (Scene state): the
+  scene tracker's latest `ok` record at the transcript's tail, over the whole
+  scene cast less any excluded actor, filtered for this prompt's reader. An
+  assigned NPC gets its own line first (`own`, every value) and the others'
+  `present`-aware values plus the private ones whose awareness list names it;
+  the narrator — `grimoire`, or no assigned actor — gets every value, none
+  `own`. A character with an empty `values` renders no line. `[]` — and so no
+  section — when the tracker is off for the campaign, nothing has been
+  recorded, or the tracker could not be read (fail-soft). Never in the opener.
+  A reroll replays its frozen prompt, so it keeps the state it was first
+  composed with. Read `c["values"]`, not `c.values`: on a dict that names the
+  method. — `context/assemble.py: _tracker_read / _tracker_lines`
+- `tracker_narrator` — `True` when the reader is the narrator: no
+  "(what you can perceive)" on other characters' names, and private values
+  labelled "(private: never state or imply in narration)" instead of
+  "(known to you)"
 - `speaker` — `None`, or `{lead, quiet, reason, spoken, silent_for}`: who
   carries this turn in a group scene (#29), for `sections/active_speaker.j2`.
   `reason` is `"named"` (the turn's input named exactly one present NPC),
