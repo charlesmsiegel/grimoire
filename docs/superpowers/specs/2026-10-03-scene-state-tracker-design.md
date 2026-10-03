@@ -437,8 +437,9 @@ it simply loses it.
   and goes through the review checklist unchanged. Nothing is written
   automatically.
 - **Player characters gain `state.md`.** `playstate` is extended to
-  `pcs/<id>/state.md`, with the "Current state" section only; Knows and Suspects
-  stay non-player-only. Absorb's `character_state_edits` contract accepts PC
+  `pcs/<id>/play/state.md`, with the "Current state" section only; Knows and
+  Suspects stay non-player-only. (Not `pcs/<id>/state.md`: a PC's directory
+  root is where its versions live, and a file there would be read as one.) Absorb's `character_state_edits` contract accepts PC
   ids, and `apply_edits` writes them. The next scene's first update reads that
   file like any other.
 
