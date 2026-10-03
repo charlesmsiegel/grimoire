@@ -331,6 +331,39 @@ describe("Now", () => {
     expect(screen.queryByText(/wary/)).not.toBeInTheDocument();
   });
 
+  test("Edit waits, saying so, while the advanced key's record is still being read", async () => {
+    // The old record stays on screen, but it is no longer the one the key
+    // names: an edit of it would land under the record a newer post replaced.
+    getTrackerRecord.mockResolvedValueOnce(RECORD);
+    editTrackerRecord.mockResolvedValue(RECORD);
+    const view = renderDossier(AUD, false, {}, NOW);
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeEnabled();
+    let landNew!: (r: TrackerRecord) => void;
+    getTrackerRecord.mockImplementationOnce(() => new Promise((r) => { landNew = r; }));
+    view.rerender(
+      <DossierColumn cid="saltmarch" casefile={AUD} busy={false} provenance={{}}
+                     onBack={() => {}} onOpenActor={() => {}} onRemove={() => {}}
+                     tracker={{ ...NOW, key: "k3" }} onTrackerChanged={() => {}} />);
+    await waitFor(() => expect(getTrackerRecord).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/wary/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+    expect(screen.getByText("updating…")).toBeInTheDocument();
+    getTrackerRecord.mockResolvedValue({ ...RECORD, key: "k3" });
+    await act(async () => {
+      landNew({ ...RECORD, key: "k3", snapshot: { "characters:aud": { present: true, fields: {
+        mood: { value: "newer", aware: "present" } } } } });
+      await Promise.resolve();
+    });
+    expect(await screen.findByText(/newer/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeEnabled();
+    expect(screen.queryByText("updating…")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Sister Aud Mood"), { target: { value: "calm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(editTrackerRecord).toHaveBeenCalledWith(
+      "saltmarch", "004--x", "k3", { "characters:aud": { mood: { value: "calm" } } }));
+  });
+
   test("a response for a key that is no longer current is dropped", async () => {
     let resolveOld!: (r: TrackerRecord) => void;
     getTrackerRecord.mockImplementationOnce(() => new Promise((r) => { resolveOld = r; }));
