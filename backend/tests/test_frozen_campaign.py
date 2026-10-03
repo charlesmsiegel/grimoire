@@ -28,6 +28,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -293,8 +294,12 @@ def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client
     assert '"delta"' in resp.text and 'data: {"done": true}' in resp.text
 
     messages = frozen_client.get(f"/api/campaigns/{CAMPAIGN}/scenes/{SCENE}").json()["messages"]
-    assert messages[before] == {"role": "user", "content": "I have brought the salt.",
-                                "speaker": "Winifred"}
+    # The post carries a tracker post id now (the frozen campaign tracks by
+    # default); it is opaque, so pin its shape and compare the rest.
+    posted = dict(messages[before])
+    assert re.fullmatch(r"[0-9a-f]{32}", posted.pop("post_id"))
+    assert posted == {"role": "user", "content": "I have brought the salt.",
+                      "speaker": "Winifred"}
     # The reply is stored one message per speaker block, so assert on the text
     # rather than on a count the serializer owns.
     reply = "\n".join(m["content"] for m in messages[before + 1:])

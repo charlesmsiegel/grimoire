@@ -351,7 +351,7 @@ def _append_block(body: str, block: str) -> str:
 
 
 RESPONSE_METADATA = ("response_thinking", "response_part", "response_id", "response_status", "response_can_reroll",
-                     "context_changed")
+                     "context_changed", "post_id")
 
 
 def _message_block(m: dict) -> str:

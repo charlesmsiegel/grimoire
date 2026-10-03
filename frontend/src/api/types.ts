@@ -339,7 +339,8 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
   actor_ref?: string;
   response_thinking?: string;
   response_id?: string; response_part?: string; response_status?: "complete" | "incomplete";
-  context_changed?: boolean; response_can_reroll?: boolean };
+  context_changed?: boolean; response_can_reroll?: boolean;
+  post_id?: string };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
   variants: { id: string; content: string; reasoning?: string; status: string; issue?: string | null }[] };

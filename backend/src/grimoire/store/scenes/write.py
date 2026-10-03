@@ -77,8 +77,15 @@ def set_response(cid: str, sid: str, fields: dict) -> None:
 
 @locking._serialized
 def append_message(cid: str, sid: str, role: str, content: str,
-                   speaker: str | None = None) -> int:
+                   speaker: str | None = None,
+                   post_id: str | None = None) -> int:
     """Append one message; returns the index it landed at.
+
+    `post_id` is the opaque id the scene tracker keys a record to. It rides in
+    the same per-post metadata comment as `response_id` (via `_message_block`,
+    whose whitelist is what every later whole-transcript rewrite round-trips),
+    so it survives edits, cuts and renumbering where an index would not. Left
+    None the block is the plain `_block`, byte-identical to before ids existed.
 
     The index is read under the same lock as the write, which is what makes it
     usable as an identity later (`remove_trailing_user_post`). Counted from the
@@ -95,7 +102,10 @@ def append_message(cid: str, sid: str, role: str, content: str,
     # change how many there are. Counting them directly keeps the index free of
     # any dependence on who is currently in the scene.
     index = len(serialize._markers(body))
-    body = serialize._append_block(body, serialize._block(role, speaker, content))
+    block = (serialize._message_block({"role": role, "speaker": speaker,
+                                       "content": content, "post_id": post_id})
+             if post_id else serialize._block(role, speaker, content))
+    body = serialize._append_block(body, block)
     meta["updated"] = now_iso()
     atomic.write_text(p, dump_frontmatter(meta, body))
     return index
