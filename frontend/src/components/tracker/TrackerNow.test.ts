@@ -1,5 +1,5 @@
 import type { TrackerEntry } from "../../api/client";
-import { lastOkKey } from "./TrackerNow";
+import { lastOkKey, pendingAfter } from "./TrackerNow";
 
 const entry = (status: TrackerEntry["status"]): TrackerEntry => ({
   status, changed: [], flags: { upstream_changed: false, text_changed: false },
@@ -32,5 +32,22 @@ describe("lastOkKey", () => {
     expect(lastOkKey(keys("a", "b"), { a: entry("failed"), b: entry("failed") })).toBeNull();
     expect(lastOkKey(keys("a"), { a: entry("pending") })).toBeNull();
     expect(lastOkKey([], {})).toBeNull();
+  });
+});
+
+describe("pendingAfter", () => {
+  test("a pending key after the Now key", () => {
+    expect(pendingAfter(keys("a", "b", "c"),
+      { a: entry("ok"), b: entry("ok"), c: entry("pending") }, "b")).toBe(true);
+  });
+
+  test("nothing pending after it, even with something pending before", () => {
+    expect(pendingAfter(keys("a", "b", "c"),
+      { a: entry("pending"), b: entry("ok"), c: entry("failed") }, "b")).toBe(false);
+  });
+
+  test("with no Now key, any pending key counts", () => {
+    expect(pendingAfter(keys("a"), { a: entry("pending") }, null)).toBe(true);
+    expect(pendingAfter([], {}, null)).toBe(false);
   });
 });

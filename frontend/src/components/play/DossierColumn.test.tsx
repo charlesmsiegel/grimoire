@@ -193,6 +193,7 @@ test("Last seen carries no marker at all", () => {
 
 const NOW: NowTracker = {
   cid: "saltmarch", sid: "004--x", key: "k2", ref: "characters:aud", enabled: true, entry: undefined,
+  updating: false,
 };
 const RECORD: TrackerRecord = {
   key: "k2", status: "ok", flags: { upstream_changed: false, text_changed: false },
@@ -252,6 +253,29 @@ describe("Now", () => {
       "saltmarch", "004--x", "k2", { "characters:aud": { mood: { value: "calm" } } }));
     await waitFor(() => expect(changed).toEqual([1]));
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+
+  test("Edit waits, saying so, while a later post is still being tracked", async () => {
+    getTrackerRecord.mockResolvedValue(RECORD);
+    const view = renderDossier(AUD, false, {}, { ...NOW, updating: true });
+    expect(await screen.findByText(/wary/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+    expect(screen.getByText("updating…")).toBeInTheDocument();
+    view.rerender(
+      <DossierColumn cid="saltmarch" casefile={AUD} busy={false} provenance={{}}
+                     onBack={() => {}} onOpenActor={() => {}} onRemove={() => {}}
+                     tracker={NOW} onTrackerChanged={() => {}} />);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeEnabled();
+    expect(screen.queryByText("updating…")).not.toBeInTheDocument();
+  });
+
+  test("an actor who has left the scene gets no Now section", async () => {
+    getTrackerRecord.mockResolvedValue({ ...RECORD, snapshot: { ...RECORD.snapshot!,
+      "characters:aud": { ...RECORD.snapshot!["characters:aud"], present: false } } });
+    renderDossier(AUD, false, {}, NOW);
+    await waitFor(() => expect(getTrackerRecord).toHaveBeenCalled());
+    expect(screen.queryByText("Now")).not.toBeInTheDocument();
+    expect(screen.queryByText(/wary/)).not.toBeInTheDocument();
   });
 
   test("Edit is not offered while the tracker is off", async () => {

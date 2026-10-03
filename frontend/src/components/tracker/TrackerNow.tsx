@@ -21,6 +21,10 @@ export type NowTracker = {
    *  nothing new (`shareSummary`), so it moves exactly when the record behind
    *  the key was rewritten -- a retry, a re-run, an edit from the transcript. */
   entry: TrackerEntry | undefined;
+  /** A post after `key` is still being tracked. Its update was built on the
+   *  record `key` names as it stood before, so an edit made now would land
+   *  under a result that never saw it: Edit waits until the tail settles. */
+  updating: boolean;
 };
 
 /** The latest key whose tracking landed, or null. */
@@ -32,18 +36,28 @@ export function lastOkKey(
   return null;
 }
 
+/** Whether any key after `key` is still `pending`. */
+export function pendingAfter(
+  keys: { index: number; key: string }[], entries: Record<string, TrackerEntry>,
+  key: string | null,
+): boolean {
+  const at = key === null ? -1 : keys.findIndex((k) => k.key === key);
+  return keys.slice(at + 1).some((k) => entries[k.key]?.status === "pending");
+}
+
 /** One actor's current tracked values, in the dossier. Read-only until Edit is
  *  pressed; the form is limited to this actor and is built from the record the
  *  click found, which a re-read must not swap out from under its drafts.
  *
- *  Renders nothing until the record lands, and nothing when the actor is not in
- *  it: "Now" is a claim about this scene, and an actor the tracker never saw
- *  has no state to give. */
+ *  Renders nothing until the record lands, and nothing when the actor is not
+ *  present in it: "Now" is a claim about this scene, an actor the tracker never
+ *  saw has no state to give, and one who left keeps only their last values --
+ *  which describe when they left, not now. */
 export function TrackerNow({ tracker, onChanged }: {
   tracker: NowTracker & { key: string };
   onChanged: () => void;
 }) {
-  const { cid, sid, key, ref, enabled, entry } = tracker;
+  const { cid, sid, key, ref, enabled, entry, updating } = tracker;
   const [record, setRecord] = useState<TrackerRecord | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [reload, setReload] = useState(0);
@@ -63,7 +77,8 @@ export function TrackerNow({ tracker, onChanged }: {
   // When the key advances the previous record stays up until the new one lands,
   // rather than the section blinking out each turn. The parent remounts this per
   // scene and actor, so what is held here is always this actor's last good read.
-  const actor = record?.snapshot?.[ref];
+  const stored = record?.snapshot?.[ref];
+  const actor = stored?.present ? stored : undefined;
 
   async function save(edits: TrackerEdits) {
     if (editRecord === null) return;
@@ -92,7 +107,9 @@ export function TrackerNow({ tracker, onChanged }: {
                            names={record.names} changed={EMPTY_SET} />
             {enabled && (
               <div className="form-actions">
-                <button className="subtle" onClick={() => setEditRecord(record)}>Edit</button>
+                <button className="subtle" disabled={updating}
+                        onClick={() => setEditRecord(record)}>Edit</button>
+                {updating && <span className="field-hint">updating…</span>}
               </div>
             )}
           </>

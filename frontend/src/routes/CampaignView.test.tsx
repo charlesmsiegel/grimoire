@@ -353,6 +353,9 @@ test("Mara's dossier reads the latest ok key while the newest post is still pend
   expect(await screen.findByText("Now")).toBeInTheDocument();
   expect(api.getTrackerRecord).toHaveBeenCalledWith("run", "s1", "p-0");
   expect(api.getTrackerRecord).not.toHaveBeenCalledWith("run", "s1", "p-1");
+  // p-1's update was built on p-0 as it stands: an edit now would land under it.
+  const now = (await screen.findByText(/calm/)).closest(".column-section") as HTMLElement;
+  expect(within(now).getByRole("button", { name: "Edit" })).toBeDisabled();
 });
 
 test("a post whose key the tracker does not list shows no disclosure", async () => {
