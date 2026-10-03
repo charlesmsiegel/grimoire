@@ -33,6 +33,7 @@ from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..llm_connections import get_active as _get_active_connection
 from ..paths import now_iso, safe_id, slugify, uniquify
+from ..tracker import records as tracker_records
 from . import identity, locking, paths, serialize
 
 
@@ -254,6 +255,14 @@ def delete_scene(cid: str, sid: str) -> None:
     _unlink_sidecar(paths._review_path(cid, sid))
     _unlink_sidecar(paths._alts_path(cid, sid))
     _unlink_sidecar(paths._steering_path(cid, sid))
+    # The tracker's records and scene field layer, keyed by this scene's
+    # identity. A replacement scene gets a fresh identity, so it could never
+    # read them -- this is about not leaving a dead scene's state on disk
+    # forever. Before the unlink for the same reason as the sidecars: once the
+    # transcript is gone, nothing names this identity any more.
+    ident = identity.scene_identity(cid, sid)
+    if ident:
+        tracker_records.drop(cid, ident)
     p.unlink()
     # AFTER the unlink, so a delete that raised records nothing. Deleting the
     # newest scene would otherwise drag the campaign's derived activity
