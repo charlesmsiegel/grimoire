@@ -292,18 +292,19 @@ def test_keep_user_values_restores_only_what_was_set_at_this_post():
         "clothing": {"value": "blue coat", "aware": "present", "set_by": "user"}}}}
     fresh = {MARA: {"present": True, "fields": {
         "clothing": {"value": "blue coat", "aware": "present", "set_by": "user"}}}}
-    snap, changed = merge.keep_user_values(fresh, own, prior, [], {(MARA, "pose")})
+    snap, changed, restored = merge.keep_user_values(fresh, own, prior, [], {(MARA, "pose")})
     fields_ = snap[MARA]["fields"]
     assert fields_["clothing"]["value"] == "blue coat"     # inherited: the base's word
     assert fields_["pose"]["value"] == "kneeling"          # set here: kept
     assert changed == [[MARA, "pose", "kneeling"]]
+    assert restored == [[MARA, "pose"]]
 
 
 def test_keep_user_values_conjures_nobody():
     own = {WIN: {"present": True, "fields": {
         "pose": {"value": "leaning", "aware": "present", "set_by": "user"}}}}
-    snap, changed = merge.keep_user_values({}, own, {}, [], {(WIN, "pose")})
-    assert snap == {} and changed == []
+    snap, changed, restored = merge.keep_user_values({}, own, {}, [], {(WIN, "pose")})
+    assert snap == {} and changed == [] and restored == []
 
 
 def test_keep_user_values_keeps_a_widening_the_reply_made():
@@ -311,9 +312,42 @@ def test_keep_user_values_keeps_a_widening_the_reply_made():
         "concealed": {"value": "a letter", "aware": [], "set_by": "user"}}}}
     fresh = {MARA: {"present": True, "fields": {
         "concealed": {"value": "a letter", "aware": [WIN]}}}}
-    snap, _ = merge.keep_user_values(fresh, own, {}, [], {(MARA, "concealed")})
+    snap, _, _ = merge.keep_user_values(fresh, own, {}, [], {(MARA, "concealed")})
     assert snap[MARA]["fields"]["concealed"] == {
         "value": "a letter", "aware": [WIN], "set_by": "user"}
     fresh[MARA]["fields"]["concealed"]["aware"] = "present"
-    snap, _ = merge.keep_user_values(fresh, own, {}, [], {(MARA, "concealed")})
+    snap, _, _ = merge.keep_user_values(fresh, own, {}, [], {(MARA, "concealed")})
     assert snap[MARA]["fields"]["concealed"]["aware"] == "present"
+
+
+def test_keep_user_values_keeps_a_narrowing_the_base_did_not_share():
+    """An awareness-only edit narrows who knows a value. The fresh result
+    inherits the base's wider awareness, and only what the reply ADDED to it
+    widens the restored value -- or a re-run would undo the narrowing."""
+    own = {MARA: {"present": True, "fields": {
+        "concealed": {"value": "a letter", "aware": [], "set_by": "user"}}}}
+    prior = {MARA: {"present": True, "fields": {
+        "concealed": {"value": "a letter", "aware": [WIN]}}}}
+    fresh = {MARA: {"present": True, "fields": {
+        "concealed": {"value": "a letter", "aware": [WIN]}}}}
+    snap, changed, restored = merge.keep_user_values(fresh, own, prior, [], {(MARA, "concealed")})
+    assert snap[MARA]["fields"]["concealed"]["aware"] == []
+    assert changed == [] and restored == [[MARA, "concealed"]]
+    fresh[MARA]["fields"]["concealed"]["aware"].append("characters:seraphine")
+    snap, _, _ = merge.keep_user_values(fresh, own, prior, [], {(MARA, "concealed")})
+    assert snap[MARA]["fields"]["concealed"]["aware"] == ["characters:seraphine"]
+    prior[MARA]["fields"]["concealed"]["aware"] = "present"
+    fresh[MARA]["fields"]["concealed"]["aware"] = "present"
+    snap, _, _ = merge.keep_user_values(fresh, own, prior, [], {(MARA, "concealed")})
+    assert snap[MARA]["fields"]["concealed"]["aware"] == []
+
+
+def test_touched_by_names_value_and_awareness_edits_only():
+    prev = {MARA: {"present": True, "fields": {
+        "pose": {"value": "standing", "aware": "present"},
+        "clothing": {"value": "grey cloak", "aware": "present", "set_by": "user"}}}}
+    after = {MARA: {"present": True, "fields": {
+        "pose": {"value": "standing", "aware": [], "set_by": "user"},
+        "clothing": {"value": "grey cloak", "aware": "present", "set_by": "user"},
+        "visible_mood": {"value": "calm", "aware": "present", "set_by": "user"}}}}
+    assert merge.touched_by(prev, after) == [[MARA, "pose"], [MARA, "visible_mood"]]

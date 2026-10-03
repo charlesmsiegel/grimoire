@@ -659,6 +659,43 @@ def test_a_rerun_keeps_what_a_person_set_unless_the_reply_moves_it(client, actio
     assert ["characters:mara", "pose", "standing"] in changed
 
 
+@pytest.mark.parametrize("action", ["retry", "rerun-from"])
+def test_a_rerun_keeps_an_awareness_only_edit(client, action):
+    """Who knows a value is a person's word as much as the value is. An edit
+    that only narrows awareness moves no value, so it is in no change list --
+    and a re-run that restored only what the change list named rebuilt the
+    record with the base's awareness and lost it. Kept across a second re-run
+    too: what a re-run restored is still the person's."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    mara = "characters:mara"
+    before = client.get(f"{_base(cid, sid)}/records/{keys[1]}").json()["snapshot"]
+    assert before[mara]["fields"]["visible_mood"]["aware"] == "present"
+    _edit(client, cid, sid, keys[1], {mara: {"visible_mood": {"aware": []}}})
+    assert not any(c[1] == "visible_mood" for c in _index(cid, sid)[keys[1]]["changed"])
+    for _ in range(2):
+        r = client.post(f"{_base(cid, sid)}/records/{keys[1]}/{action}")
+        assert r.status_code == 200, r.text
+        _settle(client, cid, sid)
+        body = client.get(f"{_base(cid, sid)}/records/{keys[1]}").json()
+        assert body["status"] == "ok"
+        mood = body["snapshot"][mara]["fields"]["visible_mood"]
+        assert mood == {"value": "joy", "aware": [], "set_by": "user"}, \
+            "the re-run dropped an awareness-only edit"
+
+
+def test_a_second_edit_keeps_what_the_first_touched(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    mara = "characters:mara"
+    _edit(client, cid, sid, keys[1], {mara: {"visible_mood": {"aware": []}}})
+    _edit(client, cid, sid, keys[1], {mara: {"pose": {"value": "kneeling"}}})
+    assert sorted(_index(cid, sid)[keys[1]]["touched"]) == [
+        [mara, "pose"], [mara, "visible_mood"]]
+
+
 def test_a_rerun_does_not_revert_a_newer_edit_it_only_inherited(client):
     """A record carries forward what came before it, `set_by` included, so a
     later record's own snapshot holds the earlier record's hand-set value

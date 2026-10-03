@@ -111,7 +111,9 @@ def test_a_malformed_entry_is_normalised_not_served(home):
         # A known status keeps its entry; its parts are each made well-formed.
         kb: {"status": "failed", "changed": [good, "junk", ["only", "two"], [1, "f", "v"]],
              "flags": {"text_changed": True, "upstream_changed": "yes", "bogus": True},
-             "error": 7, "flag_seq": "3", "mark_gen": 2},
+             "error": 7, "flag_seq": "3", "mark_gen": 2,
+             "touched": [["characters:mara", "pose"], "pose", ["characters:mara", "pose"],
+                         ["characters:mara", 1], ["a", "b", "c"]]},
         # Junk status and no snapshot file: nothing to fall back to.
         kc: {"status": "done", "changed": [], "flags": {}},
         kd: {"status": "ok", "changed": "grey cloak"},
@@ -120,7 +122,8 @@ def test_a_malformed_entry_is_normalised_not_served(home):
     assert set(index) == {ka, kb, kd}
     assert index[ka] == {"status": "ok", "changed": [], "flags": CLEAR}
     assert index[kb] == {"status": "failed", "changed": [good],
-                         "flags": {**CLEAR, "text_changed": True}, "mark_gen": 2}
+                         "flags": {**CLEAR, "text_changed": True}, "mark_gen": 2,
+                         "touched": [["characters:mara", "pose"]]}
     assert index[kd] == {"status": "ok", "changed": [], "flags": CLEAR}
 
 
