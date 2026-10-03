@@ -1645,53 +1645,61 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [trackerRead, setTrackerRead] =
     useState<{ cid: string; sid: string; summary: TrackerSummary } | null>(null);
   const [trackerTick, setTrackerTick] = useState(0);
-  const landTracker = useCallback((tcid: string, tsid: string, summary: TrackerSummary) => {
-    setTrackerRead((prev) => ({
-      cid: tcid, sid: tsid,
-      summary: shareSummary(prev && prev.cid === tcid && prev.sid === tsid ? prev.summary : null,
-                            summary),
-    }));
-  }, []);
   const trackerCid = loaded?.cid ?? null;
   const trackerSid = loaded?.sid ?? null;
+  // Reads can land out of order -- the main read and the poll are separate
+  // requests -- and an older answer that lacks a post the newer one has would
+  // overwrite it, read as "never tracked", and (nothing pending) end the poll
+  // for good. So each request is stamped when it is ISSUED, and an answer older
+  // than the newest one already landed is dropped, as is one for a scene that
+  // is no longer the loaded one.
+  const trackerSeq = useRef({ issued: 0, landed: 0 });
+  const trackerScene = useRef<{ cid: string | null; sid: string | null }>({ cid: null, sid: null });
+  trackerScene.current = { cid: trackerCid, sid: trackerSid };
+  const readTracker = useCallback((tcid: string, tsid: string) => {
+    const seq = ++trackerSeq.current.issued;
+    return api.getTracker(tcid, tsid).then((summary) => {
+      if (seq < trackerSeq.current.landed) return;
+      if (trackerScene.current.cid !== tcid || trackerScene.current.sid !== tsid) return;
+      trackerSeq.current.landed = seq;
+      setTrackerRead((prev) => {
+        const before = prev && prev.cid === tcid && prev.sid === tsid ? prev.summary : null;
+        const shared = shareSummary(before, summary);
+        // Nothing moved: keep the very state object, so no render follows.
+        if (prev && before === shared) return prev;
+        return { cid: tcid, sid: tsid, summary: shared };
+      });
+    });
+  }, []);
   useEffect(() => {
     if (!trackerCid || !trackerSid) return;
-    let live = true;
-    api.getTracker(trackerCid, trackerSid)
-      .then((summary) => {
-        if (!live) return;
-        landTracker(trackerCid, trackerSid, summary);
-      })
-      .catch(() => { /* see above */ });
-    return () => { live = false; };
-  }, [trackerCid, trackerSid, ctxKey, trackerTick, landTracker]);
+    readTracker(trackerCid, trackerSid).catch(() => { /* see above */ });
+  }, [trackerCid, trackerSid, ctxKey, trackerTick, readTracker]);
   const tracker = trackerRead && trackerRead.cid === trackerCid && trackerRead.sid === trackerSid
     ? trackerRead.summary : null;
   const trackerKeys = useMemo(
     () => Object.fromEntries((tracker?.keys ?? []).map((k) => [k.index, k.key])),
     [tracker?.keys]);
   // While a post is being tracked, ask again every two seconds: one timeout
-  // chain, re-armed only once the last read has landed so a slow server is
-  // never asked twice at once, and cleared with the scene or the view.
+  // chain, re-armed only once the last read has settled so a slow server is
+  // never asked twice at once, and cleared with the scene or the view. A read
+  // that fails doubles the wait (to 30 s) rather than hammering a server that
+  // is struggling; the next success goes back to two seconds.
   const trackerPending = Object.values(tracker?.entries ?? {}).some((e) => e.status === "pending");
   useEffect(() => {
     if (!trackerPending || !trackerCid || !trackerSid) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const arm = () => {
+    const arm = (delay: number) => {
       timer = setTimeout(() => {
-        api.getTracker(trackerCid, trackerSid)
-          .then((summary) => {
-            if (!live) return;
-            landTracker(trackerCid, trackerSid, summary);
-          })
-          .catch(() => { /* try again on the next tick */ })
-          .finally(() => { if (live) arm(); });
-      }, 2000);
+        void readTracker(trackerCid, trackerSid)
+          .then(() => 2000, () => Math.min(delay * 2, 30000))
+          .then((next) => { if (live) arm(next); });
+      }, delay);
     };
-    arm();
+    arm(2000);
     return () => { live = false; clearTimeout(timer); };
-  }, [trackerPending, trackerCid, trackerSid, landTracker]);
+  }, [trackerPending, trackerCid, trackerSid, readTracker]);
 
   /** The chips, but only where they describe the transcript on screen. */
   const sceneCosts =

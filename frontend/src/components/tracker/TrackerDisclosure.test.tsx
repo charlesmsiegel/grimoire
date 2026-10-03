@@ -190,3 +190,74 @@ test("shareSummary keeps the identity of everything a re-read did not change", (
   expect(out.names).toBe(a.names);
   expect(out.keys).toBe(a.keys);
 });
+
+test("an entry that moves while the form is open neither crashes it nor reverts the server's value", async () => {
+  const props = { cid: "run", sid: "s1", trackerKey: "p-1", names: NAMES, labels: LABELS,
+                  enabled: true, onChanged: vi.fn() };
+  const { rerender } = render(<TrackerDisclosure {...props} entry={OK} />);
+  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  // The server moves on: Mara's clothing changed and a new field appeared.
+  const moved: TrackerRecord = { ...RECORD,
+    fields: [...RECORD.fields, { key: "posture", label: "Posture", type: "text", aware: "present", hint: "" }],
+    snapshot: { ...RECORD.snapshot!, "characters:mara": { present: true, fields: {
+      ...RECORD.snapshot!["characters:mara"].fields,
+      clothing: { value: "ballgown", aware: [] },
+      posture: { value: "slumped", aware: "present" } } } } };
+  vi.mocked(api.getTrackerRecord).mockResolvedValue(moved);
+  rerender(<TrackerDisclosure {...props} entry={{ ...OK, changed: [] }} />);
+  await waitFor(() => expect(api.getTrackerRecord).toHaveBeenCalledTimes(2));
+  // The form is still the one that was opened, and still answers to its record.
+  expect(screen.queryByLabelText("Mara Posture")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Mara Visible mood"), { target: { value: "calm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.editTrackerRecord).toHaveBeenCalled());
+  expect(vi.mocked(api.editTrackerRecord).mock.calls[0][3]).toEqual({
+    "characters:mara": { visible_mood: { value: "calm" } },
+  });
+});
+
+test("an unset field starts from its own default awareness", async () => {
+  const rec: TrackerRecord = { ...RECORD,
+    fields: [{ key: "secret", label: "Secret", type: "text", aware: "self", hint: "" },
+             { key: "clothing", label: "Clothing", type: "text", aware: "present", hint: "" }],
+    snapshot: { "characters:mara": { present: true, fields: {} } } };
+  vi.mocked(api.getTrackerRecord).mockResolvedValue(rec);
+  mount(OK);
+  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("Mara Secret awareness")).toHaveValue("private");
+  expect(screen.getByLabelText("Mara Clothing awareness")).toHaveValue("present");
+  // Awareness of nothing is not offered; a value to attach it to is.
+  expect(screen.getByLabelText("Mara Secret awareness")).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Mara Secret"), { target: { value: "a key" } });
+  expect(screen.getByLabelText("Mara Secret awareness")).not.toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.editTrackerRecord).toHaveBeenCalled());
+  // The default is not an edit: the server applies it.
+  expect(vi.mocked(api.editTrackerRecord).mock.calls[0][3]).toEqual({
+    "characters:mara": { secret: { value: "a key" } },
+  });
+});
+
+test("a switched-off field is shown in the form but cannot be edited", async () => {
+  const rec: TrackerRecord = { ...RECORD,
+    fields: [{ key: "clothing", label: "Clothing", type: "text", aware: "present", hint: "", off: true }],
+    snapshot: { "characters:mara": { present: true, fields: { clothing: { value: "cloak", aware: "present" } } } } };
+  vi.mocked(api.getTrackerRecord).mockResolvedValue(rec);
+  mount(OK);
+  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(screen.getByText(/cloak/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("Mara Clothing")).toBeNull();
+});
+
+test("a list that reads the same after trimming is not an edit", async () => {
+  mount(OK);
+  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Mara Companions"), { target: { value: "  Winifred ,, " } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.editTrackerRecord).not.toHaveBeenCalled();
+});

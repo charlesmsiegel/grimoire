@@ -45,7 +45,11 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
   const [open, setOpen] = useState(false);
   const [record, setRecord] = useState<TrackerRecord | null>(null);
   const [loading, setLoading] = useState(false);
-  const [editing, setEditing] = useState(false);
+  // The record the open form was built from. Frozen at the click: a re-read
+  // that lands while the form is up (a poll, a refresh) must not swap what its
+  // drafts are diffed against, or an untouched value the server moved would be
+  // sent back as the person's edit.
+  const [editRecord, setEditRecord] = useState<TrackerRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -86,7 +90,7 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
 
   async function save(edits: TrackerEdits) {
     const next = await api.editTrackerRecord(cid, sid, trackerKey, edits);
-    setRecord(next); setEditing(false);
+    setRecord(next); setEditRecord(null);
     onChanged();
   }
 
@@ -99,7 +103,7 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
                onToggle={(event) => {
                  const now = event.currentTarget.open;
                  setOpen(now);
-                 if (!now) setEditing(false);
+                 if (!now) setEditRecord(null);
                }}>
         <summary>{summaryText(entry, names, labels)}</summary>
         {loading && record === null && <p role="status">Loading tracker…</p>}
@@ -107,8 +111,8 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
           <p className="field-hint">{entry.error === "interrupted"
             ? "Tracking was interrupted." : `Tracking failed: ${entry.error}`}</p>
         )}
-        {record !== null && (editing && record.snapshot ? (
-          <TrackerEditForm record={record} onSave={save} onCancel={() => setEditing(false)} />
+        {record !== null && (editRecord !== null ? (
+          <TrackerEditForm record={editRecord} onSave={save} onCancel={() => setEditRecord(null)} />
         ) : (
           <>
             {record.snapshot === null
@@ -121,7 +125,7 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
               <div className="form-actions">
                 {record.snapshot !== null && (
                   <button className="subtle" disabled={busy || pending}
-                          onClick={() => setEditing(true)}>Edit</button>
+                          onClick={() => setEditRecord(record)}>Edit</button>
                 )}
                 <button className="subtle" disabled={busy || pending}
                         onClick={() => void run(() => api.rerunTrackerFrom(cid, sid, trackerKey))}>
