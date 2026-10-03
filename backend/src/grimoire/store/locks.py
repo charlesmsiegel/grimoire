@@ -365,7 +365,8 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "`_finish`. Fixing the rest is a concurrency "
         "change that needs its own review, which is why this guard classifies "
         "them rather than closing them. `set_campaign_routing` (#142) writes "
-        "the same file and does NOT join them: it takes the lock. Inheriting a "
+        "the same file and does NOT join them: it takes the lock, as does "
+        "`set_campaign_tracker` (the scene tracker's switch). Inheriting a "
         "known gap and adding to it knowingly are not the same thing, and this "
         "module stays out here for the mutators above rather than for that one."
     ),

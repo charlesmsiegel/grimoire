@@ -139,14 +139,21 @@ def test_changing_an_enum_to_text_drops_its_options(home):
     assert mood["type"] == "text" and "options" not in mood
 
 
-def test_garbled_layer_reads_empty(home):
+def test_garbled_layer_reads_empty(home, caplog):
+    import logging
+
     _, cid, _ = home
     p = paths.campaign_layer_path(cid)
-    assert fields.read_layer(p) == {}                     # missing
-    p.write_text("{nope", encoding="utf-8")               # test-only raw write
-    assert fields.read_layer(p) == {}
-    p.write_text("[1, 2]", encoding="utf-8")
-    assert fields.read_layer(p) == {}
+    with caplog.at_level(logging.WARNING, logger="grimoire.store.tracker.fields"):
+        assert fields.read_layer(p) == {}                 # missing
+        assert not caplog.records, "a missing layer is the ordinary case, not news"
+        p.write_text("{nope", encoding="utf-8")           # test-only raw write
+        assert fields.read_layer(p) == {}
+        p.write_text("[1, 2]", encoding="utf-8")
+        assert fields.read_layer(p) == {}
+    # A layer that is there and was dropped says so: definitions silently
+    # reverting to the inherited ones would otherwise have no trace.
+    assert len([r for r in caplog.records if "ignoring the field layer" in r.getMessage()]) == 2
     assert fields.campaign_fields(cid) == fields.world_fields(home[0])
 
 

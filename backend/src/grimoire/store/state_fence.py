@@ -67,9 +67,9 @@ def parse_block(body: str) -> dict[str, dict[str, str]]:
     middle of a reply that is otherwise fine, and the reply is the artifact
     worth keeping.
 
-    Both the bare mapping and #120's ``{"state": {...}}`` envelope are accepted
-    --- the instruction asks for the bare one, and a model that wraps it has
-    still said what it meant.
+    Both the bare mapping and the ``{"state": {...}}`` envelope are accepted
+    --- the retired instruction asked for the bare one, and a model that wraps
+    it has still said what it meant.
     """
     try:
         data = json.loads(body)
@@ -96,7 +96,7 @@ def parse_block(body: str) -> dict[str, dict[str, str]]:
 
 
 def split_block(text: str) -> tuple[str, dict[str, dict[str, str]]]:
-    """``(narration, states)`` --- the reply with its trailing tracker block
+    """``(narration, states)`` --- the reply with its trailing ``state`` block
     removed, and what the block said.
 
     **Only a trailing block is stripped.** A ``state`` fence with narration
@@ -129,7 +129,7 @@ def split_block(text: str) -> tuple[str, dict[str, dict[str, str]]]:
 # Composed OUTSIDE `fence.FenceWatcher` rather than folded into it. That class
 # decides whether a roll proposal exists, its holdback is load-bearing for the
 # proposal-before-narration guarantee, and it has no business also knowing
-# about trackers. Feeding its output through this leaves `watcher.narration`
+# about state fences. Feeding its output through this leaves `watcher.narration`
 # --- and therefore the whole persistence path --- untouched.
 
 _MAYBE_OPENER = re.compile(r"`{1,2}\Z|```[ \t]*(?:s(?:t(?:a(?:t(?:e)?)?)?)?)?\Z", re.IGNORECASE)
@@ -137,7 +137,7 @@ _IS_OPENER = re.compile(r"```[ \t]*state\b", re.IGNORECASE)
 
 
 def _verdict(s: str) -> str:
-    """Whether `s` (which starts with a backtick) opens a tracker block, could
+    """Whether `s` (which starts with a backtick) opens a ``state`` block, could
     still grow into one, or cannot.
 
     An opener sitting exactly at the buffer end is "maybe", not "yes", for the
@@ -159,7 +159,7 @@ def _verdict(s: str) -> str:
 
 
 class StreamRedactor:
-    """Withhold a tracker block from the deltas the client sees.
+    """Withhold a trailing ``state`` block from the deltas the client sees.
 
     Buffers from any backtick, releases the buffer the moment it cannot become
     an opener, and holds everything from an opener onward until `finish` can

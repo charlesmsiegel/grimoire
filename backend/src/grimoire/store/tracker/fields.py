@@ -26,6 +26,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -34,6 +35,8 @@ from ..campaigns import read as campaigns_read
 from ..scenes import identity as scenes_identity
 from ..worlds import paths as worlds_paths
 from . import paths
+
+log = logging.getLogger(__name__)
 
 VISIBLE_MOODS = ("admiration", "amusement", "anger", "annoyance", "approval", "caring",
     "confusion", "curiosity", "desire", "disappointment", "disapproval", "disgust",
@@ -280,11 +283,18 @@ def read_layer(path: Path, *, scene: bool = False) -> dict:
     must not take the play view down, and an empty layer is the safe reading.
 
     `scene` applies the scene rule on the way in too, so a scene file hand-edited
-    to carry a `change` cannot redefine a field."""
+    to carry a `change` cannot redefine a field.
+
+    A file that is THERE and is dropped is logged: the person's field
+    definitions silently reverting to the inherited ones would otherwise have
+    nothing anywhere to say why."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return validate_layer(raw, scene=scene)
-    except (OSError, ValueError):       # FieldLayerError and JSONDecodeError are ValueErrors
+    except FileNotFoundError:
+        return {}                       # no layer: the ordinary case
+    except (OSError, ValueError) as exc:  # FieldLayerError, JSONDecodeError are ValueErrors
+        log.warning("tracker: ignoring the field layer at %s -- %s", path, exc)
         return {}
 
 
