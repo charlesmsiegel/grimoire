@@ -56,7 +56,9 @@ def _chat(client, cid, sid, content):
         r.read()
 
 
-def test_chat_stamps_a_post_id_only_when_tracking(client):
+def test_chat_stamps_a_post_id_on_every_post(client):
+    """Whatever the tracker's setting: a post written while it was off is
+    still one a campaign that switches it back on can track."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
@@ -71,5 +73,6 @@ def test_chat_stamps_a_post_id_only_when_tracking(client):
              if m["role"] == "user"]
     assert [m["content"] for m in users] == ["tracked", "untracked"]
     assert POST_ID.match(users[0]["post_id"])
-    assert "post_id" not in users[1]
+    assert POST_ID.match(users[1]["post_id"])
+    assert users[0]["post_id"] != users[1]["post_id"]
     assert store.tracker.settings.enabled(cid) is False
