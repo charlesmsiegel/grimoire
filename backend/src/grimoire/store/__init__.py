@@ -188,6 +188,8 @@ from .tags import TagNotFound
 
 # Each tracker submodule is imported explicitly so `store.tracker.<submodule>`
 # resolves for routes and tests (one line per submodule, added as each lands).
+from .tracker import fields as _tracker_fields
+from .tracker import paths as _tracker_paths
 from .tracker import settings as _tracker_settings
 from .world_bundle import BundleError
 from .worlds import WorldNotFound

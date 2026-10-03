@@ -153,6 +153,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # of that has to be one critical section with the scene writes it brackets,
     # or a concurrent reply lands between the decision and the swap.
     "store.alternates",
+    # The campaign and scene field layers (`tracker.json`, `tracker/<identity>/
+    # fields.json`) sit beside `campaign.md` and are rewritten whole, and the
+    # scene one is validated against the campaign's effective list -- so the read
+    # of that list and the write have to be one hold, or a concurrent campaign
+    # layer edit lands between them.
+    "store.tracker.fields",
     # The steering log is a read-modify-write of one whole file, appended
     # beside `alternates.archive` inside the regenerate route's lock hold
     # (reentrant, so its own acquire is free) — two unserialized rerolls
