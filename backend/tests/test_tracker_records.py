@@ -377,3 +377,65 @@ def test_prune_keeps_response_records_when_a_later_identity_read_fails(home, mon
         assert walk.prune(cid, sid) == 0
     assert set(records.read_index(cid, ident)) == {key}
     assert records.read_snapshot(cid, ident, key) is not None
+
+
+MANGLED = {
+    "characters:mara": "bad",                          # not an entry at all
+    "characters:winifred": {"present": "yes"},         # no fields; junk present
+    "characters:seraphine": {"present": True, "fields": {
+        "pose": {"value": "kneeling", "aware": 7, "set_by": "model"},
+        "injuries": {"value": ["cut, left arm", 3, None, "wet"], "aware": ["characters:mara", 4]},
+        "clothing": {"value": {"nested": True}, "aware": "present"},
+        "concealed": "a letter",
+        "visible_mood": {"value": "calm", "set_by": "user"},
+    }},
+    "pcs:winifred": {"present": False, "fields": ["not", "a", "dict"]},
+}
+
+
+def test_a_malformed_snapshot_is_normalised_on_read(home):
+    """Every reader dereferences an entry's `fields` and each value's `value`
+    and `aware`; a file written by hand (or by an older version) must not
+    reach one of them in any other shape."""
+    _, cid, sid = home
+    ident = identity.ensure_identity(cid, sid)
+    key = tpaths.post_key(A)
+    records.save(cid, ident, key, MANGLED, changed=[], fields_digest="d", model="m")
+
+    snap = records.read_snapshot(cid, ident, key)["snapshot"]
+    assert snap == {
+        "characters:winifred": {"present": False, "fields": {}},
+        "characters:seraphine": {"present": True, "fields": {
+            "pose": {"value": "kneeling", "aware": []},
+            "injuries": {"value": ["cut, left arm", "wet"], "aware": ["characters:mara"]},
+            "visible_mood": {"value": "calm", "aware": [], "set_by": "user"},
+        }},
+        "pcs:winifred": {"present": False, "fields": {}},
+    }
+
+
+def test_a_snapshot_that_is_not_an_object_reads_as_absent(home):
+    _, cid, sid = home
+    ident = identity.ensure_identity(cid, sid)
+    key = tpaths.post_key(A)
+    records.save(cid, ident, key, SNAP, changed=[], fields_digest="d", model="m")
+    path = tpaths.scene_dir(cid, ident) / f"{key}.json"
+    path.write_text(json.dumps({"version": 1, "snapshot": ["characters:mara"]}),
+                    encoding="utf-8")
+    assert records.read_snapshot(cid, ident, key) is None
+
+
+def test_the_walk_and_view_read_a_mangled_snapshot(home):
+    from grimoire.store.tracker import view
+
+    _, cid, sid = home
+    ident, keys = _three_posts(cid, sid)
+    records.save(cid, ident, keys[0], MANGLED, changed=[], fields_digest="d", model="m")
+    key, snap = walk.current(cid, sid)
+    assert key == keys[0]
+    roster = {"characters:seraphine": "Seraphine", "characters:winifred": "Winifred",
+              "characters:mara": "Mara"}
+    lines = view.lines_for(snap, fields.effective(cid, sid), None, roster,
+                           include_departed=True)
+    assert [ln["name"] for ln in lines] == ["Winifred (left the scene)", "Seraphine"]
+    assert view.lines_for(snap, fields.effective(cid, sid), "characters:mara", roster)
