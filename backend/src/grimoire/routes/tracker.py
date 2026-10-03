@@ -121,9 +121,8 @@ def put_world_tracker_fields(wid: str, body: TrackerLayer):
 
 @router.get("/campaigns/{cid}/tracker-fields")
 def get_campaign_tracker_fields(cid: str):
-    wid = _campaign_world(cid)
-    return _layer_body(store.tracker.fields.world_fields(wid),
-                       store.tracker.fields.campaign_layer(cid))
+    world = store.tracker.fields.world_fields(_campaign_world(cid))
+    return _layer_body(world, store.tracker.fields.campaign_layer(cid, world))
 
 
 @router.put("/campaigns/{cid}/tracker-fields")
@@ -141,8 +140,8 @@ def put_campaign_tracker_fields(cid: str, body: TrackerLayer):
 @router.get("/campaigns/{cid}/scenes/{sid}/tracker-fields")
 def get_scene_tracker_fields(cid: str, sid: str):
     _require_scene(cid, sid)
-    return _layer_body(store.tracker.fields.campaign_fields(cid),
-                       store.tracker.fields.scene_layer(cid, sid))
+    campaign = store.tracker.fields.campaign_fields(cid)
+    return _layer_body(campaign, store.tracker.fields.scene_layer(cid, sid, campaign))
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/tracker-fields")

@@ -12,8 +12,9 @@ stored for it still have a label to render under; `active` drops them for the
 callers (prompts, the update call) that must not see them.
 
 A layer is validated against the list it sits on, so a campaign cannot add a key
-its world already defined. Reading is the opposite: `read_layer` never raises
-and treats anything it cannot trust as empty, because a hand-edited or
+its world already defined. Reading checks against that same list, but never
+raises: an entry the list below has since outgrown costs only itself, and a
+file it cannot trust at all reads as empty, because a hand-edited or
 half-synced file must not take the play view down with it.
 
 Writers: the world layer is not campaign-scoped, so it takes no campaign lock
@@ -277,32 +278,70 @@ def digest(fields: list[dict]) -> str:
 
 # --- reading ------------------------------------------------------------------
 
-def _unshadowed(raw, path: Path):
-    """`raw` without the additions whose key is now a built-in, each logged.
-
-    Such a layer was valid when it was written -- the key was free then -- and
-    a release that ships the key as a built-in must not cost the person the
-    rest of it: every other field they added, every change, every switch. The
-    addition alone goes, as `apply_layer` would skip it anyway, and the
-    built-in stands. Read-side only: a write still refuses the collision,
-    because then there is someone to tell."""
-    if not isinstance(raw, dict) or not isinstance(raw.get("fields"), list):
-        return raw
-    builtin = {f["key"] for f in DEFAULT_FIELDS}
-    kept = []
-    for field in raw["fields"]:
-        key = field.get("key") if isinstance(field, dict) else None
-        if isinstance(key, str) and key in builtin:
-            log.warning("tracker: the field layer at %s adds %r, which is now a "
-                        "built-in field; keeping the built-in", path, key)
-            continue
-        kept.append(field)
-    return {**raw, "fields": kept}
+def _entries(raw: dict, name: str, drop) -> list:
+    """`raw[name]` as a list of entries -- a dict's as its items -- or empty
+    when it is not the shape it should be, with `drop` told why."""
+    value = raw.get(name)
+    if not value:
+        return []
+    want = dict if name == "change" else list
+    if not isinstance(value, want):
+        drop(FieldLayerError(f"{name} must be a {want.__name__}"))
+        return []
+    return list(value.items()) if isinstance(value, dict) else value
 
 
-def read_layer(path: Path, *, scene: bool = False) -> dict:
-    """The stored layer at `path`, normalized; `{}` for a missing, unreadable,
-    garbled or invalid file. Never raises: a hand-edited or half-synced file
+def _salvaged(raw, base: list[dict] | tuple[dict, ...], *, scene: bool, path: Path) -> dict:
+    """`raw` validated the way `validate_layer` would against `base`, except
+    that an entry which fails costs only itself, logged.
+
+    Such a layer was valid against the base it was written on; what moved is
+    the base. A world edited after the campaign layer was written, or a
+    release that ships a key as a built-in, can make one addition collide or
+    one change land on a field it no longer fits -- and that must not cost the
+    person every other field they added, every change, every switch. The
+    entry goes (an addition a lower layer now owns, `apply_layer` would skip
+    anyway), and the rest is kept. Read-side only: a write still refuses the
+    whole layer, because then there is someone to tell.
+
+    A file whose shape is wrong as a whole -- not an object, an unknown
+    version -- raises, and `read_layer` drops it."""
+    if not isinstance(raw, dict):
+        raise FieldLayerError("a layer must be an object")
+    if raw.get("version", 1) != 1:
+        raise FieldLayerError("unsupported layer version")
+
+    def drop(exc: Exception) -> None:
+        log.warning("tracker: the field layer at %s -- dropping one entry: %s", path, exc)
+
+    def kept(check):
+        try:
+            return check()
+        except FieldLayerError as exc:
+            drop(exc)
+            return None
+
+    existing = {f["key"]: f for f in base}
+    added: list[dict] = []
+    for entry in _entries(raw, "fields", drop):
+        taken = {**existing, **{f["key"]: f for f in added}}
+        added += kept(lambda e=entry, t=taken: _validate_added([e], t)) or []
+    change: dict = {}
+    for key, props in _entries(raw, "change", drop):
+        change.update(kept(lambda k=key, p=props: _validate_change({k: p}, existing,
+                                                                  scene=scene)) or {})
+    off: list[str] = []
+    for key in _entries(raw, "off", drop):
+        if kept(lambda k=key: _check_key(k)) and key not in off:
+            off.append(key)
+    return {"version": 1, "fields": added, "change": change, "off": off}
+
+
+def read_layer(path: Path, *, scene: bool = False,
+               base: list[dict] | tuple[dict, ...] | None = None) -> dict:
+    """The stored layer at `path`, normalized against `base` -- the same list
+    its writer validated it on (default: the built-ins). `{}` for a missing,
+    unreadable or garbled file. Never raises: a hand-edited or half-synced file
     must not take the play view down, and an empty layer is the safe reading.
 
     `scene` applies the scene rule on the way in too, so a scene file hand-edited
@@ -310,12 +349,11 @@ def read_layer(path: Path, *, scene: bool = False) -> dict:
 
     A file that is THERE and is dropped is logged: the person's field
     definitions silently reverting to the inherited ones would otherwise have
-    nothing anywhere to say why.
-
-    An addition a built-in now shadows costs only itself (`_unshadowed`)."""
+    nothing anywhere to say why. One entry that no longer fits its base costs
+    only itself (`_salvaged`)."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return validate_layer(_unshadowed(raw, path), scene=scene)
+        return _salvaged(raw, DEFAULT_FIELDS if base is None else base, scene=scene, path=path)
     except FileNotFoundError:
         return {}                       # no layer: the ordinary case
     except (OSError, ValueError) as exc:  # FieldLayerError, JSONDecodeError are ValueErrors
@@ -334,27 +372,39 @@ def world_fields(wid: str) -> list[dict]:
     return apply_layer([copy.deepcopy(f) for f in DEFAULT_FIELDS], world_layer(wid))
 
 
-def campaign_layer(cid: str) -> dict:
-    return read_layer(paths.campaign_layer_path(cid))
+def _world_of(cid: str) -> str:
+    return campaigns_read.read_campaign(cid)["meta"].get("world") or ""
+
+
+def campaign_layer(cid: str, base: list[dict] | None = None) -> dict:
+    """The campaign's layer, read against `base` -- its world's fields, as
+    `write_campaign_layer` validates it; pass them when already in hand."""
+    if base is None:
+        base = world_fields(_world_of(cid))
+    return read_layer(paths.campaign_layer_path(cid), base=base)
 
 
 def campaign_fields(cid: str) -> list[dict]:
-    wid = campaigns_read.read_campaign(cid)["meta"].get("world") or ""
-    return apply_layer(world_fields(wid), campaign_layer(cid))
+    world = world_fields(_world_of(cid))
+    return apply_layer(world, campaign_layer(cid, world))
 
 
-def scene_layer(cid: str, sid: str) -> dict:
-    """The scene's layer; `{}` when the scene has no identity yet (nothing has
-    ever been stored for it) or none was written."""
+def scene_layer(cid: str, sid: str, base: list[dict] | None = None) -> dict:
+    """The scene's layer, read against `base` -- the campaign's fields, as
+    `write_scene_layer` validates it; `{}` when the scene has no identity yet
+    (nothing has ever been stored for it) or none was written."""
     ident = scenes_identity.scene_identity(cid, sid)
     if ident is None:
         return {}
-    return read_layer(paths.scene_layer_path(cid, ident), scene=True)
+    if base is None:
+        base = campaign_fields(cid)
+    return read_layer(paths.scene_layer_path(cid, ident), scene=True, base=base)
 
 
 def effective(cid: str, sid: str) -> list[dict]:
     """Every field in force for a scene, switched-off ones marked."""
-    return apply_layer(campaign_fields(cid), scene_layer(cid, sid))
+    campaign = campaign_fields(cid)
+    return apply_layer(campaign, scene_layer(cid, sid, campaign))
 
 
 # --- writing ------------------------------------------------------------------
@@ -379,8 +429,7 @@ def write_world_layer(wid: str, layer: dict) -> dict:
 def write_campaign_layer(cid: str, layer: dict) -> dict:
     path = paths.campaign_layer_path(cid)
     with locks.campaign_lock(cid):
-        wid = campaigns_read.read_campaign(cid)["meta"].get("world") or ""
-        return _write(path, validate_layer(layer, base=world_fields(wid)))
+        return _write(path, validate_layer(layer, base=world_fields(_world_of(cid))))
 
 
 def write_scene_layer(cid: str, sid: str, layer: dict) -> dict:
