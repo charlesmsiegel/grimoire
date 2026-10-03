@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { TrackerDisclosure, summaryText } from "./TrackerDisclosure";
+import { TrackerDisclosure, rerunPrompt, summaryText } from "./TrackerDisclosure";
 import { shareSummary } from "./share";
 import { api } from "../../api/client";
 import type { TrackerEntry, TrackerRecord, TrackerSummary } from "../../api/client";
@@ -32,7 +32,8 @@ const OK: TrackerEntry = { status: "ok", changed: [["characters:mara", "visible_
 function mount(entry: TrackerEntry | undefined, over: Partial<{ enabled: boolean }> = {}) {
   const onChanged = vi.fn();
   render(<TrackerDisclosure cid="run" sid="s1" trackerKey="p-1" entry={entry}
-    names={NAMES} labels={LABELS} enabled={over.enabled ?? true} onChanged={onChanged} />);
+    names={NAMES} labels={LABELS} enabled={over.enabled ?? true} rerunCount={3}
+    onChanged={onChanged} />);
   return onChanged;
 }
 
@@ -60,7 +61,7 @@ test("summary states", () => {
 });
 
 test("fetches only on open and renders read-only values with awareness", async () => {
-  const { container } = render(<TrackerDisclosure cid="run" sid="s1" trackerKey="p-1" entry={OK}
+  const { container } = render(<TrackerDisclosure cid="run" sid="s1" trackerKey="p-1" entry={OK} rerunCount={1}
     names={NAMES} labels={LABELS} enabled onChanged={vi.fn()} />);
   expect(api.getTrackerRecord).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("Tracker · Mara: Visible mood → fear"));
@@ -147,12 +148,33 @@ test("a retry the server refuses is shown inline", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent(/tracker_off/);
 });
 
-test("Re-run tracker from here calls rerunTrackerFrom and refreshes", async () => {
-  const onChanged = mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
-  fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
-  await waitFor(() => expect(api.rerunTrackerFrom).toHaveBeenCalledWith("run", "s1", "p-1"));
-  await waitFor(() => expect(onChanged).toHaveBeenCalled());
+test("Re-run tracker from here asks, naming the posts it will pay for, then runs", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  try {
+    const onChanged = mount(OK);
+    fireEvent.click(screen.getByText(/Tracker · /));
+    fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Re-run the tracker for 3 posts from here? That is 3 model calls.");
+    await waitFor(() => expect(api.rerunTrackerFrom).toHaveBeenCalledWith("run", "s1", "p-1"));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  } finally { confirm.mockRestore(); }
+});
+
+test("a declined re-run confirm sends nothing", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    const onChanged = mount(OK);
+    fireEvent.click(screen.getByText(/Tracker · /));
+    fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
+    expect(confirm).toHaveBeenCalled();
+    expect(api.rerunTrackerFrom).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  } finally { confirm.mockRestore(); }
+});
+
+test("the re-run prompt reads right for one post", () => {
+  expect(rerunPrompt(1)).toBe("Re-run the tracker for 1 post from here? That is 1 model call.");
 });
 
 test("a pending entry reads updating and offers no Retry", () => {
@@ -162,7 +184,7 @@ test("a pending entry reads updating and offers no Retry", () => {
 });
 
 test("with the tracker off, a key with no entry renders nothing", () => {
-  const { container } = render(<TrackerDisclosure cid="run" sid="s1" trackerKey="p-1" entry={undefined}
+  const { container } = render(<TrackerDisclosure cid="run" sid="s1" trackerKey="p-1" entry={undefined} rerunCount={1}
     names={NAMES} labels={LABELS} enabled={false} onChanged={vi.fn()} />);
   expect(container).toBeEmptyDOMElement();
 });
@@ -193,7 +215,7 @@ test("shareSummary keeps the identity of everything a re-read did not change", (
 
 test("an entry that moves while the form is open neither crashes it nor reverts the server's value", async () => {
   const props = { cid: "run", sid: "s1", trackerKey: "p-1", names: NAMES, labels: LABELS,
-                  enabled: true, onChanged: vi.fn() };
+                  enabled: true, rerunCount: 1, onChanged: vi.fn() };
   const { rerender } = render(<TrackerDisclosure {...props} entry={OK} />);
   fireEvent.click(screen.getByText(/Tracker · /));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));

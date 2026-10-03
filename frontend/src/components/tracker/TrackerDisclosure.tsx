@@ -28,16 +28,29 @@ export function summaryText(
   return text;
 }
 
+/** What "Re-run tracker from here" asks before it spends anything: `count`
+ *  tracked posts, this one included, each a paid model call. */
+export function rerunPrompt(count: number): string {
+  const posts = count === 1 ? "1 post" : `${count} posts`;
+  const calls = count === 1 ? "1 model call" : `${count} model calls`;
+  return `Re-run the tracker for ${posts} from here? That is ${calls}.`;
+}
+
 /** One post's tracked state: a summary line, and on first open the record
  *  behind it, read-only until Edit is pressed. Fetches only on expansion, like
  *  `SavedThinking`: a long transcript need not transfer every post's snapshot.
  *
  *  `enabled` is the campaign's switch. Off, a post with no entry shows nothing
  *  and one with an entry shows it read-only -- the server refuses an edit, a
- *  retry and a re-run with `tracker_off`, so the controls are not offered. */
-export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, enabled, onChanged }: {
+ *  retry and a re-run with `tracker_off`, so the controls are not offered.
+ *
+ *  `rerunCount` is how many tracked posts a re-run from here covers (this one
+ *  and every one after it): each is a paid call, so the button asks first. */
+export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, enabled,
+  rerunCount, onChanged }: {
   cid: string; sid: string; trackerKey: string;
   entry: TrackerEntry | undefined;
+  rerunCount: number;
   names: Record<string, string>; labels: Record<string, string>;
   enabled: boolean;
   onChanged: () => void;
@@ -128,7 +141,10 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
                           onClick={() => setEditRecord(record)}>Edit</button>
                 )}
                 <button className="subtle" disabled={busy || pending}
-                        onClick={() => void run(() => api.rerunTrackerFrom(cid, sid, trackerKey))}>
+                        onClick={() => {
+                          if (!window.confirm(rerunPrompt(rerunCount))) return;
+                          void run(() => api.rerunTrackerFrom(cid, sid, trackerKey));
+                        }}>
                   Re-run tracker from here
                 </button>
               </div>
