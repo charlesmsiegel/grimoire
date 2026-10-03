@@ -154,9 +154,44 @@ def roster(cid: str, sid: str, *, departed: bool = True) -> dict[str, str]:
             for a in cast.scene_cast(cid, sid, include_departed=departed)}
 
 
+def _later(cid: str, sid: str, ident: str, index: int) -> list[str]:
+    """Every key whose post sits after message `index`: each later player
+    post, and EVERY variant of each later response -- not only the walk's.
+
+    An inactive variant keeps its record (see the module docstring), and that
+    record was built on the state before its response just as the active one
+    was. Flagging only the walk would leave it fresh, and a swipe to it -- which
+    flags only what comes after the response -- would make its pre-change
+    state current with no warning. A response counts as later when its FIRST
+    part does, so the response that owns `index` (an edit to an earlier part
+    of a split response) is never its own successor."""
+    messages = read.read_scene(cid, sid)["messages"]
+    # The token already resolved, as `prune` passes it: a fail-soft second
+    # lookup answering `{}` would quietly flag no response at all.
+    variants = responses.variants_by_response(cid, sid, token=ident)
+    out: list[str] = []
+    first: dict[str, int] = {}
+    for i, m in enumerate(messages):
+        tracked = _tracked(m)
+        if tracked is None:
+            continue
+        kind, value = tracked
+        if kind == "response":
+            first.setdefault(value, i)
+        elif i > index and paths.valid_key(value):
+            out.append(value)
+    for rid, at in first.items():
+        if at > index:
+            out += [k for k in (paths.response_key(rid, vid)
+                                for vid in variants.get(rid, (None, []))[1])
+                    if paths.valid_key(k)]
+    return out
+
+
 def flag_edited(cid: str, sid: str, index: int) -> None:
     """The post at `index` was edited: its own record no longer matches its
-    text, and every later record was built on top of it.
+    text, and every later record -- every variant of a later response
+    included (`_later`) -- was built on top of it.
 
     An edit to an earlier part of a split response flags that response's key,
     which sits at its last part."""
@@ -164,23 +199,23 @@ def flag_edited(cid: str, sid: str, index: int) -> None:
         ident = identity.scene_identity(cid, sid)
         if not ident:
             return
-        keys, owner = _walk(cid, sid)
+        _, owner = _walk(cid, sid)
         own = owner.get(index)
         if own:
             records.set_flags(cid, ident, [own], "text_changed")
-        records.set_flags(cid, ident, [k for i, k in keys if i > index and k != own],
+        records.set_flags(cid, ident, [k for k in _later(cid, sid, ident, index) if k != own],
                           "upstream_changed")
 
 
 def flag_after(cid: str, sid: str, index: int) -> None:
     """Something at `index` changed that later records were built on (a cut, a
-    reroll, a manual state edit): every key strictly after it is stale."""
+    reroll, a manual state edit): every record strictly after it is stale, each
+    variant of a later response included (`_later`)."""
     with locks.campaign_lock(cid):
         ident = identity.scene_identity(cid, sid)
         if not ident:
             return
-        keys, _ = _walk(cid, sid)
-        records.set_flags(cid, ident, [k for i, k in keys if i > index], "upstream_changed")
+        records.set_flags(cid, ident, _later(cid, sid, ident, index), "upstream_changed")
 
 
 def prune(cid: str, sid: str) -> int:
