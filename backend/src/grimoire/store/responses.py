@@ -80,6 +80,26 @@ def actor_refs(cid: str, sid: str) -> dict[str, str]:
             if record.get("actor_ref")}
 
 
+def variants_by_response(cid: str, sid: str) -> dict[str, tuple[str | None, list[str]]]:
+    """Each response's active variant id and every variant id it has, for the
+    scene tracker's walk (which keys a character post by its active variant and
+    keeps every variant's record, so a swipe back finds its state).
+
+    Read-only, so it never mints: `_scope` would `ensure_identity`, writing the
+    scene file to answer a question about it. A scene with no identity has no
+    ledger scope either, which is `{}`. Under the lock so the active pointer and
+    the variant list come from one ledger state.
+    """
+    with locks.campaign_lock(cid):
+        token = identity.scene_identity(cid, sid)
+        if not token:
+            return {}
+        records = _read(cid)["scenes"].get(token, {}).get("responses", {})
+        return {rid: (record.get("active_variant"),
+                      [v["id"] for v in record.get("variants", [])])
+                for rid, record in records.items()}
+
+
 def transcript_hash(messages):
     public = [{k: m[k] for k in ("role", "speaker", "content") if k in m} for m in messages]
     return hashlib.sha256(

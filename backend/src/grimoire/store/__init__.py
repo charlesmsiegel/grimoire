@@ -190,7 +190,9 @@ from .tags import TagNotFound
 # resolves for routes and tests (one line per submodule, added as each lands).
 from .tracker import fields as _tracker_fields
 from .tracker import paths as _tracker_paths
+from .tracker import records as _tracker_records
 from .tracker import settings as _tracker_settings
+from .tracker import walk as _tracker_walk
 from .world_bundle import BundleError
 from .worlds import WorldNotFound
 

@@ -159,6 +159,17 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # of that list and the write have to be one hold, or a concurrent campaign
     # layer edit lands between them.
     "store.tracker.fields",
+    # The tracker's per-scene records: a snapshot file per post plus an
+    # `index.json` that is read-modify-written whole on every status or flag
+    # change -- two unserialized updates landing at once would lose one entry.
+    # Held across the snapshot-then-index pair so a reader never sees the index
+    # ahead of the file it describes. `store.tracker.walk` is deliberately NOT
+    # listed: it writes only through these mutators, so this guard does not
+    # count it as mutating, and its writers (`flag_edited`, `flag_after`,
+    # `prune`) take the same reentrant lock around deciding which keys to touch
+    # from the transcript and the write itself -- or a cut or a swipe lands
+    # between the two and the flags go to keys that are no longer there.
+    "store.tracker.records",
     # The steering log is a read-modify-write of one whole file, appended
     # beside `alternates.archive` inside the regenerate route's lock hold
     # (reentrant, so its own acquire is free) — two unserialized rerolls
