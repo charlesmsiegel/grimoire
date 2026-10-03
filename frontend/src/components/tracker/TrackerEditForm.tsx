@@ -5,6 +5,12 @@ import { valueText } from "./TrackerValues";
 
 type Draft = { text: string; aware: TrackerAware };
 
+/** What the server gives a value nobody has set yet (`merge._default_aware`):
+ *  everyone for a "present" field, only its owner for a "self" one. */
+const defaultAware = (f: TrackerField): TrackerAware => f.aware === "present" ? "present" : [];
+
+const splitList = (text: string) => text.split(",").map((s) => s.trim()).filter(Boolean);
+
 const sameAware = (a: TrackerAware, b: TrackerAware) =>
   a === b || (Array.isArray(a) && Array.isArray(b)
     && a.length === b.length && a.every((r, i) => r === b[i]));
@@ -32,7 +38,7 @@ export function TrackerEditForm({ record, onSave, onCancel }: {
   const actors = orderedActors(snapshot);
   const initial = (ref: string, f: TrackerField): Draft => {
     const v = snapshot[ref].fields[f.key];
-    return { text: v ? valueText(v.value) : "", aware: v ? v.aware : "present" };
+    return { text: v ? valueText(v.value) : "", aware: v ? v.aware : defaultAware(f) };
   };
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => {
     const out: Record<string, Draft> = {};
@@ -53,11 +59,12 @@ export function TrackerEditForm({ record, onSave, onCancel }: {
         const was = initial(ref, f);
         const now = drafts[`${ref}\u0000${f.key}`];
         const edit: { value?: string | string[]; aware?: TrackerAware } = {};
-        if (now.text !== was.text)
-          edit.value = f.type === "list"
-            ? now.text.split(",").map((s) => s.trim()).filter(Boolean)
-            : now.text;
-        if (!sameAware(now.aware, was.aware)) edit.aware = now.aware;
+        const moved = f.type === "list"
+          ? JSON.stringify(splitList(now.text)) !== JSON.stringify(splitList(was.text))
+          : now.text !== was.text;
+        if (moved) edit.value = f.type === "list" ? splitList(now.text) : now.text;
+        // Who knows an empty value is not a thing the server will record.
+        if (now.text !== "" && !sameAware(now.aware, was.aware)) edit.aware = now.aware;
         if (edit.value !== undefined || edit.aware !== undefined)
           (edits[ref] ??= {})[f.key] = edit;
       }
@@ -76,6 +83,16 @@ export function TrackerEditForm({ record, onSave, onCancel }: {
           <fieldset key={ref} className="tracker-actor">
             <legend>{nameOf(ref)}{actor.present ? "" : " (not present)"}</legend>
             {editableFields(record.fields, actor).map((f) => {
+              if (f.off) {
+                // Switched off: the server refuses an edit, so it is shown, not offered.
+                return (
+                  <div key={f.key} className="tracker-field">
+                    <span className="tracker-label">{f.label}</span>
+                    {": "}{drafts[`${ref}\u0000${f.key}`].text || "—"}
+                    <span className="field-hint"> (switched off)</span>
+                  </div>
+                );
+              }
               const id = `${ref}\u0000${f.key}`;
               const d = drafts[id];
               const label = `${nameOf(ref)} ${f.label}`;
@@ -99,7 +116,7 @@ export function TrackerEditForm({ record, onSave, onCancel }: {
                              onChange={(e) => set(id, { text: e.target.value })} />
                     )}
                   </label>
-                  <select aria-label={`${label} awareness`} value={current}
+                  <select aria-label={`${label} awareness`} value={current} disabled={d.text === ""}
                           onChange={(e) => {
                             const v = e.target.value;
                             if (v === "present") set(id, { aware: "present" });
