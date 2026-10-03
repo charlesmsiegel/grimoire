@@ -153,7 +153,7 @@ export const TranscriptRun = memo(function TranscriptRun({
           </>
         ) : (
           <>
-            <span className="plate-avatar"><Portrait src={null} name={run.speaker} /></span>
+            <span className="plate-avatar"><Portrait src={avatar} name={run.speaker} /></span>
             <span className="plate-name">{run.speaker}</span>
           </>
         )}

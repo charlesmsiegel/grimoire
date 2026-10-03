@@ -599,7 +599,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
   const [responseActor, setResponseActor] = useState("");
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; offset: number; ended?: boolean; thinking?: string }[]>([]);
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
@@ -2334,7 +2334,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       await api.attachRun(cid, sid, runId, registry.resumeFrom(runId), (e) => {
         if (e.response_start) {
-          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
+          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
+            actor_ref: e.response_start.actor_ref, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
           setStreamingSpeakers((prior) => prior.map((part, index) =>
@@ -2696,7 +2697,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       await start((e) => {
         if (e.response_start) {
-          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker, offset: acc.length };
+          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
+            actor_ref: e.response_start.actor_ref, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
           setStreamingSpeakers((prior) => prior.map((part, index) =>
@@ -3993,8 +3995,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const lockedEntry = useMemo(
     () => new Map(roster.map((r) => [`${r.kind}/${r.id}`, r])), [roster]);
 
-  const plateAvatar = useCallback((run: TranscriptRunData): string | null => {
-    if (!run.actor) return null;
+  const plateAvatar = useCallback((run: Pick<TranscriptRunData, "actor" | "speaker" | "pc">,
+                                  actorRef?: string): string | null => {
+    // Narrator labels are configurable; the response identity survives a rename.
+    // Older posts have no identity, so retain their reserved/configured labels.
+    if (actorRef === "grimoire") return "/grimoire-32.png";
+    if (!run.actor) return !run.pc && (run.speaker === "Grimoire" || run.speaker === labels.assistant)
+      ? "/grimoire-32.png" : null;
     // Either actor kind: a speaker plate used to fall back to initials for
     // every PC, because PCs had no images to point at (#219).
     const { kind, id } = run.actor;
@@ -4005,7 +4012,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, locked.version, "avatar",
                           { w: THUMB.row, v: locked.avatar_v })
       : null;
-  }, [lockedEntry, cid]);
+  }, [lockedEntry, cid, labels.assistant]);
 
   /** Whose images the picker offers for a post by `speaker` (#376).
    *
@@ -4110,7 +4117,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const transcript = useMemo(() => runs.map((run) => {
     const holds = (index: number) => run.posts.some((p) => p.index === index);
     return (
-      <TranscriptRun key={run.posts[0].index} run={run} avatar={plateAvatar(run)}
+      <TranscriptRun key={run.posts[0].index} run={run} avatar={plateAvatar(run, run.posts[0].m.actor_ref)}
                      ctx={transcriptCtx} actions={transcriptActions}
                      editing={editing && holds(editing.index) ? editing : null}
                      reroll={holds(rerollAt) ? transcriptReroll : null} />
@@ -4799,7 +4806,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 {streamingSpeakers.length === 0 && (messages.length === 0 ||
                   speakerOf(messages[messages.length - 1]) !== labels.assistant) && (
                   <div className="plate">
-                    <span className="plate-avatar"><Portrait src={null} name={labels.assistant} /></span>
+                    <span className="plate-avatar"><Portrait src="/grimoire-32.png" name={labels.assistant} /></span>
                     <span className="plate-name">{labels.assistant}</span>
                     <span className="role-chip">npc</span>
                   </div>
@@ -4819,7 +4826,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                     {streamingSpeakers.length ? <>
                       {streamingSpeakers[0].offset > 0 && <StreamingMarkdown text={streaming.slice(0, streamingSpeakers[0].offset)} />}
                       {streamingSpeakers.map((part, index) => <div className="streaming-response" key={part.id}>
-                        <strong>{part.speaker}</strong>
+                        <div className="plate">
+                          <span className="plate-avatar"><Portrait name={part.speaker}
+                            src={plateAvatar({ speaker: part.speaker, pc: false,
+                              actor: matchActor(part.speaker, part.actor_ref) }, part.actor_ref)} /></span>
+                          <strong className="plate-name">{part.speaker}</strong>
+                        </div>
                         <Thinking content={part.thinking ?? ""} />
                         <StreamingMarkdown text={streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
                         {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
