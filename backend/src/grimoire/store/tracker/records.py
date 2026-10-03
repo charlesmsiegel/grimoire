@@ -39,6 +39,9 @@ from . import paths
 
 VERSION = 1
 FLAGS = ("upstream_changed", "text_changed")
+SEQ = "flag_seq"
+"""The entry field counting flag raises (`set_flags`), so an update can tell
+at save time whether a flag went up after it read its inputs."""
 
 
 def _index_path(cid: str, identity: str) -> Path:
@@ -135,16 +138,29 @@ def mark_pending(cid: str, identity: str, key: str) -> None:
         _write_index(cid, identity, entries)
 
 
-def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[list],
-         fields_digest: str, model: str, keep_flags: bool = False) -> None:
-    """Store `key`'s snapshot and mark it `ok` -- with fresh flags, or with the
-    entry's current ones when `keep_flags`.
+def flag_seq(entry: dict | None) -> int:
+    """How many times a flag has been raised on this entry -- what an update
+    reads beside its inputs and hands back to `save` as `seen_seq`."""
+    seq = (entry or {}).get(SEQ, 0)
+    return seq if isinstance(seq, int) else 0
 
-    `keep_flags` is for a writer whose inputs were read EARLIER than this save:
-    an update run (which clears the flags itself, in the hold that reads its
-    inputs -- `clear_flags`) and a hand edit. A flag still raised at save time
-    was raised by a write the snapshot never saw, so clearing it here would
-    make a stale record read as fresh.
+
+def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[list],
+         fields_digest: str, model: str, keep_flags: bool = False,
+         seen_seq: int | None = None) -> None:
+    """Store `key`'s snapshot and mark it `ok`. What happens to its flags:
+
+    - by default they are cleared (a writer that read everything just now);
+    - `keep_flags`: kept as they are (a hand edit -- one value typed in does
+      not make the rest of the record agree with an edited post);
+    - `seen_seq`: cleared only if no flag was raised since the writer read its
+      inputs (`flag_seq` then), else kept. An update run reads its inputs a
+      provider call before this save; a flag raised in between is a write the
+      snapshot never saw, and clearing it would make a stale record read fresh.
+
+    The flags are never cleared anywhere else -- not when a run is marked, not
+    when it fails -- so a run that produced nothing leaves them as it found
+    them. The sequence is carried over, never reset.
 
     The snapshot is stored as given; what a valid one looks like is the update
     pipeline's business, not the store's."""
@@ -153,23 +169,14 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
                     {"version": VERSION, "snapshot": snapshot,
                      "fields_digest": fields_digest, "model": model, "at": now_iso()})
         entries = read_index(cid, identity)
+        prev = entries.get(key) or {}
+        seq = flag_seq(prev)
         flags = _clear_flags()
-        if keep_flags:
-            flags.update((entries.get(key) or {}).get("flags") or {})
+        if keep_flags or (seen_seq is not None and seen_seq != seq):
+            flags.update(prev.get("flags") or {})
         entries[key] = {"status": "ok", "changed": changed, "flags": flags}
-        _write_index(cid, identity, entries)
-
-
-def clear_flags(cid: str, identity: str, key: str) -> None:
-    """Lower both flags on `key`'s entry, if it has one: an update has just read
-    the transcript and prior state those flags said had moved, so the result it
-    is about to compute answers them."""
-    with locks.campaign_lock(cid):
-        entries = read_index(cid, identity)
-        entry = entries.get(key)
-        if entry is None or not any((entry.get("flags") or {}).values()):
-            return
-        entry["flags"] = _clear_flags()
+        if seq:
+            entries[key][SEQ] = seq     # absent reads as 0; only a raise starts it
         _write_index(cid, identity, entries)
 
 
@@ -197,6 +204,7 @@ def set_flags(cid: str, identity: str, keys: list[str], flag: str) -> None:
             return
         for k in hit:
             entries[k].setdefault("flags", _clear_flags())[flag] = True
+            entries[k][SEQ] = flag_seq(entries[k]) + 1
         _write_index(cid, identity, entries)
 
 

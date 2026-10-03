@@ -13,6 +13,7 @@ import json
 import pytest
 
 from grimoire import routes, store
+from grimoire.routes import tracker as tracker_routes
 
 from .llm_fakes import FakeLLM, HeldCassette, from_entries
 
@@ -511,3 +512,41 @@ def test_rerolling_an_earlier_response_flags_later(client):
     assert not index[after[0]]["flags"]["upstream_changed"]
     assert index[keys[2]]["flags"]["upstream_changed"]
     assert index[keys[3]]["flags"]["upstream_changed"]
+
+
+def test_a_failed_retry_keeps_the_flags_and_a_hand_edit_after_it_too(client):
+    """A run that never produced a result answered nothing: the flags it found
+    must still be raised after it fails, and after a hand edit on top."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    at = _msg_index(cid, sid, keys[1])
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/{at}",
+                      json={"content": "Mara answers, differently."}).status_code == 200
+    _use(client, _llm("not json"))
+    assert client.post(f"{_base(cid, sid)}/records/{keys[1]}/retry").status_code == 200
+    _settle(client, cid, sid)
+    entry = _index(cid, sid)[keys[1]]
+    assert entry["status"] == "failed"
+    assert entry["flags"]["text_changed"], "a failed run cleared the flags"
+    r = client.put(f"{_base(cid, sid)}/records/{keys[1]}",
+                   json={"edits": {"characters:mara": {"clothing": {"value": "red coat"}}}})
+    assert r.status_code == 200, r.text
+    assert r.json()["flags"]["text_changed"]
+    assert _index(cid, sid)[keys[1]]["flags"]["text_changed"]
+
+
+def test_an_interrupted_run_keeps_the_flags(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    at = _msg_index(cid, sid, keys[1])
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/{at}",
+                      json={"content": "Mara answers, differently."}).status_code == 200
+    ident = _ident(cid, sid)
+    # A run that read its inputs and then died: prepared, never committed.
+    assert tracker_routes._prepare(cid, ident, sid, keys[1]) is not None
+    store.tracker.records.mark_pending(cid, ident, keys[1])
+    record = client.get(f"{_base(cid, sid)}/records/{keys[1]}").json()
+    assert record["status"] == "failed" and record["error"] == "interrupted"
+    assert record["flags"]["text_changed"]

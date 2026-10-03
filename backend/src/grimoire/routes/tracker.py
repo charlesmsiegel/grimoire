@@ -389,7 +389,8 @@ async def _update_locked(cid: str, sid: str, key: str, client: LLMClient,
     try:
         written = await run_in_threadpool(
             _commit, cid, identity, prep["sid"], key, snapshot, changed,
-            store.tracker.fields.digest(fields), effective_model(conn), flag_later)
+            store.tracker.fields.digest(fields), effective_model(conn), flag_later,
+            prep["seen_seq"])
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
         await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
@@ -498,11 +499,12 @@ def _prepare(cid: str, identity: str, hint: str, key: str) -> dict | None:
             return None
         index = located["index"]
         _, prior = walk.state_before(cid, sid, index)
-        # The flags are answered HERE, in the hold that reads the post and its
-        # prior -- not at save, a provider call later. An edit that lands
-        # while the model answers raises a flag this run never saw, and
-        # `_commit` keeps it (`keep_flags`), so the record still reads stale.
-        store.tracker.records.clear_flags(cid, identity, key)
+        # Read in the hold that reads the post and its prior: the flags this
+        # run answers are the ones raised up to here. Nothing is cleared now --
+        # a run that fails or dies answered nothing -- and `_commit` clears
+        # them only if none went up while the model answered.
+        seen = store.tracker.records.flag_seq(
+            store.tracker.records.read_index(cid, identity).get(key))
         present = walk.present_at(cid, sid, index)
         return {
             "sid": sid, "post": located["post"], "rid": located["rid"],
@@ -512,6 +514,7 @@ def _prepare(cid: str, identity: str, hint: str, key: str) -> dict | None:
                           for ref in sorted(present) if ref not in prior],
             "context_posts": _context_posts(cid, sid, located["first"]),
             "post_msg": located["post_msg"],
+            "seen_seq": seen,
         }
 
 
@@ -532,7 +535,8 @@ def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) 
 
 
 def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
-            changed: list, digest: str, model: str, flag_later: bool = False) -> bool:
+            changed: list, digest: str, model: str, flag_later: bool = False,
+            seen_seq: int = 0) -> bool:
     """Store the result, unless the post went away while the model answered.
 
     RE-CHECKED under the lock that covers the write, because the check in
@@ -556,10 +560,11 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
         if _locate(cid, sid, key) is None:
             _settle_unwritten(cid, sid, identity, key, "")
             return False
-        # `keep_flags`: `_prepare` cleared them when it read this result's
-        # inputs, so any flag raised since is a write the result never saw.
+        # `seen_seq`: the flags are cleared only if none went up since
+        # `_prepare` read this result's inputs -- one that did is a write the
+        # result never saw, and the record must keep saying so.
         store.tracker.records.save(cid, identity, key, snapshot, changed=changed,
-                                   fields_digest=digest, model=model, keep_flags=True)
+                                   fields_digest=digest, model=model, seen_seq=seen_seq)
         if flag_later:
             at = store.tracker.walk.index_of(cid, sid, key)
             if at is not None:
@@ -647,6 +652,7 @@ def _reported(entry: dict, live: bool) -> dict:
     "updating..." for good and offers nothing; reported as failed it offers
     Retry, which is the one action that settles it. Reported, not rewritten --
     a GET takes no lock, and the next mark or save overwrites it anyway."""
+    entry = {k: v for k, v in entry.items() if k != store.tracker.records.SEQ}
     if entry.get("status") == "pending" and not live:
         return {**entry, "status": "failed", "error": INTERRUPTED}
     return entry
