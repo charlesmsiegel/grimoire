@@ -1,10 +1,11 @@
 import { memo } from "react";
-import type { Actor, Message, UsagePostBucket } from "../../api/client";
+import type { Actor, Message, TrackerEntry, TrackerSummary, UsagePostBucket } from "../../api/client";
 import { PostCost } from "../cost";
 import { Portrait } from "../Portrait";
 import { ResponseControls } from "../ResponseControls";
 import RerollRoutePicker, { type RerollRoute } from "../RerollRoute";
 import { SavedThinking } from "../Thinking";
+import { TrackerDisclosure } from "../tracker/TrackerDisclosure";
 import { RenderedMarkdown } from "./StreamingMarkdown";
 
 // Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
@@ -66,6 +67,10 @@ export type TranscriptActions = {
   rerollResponse: (id: string, guidance: string, route: RerollRoute) => void;
   activateVariant: (id: string, variant: string) => void;
   createCharacter: (responseId: string) => void;
+  /** Ask the view to re-read the scene's tracker after a disclosure changed it
+   *  (a retry, a re-run, an edit). A member of this object rather than a
+   *  closure handed down per render, so the memoized rows keep their props. */
+  refreshTracker: () => void;
 };
 
 /** The swipe control, on the one row it hangs off. */
@@ -110,7 +115,17 @@ export type TranscriptContext = {
   /** Absolute indices of each response's last part in the window — the post
    *  that carries its controls and its saved thinking. */
   lastOfResponse: Set<number>;
+  /** The loaded scene's tracker read, or null before it lands. Its parts keep
+   *  their identity across a re-read that finds them unchanged (`shareSummary`),
+   *  which is what lets a row take its own entry as a prop. */
+  tracker: TrackerSummary | null;
+  /** Absolute post index -> the tracker's key for it. */
+  trackerKeys: Record<number, string>;
 };
+
+// One shared object for "no tracker yet", so a row's props do not change
+// identity on every render while the read is outstanding.
+const NO_NAMES: Record<string, string> = {};
 
 /** One speaker's run: the plate, then each post.
  *
@@ -176,6 +191,12 @@ export const TranscriptRun = memo(function TranscriptRun({
             chip={m.role === "user" || m.speaker === DIRECTOR_SPEAKER
               ? ctx.postChips?.[index] : undefined}
             lastOfResponse={ctx.lastOfResponse.has(index)}
+            trackerKey={ctx.trackerKeys[index]}
+            trackerEntry={ctx.trackerKeys[index] !== undefined
+              ? ctx.tracker?.entries[ctx.trackerKeys[index]] : undefined}
+            trackerNames={ctx.tracker?.names ?? NO_NAMES}
+            trackerLabels={ctx.tracker?.labels ?? NO_NAMES}
+            trackerEnabled={ctx.tracker?.enabled ?? false}
             loadedCid={ctx.loadedCid} loadedSid={ctx.loadedSid}
             cid={ctx.cid} sid={ctx.sid} responseDisabled={ctx.responseDisabled}
             actions={actions}
@@ -193,8 +214,8 @@ export const TranscriptRun = memo(function TranscriptRun({
  *  re-renders then — once per turn — but a keystroke or a delta reaches none. */
 export const TranscriptPost = memo(function TranscriptPost({
   m, index, actor, speaker, cited, editingText, busy, rolling, active, rerollButton, swipe,
-  rerollPop, canReplayAfter, chip, lastOfResponse, loadedCid, loadedSid, cid, sid,
-  responseDisabled, actions,
+  rerollPop, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
+  trackerLabels, trackerEnabled, loadedCid, loadedSid, cid, sid, responseDisabled, actions,
 }: {
   m: Message; index: number;
   /** Who spoke it, for the image picker's scope (#376). */
@@ -209,6 +230,14 @@ export const TranscriptPost = memo(function TranscriptPost({
   canReplayAfter: boolean;
   chip: UsagePostBucket | undefined;
   lastOfResponse: boolean;
+  /** This post's tracker key (absent where the post is not tracked), its entry
+   *  from the summary, and the scene-wide names, labels and switch. All
+   *  primitives or identity-stable parts of the summary. */
+  trackerKey: string | undefined;
+  trackerEntry: TrackerEntry | undefined;
+  trackerNames: Record<string, string>;
+  trackerLabels: Record<string, string>;
+  trackerEnabled: boolean;
   loadedCid: string | null; loadedSid: string | null;
   cid: string; sid: string;
   responseDisabled: boolean;
@@ -363,6 +392,12 @@ export const TranscriptPost = memo(function TranscriptPost({
               && lastOfResponse && <SavedThinking key={`${loadedCid}:${loadedSid}:${m.response_thinking}`}
               cid={loadedCid} sid={loadedSid} responseId={m.response_id} variantId={m.response_thinking} />}
             <RenderedMarkdown content={m.content} />
+            {trackerKey !== undefined && loadedCid !== null && loadedSid !== null
+              && (m.role === "user" || lastOfResponse)
+              && <TrackerDisclosure key={`${loadedCid}:${loadedSid}:${trackerKey}`}
+                cid={loadedCid} sid={loadedSid} trackerKey={trackerKey} entry={trackerEntry}
+                names={trackerNames} labels={trackerLabels} enabled={trackerEnabled}
+                onChanged={actions.refreshTracker} />}
           </>
         )}
         {m.response_id && m.role === "assistant" && active && lastOfResponse && (

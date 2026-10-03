@@ -292,6 +292,74 @@ test("a failed cost read leaves the transcript alone", async () => {
   expect(await screen.findByText("hi")).toBeInTheDocument();
 });
 
+// ---- the per-post Tracker disclosure ----
+const TF = { upstream_changed: false, text_changed: false };
+function withTracker(over: Record<string, unknown> = {}) {
+  (api.getTracker as any).mockResolvedValue({
+    enabled: true, names: { "characters:mara": "Mara" }, moods: {},
+    labels: { visible_mood: "Visible mood" },
+    keys: [{ index: 0, key: "p-0" }, { index: 1, key: "p-1" }],
+    entries: { "p-0": { status: "ok", changed: [], flags: TF },
+               "p-1": { status: "ok", changed: [["characters:mara", "visible_mood", "fear"]], flags: TF } },
+    ...over });
+}
+function twoPosts() {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply", response_id: "r1" }] });
+}
+
+test("a tracked post shows its Tracker summary", async () => {
+  twoPosts();
+  withTracker();
+  renderCampaign();
+  expect(await screen.findByText("Tracker · no change")).toBeInTheDocument();
+  expect(screen.getByText("Tracker · Mara: Visible mood → fear")).toBeInTheDocument();
+  expect(api.getTracker).toHaveBeenCalledWith("run", "s1");
+});
+
+test("a post whose key the tracker does not list shows no disclosure", async () => {
+  twoPosts();
+  withTracker({ keys: [{ index: 0, key: "p-0" }] });
+  renderCampaign();
+  await screen.findByText("Tracker · no change");
+  expect(screen.queryByText(/Tracker · Mara/)).toBeNull();
+});
+
+test("with the tracker off, an untracked post shows nothing", async () => {
+  twoPosts();
+  withTracker({ enabled: false, entries: {} });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.queryByText(/^Tracker · /)).toBeNull();
+});
+
+test("a pending post is re-read until it lands", async () => {
+  twoPosts();
+  const pending = { "p-0": { status: "pending", changed: [], flags: TF },
+                    "p-1": { status: "ok", changed: [], flags: TF } };
+  withTracker({ entries: pending });
+  renderCampaign();
+  expect(await screen.findByText("Tracker · updating…")).toBeInTheDocument();
+  // The next read, two seconds on, finds it done.
+  withTracker({ entries: { ...pending, "p-0": { status: "ok", changed: [], flags: TF } } });
+  await waitFor(() => expect(screen.queryByText("Tracker · updating…")).toBeNull(),
+                { timeout: 5000 });
+  expect(screen.getAllByText("Tracker · no change")).toHaveLength(2);
+}, 15_000);
+
+test("Retry on an untracked post re-reads the tracker", async () => {
+  twoPosts();
+  withTracker({ entries: { "p-0": { status: "failed", changed: [], flags: TF, error: "interrupted" },
+                           "p-1": { status: "ok", changed: [], flags: TF } } });
+  (api.retryTracker as any).mockResolvedValue({});
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  const before = (api.getTracker as any).mock.calls.length;
+  await waitFor(() => expect(api.retryTracker).toHaveBeenCalledWith("run", "s1", "p-0"));
+  await waitFor(() => expect((api.getTracker as any).mock.calls.length).toBeGreaterThan(before));
+});
+
 test("⌘K numbers a scene by its id's own number, not by list position", async () => {
   // listScenes is sorted by `updated` descending — an earlier scene edited
   // most recently sorts first, which must not desync the displayed number
