@@ -270,10 +270,7 @@ def test_every_task_the_routes_name_is_classified():
         f"store/routing.py: {unclassified}")
 
 
-@pytest.mark.parametrize("task", [
-    pytest.param(t, marks=pytest.mark.xfail(strict=True, reason="call site lands in Task 8"))
-    if t == "tracker-update" else t
-    for t in sorted(routing.TASK_ROUTE)])
+@pytest.mark.parametrize("task", sorted(routing.TASK_ROUTE))
 def test_every_registered_task_is_actually_named_by_a_call_site(task):
     """The registry may not accumulate phantoms either.
 

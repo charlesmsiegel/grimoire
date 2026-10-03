@@ -1,17 +1,34 @@
-"""The scene state tracker's HTTP surface (store/tracker/).
+"""The scene state tracker's HTTP surface (store/tracker/), and its update run.
 
-The on/off setting and the field-definition layers so far; the tracker's own
-reads and writes join them here as they land."""
+The on/off setting and the field-definition layers, and the run that keeps a
+snapshot per post: `schedule` is called after every post lands (a player's, a
+character's, an opener) and starts a `background` run that asks the model what
+changed and stores the merged result under that post's key.
+
+The callers are `routes/scenes.py`, `routes/character_turns.py` and
+`routes/greetings.py`; this module imports none of them, which is what keeps
+the route graph acyclic."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
+
+import anyio
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from .. import store
-from .common import _dump, _require_scene
+from ..llm import LLMClient, effective_model
+from ..llm_errors import LLMError
+from . import runs
+from .common import _dump, _llm_http_error, _require_connection, _require_scene, run_error
 from .models import CampaignTracker, TrackerLayer
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
 
 
 def _setting_body(cid: str) -> dict:
@@ -129,3 +146,359 @@ def put_scene_tracker_fields(cid: str, sid: str, body: TrackerLayer):
         # Deleted between the check and the write, in another tab.
         raise HTTPException(status_code=404, detail="scene not found") from exc
     return get_scene_tracker_fields(cid, sid)
+
+
+# --- the update run ----------------------------------------------------------
+#
+# One `background` run per tracked post (`runs.reserve_background`): no
+# exclusion key, so an update can neither refuse a turn with `run_in_flight`
+# nor hold the scene against an edit, a cut or a rename. Play never waits on
+# it, and nothing it does can fail the turn that scheduled it -- every entry
+# point below swallows its own failures, because by the time any of them is
+# called the post is already on disk and the player is owed it.
+#
+# Everything here is keyed on the scene's IDENTITY, not its `sid`. A run
+# outlives its request, and a `sid` moves on rename: the `sid` a run was handed
+# is only a hint, re-resolved (`_current_sid`) every time the run touches the
+# store.
+
+def schedule(app, cid: str, sid: str, key: str, client: LLMClient) -> None:
+    """Start the update for `key`, or do nothing when the campaign's tracker is
+    off. Never raises (see above).
+
+    **Must be called from a worker thread, never the event loop:** reserving a
+    run builds its handshake events through the lifespan's `BlockingPortal`,
+    which raises from the loop thread. Every caller is either a `def` handler or
+    reaches here through `run_in_threadpool`.
+
+    The record is marked `pending` FIRST, before the run exists: that is
+    `records.save`'s caller contract (a crash between a snapshot and its index
+    entry leaves `pending`, never an `ok` about a file that did not land), and
+    it is also what the play view reads to say an update is on its way."""
+    try:
+        if not store.tracker.settings.enabled(cid):
+            return
+        ident = store.scenes.ensure_identity(cid, sid)
+        store.tracker.records.mark_pending(cid, ident, key)
+    except Exception as exc:  # noqa: BLE001 -- the post landed; tracking it is extra
+        log.warning("tracker: could not schedule %s for %s/%s -- %s", key, cid, sid, exc)
+        return
+    run = runs.reserve_background(app, cid, sid, "tracker-update")
+    if run is None:
+        # A store mid-move or a scene that vanished: no run will ever settle
+        # this record, so it must not sit at `pending` for good.
+        _fail(cid, ident, sid, key, "the update could not be scheduled")
+        return
+    try:
+        runs.start_computing(app, run, lambda: _update(app, cid, sid, key, client, ident))
+    except Exception as exc:  # noqa: BLE001 -- `scenes._start_background`'s reason
+        # `runner.start` raises with no lifespan running, or when shutdown
+        # closed the portal between the reservation and the handoff. A run
+        # reserved and never entered stays `running` for the life of the
+        # process (and keeps `PUT /config/data-dir` refused), so it is released
+        # here, and the record that would otherwise wait on it is failed.
+        log.warning("tracker: could not start %s for %s/%s -- %s", key, cid, sid, exc)
+        runs.release_before_start(app, run, "failed",
+                                  {"kind": "run_failed", "detail": str(exc)})
+        _fail(cid, ident, sid, key, str(exc) or "the update could not be started")
+
+
+def schedule_response(app, cid: str, sid: str, rid: str, client: LLMClient) -> None:
+    """`schedule` for a response's ACTIVE variant -- the one the transcript now
+    shows. Nothing when it has none yet. Never raises."""
+    try:
+        if not store.tracker.settings.enabled(cid):
+            return
+        active, _ = store.responses.variants_by_response(cid, sid).get(rid, (None, []))
+    except Exception as exc:  # noqa: BLE001 -- see `schedule`
+        log.warning("tracker: could not resolve response %s in %s/%s -- %s", rid, cid, sid, exc)
+        return
+    if active:
+        schedule(app, cid, sid, store.tracker.paths.response_key(rid, active), client)
+
+
+def schedule_untracked(app, cid: str, sid: str, client: LLMClient) -> None:
+    """`schedule` every tracked post that has no record yet, in transcript order.
+
+    Only for a scene that was EMPTY before the call (an adopted opener, a
+    greeting start), where every post on it is new. Anywhere else "no record"
+    may be a record a cut or a prune removed on purpose, and recomputing a whole
+    scene's worth of posts is not something to do as a side effect."""
+    try:
+        if not store.tracker.settings.enabled(cid):
+            return
+        ident = store.scenes.ensure_identity(cid, sid)
+        have = store.tracker.records.read_index(cid, ident)
+        keys = [k for _, k in store.tracker.walk.ordered_keys(cid, sid) if k not in have]
+    except Exception as exc:  # noqa: BLE001 -- see `schedule`
+        log.warning("tracker: could not list untracked posts in %s/%s -- %s", cid, sid, exc)
+        return
+    for key in keys:
+        schedule(app, cid, sid, key, client)
+
+
+_LOCKS_GUARD = threading.Lock()
+
+
+def _scene_lock(app, identity: str) -> asyncio.Lock:
+    """The one lock every update for this scene runs under.
+
+    WHY: an update's input is the snapshot its predecessor wrote
+    (`walk.state_before` reads the latest `ok` record above the post), so two
+    updates for one scene running side by side would both start from the same
+    prior and the later one would silently drop whatever the earlier one
+    changed. The spec's rule is one at a time, in transcript order, and the
+    order updates are SCHEDULED in is transcript order: a post's update is
+    scheduled when the post lands. `asyncio.Lock` wakes its waiters first come,
+    first served, so serialising on it keeps that order.
+
+    An `asyncio.Lock`, not the campaign lock: the wait spans a provider call,
+    and the campaign lock is held by every write in the campaign. Every
+    `_update` runs on the lifespan loop, so one loop owns every lock here; they
+    live on `app.state` (not module scope) for the reason the run registry does
+    -- a `TestClient` builds an app per test. The `threading.Lock` only guards
+    creating them: `schedule` runs on worker threads, but this is reached from
+    `_update` on the loop, and a dict get-or-set is not atomic across both."""
+    with _LOCKS_GUARD:
+        locks = getattr(app.state, "tracker_locks", None)
+        if locks is None:
+            locks = app.state.tracker_locks = {}
+        lock = locks.get(identity)
+        if lock is None:
+            lock = locks[identity] = asyncio.Lock()
+        return lock
+
+
+async def _update(app, cid: str, sid: str, key: str, client: LLMClient,
+                  identity: str) -> dict:
+    """One post's update, as a run's outcome. `sid` is a hint (see above)."""
+    async with _scene_lock(app, identity):
+        try:
+            return await _update_locked(cid, sid, key, client, identity)
+        except BaseException as exc:
+            # Cancelled (a shutdown mid-call) or a bug: the record must not be
+            # left `pending` with no run behind it, which reads as an update
+            # still on its way, for good. Shielded, as `character_turns._rescue`
+            # is, so the write survives the cancellation that brought us here.
+            reason = (_text(exc) if isinstance(exc, Exception)
+                      else "the update was interrupted")
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(_fail, cid, identity, sid, key, reason)
+            raise
+
+
+async def _update_locked(cid: str, sid: str, key: str, client: LLMClient,
+                         identity: str) -> dict:
+    """`_update`'s body, under the scene's tracker lock. Every failure it
+    expects is settled here and returned as the run's outcome."""
+    try:
+        # Inside the coroutine, so a campaign with no usable connection is
+        # a failed record saying why rather than an exception out of the run.
+        conn = _require_connection("tracker-update", cid)
+    except HTTPException as exc:
+        await run_in_threadpool(_fail, cid, identity, sid, key, _detail(exc))
+        return {"state": "failed", "error": run_error(exc)}
+    try:
+        prep = await run_in_threadpool(_prepare, cid, identity, sid, key)
+    except Exception as exc:  # noqa: BLE001 -- the walk fails closed on a bad ledger
+        await run_in_threadpool(_fail, cid, identity, sid, key, _text(exc))
+        return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
+    if prep is None:
+        return {"state": "landed", "result": {"skipped": True}}
+    fields = prep["fields"]
+    messages = store.tracker.prompt.build_messages(
+        fields, prep["prior"], prep["roster"], prep["present"], prep["newcomers"],
+        prep["context_posts"], prep["post_msg"])
+    try:
+        with store.usage.meter("tracker-update", campaign=cid, scene=prep["sid"],
+                               post=prep["post"], response_id=prep["rid"]) as m:
+            text = await client.complete(messages, conn, m.usage)
+        reply = store.tracker.merge.parse_reply(text)
+    except LLMError as exc:
+        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
+        return {"state": "failed", "error": run_error(_llm_http_error(exc))}
+    except store.tracker.merge.TrackerReplyError as exc:
+        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
+        return {"state": "failed", "error": {"kind": "bad_reply", "detail": _text(exc)}}
+    snapshot, changed = store.tracker.merge.apply_reply(
+        prep["prior"], reply, fields, prep["roster"], prep["present"],
+        store.scenes.match_name)
+    try:
+        written = await run_in_threadpool(
+            _commit, cid, identity, prep["sid"], key, snapshot, changed,
+            store.tracker.fields.digest(fields), effective_model(conn))
+    except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
+        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
+        return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
+    if not written:
+        return {"state": "landed", "result": {"skipped": True}}
+    return {"state": "landed", "result": {"changed": len(changed)}}
+
+
+def _detail(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        return str(detail.get("detail") or detail.get("kind") or detail)
+    return str(detail)
+
+
+def _text(exc: Exception) -> str:
+    return str(exc) or type(exc).__name__
+
+
+def _current_sid(cid: str, hint: str, identity: str) -> str | None:
+    """The scene's `sid` now, or `None` once it is deleted. The hint is tried
+    first, so the ordinary case costs one header read rather than a scan."""
+    if store.scenes.scene_identity(cid, hint) == identity:
+        return hint
+    return store.scenes.find_by_identity(cid, identity)
+
+
+def _speaker(m: dict, player: str) -> str:
+    if m.get("role") == "user":
+        return m.get("speaker") or player or "You"
+    return m.get("speaker") or "Grimoire"
+
+
+def _locate(cid: str, sid: str, key: str) -> dict | None:
+    """Where `key`'s post sits and what it says, or `None` once it is gone.
+
+    A response's key is live while the response is on the transcript and the
+    variant is still one of its variants -- active or not. The spec keeps every
+    variant's record ("nothing is cancelled", and a swipe back must be free),
+    so an update whose variant was swiped away while it waited still computes
+    its record, at the response's position, from the variant's own text. Only a
+    post that is GONE (cut, retconned, taken back after a failed turn) has
+    nothing to record."""
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    walked = {k: i for i, k in store.tracker.walk.ordered_keys(cid, sid)}
+    player = store.appearances.player_label(cid, sid)
+    if key.startswith("p-"):
+        index = walked.get(key)
+        if index is None:
+            return None
+        m = messages[index]
+        return {"index": index, "first": index, "post": index, "rid": "",
+                "post_msg": {"speaker": _speaker(m, player), "content": m.get("content", "")}}
+    rid, vid = key[2:34], key[35:]
+    parts = [i for i, m in enumerate(messages) if m.get("response_id") == rid]
+    if not parts:
+        return None
+    record = store.responses.get(cid, sid, rid)
+    variant = next((v for v in record.get("variants", []) if v.get("id") == vid), None)
+    if variant is None:
+        return None
+    if walked.get(key) is not None:
+        # The active variant: the transcript's text, every part of it.
+        content = "\n\n".join(messages[i].get("content", "") for i in parts)
+    else:
+        content = variant.get("content", "")
+    speaker = record.get("speaker") or _speaker(messages[parts[-1]], player)
+    return {"index": parts[-1], "first": parts[0], "post": record.get("post"), "rid": rid,
+            "post_msg": {"speaker": speaker, "content": content}}
+
+
+def _context_posts(cid: str, sid: str, first: int) -> list[dict]:
+    """The two non-synthetic messages before the post, oldest first. Rolls,
+    transitions and director notes are not things a character did."""
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    player = store.appearances.player_label(cid, sid)
+    out: list[dict] = []
+    for m in reversed(messages[:first]):
+        if m.get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
+            continue
+        out.append({"speaker": _speaker(m, player), "content": m.get("content", "")})
+        if len(out) == 2:
+            break
+    return out[::-1]
+
+
+def _prepare(cid: str, identity: str, hint: str, key: str) -> dict | None:
+    """Everything the update call needs, read under one campaign-lock hold so it
+    describes one transcript. `None` when there is nothing to do -- the scene
+    or the post is gone, or the tracker was switched off while this waited --
+    and the record has been settled accordingly."""
+    walk = store.tracker.walk
+    with store.locks.campaign_lock(cid):
+        sid = _current_sid(cid, hint, identity)
+        if sid is None:
+            return None         # deleted: `delete_scene` already dropped its records
+        if not store.tracker.settings.enabled(cid):
+            # Switched off after this was scheduled. Turning it off is a choice
+            # not to pay for updates, including the ones still queued.
+            _settle_unwritten(cid, sid, identity, key,
+                              "the tracker was switched off before this update ran")
+            return None
+        located = _locate(cid, sid, key)
+        if located is None:
+            _settle_unwritten(cid, sid, identity, key, "")
+            return None
+        index = located["index"]
+        _, prior = walk.state_before(cid, sid, index)
+        present = walk.present_at(cid, sid, index)
+        return {
+            "sid": sid, "post": located["post"], "rid": located["rid"],
+            "fields": store.tracker.fields.effective(cid, sid),
+            "prior": prior, "roster": walk.roster(cid, sid), "present": present,
+            "newcomers": [store.tracker.prompt.newcomer(cid, ref)
+                          for ref in sorted(present) if ref not in prior],
+            "context_posts": _context_posts(cid, sid, located["first"]),
+            "post_msg": located["post_msg"],
+        }
+
+
+def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) -> None:
+    """A `pending` record no result will reach. Called under the campaign lock.
+
+    A post that is gone has no record to keep, so its entry (and any older
+    snapshot) is discarded -- left behind, it would read as `pending` forever.
+    A post still there is marked `failed` with `reason`, which keeps any older
+    snapshot file and offers Retry."""
+    if _locate(cid, sid, key) is None:
+        store.tracker.records.discard(cid, identity, [key])
+    else:
+        store.tracker.records.mark_failed(cid, identity, key, reason)
+    # A detached run writes after the activity middleware stamped its request,
+    # so it stamps for itself (CLAUDE.md, the write token).
+    store.revision.bump(cid)
+
+
+def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
+            changed: list, digest: str, model: str) -> bool:
+    """Store the result, unless the post went away while the model answered.
+
+    RE-CHECKED under the lock that covers the write, because the check in
+    `_prepare` is a provider call old: a cut, a retcon or a failed turn's
+    take-back may have removed the post since, and a record written for it
+    would be a snapshot of something that no longer happened (and, keyed by an
+    id rather than an index, would never be overwritten). A rename is not a
+    reason to drop it -- the identity finds the scene under its new id."""
+    with store.locks.campaign_lock(cid):
+        sid = _current_sid(cid, hint, identity)
+        if sid is None:
+            # Deleted while the model answered. `delete_scene` dropped the
+            # whole directory; writing now would resurrect it as an orphan.
+            return False
+        if _locate(cid, sid, key) is None:
+            _settle_unwritten(cid, sid, identity, key, "")
+            return False
+        store.tracker.records.save(cid, identity, key, snapshot, changed=changed,
+                                   fields_digest=digest, model=model)
+        # Inside the hold, for the write token's rule: a token minted after the
+        # lock is released is one a reader can hold while this write is still
+        # the newest thing in the campaign it has not seen.
+        store.revision.bump(cid)
+        return True
+
+
+def _fail(cid: str, identity: str, hint: str, key: str, error: str) -> None:
+    """Mark `key` failed. Never raises: this runs on paths that are already
+    reporting a failure, and a second one would only bury the first."""
+    try:
+        with store.locks.campaign_lock(cid):
+            if _current_sid(cid, hint, identity) is None:
+                return          # deleted: nothing to mark, and nothing to resurrect
+            store.tracker.records.mark_failed(cid, identity, key, error)
+            store.revision.bump(cid)
+    except Exception as exc:  # noqa: BLE001 -- see the docstring
+        log.warning("tracker: could not mark %s failed in %s -- %s", key, cid, exc)

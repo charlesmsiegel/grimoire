@@ -284,6 +284,7 @@ def frozen_client(frozen_home):
         yield client
 
 
+@pytest.mark.tracker      # the shipped default: this campaign predates the setting
 def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client):
     # This cassette answers the actor-scoped prompt with prose for the
     # selected speaker; the transcript still keeps its familiar block shape.
@@ -306,7 +307,11 @@ def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client
     assert "Salt first" in reply and "wet page faces you" in reply
     assert [m["role"] for m in messages[before + 1:]] == ["assistant"] * (len(messages) - before - 1)
     # and the request the route built carried the frozen campaign's own state
-    system = frozen_client.llm.messages[0]["content"]
+    # The turn's request, not merely the last one: the post and the reply each
+    # schedule a tracker update beside the turn, and those reach the same fake.
+    turn = next(r["messages"] for r in reversed(frozen_client.llm.requests)
+                if "You maintain the scene state tracker" not in r["messages"][0]["content"])
+    system = turn[0]["content"]
     assert "The drowned keeper of the tide ledger." in system
     # A named NPC receives only what they can observe; the old whole-cast
     # prompt included player-only history that this actor view omits.

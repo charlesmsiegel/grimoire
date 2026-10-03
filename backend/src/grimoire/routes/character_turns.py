@@ -14,6 +14,7 @@ from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from . import runs, streaming
+from . import tracker as tracker_routes
 from .common import (
     _override_connection,
     _record_prompt,
@@ -118,6 +119,7 @@ def start(
         token,
         round_record,
         outcome,
+        app=request.app,
         after_turn=after_turn,
         appended=appended,
         continuation=continuation,
@@ -380,7 +382,7 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
         )
         outcome.persisted(at)
         streaming._turn_settled(cid)
-        return proposal
+        return proposal, at
 
 
 async def _first_actor(cid, sid, client, round_record):
@@ -403,6 +405,7 @@ async def _frames(
     round_record,
     outcome,
     *,
+    app=None,
     after_turn=None,
     appended=(),
     continuation=None,
@@ -462,7 +465,7 @@ async def _frames(
             paused = watcher.roll.complete or watcher.roll.truncated
             status = "incomplete" if paused or run.cancel_requested else "complete"
             if paused:
-                proposal = await run_in_threadpool(
+                proposal, at = await run_in_threadpool(
                     _pause,
                     cid,
                     sid,
@@ -475,6 +478,10 @@ async def _frames(
                     outcome,
                     actor,
                 )
+                # The prose before the roll fence is a post the transcript
+                # shows, so it is tracked now; the resumed part schedules the
+                # finished variant again over the whole response.
+                await _track(app, cid, sid, record["id"], client, at)
                 yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
                 outcome.land()
                 yield streaming._sse({"done": True})
@@ -483,6 +490,9 @@ async def _frames(
                 _save, cid, sid, run, token, record, watcher, status, round_record, continuation
             )
             outcome.persisted(at)
+            # The response is on the transcript: track it. `at` is None when
+            # nothing was written (an empty reply), and then there is no post.
+            await _track(app, cid, sid, record["id"], client, at)
             if watcher.issue == "empty response":
                 await run_in_threadpool(_round_state, cid, sid, round_record, status="incomplete")
                 outcome.fail("empty_response", "The model returned no response prose.")
@@ -531,14 +541,16 @@ async def _frames(
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except LLMError as exc:
         await _rescue(
-            cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, exc
+            app, client, cid, sid, run, token, record, watcher, round_record, continuation,
+            outcome, meter, exc,
         )
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except BaseException:
         with anyio.CancelScope(shield=True):
             await _rescue(
-                cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter
+                app, client, cid, sid, run, token, record, watcher, round_record, continuation,
+                outcome, meter,
             )
         raise
     finally:
@@ -552,7 +564,8 @@ def _abort_meter(meter):
 
 
 async def _rescue(
-    cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, error=None
+    app, client, cid, sid, run, token, record, watcher, round_record, continuation, outcome,
+    meter, error=None,
 ):
     if meter:
         if error:
@@ -561,6 +574,7 @@ async def _rescue(
             meter.done("aborted")
 
     def save():
+        saved = None
         with store.locks.campaign_lock(cid):
             _fence(cid, sid, run, token)
             if watcher and record:
@@ -568,7 +582,7 @@ async def _rescue(
                 if current["status"] != "complete":
                     watcher.finish()
                     if watcher.roll.complete or watcher.roll.truncated:
-                        _pause(
+                        _, at = _pause(
                             cid,
                             sid,
                             run,
@@ -580,7 +594,7 @@ async def _rescue(
                             outcome,
                             record["actor_ref"],
                         )
-                        return
+                        return at
                     at = _save(
                         cid,
                         sid,
@@ -593,11 +607,31 @@ async def _rescue(
                         continuation,
                     )
                     outcome.persisted(at)
+                    saved = at
             current_round = store.responses.unfinished(cid, sid)
             if current_round and current_round["status"] != "paused":
                 _round_state(cid, sid, round_record, status="incomplete")
+            return saved
 
-    await run_in_threadpool(save)
+    at = await run_in_threadpool(save)
+    # A partial the rescue kept is a post the transcript shows. Scheduled
+    # after `save` returns, outside its campaign-lock hold.
+    if record:
+        await _track(app, cid, sid, record["id"], client, at)
+
+
+async def _track(app, cid, sid, rid, client, at):
+    """Schedule the tracker update for response `rid` if a write landed (`at`).
+
+    In a worker thread: this is the event loop, and reserving a run goes
+    through the lifespan's portal, which raises from the loop thread (the same
+    reason `streaming._fire_follow_up` gives). `schedule_response` swallows its
+    own failures, so the turn's outcome cannot depend on it.
+
+    `app` is None only for a test driving `_frames` with no app behind it --
+    there is no lifespan to run an update on, so there is nothing to track."""
+    if at is not None and app is not None:
+        await run_in_threadpool(tracker_routes.schedule_response, app, cid, sid, rid, client)
 
 
 def resume_roll(
@@ -804,12 +838,14 @@ def regenerate_response(
                     }
                 )
         outcome = streaming.StreamOutcome()
-        frames = _reroll_frames(cid, sid, rid, client, conn, run, token, record, messages, outcome)
+        frames = _reroll_frames(
+            request.app, cid, sid, rid, client, conn, run, token, record, messages, outcome
+        )
         runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
-async def _reroll_frames(cid, sid, rid, client, conn, run, token, record, messages, outcome):
+async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, messages, outcome):
     watcher = store.response_protocol.ResponseWatcher(perception=record["actor_ref"] != "grimoire")
     meter = store.usage.meter(
         "regenerate",
@@ -838,6 +874,11 @@ async def _reroll_frames(cid, sid, rid, client, conn, run, token, record, messag
             _accept_reroll, cid, sid, rid, run, token, record, watcher
         )
         if accepted:
+            # The new variant is the response's active one now, and gets its
+            # own record; the previous variant's record is kept, so swiping
+            # back to it reads a state already worked out instead of paying
+            # for a fresh run.
+            await _track(app, cid, sid, rid, client, True)
             outcome.land()
             yield streaming._sse({"response_end": {"id": rid, "status": "complete"}})
             yield streaming._sse({"done": True})

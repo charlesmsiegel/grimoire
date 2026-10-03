@@ -7,6 +7,8 @@ from grimoire import store
 from grimoire.store import campaigns, worlds
 from grimoire.store.tracker import settings
 
+pytestmark = pytest.mark.tracker
+
 
 def _campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
