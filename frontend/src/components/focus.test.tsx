@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { PHONE_PX } from "../shell/tabs";
+import { stylesheet } from "../testkit/stylesheet";
 import { FocusProvider, FocusRestore, useFocus } from "./focus";
 
 function Probe() {
@@ -86,61 +84,11 @@ test("storage that refuses to answer is not a blank screen", () => {
    the entrance had none, which is backwards: `focus.tsx` and the scene bar both
    argue focus mode is FOR the 375px case. */
 
-// Off disk, and for `pickerLayout.test.ts`'s reason: vitest stubs CSS imports to
-// an empty string, so an import would make every case here pass vacuously.
-// Comments come out first: this file argues with itself in prose, and a rule
-// whose comment NAMES the selector it is explaining would otherwise read as a
-// rule that selects it. Every case below was wrong in exactly that way once.
-const css = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "..", "index.css"), "utf8")
-  .replace(/\/\*[\s\S]*?\*\//g, "");
-
-/** The concatenated bodies of every `@media (max-width: <px>px)` block. Braces
- *  are counted rather than matched with a regex, because these blocks nest. */
-function atWidth(px: number): string {
-  const query = `@media (max-width: ${px}px)`;
-  const out: string[] = [];
-  for (let i = 0; ; ) {
-    const at = css.indexOf(query, i);
-    if (at === -1) break;
-    const open = css.indexOf("{", at);
-    let depth = 0;
-    let j = open;
-    for (; j < css.length; j++) {
-      if (css[j] === "{") depth++;
-      else if (css[j] === "}" && --depth === 0) break;
-    }
-    out.push(css.slice(open + 1, j));
-    i = j + 1;
-  }
-  if (!out.length) throw new Error(`no ${query} block in index.css`);
-  return out.join("\n");
-}
-
-/** Every rule in `text` whose selector list names the class `cls`, as bodies.
- *
- *  Whole-token, not substring: `.header-focus` must not match
- *  `.header-focus-word`, which is a different control-half with the opposite
- *  `display` — reading one as the other is how the first draft of these cases
- *  reported the fixed stylesheet as still broken.
- *
- *  Both ends are guarded. The dot is escaped as `\\.` and not as `\\${cls}`,
- *  which is an identity escape emitting `\\header-focus` — a pattern that
- *  matches the bare word anywhere and so anchors nothing on the left. */
-function bodiesNaming(text: string, cls: string): string[] {
-  const named = new RegExp(`\\.${cls}(?![-\\w])`);
-  const bodies: string[] = [];
-  const rule = /([^{}]*)\{([^{}]*)\}/g;
-  for (let m = rule.exec(text); m; m = rule.exec(text)) {
-    if (named.test(m[1])) bodies.push(m[2]);
-  }
-  return bodies;
-}
-
-const declares = (body: string, prop: string): string | null => {
-  const m = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "i").exec(body);
-  return m ? m[1].trim() : null;
-};
+// Off disk, through the testkit, which carries the reasons: vitest stubs CSS
+// imports to an empty string, and comments come out before any rule is read.
+// The composer suite (`routes/composerLayout.test.ts`) reads the same file
+// with the same tools, which is why they are no longer defined here.
+const { css, atWidth, bodiesNaming, declares } = stylesheet();
 
 test("nothing in the stylesheet hides the control that enters focus mode", () => {
   const hidden = bodiesNaming(css, "header-focus")
