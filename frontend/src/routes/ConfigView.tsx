@@ -94,7 +94,7 @@ type SectionId =
   | "context" | "layout" | "tracker" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
-/** The column, as data: three groups, fourteen sections, and which draft fields
+/** The column, as data: three groups, seventeen sections, and which draft fields
  *  each one owns — the last part is what lets a section carry an unsaved dot,
  *  so the footer's count is always findable rather than being a number about
  *  somewhere else. */
