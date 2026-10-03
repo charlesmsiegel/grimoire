@@ -318,6 +318,43 @@ test("a tracked post shows its Tracker summary", async () => {
   expect(api.getTracker).toHaveBeenCalledWith("run", "s1");
 });
 
+test("a cast tile shows the tracker's visible mood", async () => {
+  twoPosts();
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "mara", role: "npc", name: "Mara" },
+  ]);
+  withTracker({ moods: { "characters:mara": "fear" } });
+  renderCampaign();
+  const mood = await screen.findByText("fear");
+  expect(mood).toHaveClass("cast-mood");
+});
+
+test("Mara's dossier reads the latest ok key while the newest post is still pending", async () => {
+  twoPosts();
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "mara", role: "npc", name: "Mara" },
+  ]);
+  (api.getCasefile as any).mockResolvedValue({
+    kind: "characters", id: "mara", name: "Mara", version: "v1", role: "npc",
+    scenes: [], last_seen: "", standing: "Watchful.", knows: "", suspects: "",
+    dossier: "", tagline: "", feels_toward: [], standing_facts: [],
+  });
+  (api.getTrackerRecord as any).mockResolvedValue({
+    key: "p-0", status: "ok", flags: TF, names: { "characters:mara": "Mara" },
+    fields: [{ key: "visible_mood", label: "Visible mood", type: "text", aware: "present", hint: "" }],
+    snapshot: { "characters:mara": { present: true, fields: {
+      visible_mood: { value: "calm", aware: "present" } } } },
+  });
+  withTracker({ entries: { "p-0": { status: "ok", changed: [], flags: TF },
+                           "p-1": { status: "pending", changed: [], flags: TF } } });
+  renderCampaign();
+  await screen.findByText("Tracker · updating…");
+  fireEvent.click(document.querySelector(".cast-tile-name") as HTMLElement);
+  expect(await screen.findByText("Now")).toBeInTheDocument();
+  expect(api.getTrackerRecord).toHaveBeenCalledWith("run", "s1", "p-0");
+  expect(api.getTrackerRecord).not.toHaveBeenCalledWith("run", "s1", "p-1");
+});
+
 test("a post whose key the tracker does not list shows no disclosure", async () => {
   twoPosts();
   withTracker({ keys: [{ index: 0, key: "p-0" }] });

@@ -44,24 +44,25 @@ export function TrackerNow({ tracker, onChanged }: {
   onChanged: () => void;
 }) {
   const { cid, sid, key, ref, enabled, entry } = tracker;
-  const [loaded, setLoaded] = useState<{ key: string; record: TrackerRecord } | null>(null);
+  const [record, setRecord] = useState<TrackerRecord | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [reload, setReload] = useState(0);
   const [editRecord, setEditRecord] = useState<TrackerRecord | null>(null);
 
   // Read whenever the key moves, and again when its entry does or a save lands.
-  // A response that arrives after any of those moved again is dropped.
+  // A response that arrives after any of those moved again is dropped (`live`).
   useEffect(() => {
     let live = true;
     setError(null);
     api.getTrackerRecord(cid, sid, key)
-      .then((r) => { if (live) setLoaded({ key, record: r }); })
+      .then((r) => { if (live) setRecord(r); })
       .catch((err) => { if (live) setError(err); });
     return () => { live = false; };
   }, [cid, sid, key, ref, entry, reload]);
 
-  // A record read for another key is not shown: it is the previous turn's.
-  const record = loaded !== null && loaded.key === key ? loaded.record : null;
+  // When the key advances the previous record stays up until the new one lands,
+  // rather than the section blinking out each turn. The parent remounts this per
+  // scene and actor, so what is held here is always this actor's last good read.
   const actor = record?.snapshot?.[ref];
 
   async function save(edits: TrackerEdits) {
