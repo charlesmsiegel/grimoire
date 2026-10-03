@@ -19,6 +19,7 @@ import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
 import { shareSummary } from "../components/tracker/share";
+import { lastOkKey, type NowTracker } from "../components/tracker/TrackerNow";
 import { errorText, isProviderFailure } from "../api/errors";
 import { configChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
@@ -104,6 +105,10 @@ const NO_ALTERNATES: ScopedAlternates = {
 // recent end. Older posts arrive by scrolling up (or the button that scroll
 // falls back to), which prepends the next page and holds the viewport still.
 const PAGE_SIZE = 60;
+
+/** The cast column's moods while there are none to show. A module-level object
+ *  so the memoized column is handed the same one every render. */
+const NO_MOODS: Readonly<Record<string, string>> = Object.freeze({});
 // How many extra rounds Stop will ask the server before giving the composer
 // back. The cancel route waits for the run itself, but that wait is bounded, so
 // a provider slow to unwind can answer while still `running`; each round is
@@ -1680,6 +1685,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const trackerKeys = useMemo(
     () => Object.fromEntries((tracker?.keys ?? []).map((k) => [k.index, k.key])),
     [tracker?.keys]);
+  // What the dossier's "Now" section reads: the latest post whose tracking
+  // landed, for the open actor. Memoized -- a literal here would hand the
+  // memoized dossier a new object on every keystroke and streamed delta.
+  const nowKey = tracker ? lastOkKey(tracker.keys, tracker.entries) : null;
+  const nowEntry = nowKey && tracker ? tracker.entries[nowKey] : undefined;
+  const nowEnabled = tracker?.enabled ?? false;
+  const dossierTracker = useMemo<NowTracker | null>(
+    () => selectedActor && activeId
+      ? { cid, sid: activeId, key: nowKey, ref: `${selectedActor.kind}:${selectedActor.id}`,
+          enabled: nowEnabled, entry: nowEntry }
+      : null,
+    [cid, activeId, selectedActor, nowKey, nowEnabled, nowEntry]);
   // While a post is being tracked, ask again every two seconds: one timeout
   // chain, re-armed only once the last read has settled so a slow server is
   // never asked twice at once, and cleared with the scene or the view. A read
@@ -4356,9 +4373,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                      onHoverQuote={setCitedQuote} onGoToTurn={goToQuoteStable}
                      onBack={closeActorStable}
                      onOpenActor={openDrawerActor}
-                     onRemove={removeSelectedActorStable} busy={sceneLocked} />
+                     onRemove={removeSelectedActorStable} busy={sceneLocked}
+                     tracker={dossierTracker}
+                     onTrackerChanged={transcriptActions.refreshTracker} />
     : <CastColumn cid={cid} sid={activeId ?? ""} hasPosts={messages.length > 0} refreshKey={ctxKey}
                   cast={cast} roster={roster} briefing={briefing}
+                  moods={tracker?.moods ?? NO_MOODS}
                   onOpen={transcriptActions.openActor}
                   // A confirmed enter or leave writes a transition line into the
                   // transcript as well as moving the cast, so the scene is
