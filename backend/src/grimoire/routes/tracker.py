@@ -3,7 +3,10 @@
 The on/off setting and the field-definition layers, and the run that keeps a
 snapshot per post: `schedule` is called after every post lands (a player's, a
 character's, an opener) and starts a `background` run that asks the model what
-changed and stores the merged result under that post's key.
+changed and stores the merged result under that post's key. The scene's
+records are read, hand-edited and re-run through the routes at the bottom, and
+the `after_*` hooks are how the transcript routes that edit, cut or swipe keep
+those records consistent with what the transcript now says.
 
 The callers are `routes/scenes.py`, `routes/character_turns.py` and
 `routes/greetings.py`; this module imports none of them, which is what keeps
@@ -16,15 +19,22 @@ import logging
 import threading
 
 import anyio
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from . import runs
-from .common import _dump, _llm_http_error, _require_connection, _require_scene, run_error
-from .models import CampaignTracker, TrackerLayer
+from .common import (
+    _dump,
+    _llm_http_error,
+    _require_connection,
+    _require_scene,
+    get_llm,
+    run_error,
+)
+from .models import CampaignTracker, TrackerEdit, TrackerLayer
 
 router = APIRouter()
 
@@ -201,7 +211,7 @@ def mark_response(cid: str, sid: str, rid: str) -> str | None:
 
 
 def start(app, cid: str, sid: str, key: str, client: LLMClient,
-          identity: str | None = None) -> None:
+          identity: str | None = None, *, flag_later: bool = False) -> None:
     """The second half: start the run for a key `mark` returned. Never raises.
 
     Takes no campaign lock on its success path (`reserve_background` reads the
@@ -218,7 +228,11 @@ def start(app, cid: str, sid: str, key: str, client: LLMClient,
     `identity` is the scene the key was marked on, when the caller knows it (a
     turn does: its fenced identity). A reservation made against a different
     scene -- the `sid` deleted and reissued in between -- is released, and the
-    record is failed where it was marked rather than looked for in a stranger."""
+    record is failed where it was marked rather than looked for in a stranger.
+
+    `flag_later` is a Retry's: the record had no usable result, so every later
+    record was built without this post's contribution and is stale once it
+    lands (`_commit`)."""
     try:
         run = runs.reserve_background(app, cid, sid, "tracker-update")
     except Exception as exc:  # noqa: BLE001 -- fail-soft by contract
@@ -236,7 +250,8 @@ def start(app, cid: str, sid: str, key: str, client: LLMClient,
         _fail(cid, identity, sid, key, "the scene was replaced before the update started")
         return
     try:
-        runs.start_computing(app, run, lambda: _update(app, cid, sid, key, client, ident))
+        runs.start_computing(app, run, lambda: _update(app, cid, sid, key, client, ident,
+                                                       flag_later))
     except Exception as exc:  # noqa: BLE001 -- `scenes._start_background`'s reason
         # `runner.start` raises with no lifespan running, or when shutdown
         # closed the portal between the reservation and the handoff. A run
@@ -249,12 +264,13 @@ def start(app, cid: str, sid: str, key: str, client: LLMClient,
         _fail(cid, ident, sid, key, str(exc) or "the update could not be started")
 
 
-def schedule(app, cid: str, sid: str, key: str, client: LLMClient) -> None:
+def schedule(app, cid: str, sid: str, key: str, client: LLMClient, *,
+             flag_later: bool = False) -> None:
     """`mark` then `start`, for a caller with no write hold of its own to mark
     inside -- a user action (Retry, re-run from here) or an opening. Never
     raises. A turn uses the two halves instead (see `mark`)."""
     if mark(cid, sid, key):
-        start(app, cid, sid, key, client)
+        start(app, cid, sid, key, client, flag_later=flag_later)
 
 
 def schedule_response(app, cid: str, sid: str, rid: str, client: LLMClient) -> None:
@@ -317,11 +333,11 @@ def _scene_lock(app, identity: str) -> asyncio.Lock:
 
 
 async def _update(app, cid: str, sid: str, key: str, client: LLMClient,
-                  identity: str) -> dict:
+                  identity: str, flag_later: bool = False) -> dict:
     """One post's update, as a run's outcome. `sid` is a hint (see above)."""
     async with _scene_lock(app, identity):
         try:
-            return await _update_locked(cid, sid, key, client, identity)
+            return await _update_locked(cid, sid, key, client, identity, flag_later)
         except BaseException as exc:
             # Cancelled (a shutdown mid-call) or a bug: the record must not be
             # left `pending` with no run behind it, which reads as an update
@@ -335,7 +351,7 @@ async def _update(app, cid: str, sid: str, key: str, client: LLMClient,
 
 
 async def _update_locked(cid: str, sid: str, key: str, client: LLMClient,
-                         identity: str) -> dict:
+                         identity: str, flag_later: bool = False) -> dict:
     """`_update`'s body, under the scene's tracker lock. Every failure it
     expects is settled here and returned as the run's outcome."""
     try:
@@ -373,7 +389,7 @@ async def _update_locked(cid: str, sid: str, key: str, client: LLMClient,
     try:
         written = await run_in_threadpool(
             _commit, cid, identity, prep["sid"], key, snapshot, changed,
-            store.tracker.fields.digest(fields), effective_model(conn))
+            store.tracker.fields.digest(fields), effective_model(conn), flag_later)
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
         await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
@@ -511,7 +527,7 @@ def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) 
 
 
 def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
-            changed: list, digest: str, model: str) -> bool:
+            changed: list, digest: str, model: str, flag_later: bool = False) -> bool:
     """Store the result, unless the post went away while the model answered.
 
     RE-CHECKED under the lock that covers the write, because the check in
@@ -519,7 +535,13 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
     take-back may have removed the post since, and a record written for it
     would be a snapshot of something that no longer happened (and, keyed by an
     id rather than an index, would never be overwritten). A rename is not a
-    reason to drop it -- the identity finds the scene under its new id."""
+    reason to drop it -- the identity finds the scene under its new id.
+
+    `flag_later` (a Retry of a record that had no result): every later record
+    on the walk was built without this one, so each gets `upstream_changed` --
+    in the same hold, so no reader sees the new result beside unflagged
+    successors. Only when the key is ON the walk: an inactive variant's record
+    is not what any later record was built on."""
     with store.locks.campaign_lock(cid):
         sid = _current_sid(cid, hint, identity)
         if sid is None:
@@ -531,6 +553,10 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
             return False
         store.tracker.records.save(cid, identity, key, snapshot, changed=changed,
                                    fields_digest=digest, model=model)
+        if flag_later:
+            at = store.tracker.walk.index_of(cid, sid, key)
+            if at is not None:
+                store.tracker.walk.flag_after(cid, sid, at)
         # Inside the hold, for the write token's rule: a token minted after the
         # lock is released is one a reader can hold while this write is still
         # the newest thing in the campaign it has not seen.
@@ -561,3 +587,267 @@ def _fail_by_sid(cid: str, sid: str, key: str, error: str) -> None:
         return
     if ident:
         _fail(cid, ident, sid, key, error)
+
+
+# --- scene records -------------------------------------------------------------
+#
+# What the disclosure reads and writes. Reads work whatever the setting, so a
+# campaign that switched the tracker off can still look at what it recorded;
+# the three writes refuse with `tracker_off`, because each of them either
+# schedules a paid update or edits a record nothing will keep up to date.
+
+INTERRUPTED = "interrupted"
+"""The `error` a `pending` record with no run behind it is reported with."""
+
+
+def _require_on(cid: str) -> None:
+    if not store.tracker.settings.enabled(cid):
+        raise HTTPException(status_code=409, detail="tracker_off")
+
+
+def _require_key(key: str) -> None:
+    # Checked before anything is read: a key becomes a file name.
+    if not store.tracker.paths.valid_key(key):
+        raise HTTPException(status_code=404, detail="tracker record not found")
+
+
+def _update_live(app, cid: str, identity: str | None) -> bool:
+    """Whether anything still running can settle this scene's `pending` records.
+
+    A tracker update can, obviously. So can a TURN: it marks its keys `pending`
+    inside the hold that writes each post, but starts their runs only after its
+    terminal frames (`character_turns._start_tracking`) -- and a client that
+    reads the summary on the `done` frame lands in exactly that gap. The turn
+    run is still live there (it finishes when its generator does, after that
+    `finally`), so counting it keeps a record that is about to start from
+    flickering to "interrupted"."""
+    if not identity:
+        return False
+    for run in app.state.runs.for_subject(("scene", cid, identity)):
+        if run.terminal.is_set():
+            continue
+        if run.kind == "tracker-update" or run.cls == "turn":
+            return True
+    return False
+
+
+def _reported(entry: dict, live: bool) -> dict:
+    """The entry as a reader should see it.
+
+    A `pending` record with nothing live behind it is one no run will ever
+    settle: the process stopped between the mark and the result, or a start
+    that failed could not even write `failed`. Read literally it says
+    "updating..." for good and offers nothing; reported as failed it offers
+    Retry, which is the one action that settles it. Reported, not rewritten --
+    a GET takes no lock, and the next mark or save overwrites it anyway."""
+    if entry.get("status") == "pending" and not live:
+        return {**entry, "status": "failed", "error": INTERRUPTED}
+    return entry
+
+
+def _flags(entry: dict) -> dict:
+    return {**dict.fromkeys(store.tracker.records.FLAGS, False), **(entry.get("flags") or {})}
+
+
+def _moods(snapshot: dict, fields: list[dict]) -> dict:
+    """`{ref: visible_mood}` for the characters present at the tail, for the
+    cast tiles. Nothing for a character with no mood yet, and nothing at all
+    when the field is switched off for this scene."""
+    if not any(f["key"] == "visible_mood" for f in store.tracker.fields.active(fields)):
+        return {}
+    out = {}
+    for ref, ent in snapshot.items():
+        value = ((ent.get("fields") or {}).get("visible_mood") or {}).get("value")
+        if ent.get("present") and value:
+            out[ref] = value
+    return out
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/tracker")
+def get_scene_tracker(cid: str, sid: str, request: Request):
+    """Every tracked post's key in transcript order, with its index entry --
+    the disclosures' collapsed summaries in one read, no snapshot among them."""
+    _require_scene(cid, sid)
+    walk = store.tracker.walk
+    ident = store.scenes.scene_identity(cid, sid)
+    entries = store.tracker.records.read_index(cid, ident) if ident else {}
+    live = _update_live(request.app, cid, ident)
+    fields = store.tracker.fields.effective(cid, sid)
+    _, current = walk.current(cid, sid)
+    return {
+        "enabled": store.tracker.settings.enabled(cid),
+        "names": walk.roster(cid, sid),
+        "keys": [{"index": i, "key": k} for i, k in walk.ordered_keys(cid, sid)],
+        "entries": {k: _reported(e, live) for k, e in entries.items()},
+        "moods": _moods(current, fields),
+        # Switched-off fields included: a stored value still needs its label.
+        "labels": {f["key"]: f["label"] for f in fields},
+    }
+
+
+def _record_body(app, cid: str, sid: str, identity: str, key: str) -> dict:
+    entry = store.tracker.records.read_index(cid, identity).get(key)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="tracker record not found")
+    shown = _reported(entry, _update_live(app, cid, identity))
+    body = store.tracker.records.read_snapshot(cid, identity, key)
+    out = {
+        "key": key,
+        "status": shown.get("status"),
+        "flags": _flags(shown),
+        "snapshot": body["snapshot"] if body else None,
+        "fields": store.tracker.fields.effective(cid, sid),
+        "names": store.tracker.walk.roster(cid, sid),
+    }
+    if shown.get("error"):
+        out["error"] = shown["error"]
+    return out
+
+
+def _identity_or_404(cid: str, sid: str) -> str:
+    ident = store.scenes.scene_identity(cid, sid)
+    if not ident:
+        # A scene that never minted an identity has never stored a record.
+        raise HTTPException(status_code=404, detail="tracker record not found")
+    return ident
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/tracker/records/{key}")
+def get_tracker_record(cid: str, sid: str, key: str, request: Request):
+    _require_scene(cid, sid)
+    _require_key(key)
+    return _record_body(request.app, cid, sid, _identity_or_404(cid, sid), key)
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/tracker/records/{key}")
+def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request: Request):
+    """A person's edit of one record's values. Nothing re-runs: every later
+    record is flagged `upstream_changed`, and re-running is the person's call.
+
+    Under one campaign-lock hold from the read to the flags, so the edit is
+    applied to the snapshot it replaces and the flags land with it."""
+    _require_scene(cid, sid)
+    _require_key(key)
+    _require_on(cid)
+    records, walk = store.tracker.records, store.tracker.walk
+    with store.locks.campaign_lock(cid):
+        ident = _identity_or_404(cid, sid)
+        entry = records.read_index(cid, ident).get(key)
+        located = _locate(cid, sid, key) if entry is not None else None
+        if entry is None or located is None:
+            # No record, or one for a post that is gone (the next prune drops it).
+            raise HTTPException(status_code=404, detail="tracker record not found")
+        stored = records.read_snapshot(cid, ident, key)
+        # A record with no snapshot (failed before it ever landed) is edited
+        # from the state its post started from -- what the disclosure shows.
+        prev = stored["snapshot"] if stored else walk.state_before(cid, sid, located["index"])[1]
+        fields = store.tracker.fields.effective(cid, sid)
+        try:
+            snapshot, changed = store.tracker.merge.apply_edit(prev, body.edits, fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # The post's own change list keeps what the update found, with the
+        # person's changes laid over the same fields: it is the summary of what
+        # changed AT this post, and the edit is one more thing that did.
+        touched = {(c[0], c[1]) for c in changed}
+        kept = ([c for c in entry.get("changed") or [] if (c[0], c[1]) not in touched]
+                if entry.get("status") == "ok" else [])
+        records.save(cid, ident, key, snapshot, changed=kept + changed,
+                     fields_digest=store.tracker.fields.digest(fields), model="user")
+        # `save` clears the flags, which is right for a re-run and wrong here:
+        # a hand edit of one value does not make the rest of the record agree
+        # with an edited post or an earlier change, so whatever was raised stays.
+        for flag, raised in _flags(entry).items():
+            if raised:
+                records.set_flags(cid, ident, [key], flag)
+        at = walk.index_of(cid, sid, key)
+        if at is not None:
+            # Only from a key ON the walk: an inactive variant is not what any
+            # later record was built on.
+            walk.flag_after(cid, sid, at)
+    return _record_body(request.app, cid, sid, ident, key)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/tracker/records/{key}/retry")
+def post_tracker_retry(cid: str, sid: str, key: str, request: Request,
+                       client: LLMClient = Depends(get_llm)):
+    """Run `key`'s update again. Its post must still be there; a record need
+    not exist -- an untracked post is what Retry is offered on.
+
+    When the record had no usable result (failed, interrupted, or never
+    tracked), a success flags every later record: each was built without this
+    post's contribution. A retry of an `ok` record leaves them alone."""
+    _require_scene(cid, sid)
+    _require_key(key)
+    _require_on(cid)
+    if _locate(cid, sid, key) is None:
+        raise HTTPException(status_code=404, detail="tracker record not found")
+    ident = store.scenes.scene_identity(cid, sid)
+    entry = store.tracker.records.read_index(cid, ident).get(key) if ident else None
+    # Captured BEFORE the mark, which overwrites the status with `pending`.
+    status = (_reported(entry, _update_live(request.app, cid, ident))["status"]
+              if entry else None)
+    schedule(request.app, cid, sid, key, client,
+             flag_later=status not in ("ok", "pending"))
+    return get_scene_tracker(cid, sid, request)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/tracker/records/{key}/rerun-from")
+def post_tracker_rerun_from(cid: str, sid: str, key: str, request: Request,
+                            client: LLMClient = Depends(get_llm)):
+    """Re-run `key` and every tracked post after it, in transcript order.
+
+    Scheduled in that order, which is the order they run in (`_scene_lock`),
+    so each starts from what the one before it just wrote. Each save clears its
+    own flags; nothing needs flagging, because everything after is re-run."""
+    _require_scene(cid, sid)
+    _require_key(key)
+    _require_on(cid)
+    ordered = [k for _, k in store.tracker.walk.ordered_keys(cid, sid)]
+    if key not in ordered:
+        raise HTTPException(status_code=404, detail="tracker record not found")
+    for later in ordered[ordered.index(key):]:
+        schedule(request.app, cid, sid, later, client)
+    return get_scene_tracker(cid, sid, request)
+
+
+# --- transcript hooks -----------------------------------------------------------
+#
+# Called by the routes that change a transcript's shape, after their store
+# write and inside the hold that covers it, so the records move with the
+# transcript rather than after another request could have read it. None of
+# them raises: the write they follow is the user's and has landed, and stale
+# tracker bookkeeping is worth a log line, not a failed edit.
+
+def _soft(what: str, cid: str, sid: str, fn, *args) -> None:
+    try:
+        fn(cid, sid, *args)
+    except Exception as exc:  # noqa: BLE001 -- see the section comment
+        log.warning("tracker: could not %s in %s/%s -- %s", what, cid, sid, exc)
+
+
+def after_text_edit(cid: str, sid: str, index: int) -> None:
+    """The post at `index` was rewritten (an edit or a retcon): its record no
+    longer matches its text, and every later one was built on it."""
+    _soft("flag an edit", cid, sid, store.tracker.walk.flag_edited, index)
+
+
+def after_cut(cid: str, sid: str, index: int | None = None) -> None:
+    """Posts left the transcript: drop their records. `index`, when known, is
+    the first position the removal renumbered -- every record from there on
+    was built on something that is gone, so it is flagged."""
+    _soft("prune records", cid, sid, store.tracker.walk.prune)
+    if index is not None:
+        _soft("flag later records", cid, sid, store.tracker.walk.flag_after, index - 1)
+
+
+def after_swipe(cid: str, sid: str, rid: str) -> None:
+    """Response `rid`'s active variant changed. Its own record is the
+    variant's cached one (nothing re-runs), but every later record was built
+    on the variant that was active before."""
+    def flag(c: str, s: str) -> None:
+        messages = store.scenes.read_scene(c, s)["messages"]
+        parts = [i for i, m in enumerate(messages) if m.get("response_id") == rid]
+        if parts:
+            store.tracker.walk.flag_after(c, s, parts[-1])
+    _soft("flag a swipe", cid, sid, flag)

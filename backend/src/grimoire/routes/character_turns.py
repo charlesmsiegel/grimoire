@@ -790,10 +790,16 @@ def get_response(cid: str, sid: str, rid: str):
 def delete_response(cid: str, sid: str, rid: str, request: Request):
     _require_scene(cid, sid)
     with runs.scene_held_free(request.app, cid, sid):
+        messages = store.scenes.read_scene(cid, sid)["messages"]
+        at = next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
         try:
             store.responses.delete(cid, sid, rid)
         except (store.responses.ResponseNotFound, store.responses.ResponseConflict) as exc:
             raise _public_error(exc) from exc
+        # Every variant's tracker record goes with the response, and whatever
+        # now sits where it was (`at` onward, renumbered) was built on it.
+        # In the hold that deleted it; fail-soft.
+        tracker_routes.after_cut(cid, sid, at)
         return store.scenes.read_scene(cid, sid)
 
 
@@ -805,6 +811,10 @@ def activate_response(cid: str, sid: str, rid: str, vid: str, request: Request):
             store.responses.activate(cid, sid, rid, vid)
         except (store.responses.ResponseNotFound, store.responses.ResponseConflict) as exc:
             raise _public_error(exc) from exc
+        # A swipe starts no update -- the variant's own record is kept for
+        # exactly this -- but every later record was built on the variant that
+        # was showing. In the hold that swapped it; fail-soft.
+        tracker_routes.after_swipe(cid, sid, rid)
         return store.scenes.read_scene(cid, sid)
 
 
