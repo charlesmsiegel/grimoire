@@ -28,6 +28,12 @@ import grimoire.store as store
 from grimoire import routes
 from tests.llm_fakes import FakeOpenRouter, FakeOpenRouterComplete
 
+# The tracker ON (its shipped default), which the suite otherwise turns off
+# (conftest). Without it `tracker.mark` returns before `mark_pending`, so a
+# draft path that scheduled an update would never reach the armed tracker
+# writers below and this guard could not fail.
+pytestmark = pytest.mark.tracker
+
 #: (module, function) pairs a draft must never reach: the extraction pipeline,
 #: the transcript, play state, relationships, plot, dossiers and voice drift.
 _WRITERS = [
@@ -57,15 +63,26 @@ def _module(mod: str):
 
 @pytest.fixture
 def instrumented(client, monkeypatch):
-    """The route-test app, with every canonical campaign-state writer armed."""
+    """The route-test app, with every canonical campaign-state writer armed.
+
+    Each armed writer raises AND records the hit, and the hits are checked at
+    teardown. The raise alone is not enough: the tracker's scheduling is
+    fail-soft by contract (`tracker.mark` swallows whatever its write raises,
+    because the post it tracks has already landed), so a draft path reaching it
+    would have its AssertionError logged and discarded, and the test would pass.
+    """
+    hits: list[str] = []
+
     def _boom(name):
         def fail(*a, **k):  # pragma: no cover - reaching this IS the failure
+            hits.append(name)
             raise AssertionError(f"ephemeral draft path called {name}")
         return fail
 
     for mod, fn in _WRITERS:
         monkeypatch.setattr(_module(mod), fn, _boom(f"{mod}.{fn}"))
-    return client
+    yield client
+    assert hits == [], f"a draft path reached a campaign-state writer: {hits}"
 
 
 @pytest.fixture

@@ -711,7 +711,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         if ephemeral:
             _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
-        posted_at, content, speaker, post_id = None, "", None, None
+        posted_at, content, speaker, post_id, tracked = None, "", None, None, None
         if note_text:
             # In the same locked, fenced hold the player's post is written in,
             # and for its reasons. Macros are expanded at persist time exactly
@@ -754,6 +754,11 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
                        if store.tracker.settings.enabled(cid) else None)
             posted_at = store.scenes.append_message(
                 cid, sid, "user", content, speaker=speaker, post_id=post_id)
+            # The tracker's `pending` mark, in the hold that wrote the post:
+            # the acquisition is reentrant here, where after the hold it would
+            # be a second wait on the campaign lock in front of the turn.
+            tracked = (tracker_routes.mark(cid, sid, store.tracker.paths.post_key(post_id))
+                       if post_id else None)
             # In the SAME hold as the append it describes. This is what lets a
             # recovery after the run record expired ask the only decisive
             # question -- is this attempt's post still here? -- rather than
@@ -768,18 +773,17 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # transcript -- a duplicate, the recoverable side again.
             with contextlib.suppress(OSError):
                 store.attempts.remember(cid, run.scene_identity, run.attempt_id)
-    if post_id:
+    if tracked:
         # The player's post is a tracked post of its own: what they said or did
-        # can change the scene's state before anyone answers. AFTER the hold
-        # above, not in it -- reserving a run goes through the lifespan portal,
-        # and nothing about it needs the post's lock. Scheduled before the turn
-        # starts, so the post's update queues ahead of the reply's on the
-        # scene's tracker lock and the two run in transcript order. Fail-soft:
-        # the post is written, and a tracker that cannot start is not a turn
-        # that cannot. If the turn later takes the post back, the update finds
-        # it gone and discards its record (`tracker._commit`).
-        tracker_routes.schedule(request.app, cid, sid,
-                                store.tracker.paths.post_key(post_id), client)
+        # can change the scene's state before anyone answers. Marked `pending`
+        # inside the hold above; the run is started here, after it, because
+        # reserving one needs no campaign lock and goes through the lifespan
+        # portal. Started before the turn, so the post's update queues ahead of
+        # the reply's on the scene's tracker lock and the two run in transcript
+        # order. Fail-soft: a run that cannot start marks the record `failed`.
+        # If the turn later takes the post back, the update finds it gone and
+        # discards its record (`tracker._commit`).
+        tracker_routes.start(request.app, cid, sid, tracked, client, run.scene_identity)
     if character_turns.enabled() or turn.speaker_ref:
         return character_turns.start(
             cid,sid,request,client,conn,run,post=posted_at,

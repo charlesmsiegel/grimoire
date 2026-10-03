@@ -162,32 +162,78 @@ def put_scene_tracker_fields(cid: str, sid: str, body: TrackerLayer):
 # is only a hint, re-resolved (`_current_sid`) every time the run touches the
 # store.
 
-def schedule(app, cid: str, sid: str, key: str, client: LLMClient) -> None:
-    """Start the update for `key`, or do nothing when the campaign's tracker is
-    off. Never raises (see above).
+def mark(cid: str, sid: str, key: str) -> str | None:
+    """The first half of scheduling: mark `key` `pending`, and return it -- or
+    `None` when the tracker is off or the mark could not be written.
+
+    **Meant to be called inside the campaign-lock hold that wrote the post**
+    (the append, `_save`, `_pause`, `_accept_reroll`). There the acquisition
+    below is reentrant and costs nothing; anywhere on a turn's path OUTSIDE
+    such a hold it would be a fresh wait of up to `LOCK_TIMEOUT` in front of
+    the player's terminal frames, which is exactly the cost `reserve_background`
+    was built not to charge. `pending` before the run exists is also
+    `records.save`'s caller contract (a crash between a snapshot and its index
+    entry leaves `pending`, never an `ok` about a file that did not land).
+
+    Never raises: the post is written, and tracking it is extra."""
+    try:
+        if not store.tracker.settings.enabled(cid):
+            return None
+        ident = store.scenes.ensure_identity(cid, sid)
+        store.tracker.records.mark_pending(cid, ident, key)
+    except Exception as exc:  # noqa: BLE001 -- see the docstring
+        log.warning("tracker: could not mark %s pending in %s/%s -- %s", key, cid, sid, exc)
+        return None
+    return key
+
+
+def mark_response(cid: str, sid: str, rid: str) -> str | None:
+    """`mark` for response `rid`'s ACTIVE variant -- the one the transcript now
+    shows. `None` when it has none yet. Same calling rule as `mark`."""
+    try:
+        if not store.tracker.settings.enabled(cid):
+            return None
+        active, _ = store.responses.variants_by_response(cid, sid).get(rid, (None, []))
+    except Exception as exc:  # noqa: BLE001 -- see `mark`
+        log.warning("tracker: could not resolve response %s in %s/%s -- %s", rid, cid, sid, exc)
+        return None
+    return mark(cid, sid, store.tracker.paths.response_key(rid, active)) if active else None
+
+
+def start(app, cid: str, sid: str, key: str, client: LLMClient,
+          identity: str | None = None) -> None:
+    """The second half: start the run for a key `mark` returned. Never raises.
+
+    Takes no campaign lock on its success path (`reserve_background` reads the
+    identity rather than ensuring it), so a turn calls it AFTER its terminal
+    frames without anything left to wait on. Only a failure takes the lock, to
+    mark the record `failed`: once `mark` has said `pending`, every way this
+    can go wrong must say so rather than leave the record waiting on a run
+    that does not exist.
 
     **Must be called from a worker thread, never the event loop:** reserving a
     run builds its handshake events through the lifespan's `BlockingPortal`,
-    which raises from the loop thread. Every caller is either a `def` handler or
-    reaches here through `run_in_threadpool`.
+    which raises from the loop thread.
 
-    The record is marked `pending` FIRST, before the run exists: that is
-    `records.save`'s caller contract (a crash between a snapshot and its index
-    entry leaves `pending`, never an `ok` about a file that did not land), and
-    it is also what the play view reads to say an update is on its way."""
+    `identity` is the scene the key was marked on, when the caller knows it (a
+    turn does: its fenced identity). A reservation made against a different
+    scene -- the `sid` deleted and reissued in between -- is released, and the
+    record is failed where it was marked rather than looked for in a stranger."""
     try:
-        if not store.tracker.settings.enabled(cid):
-            return
-        ident = store.scenes.ensure_identity(cid, sid)
-        store.tracker.records.mark_pending(cid, ident, key)
-    except Exception as exc:  # noqa: BLE001 -- the post landed; tracking it is extra
-        log.warning("tracker: could not schedule %s for %s/%s -- %s", key, cid, sid, exc)
-        return
-    run = runs.reserve_background(app, cid, sid, "tracker-update")
-    if run is None:
+        run = runs.reserve_background(app, cid, sid, "tracker-update")
+    except Exception as exc:  # noqa: BLE001 -- fail-soft by contract
+        log.warning("tracker: could not reserve %s for %s/%s -- %s", key, cid, sid, exc)
+        run = None
+    if run is None or not run.scene_identity:
         # A store mid-move or a scene that vanished: no run will ever settle
         # this record, so it must not sit at `pending` for good.
-        _fail(cid, ident, sid, key, "the update could not be scheduled")
+        _fail_by_sid(cid, sid, key, "the update could not be scheduled")
+        return
+    ident = run.scene_identity
+    if identity is not None and ident != identity:
+        runs.release_before_start(app, run, "failed",
+                                  {"kind": "scene_replaced", "detail": "the scene was replaced"})
+        _fail(cid, identity, sid, key, "the scene was replaced before the update started")
         return
     try:
         runs.start_computing(app, run, lambda: _update(app, cid, sid, key, client, ident))
@@ -203,18 +249,19 @@ def schedule(app, cid: str, sid: str, key: str, client: LLMClient) -> None:
         _fail(cid, ident, sid, key, str(exc) or "the update could not be started")
 
 
+def schedule(app, cid: str, sid: str, key: str, client: LLMClient) -> None:
+    """`mark` then `start`, for a caller with no write hold of its own to mark
+    inside -- a user action (Retry, re-run from here) or an opening. Never
+    raises. A turn uses the two halves instead (see `mark`)."""
+    if mark(cid, sid, key):
+        start(app, cid, sid, key, client)
+
+
 def schedule_response(app, cid: str, sid: str, rid: str, client: LLMClient) -> None:
-    """`schedule` for a response's ACTIVE variant -- the one the transcript now
-    shows. Nothing when it has none yet. Never raises."""
-    try:
-        if not store.tracker.settings.enabled(cid):
-            return
-        active, _ = store.responses.variants_by_response(cid, sid).get(rid, (None, []))
-    except Exception as exc:  # noqa: BLE001 -- see `schedule`
-        log.warning("tracker: could not resolve response %s in %s/%s -- %s", rid, cid, sid, exc)
-        return
-    if active:
-        schedule(app, cid, sid, store.tracker.paths.response_key(rid, active), client)
+    """`schedule` for a response's active variant. Never raises."""
+    key = mark_response(cid, sid, rid)
+    if key:
+        start(app, cid, sid, key, client)
 
 
 def schedule_untracked(app, cid: str, sid: str, client: LLMClient) -> None:
@@ -502,3 +549,15 @@ def _fail(cid: str, identity: str, hint: str, key: str, error: str) -> None:
             store.revision.bump(cid)
     except Exception as exc:  # noqa: BLE001 -- see the docstring
         log.warning("tracker: could not mark %s failed in %s -- %s", key, cid, exc)
+
+
+def _fail_by_sid(cid: str, sid: str, key: str, error: str) -> None:
+    """`_fail` for a caller that has no identity in hand -- a reservation that
+    never happened. Never raises."""
+    try:
+        ident = store.scenes.scene_identity(cid, sid)
+    except Exception as exc:  # noqa: BLE001 -- as `_fail`
+        log.warning("tracker: could not mark %s failed in %s -- %s", key, cid, exc)
+        return
+    if ident:
+        _fail(cid, ident, sid, key, error)

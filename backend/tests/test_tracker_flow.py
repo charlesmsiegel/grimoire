@@ -301,3 +301,79 @@ def test_an_update_for_a_deleted_scene_leaves_nothing_behind(client):
         llm.release()
     _settle(client, cid, ident)
     assert not store.tracker.paths.scene_dir(cid, ident).exists()
+
+
+# ---- tracking stays off the turn's critical path ---------------------------
+def test_tracking_waits_on_no_lock_in_front_of_the_turns_frames(client, monkeypatch):
+    """The `pending` mark is written inside the hold that wrote the post, and
+    the run is started only once the turn's terminal frames are out -- taking
+    no campaign lock to do it, so a contended campaign cannot hold the
+    player's `done` frame back behind tracker bookkeeping."""
+    import threading
+
+    from grimoire.routes import tracker as tracker_routes
+
+    _use(client, from_entries(_llm(_tracked({}))))
+    cid, sid = _scene(client)
+    lock = store.locks.campaign_lock(cid)
+    inside_start = threading.local()
+    marked_in_a_hold: list[bool] = []
+    started: list[tuple[str, bool, int]] = []
+
+    real_mark = store.tracker.records.mark_pending
+
+    def mark_spy(c, ident, key):
+        marked_in_a_hold.append(lock._rlock._is_owned())
+        return real_mark(c, ident, key)
+
+    real_acquire = lock.acquire
+    acquired = {"n": 0}
+
+    def acquire_spy(*a, **k):
+        if getattr(inside_start, "on", False):
+            acquired["n"] += 1
+        return real_acquire(*a, **k)
+
+    real_start = tracker_routes.start
+
+    def start_spy(app, c, s, key, llm_client, identity=None):
+        turns = [r for r in app.state.runs.for_subject(("scene", c, identity))
+                 if r.cls == "turn"]
+        done = any('"done": true' in f["raw"] for r in turns for f in r.frames)
+        before = acquired["n"]
+        inside_start.on = True
+        try:
+            real_start(app, c, s, key, llm_client, identity)
+        finally:
+            inside_start.on = False
+        started.append((key, done, acquired["n"] - before))
+
+    monkeypatch.setattr(store.tracker.records, "mark_pending", mark_spy)
+    monkeypatch.setattr(lock, "acquire", acquire_spy)
+    monkeypatch.setattr(tracker_routes, "start", start_spy)
+    _send(client, cid, sid)
+    _settle(client, cid, _identity(cid, sid))
+
+    assert marked_in_a_hold == [True, True], "a key was marked outside the write's hold"
+    assert [k[:2] for k, _, _ in started] == ["p-", "r-"]
+    assert [n for _, _, n in started] == [0, 0], "starting a run took the campaign lock"
+    reply = next(entry for entry in started if entry[0].startswith("r-"))
+    assert reply[1], "the reply's update started before the turn's done frame"
+
+
+def test_a_run_that_cannot_be_started_leaves_the_record_failed(client, monkeypatch):
+    """After the frames there is nobody to tell, so a reservation that cannot
+    happen must say so on the record rather than leave it `pending` (or absent)."""
+    from grimoire.routes import runs as runs_routes
+
+    _use(client, from_entries(_llm(_tracked({}))))
+    cid, sid = _scene(client)
+    monkeypatch.setattr(runs_routes, "reserve_background", lambda *a, **k: None)
+    _send(client, cid, sid)
+    ident = _identity(cid, sid)
+    keys = [k for _, k in store.tracker.walk.ordered_keys(cid, sid)]
+    index = _index(cid, ident)
+    assert len(keys) == 2
+    for key in keys:
+        assert index[key]["status"] == "failed"
+        assert "could not be scheduled" in index[key]["error"]
