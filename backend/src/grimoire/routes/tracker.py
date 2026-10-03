@@ -412,7 +412,7 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
     # A re-run or Retry rebuilds this record from the one before it; whatever
     # a person typed into it, and the reply did not itself move, is kept.
     snapshot, changed = store.tracker.merge.keep_user_values(
-        snapshot, prep["own"], prep["prior"], changed)
+        snapshot, prep["own"], prep["prior"], changed, prep["set_here"])
     try:
         written = await run_in_threadpool(
             _commit, cid, identity, prep["sid"], key, snapshot, changed,
@@ -570,6 +570,11 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
             "seen_seq": seen,
             "stale_base": stale_base,
             "own": own["snapshot"] if own else None,
+            # The pairs this post's own record changed -- what a person set AT
+            # it, as opposed to what it inherited (`merge.keep_user_values`).
+            # Read in this hold, with the snapshot it describes.
+            "set_here": {(c[0], c[1]) for c in (entries.get(key) or {}).get("changed") or []
+                         if isinstance(c, list) and len(c) >= 2},
         }
 
 

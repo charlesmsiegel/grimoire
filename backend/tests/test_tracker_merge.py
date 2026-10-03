@@ -277,3 +277,43 @@ def test_view_puts_viewer_first_and_skips_absent_and_off_fields():
     flds = [dict(f, off=True) if f["key"] == "visible_mood" else f for f in FIELDS]
     narr = view.lines_for(SNAP, flds, None, ROSTER)
     assert all(v["label"] != "Visible mood" for l in narr for v in l["values"])
+
+
+# --- a re-run keeping what a person set ---------------------------------------
+
+MARA, WIN = "characters:mara", "characters:winifred"
+
+
+def test_keep_user_values_restores_only_what_was_set_at_this_post():
+    own = {MARA: {"present": True, "fields": {
+        "clothing": {"value": "red coat", "aware": "present", "set_by": "user"},
+        "pose": {"value": "kneeling", "aware": "present", "set_by": "user"}}}}
+    prior = {MARA: {"present": True, "fields": {
+        "clothing": {"value": "blue coat", "aware": "present", "set_by": "user"}}}}
+    fresh = {MARA: {"present": True, "fields": {
+        "clothing": {"value": "blue coat", "aware": "present", "set_by": "user"}}}}
+    snap, changed = merge.keep_user_values(fresh, own, prior, [], {(MARA, "pose")})
+    fields_ = snap[MARA]["fields"]
+    assert fields_["clothing"]["value"] == "blue coat"     # inherited: the base's word
+    assert fields_["pose"]["value"] == "kneeling"          # set here: kept
+    assert changed == [[MARA, "pose", "kneeling"]]
+
+
+def test_keep_user_values_conjures_nobody():
+    own = {WIN: {"present": True, "fields": {
+        "pose": {"value": "leaning", "aware": "present", "set_by": "user"}}}}
+    snap, changed = merge.keep_user_values({}, own, {}, [], {(WIN, "pose")})
+    assert snap == {} and changed == []
+
+
+def test_keep_user_values_keeps_a_widening_the_reply_made():
+    own = {MARA: {"present": True, "fields": {
+        "concealed": {"value": "a letter", "aware": [], "set_by": "user"}}}}
+    fresh = {MARA: {"present": True, "fields": {
+        "concealed": {"value": "a letter", "aware": [WIN]}}}}
+    snap, _ = merge.keep_user_values(fresh, own, {}, [], {(MARA, "concealed")})
+    assert snap[MARA]["fields"]["concealed"] == {
+        "value": "a letter", "aware": [WIN], "set_by": "user"}
+    fresh[MARA]["fields"]["concealed"]["aware"] = "present"
+    snap, _ = merge.keep_user_values(fresh, own, {}, [], {(MARA, "concealed")})
+    assert snap[MARA]["fields"]["concealed"]["aware"] == "present"

@@ -639,6 +639,32 @@ def test_a_rerun_keeps_what_a_person_set_unless_the_reply_moves_it(client, actio
     assert ["characters:mara", "pose", "standing"] in changed
 
 
+def test_a_rerun_does_not_revert_a_newer_edit_it_only_inherited(client):
+    """A record carries forward what came before it, `set_by` included, so a
+    later record's own snapshot holds the earlier record's hand-set value
+    without anyone having set it there. Re-running that later record must
+    take the newer edit from its base, not restore the stale inherited one."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    _edit(client, cid, sid, keys[1], {"characters:mara": {"clothing": {"value": "red coat"}}})
+    _send(client, cid, sid, "Words number 1.")
+    _settle(client, cid, sid)
+    keys = _keys(cid, sid)
+    inherited = client.get(f"{_base(cid, sid)}/records/{keys[3]}").json()["snapshot"]
+    clothing = inherited["characters:mara"]["fields"]["clothing"]
+    assert clothing["value"] == "red coat" and clothing["set_by"] == "user"
+    _edit(client, cid, sid, keys[1], {"characters:mara": {"clothing": {"value": "blue coat"}}})
+    r = client.post(f"{_base(cid, sid)}/records/{keys[2]}/rerun-from")
+    assert r.status_code == 200, r.text
+    _settle(client, cid, sid)
+    index = _index(cid, sid)
+    for key in keys[2:]:
+        body = client.get(f"{_base(cid, sid)}/records/{key}").json()
+        assert body["snapshot"]["characters:mara"]["fields"]["clothing"]["value"] == "blue coat", key
+        assert not any(c[1] == "clothing" for c in index[key]["changed"]), key
+
+
 # --- a run superseded while it waited -----------------------------------------
 
 def test_an_obsolete_run_neither_prepares_nor_lands(client):

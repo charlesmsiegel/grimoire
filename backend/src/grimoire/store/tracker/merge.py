@@ -293,30 +293,53 @@ def _apply_awareness(snap: dict, awareness: dict, defs: dict[str, dict],
                 stored["aware"].append(ref)
 
 
+def _merged_aware(a, b):
+    """Two awareness specs as one: `"present"` (everyone) wins over a list;
+    two lists are their union, `a`'s order first."""
+    if a == "present" or b == "present":
+        return "present"
+    out = list(a) if isinstance(a, list) else []
+    out += [r for r in (b if isinstance(b, list) else []) if r not in out]
+    return out
+
+
 def keep_user_values(snapshot: dict, own: dict | None, prior: dict,
-                     changed: list[list]) -> tuple[dict, list[list]]:
+                     changed: list[list], set_here: set[tuple[str, str]]
+                     ) -> tuple[dict, list[list]]:
     """`snapshot` (a fresh result for a post) with the hand-set values the
-    post's OWN earlier record carried put back: `(snapshot, changed)`.
+    post's OWN earlier record set AT this post put back: `(snapshot, changed)`.
 
     A re-run or a Retry rebuilds a record from the one before it, so without
     this every value a person typed into this record would be silently lost
-    to it. A value the reply itself changed is the model's newer word and
-    stands; every other `set_by: "user"` value of `own` is restored as it was,
-    `set_by` and awareness included, and listed in `changed` when it differs
-    from what the post started from -- it is a change made AT this post.
-    `snapshot` is not touched."""
+    to it. Only `set_here` pairs -- the `(ref, field)`s in the record's own
+    change list -- are restored: a record carries forward everything before
+    it, `set_by` included, so a `"user"` value merely inherited from an
+    earlier record is that record's to say, and restoring it here would
+    revert a newer edit made there. A value the reply itself changed is the
+    model's newer word and stands. A restored value keeps its `set_by`; its
+    awareness is the stored one widened by whatever the reply widened for
+    that field. Listed in `changed` when it differs from what the post
+    started from. A character the fresh snapshot does not hold (not present
+    here, and not carried from the prior) is not conjured. `snapshot` is not
+    touched."""
     snap = copy.deepcopy(snapshot)
     out = list(changed)
     moved = {(c[0], c[1]) for c in changed}
     for ref, ent in (own or {}).items():
+        target = snap.get(ref)
+        if target is None:
+            continue
         for key, cur in ((ent or {}).get("fields") or {}).items():
             if not isinstance(cur, dict) or cur.get("set_by") != "user":
                 continue
-            if (ref, key) in moved:
+            if (ref, key) in moved or (ref, key) not in set_here:
                 continue
-            target = snap.setdefault(ref, {"present": bool(ent.get("present")),
-                                           "fields": {}})
-            target.setdefault("fields", {})[key] = copy.deepcopy(cur)
+            fields_ = target.setdefault("fields", {})
+            fresh = fields_.get(key) or {}
+            restored = copy.deepcopy(cur)
+            if "aware" in fresh:
+                restored["aware"] = _merged_aware(cur.get("aware", []), fresh["aware"])
+            fields_[key] = restored
             before = ((prior.get(ref) or {}).get("fields") or {}).get(key) or {}
             if before.get("value") != cur.get("value"):
                 out.append([ref, key, cur.get("value")])
