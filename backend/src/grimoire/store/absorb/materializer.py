@@ -316,9 +316,15 @@ def materialize(cid: str, sid: str, parsed: dict,
             knows = e["knows"] if "knows" in e else cur_knows
             suspects = e["suspects"] if "suspects" in e else cur_suspects
         after = playstate.compose_body(e.get("current_state", ""), knows, suspects)
-        if not after:
-            continue
         before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
+        # An empty result is dropped for a character, whose state the play
+        # loop also feeds. A PC's state.md is written by absorb and nothing
+        # else, so an explicit "" (the state is over) is the only way it ever
+        # stops standing: staged when there is a state to clear. An omitted
+        # current_state stays "nothing to say", as knows/suspects' omission is.
+        clears = kind == "pcs" and "current_state" in e and bool(before)
+        if not after and not clears:
+            continue
         if before == after:
             continue
         out.append(_staged(_character_state_edit(cid, kind, char_id, before, after, name),
