@@ -136,8 +136,15 @@ def mark_pending(cid: str, identity: str, key: str) -> None:
 
 
 def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[list],
-         fields_digest: str, model: str) -> None:
-    """Store `key`'s snapshot and mark it `ok` with fresh flags.
+         fields_digest: str, model: str, keep_flags: bool = False) -> None:
+    """Store `key`'s snapshot and mark it `ok` -- with fresh flags, or with the
+    entry's current ones when `keep_flags`.
+
+    `keep_flags` is for a writer whose inputs were read EARLIER than this save:
+    an update run (which clears the flags itself, in the hold that reads its
+    inputs -- `clear_flags`) and a hand edit. A flag still raised at save time
+    was raised by a write the snapshot never saw, so clearing it here would
+    make a stale record read as fresh.
 
     The snapshot is stored as given; what a valid one looks like is the update
     pipeline's business, not the store's."""
@@ -146,7 +153,23 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
                     {"version": VERSION, "snapshot": snapshot,
                      "fields_digest": fields_digest, "model": model, "at": now_iso()})
         entries = read_index(cid, identity)
-        entries[key] = {"status": "ok", "changed": changed, "flags": _clear_flags()}
+        flags = _clear_flags()
+        if keep_flags:
+            flags.update((entries.get(key) or {}).get("flags") or {})
+        entries[key] = {"status": "ok", "changed": changed, "flags": flags}
+        _write_index(cid, identity, entries)
+
+
+def clear_flags(cid: str, identity: str, key: str) -> None:
+    """Lower both flags on `key`'s entry, if it has one: an update has just read
+    the transcript and prior state those flags said had moved, so the result it
+    is about to compute answers them."""
+    with locks.campaign_lock(cid):
+        entries = read_index(cid, identity)
+        entry = entries.get(key)
+        if entry is None or not any((entry.get("flags") or {}).values()):
+            return
+        entry["flags"] = _clear_flags()
         _write_index(cid, identity, entries)
 
 

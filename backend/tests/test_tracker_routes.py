@@ -14,7 +14,7 @@ import pytest
 
 from grimoire import routes, store
 
-from .llm_fakes import FakeLLM, from_entries
+from .llm_fakes import FakeLLM, HeldCassette, from_entries
 
 pytestmark = pytest.mark.tracker
 
@@ -403,8 +403,6 @@ def test_a_pending_record_with_no_run_reads_as_interrupted(client):
 
 
 def test_a_pending_record_with_a_live_run_reads_as_pending(client):
-    from .llm_fakes import HeldCassette
-
     llm = _use(client, HeldCassette(
         [{"when": dict(TRACKER), "reply": "{}"}, {"when": {}, "reply": MARA_SAYS}],
         hold=TRACKER))
@@ -418,3 +416,98 @@ def test_a_pending_record_with_a_live_run_reads_as_pending(client):
     finally:
         llm.release()
     _settle(client, cid, sid)
+
+
+# --- writes that land while an update is running ------------------------------
+
+def _held(client) -> HeldCassette:
+    return _use(client, HeldCassette(
+        [{"when": dict(TRACKER), "reply": json.dumps({"changes": {"Mara": {"pose": "x"}}})},
+         {"when": {}, "reply": MARA_SAYS}], hold=TRACKER))
+
+
+def test_a_text_edit_during_its_own_update_stays_flagged(client):
+    """The update read the old text; its save must not clear the flag the
+    edit raised after it read."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    llm = _held(client)
+    try:
+        assert client.post(f"{_base(cid, sid)}/records/{keys[1]}/retry").status_code == 200
+        llm.await_held()
+        at = _msg_index(cid, sid, keys[1])
+        r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/{at}",
+                       json={"content": "Mara answers, differently."})
+        assert r.status_code == 200, r.text
+    finally:
+        llm.release()
+    _settle(client, cid, sid)
+    entry = _index(cid, sid)[keys[1]]
+    assert entry["status"] == "ok"
+    assert entry["flags"]["text_changed"], "the update's save cleared a later edit's flag"
+
+
+def test_an_earlier_edit_during_an_update_stays_flagged(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    llm = _held(client)
+    try:
+        assert client.post(f"{_base(cid, sid)}/records/{keys[2]}/retry").status_code == 200
+        llm.await_held()
+        r = client.put(f"{_base(cid, sid)}/records/{keys[1]}",
+                       json={"edits": {"characters:mara": {"clothing": {"value": "red coat"}}}})
+        assert r.status_code == 200, r.text
+    finally:
+        llm.release()
+    _settle(client, cid, sid)
+    entry = _index(cid, sid)[keys[2]]
+    assert entry["status"] == "ok"
+    assert entry["flags"]["upstream_changed"], "the update's save cleared an earlier edit's flag"
+
+
+def test_a_rerun_still_clears_flags_raised_before_it_read(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    at = _msg_index(cid, sid, keys[1])
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/{at}",
+                      json={"content": "Mara answers, differently."}).status_code == 200
+    assert _index(cid, sid)[keys[1]]["flags"]["text_changed"]
+    assert client.post(f"{_base(cid, sid)}/records/{keys[1]}/retry").status_code == 200
+    _settle(client, cid, sid)
+    assert _index(cid, sid)[keys[1]]["flags"] == {"upstream_changed": False,
+                                                 "text_changed": False}
+
+
+def test_editing_a_record_whose_update_is_running_is_refused(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    llm = _held(client)
+    try:
+        assert client.post(f"{_base(cid, sid)}/records/{keys[1]}/retry").status_code == 200
+        llm.await_held()
+        r = client.put(f"{_base(cid, sid)}/records/{keys[1]}",
+                       json={"edits": {"characters:mara": {"clothing": {"value": "red coat"}}}})
+        assert r.status_code == 409 and r.json() == {"detail": "tracker_busy"}
+    finally:
+        llm.release()
+    _settle(client, cid, sid)
+
+
+def test_rerolling_an_earlier_response_flags_later(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    rid = keys[1][2:34]
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate", json={})
+    assert r.status_code == 200 and '"error"' not in r.text, r.text
+    _settle(client, cid, sid)
+    after = _keys(cid, sid)
+    assert after[1] != keys[1] and after[2:] == keys[2:]
+    index = _index(cid, sid)
+    assert not index[after[0]]["flags"]["upstream_changed"]
+    assert index[keys[2]]["flags"]["upstream_changed"]
+    assert index[keys[3]]["flags"]["upstream_changed"]
