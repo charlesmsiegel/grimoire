@@ -20,6 +20,8 @@ default), the usage ledger and the log file. None of them is campaign state,
 and the first is the one write the opener path is documented to make.
 """
 
+import functools
+
 import pytest
 
 import grimoire.store as store
@@ -43,7 +45,14 @@ _WRITERS = [
     ("dossiers", "stage_edit"),
     ("voice_drift", "write"),
     ("voice_drift", "stage_edit"),
+    ("tracker.records", "save"),
+    ("tracker.records", "mark_pending"),
 ]
+
+
+def _module(mod: str):
+    """`store.<mod>`, where `mod` may be dotted (`tracker.records`)."""
+    return functools.reduce(getattr, mod.split("."), store)
 
 
 @pytest.fixture
@@ -55,7 +64,7 @@ def instrumented(client, monkeypatch):
         return fail
 
     for mod, fn in _WRITERS:
-        monkeypatch.setattr(getattr(store, mod), fn, _boom(f"{mod}.{fn}"))
+        monkeypatch.setattr(_module(mod), fn, _boom(f"{mod}.{fn}"))
     return client
 
 
@@ -145,4 +154,4 @@ def test_the_armed_writers_exist(client):
     """The list stays honest: a renamed writer must rename here too, not fall
     out of the guard as a silent getattr miss."""
     for mod, fn in _WRITERS:
-        assert callable(getattr(getattr(store, mod), fn)), f"{mod}.{fn}"
+        assert callable(getattr(_module(mod), fn)), f"{mod}.{fn}"

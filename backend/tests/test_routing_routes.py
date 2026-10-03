@@ -154,6 +154,26 @@ def _drive_scenario(client, wid, cid, sid):
                 files={"file": ("card.json", card.encode(), "application/json")})
 
 
+def _drive_tracker(client, wid, cid, sid):
+    # An adopted opener rather than a chat: a chat's own turn would reach the
+    # provider on the `scene` route, and every assertion here is "EVERY request
+    # went to this connection". Adoption makes no call of its own, so the only
+    # requests are the tracker updates it schedules. The suite runs with the
+    # tracker off (conftest), so this campaign opts in.
+    client.put(f"/api/campaigns/{cid}/tracker", json={"setting": "on"})
+    fresh = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tideline"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{fresh}/first-post",
+                json={"text": "The lamps along the quay gutter out."})
+    # Detached `background` runs: the POST answers before they reach the
+    # provider, so wait for them as `test_tracker_flow.py` does.
+    identity = store.scenes.scene_identity(cid, fresh)
+    updates = [r for r in client.app.state.runs.for_subject(("scene", cid, identity))
+               if r.cls == "background" and r.kind == "tracker-update"]
+    assert updates, "adopting an opener scheduled no tracker update"
+    for run in updates:
+        assert run.terminal.wait(timeout=10), "a tracker update never finished"
+
+
 #: route key -> what a user does to reach it. Every route in the registry is
 #: here; `test_every_route_has_a_driver` fails if one is added without one,
 #: which is the same "no phantoms" rule the guard applies to tasks.
@@ -168,6 +188,7 @@ DRIVERS = {
     "image": _drive_image,
     "tagline": _drive_tagline,
     "scenario": _drive_scenario,
+    "tracker": _drive_tracker,
 }
 
 #: The routes a campaign may override, which is the registry's own answer.

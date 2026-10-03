@@ -4,8 +4,12 @@ that, and the text is not an identifier."""
 
 import re
 
+import pytest
+
 from grimoire import store
 from grimoire.store import campaigns, scenes, worlds
+
+pytestmark = pytest.mark.tracker
 
 POST_ID = re.compile(r"^[0-9a-f]{32}$")
 
