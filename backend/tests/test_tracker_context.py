@@ -188,6 +188,48 @@ def test_the_opener_carries_no_scene_state(cast_scene):
     assert all(row["id"] != "tracker_state" for row in detail["sections"])
 
 
+def test_the_opener_reads_no_tracker_state(cast_scene, monkeypatch):
+    """Not only unrendered: unread. The opener is composed inside an async
+    generator on the event loop, and the read waits on locks."""
+    cid, sid = cast_scene
+
+    def read(*a, **k):
+        raise AssertionError("the opener read the tracker")
+
+    monkeypatch.setattr(assemble, "_tracker_read", read)
+    for actor_ref in ("grimoire", MARA):
+        context.compose_opener(cid, sid, "Set the scene.", actor_ref=actor_ref)
+
+
+def test_the_prompt_path_waits_on_no_held_campaign_lock(cast_scene):
+    """A composing turn reads the tracker's walk, which reads the response
+    ledger. That read is one atomically written file and takes no lock, so a
+    campaign held elsewhere (an absorb, a long write) costs the prompt nothing
+    -- where a lock there was a wait of up to the lock timeout per prompt."""
+    import threading
+    import time
+
+    cid, sid = cast_scene
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with store.locks.campaign_lock(cid):
+            held.set()
+            done.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert held.wait(5)
+        started = time.monotonic()
+        assert walk.ordered_keys(cid, sid)
+        responses.variants_by_response(cid, sid)
+        assert time.monotonic() - started < 1.0, "the walk waited on the campaign lock"
+    finally:
+        done.set()
+        holder.join()
+
+
 def test_a_pinned_cast_member_holds_the_section_up():
     cast = [{"kind": "characters", "id": "mara", "role": "npc"}]
     held = assemble._pinned_sections(frozenset({MARA}), cast, [], None)
