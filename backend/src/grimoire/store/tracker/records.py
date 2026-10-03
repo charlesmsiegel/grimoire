@@ -42,6 +42,15 @@ FLAGS = ("upstream_changed", "text_changed")
 SEQ = "flag_seq"
 """The entry field counting flag raises (`set_flags`), so an update can tell
 at save time whether a flag went up after it read its inputs."""
+GEN = "mark_gen"
+"""The entry field counting the writes that make an update run obsolete: every
+`mark_pending` (a newer run for the same key) and every hand edit. A run
+carries the generation its mark returned, and is skipped -- or its result
+discarded -- once the entry's has moved on: a newer run will settle the record,
+or a person has written to it and a result built before that would replace the
+edit without a trace."""
+INTERNAL = (SEQ, GEN)
+"""Bookkeeping fields no reader is shown."""
 
 
 def _index_path(cid: str, identity: str) -> Path:
@@ -125,17 +134,27 @@ def _write_index(cid: str, identity: str, entries: dict[str, dict]) -> None:
     _write_json(_index_path(cid, identity), {"version": VERSION, "entries": entries})
 
 
-def mark_pending(cid: str, identity: str, key: str) -> None:
-    """A run for `key` has started. Its flags and change list stay as they were
-    until the run lands, so a disclosure can keep showing the last result."""
+def generation(entry: dict | None) -> int:
+    """The entry's mark generation (`GEN`); absent reads as 0."""
+    gen = (entry or {}).get(GEN, 0)
+    return gen if isinstance(gen, int) else 0
+
+
+def mark_pending(cid: str, identity: str, key: str) -> int:
+    """A run for `key` has been scheduled; returns the generation it owns.
+    Its flags and change list stay as they were until the run lands, so a
+    disclosure can keep showing the last result. The generation moves, so any
+    run marked before this one is now obsolete (`GEN`)."""
     with locks.campaign_lock(cid):
         _snapshot_path(cid, identity, key)          # validates the key
         entries = read_index(cid, identity)
         entry = entries.get(key) or {"changed": [], "flags": _clear_flags()}
         entry["status"] = "pending"
         entry.pop("error", None)
+        entry[GEN] = generation(entry) + 1
         entries[key] = entry
         _write_index(cid, identity, entries)
+        return entry[GEN]
 
 
 def flag_seq(entry: dict | None) -> int:
@@ -147,7 +166,8 @@ def flag_seq(entry: dict | None) -> int:
 
 def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[list],
          fields_digest: str, model: str, keep_flags: bool = False,
-         seen_seq: int | None = None) -> None:
+         seen_seq: int | None = None, raise_upstream: bool = False,
+         bump_gen: bool = False) -> None:
     """Store `key`'s snapshot and mark it `ok`. What happens to its flags:
 
     - by default they are cleared (a writer that read everything just now);
@@ -162,6 +182,11 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
     when it fails -- so a run that produced nothing leaves them as it found
     them. The sequence is carried over, never reset.
 
+    `raise_upstream` then raises `upstream_changed` in the same write: an
+    update built on a base record that was itself stale is stale too, however
+    fresh its own reading of its post. `bump_gen` moves the mark generation
+    (a hand edit -- see `GEN`); otherwise it is carried over.
+
     The snapshot is stored as given; what a valid one looks like is the update
     pipeline's business, not the store's."""
     with locks.campaign_lock(cid):
@@ -174,18 +199,30 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
         flags = _clear_flags()
         if keep_flags or (seen_seq is not None and seen_seq != seq):
             flags.update(prev.get("flags") or {})
+        if raise_upstream:
+            flags["upstream_changed"] = True
         entries[key] = {"status": "ok", "changed": changed, "flags": flags}
         if seq:
             entries[key][SEQ] = seq     # absent reads as 0; only a raise starts it
+        gen = generation(prev) + (1 if bump_gen else 0)
+        if gen:
+            entries[key][GEN] = gen
         _write_index(cid, identity, entries)
 
 
-def mark_failed(cid: str, identity: str, key: str, error: str) -> None:
+def mark_failed(cid: str, identity: str, key: str, error: str,
+                gen: int | None = None) -> None:
     """The run for `key` failed. An earlier snapshot file, if any, is kept: the
-    walk skips a non-`ok` key, so it is not read, and a retry overwrites it."""
+    walk skips a non-`ok` key, so it is not read, and a retry overwrites it.
+
+    `gen`, when given, is the generation the failing run owned: once the entry
+    has moved past it, the record belongs to a newer run or a hand edit, and a
+    stale run's failure is not news about it -- nothing is written."""
     with locks.campaign_lock(cid):
         _snapshot_path(cid, identity, key)
         entries = read_index(cid, identity)
+        if gen is not None and generation(entries.get(key)) != gen:
+            return
         entry = entries.get(key) or {"changed": [], "flags": _clear_flags()}
         entry.update(status="failed", error=error)
         entries[key] = entry

@@ -336,17 +336,17 @@ def test_tracking_waits_on_no_lock_in_front_of_the_turns_frames(client, monkeypa
 
     real_start = tracker_routes.start
 
-    def start_spy(app, c, s, key, llm_client, identity=None):
+    def start_spy(app, c, s, marked, llm_client, identity=None):
         turns = [r for r in app.state.runs.for_subject(("scene", c, identity))
                  if r.cls == "turn"]
         done = any('"done": true' in f["raw"] for r in turns for f in r.frames)
         before = acquired["n"]
         inside_start.on = True
         try:
-            real_start(app, c, s, key, llm_client, identity)
+            real_start(app, c, s, marked, llm_client, identity)
         finally:
             inside_start.on = False
-        started.append((key, done, acquired["n"] - before))
+        started.append((marked[0], done, acquired["n"] - before))
 
     monkeypatch.setattr(store.tracker.records, "mark_pending", mark_spy)
     monkeypatch.setattr(lock, "acquire", acquire_spy)
