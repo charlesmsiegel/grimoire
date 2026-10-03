@@ -102,6 +102,30 @@ def test_no_actor_prompt_leaks_another_actors_private_value(cast_scene):
             assert (_secret(owner) in text) == allowed, (ref, owner)
 
 
+def test_a_value_told_only_to_the_player_reaches_no_other_npc(cast_scene):
+    """Mara's plan names only Seraphine as knowing it. The player character is
+    not a reader of any prompt (there is no PC prompt), so being told it
+    lets nobody else see it: Winifred's prompt must not carry it, Mara's own
+    must, and the narrator's carries it marked private."""
+    cid, sid = cast_scene
+    told = json.loads(json.dumps(STATE))
+    told[MARA]["fields"]["intent"] = {"value": "MARA_TOLD_THE_PC", "aware": [SERAPHINE]}
+    _seed(cid, sid, told)
+    assert "MARA_TOLD_THE_PC" not in _text(cid, sid, WINIFRED)
+    assert "MARA_TOLD_THE_PC" in _text(cid, sid, MARA)
+    assert "MARA_TOLD_THE_PC" + NARRATED in _text(cid, sid, None)
+
+
+def test_a_player_secret_told_to_one_npc_reaches_that_npc_only(cast_scene):
+    cid, sid = cast_scene
+    told = json.loads(json.dumps(STATE))
+    told[SERAPHINE]["fields"]["concealed"]["aware"] = [MARA]
+    _seed(cid, sid, told)
+    mara = _text(cid, sid, MARA)
+    assert _secret(SERAPHINE) + " (known to you)" in mara
+    assert _secret(SERAPHINE) not in _text(cid, sid, WINIFRED)
+
+
 def test_an_npc_reads_itself_whole_and_the_others_as_perceived(cast_scene):
     cid, sid = cast_scene
     text = _text(cid, sid, WINIFRED)
