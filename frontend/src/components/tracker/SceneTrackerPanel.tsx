@@ -4,7 +4,7 @@ import { errorText } from "../../api/errors";
 import { FieldForm } from "./FieldForm";
 import {
   BLANK_DRAFT, draftProblem, fieldOf, fullLayer, keyFromLabel, removeAdded, switchOff, switchOn,
-  upsertAdded, type FieldDraft, type FullLayer,
+  upsertAdded, withoutShadowed, type FieldDraft, type FullLayer,
 } from "./fieldLayer";
 
 /** What the tracker follows in ONE scene.
@@ -40,21 +40,24 @@ export function SceneTrackerPanel({ cid, sid }: { cid: string; sid: string }) {
     void reload();
   }, [reload]);
 
-  const layer = fullLayer(bundle?.layer);
-  const ownKeys = new Set(layer.fields.map((f) => f.key));
+  const inherited = bundle?.inherited ?? [];
+  // The stored layer minus additions the campaign has since taken over: those
+  // are inherited fields now (so they get their checkbox), and the server would
+  // refuse every save that still carried them.
+  const layer = withoutShadowed(fullLayer(bundle?.layer), new Set(inherited.map((f) => f.key)));
   // What the campaign hands this scene. The scene's own additions are listed
   // apart, with Remove rather than a checkbox.
-  const inherited = (bundle?.inherited ?? []).filter((f) => !ownKeys.has(f.key));
   const taken = [...(bundle?.effective ?? []).map((f) => f.key), ...layer.fields.map((f) => f.key)];
 
-  /** Store `next` as the scene's layer. `change` is left out on purpose. */
+  /** Store `next` as the scene's layer and show the bundle the write answers
+   *  with. `change` is left out on purpose. */
   async function commit(next: FullLayer): Promise<boolean> {
     const mine = live.current;
     setSaving(true); setError(null);
     try {
-      await api.setTrackerFields(scope, { fields: next.fields, off: next.off });
-      await reload();
-      return true;
+      const saved = await api.setTrackerFields(scope, { fields: next.fields, off: next.off });
+      if (live.current === mine) setBundle(saved);
+      return live.current === mine;
     } catch (err) {
       if (live.current === mine) setError(errorText(err));
       return false;

@@ -4,7 +4,7 @@ import { errorText } from "../../api/errors";
 import { FieldForm } from "./FieldForm";
 import {
   BLANK_DRAFT, changeOf, draftOf, draftProblem, fieldOf, fullLayer, keyFromLabel, removeAdded,
-  revert, switchOff, switchOn, upsertAdded, withChange, type FieldDraft, type FullLayer,
+  revert, switchOff, switchOn, upsertAdded, withChange, withoutShadowed, type FieldDraft, type FullLayer,
 } from "./fieldLayer";
 
 type EditorScope = Extract<TrackerScope, { kind: "world" | "campaign" }>;
@@ -42,6 +42,7 @@ export function TrackerFieldsEditor({ scope }: { scope: EditorScope }) {
   const live = useRef(id + scope.kind);
   live.current = id + scope.kind;
 
+  /** Read the layer again. Used to load, and to retry a failed load. */
   const reload = useCallback(async () => {
     const mine = live.current;
     try {
@@ -57,10 +58,12 @@ export function TrackerFieldsEditor({ scope }: { scope: EditorScope }) {
     void reload();
   }, [reload]);
 
-  const layer: FullLayer = fullLayer(bundle?.layer);
   const inherited = bundle?.inherited ?? [];
   const effective = bundle?.effective ?? [];
   const inheritedByKey = new Map(inherited.map((f) => [f.key, f]));
+  // What gets written: the stored layer minus additions a lower layer has since
+  // taken over, which the server would refuse on every save.
+  const layer: FullLayer = withoutShadowed(fullLayer(bundle?.layer), new Set(inheritedByKey.keys()));
   /** Added by this layer: its key is in `fields` and nothing below owns it. */
   const addedHere = (key: string) => layer.fields.some((f) => f.key === key) && !inheritedByKey.has(key);
   const selected = effective.find((f) => f.key === selKey) ?? null;
@@ -85,17 +88,19 @@ export function TrackerFieldsEditor({ scope }: { scope: EditorScope }) {
     if (touched) setKeyTouched(true);
   }
 
-  /** Store `next` as this layer, re-read, and report whether it landed. */
-  async function commit(next: FullLayer): Promise<boolean> {
+  /** Store `next` as this layer and show the bundle the write answers with.
+   *  Reports whether it landed, and whether the screen is still the one that
+   *  asked: a save settling after a campaign switch must not touch the new one. */
+  async function commit(next: FullLayer): Promise<{ ok: boolean; current: boolean }> {
     const mine = live.current;
     setSaving(true); setError(null);
     try {
-      await api.setTrackerFields(apiScope, next);
-      await reload();
-      return true;
+      const saved = await api.setTrackerFields(apiScope, next);
+      if (live.current === mine) setBundle(saved);
+      return { ok: true, current: live.current === mine };
     } catch (err) {
       if (live.current === mine) setError(errorText(err));
-      return false;
+      return { ok: false, current: live.current === mine };
     } finally {
       if (live.current === mine) setSaving(false);
     }
@@ -113,12 +118,13 @@ export function TrackerFieldsEditor({ scope }: { scope: EditorScope }) {
       if (!base) return;
       next = withChange(layer, selected.key, changeOf(base, draft));
     }
-    if (await commit(next)) { setSelKey(draft.key); setMode("view"); }
+    const done = await commit(next);
+    if (done.ok && done.current) { setSelKey(draft.key); setMode("view"); }
   }
 
   function remove(f: TrackerField) {
     if (!window.confirm(`Remove field '${f.label}'? Values already tracked for it will have no label.`)) return;
-    void commit(removeAdded(layer, f.key)).then((ok) => { if (ok) setSelKey(null); });
+    void commit(removeAdded(layer, f.key)).then((done) => { if (done.ok && done.current) setSelKey(null); });
   }
 
   function sourceChips(f: TrackerField) {

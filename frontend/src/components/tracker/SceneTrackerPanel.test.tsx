@@ -14,8 +14,17 @@ const SCENE = { kind: "scene", cid: "saltmarch", sid: "s1" };
 function serve(layer: TrackerLayer, inherited: TrackerField[] = [ATTENTION, CLOTHING]) {
   const off = new Set(layer.off ?? []);
   const eff = inherited.map((f) => (off.has(f.key) ? { ...f, off: true } : f));
-  const b: TrackerLayerBundle = { layer, effective: [...eff, ...(layer.fields ?? [])], inherited };
+  const have = new Set(inherited.map((f) => f.key));
+  const added = (layer.fields ?? []).filter((f) => !have.has(f.key));
+  const b: TrackerLayerBundle = { layer, effective: [...eff, ...added], inherited };
   vi.mocked(api.getTrackerFields).mockResolvedValue(b);
+  // The server answers a PUT with the bundle for what it stored.
+  vi.mocked(api.setTrackerFields).mockImplementation(async (_s, sent) => {
+    const off2 = new Set(sent.off ?? []);
+    return { layer: sent, inherited,
+      effective: [...inherited.map((f) => (off2.has(f.key) ? { ...f, off: true } : f)),
+                  ...(sent.fields ?? []).filter((f) => !have.has(f.key))] };
+  });
 }
 
 beforeEach(() => {
@@ -101,4 +110,22 @@ test("the server's refusal, a scene held by a turn, is shown", async () => {
   render(<SceneTrackerPanel cid="saltmarch" sid="s1" />);
   fireEvent.click(await screen.findByRole("checkbox", { name: "Attention" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("scene_busy");
+});
+
+test("an addition the campaign has since taken over is an inherited checkbox, and is not written back", async () => {
+  const stale: TrackerField = { key: "attention", label: "Old", type: "text", aware: "self", hint: "" };
+  serve({ fields: [stale] });
+  render(<SceneTrackerPanel cid="saltmarch" sid="s1" />);
+  const box = await screen.findByRole("checkbox", { name: "Attention" });
+  expect(screen.queryByText("Scene-only fields")).toBeNull();
+  fireEvent.click(box);
+  await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(SCENE, { fields: [], off: ["attention"] }));
+});
+
+test("the panel shows the bundle a write answers with, without a second read", async () => {
+  serve({});
+  render(<SceneTrackerPanel cid="saltmarch" sid="s1" />);
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Attention" }));
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: "Attention" })).not.toBeChecked());
+  expect(api.getTrackerFields).toHaveBeenCalledTimes(1);
 });
