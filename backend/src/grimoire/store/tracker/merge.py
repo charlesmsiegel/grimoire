@@ -76,19 +76,27 @@ def _balanced_end(text: str, start: int) -> int | None:
 
 
 def _first_object(body: str) -> dict | None:
-    """The first balanced `{...}` in `body` that parses to an object. Prose may
-    contain a stray brace before the real object, so a span that does not parse
-    is skipped rather than ending the search."""
+    """The first balanced `{...}` in `body` that parses to an object carrying
+    `changes` or `awareness`. Prose may contain a stray balanced brace before
+    the real object, so a span that does not parse, or is not a reply, is
+    skipped.
+
+    An *unbalanced* `{` ends the search instead: that is a reply cut off by the
+    token limit, and descending into it would find the inner `{"Mara": {...}}`
+    -- balanced, parseable, and not a reply -- and report a clean empty update
+    where the changes were lost. The key requirement is the second line of the
+    same defence."""
     pos = body.find("{")
     while pos != -1:
         end = _balanced_end(body, pos)
-        if end is not None:
-            try:
-                candidate = json.loads(body[pos:end])
-            except ValueError:
-                candidate = None
-            if isinstance(candidate, dict):
-                return candidate
+        if end is None:
+            return None
+        try:
+            candidate = json.loads(body[pos:end])
+        except ValueError:
+            candidate = None
+        if isinstance(candidate, dict) and ("changes" in candidate or "awareness" in candidate):
+            return candidate
         pos = body.find("{", pos + 1)
     return None
 
@@ -138,8 +146,11 @@ def _normalize(field: dict, value):
     if kind == "list":
         if not isinstance(value, list):
             raise ValueError(f"{field['key']}: expected a list")
-        items = (_line(v) for v in value if isinstance(v, str))
-        return [v for v in items if v]
+        if not all(isinstance(v, str) for v in value):
+            # Dropped (reply) or refused (edit) as a whole: filtering would turn
+            # `[{"state": "wet"}]` into `[]`, which is a valid clear of the list.
+            raise ValueError(f"{field['key']}: list items must be text")
+        return [v for v in (_line(v) for v in value) if v]
     if not isinstance(value, str):
         raise ValueError(f"{field['key']}: expected text")
     text = _line(value)

@@ -35,6 +35,16 @@ def test_parse_reply_balances_braces_inside_strings():
     assert got["changes"] == {"Mara": {"pose": "a } b"}}
 
 
+def test_parse_reply_rejects_a_truncated_reply():
+    # Cut off by the token limit: the inner object is balanced but is not a reply.
+    with pytest.raises(merge.TrackerReplyError):
+        merge.parse_reply('{"changes": {"Mara": {"pose": "x"}}')
+    with pytest.raises(merge.TrackerReplyError):
+        merge.parse_reply('Sure: {"changes": {"Mara": {"pose": "x"}}, "awareness": {"Mara.concea')
+    with pytest.raises(merge.TrackerReplyError):
+        merge.parse_reply('```json\n{"changes": {"Mara": {"pose": "x"}}\n')
+
+
 def test_changes_apply_with_default_awareness():
     snap, changed = _reply({}, {"changes": {"Mara": {"visible_mood": "fear", "concealed": "a letter"}}})
     m = snap["characters:mara"]["fields"]
@@ -142,6 +152,21 @@ def test_text_truncated_at_200():
 def test_non_list_for_list_field_dropped():
     _, changed = _reply({}, {"changes": {"Mara": {"condition": "wet"}}})
     assert changed == []
+
+
+@pytest.mark.parametrize("items", [[1], ["x", 5], [{"state": "wet"}]])
+def test_non_string_list_items_drop_the_value_and_keep_the_stored_list(items):
+    prev = {"characters:mara": {"present": True, "fields": {
+        "condition": {"value": ["soaked"], "aware": "present"}}}}
+    snap, changed = _reply(prev, {"changes": {"Mara": {"condition": items}}})
+    assert changed == [] and snap["characters:mara"]["fields"]["condition"]["value"] == ["soaked"]
+
+
+@pytest.mark.parametrize("items", [[1], ["x", 5], [{"state": "wet"}]])
+def test_apply_edit_rejects_non_string_list_items(items):
+    prev = {"characters:mara": {"present": True, "fields": {}}}
+    with pytest.raises(ValueError):
+        merge.apply_edit(prev, {"characters:mara": {"condition": {"value": items}}}, FIELDS)
 
 
 def test_apply_edit_marks_user_and_rejects_bad_enum():
