@@ -1,12 +1,13 @@
-{#- Vars: fields ([{key, type, options, aware, hint}] — active fields only;
-    options is a list, empty unless the type is enum), characters ([{name, new,
+{#- Vars: fields ([{key, label, type, options, aware, hint}] — active fields
+    only; label is "" when it only restates the key; options is a list, empty
+    unless the type is enum), characters ([{name, new,
     entries: [{key, text, user_set, private, known_to}]}] — present characters
     only; known_to is a list of names, empty for a private value nobody else
     knows), newcomers ([{name, description, state}]), context_posts
     ([{speaker, content}]), post ({speaker, content}). -#}
 # Fields
 {% for f in fields -%}
-{{ f.key }} ({{ f.type }}{% if f.type == "enum" and f.options %}: {{ f.options | join(", ") }}{% endif %}){% if f.aware == "self" %} [private by default]{% endif %}{% if f.hint %} — {{ f.hint }}{% endif %}
+{{ f.key }}{% if f.label %} "{{ f.label }}"{% endif %} ({{ f.type }}{% if f.type == "enum" and f.options %}: {{ f.options | join(", ") }}{% endif %}){% if f.aware == "self" %} [private by default]{% endif %}{% if f.hint %} — {{ f.hint }}{% endif %}
 {% endfor %}
 # Characters present
 {% for c in characters -%}
