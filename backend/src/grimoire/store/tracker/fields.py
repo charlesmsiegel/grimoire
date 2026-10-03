@@ -277,6 +277,29 @@ def digest(fields: list[dict]) -> str:
 
 # --- reading ------------------------------------------------------------------
 
+def _unshadowed(raw, path: Path):
+    """`raw` without the additions whose key is now a built-in, each logged.
+
+    Such a layer was valid when it was written -- the key was free then -- and
+    a release that ships the key as a built-in must not cost the person the
+    rest of it: every other field they added, every change, every switch. The
+    addition alone goes, as `apply_layer` would skip it anyway, and the
+    built-in stands. Read-side only: a write still refuses the collision,
+    because then there is someone to tell."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("fields"), list):
+        return raw
+    builtin = {f["key"] for f in DEFAULT_FIELDS}
+    kept = []
+    for field in raw["fields"]:
+        key = field.get("key") if isinstance(field, dict) else None
+        if isinstance(key, str) and key in builtin:
+            log.warning("tracker: the field layer at %s adds %r, which is now a "
+                        "built-in field; keeping the built-in", path, key)
+            continue
+        kept.append(field)
+    return {**raw, "fields": kept}
+
+
 def read_layer(path: Path, *, scene: bool = False) -> dict:
     """The stored layer at `path`, normalized; `{}` for a missing, unreadable,
     garbled or invalid file. Never raises: a hand-edited or half-synced file
@@ -287,10 +310,12 @@ def read_layer(path: Path, *, scene: bool = False) -> dict:
 
     A file that is THERE and is dropped is logged: the person's field
     definitions silently reverting to the inherited ones would otherwise have
-    nothing anywhere to say why."""
+    nothing anywhere to say why.
+
+    An addition a built-in now shadows costs only itself (`_unshadowed`)."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return validate_layer(raw, scene=scene)
+        return validate_layer(_unshadowed(raw, path), scene=scene)
     except FileNotFoundError:
         return {}                       # no layer: the ordinary case
     except (OSError, ValueError) as exc:  # FieldLayerError, JSONDecodeError are ValueErrors
