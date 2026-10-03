@@ -562,3 +562,32 @@ def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client):
     roster, candidates = narrator.split("Present people:", 1)[1].split("Eligible next speakers:", 1)
     assert "characters:mara" in roster and "characters:winifred" in roster
     assert "characters:mara" not in candidates and "characters:winifred" in candidates
+
+
+PERCEPTION_REPLY = (
+    '```perception\n{"known": [], "heard_or_seen": [], "unknown": []}\n```\n'
+    'Mara answers.\n```handoff\n{"next":null}\n```'
+)
+
+
+def test_perception_block_is_hidden_only_while_the_rider_is_on(client):
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[PERCEPTION_REPLY]])
+    response = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/chat",
+        json={"content": "Hello", "speaker_ref": "characters:mara"},
+    )
+    assert response.status_code == 200
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert "perception" not in messages[-1]["content"]
+
+    store.config.write_config(perception_rider="off")
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[PERCEPTION_REPLY]])
+    response = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/chat",
+        json={"content": "Hello", "speaker_ref": "characters:mara"},
+    )
+    assert response.status_code == 200
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert "```perception" in messages[-1]["content"]

@@ -512,3 +512,15 @@ an exact transcript excerpt, its `kind` (speech or action), and `access`
 Missing perception evidence leaves a fact unknown unless an independent
 established source already supplies it. These are advisory model claims,
 not server-validated citations; the leading-fence parser is unchanged.
+
+The whole preparation paragraph in `scene/response_actor.j2` sits behind the
+`perception_rider` template variable, which `context.assemble` fills from the
+global `perception_rider` setting (on/off, default on) and `verify_templates.py`
+passes as `True`. The paragraph covers events only: what the actor heard or saw
+happen. For the visible state of the others (appearance, mood, injuries) it
+points at the Scene state section (`scene/sections/tracker_state.j2`) instead,
+so the two do not describe the same thing twice. With the rider off, the
+paragraph is absent and `routes/character_turns.py` builds its
+`ResponseWatcher` with `perception=False`, so a leading fence the model was
+never asked for is neither hidden nor stripped. The surrounding "What this
+actor can perceive" and continuity-notes guidance stays either way.
