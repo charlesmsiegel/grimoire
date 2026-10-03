@@ -131,6 +131,26 @@ def test_summary_lists_keys_in_order_with_entries(client):
     assert body["labels"]["visible_mood"] == "Visible mood"
 
 
+def test_summary_serves_a_hand_mangled_index_in_the_shape_it_promises(client):
+    """The transcript reads `entry.changed.length` and `entry.flags.*` off
+    every entry; one written by hand (or by an older version) must not reach
+    it with either missing."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid, sends=1)
+    path = store.tracker.paths.scene_dir(cid, _ident(cid, sid)) / "index.json"
+    path.write_text(json.dumps({"version": 1, "entries": {
+        keys[0]: {}, keys[1]: {"status": "ok", "changed": 3}}}), encoding="utf-8")
+    r = client.get(_base(cid, sid))
+    assert r.status_code == 200, r.text
+    entries = r.json()["entries"]
+    assert set(entries) == set(keys)
+    for k in keys:
+        assert entries[k]["status"] == "ok"
+        assert entries[k]["changed"] == []
+        assert entries[k]["flags"] == {"upstream_changed": False, "text_changed": False}
+
+
 def test_record_carries_snapshot_fields_and_names(client):
     _use(client, _llm())
     cid, sid = _scene(client)

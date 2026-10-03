@@ -84,6 +84,58 @@ def test_garbled_index_rebuilds_from_files(home):
     assert set(records.read_index(cid, ident)) == {key}
 
 
+def _hand_written_index(cid, ident, entries):
+    d = tpaths.scene_dir(cid, ident)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "index.json").write_text(json.dumps({"version": 1, "entries": entries}),
+                                  encoding="utf-8")
+
+
+CLEAR = {"upstream_changed": False, "text_changed": False}
+
+
+def test_a_malformed_entry_is_normalised_not_served(home):
+    """Every entry a reader gets has the shape the transcript dereferences --
+    a status it knows, a list of `[ref, field, value]` changes, both flags --
+    whatever a hand edit or an older writer left in the file. One bad entry
+    costs that entry, not the rest of the index."""
+    _, cid, sid = home
+    ident, (ka, kb, kc) = _three_posts(cid, sid)
+    kd = tpaths.post_key("d" * 32)
+    for key in (ka, kb):
+        records.save(cid, ident, key, SNAP, changed=[], fields_digest="d", model="m")
+    good = ["characters:mara", "clothing", "grey cloak"]
+    _hand_written_index(cid, ident, {
+        # An empty entry with a snapshot on disk falls back to the rebuilt one.
+        ka: {},
+        # A known status keeps its entry; its parts are each made well-formed.
+        kb: {"status": "failed", "changed": [good, "junk", ["only", "two"], [1, "f", "v"]],
+             "flags": {"text_changed": True, "upstream_changed": "yes", "bogus": True},
+             "error": 7, "flag_seq": "3", "mark_gen": 2},
+        # Junk status and no snapshot file: nothing to fall back to.
+        kc: {"status": "done", "changed": [], "flags": {}},
+        kd: {"status": "ok", "changed": "grey cloak"},
+    })
+    index = records.read_index(cid, ident)
+    assert set(index) == {ka, kb, kd}
+    assert index[ka] == {"status": "ok", "changed": [], "flags": CLEAR}
+    assert index[kb] == {"status": "failed", "changed": [good],
+                         "flags": {**CLEAR, "text_changed": True}, "mark_gen": 2}
+    assert index[kd] == {"status": "ok", "changed": [], "flags": CLEAR}
+
+
+def test_a_mutator_persists_the_normalised_index(home):
+    _, cid, sid = home
+    ident, (ka, kb, _) = _three_posts(cid, sid)
+    records.save(cid, ident, ka, SNAP, changed=[], fields_digest="d", model="m")
+    _hand_written_index(cid, ident, {ka: {"status": "ok"}, kb: {"status": "ok", "flags": 1}})
+    records.set_flags(cid, ident, [ka], "upstream_changed")
+    raw = json.loads((tpaths.scene_dir(cid, ident) / "index.json").read_text(encoding="utf-8"))
+    assert raw["entries"][ka]["changed"] == []
+    assert raw["entries"][ka]["flags"] == {**CLEAR, "upstream_changed": True}
+    assert raw["entries"][kb] == {"status": "ok", "changed": [], "flags": CLEAR}
+
+
 def test_set_flags_ignores_unknown_keys_and_refuses_unknown_flags(home):
     _, cid, sid = home
     ident = identity.ensure_identity(cid, sid)

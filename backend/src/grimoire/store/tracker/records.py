@@ -92,26 +92,83 @@ def _rebuilt(cid: str, identity: str) -> dict[str, dict]:
             for p in files if paths.valid_key(p.stem)}
 
 
-def _well_formed(entries: dict) -> bool:
-    return all(
-        paths.valid_key(k) and isinstance(v, dict) for k, v in entries.items())
+STATUSES = ("pending", "ok", "failed")
+
+
+def _count(value) -> int:
+    # `bool` is an `int` too, and `True` is not a count.
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _normalised(entry) -> dict | None:
+    """`entry` in the shape every reader dereferences, or `None` when it has
+    no status this module wrote -- with no status there is no saying whether
+    its snapshot is a result, so the entry is not trusted at all.
+
+    Each part is repaired on its own rather than the entry refused over one:
+    a change that is not `[ref, field, value]` is dropped, a flag that is not
+    a boolean reads as lowered, an error that is not text is dropped, and a
+    counter that is not an int reads as 0 (by being left out, as `save`
+    leaves a zero out)."""
+    if not isinstance(entry, dict) or entry.get("status") not in STATUSES:
+        return None
+    changed = entry.get("changed")
+    flags = entry.get("flags")
+    out: dict = {
+        "status": entry["status"],
+        "changed": [list(c) for c in (changed if isinstance(changed, list) else [])
+                    if isinstance(c, list) and len(c) == 3
+                    and isinstance(c[0], str) and isinstance(c[1], str)],
+        "flags": {**_clear_flags(),
+                  **{f: v for f, v in (flags if isinstance(flags, dict) else {}).items()
+                     if f in FLAGS and isinstance(v, bool)}},
+    }
+    if isinstance(entry.get("error"), str):
+        out["error"] = entry["error"]
+    for counter in INTERNAL:
+        if _count(entry.get(counter)):
+            out[counter] = entry[counter]
+    return out
+
+
+def _normalised_index(cid: str, identity: str, entries: dict) -> dict[str, dict]:
+    """Every entry normalised (`_normalised`). One the file does not describe
+    well enough to keep falls back to what its snapshot file implies, as a
+    whole garbled index does, and is dropped when there is no file -- a key
+    that is not a key never had one."""
+    out: dict[str, dict] = {}
+    rebuilt: dict[str, dict] | None = None
+    for key, entry in entries.items():
+        if not isinstance(key, str) or not paths.valid_key(key):
+            continue
+        fixed = _normalised(entry)
+        if fixed is None:
+            if rebuilt is None:
+                rebuilt = _rebuilt(cid, identity)
+            fixed = rebuilt.get(key)
+        if fixed is not None:
+            out[key] = fixed
+    return out
 
 
 def read_index(cid: str, identity: str) -> dict[str, dict]:
     """Every key's entry: `{key: {"status", "changed", "flags", "error"?}}`.
 
     Never raises over the file's contents: a missing, unreadable or garbled
-    index is rebuilt from the snapshot files (see the module docstring). Not
-    written back here -- a read takes no lock -- but the next mutator persists
-    whatever this returned."""
+    index is rebuilt from the snapshot files (see the module docstring), and
+    a malformed entry inside a readable one is normalised on its own
+    (`_normalised_index`) -- the transcript dereferences `changed` and `flags`
+    on every entry it is served, so none may arrive without them. Not written
+    back here -- a read takes no lock -- but every mutator reads through this,
+    so the next one persists the normalised form."""
     try:
         raw = json.loads(_index_path(cid, identity).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return _rebuilt(cid, identity)
     entries = raw.get("entries") if isinstance(raw, dict) else None
-    if not isinstance(entries, dict) or not _well_formed(entries):
+    if not isinstance(entries, dict):
         return _rebuilt(cid, identity)
-    return entries
+    return _normalised_index(cid, identity, entries)
 
 
 def stored_keys(cid: str, identity: str) -> set[str]:
