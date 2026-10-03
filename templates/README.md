@@ -520,7 +520,10 @@ passes as `True`. The paragraph covers events only: what the actor heard or saw
 happen. For the visible state of the others (appearance, mood, injuries) it
 points at the Scene state section (`scene/sections/tracker_state.j2`) instead,
 so the two do not describe the same thing twice. With the rider off, the
-paragraph is absent and `routes/character_turns.py` builds its
-`ResponseWatcher` with `perception=False`, so a leading fence the model was
-never asked for is neither hidden nor stripped. The surrounding "What this
-actor can perceive" and continuity-notes guidance stays either way.
+paragraph is absent. The setting gates only the prompt instruction, never the
+stripping: `routes/character_turns.py` always builds its `ResponseWatcher` with
+`perception=True` for an NPC, because a reroll replays a frozen prompt that may
+have been composed with the rider on, and a switch flipped between composing a
+prompt and reading the reply would otherwise leave a fence in the stored text.
+Stripping a leading fence nothing asked for is harmless. The surrounding "What
+this actor can perceive" and continuity-notes guidance stays either way.

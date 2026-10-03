@@ -570,24 +570,41 @@ PERCEPTION_REPLY = (
 )
 
 
-def test_perception_block_is_hidden_only_while_the_rider_is_on(client):
-    cid, sid = seed(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[PERCEPTION_REPLY]])
-    response = client.post(
+def _chat_mara(client, cid, sid):
+    return client.post(
         f"/api/campaigns/{cid}/scenes/{sid}/chat",
         json={"content": "Hello", "speaker_ref": "characters:mara"},
     )
-    assert response.status_code == 200
-    messages = store.scenes.read_scene(cid, sid)["messages"]
-    assert "perception" not in messages[-1]["content"]
 
-    store.config.write_config(perception_rider="off")
+
+def test_perception_block_is_stripped_whatever_the_rider_setting(client):
+    # The setting gates only the prompt instruction; the watcher always strips
+    # a leading fence, which is harmless when nothing asked for one.
+    for rider in ("on", "off"):
+        store.config.write_config(perception_rider=rider)
+        cid, sid = seed(client)
+        client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[PERCEPTION_REPLY]])
+        assert _chat_mara(client, cid, sid).status_code == 200
+        messages = store.scenes.read_scene(cid, sid)["messages"]
+        assert messages[-1]["content"] == "Mara answers."
+
+
+def test_reroll_strips_a_fence_the_frozen_prompt_asked_for(client):
+    # The reroll prompt is a frozen snapshot taken with the rider on; switching
+    # it off afterwards must not leave the fence in the stored variant.
+    store.config.write_config(perception_rider="on")
     cid, sid = seed(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[PERCEPTION_REPLY]])
-    response = client.post(
-        f"/api/campaigns/{cid}/scenes/{sid}/chat",
-        json={"content": "Hello", "speaker_ref": "characters:mara"},
-    )
-    assert response.status_code == 200
-    messages = store.scenes.read_scene(cid, sid)["messages"]
-    assert "```perception" in messages[-1]["content"]
+    assert _chat_mara(client, cid, sid).status_code == 200
+    rid = store.scenes.read_scene(cid, sid)["messages"][-1]["response_id"]
+    store.config.write_config(perception_rider="off")
+    retry = FakeLLM([[PERCEPTION_REPLY.replace("Mara answers.", "Replacement.")]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: retry
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    result = client.post(base + f"/responses/{rid}/regenerate", json={})
+    assert "error" not in result.text, result.text
+    assert retry.calls == 1
+    content = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
+    assert content == "Replacement."
+    record = client.get(base + f"/responses/{rid}").json()
+    assert not any("perception" in str(v) for v in record["variants"])
