@@ -52,7 +52,7 @@ def test_save_then_read(home):
     records.save(cid, ident, key, SNAP, changed=changed, fields_digest="d", model="m")
     assert records.read_index(cid, ident)[key] == {
         "status": "ok", "changed": changed,
-        "flags": {"upstream_changed": False, "text_changed": False}}
+        "flags": {"upstream_changed": False, "text_changed": False}, "mark_gen": 1}
     body = records.read_snapshot(cid, ident, key)
     assert body["version"] == 1 and body["snapshot"] == SNAP
     assert body["fields_digest"] == "d" and body["model"] == "m" and body["at"]

@@ -223,9 +223,9 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             # Marked HERE, in the hold that wrote the variant, where the
             # tracker's lock acquisition is reentrant: anywhere later on this
             # path it would be a fresh wait in front of the player's frames.
-            key = tracker_routes.mark_response(cid, sid, record["id"])
-            if key:
-                tracked.append(key)
+            marked = tracker_routes.mark_response(cid, sid, record["id"])
+            if marked:
+                tracked.append(marked)
         return streaming._tail_length(cid, sid) if text else None
 
 
@@ -433,7 +433,7 @@ async def _frames(
     # Tracker keys this turn marked `pending`, started in `finally` once the
     # terminal frames are out -- in transcript order, which is the order the
     # scene's tracker lock runs them in.
-    tracked: list[str] = []
+    tracked: list[tracker_routes.Mark] = []
     try:
         actor, round_record = await _first_actor(cid, sid, client, round_record)
         while actor and not run.cancel_requested:
@@ -646,8 +646,8 @@ async def _start_tracking(app, cid, sid, client, tracked, identity):
     the truth: nothing was started."""
     if app is None:
         return
-    for key in tracked:
-        await run_in_threadpool(tracker_routes.start, app, cid, sid, key, client, identity)
+    for marked in tracked:
+        await run_in_threadpool(tracker_routes.start, app, cid, sid, marked, client, identity)
 
 
 def resume_roll(
@@ -884,7 +884,7 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
     # The new variant's tracker key, marked inside `_accept_reroll`'s hold and
     # started in `finally` once the terminal frames are out. The previous
     # variant's record is kept, so swiping back to it is free.
-    tracked: list[str] = []
+    tracked: list[tracker_routes.Mark] = []
     try:
         await run_in_threadpool(_capture, cid, sid, "regenerate", messages, conn)
         yield streaming._sse(
@@ -959,10 +959,10 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None):
         if tracked is not None:
             # In this hold, for `_save`'s reason: reentrant here, a fresh wait
             # in front of the frames anywhere after it.
-            key = tracker_routes.mark(
+            marked = tracker_routes.mark(
                 cid, sid, store.tracker.paths.response_key(rid, variant["id"]))
-            if key:
-                tracked.append(key)
+            if marked:
+                tracked.append(marked)
         return True
 
 

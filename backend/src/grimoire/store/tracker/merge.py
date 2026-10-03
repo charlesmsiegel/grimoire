@@ -286,6 +286,36 @@ def _apply_awareness(snap: dict, awareness: dict, defs: dict[str, dict],
                 stored["aware"].append(ref)
 
 
+def keep_user_values(snapshot: dict, own: dict | None, prior: dict,
+                     changed: list[list]) -> tuple[dict, list[list]]:
+    """`snapshot` (a fresh result for a post) with the hand-set values the
+    post's OWN earlier record carried put back: `(snapshot, changed)`.
+
+    A re-run or a Retry rebuilds a record from the one before it, so without
+    this every value a person typed into this record would be silently lost
+    to it. A value the reply itself changed is the model's newer word and
+    stands; every other `set_by: "user"` value of `own` is restored as it was,
+    `set_by` and awareness included, and listed in `changed` when it differs
+    from what the post started from -- it is a change made AT this post.
+    `snapshot` is not touched."""
+    snap = copy.deepcopy(snapshot)
+    out = list(changed)
+    moved = {(c[0], c[1]) for c in changed}
+    for ref, ent in (own or {}).items():
+        for key, cur in ((ent or {}).get("fields") or {}).items():
+            if not isinstance(cur, dict) or cur.get("set_by") != "user":
+                continue
+            if (ref, key) in moved:
+                continue
+            target = snap.setdefault(ref, {"present": bool(ent.get("present")),
+                                           "fields": {}})
+            target.setdefault("fields", {})[key] = copy.deepcopy(cur)
+            before = ((prior.get(ref) or {}).get("fields") or {}).get(key) or {}
+            if before.get("value") != cur.get("value"):
+                out.append([ref, key, cur.get("value")])
+    return snap, out
+
+
 # --- a person's edit ----------------------------------------------------------
 
 def _check_aware(aware, snapshot: dict, owner: str, key: str):

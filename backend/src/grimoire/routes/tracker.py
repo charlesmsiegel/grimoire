@@ -172,9 +172,18 @@ def put_scene_tracker_fields(cid: str, sid: str, body: TrackerLayer):
 # is only a hint, re-resolved (`_current_sid`) every time the run touches the
 # store.
 
-def mark(cid: str, sid: str, key: str) -> str | None:
-    """The first half of scheduling: mark `key` `pending`, and return it -- or
-    `None` when the tracker is off or the mark could not be written.
+Mark = tuple[str, int]
+"""A key `mark` set `pending`, with the generation that mark owns
+(`records.GEN`). The run started for it carries both: a run whose generation
+the entry has moved past is obsolete -- a newer run for the same key was marked
+after it, or a person edited the record -- and is skipped or its result
+discarded rather than allowed to land over whatever superseded it."""
+
+
+def mark(cid: str, sid: str, key: str) -> Mark | None:
+    """The first half of scheduling: mark `key` `pending`, and return it with
+    its generation -- or `None` when the tracker is off or the mark could not
+    be written.
 
     **Meant to be called inside the campaign-lock hold that wrote the post**
     (the append, `_save`, `_pause`, `_accept_reroll`). There the acquisition
@@ -190,14 +199,14 @@ def mark(cid: str, sid: str, key: str) -> str | None:
         if not store.tracker.settings.enabled(cid):
             return None
         ident = store.scenes.ensure_identity(cid, sid)
-        store.tracker.records.mark_pending(cid, ident, key)
+        gen = store.tracker.records.mark_pending(cid, ident, key)
     except Exception as exc:  # noqa: BLE001 -- see the docstring
         log.warning("tracker: could not mark %s pending in %s/%s -- %s", key, cid, sid, exc)
         return None
-    return key
+    return key, gen
 
 
-def mark_response(cid: str, sid: str, rid: str) -> str | None:
+def mark_response(cid: str, sid: str, rid: str) -> Mark | None:
     """`mark` for response `rid`'s ACTIVE variant -- the one the transcript now
     shows. `None` when it has none yet. Same calling rule as `mark`."""
     try:
@@ -210,9 +219,10 @@ def mark_response(cid: str, sid: str, rid: str) -> str | None:
     return mark(cid, sid, store.tracker.paths.response_key(rid, active)) if active else None
 
 
-def start(app, cid: str, sid: str, key: str, client: LLMClient,
-          identity: str | None = None, *, flag_later: bool = False) -> None:
-    """The second half: start the run for a key `mark` returned. Never raises.
+def start(app, cid: str, sid: str, marked: Mark, client: LLMClient,
+          identity: str | None = None, *, flag_later: bool = False,
+          trust_base: bool = False) -> None:
+    """The second half: start the run for what `mark` returned. Never raises.
 
     Takes no campaign lock on its success path (`reserve_background` reads the
     identity rather than ensuring it), so a turn calls it AFTER its terminal
@@ -232,7 +242,11 @@ def start(app, cid: str, sid: str, key: str, client: LLMClient,
 
     `flag_later` is a Retry's: the record had no usable result, so every later
     record was built without this post's contribution and is stale once it
-    lands (`_commit`)."""
+    lands (`_commit`). `trust_base` is the first key of an explicit re-run
+    from here: the person chose that starting point with its base record's
+    warning in view, so a stale base does not make the result stale
+    (`_prepare`)."""
+    key, gen = marked
     try:
         run = runs.reserve_background(app, cid, sid, "tracker-update")
     except Exception as exc:  # noqa: BLE001 -- fail-soft by contract
@@ -241,17 +255,17 @@ def start(app, cid: str, sid: str, key: str, client: LLMClient,
     if run is None or not run.scene_identity:
         # A store mid-move or a scene that vanished: no run will ever settle
         # this record, so it must not sit at `pending` for good.
-        _fail_by_sid(cid, sid, key, "the update could not be scheduled")
+        _fail_by_sid(cid, sid, key, "the update could not be scheduled", gen)
         return
     ident = run.scene_identity
     if identity is not None and ident != identity:
         runs.release_before_start(app, run, "failed",
                                   {"kind": "scene_replaced", "detail": "the scene was replaced"})
-        _fail(cid, identity, sid, key, "the scene was replaced before the update started")
+        _fail(cid, identity, sid, key, "the scene was replaced before the update started", gen)
         return
     try:
-        runs.start_computing(app, run, lambda: _update(app, cid, sid, key, client, ident,
-                                                       flag_later))
+        runs.start_computing(app, run, lambda: _update(app, cid, sid, key, gen, client, ident,
+                                                       flag_later, trust_base))
     except Exception as exc:  # noqa: BLE001 -- `scenes._start_background`'s reason
         # `runner.start` raises with no lifespan running, or when shutdown
         # closed the portal between the reservation and the handoff. A run
@@ -261,23 +275,24 @@ def start(app, cid: str, sid: str, key: str, client: LLMClient,
         log.warning("tracker: could not start %s for %s/%s -- %s", key, cid, sid, exc)
         runs.release_before_start(app, run, "failed",
                                   {"kind": "run_failed", "detail": str(exc)})
-        _fail(cid, ident, sid, key, str(exc) or "the update could not be started")
+        _fail(cid, ident, sid, key, str(exc) or "the update could not be started", gen)
 
 
 def schedule(app, cid: str, sid: str, key: str, client: LLMClient, *,
-             flag_later: bool = False) -> None:
+             flag_later: bool = False, trust_base: bool = False) -> None:
     """`mark` then `start`, for a caller with no write hold of its own to mark
     inside -- a user action (Retry, re-run from here) or an opening. Never
     raises. A turn uses the two halves instead (see `mark`)."""
-    if mark(cid, sid, key):
-        start(app, cid, sid, key, client, flag_later=flag_later)
+    marked = mark(cid, sid, key)
+    if marked:
+        start(app, cid, sid, marked, client, flag_later=flag_later, trust_base=trust_base)
 
 
 def schedule_response(app, cid: str, sid: str, rid: str, client: LLMClient) -> None:
     """`schedule` for a response's active variant. Never raises."""
-    key = mark_response(cid, sid, rid)
-    if key:
-        start(app, cid, sid, key, client)
+    marked = mark_response(cid, sid, rid)
+    if marked:
+        start(app, cid, sid, marked, client)
 
 
 def schedule_untracked(app, cid: str, sid: str, client: LLMClient) -> None:
@@ -303,7 +318,7 @@ def schedule_untracked(app, cid: str, sid: str, client: LLMClient) -> None:
 _LOCKS_GUARD = threading.Lock()
 
 
-def _scene_lock(app, identity: str) -> asyncio.Lock:
+def _scene_lock(app, cid: str, identity: str) -> asyncio.Lock:
     """The one lock every update for this scene runs under.
 
     WHY: an update's input is the snapshot its predecessor wrote
@@ -321,23 +336,28 @@ def _scene_lock(app, identity: str) -> asyncio.Lock:
     live on `app.state` (not module scope) for the reason the run registry does
     -- a `TestClient` builds an app per test. The `threading.Lock` only guards
     creating them: `schedule` runs on worker threads, but this is reached from
-    `_update` on the loop, and a dict get-or-set is not atomic across both."""
+    `_update` on the loop, and a dict get-or-set is not atomic across both.
+
+    Keyed by `(cid, identity)`, not the identity alone: a fork copies its
+    source's scene files, identities included, and two campaigns' scenes
+    sharing one lock would queue each other's updates for nothing."""
     with _LOCKS_GUARD:
         locks = getattr(app.state, "tracker_locks", None)
         if locks is None:
             locks = app.state.tracker_locks = {}
-        lock = locks.get(identity)
+        lock = locks.get((cid, identity))
         if lock is None:
-            lock = locks[identity] = asyncio.Lock()
+            lock = locks[(cid, identity)] = asyncio.Lock()
         return lock
 
 
-async def _update(app, cid: str, sid: str, key: str, client: LLMClient,
-                  identity: str, flag_later: bool = False) -> dict:
+async def _update(app, cid: str, sid: str, key: str, gen: int | None, client: LLMClient,
+                  identity: str, flag_later: bool = False, trust_base: bool = False) -> dict:
     """One post's update, as a run's outcome. `sid` is a hint (see above)."""
-    async with _scene_lock(app, identity):
+    async with _scene_lock(app, cid, identity):
         try:
-            return await _update_locked(cid, sid, key, client, identity, flag_later)
+            return await _update_locked(cid, sid, key, gen, client, identity, flag_later,
+                                        trust_base)
         except BaseException as exc:
             # Cancelled (a shutdown mid-call) or a bug: the record must not be
             # left `pending` with no run behind it, which reads as an update
@@ -346,25 +366,28 @@ async def _update(app, cid: str, sid: str, key: str, client: LLMClient,
             reason = (_text(exc) if isinstance(exc, Exception)
                       else "the update was interrupted")
             with anyio.CancelScope(shield=True):
-                await run_in_threadpool(_fail, cid, identity, sid, key, reason)
+                await run_in_threadpool(_fail, cid, identity, sid, key, reason, gen)
             raise
 
 
-async def _update_locked(cid: str, sid: str, key: str, client: LLMClient,
-                         identity: str, flag_later: bool = False) -> dict:
+async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: LLMClient,
+                         identity: str, flag_later: bool = False,
+                         trust_base: bool = False) -> dict:
     """`_update`'s body, under the scene's tracker lock. Every failure it
     expects is settled here and returned as the run's outcome."""
     try:
         # Inside the coroutine, so a campaign with no usable connection is
         # a failed record saying why rather than an exception out of the run.
-        conn = _require_connection("tracker-update", cid)
+        # In a worker: resolving a connection reads the campaign and the
+        # connection files, and this runs on the lifespan loop.
+        conn = await run_in_threadpool(_require_connection, "tracker-update", cid)
     except HTTPException as exc:
-        await run_in_threadpool(_fail, cid, identity, sid, key, _detail(exc))
+        await run_in_threadpool(_fail, cid, identity, sid, key, _detail(exc), gen)
         return {"state": "failed", "error": run_error(exc)}
     try:
-        prep = await run_in_threadpool(_prepare, cid, identity, sid, key)
+        prep = await run_in_threadpool(_prepare, cid, identity, sid, key, gen, trust_base)
     except Exception as exc:  # noqa: BLE001 -- the walk fails closed on a bad ledger
-        await run_in_threadpool(_fail, cid, identity, sid, key, _text(exc))
+        await run_in_threadpool(_fail, cid, identity, sid, key, _text(exc), gen)
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
     if prep is None:
         return {"state": "landed", "result": {"skipped": True}}
@@ -378,21 +401,25 @@ async def _update_locked(cid: str, sid: str, key: str, client: LLMClient,
             text = await client.complete(messages, conn, m.usage)
         reply = store.tracker.merge.parse_reply(text)
     except LLMError as exc:
-        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
+        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc), gen)
         return {"state": "failed", "error": run_error(_llm_http_error(exc))}
     except store.tracker.merge.TrackerReplyError as exc:
-        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
+        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc), gen)
         return {"state": "failed", "error": {"kind": "bad_reply", "detail": _text(exc)}}
     snapshot, changed = store.tracker.merge.apply_reply(
         prep["prior"], reply, fields, prep["roster"], prep["present"],
         store.scenes.match_name)
+    # A re-run or Retry rebuilds this record from the one before it; whatever
+    # a person typed into it, and the reply did not itself move, is kept.
+    snapshot, changed = store.tracker.merge.keep_user_values(
+        snapshot, prep["own"], prep["prior"], changed)
     try:
         written = await run_in_threadpool(
             _commit, cid, identity, prep["sid"], key, snapshot, changed,
             store.tracker.fields.digest(fields), effective_model(conn), flag_later,
-            prep["seen_seq"])
+            prep["seen_seq"], gen, prep["stale_base"])
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
-        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc))
+        await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc), gen)
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
     if not written:
         return {"state": "landed", "result": {"skipped": True}}
@@ -477,16 +504,39 @@ def _context_posts(cid: str, sid: str, first: int) -> list[dict]:
     return out[::-1]
 
 
-def _prepare(cid: str, identity: str, hint: str, key: str) -> dict | None:
+def _obsolete(cid: str, identity: str, key: str, gen: int | None) -> bool:
+    """Whether a run owning generation `gen` has been superseded (`Mark`).
+    Called under the campaign lock. `None` -- a caller with no generation to
+    compare -- is never obsolete."""
+    if gen is None:
+        return False
+    entry = store.tracker.records.read_index(cid, identity).get(key)
+    return store.tracker.records.generation(entry) != gen
+
+
+def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = None,
+             trust_base: bool = False) -> dict | None:
     """Everything the update call needs, read under one campaign-lock hold so it
     describes one transcript. `None` when there is nothing to do -- the scene
-    or the post is gone, or the tracker was switched off while this waited --
-    and the record has been settled accordingly."""
+    or the post is gone, the tracker was switched off while this waited, or the
+    run is obsolete (`Mark`) -- and the record has been settled accordingly.
+
+    `stale_base`: the record this one is built on (the latest `ok` record
+    before the post) carries a staleness flag of its own, so the result will
+    be built on a state the transcript no longer stands behind -- `_commit`
+    raises `upstream_changed` on it. Not for `trust_base` (the first key of an
+    explicit re-run, started from that base on purpose)."""
     walk = store.tracker.walk
+    records = store.tracker.records
     with store.locks.campaign_lock(cid):
         sid = _current_sid(cid, hint, identity)
         if sid is None:
             return None         # deleted: `delete_scene` already dropped its records
+        if _obsolete(cid, identity, key, gen):
+            # A newer run for this key was marked, or a person edited the
+            # record, after this one was. The newer run settles the record; an
+            # edit already did. Either way this one has nothing to add.
+            return None
         if not store.tracker.settings.enabled(cid):
             # Switched off after this was scheduled. Turning it off is a choice
             # not to pay for updates, including the ones still queued.
@@ -498,13 +548,16 @@ def _prepare(cid: str, identity: str, hint: str, key: str) -> dict | None:
             _settle_unwritten(cid, sid, identity, key, "")
             return None
         index = located["index"]
-        _, prior = walk.state_before(cid, sid, index)
+        base_key, prior = walk.state_before(cid, sid, index)
         # Read in the hold that reads the post and its prior: the flags this
         # run answers are the ones raised up to here. Nothing is cleared now --
         # a run that fails or dies answered nothing -- and `_commit` clears
         # them only if none went up while the model answered.
-        seen = store.tracker.records.flag_seq(
-            store.tracker.records.read_index(cid, identity).get(key))
+        entries = records.read_index(cid, identity)
+        seen = records.flag_seq(entries.get(key))
+        base_flags = ((entries.get(base_key) or {}).get("flags") or {}) if base_key else {}
+        stale_base = not trust_base and any(base_flags.get(f) for f in records.FLAGS)
+        own = records.read_snapshot(cid, identity, key)
         present = walk.present_at(cid, sid, index)
         return {
             "sid": sid, "post": located["post"], "rid": located["rid"],
@@ -515,6 +568,8 @@ def _prepare(cid: str, identity: str, hint: str, key: str) -> dict | None:
             "context_posts": _context_posts(cid, sid, located["first"]),
             "post_msg": located["post_msg"],
             "seen_seq": seen,
+            "stale_base": stale_base,
+            "own": own["snapshot"] if own else None,
         }
 
 
@@ -536,7 +591,7 @@ def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) 
 
 def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
             changed: list, digest: str, model: str, flag_later: bool = False,
-            seen_seq: int = 0) -> bool:
+            seen_seq: int = 0, gen: int | None = None, stale_base: bool = False) -> bool:
     """Store the result, unless the post went away while the model answered.
 
     RE-CHECKED under the lock that covers the write, because the check in
@@ -550,12 +605,18 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
     on the walk was built without this one, so each gets `upstream_changed` --
     in the same hold, so no reader sees the new result beside unflagged
     successors. Only when the key is ON the walk: an inactive variant's record
-    is not what any later record was built on."""
+    is not what any later record was built on.
+
+    `gen` is re-checked here too (`Mark`): a newer run marked, or a hand edit
+    made, while the model answered means this result is not the one to keep.
+    `stale_base` (`_prepare`) raises `upstream_changed` in the same write."""
     with store.locks.campaign_lock(cid):
         sid = _current_sid(cid, hint, identity)
         if sid is None:
             # Deleted while the model answered. `delete_scene` dropped the
             # whole directory; writing now would resurrect it as an orphan.
+            return False
+        if _obsolete(cid, identity, key, gen):
             return False
         if _locate(cid, sid, key) is None:
             _settle_unwritten(cid, sid, identity, key, "")
@@ -564,7 +625,8 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
         # `_prepare` read this result's inputs -- one that did is a write the
         # result never saw, and the record must keep saying so.
         store.tracker.records.save(cid, identity, key, snapshot, changed=changed,
-                                   fields_digest=digest, model=model, seen_seq=seen_seq)
+                                   fields_digest=digest, model=model, seen_seq=seen_seq,
+                                   raise_upstream=stale_base)
         if flag_later:
             at = store.tracker.walk.index_of(cid, sid, key)
             if at is not None:
@@ -576,20 +638,23 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
         return True
 
 
-def _fail(cid: str, identity: str, hint: str, key: str, error: str) -> None:
-    """Mark `key` failed. Never raises: this runs on paths that are already
-    reporting a failure, and a second one would only bury the first."""
+def _fail(cid: str, identity: str, hint: str, key: str, error: str,
+          gen: int | None = None) -> None:
+    """Mark `key` failed -- unless the run owning `gen` is obsolete, when the
+    record belongs to whatever superseded it (`records.mark_failed`). Never
+    raises: this runs on paths that are already reporting a failure, and a
+    second one would only bury the first."""
     try:
         with store.locks.campaign_lock(cid):
             if _current_sid(cid, hint, identity) is None:
                 return          # deleted: nothing to mark, and nothing to resurrect
-            store.tracker.records.mark_failed(cid, identity, key, error)
+            store.tracker.records.mark_failed(cid, identity, key, error, gen)
             store.revision.bump(cid)
     except Exception as exc:  # noqa: BLE001 -- see the docstring
         log.warning("tracker: could not mark %s failed in %s -- %s", key, cid, exc)
 
 
-def _fail_by_sid(cid: str, sid: str, key: str, error: str) -> None:
+def _fail_by_sid(cid: str, sid: str, key: str, error: str, gen: int | None = None) -> None:
     """`_fail` for a caller that has no identity in hand -- a reservation that
     never happened. Never raises."""
     try:
@@ -598,7 +663,7 @@ def _fail_by_sid(cid: str, sid: str, key: str, error: str) -> None:
         log.warning("tracker: could not mark %s failed in %s -- %s", key, cid, exc)
         return
     if ident:
-        _fail(cid, ident, sid, key, error)
+        _fail(cid, ident, sid, key, error, gen)
 
 
 # --- scene records -------------------------------------------------------------
@@ -652,7 +717,7 @@ def _reported(entry: dict, live: bool) -> dict:
     "updating..." for good and offers nothing; reported as failed it offers
     Retry, which is the one action that settles it. Reported, not rewritten --
     a GET takes no lock, and the next mark or save overwrites it anyway."""
-    entry = {k: v for k, v in entry.items() if k != store.tracker.records.SEQ}
+    entry = {k: v for k, v in entry.items() if k not in store.tracker.records.INTERNAL}
     if entry.get("status") == "pending" and not live:
         return {**entry, "status": "failed", "error": INTERRUPTED}
     return entry
@@ -772,10 +837,12 @@ def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request:
                 if entry.get("status") == "ok" else [])
         # `keep_flags`: clearing is a re-run's job. A hand edit of one value
         # does not make the rest of the record agree with an edited post or an
-        # earlier change, so whatever was raised stays.
+        # earlier change, so whatever was raised stays. `bump_gen`: a run
+        # already queued for this key read the record before this edit, and
+        # must not land over it (`Mark`).
         records.save(cid, ident, key, snapshot, changed=kept + changed,
                      fields_digest=store.tracker.fields.digest(fields), model="user",
-                     keep_flags=True)
+                     keep_flags=True, bump_gen=True)
         at = walk.index_of(cid, sid, key)
         if at is not None:
             # Only from a key ON the walk: an inactive variant is not what any
@@ -815,15 +882,17 @@ def post_tracker_rerun_from(cid: str, sid: str, key: str, request: Request,
 
     Scheduled in that order, which is the order they run in (`_scene_lock`),
     so each starts from what the one before it just wrote. Each save clears its
-    own flags; nothing needs flagging, because everything after is re-run."""
+    own flags; nothing needs flagging, because everything after is re-run.
+    The first is started from its base record on purpose (`trust_base`): the
+    person chose to re-run from here with that record's warning in view."""
     _require_scene(cid, sid)
     _require_key(key)
     _require_on(cid)
     ordered = [k for _, k in store.tracker.walk.ordered_keys(cid, sid)]
     if key not in ordered:
         raise HTTPException(status_code=404, detail="tracker record not found")
-    for later in ordered[ordered.index(key):]:
-        schedule(request.app, cid, sid, later, client)
+    for n, later in enumerate(ordered[ordered.index(key):]):
+        schedule(request.app, cid, sid, later, client, trust_base=n == 0)
     return get_scene_tracker(cid, sid, request)
 
 
