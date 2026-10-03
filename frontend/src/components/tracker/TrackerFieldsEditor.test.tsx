@@ -16,20 +16,27 @@ const MOOD: TrackerField = {
 };
 const INHERITED = [ATTENTION, MOOD];
 
-/** A bundle the way the server builds it: `effective` is `inherited` with the layer laid over. */
+/** A bundle the way the server builds it (`fields.apply_layer`): a change is merged
+ *  over the inherited field, leaving enum drops the options, a switched-off field is
+ *  marked, and an addition whose key the base already has is skipped. */
 function bundle(layer: TrackerLayer, inherited: TrackerField[] = INHERITED): TrackerLayerBundle {
   const eff = inherited.map((f) => {
-    const merged = { ...f, ...(layer.change?.[f.key] ?? {}) };
+    const merged: TrackerField = { ...f, ...(layer.change?.[f.key] ?? {}) };
+    if (merged.type !== "enum") delete merged.options;
     return (layer.off ?? []).includes(f.key) ? { ...merged, off: true } : merged;
   });
-  return { layer, effective: [...eff, ...(layer.fields ?? [])], inherited };
+  const have = new Set(inherited.map((f) => f.key));
+  const added = (layer.fields ?? []).filter((f) => !have.has(f.key));
+  return { layer, effective: [...eff, ...added], inherited };
 }
 
 const CAMPAIGN = { kind: "campaign" as const, cid: "saltmarch" };
 const WORLD = { kind: "world" as const, wid: "realm" };
 
+/** The server answers a PUT with the bundle for what it stored, so this does too. */
 function serve(layer: TrackerLayer, inherited?: TrackerField[]) {
   vi.mocked(api.getTrackerFields).mockResolvedValue(bundle(layer, inherited));
+  vi.mocked(api.setTrackerFields).mockImplementation(async (_s, sent) => bundle(sent, inherited));
 }
 
 beforeEach(() => {
@@ -129,9 +136,11 @@ test("editing an inherited field writes only what differs as a change", async ()
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(
     CAMPAIGN, { fields: [], change: { attention: { label: "Focus" } }, off: [] }));
-  // Back to the read-only view, and the list was re-read.
-  expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
-  expect(api.getTrackerFields).toHaveBeenCalledTimes(2);
+  // Back to the read-only view, showing the bundle the write answered with.
+  expect(await screen.findByRole("heading", { name: "Focus" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(screen.getByText("changed here")).toBeInTheDocument();
+  expect(api.getTrackerFields).toHaveBeenCalledTimes(1);
 });
 
 test("changing an enum's options is a change of options alone", async () => {
@@ -270,4 +279,26 @@ test("a failed read says so, with a way to try again", async () => {
   serve({});
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   expect(await screen.findByRole("button", { name: /Attention/ })).toBeInTheDocument();
+});
+
+test("a layer whose added field a lower layer has since taken over is still saveable", async () => {
+  // The world grew `attention` after this campaign added it. Reading is fine and
+  // the field shows as inherited, but the server refuses any write that still
+  // carries the dead addition -- so none may be sent.
+  const stale: TrackerField = { key: "attention", label: "Old", type: "text", aware: "self", hint: "" };
+  serve({ fields: [stale] });
+  await open("Attention");
+  expect(screen.getByText("inherited")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Switch off" }));
+  await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(
+    CAMPAIGN, { fields: [], change: {}, off: ["attention"] }));
+});
+
+test("the same layer saves an unrelated field's switch without the dead addition", async () => {
+  const stale: TrackerField = { key: "attention", label: "Old", type: "text", aware: "self", hint: "" };
+  serve({ fields: [stale] });
+  await open("Visible mood");
+  fireEvent.click(screen.getByRole("button", { name: "Switch off" }));
+  await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(
+    CAMPAIGN, { fields: [], change: {}, off: ["visible_mood"] }));
 });

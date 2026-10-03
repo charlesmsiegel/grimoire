@@ -27,6 +27,20 @@ export const fullLayer = (layer: TrackerLayer | undefined): FullLayer => ({
   fields: layer?.fields ?? [], change: layer?.change ?? {}, off: layer?.off ?? [],
 });
 
+/** `layer` without the additions a layer below has since taken over.
+ *
+ *  `apply_layer` skips an addition whose key the base already has, so reading
+ *  such a layer works and `effective` is unchanged -- but `validate_layer`
+ *  refuses every write that still carries it ("already exists"), which would
+ *  leave the layer unsaveable, and with no Remove to offer for a field the
+ *  editor shows as inherited. Dropping the no-ops from what is written fixes
+ *  that without touching what the layer means. Still the STORED layer, not
+ *  `effective`: nothing inherited is copied in. */
+export const withoutShadowed = (layer: FullLayer, inheritedKeys: ReadonlySet<string>): FullLayer =>
+  layer.fields.some((f) => inheritedKeys.has(f.key))
+    ? { ...layer, fields: layer.fields.filter((f) => !inheritedKeys.has(f.key)) }
+    : layer;
+
 /** What a form edits. `options` is the comma list as typed. */
 export type FieldDraft = {
   key: string; label: string; hint: string;
