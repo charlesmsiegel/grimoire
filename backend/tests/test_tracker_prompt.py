@@ -2,10 +2,12 @@
 material is read. Rendering is pure; `newcomer` is the only part that reads a
 store, and it answers an empty string rather than raising."""
 
+import json
+
 import pytest
 
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, pcs, playstate, routing, scenes, worlds
+from grimoire.store import campaigns, characters, overlay, pcs, playstate, routing, scenes, worlds
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.tracker import fields, prompt
 
@@ -82,6 +84,43 @@ def test_newcomer_reads_a_card_a_persona_and_the_standing_state(home):
                    "description": "A tall archivist.", "state": "Tired."}
     got = prompt.newcomer(cid, f"pcs:{pid}")
     assert got["name"] == "Mara" and got["state"] == ""
+
+
+@pytest.mark.parametrize("card", [{"name": "X"}, {"data": "oops"}, {"data": []}])
+def test_newcomer_survives_a_card_with_no_usable_data(home, card):
+    wid, cid, sid = home
+    wcid, vid = characters.create_character(worlds.world_root(wid), "Winifred", "default",
+                                            characters.blank_card("Winifred"))
+    ap.appear(cid, sid, "characters", wcid, "default", "npc")
+    overlay.materialize_actor(cid, "characters", wcid)
+    path = characters.require_version(overlay.char_root(cid, wcid), wcid, vid)
+    path.write_text(json.dumps(card), encoding="utf-8")
+    got = prompt.newcomer(cid, f"characters:{wcid}")
+    assert got["description"] == "" and got["ref"] == f"characters:{wcid}"
+
+
+def test_newcomer_pc_reads_the_campaign_copy_not_the_world_one(home):
+    wid, cid, sid = home
+    persona = pcs.blank_persona("Mara")
+    persona.update(summary="World summary.", description="World description.")
+    pid, vid = pcs.create_pc(worlds.world_root(wid), "Mara", [], "default", persona)
+    ap.appear(cid, sid, "pcs", pid, "default", "player")
+    overlay.materialize_actor(cid, "pcs", pid)
+    persona.update(summary="Campaign summary.", description="Campaign description.")
+    pcs.require_version(overlay.pc_root(cid, pid), pid, vid).write_text(
+        pcs._dump_persona(persona), encoding="utf-8")
+    got = prompt.newcomer(cid, f"pcs:{pid}")
+    assert got["description"] == "Campaign summary.\n\nCampaign description."
+
+
+def test_newcomer_pc_that_only_the_campaign_has(home):
+    _, cid, sid = home
+    persona = pcs.blank_persona("Seraphine")
+    persona.update(summary="Keeper.", description="Keeps the tide ledger.")
+    pid, _ = overlay.create_pc(cid, "Seraphine", [], "default", persona)
+    ap.appear(cid, sid, "pcs", pid, "default", "player")
+    got = prompt.newcomer(cid, f"pcs:{pid}")
+    assert got["name"] == "Seraphine" and "Keeps the tide ledger." in got["description"]
 
 
 def test_routing_knows_the_task():

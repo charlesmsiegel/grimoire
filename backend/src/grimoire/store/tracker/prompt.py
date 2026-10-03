@@ -30,14 +30,15 @@ def _card(cid: str, actor_id: str) -> dict:
     vid = appearances_versions.locked_version(cid, "characters", actor_id)
     if vid is None:
         raise characters.VersionNotFound(actor_id)
-    return characters.read_card(overlay.char_root(cid, actor_id), actor_id, vid)["data"]
+    card = characters.read_card(overlay.char_root(cid, actor_id), actor_id, vid)
+    return cards.card_data(card)    # a hand-edited card may have no usable `data`
 
 
 def _persona(cid: str, actor_id: str) -> dict:
     vid = appearances_versions.locked_version(cid, "pcs", actor_id)
     if vid is None:
         raise pcs.PCVersionNotFound(actor_id)
-    return pcs.read_persona(overlay.char_root(cid, actor_id), actor_id, vid)
+    return pcs.read_persona(overlay.pc_root(cid, actor_id), actor_id, vid)
 
 
 def newcomer(cid: str, ref: str) -> dict:
