@@ -89,8 +89,15 @@ def variants_by_response(
 
     Read-only, so it never mints: `_scope` would `ensure_identity`, writing the
     scene file to answer a question about it. A scene with no identity has no
-    ledger scope either, which is `{}`. Under the lock so the active pointer and
-    the variant list come from one ledger state.
+    ledger scope either, which is `{}`.
+
+    Takes no lock, as `actor_refs` takes none: the ledger is one file written
+    whole through `atomic`, so a single read already sees the active pointer
+    and the variant list from one ledger state. A lock here would only add a
+    wait -- up to the lock timeout -- in front of every prompt composed while
+    something else holds the campaign (`context.assemble` reaches this through
+    the tracker's walk). A caller that must decide against what it read holds
+    the campaign lock itself, around this read and its write.
 
     `token` is for a caller that has already resolved the identity and would
     act on an empty answer. `scene_identity` is fail-soft -- an unreadable
@@ -98,15 +105,14 @@ def variants_by_response(
     could turn a momentarily unreadable file into `{}`, and a prune would take
     that as "no response has any variant" and discard every one of them.
     """
-    with locks.campaign_lock(cid):
-        if token is None:
-            token = identity.scene_identity(cid, sid)
-        if not token:
-            return {}
-        records = _read(cid)["scenes"].get(token, {}).get("responses", {})
-        return {rid: (record.get("active_variant"),
-                      [v["id"] for v in record.get("variants", [])])
-                for rid, record in records.items()}
+    if token is None:
+        token = identity.scene_identity(cid, sid)
+    if not token:
+        return {}
+    records = _read(cid)["scenes"].get(token, {}).get("responses", {})
+    return {rid: (record.get("active_variant"),
+                  [v["id"] for v in record.get("variants", [])])
+            for rid, record in records.items()}
 
 
 def transcript_hash(messages):

@@ -75,7 +75,8 @@ def compose_opener(cid: str, sid: str, prompt: str,
     Returns the messages and the breakdown describing them — see `compose_turn`
     for why those two must come out of one pass."""
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH,
-                  actor_ref=actor_ref, opening_narrator=actor_ref == "grimoire")
+                  actor_ref=actor_ref, opening_narrator=actor_ref == "grimoire",
+                  opener=True)
     # Both trailing messages are rendered before packing so their tokens can be
     # reserved: neither is droppable, so neither may go uncounted.
     user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid,
@@ -103,14 +104,17 @@ def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> l
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
               turn: dict | None = None, actor_ref: str | None = None,
               eligible_speakers: list[dict] | None = None,
-              opening_narrator: bool = False) -> dict:
+              opening_narrator: bool = False, opener: bool = False) -> dict:
     """One pass gathering the template data + projected history + post-history.
     build_* render templates/scene/system.j2 from data; context_sections renders
     the per-section templates for the token breakdown. `wi_seed` folds extra text
     (the opener prompt) into the world-info activation window; `full_recap` (> 0)
     selects the full story-so-far variant over the compact recap. `turn` is a
     one-shot, unpersisted override (e.g. a per-turn response-length chip) that
-    outranks every stored scope in response_presets.resolve -- see build_messages."""
+    outranks every stored scope in response_presets.resolve -- see build_messages.
+    `opener` skips the tracker read: its section is `except_opener`, and the
+    opener is composed inside an async generator on the event loop, where the
+    read's lock waits would stall every other request."""
     # BEST-EFFORT, not `campaign_lock`: `post_chat` appends the player's post
     # before calling this and only wires the undo that would take it back off
     # afterwards, so a `StoreBusy` raised here would strand that post with no
@@ -121,7 +125,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # so the two describe one moment. A reroll never comes through here:
         # it replays the prompt frozen for the response it replaces, which
         # already holds the state that stood before that post.
-        tracker = _tracker_read(cid, sid)
+        tracker = _NO_TRACKER if opener else _tracker_read(cid, sid)
     history = [dict(m) for m in scene["messages"]]
     # {{date}}/{{weekday}}/{{time}}, resolved ONCE per compose and handed to
     # every `expand_macros` call below, in `_render_sections` and in `_prepare`.
