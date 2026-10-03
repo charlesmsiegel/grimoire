@@ -62,6 +62,7 @@ const DRAFT_FIELDS = [
   "advance_fork_threshold",
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "log_level",
+  "tracker", "perception_rider",
   // `theme` is deliberately NOT here. The look is persisted the moment it is
   // picked, by `useThemeSetting`, because three controls now offer it (this
   // page, the first-run wizard, the header toggle) and a draft field would let
@@ -90,10 +91,10 @@ function draftOf(c: Config): Draft {
 type SectionId =
   | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
   | "setup"
-  | "context" | "layout" | "semantic" | "system-prompt" | "response"
+  | "context" | "layout" | "tracker" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
-/** The column, as data: three groups, thirteen sections, and which draft fields
+/** The column, as data: three groups, fourteen sections, and which draft fields
  *  each one owns — the last part is what lets a section carry an unsaved dot,
  *  so the footer's count is always findable rather than being a number about
  *  somewhere else. */
@@ -123,6 +124,8 @@ const SECTIONS: SectionDef[] = [
              "offscene_known_limit", "speaker_turn_taking"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
+  { id: "tracker", group: "What the model sees", label: "Scene tracker",
+    fields: ["tracker", "perception_rider"] },
   { id: "semantic", group: "What the model sees", label: "Semantic recall",
     fields: ["embeddings_connection_id", "embeddings_model",
              "semantic_recall_depth", "semantic_recall_threshold"] },
@@ -334,6 +337,8 @@ export default function ConfigView() {
       case "storage": return config?.data_dir ? "set" : "";
       case "appearance": return theme.mode;
       case "layout": return draft?.prompt_layout_enabled === "on" ? "on" : "off";
+      // Unset reads as on, like the checkbox: the shipped default is on.
+      case "tracker": return draft?.tracker === "off" ? "off" : "on";
       case "semantic": return recallOff ? "off" : "on";
       // Deliberately blank: the rate table, the routing records and the
       // response preset are each a document of their own, and "12 entries" is
@@ -954,6 +959,41 @@ export default function ConfigView() {
             <p className="config-copy">
               To change what a section <em>says</em>, edit its template in <code>templates/</code>
               — they are read from disk, so a saved edit is live on the next turn.
+            </p>
+          </>
+        )}
+
+        {draft && section === "tracker" && (
+          <>
+            <p className="config-copy">
+              After every post, the scene tracker keeps a small record of each character: where
+              they are, what they are holding and doing, and what they have seen or heard. It
+              costs one extra call per post, made on the <em>Scene state tracker</em> model route,
+              which you can point at a cheaper model from <em>Model routing</em>. A campaign can
+              switch it on or off for itself.
+            </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Track each character's state after every post"
+                checked={draft.tracker !== "off"}
+                onChange={(e) => edit("tracker", e.target.checked ? "on" : "off")}
+              />
+              Track each character's state after every post
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Ask each character to note what it heard or saw before replying"
+                checked={draft.perception_rider !== "off"}
+                onChange={(e) => edit("perception_rider", e.target.checked ? "on" : "off")}
+              />
+              Ask each character to note what it heard or saw before replying
+            </label>
+            <p className="config-copy">
+              The second switch adds a short instruction to each character's turn, asking it to
+              note what it perceived before it replies. Turn it off to keep the tracker's record
+              while shedding that prompt cost.
             </p>
           </>
         )}
