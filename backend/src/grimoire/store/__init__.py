@@ -138,6 +138,7 @@ from . import (
     thumbs,
     timeline,
     tokens,
+    tracker,
     undo,
     usage,
     usage_rollup,
@@ -184,6 +185,10 @@ from .scene_import import SceneImportError
 from .scenes import SceneNotFound
 from .styles import BuiltInStyleImmutable, StyleNotFound
 from .tags import TagNotFound
+
+# Each tracker submodule is imported explicitly so `store.tracker.<submodule>`
+# resolves for routes and tests (one line per submodule, added as each lands).
+from .tracker import settings as _tracker_settings
 from .world_bundle import BundleError
 from .worlds import WorldNotFound
 
@@ -272,6 +277,7 @@ __all__ = [
     "appearances",
     "AppearError",
     "tags",
+    "tracker",
     "TagNotFound",
     "pcs",
     "PCNotFound",
