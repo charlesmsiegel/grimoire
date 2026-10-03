@@ -163,6 +163,17 @@ def test_a_reply_written_as_json_instead_of_as_a_string_is_rejected():
         fake.cassette.reply([{"role": "user", "content": "x"}])
 
 
+async def test_a_cassette_entry_can_fail_its_request_alone():
+    cas = _cassette({"when": {"contains": "turn"}, "error": {"kind": "network",
+                                                            "message": "reset"}},
+                    {"when": {}, "reply": "fine"})
+    fake = FakeLLM(cassette=cas)
+    with pytest.raises(LLMError) as exc:
+        await fake.complete([{"role": "user", "content": "the turn"}], CONN)
+    assert (exc.value.kind, exc.value.detail) == ("network", "reset")
+    assert await fake.complete([{"role": "user", "content": "the update"}], CONN) == "fine"
+
+
 async def test_a_cassette_reply_can_be_streamed_as_deltas():
     fake = from_cassette("campaign_flow")
     deltas = await _drain(fake, [{"role": "system", "content":

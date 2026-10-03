@@ -89,6 +89,9 @@ class Cassette:
 
     Entries are tried in order and the first match wins, so put the specific
     ones first. `reply` is a string, or a list of strings streamed as deltas.
+    An entry may carry `error` (`{"kind", "message"}`) instead: the matching
+    request then fails upstream before any delta, which is how a test fails ONE
+    call (a turn) while the calls beside it (a background update) answer.
     """
 
     def __init__(self, data: dict, name: str = "<inline>"):
@@ -124,6 +127,10 @@ class Cassette:
         """The deltas for this request, or `CassetteMiss` naming what was tried."""
         for entry in self.entries:
             if self._matches(entry.get("when", {}), messages):
+                if "error" in entry:
+                    err = entry["error"]
+                    raise LLMError(err.get("kind", "network"),
+                                   err.get("message", "connection reset"))
                 reply = entry["reply"]
                 if isinstance(reply, str):
                     return [reply]
