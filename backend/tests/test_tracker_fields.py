@@ -63,6 +63,24 @@ def test_scene_layer_may_not_redefine(home):
         fields.write_scene_layer(cid, sid, {"change": {"visible_mood": {"type": "text"}}})
 
 
+def test_a_rejected_scene_layer_leaves_the_scene_file_alone(home):
+    from grimoire.store.scenes import identity as scenes_identity
+    from grimoire.store.scenes import paths as scenes_paths
+    _, cid, sid = home
+    # Strip the identity create_scene minted (test-only raw rewrite), so the
+    # write has something to mint.
+    p = scenes_paths._scene_path(cid, sid)
+    p.write_bytes(scenes_identity._drop_identity_line(p.read_bytes()))
+    assert scenes_identity.scene_identity(cid, sid) is None
+    before = p.read_bytes()
+    with pytest.raises(fields.FieldLayerError):
+        fields.write_scene_layer(cid, sid, {"change": {"pose": {"label": "x"}}})
+    assert scenes_identity.scene_identity(cid, sid) is None
+    assert p.read_bytes() == before
+    fields.write_scene_layer(cid, sid, {"off": ["pose"]})       # a valid one mints
+    assert scenes_identity.scene_identity(cid, sid) is not None
+
+
 def test_scene_layer_may_add_a_scene_only_field_but_not_shadow(home):
     _, cid, sid = home
     fields.write_scene_layer(cid, sid, {"fields": [
