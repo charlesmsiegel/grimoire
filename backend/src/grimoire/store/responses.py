@@ -80,7 +80,9 @@ def actor_refs(cid: str, sid: str) -> dict[str, str]:
             if record.get("actor_ref")}
 
 
-def variants_by_response(cid: str, sid: str) -> dict[str, tuple[str | None, list[str]]]:
+def variants_by_response(
+    cid: str, sid: str, *, token: str | None = None
+) -> dict[str, tuple[str | None, list[str]]]:
     """Each response's active variant id and every variant id it has, for the
     scene tracker's walk (which keys a character post by its active variant and
     keeps every variant's record, so a swipe back finds its state).
@@ -89,9 +91,16 @@ def variants_by_response(cid: str, sid: str) -> dict[str, tuple[str | None, list
     scene file to answer a question about it. A scene with no identity has no
     ledger scope either, which is `{}`. Under the lock so the active pointer and
     the variant list come from one ledger state.
+
+    `token` is for a caller that has already resolved the identity and would
+    act on an empty answer. `scene_identity` is fail-soft -- an unreadable
+    scene file reads as "no identity" -- so resolving it a second time here
+    could turn a momentarily unreadable file into `{}`, and a prune would take
+    that as "no response has any variant" and discard every one of them.
     """
     with locks.campaign_lock(cid):
-        token = identity.scene_identity(cid, sid)
+        if token is None:
+            token = identity.scene_identity(cid, sid)
         if not token:
             return {}
         records = _read(cid)["scenes"].get(token, {}).get("responses", {})

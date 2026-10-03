@@ -184,7 +184,10 @@ def prune(cid: str, sid: str) -> int:
         if not ident:
             return 0
         messages = read.read_scene(cid, sid)["messages"]
-        variants = responses.variants_by_response(cid, sid)
+        # The token already resolved, not a second fail-soft lookup: if the scene
+        # file were unreadable on that one, the ledger would answer `{}` and
+        # every response record would read as dead.
+        variants = responses.variants_by_response(cid, sid, token=ident)
         live: set[str] = set()
         for m in messages:
             tracked = _tracked(m)

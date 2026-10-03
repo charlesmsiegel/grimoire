@@ -275,3 +275,26 @@ def test_present_at_follows_intervals(home):
     data["characters/winifred"]["presence"].pop(sid)
     record_path.write_text(json.dumps(data), encoding="utf-8")
     assert walk.present_at(cid, sid, 0) == {mara, winifred}
+
+
+def test_prune_keeps_response_records_when_a_later_identity_read_fails(home, monkeypatch):
+    """`scene_identity` answers None for an unreadable scene file. A second
+    lookup failing inside prune must not make every response record look dead."""
+    _, cid, sid = home
+    r1 = _reply(cid, sid, "Mara", "Hello.")
+    ident = identity.ensure_identity(cid, sid)
+    key = tpaths.response_key(r1, responses.variants_by_response(cid, sid)[r1][0])
+    records.save(cid, ident, key, SNAP, changed=[], fields_digest="d", model="m")
+
+    real = identity.scene_identity
+    calls = []
+
+    def flaky(c, s):
+        calls.append(s)
+        return real(c, s) if len(calls) == 1 else None
+
+    with monkeypatch.context() as m:
+        m.setattr(identity, "scene_identity", flaky)
+        assert walk.prune(cid, sid) == 0
+    assert set(records.read_index(cid, ident)) == {key}
+    assert records.read_snapshot(cid, ident, key) is not None
