@@ -942,6 +942,18 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   border-radius: 3px; padding: 5px 8px; font-family: var(--fm); font-size: 10px;
   letter-spacing: 0.1em; min-width: 0; max-width: 100%; min-height: 34px;
 }
+/* The two one-shot targets (words, paragraphs). A bare `<input type="number">`
+   is 185px wide by UA default -- room for a nine-digit figure in a box whose
+   largest sensible value has three -- and two of them were most of why the
+   strip wrapped to two rows on a desktop and scrolled 900px on a phone. Sized
+   to the number, and dressed like the strip's select so the row reads as one
+   control bar rather than two chrome fields with form inputs between them. */
+.response-target-input {
+  width: 4.5em; flex: none; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: 3px; padding: 5px 8px;
+  font-family: var(--fm); font-size: 12px; min-height: 34px; text-align: right;
+}
+.response-target-input:focus { border-color: var(--accent); outline: none; }
 /* #83: the composer's Speak/Direct toggle. Segmented rather than a checkbox —
    the two are alternatives, and naming both is what teaches the second one. */
 .composer-mode {
@@ -986,6 +998,18 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   min-height: 44px; padding: 0 12px; cursor: pointer; font-size: 15px; flex: none;
 }
 .inputbar .roll-btn:disabled { opacity: 0.4; cursor: default; }
+/* The speaker picker and its Respond-as, dressed as the dice button is. The
+   three share one row under the box on a phone, and two of them were UA
+   defaults: a white select and a grey button in a bar of hairline chrome. */
+.inputbar .form-actions select, .inputbar .form-actions button {
+  border: 1px solid var(--line-strong); border-radius: 3px; background: transparent;
+  color: var(--ink); min-height: 44px; padding: 0 10px; font-family: var(--fm);
+  font-size: 12px; cursor: pointer;
+}
+.inputbar .form-actions button { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+.inputbar .form-actions select:disabled, .inputbar .form-actions button:disabled {
+  opacity: 0.4; cursor: default;
+}
 .inputbar textarea {
   /* `min-width: 0` overrides the flex default of `auto`, which is a textarea's
      intrinsic width (its `cols`) and refuses to shrink past it. Without it the
@@ -3276,8 +3300,67 @@ a.column-back { text-decoration: none; }
      wrapping into three rows that push the textarea off screen. */
   .composer-meta { flex-wrap: nowrap; overflow-x: auto; padding: 10px 16px 0; scrollbar-width: none; }
   .composer-meta::-webkit-scrollbar { display: none; }
-  .composer-notice, .composer-meta-hint { white-space: nowrap; }
-  .inputbar { padding: 10px 16px 14px; }
+  /* `.composer-link` too. A nowrap ROW does not make its items nowrap: each
+     still shrinks to its own min-content width, and the inspector link's is
+     one word -- so "What the model saw →" folded into four lines, 96px tall,
+     and the strip above the box stood taller than the box. */
+  .composer-notice, .composer-meta-hint, .composer-link { white-space: nowrap; }
+  /* The Speak/Direct toggle owes the floor every other control on the strip
+     already clears; at 34px it was the one short item in a 44px row. */
+  .composer-mode { min-height: 44px; }
+
+  /* The input bar stacks: the box on a row of its own, and under it, in one
+     row, everything that used to sit beside it. As a single row it held the
+     dice button, the speaker picker with its Respond-as, and Send -- 390px of
+     `flex: none` controls in a 343px bar -- so the textarea, the one item
+     allowed to shrink, was 30px wide (a character per line) and Send was
+     pushed past the right edge of the screen. The row of controls under the
+     box is the shape a phone keyboard is used to, and the shape focus mode
+     exists for: that mode strips the chrome above the transcript so that the
+     transcript and the place to write it are what is left, and the place to
+     write it was a sliver. */
+  .inputbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px 12px; }
+  .inputbar textarea {
+    /* `order: -1` rather than reordering the three controls: the dice button
+       is before the box in the DOM (the popover it opens is anchored there),
+       and this is the one item that moves. */
+    flex: 1 1 100%; order: -1; min-height: 78px;
+    /* 16px, not 15.5: iOS Safari zooms the page in on focusing anything
+       smaller, and the box you tap to write is the one control that must not
+       do that. The Android shell's WebView does not zoom either way. */
+    font-size: 16px;
+    /* Grows with what is written, to a cap: with the keyboard up, three fixed
+       rows is a window to scroll a paragraph through, and two that grow is
+       more transcript until there is something to show. A progressive
+       enhancement -- a browser without `field-sizing` keeps the fixed rows,
+       which is what it had. `dvh` after `vh` for the same reason: the cap
+       should follow the keyboard, where the browser can say so. */
+    field-sizing: content; max-height: 40vh; max-height: 40dvh;
+  }
+  /* The speaker picker is the one control on the row that can give: it
+     carries the picked name, which is short, or a placeholder, which is not
+     and may truncate. The generic `.form-actions` margin is a form's gap
+     above its buttons, and here there is a box above instead. The basis is
+     160px rather than 0, and on the group rather than the picker inside it,
+     because the group is the flex item the bar wraps by: with 0 the group
+     absorbed every shortfall and the picker measured 22px on a 320px screen;
+     with a basis the row holds at 375px with room for a short name, and
+     where even that does not fit, Send wraps to a line of its own under the
+     row rather than the picker vanishing to make it fit. */
+  .inputbar .form-actions {
+    flex: 1 1 160px; min-width: 0; margin-top: 0; gap: 8px; justify-content: flex-start;
+  }
+  .inputbar .form-actions select { flex: 1 1 0; min-width: 0; }
+  .inputbar .form-actions button { padding: 0 8px; }
+  /* Stop beside Send, not over it: stacked they were 112px of button under
+     the box, and the pair only ever shows while a turn is running. */
+  .composer-run-actions { flex-direction: row; margin-left: auto; gap: 8px; }
+  .inputbar .send { min-height: 44px; padding: 0 14px; }
+  /* The dice popover hangs off the bar's left edge, and with two 170px inputs
+     it ran past the right one. Pinned to both edges it wraps inside the
+     screen instead, and the inputs share the width rather than fix it. */
+  .roll-pop { right: 0; }
+  .roll-pop input { width: auto; flex: 1 1 120px; min-width: 0; }
   .scene-head, .scene-actions { padding-left: 16px; padding-right: 16px; }
   .stream { padding: 16px; }
   /* The player's rule would otherwise hang off the left edge with the negative
