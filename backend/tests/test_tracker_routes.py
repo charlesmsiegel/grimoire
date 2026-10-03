@@ -532,6 +532,40 @@ def test_editing_a_record_whose_update_is_running_is_refused(client):
     _settle(client, cid, sid)
 
 
+@pytest.mark.parametrize("change", ["record", "text"])
+def test_an_upstream_change_flags_every_variant_of_a_later_response(client, change):
+    """Each variant of a later response keeps a record, and each was built on
+    the state before it -- so an upstream change flags the inactive ones too.
+    Otherwise swiping to one makes its pre-change state current with no
+    warning, since a swipe flags only what comes after the response."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    rid = keys[3][2:34]
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    r = client.post(f"{base}/responses/{rid}/regenerate", json={})
+    assert '"error"' not in r.text, r.text
+    _settle(client, cid, sid)
+    old = keys[3]
+    assert _keys(cid, sid)[3] != old and _index(cid, sid)[old]["status"] == "ok"
+    if change == "record":
+        r = client.put(f"{_base(cid, sid)}/records/{keys[1]}",
+                       json={"edits": {"characters:mara": {"clothing": {"value": "red coat"}}}})
+    else:
+        r = client.put(f"{base}/messages/{_msg_index(cid, sid, keys[1])}",
+                       json={"content": "Mara answers, differently."})
+    assert r.status_code == 200, r.text
+    index = _index(cid, sid)
+    assert index[_keys(cid, sid)[3]]["flags"]["upstream_changed"]
+    assert index[old]["flags"]["upstream_changed"], "an inactive later variant stayed fresh"
+    assert not index[keys[0]]["flags"]["upstream_changed"]
+    r = client.post(f"{base}/responses/{rid}/variants/{old[35:]}/activate")
+    assert r.status_code == 200, r.text
+    summary = client.get(_base(cid, sid)).json()
+    assert summary["keys"][-1]["key"] == old
+    assert summary["entries"][old]["flags"]["upstream_changed"]
+
+
 def test_rerolling_an_earlier_response_flags_later(client):
     _use(client, _llm())
     cid, sid = _scene(client)
