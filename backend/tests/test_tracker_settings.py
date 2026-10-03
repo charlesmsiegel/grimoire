@@ -103,3 +103,35 @@ def test_public_config_carries_tracker_keys(client):
     client.put("/api/config", json={"tracker": "off", "perception_rider": "off"})
     cfg = client.get("/api/config").json()
     assert cfg["tracker"] == "off" and cfg["perception_rider"] == "off"
+
+
+def test_a_hand_mangled_global_value_reads_on_like_the_settings_page(monkeypatch, tmp_path):
+    # Settings shows the checkbox ticked for anything but "off"; the backend
+    # must answer the same way, or the page says on while no tracker runs.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    path = store.home() / "config.md"
+    store.read_config()
+    meta, body = store.parse_frontmatter(path.read_text(encoding="utf-8"))
+    meta["tracker"] = "maybe"
+    meta["perception_rider"] = "yes"
+    path.write_text(store.dump_frontmatter(meta, body), encoding="utf-8")
+    assert store.config.tracker_enabled() is True
+    assert store.config.perception_rider() is True
+    meta["tracker"] = meta["perception_rider"] = "off"
+    path.write_text(store.dump_frontmatter(meta, body), encoding="utf-8")
+    assert store.config.tracker_enabled() is False
+    assert store.config.perception_rider() is False
+
+
+@pytest.mark.parametrize("key", ["tracker", "perception_rider"])
+def test_put_config_rejects_a_value_that_is_neither_on_nor_off(client, key):
+    before = client.get("/api/config").json()
+    r = client.put("/api/config", json={key: "maybe"})
+    assert r.status_code == 400
+    assert client.get("/api/config").json()[key] == "on"
+    # A refused PUT stores nothing, including the valid fields beside it.
+    theme = "dark" if before["theme"] != "dark" else "light"
+    r = client.put("/api/config", json={key: "maybe", "theme": theme})
+    assert r.status_code == 400
+    assert client.get("/api/config").json()["theme"] == before["theme"]
+    assert client.put("/api/config", json={key: "off"}).json()[key] == "off"

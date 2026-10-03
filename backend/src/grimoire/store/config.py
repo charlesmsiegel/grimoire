@@ -389,13 +389,19 @@ def speaker_turn_taking() -> bool:
 def tracker_enabled() -> bool:
     """The GLOBAL scene-tracker switch (store/tracker/settings.py decides per
     campaign). Read this only through `tracker.settings.enabled`, which lets a
-    campaign's own setting win."""
-    return read_config().get("tracker") == "on"
+    campaign's own setting win.
+
+    Anything but "off" is on, which is the rule the Settings checkbox reads
+    the stored value by: a hand-edited value that is neither must not show
+    ticked there while no tracker runs. `PUT /config` refuses such a value,
+    so only a hand edit reaches this branch."""
+    return read_config().get("tracker") != "off"
 
 
 def perception_rider() -> bool:
-    """Whether the tracker's perception rider is added to the prompt."""
-    return read_config().get("perception_rider") == "on"
+    """Whether the tracker's perception rider is added to the prompt. The same
+    "anything but off" rule as `tracker_enabled`, for the same reason."""
+    return read_config().get("perception_rider") != "off"
 
 
 def replay_fork_threshold() -> int:
