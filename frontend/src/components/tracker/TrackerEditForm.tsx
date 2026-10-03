@@ -3,13 +3,32 @@ import type { TrackerActor, TrackerAware, TrackerEdits, TrackerField, TrackerRec
 import { ErrorNote } from "../ErrorNote";
 import { valueText } from "./TrackerValues";
 
-type Draft = { text: string; aware: TrackerAware };
+/** One value as the form holds it. A list field is edited item by item in
+ *  `items`, so an item carrying a comma ("cut, left arm") stays one item;
+ *  `text` is what every other field edits, and how a list reads when shown. */
+type Draft = { text: string; items: Item[]; aware: TrackerAware };
+
+/** A list item and the id React keys its row by: an item has no identity of
+ *  its own, and keyed by position, removing one would hand the next item's
+ *  row (and its caret) to the one after it. */
+type Item = { id: number; text: string };
+let lastItemId = 0;
+const item = (text: string): Item => ({ id: ++lastItemId, text });
 
 /** What the server gives a value nobody has set yet (`merge._default_aware`):
  *  everyone for a "present" field, only its owner for a "self" one. */
 const defaultAware = (f: TrackerField): TrackerAware => f.aware === "present" ? "present" : [];
 
-const splitList = (text: string) => text.split(",").map((s) => s.trim()).filter(Boolean);
+/** The items a list draft saves: trimmed, the blank ones dropped. */
+const cleanItems = (items: Item[]) => items.map((s) => s.text.trim()).filter(Boolean);
+
+const sameItems = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((s, i) => s === b[i]);
+
+/** Whether the draft holds a value at all -- who knows nothing is not a thing
+ *  the server will record. */
+const filled = (f: TrackerField, d: Draft) =>
+  f.type === "list" ? cleanItems(d.items).length > 0 : d.text !== "";
 
 const sameAware = (a: TrackerAware, b: TrackerAware) =>
   a === b || (Array.isArray(a) && Array.isArray(b)
@@ -43,7 +62,9 @@ export function TrackerEditForm({ record, only, onSave, onCancel }: {
   const actors = only === undefined ? everyone : everyone.filter(([ref]) => ref === only);
   const initial = (ref: string, f: TrackerField): Draft => {
     const v = snapshot[ref].fields[f.key];
-    return { text: v ? valueText(v.value) : "", aware: v ? v.aware : defaultAware(f) };
+    return { text: v ? valueText(v.value) : "",
+             items: v && Array.isArray(v.value) ? v.value.map(item) : [],
+             aware: v ? v.aware : defaultAware(f) };
   };
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => {
     const out: Record<string, Draft> = {};
@@ -65,11 +86,10 @@ export function TrackerEditForm({ record, only, onSave, onCancel }: {
         const now = drafts[`${ref}\u0000${f.key}`];
         const edit: { value?: string | string[]; aware?: TrackerAware } = {};
         const moved = f.type === "list"
-          ? JSON.stringify(splitList(now.text)) !== JSON.stringify(splitList(was.text))
+          ? !sameItems(cleanItems(now.items), cleanItems(was.items))
           : now.text !== was.text;
-        if (moved) edit.value = f.type === "list" ? splitList(now.text) : now.text;
-        // Who knows an empty value is not a thing the server will record.
-        if (now.text !== "" && !sameAware(now.aware, was.aware)) edit.aware = now.aware;
+        if (moved) edit.value = f.type === "list" ? cleanItems(now.items) : now.text;
+        if (filled(f, now) && !sameAware(now.aware, was.aware)) edit.aware = now.aware;
         if (edit.value !== undefined || edit.aware !== undefined)
           (edits[ref] ??= {})[f.key] = edit;
       }
@@ -104,24 +124,46 @@ export function TrackerEditForm({ record, only, onSave, onCancel }: {
               const aware = d.aware;
               const addable = others.filter((r) => aware === "present" || !aware.includes(r));
               const current = aware === "present" ? "present" : aware.length === 0 ? "private" : "list";
+              const setItem = (at: number, text: string) =>
+                set(id, { items: d.items.map((s) => (s.id === at ? { ...s, text } : s)) });
               return (
                 <div key={f.key} className="tracker-field">
-                  <label>
-                    <span className="tracker-label">{f.label}</span>
-                    {f.type === "enum" ? (
-                      <select aria-label={label} value={d.text}
-                              onChange={(e) => set(id, { text: e.target.value })}>
-                        <option value=""></option>
-                        {[...new Set([...(f.options ?? []), ...(d.text ? [d.text] : [])])].map((o) =>
-                          <option key={o} value={o}>{o}</option>)}
-                      </select>
-                    ) : (
-                      <input aria-label={label} value={d.text}
-                             placeholder={f.type === "list" ? "comma, separated" : undefined}
-                             onChange={(e) => set(id, { text: e.target.value })} />
-                    )}
-                  </label>
-                  <select aria-label={`${label} awareness`} value={current} disabled={d.text === ""}
+                  {f.type === "list" ? (
+                    <div role="group" aria-label={label} className="tracker-list">
+                      <span className="tracker-label">{f.label}</span>
+                      {d.items.map((it, i) => (
+                        <span key={it.id} className="tracker-list-item">
+                          <input aria-label={`${label} item ${i + 1}`} value={it.text}
+                                 onChange={(e) => setItem(it.id, e.target.value)} />
+                          <button type="button" className="subtle"
+                                  aria-label={`Remove ${label} item ${i + 1}`}
+                                  onClick={() => set(id, { items: d.items.filter((s) => s.id !== it.id) })}>
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      <button type="button" className="subtle" aria-label={`Add ${label} item`}
+                              onClick={() => set(id, { items: [...d.items, item("")] })}>
+                        + Add item
+                      </button>
+                    </div>
+                  ) : (
+                    <label>
+                      <span className="tracker-label">{f.label}</span>
+                      {f.type === "enum" ? (
+                        <select aria-label={label} value={d.text}
+                                onChange={(e) => set(id, { text: e.target.value })}>
+                          <option value=""></option>
+                          {[...new Set([...(f.options ?? []), ...(d.text ? [d.text] : [])])].map((o) =>
+                            <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      ) : (
+                        <input aria-label={label} value={d.text}
+                               onChange={(e) => set(id, { text: e.target.value })} />
+                      )}
+                    </label>
+                  )}
+                  <select aria-label={`${label} awareness`} value={current} disabled={!filled(f, d)}
                           onChange={(e) => {
                             const v = e.target.value;
                             if (v === "present") set(id, { aware: "present" });
