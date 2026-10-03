@@ -106,7 +106,7 @@ test("the column indexes every section in three groups", async () => {
     .toEqual(["The install", "What the model sees", "What you see"]);
   for (const label of [
     /^Storage/, /^Backups/, /^Connection/, /^Model routing/, /^Timeouts/, /^Context/,
-    /^Prompt layout/,
+    /^Prompt layout/, /^Scene tracker/,
     /^Semantic recall/, /^System prompt/, /^Response targets/, /^Transcript/,
     /^While playing/, /^Appearance/,
   ]) {
@@ -599,6 +599,38 @@ test("the active-speaker toggle lives in Context and saves as on/off", async () 
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ speaker_turn_taking: "on" })));
+});
+
+test("tracker settings toggle and save", async () => {
+  (api.putConfig as any).mockResolvedValue({ ...cfg, tracker: "off" });
+  renderView();
+  await open(/^Scene tracker/);
+  fireEvent.click(await screen.findByRole("checkbox",
+    { name: "Track each character's state after every post" }));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ tracker: "off" })));
+});
+
+test("the perception rider toggle saves as off, never blank", async () => {
+  (api.getConfig as any).mockResolvedValue({ ...cfg, perception_rider: "on" });
+  (api.putConfig as any).mockResolvedValue({ ...cfg, perception_rider: "off" });
+  renderView();
+  await open(/^Scene tracker/);
+  fireEvent.click(await screen.findByRole("checkbox",
+    { name: /ask each character to note what it heard or saw/i }));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ perception_rider: "off" })));
+});
+
+test("an unset tracker reads as checked, since the default is on", async () => {
+  renderView();                                  // `cfg` carries neither key
+  await open(/^Scene tracker/);
+  expect(await screen.findByRole("checkbox",
+    { name: "Track each character's state after every post" })).toBeChecked();
+  expect(screen.getByRole("checkbox",
+    { name: /ask each character to note what it heard or saw/i })).toBeChecked();
 });
 
 const twoRows = () => ({
