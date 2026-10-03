@@ -231,3 +231,42 @@ def test_layer_routes_reject_bad_bodies_and_unknown_ids(client):
     assert client.get(f"/api/campaigns/{cid}/scenes/nope/tracker-fields").status_code == 404
     assert client.put(f"/api/campaigns/{cid}/scenes/nope/tracker-fields",
                       json={}).status_code == 404
+
+
+SHADOWING = {"version": 1, "fields": [
+    {"key": "attention", "label": "Watching", "type": "list", "aware": "self", "hint": ""},
+    {"key": "grudge", "label": "Grudge", "type": "text", "aware": "self", "hint": ""}],
+    "off": ["pose"]}
+
+
+@pytest.mark.parametrize("layer", ["world", "campaign", "scene"])
+def test_a_stored_addition_a_release_made_built_in_costs_only_itself(home, caplog, layer):
+    """A layer that added `attention` was valid when it was written; a release
+    that later ships `attention` as a built-in must not take the layer's other
+    fields and switches down with it. Only the shadowed addition goes (as
+    `apply_layer` would skip it anyway), and the log names it."""
+    import json
+    import logging
+
+    wid, cid, sid = home
+    if layer == "world":
+        p = paths.world_layer_path(wid)
+    elif layer == "campaign":
+        p = paths.campaign_layer_path(cid)
+    else:
+        p = paths.scene_layer_path(cid, scenes.ensure_identity(cid, sid))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(SHADOWING), encoding="utf-8")   # test-only raw write
+    with caplog.at_level(logging.WARNING, logger="grimoire.store.tracker.fields"):
+        eff = {f["key"]: f for f in fields.effective(cid, sid)}
+    assert eff["grudge"]["label"] == "Grudge"
+    assert eff["pose"].get("off") is True
+    # The built-in stands, untouched by the addition it shadows.
+    assert eff["attention"] == next(f for f in fields.DEFAULT_FIELDS if f["key"] == "attention")
+    assert any("'attention'" in r.getMessage() for r in caplog.records)
+
+
+def test_writing_a_layer_that_shadows_a_built_in_is_still_refused(home):
+    wid, _, _ = home
+    with pytest.raises(fields.FieldLayerError, match="already exists"):
+        fields.write_world_layer(wid, SHADOWING)
