@@ -91,6 +91,7 @@ from . import (
     journal,
     locks,
     overlay,
+    pcs,
     playstate,
     plot,
     provenance,
@@ -177,7 +178,10 @@ def probe(cid: str, edit: dict) -> dict | None:
     field = edit.get("field")
     field = field if isinstance(field, str) else ""
     if kind == "character_state" and tid:
-        return {"w": "state", "id": tid}
+        # The kind only when it is a PC's: a characters descriptor stays the
+        # shape every entry journalled before PCs had state already carries.
+        return ({"w": "state", "id": tid, "kind": "pcs"} if target.get("kind") == "pcs"
+                else {"w": "state", "id": tid})
     if kind == "group_state" and tid:
         return {"w": "group_state", "id": tid}
     if kind == "dossier" and tid:
@@ -224,7 +228,8 @@ def _require_owner(cid: str, target: dict) -> None:
     """Refuse a sidecar whose owning record no longer exists.
 
     `state.md`, `dossier.md` and `voice_drift.md` live at
-    ``characters/<id>/...`` and their writers `mkdir(parents=True)`. Nothing
+    ``characters/<id>/...`` (a PC's play state at ``pcs/<id>/play/``, owned by
+    the PC) and their writers `mkdir(parents=True)`. Nothing
     below that path checks the character is still there, so putting a sidecar
     back after the character was deleted writes a directory holding a flag and
     no `character.md` -- the "flag-only phantom" `absorb.apply`'s own
@@ -243,13 +248,19 @@ def _require_owner(cid: str, target: dict) -> None:
     has since been deleted. `character_state` has no blank guard at all, and a
     blank dossier reaches the same place one redo later.
     """
-    kind = _SIDECAR_OWNER.get(target.get("w"))
+    w = target.get("w")
+    kind = _SIDECAR_OWNER.get(w) if isinstance(w, str) else None
     if kind is None:
         return
+    if w == "state" and target.get("kind") == "pcs":
+        kind = "pcs"    # a PC's play state is filed under the PC, not a character
     rid = target.get("id")
+    rid = rid if isinstance(rid, str) else ""     # a journal row is hand-editable JSON
     try:
         if kind == "characters":
             characters.read_character(overlay.char_root(cid, rid), rid)
+        elif kind == "pcs":
+            pcs.read_pc(overlay.pc_root(cid, rid), rid)
         else:
             overlay.read_entity(cid, kind, rid)
     except Exception as exc:  # a missing or unreadable owner is a refusal
@@ -273,7 +284,7 @@ def read_value(cid: str, target: dict):
     _require_owner(cid, target)
     w = target.get("w")
     if w == "state":
-        st = playstate.read_state(croot, target["id"])
+        st = playstate.read_state(croot, target["id"], target.get("kind", "characters"))
         return playstate.compose_body(st["current_state"], st["knows"], st["suspects"]) if st else ""
     if w == "group_state":
         st = groupstate.read_state(croot, target["id"])
@@ -322,7 +333,8 @@ def write_value(cid: str, target: dict, value) -> None:
     _require_owner(cid, target)
     w = target.get("w")
     if w == "state":
-        playstate.write_state(croot, target["id"], value or "")
+        playstate.write_state(croot, target["id"], value or "",
+                              kind=target.get("kind", "characters"))
     elif w == "group_state":
         groupstate.write_state(croot, target["id"], value or "")
     elif w == "dossier":

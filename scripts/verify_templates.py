@@ -311,8 +311,17 @@ for label, snap, cands, off, direction in (
           render("scene_suggestions/user.j2", s=snap, offscreen=off,
                  greeting_candidates=cands, direction=direction))
 
-for label, facts, st, rel, plt, grp, cmt, fct, strg in (
-        ("bare", {}, None, None, None, None, None, None, None),
+#: The scene tracker's final state as `routes.scenes._absorb_tracked` hands it
+#: over (`tracker.view.lines_for` for the narrator, empty lines dropped).
+TRACKED = [{"name": "Seraphine Vale", "own": False, "values": [
+               {"label": "Visible mood", "text": "fear", "private": False},
+               {"label": "Concealed", "text": "the ledger", "private": True}]},
+           {"name": "Hero", "own": False, "values": [
+               {"label": "Holding", "text": "a lantern", "private": False}]}]
+
+for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
+        ("bare", {}, None, None, None, None, None, None, None, None),
+        ("tracked", {}, None, None, None, None, None, None, None, TRACKED),
         ("full", {"location": "Night Dock", "date": "2026-07-05",
                   "cast": ["characters/seraphine-vale", "pcs/hero"]},
          {"Seraphine Vale": "Wounded. Knows: The ledger is real."},
@@ -322,8 +331,9 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg in (
          "the-deadline: Midnight deadline (threat, open), due midnight "
          "— Hero was given until midnight.",
          "f1: The warehouse belongs to the Salt Circle. (the third night)",
-         "- Seraphine was told about the tail at the Night Dock")):
-    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg)
+         "- Seraphine was told about the tail at the Night Dock", TRACKED)):
+    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg,
+                              tracked_snapshot=trk)
     check(f"absorb system ({label})", exp[0]["content"],
           render("absorb/system.j2", steering=bool(strg)))
     if strg:
@@ -335,7 +345,20 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg in (
     check(f"absorb user ({label})", exp[1]["content"],
           render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
                  plot_snapshot=plt, group_snapshot=grp, commitment_snapshot=cmt,
-                 fact_snapshot=fct, steering_snapshot=strg, transcript=transcript))
+                 fact_snapshot=fct, steering_snapshot=strg,
+                 tracked_snapshot=trk or [], transcript=transcript))
+    if trk:
+        assert ("Final tracked state (as the scene ended; private values marked):\n"
+                "- Seraphine Vale: Visible mood: fear; Concealed: the ledger (private)\n"
+                "- Hero: Holding: a lantern") in exp[1]["content"], \
+            f"absorb user ({label}) missing the Final tracked state block"
+    else:
+        assert "Final tracked state" not in exp[1]["content"], \
+            f"absorb user ({label}) renders a tracked-state block with no tracked state"
+        assert exp[1]["content"] == absorb.build_prompt(
+            transcript, facts, st, rel, plt, grp, cmt, fct, strg,
+            tracked_snapshot=[])[1]["content"], \
+            f"absorb user ({label}) changes with an empty tracked state"
     if grp:
         assert "Groups:" in exp[1]["content"], f"absorb user ({label}) missing Groups: head line"
     if cmt:
@@ -1103,7 +1126,7 @@ check("absorb user (store)", exp[1]["content"],
       render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
              plot_snapshot=plot_snap, group_snapshot=grp_snap,
              commitment_snapshot=cmt_snap, fact_snapshot=fct_snap,
-             steering_snapshot=strg_snap, transcript=tr))
+             steering_snapshot=strg_snap, tracked_snapshot=[], transcript=tr))
 for name, line in st_snap.items():
     st = playstate.read_state(croot, sera)
     check(f"state snapshot line (store, {name})", line,

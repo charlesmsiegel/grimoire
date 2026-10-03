@@ -59,8 +59,8 @@ def newcomer(cid: str, ref: str) -> dict:
     except _UNREADABLE:     # a missing or damaged card is an empty description
         pass
     try:
-        if kind == "characters":     # a pc's standing state arrives with the pc state store
-            st = playstate.read_state(campaigns_paths.campaign_root(cid), actor_id)
+        if kind in ("characters", "pcs"):
+            st = playstate.read_state(campaigns_paths.campaign_root(cid), actor_id, kind)
             state = _text((st or {}).get("current_state"))
     except _UNREADABLE:     # as above
         pass
