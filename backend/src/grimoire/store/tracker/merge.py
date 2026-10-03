@@ -108,7 +108,8 @@ def parse_reply(text: str) -> dict:
     to, so a fence is stripped and the first balanced `{...}` that parses is
     taken. A top level that is not an object (a bare list, a number) is an
     error rather than something to dig an object out of: `[{...}]` is a
-    different contract, not a decorated one."""
+    different contract, not a decorated one. So is an object carrying neither
+    `changes` nor `awareness`, unless it is exactly `{}`."""
     body = (text or "").strip()
     fenced = _FENCE.match(body)
     if fenced:
@@ -123,6 +124,12 @@ def parse_reply(text: str) -> dict:
     obj = whole if whole is not None else _first_object(body)
     if obj is None:
         raise TrackerReplyError("no JSON object in the reply")
+    if obj and "changes" not in obj and "awareness" not in obj:
+        # `{"Mara": {...}}`: the changes without their wrapper. Read as a
+        # reply it has no changes and lands as a clean "nothing moved" -- the
+        # update would report success over values it silently lost. Only an
+        # empty object means "nothing changed" without saying `changes`.
+        raise TrackerReplyError("the reply's object has no \"changes\" or \"awareness\"")
     changes, awareness = obj.get("changes"), obj.get("awareness")
     return {"changes": changes if isinstance(changes, dict) else {},
             "awareness": awareness if isinstance(awareness, dict) else {}}
