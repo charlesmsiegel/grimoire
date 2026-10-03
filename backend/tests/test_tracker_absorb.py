@@ -237,6 +237,18 @@ def test_pc_state_edit_is_staged_and_applied(home):
     assert playstate.read_state(croot, "seraphine") is None
 
 
+def test_the_changes_listing_keeps_a_pc_state_row(home):
+    """`/changes` names each record it lists and drops one it cannot name (a
+    record deleted since). A PC is a record it must be able to name."""
+    from grimoire.routes import campaigns as campaign_routes
+
+    cid, sid, _croot = home
+    absorb.apply_edits(cid, [_pc_edit(cid, sid)], sid)
+    out = campaign_routes.get_changes(cid)
+    rows = [r for r in out if r["ref"] == {"kind": "pcs", "id": "seraphine"}]
+    assert len(rows) == 1 and rows[0]["name"] == "Seraphine"
+
+
 def test_a_pc_state_edit_carries_no_knows_or_suspects(home):
     cid, sid, _croot = home
     parsed = {"character_state_edits": [{"id": "pcs:seraphine", "current_state": "Soaked.",
