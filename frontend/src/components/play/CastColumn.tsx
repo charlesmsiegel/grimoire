@@ -45,7 +45,7 @@ export function tiers(cast: Actor[], roster: RosterEntry[]): CastTile[] {
 }
 
 function Tile(
-  { cid, tile, onOpen }: { cid: string; tile: CastTile; onOpen: () => void },
+  { cid, tile, mood, onOpen }: { cid: string; tile: CastTile; mood?: string; onOpen: () => void },
 ) {
   // `.cast-tile-art`: half the 274px column (~116px) on a desktop, a 52px
   // circle once the grid becomes a strip at phone width.
@@ -65,6 +65,7 @@ function Tile(
       <button className="cast-tile-name" onClick={onOpen}>
         <span className="cast-name">{tile.name}</span>
         <span className="cast-state">{tile.state}</span>
+        {mood && <span className="cast-mood">{mood}</span>}
       </button>
     </div>
   );
@@ -81,7 +82,7 @@ function Tile(
  *  streamed delta, and hands this stable handlers, so the grid redraws for the
  *  cast and the briefing and not for those. */
 function CastColumn(
-  { cid, sid, hasPosts, refreshKey, cast, roster, briefing, onOpen, onCastChanged }: {
+  { cid, sid, hasPosts, refreshKey, cast, roster, briefing, moods, onOpen, onCastChanged }: {
     cid: string;
     /** The open scene, or "" when none is. The cast-change scan is per scene. */
     sid: string;
@@ -93,6 +94,9 @@ function CastColumn(
     cast: Actor[];
     roster: RosterEntry[];
     briefing: Briefing | null;
+    /** `{ref: visible mood}` from the scene tracker, `ref` being
+     *  `"<kind>:<id>"`. Identity-stable between reads that found nothing new. */
+    moods: Record<string, string>;
     onOpen: (kind: string, id: string) => void;
     onCastChanged: () => void;
   },
@@ -105,7 +109,7 @@ function CastColumn(
     <>
       <div className="cast-grid">
         {tiles.map((t) => (
-          <Tile key={`${t.kind}/${t.id}`} cid={cid} tile={t}
+          <Tile key={`${t.kind}/${t.id}`} cid={cid} tile={t} mood={moods[`${t.kind}:${t.id}`]}
                 onOpen={() => onOpen(t.kind, t.id)} />
         ))}
       </div>

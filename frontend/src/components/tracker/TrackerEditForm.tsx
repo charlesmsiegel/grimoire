@@ -29,13 +29,18 @@ function editableFields(fields: TrackerField[], actor: TrackerActor): TrackerFie
 /** The form over one record's values. It submits only what moved: a value
  *  that reads as it did, with the awareness it had, is not an edit, and sending
  *  it would stamp the user's hand on a value the user never touched. */
-export function TrackerEditForm({ record, onSave, onCancel }: {
+export function TrackerEditForm({ record, only, onSave, onCancel }: {
   record: TrackerRecord;
+  /** Limit the form to this one actor's ref. The other actors still count as
+   *  "present" for the awareness choices, but none of their values is offered,
+   *  so none can be sent. */
+  only?: string;
   onSave: (edits: TrackerEdits) => Promise<void>;
   onCancel: () => void;
 }) {
   const snapshot = record.snapshot ?? {};
-  const actors = orderedActors(snapshot);
+  const everyone = orderedActors(snapshot);
+  const actors = only === undefined ? everyone : everyone.filter(([ref]) => ref === only);
   const initial = (ref: string, f: TrackerField): Draft => {
     const v = snapshot[ref].fields[f.key];
     return { text: v ? valueText(v.value) : "", aware: v ? v.aware : defaultAware(f) };
@@ -78,7 +83,7 @@ export function TrackerEditForm({ record, onSave, onCancel }: {
   return (
     <form className="tracker-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
       {actors.map(([ref, actor]) => {
-        const others = actors.filter(([r, a]) => r !== ref && a.present).map(([r]) => r);
+        const others = everyone.filter(([r, a]) => r !== ref && a.present).map(([r]) => r);
         return (
           <fieldset key={ref} className="tracker-actor">
             <legend>{nameOf(ref)}{actor.present ? "" : " (not present)"}</legend>

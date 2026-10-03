@@ -1,9 +1,14 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import DossierColumn from "./DossierColumn";
-import type { Casefile, Provenance } from "../../api/client";
+import type { Casefile, Provenance, TrackerRecord } from "../../api/client";
+import type { NowTracker } from "../tracker/TrackerNow";
 
+const getTrackerRecord = vi.fn();
+const editTrackerRecord = vi.fn();
 vi.mock("../../api/client", () => ({
   api: {
+    getTrackerRecord: (...a: unknown[]) => getTrackerRecord(...a),
+    editTrackerRecord: (...a: unknown[]) => editTrackerRecord(...a),
     actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string,
                     o?: { w?: number; v?: string | null }) =>
       `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
@@ -31,14 +36,17 @@ const AUD: Casefile = {
 
 const opened: string[] = [];
 const removed: number[] = [];
+const changed: number[] = [];
 function renderDossier(casefile: Casefile | null = AUD, busy = false,
-                      provenance: Provenance = {}) {
+                      provenance: Provenance = {}, tracker: NowTracker | null = null) {
+  changed.length = 0;
   opened.length = 0; removed.length = 0;
   return render(
     <DossierColumn cid="saltmarch" casefile={casefile} busy={busy} provenance={provenance}
                    onBack={() => opened.push("back")}
                    onOpenActor={(kind, id) => opened.push(`${kind}/${id}`)}
-                   onRemove={() => removed.push(1)} />,
+                   onRemove={() => removed.push(1)}
+                   tracker={tracker} onTrackerChanged={() => changed.push(1)} />,
   );
 }
 
@@ -181,4 +189,123 @@ test("Last seen carries no marker at all", () => {
   renderDossier(AUD, false, { "characters/aud#current_state": STATE_CITATION });
   expect(screen.queryByRole("button", { name: /^Last seen:/ })).not.toBeInTheDocument();
   expect(screen.getByText("The Long Tide")).toBeInTheDocument();
+});
+
+const NOW: NowTracker = {
+  cid: "saltmarch", sid: "004--x", key: "k2", ref: "characters:aud", enabled: true, entry: undefined,
+};
+const RECORD: TrackerRecord = {
+  key: "k2", status: "ok", flags: { upstream_changed: false, text_changed: false },
+  fields: [
+    { key: "mood", label: "Mood", type: "text", aware: "present", hint: "" },
+    { key: "plan", label: "Plan", type: "text", aware: "self", hint: "" },
+  ],
+  names: { "characters:aud": "Sister Aud", "pcs:wyle": "Ferrant Wyle" },
+  snapshot: {
+    "characters:aud": { present: true, fields: {
+      mood: { value: "wary", aware: "present" }, plan: { value: "stall", aware: [] } } },
+    "pcs:wyle": { present: true, fields: { mood: { value: "eager", aware: "present" } } },
+  },
+};
+
+describe("Now", () => {
+  beforeEach(() => { getTrackerRecord.mockReset(); editTrackerRecord.mockReset(); });
+
+  test("no Now section without a tracked key", () => {
+    renderDossier(AUD, false, {}, { ...NOW, key: null });
+    expect(screen.queryByText("Now")).not.toBeInTheDocument();
+    expect(getTrackerRecord).not.toHaveBeenCalled();
+  });
+
+  test("no Now section when the tracker is not wired", () => {
+    renderDossier();
+    expect(screen.queryByText("Now")).not.toBeInTheDocument();
+  });
+
+  test("shows this actor's current values and only this actor's", async () => {
+    getTrackerRecord.mockResolvedValue(RECORD);
+    renderDossier(AUD, false, {}, NOW);
+    expect(await screen.findByText("Now")).toBeInTheDocument();
+    expect(screen.getByText("scene state")).toBeInTheDocument();
+    expect(screen.getByText(/wary/)).toBeInTheDocument();
+    expect(screen.queryByText(/eager/)).not.toBeInTheDocument();
+    expect(getTrackerRecord).toHaveBeenCalledWith("saltmarch", "004--x", "k2");
+  });
+
+  test("an actor missing from the snapshot gets no Now section", async () => {
+    getTrackerRecord.mockResolvedValue({ ...RECORD, snapshot: { "pcs:wyle": RECORD.snapshot!["pcs:wyle"] } });
+    renderDossier(AUD, false, {}, NOW);
+    await waitFor(() => expect(getTrackerRecord).toHaveBeenCalled());
+    expect(screen.queryByText("Now")).not.toBeInTheDocument();
+  });
+
+  test("Edit reveals a form limited to this actor, and saving sends only what moved", async () => {
+    getTrackerRecord.mockResolvedValue(RECORD);
+    editTrackerRecord.mockResolvedValue(RECORD);
+    renderDossier(AUD, false, {}, NOW);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Sister Aud Mood")).toHaveValue("wary");
+    expect(screen.queryByLabelText("Ferrant Wyle Mood")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Sister Aud Mood"), { target: { value: "calm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(editTrackerRecord).toHaveBeenCalledWith(
+      "saltmarch", "004--x", "k2", { "characters:aud": { mood: { value: "calm" } } }));
+    await waitFor(() => expect(changed).toEqual([1]));
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+
+  test("Edit is not offered while the tracker is off", async () => {
+    getTrackerRecord.mockResolvedValue(RECORD);
+    renderDossier(AUD, false, {}, { ...NOW, enabled: false });
+    expect(await screen.findByText(/wary/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  test("a re-read landing under an open form does not change what it diffs against", async () => {
+    getTrackerRecord.mockResolvedValue(RECORD);
+    editTrackerRecord.mockResolvedValue(RECORD);
+    const view = renderDossier(AUD, false, {}, NOW);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    // The summary moves (a poll found the entry changed); the record behind
+    // the key now reads differently. The open form keeps what it was built on.
+    getTrackerRecord.mockResolvedValue({
+      ...RECORD,
+      snapshot: { ...RECORD.snapshot!, "characters:aud": { present: true, fields: {
+        mood: { value: "furious", aware: "present" } } } },
+    });
+    view.rerender(
+      <DossierColumn cid="saltmarch" casefile={AUD} busy={false} provenance={{}}
+                     onBack={() => {}} onOpenActor={() => {}} onRemove={() => {}}
+                     tracker={{ ...NOW, entry: { status: "ok", changed: [],
+                       flags: { upstream_changed: false, text_changed: false } } }}
+                     onTrackerChanged={() => {}} />);
+    await waitFor(() => expect(getTrackerRecord).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Sister Aud Mood")).toHaveValue("wary");
+  });
+
+  test("a response for a key that is no longer current is dropped", async () => {
+    let resolveOld!: (r: TrackerRecord) => void;
+    getTrackerRecord.mockImplementationOnce(() => new Promise((r) => { resolveOld = r; }));
+    const view = renderDossier(AUD, false, {}, NOW);
+    getTrackerRecord.mockResolvedValue({
+      ...RECORD, key: "k3",
+      snapshot: { "characters:aud": { present: true, fields: { mood: { value: "newer", aware: "present" } } } },
+    });
+    view.rerender(
+      <DossierColumn cid="saltmarch" casefile={AUD} busy={false} provenance={{}}
+                     onBack={() => {}} onOpenActor={() => {}} onRemove={() => {}}
+                     tracker={{ ...NOW, key: "k3" }} onTrackerChanged={() => {}} />);
+    expect(await screen.findByText(/newer/)).toBeInTheDocument();
+    resolveOld(RECORD);
+    await Promise.resolve();
+    expect(screen.queryByText(/wary/)).not.toBeInTheDocument();
+    expect(screen.getByText(/newer/)).toBeInTheDocument();
+  });
+
+  test("an API error shows inline", async () => {
+    getTrackerRecord.mockRejectedValue(new Error("tracker store unreadable"));
+    renderDossier(AUD, false, {}, NOW);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/tracker store unreadable/);
+    expect(screen.getByText("Now")).toBeInTheDocument();
+  });
 });

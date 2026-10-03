@@ -40,7 +40,7 @@ function renderColumn(props: Partial<Parameters<typeof CastColumn>[0]> = {}) {
   opened.length = 0;
   return render(
     <CastColumn cid="saltmarch" sid="s1" hasPosts={false} refreshKey={0} cast={CAST} roster={ROSTER}
-                briefing={BRIEFING} onCastChanged={() => {}}
+                briefing={BRIEFING} moods={{}} onCastChanged={() => {}}
                 onOpen={(kind, id) => opened.push(`${kind}/${id}`)} {...props} />,
   );
 }
@@ -174,4 +174,23 @@ test("a briefing that failed to load empties its own blocks and nothing else", (
   renderColumn({ briefing: null });
   expect(screen.getByText("Sister Aud")).toBeInTheDocument();
   expect(screen.getByText("Nothing open.")).toBeInTheDocument();
+});
+
+describe("mood", () => {
+  it("shows the visible mood on the tile of the character it belongs to", () => {
+    renderColumn({ moods: { "characters:aud": "fear" } });
+    expect(screen.getByText("fear")).toBeInTheDocument();
+    // The tile for the player, who has no mood, draws none.
+    expect(document.querySelectorAll(".cast-mood")).toHaveLength(1);
+  });
+
+  it("keys on the actor kind, so a player and an NPC of one id do not share a mood", () => {
+    renderColumn({ moods: { "characters:wyle": "calm" } });
+    expect(screen.queryByText("calm")).not.toBeInTheDocument();
+  });
+
+  it("draws nothing for a tile with no mood", () => {
+    renderColumn();
+    expect(document.querySelector(".cast-mood")).toBeNull();
+  });
 });

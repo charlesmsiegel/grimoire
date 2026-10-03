@@ -2,6 +2,7 @@ import { memo } from "react";
 import { api, type Casefile, type Provenance } from "../../api/client";
 import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
+import { TrackerNow, type NowTracker } from "../tracker/TrackerNow";
 import CitedRow from "./CitedRow";
 
 /** A 0–5 meter as five pips. Filled pips are the accent; the rest are the
@@ -37,7 +38,7 @@ function Meter({ label, value }: { label: string; value: number }) {
  *  keystroke and per delta, and a dossier has no business redrawing for either. */
 function DossierColumn(
   { cid, casefile, provenance, onBack, onOpenActor, onRemove, onHoverQuote,
-    onGoToTurn, busy }: {
+    onGoToTurn, busy, tracker, onTrackerChanged }: {
     cid: string;
     casefile: Casefile | null;
     /** Citations keyed `"<kind>/<id>#<field>"`. Empty until the read lands, and
@@ -52,6 +53,11 @@ function DossierColumn(
     /** True while the scene is locked — removing someone mid-turn moves the
      *  cast out from under the write in flight. */
     busy: boolean;
+    /** What the "Now" section reads, or null for none. Must be identity-stable
+     *  between renders that changed nothing, or the memo below is for nothing. */
+    tracker: NowTracker | null;
+    /** The tracker's state was edited here: the parent re-reads its summary. */
+    onTrackerChanged: () => void;
   },
 ) {
   if (!casefile) {
@@ -127,6 +133,14 @@ function DossierColumn(
           Nothing recorded yet. Play a scene with {c.name} and the absorb pass
           writes her state, her dossier and how she feels about the room.
         </p>
+      )}
+
+      {/* The tracked state of the scene as of the latest post that landed. Only
+          for the actor this dossier is open on: the parent's ref can run a
+          read ahead of the casefile when the actor changes. */}
+      {tracker?.key && tracker.ref === `${c.kind}:${c.id}` && (
+        <TrackerNow key={`${tracker.cid}/${tracker.sid}/${tracker.ref}`}
+                    tracker={{ ...tracker, key: tracker.key }} onChanged={onTrackerChanged} />
       )}
 
       {c.feels_toward.length > 0 && (
