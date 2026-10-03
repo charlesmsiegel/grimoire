@@ -321,7 +321,10 @@ def test_perception_requires_source_and_access_evidence(cast_scene):
 def test_perception_rider_switch(cast_scene):
     cid, sid = cast_scene
     on = str(context.compose_turn(cid, sid, actor_ref="characters:mara")[0])
-    assert "```perception" in on and "rely on the Scene state section" in on
+    assert "```perception" in on
+    # The tracker is off in this suite, so there is no Scene state section for
+    # the rider to point at (`test_tracker_context` has the other half).
+    assert "rely on the Scene state section" not in on
     config.write_config(perception_rider="off")
     off = str(context.compose_turn(cid, sid, actor_ref="characters:mara")[0])
     assert "```perception" not in off

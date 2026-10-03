@@ -49,8 +49,8 @@ In heard_or_seen, copy a short exact excerpt from the transcript for each
 relevant perception. Identify it as speech explicitly presented as spoken,
 or an action actually observable from this actor's established vantage.
 In access, cite the established circumstance that makes it audible or visible.
-For what you can see of the others right now, rely on the Scene state section; list here only what you heard or saw happen.
-Copying narration into a quote does not make it speech. A report of a past
+{% for c in tracker_lines if c["values"] %}{% if loop.first %}For what you can see of the others right now, rely on the Scene state section; list here only what you heard or saw happen.
+{% endif %}{% endfor %}Copying narration into a quote does not make it speech. A report of a past
 action is not witnessing that action. If the source or access is missing,
 omit that perception entry. Leave the fact unknown only if no independent
 established source exists; keep independently sourced prior knowledge in known.

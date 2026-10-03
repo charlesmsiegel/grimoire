@@ -224,6 +224,17 @@ def test_a_character_who_left_is_not_in_the_scene_state(cast_scene):
         assert "grey cloak" not in text
 
 
+def test_the_perception_rider_points_at_the_section_only_when_it_renders(cast_scene):
+    cid, sid = cast_scene
+    text = _text(cid, sid, MARA)
+    assert "# Scene state" in text and "rely on the Scene state section" in text
+    # Tracker off: the rider stays, the sentence pointing at nothing goes.
+    config.write_config(tracker="off")
+    text = _text(cid, sid, MARA)
+    assert "```perception" in text
+    assert "# Scene state" not in text and "rely on the Scene state section" not in text
+
+
 def test_the_opener_reads_no_tracker_state(cast_scene, monkeypatch):
     """Not only unrendered: unread. The opener is composed inside an async
     generator on the event loop, and the read waits on locks."""
