@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import DossierColumn from "./DossierColumn";
 import type { Casefile, Provenance, TrackerRecord } from "../../api/client";
 import type { NowTracker } from "../tracker/TrackerNow";
@@ -280,7 +280,31 @@ describe("Now", () => {
                        flags: { upstream_changed: false, text_changed: false } } }}
                      onTrackerChanged={() => {}} />);
     await waitFor(() => expect(getTrackerRecord).toHaveBeenCalledTimes(2));
-    expect(screen.getByLabelText("Sister Aud Mood")).toHaveValue("wary");
+    await act(async () => { await Promise.resolve(); });
+    // Nothing touched: if the diff were taken against the re-read record, the
+    // untouched "wary" would now read as an edit away from "furious".
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+    expect(editTrackerRecord).not.toHaveBeenCalled();
+  });
+
+  test("advancing the key keeps the last record up until the new one lands", async () => {
+    getTrackerRecord.mockResolvedValueOnce(RECORD);
+    const view = renderDossier(AUD, false, {}, NOW);
+    expect(await screen.findByText(/wary/)).toBeInTheDocument();
+    let landNew!: (r: TrackerRecord) => void;
+    getTrackerRecord.mockImplementationOnce(() => new Promise((r) => { landNew = r; }));
+    view.rerender(
+      <DossierColumn cid="saltmarch" casefile={AUD} busy={false} provenance={{}}
+                     onBack={() => {}} onOpenActor={() => {}} onRemove={() => {}}
+                     tracker={{ ...NOW, key: "k3" }} onTrackerChanged={() => {}} />);
+    await waitFor(() => expect(getTrackerRecord).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Now")).toBeInTheDocument();
+    expect(screen.getByText(/wary/)).toBeInTheDocument();
+    landNew({ ...RECORD, key: "k3", snapshot: { "characters:aud": { present: true, fields: {
+      mood: { value: "newer", aware: "present" } } } } });
+    expect(await screen.findByText(/newer/)).toBeInTheDocument();
+    expect(screen.queryByText(/wary/)).not.toBeInTheDocument();
   });
 
   test("a response for a key that is no longer current is dropped", async () => {
@@ -296,8 +320,9 @@ describe("Now", () => {
                      onBack={() => {}} onOpenActor={() => {}} onRemove={() => {}}
                      tracker={{ ...NOW, key: "k3" }} onTrackerChanged={() => {}} />);
     expect(await screen.findByText(/newer/)).toBeInTheDocument();
-    resolveOld(RECORD);
-    await Promise.resolve();
+    // The k2 read answers last. Nothing else is on screen to hide it, so
+    // only the `live` guard keeps "wary" from replacing "newer".
+    await act(async () => { resolveOld(RECORD); await Promise.resolve(); });
     expect(screen.queryByText(/wary/)).not.toBeInTheDocument();
     expect(screen.getByText(/newer/)).toBeInTheDocument();
   });
