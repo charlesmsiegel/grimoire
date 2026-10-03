@@ -11,13 +11,14 @@ import {
   type CampaignBudget,
   type IncomingRef,
   type SceneUsage,
-  type UsagePostBucket,
+  type TrackerSummary, type UsagePostBucket,
 } from "../api/client";
 import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
 import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
+import { shareSummary } from "../components/tracker/share";
 import { errorText, isProviderFailure } from "../api/errors";
 import { configChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
@@ -1633,6 +1634,64 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       .catch(() => { if (live) setPostCosts(null); });
     return () => { live = false; };
   }, [usageCid, usageSid, ctxKey]);
+
+  // The scene state tracker (routes/tracker.py), read for `loaded` like the
+  // costs above and for the same reason: it describes the posts on screen, so
+  // it is held WITH the scene it was read for and only shown where that is
+  // still the transcript on screen. Re-read on every `ctxKey` beat, which is
+  // what a landed turn bumps; `trackerTick` is the disclosures asking for one
+  // (a retry, a re-run, an edit). Swallowed on failure: a tracker that cannot
+  // be read is not a reason to put an error over a transcript.
+  const [trackerRead, setTrackerRead] =
+    useState<{ cid: string; sid: string; summary: TrackerSummary } | null>(null);
+  const [trackerTick, setTrackerTick] = useState(0);
+  const landTracker = useCallback((tcid: string, tsid: string, summary: TrackerSummary) => {
+    setTrackerRead((prev) => ({
+      cid: tcid, sid: tsid,
+      summary: shareSummary(prev && prev.cid === tcid && prev.sid === tsid ? prev.summary : null,
+                            summary),
+    }));
+  }, []);
+  const trackerCid = loaded?.cid ?? null;
+  const trackerSid = loaded?.sid ?? null;
+  useEffect(() => {
+    if (!trackerCid || !trackerSid) return;
+    let live = true;
+    api.getTracker(trackerCid, trackerSid)
+      .then((summary) => {
+        if (!live) return;
+        landTracker(trackerCid, trackerSid, summary);
+      })
+      .catch(() => { /* see above */ });
+    return () => { live = false; };
+  }, [trackerCid, trackerSid, ctxKey, trackerTick, landTracker]);
+  const tracker = trackerRead && trackerRead.cid === trackerCid && trackerRead.sid === trackerSid
+    ? trackerRead.summary : null;
+  const trackerKeys = useMemo(
+    () => Object.fromEntries((tracker?.keys ?? []).map((k) => [k.index, k.key])),
+    [tracker?.keys]);
+  // While a post is being tracked, ask again every two seconds: one timeout
+  // chain, re-armed only once the last read has landed so a slow server is
+  // never asked twice at once, and cleared with the scene or the view.
+  const trackerPending = Object.values(tracker?.entries ?? {}).some((e) => e.status === "pending");
+  useEffect(() => {
+    if (!trackerPending || !trackerCid || !trackerSid) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      timer = setTimeout(() => {
+        api.getTracker(trackerCid, trackerSid)
+          .then((summary) => {
+            if (!live) return;
+            landTracker(trackerCid, trackerSid, summary);
+          })
+          .catch(() => { /* try again on the next tick */ })
+          .finally(() => { if (live) arm(); });
+      }, 2000);
+    };
+    arm();
+    return () => { live = false; clearTimeout(timer); };
+  }, [trackerPending, trackerCid, trackerSid, landTracker]);
 
   /** The chips, but only where they describe the transcript on screen. */
   const sceneCosts =
@@ -4078,6 +4137,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     rerollResponse: (id, guidance, route) => void rerollResponse(id, guidance, route),
     activateVariant: (id, variant) => void mutateResponse(id, variant),
     createCharacter: (rid) => void openCharacterPassage(rid),
+    refreshTracker: () => setTrackerTick((n) => n + 1),
   });
 
   const editingAny = editing !== null;
@@ -4095,10 +4155,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     busy, rolling, active: transcriptIsActive,
     responseDisabled: busy || rolling || sceneLocked || editingAny || renamesInFlight > 0,
     lastIndex: firstIndex + messages.length - 1,
-    rerollAt, canReroll, postChips, citedNeedle, lastOfResponse,
+    rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
   }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, sceneLocked,
        editingAny, renamesInFlight, firstIndex, messages.length, rerollAt, canReroll,
-       postChips, citedNeedle, lastOfResponse]);
+       postChips, citedNeedle, lastOfResponse, tracker, trackerKeys]);
 
   // The rows themselves, as one list built only when one of its inputs moves.
   // Each row would skip a keystroke on its own; this skips even asking them,

@@ -2373,6 +2373,22 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    A dashed rule rather than a speaker plate. A note is a stage direction in
    the margin: it is in the transcript so the turn it bought has an index to be
    charged against, not because it happened in the scene. */
+/* The per-post tracker disclosure, under the text it describes. Quiet when
+   closed -- one muted line -- and set off from the prose when open. */
+.tracker-wrap { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 6px; }
+.tracker { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--muted); }
+.tracker > summary { cursor: pointer; overflow-wrap: anywhere; }
+.tracker[open] { padding: 4px 0 4px 10px; border-left: 2px solid var(--muted); }
+.tracker .changed { font-weight: 600; }
+.tracker-actor { margin: 6px 0; padding: 0; border: 0; }
+.tracker-actor h5, .tracker-actor legend { margin: 0 0 2px; font-size: 12px; padding: 0; }
+.tracker-actor ul { margin: 0; padding-left: 16px; }
+.tracker-actor .chip { margin-left: 6px; }
+.tracker-field { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 4px; }
+.tracker-field label { display: flex; gap: 6px; align-items: baseline; flex: 1 1 14rem; }
+.tracker-field label input, .tracker-field label select { flex: 1 1 auto; min-width: 0; }
+.tracker-wrap > .field-hint { flex-basis: 100%; }
+
 .director-note .msg-body { opacity: 0.65; font-style: italic; }
 .director-note .msg { border-left: 1px dashed var(--muted); }
 /* No plate. The label would be a fourth kind of speaker in a column of three,
