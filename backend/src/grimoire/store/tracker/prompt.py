@@ -101,13 +101,27 @@ def _characters(fields: list[dict], prior: dict, roster: dict[str, str],
     return blocks
 
 
+def _label(field: dict) -> str:
+    """The field's label when it says something its key does not, else "".
+
+    A custom field's label is what the person wrote it to mean -- `grudge`
+    could be anything, "Old debt owed to Winifred" cannot -- so the model is
+    shown it. A built-in's label only restates its key ("Visible mood" for
+    `visible_mood`), and repeating it would be noise on every update."""
+    label = field.get("label")
+    if not isinstance(label, str) or not label.strip():
+        return ""
+    label = " ".join(label.split())
+    return "" if label.lower().replace(" ", "_") == field["key"] else label
+
+
 def build_messages(fields: list[dict], prior: dict, roster: dict[str, str],
                    present: set[str], newcomers: list[dict],
                    context_posts: list[dict], post: dict) -> list[dict]:
     """The system/user pair for one update. `post` and `context_posts` items are
     `{"speaker", "content"}`; switched-off fields are not shown."""
     active = field_defs.active(fields)
-    shown = [{"key": f["key"], "type": f["type"], "aware": f.get("aware"),
+    shown = [{"key": f["key"], "label": _label(f), "type": f["type"], "aware": f.get("aware"),
               "options": f.get("options") or [], "hint": f.get("hint", "")}
              for f in active]
     new_refs = {n["ref"] for n in newcomers}

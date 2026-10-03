@@ -125,3 +125,19 @@ def test_newcomer_pc_that_only_the_campaign_has(home):
 
 def test_routing_knows_the_task():
     assert routing.TASK_ROUTE["tracker-update"] == "tracker"
+
+
+def test_a_field_whose_label_says_more_than_its_key_shows_the_label(home):
+    """A custom field's label is what the person wrote it to mean; a key is an
+    identifier. The model has to see both: the key to answer under, the label
+    to know what it is answering about."""
+    flds = [*fields.DEFAULT_FIELDS,
+            {"key": "grudge", "label": "Old debt owed to Winifred", "type": "text",
+             "aware": "self", "hint": ""}]
+    msgs = prompt.build_messages(flds, {}, ROSTER, PRESENT, [], [],
+                                 {"speaker": "Mara", "content": "Hello."})
+    user = msgs[1]["content"]
+    assert 'grudge "Old debt owed to Winifred" (text) [private by default]\n' in user
+    # A built-in's label only restates its key, and is left out.
+    assert "visible_mood (enum: admiration" in user and '"Visible mood"' not in user
+    assert "by its key" in msgs[0]["content"]
