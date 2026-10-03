@@ -163,6 +163,14 @@ class CampaignTracker(BaseModel):
     setting: str
 
 
+class TrackerEdit(BaseModel):
+    """A person's hand edit of one tracker record:
+    `{ref: {field_key: {"value": ..., "aware": "present" | [refs]}}}`, either
+    half optional (`store.tracker.merge.apply_edit` validates it)."""
+
+    edits: dict
+
+
 class RoutingUpdate(BaseModel):
     """Which connection each route runs on, at one scope (#142).
 

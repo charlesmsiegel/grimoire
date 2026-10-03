@@ -4719,6 +4719,11 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
                 store.alternates.reconcile(cid, sid)
             except OSError:
                 pass          # the edit is on disk; the sidecar is not a reason to fail it
+            # The post's tracker record describes text that is no longer there,
+            # and every later record was built on it. Flagged, not re-run (the
+            # spec's "nothing re-runs automatically"), and in this hold so no
+            # reader sees the new text beside unflagged records. Fail-soft.
+            tracker_routes.after_text_edit(cid, sid, index)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.scenes.RollMessageImmutable:
@@ -4765,7 +4770,11 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
         # campaign lock is reentrant, so the cascade's own acquisitions are
         # free, and a send cannot reserve a turn in the gap.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.cascade.delete_from(cid, sid, index)
+            report = store.cascade.delete_from(cid, sid, index)
+            # The cut posts' tracker records describe posts that no longer
+            # exist. Nothing is left after them to flag: a cut takes the tail.
+            tracker_routes.after_cut(cid, sid)
+            return report
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except (store.SceneNotFound, store.CampaignNotFound):
@@ -4799,7 +4808,11 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
     try:
         # One hold over check and rewrite, as for the cascade delete above.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.retcon.retcon(cid, sid, index, content)
+            report = store.retcon.retcon(cid, sid, index, content)
+            # A retcon is a text edit for the tracker: the rewritten post's
+            # record is stale and every later one was built on it.
+            tracker_routes.after_text_edit(cid, sid, index)
+            return report
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.scenes.RollMessageImmutable:
@@ -4883,7 +4896,11 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
         # live turn that is history moving out from under a reply already being
         # written.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.replay.begin(cid, sid, body.index)
+            report = store.replay.begin(cid, sid, body.index)
+            # The cut half of a replay: the held tail's records go with it, as
+            # for any cut (a restore brings the posts back untracked, Retry).
+            tracker_routes.after_cut(cid, sid)
+            return report
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.replay.ReplayError as exc:
@@ -4973,6 +4990,8 @@ def post_replay_accept(cid: str, sid: str, request: Request):
         # stays and the next original comes back out of the held tail.
         with runs.scene_held_free(request.app, cid, sid):
             session = store.replay.accept(cid)
+            # Accepting drops whatever the step superseded; its records go too.
+            tracker_routes.after_cut(cid, sid)
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})
@@ -4996,7 +5015,13 @@ def post_replay_cancel(cid: str, sid: str, request: Request,
         # Restoring the unreplayed originals appends them back, which is the
         # same shape change as the cut that removed them.
         with runs.scene_held_free(request.app, cid, sid):
-            return store.replay.cancel(cid, restore=body.restore if body else True)
+            report = store.replay.cancel(cid, restore=body.restore if body else True)
+            # The replayed posts a cancel takes back leave the transcript, and
+            # their records go with them; restored originals come back
+            # untracked (Retry). `_replay_session` has checked the session's
+            # scene is this `sid`.
+            tracker_routes.after_cut(cid, sid)
+            return report
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})
