@@ -12,6 +12,8 @@ import { MoneyColumns, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
+import { CampaignTrackerSwitch } from "../components/tracker/CampaignTrackerSwitch";
+import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
 import { sectionHref } from "../worldPaths";
 import { intentProps } from "../api/prefetch";
 
@@ -161,7 +163,7 @@ export default function CampaignHub() {
    *  a mechanics module, set its calendar or give it a cover. They belong to
    *  the campaign, not to whichever scene you happen to have open, so they are
    *  here. */
-  const [panel, setPanel] = useState<"mechanics" | "calendar" | "cover" | null>(null);
+  const [panel, setPanel] = useState<"mechanics" | "calendar" | "cover" | "tracker" | null>(null);
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
@@ -319,7 +321,7 @@ export default function CampaignHub() {
       </ColumnSection>
       <ColumnSection label="Settings">
         {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
-           ["cover", "Cover"]] as const).map(([id, label]) => (
+           ["cover", "Cover"], ["tracker", "Tracker"]] as const).map(([id, label]) => (
           <button key={id} type="button"
                   className={"column-row" + (panel === id ? " active" : "")}
                   aria-pressed={panel === id}
@@ -385,6 +387,13 @@ export default function CampaignHub() {
             {panel === "mechanics" && <MechanicsConfig cid={cid} onChanged={retryShell} />}
             {panel === "calendar" && <CalendarConfig scope={{ kind: "campaign", id: cid }} />}
             {panel === "cover" && <CampaignCover cid={cid} />}
+            {/* Keyed by cid so a campaign switch cannot show the last one's fields. */}
+            {panel === "tracker" && (
+              <>
+                <CampaignTrackerSwitch key={cid} cid={cid} />
+                <TrackerFieldsEditor key={`${cid}:fields`} scope={{ kind: "campaign", cid }} />
+              </>
+            )}
           </section>
         )}
 

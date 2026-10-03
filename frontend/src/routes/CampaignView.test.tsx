@@ -7950,7 +7950,7 @@ test("the reattach asks from one past what was read, not from the live tail", as
 
 // ---- the scene bar's overflow ----
 
-test("the seven panels are behind one control, and End scene is not", async () => {
+test("the eight panels are behind one control, and End scene is not", async () => {
   // The mobile-clutter half of the brief. The bar's own focus-mode comment
   // conceded the cost of not having this: "eleven controls at the 44px touch
   // target this width mandates wrap into four rows".
@@ -7964,12 +7964,30 @@ test("the seven panels are behind one control, and End scene is not", async () =
 
   // Everything that opens a panel is one control now.
   for (const label of ["Changes", "World updates", "Composition", "Mechanics",
-                       "Calendar", "Response", "Cover", "+ New scene"]) {
+                       "Calendar", "Response", "Cover", "Tracker", "+ New scene"]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   }
   // ...and they are inside the disclosure rather than beside it.
   const menu = screen.getByText("Scene ⋯").closest("details")!;
   expect(within(menu).getByRole("button", { name: "Calendar" })).toBeInTheDocument();
+});
+
+test("the Tracker panel edits this scene's fields, and Close shuts it", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+  ]);
+  const clothing = { key: "clothing", label: "Clothing", type: "text", aware: "present", hint: "" };
+  (api.getTrackerFields as any).mockResolvedValue(
+    { layer: {}, effective: [clothing], inherited: [clothing] });
+  renderCampaign();
+  await screen.findByText("Scene ⋯");
+
+  fireEvent.click(screen.getByRole("button", { name: "Tracker" }));
+
+  expect(await screen.findByRole("checkbox", { name: "Clothing" })).toBeChecked();
+  expect(api.getTrackerFields).toHaveBeenCalledWith({ kind: "scene", cid: "run", sid: "s1" });
+  fireEvent.click(screen.getByRole("button", { name: "Close Tracker" }));
+  expect(screen.queryByRole("checkbox", { name: "Clothing" })).not.toBeInTheDocument();
 });
 
 test("picking from the menu shuts the menu it was picked from", async () => {

@@ -1149,6 +1149,8 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
    rule would have silently dropped its underline too. */
 .editor-list a.row { text-decoration: none; }
 .row.active { border-color: var(--accent); border-left: 4px solid var(--accent); }
+/* A tracker field switched off: still selectable, so it can be switched back on. */
+.editor-list .row.off { opacity: 0.55; }
 .row-label { flex: 1; cursor: pointer; overflow: hidden; }
 /* A row of [title][mark] rather than one clipped run: the ellipsis has to
    truncate the TITLE and leave the completion mark standing, so the mark is its

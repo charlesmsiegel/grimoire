@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, within, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { useShellPayload } from "../shell/useShellPayload";
 import { ShellPayloadProvider } from "../shell/ShellPayloadContext";
@@ -11,6 +11,10 @@ vi.mock("../components/MechanicsConfig", () => ({
 }));
 vi.mock("../components/CalendarConfig", () => ({
   CalendarConfig: () => <div data-testid="calendar-panel" />,
+}));
+vi.mock("../components/tracker/TrackerFieldsEditor", () => ({
+  TrackerFieldsEditor: ({ scope }: { scope: { kind: string; cid?: string } }) =>
+    <div data-testid="tracker-fields" data-scope={`${scope.kind}:${scope.cid}`} />,
 }));
 vi.mock("../components/CampaignCover", () => ({
   CampaignCover: () => <div data-testid="cover-panel" />,
@@ -31,6 +35,7 @@ vi.mock("../api/client", () => ({
     getCampaignBudget: vi.fn(),
     listSceneIdeas: vi.fn(),
     actorImageUrl: vi.fn(() => "/img"),
+    getCampaignTracker: vi.fn(), setCampaignTracker: vi.fn(),
   },
 }));
 
@@ -403,6 +408,22 @@ test("the campaign's own settings are reachable from its front door", () => {
   });
 });
 
+test("the Tracker panel holds the campaign's switch and its field editor", async () => {
+  (api.getCampaignTracker as any).mockResolvedValue({ setting: "", enabled: true });
+  (api.setCampaignTracker as any).mockResolvedValue({ setting: "off", enabled: false });
+  renderHub();
+  await screen.findByText("Run One");
+  fireEvent.click(screen.getByRole("button", { name: "Tracker" }));
+  expect(screen.getByTestId("tracker-fields")).toHaveAttribute("data-scope", "campaign:run");
+  const select = await screen.findByRole("combobox", { name: "Tracker" });
+  await waitFor(() => expect(select).toBeEnabled());
+  expect(select).toHaveValue("");
+  expect(screen.getByText(/Currently on/)).toBeInTheDocument();
+  fireEvent.change(select, { target: { value: "off" } });
+  await waitFor(() => expect(api.setCampaignTracker).toHaveBeenCalledWith("run", "off"));
+  expect(await screen.findByText(/Currently off/)).toBeInTheDocument();
+  expect(select).toHaveValue("off");
+});
 
 // ---- the money card ----
 

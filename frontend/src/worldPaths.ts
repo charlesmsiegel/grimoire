@@ -22,9 +22,10 @@ export const RECORD_SECTIONS = [
 ] as const;
 export type RecordSection = (typeof RECORD_SECTIONS)[number];
 
-/** ...and the four screens that are not a list of records: the world's own
- *  setup, the campaigns it feeds, its art, and its tag vocabulary. */
-const FLAT_SECTIONS = ["overview", "push", "images", "tags"] as const;
+/** ...and the five screens that are not a list of records: the world's own
+ *  setup, the campaigns it feeds, its art, its tag vocabulary, and its tracker
+ *  fields. */
+const FLAT_SECTIONS = ["overview", "push", "images", "tags", "tracker"] as const;
 
 export type Section = RecordSection | (typeof FLAT_SECTIONS)[number];
 
@@ -58,7 +59,7 @@ export function shapeOf(scope: EntityScope): Shape {
  *  single variant that gives it meaning, so they cannot be written at all. */
 export type SectionTarget =
   // a section's own screen
-  | { kind: "section"; at: "overview" | "push" | "tags" }
+  | { kind: "section"; at: "overview" | "push" | "tags" | "tracker" }
   | { kind: "section"; at: "images"; forCampaign?: string }
   | { kind: "section"; at: "greetings"; view?: "graph" }
   | { kind: "section"; at: "lore"; newOwner?: string }
