@@ -10,6 +10,7 @@ import { CharacterGrid } from "../components/CharacterGrid";
 import { characterHref } from "../components/character/shared";
 import { PCEditor } from "../components/PCEditor";
 import { TagEditor } from "../components/TagEditor";
+import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
 import { EntityEditor } from "../components/EntityEditor";
 import { GreetingEditor } from "../components/GreetingEditor";
 import { PlotMapEditor } from "../components/PlotMapEditor";
@@ -26,7 +27,7 @@ import {
 type IndexKey =
   | "characters" | "pcs" | "creatures" | "groups"
   | "locations" | "items"
-  | "lore" | "greetings" | "tags";
+  | "lore" | "greetings" | "tags" | "tracker";
 
 /** The index that replaced the ten-tab strip.
  *
@@ -50,6 +51,7 @@ const INDEX: { group: string; rows: { key: IndexKey; label: string }[] }[] = [
     { key: "lore", label: "Lore" },
     { key: "greetings", label: "Greetings" },
     { key: "tags", label: "Tags" },
+    { key: "tracker", label: "Tracker" },
   ] },
 ];
 
@@ -110,6 +112,11 @@ function countOf(key: IndexKey, scope: EntityScope, wid: string): Promise<number
   // also why the Tags row only exists on the world shape -- so `wid` is the
   // right id to ask with here even though everything else takes the scope.
   if (key === "tags") return api.listTags(wid).then((t) => Object.keys(t).length);
+  // Likewise a world's, and counted as the fields a scene in it would start
+  // with: the built-ins plus whatever this world adds, switched-off ones included.
+  if (key === "tracker") {
+    return api.getTrackerFields({ kind: "world", wid }).then((b) => b.effective.length);
+  }
   return api.listEntities(scope, key).then((l) => l.length);
 }
 
@@ -363,19 +370,20 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  vanish on the way back and read as deleted — the page hands their id over
    *  in `location.state` and the grid widens the filter for them. */
   const reveal = (location.state as { reveal?: string } | null)?.reveal ?? null;
-  // The tag vocabulary is a world concern (campaign PC tags are free strings)
-  // and the overview is a world's setup checklist -- neither is something a
-  // campaign's fork of the world has, so neither is offered on that shape.
+  // The tag vocabulary is a world concern (campaign PC tags are free strings),
+  // the tracker's world layer is edited here and a campaign's own from its hub,
+  // and the overview is a world's setup checklist -- none of them is something
+  // a campaign's fork of the world has, so none is offered on that shape.
   const groups = useMemo(
     () => INDEX
-      .map((g) => ({ group: g.group, rows: g.rows.filter((r) => !(campaign && r.key === "tags")) }))
+      .map((g) => ({ group: g.group, rows: g.rows.filter((r) => !(campaign && (r.key === "tags" || r.key === "tracker"))) }))
       .filter((g) => g.rows.length > 0),
     [campaign],
   );
 
   // The first count of a scope. The world shape's record rows came with the
-  // world read above; what is left is Tags, whose vocabulary no world read
-  // carries. The campaign shape lists every row, one request each so they
+  // world read above; what is left is Tags and Tracker, whose numbers no world
+  // read carries. The campaign shape lists every row, one request each so they
   // settle independently -- and does not wait for the campaign's world id to
   // do it, since none of its lists is addressed by one.
   useEffect(() => {
@@ -384,7 +392,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       readCounts(groups.flatMap((g) => g.rows.map((r) => r.key)), true,
                  { kind: "campaign", id: cid }, "", apply);
     } else {
-      readCounts(["tags"], false, { kind: "world", id: widParam }, widParam, apply);
+      readCounts(["tags", "tracker"], false, { kind: "world", id: widParam }, widParam, apply);
     }
   }, [campaign, cid, widParam, groups, countsFor]);
 
@@ -730,6 +738,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                                                                       { kind: "record", at: "pcs", rid: r })}
                                        module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
+        {/* World only, like Tags: a campaign's own field layer lives in its hub. */}
+        {!campaign && section === "tracker" && <TrackerFieldsEditor key={wid} scope={{ kind: "world", wid }} />}
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations"
                                           selected={section === "locations" ? rid : null}
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "locations" })}

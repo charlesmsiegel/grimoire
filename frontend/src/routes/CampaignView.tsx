@@ -33,6 +33,7 @@ import { IncomingReview } from "../components/IncomingReview";
 import { CompositionPanel } from "../components/CompositionPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
+import { SceneTrackerPanel } from "../components/tracker/SceneTrackerPanel";
 import { SceneInspector } from "../components/SceneInspector";
 import { UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
@@ -246,6 +247,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [showMechanics, setShowMechanics] = useState(false);
   const [showStyle, setShowStyle] = useState(false);
   const [showCover, setShowCover] = useState(false);
+  /** The per-scene tracker fields: what this scene stops tracking, and what it adds. */
+  const [showTracker, setShowTracker] = useState(false);
   /** Whether this scene's director notes are visible.
    *
    *  Per scene and not persisted: it is a way of looking at what is on screen,
@@ -4329,15 +4332,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   /** Which panel is above the transcript, if any.
    *
-   *  Derived rather than stored beside the seven flags, so it cannot disagree
+   *  Derived rather than stored beside the eight flags, so it cannot disagree
    *  with them. Only ONE can be open at a time in practice — every menu item
    *  toggles and the panels stack — but the first match is what the Close
-   *  button names, and closing clears all seven anyway.
+   *  button names, and closing clears all eight anyway.
    */
   const openPanel = ([
     [showChanges, "Changes"], [showIncoming, "World updates"],
     [showComposition, "Composition"], [showMechanics, "Mechanics"],
     [showCalendar, "Calendar"], [showStyle, "Response"], [showCover, "Cover"],
+    [showTracker, "Tracker"],
   ] as const).flatMap(([open, label]) => (open ? [{ label }] : []))[0];
 
   /** Run a menu item, then shut the menu it was picked from.
@@ -4353,13 +4357,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   /** Shut everything the menu can open.
    *
-   *  All seven rather than the one `openPanel` named: two can be open at once
+   *  All eight rather than the one `openPanel` named: two can be open at once
    *  (nothing forbids it), and a Close that shut only the one it happened to
    *  name would leave the other with no control on the bar at all. */
   function closePanels() {
     setShowChanges(false); setShowIncoming(false); setShowComposition(false);
     setShowMechanics(false); setShowCalendar(false); setShowStyle(false);
-    setShowCover(false);
+    setShowCover(false); setShowTracker(false);
   }
 
   // The column is one swap zone: cast, or one actor. `columnMode` is derived
@@ -4486,7 +4490,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               the chrome, on the page, and in the palette. What is left on this
               bar is what is about the SCENE in front of you; what belongs to
               the campaign moved to the hub. */}
-          {/* Seven panels behind one control (`Scene ⋯`), which is the design's
+          {/* Eight panels behind one control (`Scene ⋯`), which is the design's
               overflow and is the mobile-clutter half of the brief. The bar's
               own focus-mode comment already conceded the cost of not having
               one: "eleven controls at the 44px touch target this width
@@ -4527,6 +4531,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 ["Calendar", showCalendar, setShowCalendar],
                 ["Response", showStyle, setShowStyle],
                 ["Cover", showCover, setShowCover],
+                ["Tracker", showTracker, setShowTracker],
               ] as const).map(([label, open, set]) => (
                 <button key={label} className="scene-menu-item"
                         aria-pressed={open}
@@ -4673,7 +4678,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             </div>
           )}
           {!absorb && (<>
-          {/* Every one of these six is opened AND closed from the scene bar,
+          {/* Every one of these eight is opened AND closed from the scene bar,
               which focus mode does not render — so one left open when focus
               starts would be a panel above the transcript with no control that
               can shut it. They keep their state and come back with the bar. The
@@ -4716,6 +4721,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           {!focus && showCover && (
             <div className="panel-slot">
               <CampaignCover cid={cid} />
+            </div>
+          )}
+          {/* Keyed by scene as well as campaign: it holds one scene's layer, and
+              a rename or a switch must not show it another scene's fields. */}
+          {!focus && showTracker && activeId && (
+            <div className="panel-slot">
+              <SceneTrackerPanel key={`${cid}:${activeId}`} cid={cid} sid={activeId} />
             </div>
           )}
           {!focus && showChanges && <ChangesPanel cid={cid} />}
