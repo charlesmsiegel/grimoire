@@ -79,6 +79,10 @@ export function TrackerNow({ tracker, onChanged }: {
   // scene and actor, so what is held here is always this actor's last good read.
   const stored = record?.snapshot?.[ref];
   const actor = stored?.present ? stored : undefined;
+  // ...but while it is up it is not the record the key names. An edit built
+  // on it would be sent to the old key, under a newer post's record that
+  // never saw it, so Edit waits for the read as it waits for a later update.
+  const waiting = updating || (record !== null && record.key !== key);
 
   async function save(edits: TrackerEdits) {
     if (editRecord === null) return;
@@ -107,9 +111,9 @@ export function TrackerNow({ tracker, onChanged }: {
                            names={record.names} changed={EMPTY_SET} />
             {enabled && (
               <div className="form-actions">
-                <button className="subtle" disabled={updating}
+                <button className="subtle" disabled={waiting}
                         onClick={() => setEditRecord(record)}>Edit</button>
-                {updating && <span className="field-hint">updating…</span>}
+                {waiting && <span className="field-hint">updating…</span>}
               </div>
             )}
           </>
