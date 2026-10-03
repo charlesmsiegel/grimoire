@@ -19,7 +19,6 @@ from .. import (
     overlay,
     pcs,
     playstate,
-    turnstate,
     weather,
 )
 from ..appearances import versions as appearances_versions
@@ -1196,41 +1195,6 @@ def _character_states(aroot, cid: str, cast, pcless: bool) -> list[dict]:
                 st = {**st, "suspects": _visible_suspects(st["suspects"], others)}
             if st["current_state"] or st["knows"] or st["suspects"]:
                 out.append({"name": name, **st})
-        return out
-    except Exception:  # noqa: BLE001 — garbled state: omit, don't crash the context build
-        return []
-
-
-def _transient_states(cast, live: dict) -> list[dict]:
-    """The transient per-turn ledger, decayed to what is still live (#120).
-
-    Takes the already-read map rather than reading it, so `_assemble` can pair
-    it with the transcript under one campaign-lock hold — `_persist_reply`
-    writes the reply and its entry under that same lock, and a reader that
-    fetched them separately could see the new narration beside the previous
-    turn's mood.
-
-    Labelled with the CAST name — the locked card's `data.name`, which is what
-    the character-description section shows, what the transcript's
-    `**Speaker:**` markers carry, and therefore what the model was asked to key
-    its tracker block by. The adjacent `# Character state` block labels with the
-    character's *meta* name instead; where the two differ this section agrees
-    with the half the model writes, because writing it back under a name it
-    never uses is how a value stops resolving.
-
-    Same failure policy as `_character_states`: a garbled ledger omits the
-    block rather than crashing a context build on the way to a paid generation.
-    `turnstate.read` already swallows an unparseable file; this covers the rest.
-    """
-    try:
-        out = []
-        for a in cast:
-            if a.get("role") != "npc" or a.get("kind") != "characters":
-                continue
-            fields = live.get(f"characters:{a['id']}") or {}
-            rows = [{"label": f, "value": fields[f]} for f in turnstate.FIELDS if fields.get(f)]
-            if rows:
-                out.append({"name": a.get("name") or a["id"], "fields": rows})
         return out
     except Exception:  # noqa: BLE001 — garbled state: omit, don't crash the context build
         return []

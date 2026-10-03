@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import fence, turnstate
+from . import fence, state_fence
 
 _HANDOFF = re.compile(r"```[ \t]*handoff\b", re.IGNORECASE)
 _PREFIX = re.compile(
@@ -91,7 +91,7 @@ class ResponseWatcher:
     def __init__(self, *, perception=False):
         self.preparation = _PreparationPrefix(perception)
         self.roll = fence.FenceWatcher()
-        self.redactor = turnstate.StreamRedactor()
+        self.redactor = state_fence.StreamRedactor()
         self.reasoning = ""
         self.raw = ""
         self.visible = 0

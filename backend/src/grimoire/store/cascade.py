@@ -124,7 +124,6 @@ from . import (
     pending_reviews,
     plot,
     provenance,
-    turnstate,
     undo,
 )
 from .scenes import read as scenes_read
@@ -349,11 +348,6 @@ def delete_from(cid: str, sid: str, index: int) -> dict:
         # ---- past here the transcript is gone, so nothing may raise ----
         failed: list[str] = []
         step = _guard(cid, sid, failed)
-
-        # The transient-state ledger from the cut on (#120): its entries are
-        # keyed by post index, so every one at or past the cut describes a post
-        # that no longer exists.
-        step("turnstate", lambda: turnstate.supersede(cid, sid, index))
 
         # The reroll sidecar parks the variants of ONE generation, and the cut
         # decides its fate by whether it reached that far: a cut below it takes

@@ -57,39 +57,6 @@ def parse_body(body: str) -> dict:
     return fields
 
 
-def fold_fields(current_state: str, fields: dict[str, str]) -> str:
-    """Set `Label: value` lines inside a `current_state` body.
-
-    The write side of #121's promotion: a transient value reinforced across
-    enough posts becomes a labelled line in the standing snapshot. A line
-    already carrying that label is REPLACED in place, keeping its own spelling
-    of the label and its position; only a genuinely new label is appended. That
-    is what makes promotion idempotent — the second absorb over the same ledger
-    composes the identical body, and `materialize` drops an edit whose
-    `before == after`, so nothing is staged twice.
-
-    Matching is on the text before the first colon, case-insensitively, and
-    only on a line that has one. Prose is left alone: a narrative line has no
-    leading `Word:` label, and one that happens to (`Mood: still furious`) is
-    exactly the line this is meant to update.
-    """
-    lines = current_state.strip().splitlines()
-    pending = {k.casefold(): (k, v) for k, v in fields.items() if v.strip()}
-    out = []
-    for line in lines:
-        label, sep, _ = line.partition(":")
-        key = label.strip().casefold()
-        if sep and key in pending:
-            out.append(f"{label.strip()}: {pending.pop(key)[1].strip()}")
-        else:
-            out.append(line)
-    for key, value in fields.items():
-        held = pending.pop(key.casefold(), None)
-        if held is not None:
-            out.append(f"{held[0][:1].upper()}{held[0][1:]}: {value.strip()}")
-    return "\n".join(out).strip()
-
-
 def compose_body(current_state: str, knows: str, suspects: str) -> str:
     current_state, knows, suspects = current_state.strip(), knows.strip(), suspects.strip()
     if not knows and not suspects:

@@ -39,7 +39,6 @@ from .. import (
     response_targets,
     styles,
     tokens,
-    turnstate,
     voice_anchors,
 )
 from ..appearances import cast as appearances_cast
@@ -105,23 +104,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     selects the full story-so-far variant over the compact recap. `turn` is a
     one-shot, unpersisted override (e.g. a per-turn response-length chip) that
     outranks every stored scope in response_presets.resolve -- see build_messages."""
-    # The transcript and the transient-state ledger, read together (#120).
-    # `_persist_reply` appends the reply and files its tracker entry under one
-    # hold of this lock precisely so the two are never seen apart; a reader that
-    # took neither could land between them and send the new narration paired
-    # with the PREVIOUS turn's mood, or with none. Two file reads long, and the
-    # lock is reentrant, so a caller already holding it pays nothing.
-    #
     # BEST-EFFORT, not `campaign_lock`: `post_chat` appends the player's post
     # before calling this and only wires the undo that would take it back off
     # afterwards, so a `StoreBusy` raised here would strand that post with no
-    # reply and nothing able to remove it. This path had no lock at all before
-    # the pairing, and it must not become a new way for a turn to fail — under
-    # contention it reads unlocked and one prompt may carry a stale field.
+    # reply and nothing able to remove it. Under contention it reads unlocked.
     with locks.best_effort_campaign_lock(cid):
         scene = scenes_read.read_scene(cid, sid)
-        live_turnstate = turnstate.current(cid, sid, len(scene["messages"]),
-                                           config.turnstate_depth())
     history = [dict(m) for m in scene["messages"]]
     # {{date}}/{{weekday}}/{{time}}, resolved ONCE per compose and handed to
     # every `expand_macros` call below, in `_render_sections` and in `_prepare`.
@@ -361,7 +349,6 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # the cast record: `npc_names`/`player_names` here are one name each and
         # the wrong one for it (see `world_state._actor_aliases`).
         "states": world_state._character_states(aroot, cid, cast, pcless),
-        "transient_states": world_state._transient_states(cast, live_turnstate),
         # Derived on every pass and never stored -- see speaker.py. Off by
         # default because it adds tokens to every group turn, and `None`
         # (the toggle off, or fewer than two NPCs) renders no section at all.
@@ -372,8 +359,6 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # anyway -- and the blanking below says so regardless.
         "speaker": (speaker.nominate(npc_names, history, pending=wi_seed)
                     if not actor_scoped and config.speaker_turn_taking() else None),
-        "transient_tracker": config.turnstate_depth() > 0,
-        "transient_fields": list(turnstate.FIELDS),
         "players": players, "ref_names": ref_names, "refs": refs,
         # The recap, archive, ledgers, calendar, relationship graph, group
         # state, off-scene cast and art catalogue are campaign-wide. Birthday
@@ -522,13 +507,13 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
 #: exactly like a pin whose content did not activate.
 #:
 #: Everything else a pinned character feeds is already `lock-in` (their card,
-#: their persona), so naming those here would say nothing; these two are the
-#: droppable claims about that character, and a pin on someone is a request to
+#: their persona), so naming those here would say nothing; this one is the
+#: droppable claim about that character, and a pin on someone is a request to
 #: keep the model told who they currently are.
-_CAST_SECTIONS = ("character_state", "transient_state")
+_CAST_SECTIONS = ("character_state",)
 
 #: The voice sections, held up only by a pinned NPC. Per-character content like
-#: the two above -- a reader who pinned a character and then watched the packer
+#: the one above -- a reader who pinned a character and then watched the packer
 #: drop that character's anchor would have been told their pin meant something
 #: it did not -- but NPC-only, which `_CAST_SECTIONS` is not. `voice_policy` is
 #: absent deliberately: it is LOCK_IN, so no pin can make it any safer.
@@ -688,10 +673,6 @@ SECTIONS = [
             "scene/sections/voice_examples.j2", pack.SPOTLIGHT),
     Section("character_state", "Character state",
             "scene/sections/character_state.j2", pack.SPOTLIGHT),
-    # Beside the standing state and at the same tier: the same kind of claim
-    # about the same characters, with a shorter half-life.
-    Section("transient_state", "Transient state",
-            "scene/sections/transient_state.j2", pack.SPOTLIGHT),
     # Beside the state sections and at their tier, because it is the same kind
     # of claim: who is live right now. AFTER them, so the model reads what each
     # character is feeling before it reads which of them should carry the turn.
@@ -783,8 +764,6 @@ SECTIONS = [
             "scene/sections/mechanics_response_format.j2", pack.LOCK_IN),
     Section("response_format", "Response format",
             "scene/sections/response_format.j2", pack.LOCK_IN),
-    Section("transient_tracker", "Transient state tracker",
-            "scene/sections/transient_tracker.j2", pack.LOCK_IN, except_opener=True),
     Section("response_budget", "Response budget",
             "scene/sections/response_budget.j2", pack.LOCK_IN),
 ]

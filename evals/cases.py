@@ -57,9 +57,9 @@ from grimoire.store import (
     response_targets,
     scenes,
     sheets,
+    state_fence,
     steering,
     styles,
-    turnstate,
     worlds,
 )
 
@@ -183,7 +183,7 @@ def grade_scene_length(ctx: dict, output: str) -> list[Check]:
     watcher = response_protocol.ResponseWatcher(perception=True)
     watcher.feed(output)
     watcher.finish()
-    narration, _ = turnstate.split_block(watcher.narration)
+    narration, _ = state_fence.split_block(watcher.narration)
     prose = graders.length_drift.prose(narration)
     words = len(prose.split())
     paragraphs = max(len([p for p in prose.split("\n\n") if p.strip()]), 1)

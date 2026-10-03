@@ -267,12 +267,6 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # it starts inside the exclusion rather than joining the `UNREVIEWED`
     # backlog -- the same call `store.commitments` made.
     "store.prompt_log",
-    # turnstate.json is rewritten whole by `record`, `repoint_scenes` and
-    # `drop_scene`, exactly like commitments.json -- and it is written from
-    # inside `_persist_reply`, which already holds this lock, so the entry that
-    # files a reply's tracker block and the append that lands the reply are one
-    # critical section rather than two.
-    "store.turnstate",
     # scene_ideas.json is rewritten whole by `add`, `set_status` and
     # `repoint_scenes`, exactly like facts.json -- and `add` allocates the
     # idea's id from the keys it just read, so two unlocked saves can pick the
@@ -695,7 +689,7 @@ def best_effort_campaign_lock(cid: str, timeout: float = 2.0):
     consistent state. `campaign_lock` is the wrong tool there: it raises
     ``StoreBusy`` after ``LOCK_TIMEOUT``, and a reader that can 409 turns a
     nicety into a new way for a turn to fail. `context._assemble` is the case —
-    it pairs the transcript with the transient-state ledger, and `post_chat`
+    it reads the scene's transcript under it, and `post_chat`
     has already appended the player's post by the time it runs, with the undo
     that would take it back off not yet wired. A timeout there would strand
     that post with no reply and nothing able to remove it.

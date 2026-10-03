@@ -122,10 +122,6 @@ export type Config = {
    *  made about `first_run` belongs to a library it is no longer looking at. */
   data_dir: string;
   prompt_log_depth: string;
-  /** Posts of transcript tail the transient-state ledger is read over; "0" disables it. */
-  turnstate_depth: string;
-  /** Consecutive recorded values that promote a transient field to character state. */
-  promote_streak: string;
   /** Posts between live rolling-summary refreshes; "0" turns the automatic
    *  refresh off, leaving only the inspector's own Refresh button. */
   rolling_summary_every: string;
@@ -185,7 +181,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "llm_retries" | "fallback_connection_id" |
   "context_budget" | "context_scan_depth" | "archive_depth" |
   "setup_done" | "prompt_log_depth" |
-  "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
+  "rolling_summary_every" |
   "scene_break_every" |
   "offscene_known_limit" |
   "embeddings_connection_id" | "embeddings_model" |

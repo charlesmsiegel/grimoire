@@ -14,7 +14,7 @@ import hashlib
 import json
 import uuid
 
-from . import atomic, locks, proposals, response_snapshots, rolls, turnstate
+from . import atomic, locks, proposals, response_snapshots, rolls
 from .appearances import paths as appearance_paths
 from .campaigns import paths as campaign_paths
 from .paths import now_iso
@@ -404,7 +404,7 @@ def editable(cid: str, sid: str, rid: str) -> int:
     return index
 
 
-def _invalidate(cid, sid, index):
+def _invalidate(cid, sid):
     data = _read(cid)
     scope = _scope(cid, sid, data)
     for round_record in scope["rounds"].values():
@@ -412,7 +412,6 @@ def _invalidate(cid, sid, index):
             round_record["status"] = "superseded"
     _write(cid, data)
     proposals.supersede(cid, sid)
-    turnstate.supersede(cid, sid, index)
     write.set_rolling_summary(cid, sid, "", 0, "")
     write.set_scene_break(cid, sid, 0, 0, 0)
 
@@ -429,7 +428,7 @@ def delete(cid: str, sid: str, rid: str) -> None:
         for message in messages[index:]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid, index)
+        _invalidate(cid, sid)
         write.replace_messages(cid, sid, messages)
 
 
@@ -453,7 +452,7 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid, index)
+        _invalidate(cid, sid)
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
         record.update(active_variant=vid, status="complete")

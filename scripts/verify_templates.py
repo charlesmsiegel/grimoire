@@ -396,7 +396,6 @@ from grimoire.store import (  # noqa: E402
     sheets,
     steering,
     styles,
-    turnstate,
     worlds,
 )
 from grimoire.store import dossiers as dstore
@@ -409,13 +408,10 @@ from grimoire.store import weather as wstore
 # recap_depth=1 narrows the recap window to the newest absorbed scene, which is
 # what leaves an older one outside it for archive retrieval (#127) to recall —
 # the archive section is empty by construction while every record is in recap.
-# turnstate_depth is non-zero for the same reason the fixture writes a playstate
-# and a group state: the transient-state sections (#120) ship disabled, and a
-# section that renders "" on both sides of the comparison proves nothing.
 # speaker_turn_taking is on for exactly that reason too (#29) — it ships off,
 # and the multi-NPC scenes below are what make its section non-empty.
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.", recap_depth="1",
-                    turnstate_depth="4", speaker_turn_taking="on")
+                    speaker_turn_taking="on")
 
 # a bound mechanics module (#162 Task 6): one sheet type, one check, one
 # always-on rules doc -- so mechanics_rules/mechanics_sheets/mechanics_checks
@@ -512,13 +508,6 @@ scenes.append_message(cid, sid, "assistant", "Seraphine glances toward the wareh
 scenes.append_message(cid, sid, "assistant", "Fog rolls in off the water.")
 scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero")
 
-# The transient ledger (#120), filed against the last post of the scene as
-# `_persist_reply` would. Two entries holding the same mood, so `streaks` has
-# something to see as well as `current`.
-turnstate.record(cid, sid, 1, {f"characters:{sera}": {"mood": "wary"}})
-turnstate.record(cid, sid, 3, {f"characters:{sera}": {"mood": "wary", "intent": "reach the warehouse first",
-                                                      "posture": "half-turned toward the door"}})
-
 relationships.set_feeling(cid, f"characters:{sera}", f"pcs:{pid}", 2, 3, 4, "suspects a tail")
 relationships.set_bond(cid, f"characters:{sera}", f"pcs:{pid}", "reluctant allies")
 plot.set_movement(cid, "find-the-ledger", "Find the ledger", "open", "Hero learned it exists.", sid)
@@ -587,19 +576,6 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
         if st and (st["current_state"] or st["knows"] or st["suspects"]):
             name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             states.append({"name": name, **st})
-
-    # Mirror of context.world_state._transient_states: the ledger, decayed to
-    # `turnstate_depth` posts of the tail, labelled with the CAST name.
-    depth = max(int(cfg.get("turnstate_depth", "0")), 0)
-    live = turnstate.current(cid, scene_id, len(scene["messages"]), depth)
-    transient_states = []
-    for a in cast:
-        if a["role"] != "npc" or a["kind"] != "characters":
-            continue
-        held = live.get(f"characters:{a['id']}") or {}
-        rows = [{"label": f, "value": held[f]} for f in turnstate.FIELDS if held.get(f)]
-        if rows:
-            transient_states.append({"name": a["name"], "fields": rows})
 
     players, player_names = [], []
     for a in cast:
@@ -844,14 +820,13 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "cast_blocks": _cast_blocks(cid, npc_cards, npc_ids),
             "named_npc_count": sum(
                 1 for b in _cast_blocks(cid, npc_cards, npc_ids) if b["name"]),
-            "states": states, "transient_states": transient_states,
+            "states": states,
             # Mirrors context._assemble: derived from the present NPCs' card
             # names and the raw transcript, and None while the toggle is off.
             "speaker": (context.speaker.nominate(
                 [d.get("name", "") for d in npc_cards if d.get("name")],
                 [dict(m) for m in scene["messages"]])
                 if config.speaker_turn_taking() else None),
-            "transient_tracker": depth > 0, "transient_fields": list(turnstate.FIELDS),
             "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
             "archive_entries": archive_entries,
@@ -911,7 +886,6 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/voice_anchors.j2",
               "scene/sections/voice_examples.j2",
               "scene/sections/character_state.j2",
-              "scene/sections/transient_state.j2",
               "scene/sections/active_speaker.j2",
               "scene/sections/relationships.j2",
               "scene/sections/player_personas.j2"]
@@ -934,11 +908,6 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/off_scene_cast_known.j2",
               "scene/sections/mechanics_response_format.j2",
               "scene/sections/response_format.j2"]
-    # The tracker instruction is the one section deliberately absent from an
-    # opener (Section.except_opener) — the opener is adopted by hand, so a
-    # machine-readable block there is the user's to delete.
-    if not opener:
-        names.append("scene/sections/transient_tracker.j2")
     names.append("scene/sections/response_budget.j2")
     sections: list[str] = []
     last_head = None

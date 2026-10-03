@@ -2199,9 +2199,8 @@ def _already_absorbed(scene: dict) -> bool:
     return str(scene.get("meta", {}).get("done", "")).lower() == "true"
 
 
-def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dict, list]:
-    """The scene, its commit epoch and its transient-state ledger as of one
-    instant, under one lock hold.
+def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dict]:
+    """The scene and its commit epoch as of one instant, under one lock hold.
 
     Split out of `post_absorb` so the whole of it is one critical section.
     Raises `_require_scene`'s 404 like any other handler code.
@@ -2224,12 +2223,7 @@ def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dic
         scene = _require_scene(cid, sid)
         if streaming._scene_moved(cid, sid, identity):
             raise HTTPException(status_code=404, detail="scene not found")
-        # The ledger travels with the scene, not derived from it afterwards.
-        # An edit or a reroll landing while the extraction call is in flight
-        # rewrites entries *below* the tail, so a length is not a snapshot --
-        # only a copy taken under this same hold is one (#120/#121).
-        ledger = store.turnstate.entries(cid, sid, len(scene["messages"]))
-        return store.commits.scene_epoch(cid, sid), scene, ledger
+        return store.commits.scene_epoch(cid, sid), scene
 
 
 def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
@@ -2287,7 +2281,6 @@ class _Prepared(NamedTuple):
 
     epoch: int
     scene: dict
-    ledger: list
     facts: dict
     transcript: str
     messages: list
@@ -2459,7 +2452,7 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     `running` for the life of the process -- refusing every later turn and
     review on the scene.
     """
-    epoch, scene, ledger = _absorb_snapshot(cid, sid, run.scene_identity)
+    epoch, scene = _absorb_snapshot(cid, sid, run.scene_identity)
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
@@ -2480,7 +2473,7 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     player_label = store.appearances.player_label(cid, sid)
     transcript = store.chronicle.transcript_text(scene["messages"], player_label)
     prepared = _Prepared(
-        epoch=epoch, scene=scene, ledger=ledger, facts=facts, transcript=transcript,
+        epoch=epoch, scene=scene, facts=facts, transcript=transcript,
         player_label=player_label,
         messages=store.absorb.build_prompt(
             transcript, facts,
@@ -2570,13 +2563,11 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
             # than a state to report -- `_phase_or_raise` says so.
             raise text
         parsed = store.absorb.parse_output(text)
-        # Both halves come from the SAME snapshot, and for the same reason: a
-        # reroll or an append landing while the call was in flight would
-        # otherwise have the citations (#112) judged against text the model
-        # never saw, and promotion (#121) measure a ledger this review does not
-        # summarize.
+        # The transcript the citations (#112) are judged against comes from the
+        # SAME snapshot the model was shown: a reroll or an append landing while
+        # the call was in flight would otherwise have them judged against text
+        # it never saw.
         edits = store.absorb.materialize(cid, sid, parsed, prepared.scene["messages"],
-                                         turn_ledger=prepared.ledger,
                                          player_label=prepared.player_label)
         # Unpacked in the order the phases were listed, not the order they
         # finished, so `edits` reads the same way every time.
@@ -4701,17 +4692,6 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
                 except store.responses.ResponseConflict as exc:
                     raise HTTPException(409,detail={"kind":exc.kind,"detail":exc.detail}) from exc
             store.scenes.edit_message(cid, sid, index, content)
-            # Retire the transient-state ledger from this post on (#120). An
-            # edit is the one transcript change the tail filter cannot see:
-            # rewriting a furious exchange as a calm one leaves the entry at a
-            # perfectly valid index, so the discarded mood keeps being injected
-            # and can still be promoted into canonical state. Everything AFTER
-            # the edit goes too -- editing text can add or remove blocks, which
-            # shifts every later index onto a post it does not describe.
-            try:
-                store.turnstate.supersede(cid, sid, index)
-            except OSError:
-                pass          # same judgement as the sidecar below
             try:
                 store.alternates.reconcile(cid, sid)
             except OSError:

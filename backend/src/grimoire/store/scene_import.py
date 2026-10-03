@@ -532,7 +532,7 @@ def _discard(cid: str, sid: str, seated: list[dict]) -> None:
 
     Two halves, and the second was missing. Deleting the scene leaves every
     `appearances` record this commit wrote still naming it -- `delete_scene`
-    retires `prompt_log`, `commits`, `turnstate`, `pins` and the alternates
+    retires `prompt_log`, `commits`, `pins` and the alternates
     sidecar for the recycled-id hazard, but never appearances, because until
     now nothing deleted a scene it had already cast. Scene ids ARE recycled:
     `_numbering` reads the files on disk, so retrying a failed import of the

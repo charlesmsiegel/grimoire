@@ -58,7 +58,7 @@ import json
 import logging
 from pathlib import Path
 
-from . import alternates, atomic, cascade, commits, config, locks, turnstate
+from . import alternates, atomic, cascade, commits, config, locks
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 from .scenes import paths as scenes_paths
@@ -434,17 +434,16 @@ def cancel(cid: str, restore: bool = True) -> dict:
                 # over a transcript this is about to replace.
                 commits.retire_scene(cid, sid)
                 scenes_write.delete_from(cid, sid, mark)
-                # The two sidecars that key off post positions, cleaned exactly
-                # as `cascade.delete_from` cleans them after ITS cut -- a raw
+                # The sidecar that keys off post positions, cleaned exactly as
+                # `cascade.delete_from` cleans it after ITS cut -- a raw
                 # truncation is not the whole of a truncation anywhere else in
-                # this store, and it is not here either. The transient-state
-                # ledger would otherwise keep entries at indices the restored
-                # originals now occupy, and the reroll sidecar could be left
-                # anchored at a generation that has just been deleted, offering
-                # a discarded replay's takes as alternates of the original
-                # reply. Best-effort, and after the cut on purpose: the
-                # transcript is already back, and neither sidecar is a reason to
-                # fail a cancel that has done the thing it was asked to do.
+                # this store, and it is not here either. The reroll sidecar
+                # could otherwise be left anchored at a generation that has
+                # just been deleted, offering a discarded replay's takes as
+                # alternates of the original reply. Best-effort, and after the
+                # cut on purpose: the transcript is already back, and the
+                # sidecar is no reason to fail a cancel that has done the thing
+                # it was asked to do.
                 #
                 # The sidecar goes UNCONDITIONALLY, where `cascade.delete_from`
                 # first checks whether its cut moved the live variant. That
@@ -454,13 +453,11 @@ def cancel(cid: str, restore: bool = True) -> dict:
                 # runs is one parked on the uncommitted reply the truncation is
                 # removing. A conditional would be machinery for a state this
                 # walk cannot be in.
-                for clean in (lambda: turnstate.supersede(cid, sid, mark),
-                              lambda: alternates.drop_scene(cid, sid)):
-                    try:
-                        clean()
-                    except Exception:  # a sidecar, cleaned after the fact
-                        log.warning("replay cancel in %s/%s: cleanup failed", cid, sid,
-                                    exc_info=True)
+                try:
+                    alternates.drop_scene(cid, sid)
+                except Exception:  # a sidecar, cleaned after the fact
+                    log.warning("replay cancel in %s/%s: cleanup failed", cid, sid,
+                                exc_info=True)
             restored = _append_steps(cid, sid, _pending(rec))
         _clear(cid)
         return {"scene": sid, "restored": restored, "dropped": 0 if restore else

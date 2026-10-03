@@ -327,13 +327,10 @@ def test_a_turn_cannot_be_run_twice_over_one_unanswered_reply(cid, sid):
 
 def test_cancelling_cleans_up_after_its_own_cut(cid, sid):
     """A raw truncation is not the whole of a truncation anywhere else in this
-    store. The ledger entry describes a post the restore has just replaced."""
-    from grimoire.store import turnstate
+    store."""
     replay.begin(cid, sid, 1)
     scenes.append_reply(cid, sid, [{"speaker": None, "content": "a take nobody kept"}])
-    turnstate.record(cid, sid, 1, {"seraphine": {"mood": "furious"}})
     replay.cancel(cid)
-    assert [i for i, _ in turnstate.entries(cid, sid)] == []
     assert _contents(cid, sid) == ["player one", "reply one", "player two", "reply two"]
 
 
