@@ -121,6 +121,8 @@ export type TranscriptContext = {
   tracker: TrackerSummary | null;
   /** Absolute post index -> the tracker's key for it. */
   trackerKeys: Record<number, string>;
+  /** Tracker key -> how many tracked posts a re-run from it covers. */
+  trackerRerun: Record<string, number>;
 };
 
 // One shared object for "no tracker yet", so a row's props do not change
@@ -197,6 +199,8 @@ export const TranscriptRun = memo(function TranscriptRun({
             trackerNames={ctx.tracker?.names ?? NO_NAMES}
             trackerLabels={ctx.tracker?.labels ?? NO_NAMES}
             trackerEnabled={ctx.tracker?.enabled ?? false}
+            trackerRerun={ctx.trackerKeys[index] !== undefined
+              ? ctx.trackerRerun[ctx.trackerKeys[index]] ?? 1 : 0}
             loadedCid={ctx.loadedCid} loadedSid={ctx.loadedSid}
             cid={ctx.cid} sid={ctx.sid} responseDisabled={ctx.responseDisabled}
             actions={actions}
@@ -215,7 +219,7 @@ export const TranscriptRun = memo(function TranscriptRun({
 export const TranscriptPost = memo(function TranscriptPost({
   m, index, actor, speaker, cited, editingText, busy, rolling, active, rerollButton, swipe,
   rerollPop, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
-  trackerLabels, trackerEnabled, loadedCid, loadedSid, cid, sid, responseDisabled, actions,
+  trackerLabels, trackerEnabled, trackerRerun, loadedCid, loadedSid, cid, sid, responseDisabled, actions,
 }: {
   m: Message; index: number;
   /** Who spoke it, for the image picker's scope (#376). */
@@ -238,6 +242,7 @@ export const TranscriptPost = memo(function TranscriptPost({
   trackerNames: Record<string, string>;
   trackerLabels: Record<string, string>;
   trackerEnabled: boolean;
+  trackerRerun: number;
   loadedCid: string | null; loadedSid: string | null;
   cid: string; sid: string;
   responseDisabled: boolean;
@@ -397,7 +402,7 @@ export const TranscriptPost = memo(function TranscriptPost({
               && <TrackerDisclosure key={`${loadedCid}:${loadedSid}:${trackerKey}`}
                 cid={loadedCid} sid={loadedSid} trackerKey={trackerKey} entry={trackerEntry}
                 names={trackerNames} labels={trackerLabels} enabled={trackerEnabled}
-                onChanged={actions.refreshTracker} />}
+                rerunCount={trackerRerun} onChanged={actions.refreshTracker} />}
           </>
         )}
         {m.response_id && m.role === "assistant" && active && lastOfResponse && (

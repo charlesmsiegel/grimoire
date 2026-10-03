@@ -1688,6 +1688,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const trackerKeys = useMemo(
     () => Object.fromEntries((tracker?.keys ?? []).map((k) => [k.index, k.key])),
     [tracker?.keys]);
+  // How many tracked posts "Re-run tracker from here" covers at each key --
+  // that one and every one after it -- so the confirm can name the cost.
+  const trackerRerun = useMemo(() => {
+    const keys = tracker?.keys ?? [];
+    return Object.fromEntries(keys.map((k, i) => [k.key, keys.length - i]));
+  }, [tracker?.keys]);
   // What the dossier's "Now" section reads: the latest post whose tracking
   // landed, for the open actor. Memoized -- a literal here would hand the
   // memoized dossier a new object on every keystroke and streamed delta.
@@ -4192,9 +4198,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     responseDisabled: busy || rolling || sceneLocked || editingAny || renamesInFlight > 0,
     lastIndex: firstIndex + messages.length - 1,
     rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
+    trackerRerun,
   }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, sceneLocked,
        editingAny, renamesInFlight, firstIndex, messages.length, rerollAt, canReroll,
-       postChips, citedNeedle, lastOfResponse, tracker, trackerKeys]);
+       postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
 
   // The rows themselves, as one list built only when one of its inputs moves.
   // Each row would skip a keystroke on its own; this skips even asking them,
