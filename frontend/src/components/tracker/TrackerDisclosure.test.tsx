@@ -95,16 +95,54 @@ test("Edit reveals the form and Save sends only changed values", async () => {
   expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
 });
 
-test("list values split on commas, and a person can be added to who knows", async () => {
+test("a list value is edited item by item: added, and blank items dropped", async () => {
   mount(OK);
   fireEvent.click(screen.getByText(/Tracker · /));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("Mara Companions"), { target: { value: "Winifred, Seraphine" } });
+  expect(screen.getByLabelText("Mara Companions item 1")).toHaveValue("Winifred");
+  fireEvent.click(screen.getByRole("button", { name: "Add Mara Companions item" }));
+  fireEvent.change(screen.getByLabelText("Mara Companions item 2"), { target: { value: "Seraphine" } });
+  // An item left blank is not an item.
+  fireEvent.click(screen.getByRole("button", { name: "Add Mara Companions item" }));
   fireEvent.change(screen.getByLabelText("Mara Visible mood"), { target: { value: "calm" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.editTrackerRecord).toHaveBeenCalled());
   expect(vi.mocked(api.editTrackerRecord).mock.calls[0][3]).toEqual({
     "characters:mara": { companions: { value: ["Winifred", "Seraphine"] }, visible_mood: { value: "calm" } },
+  });
+});
+
+test("an item with a comma in it stays one item", async () => {
+  const injured: TrackerRecord = {
+    ...RECORD,
+    snapshot: { ...RECORD.snapshot, "characters:mara": { present: true, fields: {
+      ...RECORD.snapshot!["characters:mara"].fields,
+      companions: { value: ["cut, left arm", "wet"], aware: "present" },
+    } } },
+  };
+  vi.mocked(api.getTrackerRecord).mockResolvedValue(injured);
+  mount(OK);
+  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("Mara Companions item 1")).toHaveValue("cut, left arm");
+  fireEvent.change(screen.getByLabelText("Mara Companions item 2"), { target: { value: "dry" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.editTrackerRecord).toHaveBeenCalled());
+  expect(vi.mocked(api.editTrackerRecord).mock.calls[0][3]).toEqual({
+    "characters:mara": { companions: { value: ["cut, left arm", "dry"] } },
+  });
+});
+
+test("removing a list item sends the list without it", async () => {
+  mount(OK);
+  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove Mara Companions item 1" }));
+  expect(screen.queryByLabelText("Mara Companions item 1")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.editTrackerRecord).toHaveBeenCalled());
+  expect(vi.mocked(api.editTrackerRecord).mock.calls[0][3]).toEqual({
+    "characters:mara": { companions: { value: [] } },
   });
 });
 
@@ -278,7 +316,8 @@ test("a list that reads the same after trimming is not an edit", async () => {
   mount(OK);
   fireEvent.click(screen.getByText(/Tracker · /));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("Mara Companions"), { target: { value: "  Winifred ,, " } });
+  fireEvent.change(screen.getByLabelText("Mara Companions item 1"), { target: { value: "  Winifred " } });
+  fireEvent.click(screen.getByRole("button", { name: "Add Mara Companions item" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
   expect(api.editTrackerRecord).not.toHaveBeenCalled();
