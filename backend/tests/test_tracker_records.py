@@ -246,6 +246,28 @@ def test_delete_scene_drops_tracker_dir_and_recycled_sid_starts_clean(home):
     assert walk.current(cid, again) == (None, {})
 
 
+def test_a_tracker_drop_that_fails_still_deletes_the_scene(home, monkeypatch, caplog):
+    """The drop runs after the transcript is gone and fails soft: a failing
+    removal must not leave a scene standing with its sidecars already gone."""
+    import logging
+
+    from grimoire.store.scenes import lifecycle
+
+    _, cid, sid = home
+    scenes.append_message(cid, sid, "user", "Hi.", post_id=A)
+    ident = identity.ensure_identity(cid, sid)
+    records.save(cid, ident, tpaths.post_key(A), SNAP, changed=[], fields_digest="d", model="m")
+
+    def boom(c, i):
+        raise OSError("a file in there is held open")
+
+    monkeypatch.setattr(lifecycle.tracker_records, "drop", boom)
+    with caplog.at_level(logging.WARNING):
+        scenes.delete_scene(cid, sid)
+    assert sid not in {s["id"] for s in scenes.list_scenes(cid)}
+    assert any("could not drop the tracker records" in r.getMessage() for r in caplog.records)
+
+
 def test_present_at_follows_intervals(home):
     wid, cid, sid = home
     for name in ("Mara", "Winifred"):

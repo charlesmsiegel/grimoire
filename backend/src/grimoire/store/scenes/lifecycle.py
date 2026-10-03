@@ -12,6 +12,7 @@ that loop.
 from __future__ import annotations
 
 import errno
+import logging
 
 from .. import (
     alternates,
@@ -35,6 +36,8 @@ from ..llm_connections import get_active as _get_active_connection
 from ..paths import now_iso, safe_id, slugify, uniquify
 from ..tracker import records as tracker_records
 from . import identity, locking, paths, serialize
+
+log = logging.getLogger(__name__)
 
 
 @locking._serialized
@@ -205,6 +208,9 @@ def delete_scene(cid: str, sid: str) -> None:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
+    # The identity the tracker keyed this scene's records by, resolved while
+    # the transcript that carries it is certainly still there.
+    ident = identity.scene_identity(cid, sid)
     # FIRST, ahead of every destructive step, because it is the one here that can
     # refuse. Ids are recycled, so prompt snapshots left behind are adopted by the
     # next scene to take this id and listed as its own -- and unlike the sidecars
@@ -255,15 +261,20 @@ def delete_scene(cid: str, sid: str) -> None:
     _unlink_sidecar(paths._review_path(cid, sid))
     _unlink_sidecar(paths._alts_path(cid, sid))
     _unlink_sidecar(paths._steering_path(cid, sid))
-    # The tracker's records and scene field layer, keyed by this scene's
-    # identity. A replacement scene gets a fresh identity, so it could never
-    # read them -- this is about not leaving a dead scene's state on disk
-    # forever. Before the unlink for the same reason as the sidecars: once the
-    # transcript is gone, nothing names this identity any more.
-    ident = identity.scene_identity(cid, sid)
-    if ident:
-        tracker_records.drop(cid, ident)
     p.unlink()
+    # The tracker's records and scene field layer, keyed by this scene's
+    # identity. AFTER the unlink, and fail-soft, unlike the sidecars: a
+    # replacement scene gets a fresh identity, so it can never read them, and
+    # a directory left behind is only disk. Dropped before the unlink, a
+    # removal that failed half-way would leave the scene standing with its
+    # sidecars already gone -- the half-delete the order above exists to
+    # prevent. Logged, so an orphan has a line saying where it came from.
+    if ident:
+        try:
+            tracker_records.drop(cid, ident)
+        except Exception:
+            log.warning("delete_scene: could not drop the tracker records of %s/%s (%s)",
+                        cid, sid, ident, exc_info=True)
     # AFTER the unlink, so a delete that raised records nothing. Deleting the
     # newest scene would otherwise drag the campaign's derived activity
     # *backwards* onto an older survivor -- a campaign you just edited sinking
