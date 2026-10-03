@@ -182,7 +182,7 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
 
     The count is what a caller needs to tell "the model said something" from
     "the transcript grew". They are not the same question and the gap is not
-    only the tracker block: a reply that is nothing but a speaker marker splits
+    only the trailing state block: a reply that is nothing but a speaker marker splits
     into no non-empty segment either, and `append_reply` writes nothing for it.
     `post_first_post` is the caller that has to know — it reports success to a
     user who is adopting an opener, and reporting it over an empty scene loses
@@ -193,12 +193,11 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
     this now-historical message. Goes through append_reply so the generation
     records its own turn boundary for drift measurement.
 
-    A trailing transient-state tracker block (#120) is split off FIRST, so it
-    never reaches `split_reply` and so cannot become a post. Unconditionally,
-    not gated on `turnstate_depth`: turning the feature off must not start
-    leaking blocks into transcripts while the model is still complying from the
-    scene it can see, and a block is unambiguous enough that stripping one
-    nobody asked for costs nothing.
+    A trailing legacy ``state`` block is split off FIRST, so it never reaches
+    `split_reply` and so cannot become a post. Nothing records what it said any
+    more, but a model still complying from a scene it can see, or from a card, is
+    still likely to end a reply with one, and a block is unambiguous enough that
+    stripping one nobody asked for costs nothing.
 
     Art handles are resolved next, for the same reason and in the same spirit:
     `[[art:...]]` is machine-readable output that must become markdown -- or
@@ -212,19 +211,13 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
 
     It runs BEFORE macro expansion, so a description containing `{{user}}`
     lands as alt text that expands like any other narration, and AFTER the
-    tracker split, so a handle stranded inside a tracker block is not resolved
-    into markdown that nobody will ever render.
+    state-block split, so a handle stranded inside a ``state`` block is not
+    resolved into markdown that nobody will ever render.
     """
-    text, tracked = store.turnstate.split_block(text)
+    text, _ = store.state_fence.split_block(text)
     text = store.context.resolve_art_handles(cid, text, sid)
     players = frozenset(store.appearances.player_names(cid, sid))
     subs = store.context.scene_substitutions(cid, sid)
-    # Tracker values get the same one-shot macro resolution the narration below
-    # does: the section they feed is macro-expanded on every context build, so a
-    # stored {{random}} would re-roll each prompt and a stored {{user}} would
-    # drift with the cast.
-    tracked = store.turnstate.expand_values(
-        tracked, lambda v: store.context.expand_macros(v, subs, cid, sid))
     segments = [{"speaker": seg["speaker"],
                  "content": store.context.expand_macros(seg["content"], subs, cid, sid)}
                 for seg in store.scenes.split_reply(text, players)]
@@ -234,16 +227,7 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
     # acquisitions inside each call cost nothing. `reconcile` writes nothing for
     # a reply that lands anywhere else, which is every ordinary turn.
     with store.locks.campaign_lock(cid):
-        # Read before the append, under the same lock, so the index is the one
-        # this generation's posts really take. Skipped entirely when there is
-        # neither a block to file nor a ledger to clean up, which is every turn
-        # on an install that leaves the feature off: the guard is a `stat`, and
-        # what it avoids is re-parsing the whole transcript.
-        landed = (len(store.scenes.read_scene(cid, sid)["messages"])
-                  if tracked or store.turnstate.read(cid).get(sid) else None)
         store.scenes.append_reply(cid, sid, segments)
-        if landed is not None:
-            _record_turnstate(cid, sid, landed, segments, tracked)
         try:
             store.alternates.reconcile(cid, sid)
         except OSError:
@@ -270,62 +254,23 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
     return kept
 
 
-def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
-                      tracked: dict) -> None:
-    """Retire what this generation displaces, then file its tracker block
-    against the index of its LAST post.
-
-    `supersede` runs whether or not there is a block, because the case it exists
-    for is a reroll whose replacement has none -- see its docstring.
-
-    `append_reply` drops blank segments, so the count is recomputed the same
-    way here rather than assumed: an entry filed past the transcript's end is
-    one `entries()` then discards, silently losing the turn it describes.
-
-    Never fatal. A ledger that cannot be written must not turn a landed
-    generation into a failed one: the exception would escape the stream
-    finalizer before its `done` frame, so the client would report a failure
-    over a reply that is on disk and offer a retry that appends a second one.
-    Exactly the judgement `reconcile` below already makes, and the cost is
-    smaller -- a lost mood, not a lost variant.
-    """
-    try:
-        store.turnstate.supersede(cid, sid, landed)
-        kept = sum(1 for s in segments if s["content"].strip())
-        if not tracked or not kept:
-            return
-        # The transcript's own label rule, both halves of it: drop a sub-speaker
-        # parenthetical first (`**Mara (aside):**` is Mara — `speaker_base` is
-        # the same helper `absorb.routing` uses so the two cannot disagree),
-        # then match exactly or by unique prefix. Passing the raw label matched
-        # nothing for a sub-speaker, so the dialogue persisted and every field
-        # it carried was dropped.
-        states = store.turnstate.resolve(
-            tracked, store.appearances.scene_cast(cid, sid),
-            lambda label, names: store.scenes.match_name(
-                store.scenes.speaker_base(label), names))
-        store.turnstate.record(cid, sid, landed + kept - 1, states)
-    except OSError:
-        pass
-
-
 def _narration(watcher) -> str:
-    """What this turn actually SAID -- the reply with its tracker block already
-    split off (#120).
+    """What this turn actually SAID -- the reply with its state block already
+    split off.
 
     Every "did this turn produce anything?" test goes through here, because
-    `watcher.narration` answers a different question once a tracker block can
+    `watcher.narration` answers a different question once a state block can
     exist. A reply consisting only of a block is non-empty raw and empty in the
     transcript, and the callers below use that test to decide whether to put
     back a reply that reroll deleted, whether to take a stranded user post off,
     and whether the turn is worth persisting at all. Testing the raw text there
-    made a tracker-only regenerate look like a successful reply, skip the
+    made a state-block-only regenerate look like a successful reply, skip the
     restore, and delete a reply nothing else held a copy of.
 
     Cheap and pure, so calling it beside `_persist_reply`'s own split costs a
     scan of one reply and keeps the grammar in one place.
     """
-    return store.turnstate.split_block(watcher.narration)[0]
+    return store.state_fence.split_block(watcher.narration)[0]
 
 
 def _would_land(cid: str, sid: str, text: str) -> int:
@@ -337,7 +282,7 @@ def _would_land(cid: str, sid: str, text: str) -> int:
     `_continuation_stream` has to decide before `commit_narration`, which runs
     the write inside its own lock and marks the record `narrated` on the way
     out. Both need the count in advance, so this predicts it the same way —
-    tracker block off, then the marker grammar, then non-empty content.
+    state block off, then the marker grammar, then non-empty content.
 
     Deliberately skips macro expansion, which `_persist_reply` does and which
     can only ever shrink a segment. That makes this conservative in the safe
@@ -345,7 +290,7 @@ def _would_land(cid: str, sid: str, text: str) -> int:
     reverse, and the caller's fallback for that is the path it would have taken
     anyway.
     """
-    narration, _ = store.turnstate.split_block(text)
+    narration, _ = store.state_fence.split_block(text)
     players = frozenset(store.appearances.player_names(cid, sid))
     return sum(1 for seg in store.scenes.split_reply(narration, players)
                if seg["content"].strip())
@@ -708,11 +653,11 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
         # user waited rather than what was left after the last delta.
         meter = store.usage.meter(task, campaign=cid, scene=sid, post=post)
         # Display only, and deliberately downstream of the watcher rather than
-        # inside it: the tracker block is stripped from the transcript by
+        # inside it: the state block is stripped from the transcript by
         # `_persist_reply`, but by then the deltas carrying it have already been
         # rendered. `watcher.narration` is untouched, so what gets persisted is
-        # decided in exactly one place either way (#120).
-        redactor = store.turnstate.StreamRedactor()
+        # decided in exactly one place either way.
+        redactor = store.state_fence.StreamRedactor()
         liveness = _Liveness()
         try:
             async for delta in client.stream(messages, conn, meter.usage):
@@ -1205,7 +1150,7 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
         return frames
 
     def _finalize_continuation(watcher, frames: list[str]) -> list[str]:
-        # A continuation whose entire output was a tracker block persists no
+        # A continuation whose entire output was a state block persists no
         # post, and `commit_narration` marks the record `narrated` on the
         # strength of having CALLED persist, not on what it wrote. The proposal
         # would leave `resolved`/`declined` for good, every retry short-circuit

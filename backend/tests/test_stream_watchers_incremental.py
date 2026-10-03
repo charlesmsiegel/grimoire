@@ -32,7 +32,7 @@ import pytest
 
 from grimoire import routes
 from grimoire.routes import character_turns, streaming
-from grimoire.store import fence, response_protocol, turnstate
+from grimoire.store import fence, response_protocol, state_fence
 from tests.llm_fakes import FakeOpenRouter
 
 # ---- oracles: the pre-incremental algorithms, verbatim ---------------------
@@ -122,7 +122,7 @@ _O_PREFIX = re.compile(
 class _OracleResponse:
     def __init__(self):
         self.roll = _OracleFence()
-        self.redactor = turnstate.StreamRedactor()
+        self.redactor = state_fence.StreamRedactor()
         self.reasoning = ""
         self.raw = ""
         self.visible = 0

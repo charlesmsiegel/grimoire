@@ -4415,12 +4415,12 @@ def test_no_speaker_section_in_a_two_hander(monkeypatch, tmp_path):
     assert "active_speaker" not in [r["id"] for r in context.context_sections(cid, sid)]
 
 
-def test_the_speaker_section_sits_after_transient_state(monkeypatch, tmp_path):
+def test_the_speaker_section_sits_after_character_state(monkeypatch, tmp_path):
     from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     config.write_config(speaker_turn_taking="on")
     ids = [s.id for s in context.SECTIONS]
-    assert ids.index("active_speaker") == ids.index("transient_state") + 1
+    assert ids.index("active_speaker") == ids.index("character_state") + 1
 
 
 def test_the_speaker_section_names_the_named_npc(monkeypatch, tmp_path):

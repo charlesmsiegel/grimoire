@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from .. import atomic, rolling_summary, scene_break, turnstate
+from .. import atomic, rolling_summary, scene_break
 from ..appearances import cast
 from ..appearances import paths as appearance_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
@@ -273,38 +273,11 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> dict:
     appearance_paths.remap_presence(cid,sid,retained,len(messages)+len(tail))
     atomic.write_text(p, dump_frontmatter(
         meta, serialize._serialize_messages(messages + tail)))
-    # Retire the transient-state ledger from the cut (#120). Here rather than in
-    # the callers, because there are two and they must not diverge: the reroll
-    # route, and `alternates.promote`, which swaps a parked take in through this
-    # same pair. Deleting the generation is what invalidates its recorded
-    # mood/intent/posture, so the invalidation belongs where the deletion is.
-    #
-    # `cut`, not the post-removal length: trailing transition lines are preserved
-    # and re-appended, so the replacement lands ABOVE where the old generation
-    # sat. Superseding from the new landing index would step over the dead entry
-    # and leave it describing what is now a transition line.
-    #
-    # Not fatal: the transcript is already written. A ledger that will not write
-    # must not turn a completed reroll into a failed one -- same judgement
-    # `_persist_reply` makes about this file.
-    #
-    # Captured into the token BEFORE it is dropped, so `restore_trailing_
-    # assistant_run` can put it back with the reply. Reroll deletes before it
-    # generates, and a generation that then fails, is cancelled, or says nothing
-    # but a tracker block puts the original reply back -- restoring its
-    # narration while its recorded mood stayed deleted would leave the reply
-    # visibly present and silently unaccounted for in the next prompt.
-    parked: list = []
-    try:
-        parked = [e for e in turnstate.entries(cid, sid) if e[0] >= cut]
-        turnstate.supersede(cid, sid, cut)
-    except OSError:
-        pass
     # `kept` is the transcript this leaves behind, transitions excluded, and it
     # is what the restore checks it still sees: anything written since means the
     # tail is no longer the one this took from.
     return {"messages": removed, "size": size, "kept": len(messages),
-            "turnstate": parked, "presence":presence}
+            "presence":presence}
 
 
 @locking._serialized
@@ -343,17 +316,6 @@ def restore_trailing_assistant_run(cid: str, sid: str, token: dict) -> bool:
     atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(body)))
     if "presence" in token:
         _restore_presence(cid,sid,token["presence"])
-    # The transient state the removal parked, back at the indices it held. Safe
-    # to re-file at those exact indices because the restore is refused unless
-    # the transcript below the trailing transitions is still the one the removal
-    # left (`keep != token["kept"]`), so the reply goes back exactly where it
-    # came from. AFTER the write, and never fatal: the reply is what matters,
-    # and a ledger that will not write must not report the restore as refused.
-    try:
-        for idx, actors in token.get("turnstate") or []:
-            turnstate.record(cid, sid, idx, actors)
-    except OSError:
-        pass
     return True
 
 
@@ -446,16 +408,6 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     meta["updated"] = now_iso()
     turns._set_turn_sizes(meta, sizes)
     atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(kept)))
-    # Retire the transient-state ledger from the same index (#120). The tail
-    # filter does not cover this: preserved ROLL_SPEAKER lines are compacted
-    # DOWN toward `from_index`, so a roll can land on the index a crashed
-    # continuation's tracker entry holds, leaving the entry pointing at a post
-    # that still exists and is no longer the narration it described. Never
-    # fatal, for the reason the removal's own supersede is not.
-    try:
-        turnstate.supersede(cid, sid, from_index)
-    except OSError:
-        pass
 
 
 @locking._serialized
@@ -607,7 +559,6 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     for later in messages[index+1:]:
         if later.get("response_id"):
             later["context_changed"] = True
-    turnstate.supersede(cid,sid,index)
     # Re-parse the body we are about to store rather than reading it back after
     # writing: the edited text is re-split at read time, so the new block count
     # is only knowable from the serialized form — and body and boundaries have

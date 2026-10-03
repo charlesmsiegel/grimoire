@@ -20,7 +20,6 @@ from grimoire.store import (
     provenance,
     retcon,
     scenes,
-    turnstate,
     worlds,
 )
 from grimoire.store.scenes import serialize as scenes_serialize
@@ -89,15 +88,6 @@ def test_a_dice_roll_line_is_still_immutable(cid, sid):
                           speaker=scenes_serialize.ROLL_SPEAKER)
     with pytest.raises(scenes.RollMessageImmutable):
         retcon.retcon(cid, sid, 4, "3d6 → 18")
-
-
-def test_the_transient_state_ledger_is_retired_from_the_edit(cid, sid):
-    """Rewriting a furious exchange as a calm one leaves the recorded mood at a
-    perfectly valid index, so nothing but this would ever drop it."""
-    turnstate.record(cid, sid, 1, {"seraphine": {"mood": "furious"}})
-    turnstate.record(cid, sid, 3, {"seraphine": {"mood": "calm"}})
-    retcon.retcon(cid, sid, 2, "calmer words")
-    assert [i for i, _ in turnstate.entries(cid, sid)] == [1]
 
 
 @pytest.fixture

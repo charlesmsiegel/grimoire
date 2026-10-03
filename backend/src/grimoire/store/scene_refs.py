@@ -11,8 +11,7 @@ is retired, the scene that ended it), journal (the append-only change history's
 per-entry scene field), provenance (each citation's scene field, the post it was
 quoted from), rolls (per-entry scene field), prompt_log
 (the frozen per-turn prompt index's scene field), commits (the per-scene commit
-epoch's keys + each token entry's sid), turnstate (the per-turn state ledger,
-keyed by scene id then post index), scene_ideas (the scene ledger's
+epoch's keys + each token entry's sid), scene_ideas (the scene ledger's
 `used_scene`, the scene a saved idea became), notices (the warn-once
 pre-notice ledger's per-row `scene`, the scene a dismissal happened in), pins (each scene-scoped pin or
 exclude, which carries its scene id in the record *and* in its key), replay (the
@@ -57,7 +56,6 @@ from . import (
     rolls,
     scene_ideas,
     steering,
-    turnstate,
     usage,
 )
 from .appearances import paths as appearances_paths
@@ -71,5 +69,5 @@ def repoint(cid: str, mapping: dict[str, str]) -> None:
     for mod in (alternates, appearances_paths, audit_baselines, changes, chronicle,
                 commitments, commits, facts, journal, notices, pending_reviews, pins, plot,
                 prompt_log, provenance, relationship_history, replay, rolls,
-                scene_ideas, steering, turnstate, usage):
+                scene_ideas, steering, usage):
         mod.repoint_scenes(cid, mapping)

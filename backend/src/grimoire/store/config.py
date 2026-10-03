@@ -117,17 +117,6 @@ DEFAULT_SETUP_DONE = "off"
 # "0" disables capture. Counted per campaign rather than per scene because the
 # payloads hold whole prompts -- see that module for the tradeoff.
 DEFAULT_PROMPT_LOG_DEPTH = "50"
-# How many posts back the transient per-turn state ledger is injected over
-# (store/turnstate.py). This is the decay window AND the feature's switch: at
-# "0" no tracker instruction is added to the prompt and nothing is injected,
-# which is the default because the instruction asks the model to end every
-# reply with a machine-readable block — a real change to what it is being told
-# to write, and not one to turn on behind an existing install's back.
-DEFAULT_TURNSTATE_DEPTH = "0"
-# How many consecutive recorded values promote a transient field to canonical
-# character state at absorb (#121). Only reachable once the ledger has content,
-# so it is safe to default to something useful.
-DEFAULT_PROMOTE_STREAK = "3"
 # How many posts may land before the live per-scene rolling summary is refolded
 # (#85). Each refresh is one extra LLM call, so this is the knob that decides
 # what the feature costs; "0" turns it off, leaving only the panel's explicit
@@ -206,7 +195,6 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "llm_timeout", "absorb_budget", "absorb_concurrency", "setup_done",
                 "llm_retries", "fallback_connection_id",
                 "prompt_log_depth",
-                "turnstate_depth", "promote_streak",
                 "rolling_summary_every", "scene_break_every", "llm_call_budget",
                 "offscene_known_limit",
                 "embeddings_connection_id", "embeddings_model",
@@ -245,9 +233,7 @@ def read_config() -> dict[str, str]:
                 "llm_retries": DEFAULT_LLM_RETRIES,
                 "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
-                "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
                 "character_response_mode": "individual",
-                "promote_streak": DEFAULT_PROMOTE_STREAK,
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
                 "scene_break_every": DEFAULT_SCENE_BREAK_EVERY,
                 "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
@@ -379,12 +365,6 @@ def scan_depth() -> int:
     return _count("context_scan_depth", DEFAULT_SCAN_DEPTH)
 
 
-def turnstate_depth() -> int:
-    """Posts of transcript tail the transient-state ledger is read over. 0 turns
-    the whole feature off — no tracker instruction, no injected section."""
-    return _count("turnstate_depth", DEFAULT_TURNSTATE_DEPTH)
-
-
 def speaker_turn_taking() -> bool:
     """Whether the active-speaker section renders (#29, context/speaker.py).
 
@@ -393,14 +373,6 @@ def speaker_turn_taking() -> bool:
     and the section renders empty, so it drops out in `_render_sections`.
     """
     return read_config().get("speaker_turn_taking") == "on"
-
-
-def promote_streak() -> int:
-    """Consecutive recorded values that promote a transient field to canonical
-    character state. 0 disables promotion. `turnstate.streaks` clamps this to
-    the ledger's per-scene memory — the ceiling belongs where the retention
-    limit is, not here."""
-    return _count("promote_streak", DEFAULT_PROMOTE_STREAK)
 
 
 def replay_fork_threshold() -> int:

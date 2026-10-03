@@ -36,7 +36,7 @@ const cfg = {
   llm_retries: "2", fallback_connection_id: "",
   context_budget: "0", context_scan_depth: "6", archive_depth: "3",
   prompt_log_depth: "50", offscene_known_limit: "40",
-  turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
+  rolling_summary_every: "10",
   scene_break_every: "20", replay_fork_threshold: "10",
   advance_fork_threshold: "30",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
@@ -107,7 +107,6 @@ test("the column indexes every section in three groups", async () => {
   for (const label of [
     /^Storage/, /^Backups/, /^Connection/, /^Model routing/, /^Timeouts/, /^Context/,
     /^Prompt layout/,
-    /^Transient state/,
     /^Semantic recall/, /^System prompt/, /^Response targets/, /^Transcript/,
     /^While playing/, /^Appearance/,
   ]) {
@@ -430,17 +429,6 @@ test("edits the context scan depth", async () => {
   fireEvent.change(screen.getByLabelText(/context scan depth/i), { target: { value: "16" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ context_scan_depth: "16" }));
-});
-
-test("saves the transient-state settings", async () => {
-  renderView();
-  await open(/^Transient state/);
-  expect(screen.getByLabelText(/tracked posts/i)).toHaveValue("0");
-  fireEvent.change(screen.getByLabelText(/tracked posts/i), { target: { value: "6" } });
-  fireEvent.change(screen.getByLabelText(/promote after/i), { target: { value: "2" } });
-  save();
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    { turnstate_depth: "6", promote_streak: "2" }));
 });
 
 test("semantic recall is off by default and offers only openai-compatible connections", async () => {

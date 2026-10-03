@@ -25,7 +25,6 @@ from grimoire.store import (
     plot,
     provenance,
     scenes,
-    turnstate,
     worlds,
 )
 from grimoire.store.scenes import turns as scenes_turns
@@ -103,13 +102,6 @@ def test_turn_sizes_shrink_to_the_generations_that_survive(cid):
 
     cascade.delete_from(cid, sid, 2)          # takes the second generation whole
     assert scenes_turns.get_turn_sizes(cid, sid) == [1]
-
-
-def test_the_transient_state_ledger_is_retired_from_the_cut(cid, sid):
-    turnstate.record(cid, sid, 1, {"seraphine": {"mood": "furious"}})
-    turnstate.record(cid, sid, 3, {"seraphine": {"mood": "calm"}})
-    cascade.delete_from(cid, sid, 2)
-    assert [i for i, _ in turnstate.entries(cid, sid)] == [1]
 
 
 def _scene_with_parked_alternates(cid):

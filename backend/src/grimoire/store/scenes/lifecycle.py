@@ -26,7 +26,6 @@ from .. import (
     scene_ids,
     scene_refs,
     steering,
-    turnstate,
 )
 from ..appearances import paths as appearances_paths
 from ..audit import baselines
@@ -230,13 +229,6 @@ def delete_scene(cid: str, sid: str) -> None:
     # unlink fails -- costs an open review of a surviving scene a 409 it clears
     # by re-absorbing.
     commits.retire_scene(cid, sid)
-    # The per-turn state ledger goes for the same reason and in the same place:
-    # it is keyed by scene id, so a recycled id would hand the replacement scene
-    # a dead one's moods -- and at the low post indices a young scene's decay
-    # window covers, which is the worst case rather than a harmless one. Before
-    # the unlink, so a failure here leaves the scene intact rather than deleted
-    # with its ledger still claiming it.
-    turnstate.drop_scene(cid, sid)
     # The reader's pins and excludes for this scene (#129), for exactly the
     # recycled-id reason above: a rule left behind would be adopted by the next
     # scene to take this number and force one scene's lore -- or silence -- into

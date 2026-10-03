@@ -54,7 +54,6 @@ const DRAFT_FIELDS = [
   "context_budget", "context_scan_depth", "archive_depth",
   "prompt_log_depth", "offscene_known_limit",
   "speaker_turn_taking", "prompt_layout_enabled",
-  "turnstate_depth", "promote_streak",
   "embeddings_connection_id", "embeddings_model",
   "semantic_recall_depth", "semantic_recall_threshold",
   "system_prompt",
@@ -91,7 +90,7 @@ function draftOf(c: Config): Draft {
 type SectionId =
   | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
   | "setup"
-  | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
+  | "context" | "layout" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
 /** The column, as data: three groups, thirteen sections, and which draft fields
@@ -124,8 +123,6 @@ const SECTIONS: SectionDef[] = [
              "offscene_known_limit", "speaker_turn_taking"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
-  { id: "transient", group: "What the model sees", label: "Transient state",
-    fields: ["turnstate_depth", "promote_streak"] },
   { id: "semantic", group: "What the model sees", label: "Semantic recall",
     fields: ["embeddings_connection_id", "embeddings_model",
              "semantic_recall_depth", "semantic_recall_threshold"] },
@@ -958,27 +955,6 @@ export default function ConfigView() {
               To change what a section <em>says</em>, edit its template in <code>templates/</code>
               — they are read from disk, so a saved edit is live on the next turn.
             </p>
-          </>
-        )}
-
-        {draft && section === "transient" && (
-          <>
-            <p className="config-copy">
-              Asks the narrator to record each character's mood, intent and posture at the end of
-              every reply — stripped from the transcript, never shown in the scene — and feeds the
-              last few posts' worth back into the prompt. Tracked posts is how far back that reaches;
-              <code> 0</code> turns the whole thing off, which is the default. Promote after is how
-              many replies running a value has to hold before ending a scene offers it for the
-              character's standing state, alongside the other proposed edits.
-            </p>
-            <div className="config-fields">
-              <NumField id="cfg-turnstate-depth" label="Tracked posts" placeholder="0"
-                        caption="0 = off" value={draft.turnstate_depth}
-                        onChange={(v) => edit("turnstate_depth", v)} />
-              <NumField id="cfg-promote-streak" label="Promote after" unit="replies"
-                        placeholder="3" value={draft.promote_streak}
-                        onChange={(v) => edit("promote_streak", v)} />
-            </div>
           </>
         )}
 

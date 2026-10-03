@@ -314,7 +314,7 @@ def test_one_present_npc_needs_no_selector(client):
     assert store.scenes.read_scene(cid, sid)["messages"][-1]["speaker"] == "Mara"
 
 
-def test_foreign_state_is_not_recorded(client):
+def test_a_legacy_state_block_is_stripped_and_nothing_records_it(client):
     cid, sid = seed(client)
     fake = FakeLLM(
         [
@@ -329,8 +329,11 @@ def test_foreign_state_is_not_recorded(client):
         json={"content": "Hello", "speaker_ref": "characters:mara"},
     )
     assert "error" not in result.text, result.text
-    assert "FOREIGN_SENTINEL" not in str(store.turnstate.read(cid))
-    assert "watchful" in str(store.turnstate.read(cid))
+    stored = str(store.scenes.read_scene(cid, sid)["messages"])
+    assert "Wait." in stored
+    assert "```state" not in stored
+    assert "FOREIGN_SENTINEL" not in stored
+    assert "watchful" not in stored
 
 
 def test_declined_roll_whole_response_reroll_removes_old_parts(client):

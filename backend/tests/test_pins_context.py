@@ -321,8 +321,8 @@ def test_a_rule_naming_something_the_campaign_lost_is_inert(monkeypatch, tmp_pat
 
 def test_every_protected_id_is_a_section_that_exists():
     """`_pinned_sections` names sections by `Section.id`, and a pin protects
-    nothing at all if that id stops matching. Two of the three mappings
-    (transient_state, group_state) are cheap to break and expensive to notice,
+    nothing at all if that id stops matching. These mappings (group_state,
+    for one) are cheap to break and expensive to notice,
     since a pin that protects nothing looks exactly like a pin whose content did
     not activate.
 

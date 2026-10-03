@@ -41,8 +41,6 @@ class ConfigUpdate(BaseModel):
     archive_depth: str | None = None
     setup_done: str | None = None
     prompt_log_depth: str | None = None
-    turnstate_depth: str | None = None
-    promote_streak: str | None = None
     rolling_summary_every: str | None = None
     scene_break_every: str | None = None
     offscene_known_limit: str | None = None

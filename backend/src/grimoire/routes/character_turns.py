@@ -186,7 +186,7 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
 def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
-        text, tracked, authority_issue = _normalise(cid, sid, record, watcher.narration)
+        text, authority_issue = _normalise(cid, sid, record, watcher.narration)
         if authority_issue:
             watcher.handoff = None
             watcher.issue = authority_issue
@@ -212,20 +212,12 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
                 )
         else:
             saved()
-        if tracked and text:
-            streaming._record_turnstate(
-                cid,
-                sid,
-                len(store.scenes.read_scene(cid, sid)["messages"]) - 1,
-                [{"speaker": record["speaker"], "content": text}],
-                tracked,
-            )
         streaming._turn_settled(cid)
         return streaming._tail_length(cid, sid) if text else None
 
 
 def _normalise(cid, sid, record, text):
-    text, tracked = store.turnstate.split_block(text)
+    text, _ = store.state_fence.split_block(text)
     text = store.context.resolve_art_handles(cid, text, sid)
     text = store.context.expand_macros(
         text, store.context.scene_substitutions(cid, sid), cid, sid
@@ -243,15 +235,7 @@ def _normalise(cid, sid, record, text):
             parts.append(text[marker.end() : end].strip())
         else:
             issue = "response attempted to speak for another actor"
-    state = tracked.get(record["actor_ref"], tracked.get(record["speaker"]))
-    tracked = {record["speaker"]: state} if state and record["actor_ref"] != "grimoire" else {}
-    tracked = store.turnstate.expand_values(
-        tracked,
-        lambda value: store.context.expand_macros(
-            value, store.context.scene_substitutions(cid, sid), cid, sid
-        ),
-    )
-    return "\n\n".join(part for part in parts if part), tracked, issue
+    return "\n\n".join(part for part in parts if part), issue
 
 
 def _capture(cid, sid, task, messages, conn):
@@ -881,7 +865,7 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher):
         _fence(cid, sid, run, token)
         if run.cancel_requested or watcher.roll.complete or watcher.roll.truncated:
             return False
-        text, _, issue = _normalise(cid, sid, record, watcher.narration)
+        text, issue = _normalise(cid, sid, record, watcher.narration)
         if issue:
             watcher.handoff = None
             watcher.issue = issue

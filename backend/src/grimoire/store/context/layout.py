@@ -262,7 +262,8 @@ def read_layout() -> list[dict]:
     Every failure — no file, a truncated one, a hand-edit that made it a list
     of strings, an unreadable one — is the same answer: no layout, which means
     the catalog. A preference must not be able to take a scene's generation
-    down with it, which is the posture `turnstate.py` takes for the same reason.
+    down with it, which is the posture every prompt-feeding read in this
+    package takes for the same reason.
     """
     ensure_home()
     try:
