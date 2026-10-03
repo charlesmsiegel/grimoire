@@ -106,8 +106,10 @@ def test_absorb_prompt_carries_final_tracked_state(client):
     assert review_runs.absorb(client, cid, sid).status_code == 200
     user = _extraction_user(fake)
     assert "Final tracked state (as the scene ended; private values marked):" in user
-    assert "- Mara: Visible mood: fear; Concealed: a forged pass (private)" in user
-    assert "- Seraphine: Holding: a lantern" in user
+    # Each actor carries the id an edit names it by, as the Present line does.
+    assert ("- Mara (characters/mara): Visible mood: fear; Concealed: a forged pass (private)"
+            in user)
+    assert "- Seraphine (pcs/seraphine): Holding: a lantern" in user
     # In the head, ahead of the transcript it summarises.
     assert user.index("Final tracked state") < user.index("The tide is turning.")
 
@@ -123,9 +125,11 @@ def test_absorb_keeps_a_departed_characters_last_tracked_state(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     assert review_runs.absorb(client, cid, sid).status_code == 200
     user = _extraction_user(fake)
-    assert ("- Mara (left the scene): Visible mood: fear; Concealed: a forged pass (private)"
-            in user)
-    assert "- Seraphine: Holding: a lantern" in user
+    # Gone from the Present line, so the block is the only place her id is.
+    assert ("- Mara (left the scene) (characters/mara): Visible mood: fear; "
+            "Concealed: a forged pass (private)") in user
+    assert "characters/mara" not in user.split("Present:", 1)[1].split("\n", 1)[0]
+    assert "- Seraphine (pcs/seraphine): Holding: a lantern" in user
 
 
 def test_absorb_prompt_has_no_tracked_state_when_the_tracker_is_off(client):
@@ -159,6 +163,42 @@ def test_the_tracked_block_renders_nothing_when_empty():
 def test_the_system_prompt_admits_pc_ids_for_current_state_only():
     system = absorb.build_prompt("**You:** hi", {})[0]["content"]
     assert '"pcs/<id>"' in system and "Final tracked state" in system
+
+
+def test_the_system_prompt_admits_ids_from_the_final_tracked_state():
+    """A character who left mid-scene is on no Present line; the tracked block
+    is where their id is, and the contract has to let an edit name it."""
+    system = absorb.build_prompt("**You:** hi", {})[0]["content"]
+    assert ('from the "Present:" context line or the "Final tracked state" block'
+            in system)
+    assert "present or listed in the final tracked state" in system
+
+
+@pytest.mark.tracker
+def test_a_departed_characters_state_edit_is_staged_and_applied(client):
+    """Mara left; absorb names her by the id the tracked block gave it, and the
+    edit lands on her state like a present character's would."""
+    cid, sid = _tracked_scene(client)
+    store.appearances.leave(cid, sid, "characters", "mara")
+    reply = ABSORB_JSON.replace(
+        '"character_state_edits": []',
+        '"character_state_edits": [{"id": "characters/mara",'
+        ' "current_state": "Gone to ground with a forged pass.",'
+        ' "quote": "The tide is turning.", "speaker": "Seraphine", "certainty": 0.9}]')
+    fake = from_entries([{"when": _EXTRACTION, "reply": reply},
+                         {"when": _DOSSIER, "reply": "Mara is wary."},
+                         {"when": _VOICE, "reply": '{"verdict": "in_voice", "note": ""}'},
+                         {"when": _AUDIT, "reply": '{"warnings": [], "sheet_deltas": []}'}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = review_runs.absorb(client, cid, sid)
+    assert r.status_code == 200, r.text
+    edits = [e for e in r.json()["edits"] if e["kind"] == "character_state"]
+    assert [e["target"] for e in edits] == [{"kind": "characters", "id": "mara"}]
+    applied, failures = store.absorb.apply_edits(cid, edits, sid)
+    assert failures == [] and applied
+    croot = store.campaigns.campaign_root(cid)
+    assert (store.playstate.read_state(croot, "mara")["current_state"]
+            == "Gone to ground with a forged pass.")
 
 
 # ---- the player character's state file ----------------------------------------

@@ -2261,7 +2261,10 @@ def _absorb_tracked(cid: str, sid: str) -> list[dict]:
     speaking for anyone. Characters with nothing recorded are left out; one
     who left the scene keeps their last state, marked as having left (a
     snapshot can still hold someone present who left after the last tracked
-    post, so presence is taken from the cast as it stands).
+    post, so presence is taken from the cast as it stands). Each line carries
+    the actor's `id` in the "Present:" line's `<kind>/<id>` form: a character
+    who left is on no Present line, so this block is the only place absorb
+    can read the id a `character_state_edits` row names them by.
 
     `[]` when the tracker is off for the campaign, and `[]` (logged) when it
     cannot be read: `walk` raises on a malformed response ledger, and a review
@@ -2279,7 +2282,8 @@ def _absorb_tracked(cid: str, sid: str) -> list[dict]:
         lines = store.tracker.view.lines_for(
             snapshot, store.tracker.fields.effective(cid, sid), None,
             store.tracker.walk.roster(cid, sid), include_departed=True)
-        return [line for line in lines if line["values"]]
+        return [{**line, "id": line["ref"].replace(":", "/", 1)}
+                for line in lines if line["values"]]
     except Exception:
         log.warning("absorb: tracker read failed for %s/%s; absorbing without it",
                     cid, sid, exc_info=True)
