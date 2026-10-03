@@ -2258,7 +2258,10 @@ def _absorb_snapshot(cid: str, sid: str,
 def _absorb_tracked(cid: str, sid: str) -> list[dict]:
     """The scene tracker's final state as the narrator reads it -- every value,
     private ones marked -- for absorb, which writes canonical state rather than
-    speaking for anyone. Characters with nothing recorded are left out.
+    speaking for anyone. Characters with nothing recorded are left out; one
+    who left the scene keeps their last state, marked as having left (a
+    snapshot can still hold someone present who left after the last tracked
+    post, so presence is taken from the cast as it stands).
 
     `[]` when the tracker is off for the campaign, and `[]` (logged) when it
     cannot be read: `walk` raises on a malformed response ledger, and a review
@@ -2270,9 +2273,12 @@ def _absorb_tracked(cid: str, sid: str) -> list[dict]:
         _key, snapshot = store.tracker.walk.current(cid, sid)
         if not snapshot:
             return []
+        here = store.tracker.walk.roster(cid, sid, departed=False)
+        snapshot = {ref: {**ent, "present": bool(ent.get("present")) and ref in here}
+                    for ref, ent in snapshot.items()}
         lines = store.tracker.view.lines_for(
             snapshot, store.tracker.fields.effective(cid, sid), None,
-            store.tracker.walk.roster(cid, sid))
+            store.tracker.walk.roster(cid, sid), include_departed=True)
         return [line for line in lines if line["values"]]
     except Exception:
         log.warning("absorb: tracker read failed for %s/%s; absorbing without it",

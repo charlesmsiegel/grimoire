@@ -141,9 +141,17 @@ def present_at(cid: str, sid: str, index: int) -> set[str]:
     return out
 
 
-def roster(cid: str, sid: str) -> dict[str, str]:
-    """The scene's current cast, ref to display name."""
-    return {f"{a['kind']}:{a['id']}": a["name"] for a in cast.scene_cast(cid, sid)}
+def roster(cid: str, sid: str, *, departed: bool = True) -> dict[str, str]:
+    """Ref to display name for everyone the scene's records may name: its
+    current cast and, unless `departed` is False, everyone who has left it.
+
+    Departed characters by default because a record describes a moment, not
+    now: an earlier post's record names whoever was there then, an update
+    for a post made just before a Leave is about someone who was present at
+    it, and absorb reads the whole scene. Only what describes the scene AS IT
+    IS -- the play prompt's Scene state -- asks for the current cast alone."""
+    return {f"{a['kind']}:{a['id']}": a["name"]
+            for a in cast.scene_cast(cid, sid, include_departed=departed)}
 
 
 def flag_edited(cid: str, sid: str, index: int) -> None:

@@ -472,7 +472,11 @@ def _tracker_read(cid: str, sid: str) -> tuple[dict, list[dict], dict[str, str]]
         _key, snapshot = tracker_walk.current(cid, sid)
         if not snapshot:
             return _NO_TRACKER
-        return snapshot, tracker_fields.effective(cid, sid), tracker_walk.roster(cid, sid)
+        # The current cast only: the section describes who is in the scene
+        # now, and a snapshot can still hold someone present who left after
+        # the last tracked post.
+        return (snapshot, tracker_fields.effective(cid, sid),
+                tracker_walk.roster(cid, sid, departed=False))
     except Exception:
         # Logged with the traceback rather than marked `noqa`: BLE001 exempts a
         # handler that keeps the failure for whoever reads the log.
