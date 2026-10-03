@@ -956,6 +956,24 @@ def after_cut(cid: str, sid: str, index: int | None = None) -> None:
         _soft("flag later records", cid, sid, store.tracker.walk.flag_after, index - 1)
 
 
+def after_take_back(cid: str, identity: str, key: str) -> None:
+    """A failed turn took its unanswered player post `key` back off the
+    transcript (`scenes._take_the_post_back`): its record goes with it.
+
+    Whichever finished first. An update that already landed wrote a record for
+    a post that is now gone -- keyed by an id nothing will show again, so it
+    would sit hidden until some later cut happened to prune it. An update still
+    queued or answering is made obsolete by the same discard: its mark's
+    generation no longer matches an entry that is not there (`_obsolete`), so
+    it neither prepares nor commits. Called inside the hold that removed the
+    post, by identity because that is what the turn was fenced on. Never
+    raises: the removal it follows has landed."""
+    try:
+        store.tracker.records.discard(cid, identity, [key])
+    except Exception as exc:  # noqa: BLE001 -- see the section comment
+        log.warning("tracker: could not discard %s in %s -- %s", key, cid, exc)
+
+
 def after_swipe(cid: str, sid: str, rid: str) -> None:
     """Response `rid`'s active variant changed. Its own record is the
     variant's cached one (nothing re-runs), but every later record was built

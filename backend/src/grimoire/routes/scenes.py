@@ -628,7 +628,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
         return _chat_run(cid, sid, turn, request, client, conn, run)
 
 
-def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run) -> bool:
+def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
+                        post_id: str | None = None) -> bool:
     """Remove the player's post AND retire the record that says it is there.
 
     One function because the two have to be one step. `on_error` calls this
@@ -655,7 +656,13 @@ def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run) -> boo
     out leaves the post in place, which is the recoverable side.
     """
     store.attempts.forget(cid, run.scene_identity, run.attempt_id)
-    return store.scenes.remove_trailing_user_post(cid, sid, posted_at, content)
+    removed = store.scenes.remove_trailing_user_post(cid, sid, posted_at, content)
+    if removed and post_id:
+        # The post's tracker record goes in the same hold, whether its update
+        # already landed or is still on its way (`tracker.after_take_back`).
+        tracker_routes.after_take_back(cid, run.scene_identity,
+                                       store.tracker.paths.post_key(post_id))
+    return removed
 
 
 def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
@@ -781,8 +788,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         # portal. Started before the turn, so the post's update queues ahead of
         # the reply's on the scene's tracker lock and the two run in transcript
         # order. Fail-soft: a run that cannot start marks the record `failed`.
-        # If the turn later takes the post back, the update finds it gone and
-        # discards its record (`tracker._commit`).
+        # If the turn later takes the post back, the record goes with it
+        # (`tracker.after_take_back`), landed or not.
         tracker_routes.start(request.app, cid, sid, tracked, client, run.scene_identity)
     if character_turns.enabled() or turn.speaker_ref:
         return character_turns.start(
@@ -846,7 +853,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     outcome = StreamOutcome()
     stream = _chat_stream(
         cid, sid, messages, conn, client,
-        undo_user_post=lambda: _take_the_post_back(cid, sid, posted_at, content, run),
+        undo_user_post=lambda: _take_the_post_back(cid, sid, posted_at, content, run,
+                                                   post_id),
         task="chat", identity=run.scene_identity, outcome=outcome,
         after_turn=_follow_up_hook(request.app, cid, sid, client))
     # AFTER the stream is built, never before: `_chat_stream` claims the turn

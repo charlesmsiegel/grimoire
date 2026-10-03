@@ -13,6 +13,7 @@ import json
 import pytest
 
 from grimoire import routes, store
+from grimoire.routes import character_turns
 from grimoire.routes import tracker as tracker_routes
 
 from .llm_fakes import FakeLLM, HeldCassette, from_entries
@@ -818,6 +819,71 @@ def test_a_duplicate_retry_cannot_land_over_an_edit(client, monkeypatch):
         "characters:mara"]["fields"]
     assert mara["clothing"]["value"] == "red coat"
     assert mara["pose"]["value"] == "x"
+
+
+# --- a failed turn that takes its player post back ---------------------------
+#
+# The combined-generation producer (`character_turns.enabled()` False) is the
+# one that removes an unanswered player post when the turn fails having
+# produced nothing (`scenes._take_the_post_back`). The post's record goes with
+# it, whichever of the two finished first.
+
+CHAT = {"system_contains": "Continue the fictional roleplay"}
+
+
+def _failing_turn(client, monkeypatch, hold: dict) -> HeldCassette:
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    return _use(client, HeldCassette(
+        [{"when": dict(TRACKER), "reply": json.dumps({"changes": {"Mara": {"pose": "x"}}})},
+         {"when": dict(CHAT), "error": {"kind": "network", "message": "connection reset"}}],
+        hold=hold))
+
+
+def _chat_url(cid, sid) -> str:
+    return f"/api/campaigns/{cid}/scenes/{sid}/chat"
+
+
+def _no_record_left(cid, sid) -> None:
+    assert store.scenes.read_scene(cid, sid)["messages"] == []
+    assert _index(cid, sid) == {}, "the taken-back post kept its record"
+    snaps = list(store.tracker.paths.scene_dir(cid, _ident(cid, sid)).glob("p-*.json"))
+    assert snaps == [], "the taken-back post kept its snapshot file"
+
+
+def test_a_post_taken_back_after_its_update_landed_leaves_no_record(client, monkeypatch):
+    import threading
+
+    llm = _failing_turn(client, monkeypatch, hold=CHAT)
+    cid, sid = _scene(client)
+    box: dict = {}
+    sender = threading.Thread(target=lambda: box.setdefault(
+        "r", client.post(_chat_url(cid, sid), json={"content": "Mara, the tide is turning."})))
+    sender.start()
+    try:
+        llm.await_held()
+        _settle(client, cid, sid)
+        [key] = _keys(cid, sid)
+        assert _index(cid, sid)[key]["status"] == "ok"
+    finally:
+        llm.release()
+    sender.join(RUN_TIMEOUT)
+    assert '"post_returned": true' in box["r"].text, box["r"].text
+    _no_record_left(cid, sid)
+
+
+def test_a_post_taken_back_while_its_update_runs_leaves_no_record(client, monkeypatch):
+    llm = _failing_turn(client, monkeypatch, hold=TRACKER)
+    cid, sid = _scene(client)
+    try:
+        r = client.post(_chat_url(cid, sid), json={"content": "Mara, the tide is turning."})
+        assert '"post_returned": true' in r.text, r.text
+        llm.await_held()
+        assert _index(cid, sid) == {}, "a record outlived the post it was pending for"
+    finally:
+        llm.release()
+    assert [(run.state, run.result) for run in _settle(client, cid, sid)] == [
+        ("landed", {"skipped": True})], "the update was not refused"
+    _no_record_left(cid, sid)
 
 
 def test_a_roll_pause_and_its_resumption_are_both_tracked(client):
