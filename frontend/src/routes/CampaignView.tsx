@@ -19,7 +19,7 @@ import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
 import { shareSummary } from "../components/tracker/share";
-import { lastOkKey, type NowTracker } from "../components/tracker/TrackerNow";
+import { lastOkKey, pendingAfter, type NowTracker } from "../components/tracker/TrackerNow";
 import { errorText, isProviderFailure } from "../api/errors";
 import { configChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
@@ -1694,12 +1694,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const nowKey = tracker ? lastOkKey(tracker.keys, tracker.entries) : null;
   const nowEntry = nowKey && tracker ? tracker.entries[nowKey] : undefined;
   const nowEnabled = tracker?.enabled ?? false;
+  const nowUpdating = tracker ? pendingAfter(tracker.keys, tracker.entries, nowKey) : false;
   const dossierTracker = useMemo<NowTracker | null>(
     () => selectedActor && activeId
       ? { cid, sid: activeId, key: nowKey, ref: `${selectedActor.kind}:${selectedActor.id}`,
-          enabled: nowEnabled, entry: nowEntry }
+          enabled: nowEnabled, entry: nowEntry, updating: nowUpdating }
       : null,
-    [cid, activeId, selectedActor, nowKey, nowEnabled, nowEntry]);
+    [cid, activeId, selectedActor, nowKey, nowEnabled, nowEntry, nowUpdating]);
   // While a post is being tracked, ask again every two seconds: one timeout
   // chain, re-armed only once the last read has settled so a slow server is
   // never asked twice at once, and cleared with the scene or the view. A read
