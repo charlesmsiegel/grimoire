@@ -411,13 +411,13 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
         store.scenes.match_name)
     # A re-run or Retry rebuilds this record from the one before it; whatever
     # a person typed into it, and the reply did not itself move, is kept.
-    snapshot, changed = store.tracker.merge.keep_user_values(
+    snapshot, changed, restored = store.tracker.merge.keep_user_values(
         snapshot, prep["own"], prep["prior"], changed, prep["set_here"])
     try:
         written = await run_in_threadpool(
             _commit, cid, identity, prep["sid"], key, snapshot, changed,
             store.tracker.fields.digest(fields), effective_model(conn), flag_later,
-            prep["seen_seq"], gen, prep["stale_base"])
+            prep["seen_seq"], gen, prep["stale_base"], restored)
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
         await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc), gen)
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
@@ -570,11 +570,15 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
             "seen_seq": seen,
             "stale_base": stale_base,
             "own": own["snapshot"] if own else None,
-            # The pairs this post's own record changed -- what a person set AT
-            # it, as opposed to what it inherited (`merge.keep_user_values`).
-            # Read in this hold, with the snapshot it describes.
-            "set_here": {(c[0], c[1]) for c in (entries.get(key) or {}).get("changed") or []
-                         if isinstance(c, list) and len(c) >= 2},
+            # The pairs this post's own record changed, and those a person
+            # touched there without moving a value (an awareness-only edit is
+            # in no change list) -- what was set AT it, as opposed to what it
+            # inherited (`merge.keep_user_values`). Read in this hold, with
+            # the snapshot it describes; the index is normalised on read, so
+            # every change is a `[ref, field, value]`.
+            "set_here": ({(c[0], c[1]) for c in (entries.get(key) or {}).get("changed") or []}
+                         | {(p[0], p[1]) for p in records.pairs(
+                             (entries.get(key) or {}).get(records.TOUCHED))}),
         }
 
 
@@ -596,7 +600,8 @@ def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) 
 
 def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
             changed: list, digest: str, model: str, flag_later: bool = False,
-            seen_seq: int = 0, gen: int | None = None, stale_base: bool = False) -> bool:
+            seen_seq: int = 0, gen: int | None = None, stale_base: bool = False,
+            touched: list | None = None) -> bool:
     """Store the result, unless the post went away while the model answered.
 
     RE-CHECKED under the lock that covers the write, because the check in
@@ -614,7 +619,9 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
 
     `gen` is re-checked here too (`Mark`): a newer run marked, or a hand edit
     made, while the model answered means this result is not the one to keep.
-    `stale_base` (`_prepare`) raises `upstream_changed` in the same write."""
+    `stale_base` (`_prepare`) raises `upstream_changed` in the same write.
+    `touched`: the pairs `merge.keep_user_values` restored, which stay the
+    person's (`records.TOUCHED`) so the next re-run restores them too."""
     with store.locks.campaign_lock(cid):
         sid = _current_sid(cid, hint, identity)
         if sid is None:
@@ -631,7 +638,7 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
         # result never saw, and the record must keep saying so.
         store.tracker.records.save(cid, identity, key, snapshot, changed=changed,
                                    fields_digest=digest, model=model, seen_seq=seen_seq,
-                                   raise_upstream=stale_base)
+                                   raise_upstream=stale_base, touched=touched)
         if flag_later:
             at = store.tracker.walk.index_of(cid, sid, key)
             if at is not None:
@@ -837,9 +844,15 @@ def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request:
         # The post's own change list keeps what the update found, with the
         # person's changes laid over the same fields: it is the summary of what
         # changed AT this post, and the edit is one more thing that did.
-        touched = {(c[0], c[1]) for c in changed}
-        kept = ([c for c in entry.get("changed") or [] if (c[0], c[1]) not in touched]
+        moved = {(c[0], c[1]) for c in changed}
+        kept = ([c for c in entry.get("changed") or [] if (c[0], c[1]) not in moved]
                 if entry.get("status") == "ok" else [])
+        # Every pair the edit wrote, value or only awareness, joins the ones
+        # earlier edits (or a re-run restoring them) left: what a re-run must
+        # put back. `changed` cannot carry it -- it is the display's list, and
+        # an awareness-only edit moves no value.
+        touched = (records.pairs(entry.get(records.TOUCHED))
+                   + store.tracker.merge.touched_by(prev, snapshot))
         # `keep_flags`: clearing is a re-run's job. A hand edit of one value
         # does not make the rest of the record agree with an edited post or an
         # earlier change, so whatever was raised stays. `bump_gen`: a run
@@ -847,7 +860,7 @@ def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request:
         # must not land over it (`Mark`).
         records.save(cid, ident, key, snapshot, changed=kept + changed,
                      fields_digest=store.tracker.fields.digest(fields), model="user",
-                     keep_flags=True, bump_gen=True)
+                     keep_flags=True, bump_gen=True, touched=touched)
         at = walk.index_of(cid, sid, key)
         if at is not None:
             # Only from a key ON the walk: an inactive variant is not what any

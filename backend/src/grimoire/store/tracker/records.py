@@ -59,6 +59,23 @@ or a person has written to it and a result built before that would replace the
 edit without a trace."""
 INTERNAL = (SEQ, GEN)
 """Bookkeeping fields no reader is shown."""
+TOUCHED = "touched"
+"""The entry field listing every `[ref, field]` a person set AT this post --
+a value or only who knows it. `changed` is the display's list and names value
+changes only, so an awareness-only edit is in it nowhere; a re-run restores
+what this names (`merge.keep_user_values`), and keeps naming what it restored
+so the next re-run restores it again. Absent reads as empty."""
+
+
+def pairs(value) -> list[list[str]]:
+    """`value` as a list of distinct `[ref, field]` string pairs, anything else
+    in it dropped -- how `touched` is read and written."""
+    out: list[list[str]] = []
+    for p in value if isinstance(value, list) else []:
+        if (isinstance(p, list | tuple) and len(p) == 2
+                and all(isinstance(x, str) for x in p) and list(p) not in out):
+            out.append(list(p))
+    return out
 
 
 def _index_path(cid: str, identity: str) -> Path:
@@ -125,6 +142,9 @@ def _normalised(entry) -> dict | None:
     }
     if isinstance(entry.get("error"), str):
         out["error"] = entry["error"]
+    touched = pairs(entry.get(TOUCHED))
+    if touched:
+        out[TOUCHED] = touched
     for counter in INTERNAL:
         if _count(entry.get(counter)):
             out[counter] = entry[counter]
@@ -232,7 +252,7 @@ def flag_seq(entry: dict | None) -> int:
 def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[list],
          fields_digest: str, model: str, keep_flags: bool = False,
          seen_seq: int | None = None, raise_upstream: bool = False,
-         bump_gen: bool = False) -> None:
+         bump_gen: bool = False, touched: list | None = None) -> None:
     """Store `key`'s snapshot and mark it `ok`. What happens to its flags:
 
     - by default they are cleared (a writer that read everything just now);
@@ -252,6 +272,9 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
     fresh its own reading of its post. `bump_gen` moves the mark generation
     (a hand edit -- see `GEN`); otherwise it is carried over.
 
+    `touched` replaces the entry's `TOUCHED` pairs -- the writer says what a
+    person set at this post as of this snapshot; left out, there are none.
+
     The snapshot is stored as given; what a valid one looks like is the update
     pipeline's business, not the store's."""
     with locks.campaign_lock(cid):
@@ -267,6 +290,9 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
         if raise_upstream:
             flags["upstream_changed"] = True
         entries[key] = {"status": "ok", "changed": changed, "flags": flags}
+        kept = pairs(touched)
+        if kept:
+            entries[key][TOUCHED] = kept
         if seq:
             entries[key][SEQ] = seq     # absent reads as 0; only a raise starts it
         gen = generation(prev) + (1 if bump_gen else 0)

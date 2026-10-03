@@ -293,6 +293,26 @@ def _apply_awareness(snap: dict, awareness: dict, defs: dict[str, dict],
                 stored["aware"].append(ref)
 
 
+def _widened(before: dict, fresh: dict):
+    """What a reply added to who knows a field: `fresh`'s awareness less the
+    `before` it was built from. The fresh result starts from the prior record,
+    so its awareness is mostly the prior's -- and merging all of it back into
+    a restored value would undo a person's narrowing (an awareness-only edit)
+    the moment the record was re-run. A reply only ever appends to a list
+    (`_apply_awareness`), so the difference is exactly its widening. With no
+    `before` to compare, all of `fresh` counts."""
+    new = fresh.get("aware")
+    if "aware" not in before:
+        return new
+    old = before["aware"]
+    if old == "present":
+        return []                    # already everyone's: nothing to widen
+    if new == "present":
+        return "present"
+    return [r for r in (new if isinstance(new, list) else [])
+            if not isinstance(old, list) or r not in old]
+
+
 def _merged_aware(a, b):
     """Two awareness specs as one: `"present"` (everyone) wins over a list;
     two lists are their union, `a`'s order first."""
@@ -305,25 +325,32 @@ def _merged_aware(a, b):
 
 def keep_user_values(snapshot: dict, own: dict | None, prior: dict,
                      changed: list[list], set_here: set[tuple[str, str]]
-                     ) -> tuple[dict, list[list]]:
+                     ) -> tuple[dict, list[list], list[list[str]]]:
     """`snapshot` (a fresh result for a post) with the hand-set values the
-    post's OWN earlier record set AT this post put back: `(snapshot, changed)`.
+    post's OWN earlier record set AT this post put back:
+    `(snapshot, changed, restored)`, `restored` naming every `[ref, field]`
+    put back -- what the record still holds a person's word on, and so what
+    the next re-run must restore again (`records.TOUCHED`).
 
     A re-run or a Retry rebuilds a record from the one before it, so without
     this every value a person typed into this record would be silently lost
     to it. Only `set_here` pairs -- the `(ref, field)`s in the record's own
-    change list -- are restored: a record carries forward everything before
+    change list, and those a person touched there (`records.TOUCHED`), which
+    covers an edit of who knows a value as well as of the value -- are
+    restored: a record carries forward everything before
     it, `set_by` included, so a `"user"` value merely inherited from an
     earlier record is that record's to say, and restoring it here would
     revert a newer edit made there. A value the reply itself changed is the
     model's newer word and stands. A restored value keeps its `set_by`; its
     awareness is the stored one widened by whatever the reply widened for
-    that field. Listed in `changed` when it differs from what the post
+    that field (`_widened` -- not the awareness it inherited, which would
+    undo a narrowing). Listed in `changed` when it differs from what the post
     started from. A character the fresh snapshot does not hold (not present
     here, and not carried from the prior) is not conjured. `snapshot` is not
     touched."""
     snap = copy.deepcopy(snapshot)
     out = list(changed)
+    restored_pairs: list[list[str]] = []
     moved = {(c[0], c[1]) for c in changed}
     for ref, ent in (own or {}).items():
         target = snap.get(ref)
@@ -337,13 +364,15 @@ def keep_user_values(snapshot: dict, own: dict | None, prior: dict,
             fields_ = target.setdefault("fields", {})
             fresh = fields_.get(key) or {}
             restored = copy.deepcopy(cur)
-            if "aware" in fresh:
-                restored["aware"] = _merged_aware(cur.get("aware", []), fresh["aware"])
-            fields_[key] = restored
             before = ((prior.get(ref) or {}).get("fields") or {}).get(key) or {}
+            if "aware" in fresh:
+                restored["aware"] = _merged_aware(cur.get("aware", []),
+                                                  _widened(before, fresh))
+            fields_[key] = restored
+            restored_pairs.append([ref, key])
             if before.get("value") != cur.get("value"):
                 out.append([ref, key, cur.get("value")])
-    return snap, out
+    return snap, out, restored_pairs
 
 
 # --- a person's edit ----------------------------------------------------------
@@ -382,6 +411,20 @@ def apply_edit(prev: dict, edits: dict, fields: list[dict]) -> tuple[dict, list[
                 raise ValueError(f"unknown or switched-off field {key!r}")
             _edit_one(snap, ref, defs[key], edit, changed)
     return snap, changed
+
+
+def touched_by(before: dict, after: dict) -> list[list[str]]:
+    """Every `[ref, field]` a person's edit wrote: where `after` (from
+    `apply_edit`) holds a `"user"` value that differs from `before`'s. The
+    value or only its awareness -- unlike `apply_edit`'s `changed`, which is
+    the display's list and names value changes alone."""
+    out = []
+    for ref, ent in after.items():
+        old = ((before.get(ref) or {}).get("fields") or {})
+        for key, cur in ((ent or {}).get("fields") or {}).items():
+            if isinstance(cur, dict) and cur.get("set_by") == "user" and old.get(key) != cur:
+                out.append([ref, key])
+    return out
 
 
 def _edit_one(snap: dict, ref: str, field: dict, edit, changed: list) -> None:
