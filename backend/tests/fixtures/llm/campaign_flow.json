@@ -35,6 +35,10 @@
         "\"Salt first,\" she says again, ",
         "and turns the ledger so the wet page faces you."
       ]
+    },
+    {
+      "when": {"system_contains": "You maintain the scene state tracker"},
+      "reply": "{\"changes\": {}}"
     }
   ]
 }
