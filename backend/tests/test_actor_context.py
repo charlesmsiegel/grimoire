@@ -313,6 +313,18 @@ def test_perception_requires_source_and_access_evidence(cast_scene):
     assert "First find the source evidence" in text
     assert '"kind": "speech or action", "source": "exact excerpt", "access": "why this actor heard or saw it"' in text
     assert "Copying narration into a quote does not make it speech" in text
-    assert "Do not invent tired eyes" in text
+    assert "Do not invent bedroom sightlines" in text
     assert "keep independently sourced prior knowledge in known" in text
     assert "at most 80 words" in text
+
+
+def test_perception_rider_switch(cast_scene):
+    cid, sid = cast_scene
+    on = str(context.compose_turn(cid, sid, actor_ref="characters:mara")[0])
+    assert "```perception" in on and "rely on the Scene state section" in on
+    config.write_config(perception_rider="off")
+    off = str(context.compose_turn(cid, sid, actor_ref="characters:mara")[0])
+    assert "```perception" not in off
+    assert "rely on the Scene state section" not in off
+    # The rest of the assigned-speaker contract is untouched by the switch.
+    assert "# What this actor can perceive" in off and "```handoff" in off

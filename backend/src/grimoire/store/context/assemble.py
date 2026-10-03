@@ -353,6 +353,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
         "response_actor": response_actor,
+        "perception_rider": config.perception_rider(),
         "response_roster": roster,
         "response_candidates": [{"ref": e["ref"], "name": e["name"]}
                                 for e in (eligible_speakers or [])],

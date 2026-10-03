@@ -854,6 +854,9 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
                 1 for b in _cast_blocks(cid, npc_cards, npc_ids) if b["name"]),
             "states": states,
             "tracker_lines": tracker_lines, "tracker_narrator": True,
+            # Mirrors context._assemble: the global switch, on by default. Only
+            # an NPC-assigned response_actor.j2 reads it; no case here is one.
+            "perception_rider": True,
             # Mirrors context._assemble: derived from the present NPCs' card
             # names and the raw transcript, and None while the toggle is off.
             "speaker": (context.speaker.nominate(

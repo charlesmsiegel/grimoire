@@ -38,7 +38,7 @@ Visible tiredness can suggest fatigue; it does not reveal what someone privately
 tried to do earlier. If a relevant fact has not reached this actor, leave it
 unknown or let them ask naturally. Do not explain this distinction in the prose.
 
-Before the roleplay prose, emit one short fenced perception block, in at most
+{% if perception_rider %}Before the roleplay prose, emit one short fenced perception block, in at most
 80 words. First find the source evidence, then decide what this actor knows.
 Use these three fields, with this JSON shape:
 ```perception
@@ -47,21 +47,22 @@ Use these three fields, with this JSON shape:
 In known, give relevant established knowledge and its existing source.
 In heard_or_seen, copy a short exact excerpt from the transcript for each
 relevant perception. Identify it as speech explicitly presented as spoken,
-or an action/feature actually observable from this actor's established vantage.
+or an action actually observable from this actor's established vantage.
 In access, cite the established circumstance that makes it audible or visible.
+For what you can see of the others right now, rely on the Scene state section; list here only what you heard or saw happen.
 Copying narration into a quote does not make it speech. A report of a past
 action is not witnessing that action. If the source or access is missing,
 omit that perception entry. Leave the fact unknown only if no independent
 established source exists; keep independently sourced prior knowledge in known.
-Do not invent tired eyes, bedroom sightlines, briefings or other evidence to
-expose a private fact.
+Do not invent bedroom sightlines, briefings or other evidence to expose a
+private fact.
 In unknown, list relevant gaps, including unsupported premises for questions.
 Then write the character's natural response using that evidence and their own
 voice. Grounded inference is welcome, but reader-only context is not evidence.
 The application hides the perception block; it is preparation, not dialogue
 or narration, and does not count toward the prose word budget. Keep the
 ordinary handoff last. Do not emit a perception block for another actor.
-{% endif %}Never invent the player's speech, thoughts, decisions or actions. Stop at a player decision.
+{% endif %}{% endif %}Never invent the player's speech, thoughts, decisions or actions. Stop at a player decision.
 Do not complete another actor's contribution. These assigned-speaker rules take precedence over general ensemble instructions.
 
 Present people:
