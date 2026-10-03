@@ -191,6 +191,7 @@ from .tags import TagNotFound
 from .tracker import fields as _tracker_fields
 from .tracker import merge as _tracker_merge
 from .tracker import paths as _tracker_paths
+from .tracker import prompt as _tracker_prompt
 from .tracker import records as _tracker_records
 from .tracker import settings as _tracker_settings
 from .tracker import view as _tracker_view

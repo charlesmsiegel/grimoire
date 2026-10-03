@@ -201,6 +201,26 @@ whether anything was settled. The reply is a JSON object
 with empty prose, because this runs automatically off the play loop. Nothing
 here ends or splits a scene — the answer is a suggestion in the inspector.
 
+### `tracker/` — the scene state tracker's update call, after every post
+Mirrors `store/tracker/prompt.py:build_messages`. Messages: system, user. One
+small call per post: it is shown the tracked fields, each present character's
+current values and the new post, and replies with only what the post changes
+(`{"changes", "awareness"}`, parsed by `tracker.merge.parse_reply`).
+`update_system.j2` takes no vars; the cassette matches its first sentence.
+`update_user.j2` vars:
+- `fields` -- the **active** fields only (`fields.active`; a switched-off field
+  is never shown), as `{key, type, aware, options, hint}`. `options` is the
+  enum's list, empty otherwise; `aware == "self"` renders `[private by default]`
+- `characters` -- one block per **present** character, `{name, new, entries}`;
+  `entries` is `{key, text, user_set, private, known_to}` per non-empty value.
+  `user_set` renders `(user-set)`; `private` (a list-aware value) renders
+  `(private)` or `(private, known to: <names>)`; `new` marks a newcomer
+- `newcomers` -- `prompt.newcomer(cid, ref)` rows, `{ref, name, description,
+  state}`: the card (or persona) description and the standing state of a
+  character the tracker has not recorded yet. A read that fails is `""`
+- `context_posts` and `post` -- `{speaker, content}`; the new post is last in
+  the message, so the reply is anchored on it
+
 ### `scene/` — the context builder (`store/context/`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).
