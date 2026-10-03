@@ -290,6 +290,40 @@ def test_undoing_a_pc_state_edit(home):
     assert not playstate.state_path(croot, "seraphine").exists()
 
 
+def test_absorb_can_clear_a_pc_state_that_no_longer_holds(home):
+    """A PC's state.md is written by absorb and nothing else, so an absorb that
+    says the state is over (an explicit empty `current_state`) has to be able
+    to stage that -- dropped as an empty result, the stale state would stand
+    for good. Undo puts it back."""
+    cid, sid, croot = home
+    playstate.write_state(croot, "seraphine", "Sprained wrist.", kind="pcs")
+    e = _pc_edit(cid, sid, text="")
+    assert e["before"] == "Sprained wrist." and e["after"] == ""
+    applied, failures = absorb.apply_edits(cid, [e], sid)
+    assert failures == [] and applied
+    st = playstate.read_state(croot, "seraphine", "pcs")
+    assert st is None or st["current_state"] == ""
+    assert absorb.state_snapshot(cid, sid).get("Seraphine") is None
+    assert casefile.build(cid, sid, "pcs", "seraphine")["standing"] == ""
+    entry = journal.read(cid)[0]
+    assert entry["undo"] is not None, entry
+    undo.undo(cid, entry["id"])
+    assert playstate.read_state(croot, "seraphine", "pcs")["current_state"] == "Sprained wrist."
+
+
+def test_absorb_leaves_a_pc_state_alone_when_it_says_nothing_about_it(home):
+    """Clearing takes an explicit empty value. An entry that omits the current
+    state, or clears one that was never set, stages nothing."""
+    cid, sid, croot = home
+    parsed = {"character_state_edits": [{"id": "pcs/seraphine"}]}
+    assert absorb.materialize(cid, sid, parsed) == []
+    parsed = {"character_state_edits": [{"id": "pcs/seraphine", "current_state": ""}]}
+    assert absorb.materialize(cid, sid, parsed) == []
+    playstate.write_state(croot, "seraphine", "Sprained wrist.", kind="pcs")
+    parsed = {"character_state_edits": [{"id": "pcs/seraphine"}]}
+    assert absorb.materialize(cid, sid, parsed) == []
+
+
 def test_undo_will_not_conjure_play_state_for_a_deleted_pc(home):
     cid, sid, croot = home
     absorb.apply_edits(cid, [_pc_edit(cid, sid)], sid)
