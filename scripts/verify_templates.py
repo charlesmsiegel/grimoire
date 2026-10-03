@@ -313,10 +313,11 @@ for label, snap, cands, off, direction in (
 
 #: The scene tracker's final state as `routes.scenes._absorb_tracked` hands it
 #: over (`tracker.view.lines_for` for the narrator, empty lines dropped).
-TRACKED = [{"name": "Seraphine Vale", "own": False, "values": [
+TRACKED = [{"ref": "characters:seraphine-vale", "id": "characters/seraphine-vale",
+            "name": "Seraphine Vale", "own": False, "values": [
                {"label": "Visible mood", "text": "fear", "private": False},
                {"label": "Concealed", "text": "the ledger", "private": True}]},
-           {"name": "Hero", "own": False, "values": [
+           {"ref": "pcs:hero", "id": "pcs/hero", "name": "Hero", "own": False, "values": [
                {"label": "Holding", "text": "a lantern", "private": False}]}]
 
 for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
@@ -349,8 +350,9 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
                  tracked_snapshot=trk or [], transcript=transcript))
     if trk:
         assert ("Final tracked state (as the scene ended; private values marked):\n"
-                "- Seraphine Vale: Visible mood: fear; Concealed: the ledger (private)\n"
-                "- Hero: Holding: a lantern") in exp[1]["content"], \
+                "- Seraphine Vale (characters/seraphine-vale): Visible mood: fear; "
+                "Concealed: the ledger (private)\n"
+                "- Hero (pcs/hero): Holding: a lantern") in exp[1]["content"], \
             f"absorb user ({label}) missing the Final tracked state block"
     else:
         assert "Final tracked state" not in exp[1]["content"], \

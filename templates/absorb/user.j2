@@ -16,8 +16,10 @@
       steering_snapshot — rendered "- <text>" reroll-steering lines,
                         "\n"-joined (see absorb.steering_snapshot) | None
       tracked_snapshot — the scene tracker's final state as the narrator reads
-                        it: [{"name", "values": [{"label", "text", "private"}]}]
-                        (see tracker.view.lines_for); [] renders nothing
+                        it: [{"name", "id", "values": [{"label", "text",
+                        "private"}]}] (see tracker.view.lines_for), "id" the
+                        "<kind>/<id>" ref the Present line spells; [] renders
+                        nothing
       transcript — str (see snippets/transcript.j2) -#}
 {%- set head = [] -%}
 {%- if facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
@@ -33,7 +35,7 @@
 {%- for c in tracked_snapshot -%}
 {%- set parts = [] -%}
 {%- for v in c["values"] -%}{%- set _ = parts.append(v.label ~ ": " ~ v.text ~ (" (private)" if v.private else "")) -%}{%- endfor -%}
-{%- set _ = lines.append("- " ~ c.name ~ ": " ~ (parts | join("; "))) -%}
+{%- set _ = lines.append("- " ~ c.name ~ " (" ~ c.id ~ "): " ~ (parts | join("; "))) -%}
 {%- endfor -%}
 {%- set _ = head.append("Final tracked state (as the scene ended; private values marked):\n" ~ (lines | join("\n"))) -%}
 {%- endif -%}

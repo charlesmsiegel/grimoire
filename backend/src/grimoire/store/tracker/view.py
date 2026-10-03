@@ -47,8 +47,8 @@ LEFT = " (left the scene)"
 
 def lines_for(snapshot: dict, fields: list[dict], viewer: str | None,
               roster: dict[str, str], *, include_departed: bool = False) -> list[dict]:
-    """`[{"name", "own", "values": [{"label", "text", "private"}]}]` for the
-    characters present in `snapshot`, as `viewer` may see them.
+    """`[{"ref", "name", "own", "values": [{"label", "text", "private"}]}]`
+    for the characters present in `snapshot`, as `viewer` may see them.
 
     `viewer` is a character ref, or `None`/`"grimoire"` for the narrator. The
     viewer's own line comes first and carries every value; the narrator's
@@ -66,7 +66,7 @@ def lines_for(snapshot: dict, fields: list[dict], viewer: str | None,
         if not (here or include_departed) or ref not in roster:
             continue
         own = not narrator and ref == viewer
-        lines.append({"name": roster[ref] + ("" if here else LEFT), "own": own,
+        lines.append({"ref": ref, "name": roster[ref] + ("" if here else LEFT), "own": own,
                       "values": _values(entry, fields, narrator or own, viewer)})
     lines.sort(key=lambda line: not line["own"])    # stable: the rest keep order
     return lines
