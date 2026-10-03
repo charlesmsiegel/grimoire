@@ -18,6 +18,9 @@ export async function campaignApiMock() {
     ...actual,
     api: {
       getCampaign: vi.fn(),
+      getTracker: vi.fn(), getTrackerRecord: vi.fn(), editTrackerRecord: vi.fn(),
+      retryTracker: vi.fn(), rerunTrackerFrom: vi.fn(), getTrackerFields: vi.fn(),
+      setTrackerFields: vi.fn(), getCampaignTracker: vi.fn(), setCampaignTracker: vi.fn(),
       getWorld: vi.fn(),
       listScenes: vi.fn(),
       getScene: vi.fn(),
