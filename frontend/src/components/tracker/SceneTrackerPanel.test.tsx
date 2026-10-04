@@ -129,3 +129,26 @@ test("the panel shows the bundle a write answers with, without a second read", a
   await waitFor(() => expect(screen.getByRole("checkbox", { name: "Attention" })).not.toBeChecked());
   expect(api.getTrackerFields).toHaveBeenCalledTimes(1);
 });
+
+// The play view's tracker summary carries the cast tiles' moods and the
+// fields' labels, both of which this layer decides, so every save it lands
+// tells the view to read the summary again.
+test("each save that lands tells the play view, and a refused one does not", async () => {
+  const gait: TrackerField = { key: "gait", label: "Gait", type: "text", aware: "present", hint: "" };
+  serve({ fields: [gait] });
+  const onChanged = vi.fn();
+  render(<SceneTrackerPanel cid="saltmarch" sid="s1" onChanged={onChanged} />);
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Attention" }));
+  await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Remove Gait" }));
+  await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+  fireEvent.click(screen.getByRole("button", { name: "+ Scene-only field" }));
+  fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Torch Light" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add field" }));
+  await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(3));
+
+  vi.mocked(api.setTrackerFields).mockRejectedValue({ detail: "scene_busy" });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Clothing" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("scene_busy");
+  expect(onChanged).toHaveBeenCalledTimes(3);
+});

@@ -7998,6 +7998,29 @@ test("the Tracker panel edits this scene's fields, and Close shuts it", async ()
   expect(screen.queryByRole("checkbox", { name: "Clothing" })).not.toBeInTheDocument();
 });
 
+test("switching a field off in the scene's Tracker panel re-reads the tracker summary", async () => {
+  // The summary carries the cast tiles' moods and the fields' labels, which
+  // the scene's layer decides -- a save there must not leave them stale until
+  // the next turn lands.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+  ]);
+  const mood = { key: "visible_mood", label: "Visible mood", type: "text", aware: "present", hint: "" };
+  (api.getTrackerFields as any).mockResolvedValue(
+    { layer: {}, effective: [mood], inherited: [mood] });
+  (api.setTrackerFields as any).mockResolvedValue(
+    { layer: { off: ["visible_mood"] }, effective: [{ ...mood, off: true }], inherited: [mood] });
+  renderCampaign();
+  await screen.findByText("Scene ⋯");
+  fireEvent.click(screen.getByRole("button", { name: "Tracker" }));
+  const box = await screen.findByRole("checkbox", { name: "Visible mood" });
+  const before = trackerCallsFor("s1");
+  fireEvent.click(box);
+  await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(
+    { kind: "scene", cid: "run", sid: "s1" }, { fields: [], off: ["visible_mood"] }));
+  await waitFor(() => expect(trackerCallsFor("s1")).toBeGreaterThan(before));
+});
+
 test("picking from the menu shuts the menu it was picked from", async () => {
   // A menu still standing over the panel it just opened is in the way of the
   // thing that was asked for.
