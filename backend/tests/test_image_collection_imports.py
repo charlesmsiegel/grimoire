@@ -1,4 +1,5 @@
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -78,3 +79,47 @@ def test_publication_survives_a_crash_before_journal_confirmation(wid, monkeypat
     assert calls == []
     assert resumed['accepted'] and resumed['stop'] == 'accepted'
     assert imports.accept(wid, job['job_id'])['members'] == job['members']
+
+
+@pytest.mark.parametrize('source', [None, 'file:///avatar.png', '/api/worlds/realm/images/avatar'])
+def test_non_http_sources_never_start_a_download(wid, source):
+    calls = []
+    with pytest.raises(ValueError):
+        imports.sample(wid, source, fetch_image=lambda _: calls.append('download'))
+    assert calls == []
+
+
+@pytest.mark.parametrize('corruption', ['unreadable', 'retargeted'])
+def test_resume_refuses_corrupt_or_retargeted_journals(wid, corruption):
+    source = 'https://example.test/rotate'
+    job = imports.sample(wid, source, max_requests=1, delay=0, fetch_image=lambda _: png())
+    target = imports.job_path(wid, job['job_id'])
+    if corruption == 'unreadable':
+        target.write_text('{}', encoding='utf-8')
+    else:
+        job['source_url'] = 'https://example.test/different'
+        target.write_text(json.dumps(job), encoding='utf-8')
+    calls = []
+    with pytest.raises(image_collections.CollectionInvalidError):
+        imports.sample(wid, source, fetch_image=lambda _: calls.append('download'))
+    assert calls == []
+
+
+@pytest.mark.parametrize('corruption', ['missing-manifest', 'different-members'])
+def test_accepted_state_corruption_never_resumes_downloads(wid, corruption):
+    source = 'https://example.test/rotate'
+    job = imports.sample(wid, source, max_requests=1, delay=0, fetch_image=lambda _: png())
+    imports.accept(wid, job['job_id'])
+    if corruption == 'missing-manifest':
+        image_collections.manifest_path(wid, job['collection_id']).unlink()
+        expected = FileNotFoundError
+    else:
+        target = imports.job_path(wid, job['job_id'])
+        journal = json.loads(target.read_text(encoding='utf-8'))
+        journal['members'] = [image_collections.put_member(wid, png('blue')[0])]
+        target.write_text(json.dumps(journal), encoding='utf-8')
+        expected = image_collections.CollectionInvalidError
+    calls = []
+    with pytest.raises(expected):
+        imports.sample(wid, source, fetch_image=lambda _: calls.append('download'))
+    assert calls == []

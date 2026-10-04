@@ -44,11 +44,11 @@
 
 **Interfaces:** Produce `put_member(wid: str, data: bytes) -> str`, `publish(wid: str, collection_id: str, members: list[str]) -> dict`, `read(wid: str, collection_id: str) -> dict`, `available(wid: str, collection_id: str) -> list[dict]`, `referenced(wid: str, name: str) -> bool`, `url_for(wid: str, collection_id: str) -> str`. Add `image_collection_lock(wid)` and `image_collection_job_lock(wid, job)`.
 
-- [ ] Write store tests for deduplication, validated immutable publication, traversal, missing members, concurrent publication, and protected writes/deletes. Two identical inputs produce one stored member; a protected delete raises `ImageInCollectionError`.
-- [ ] Run new tests with worktree `PYTHONPATH`; observe missing-module failure.
-- [ ] Implement the interfaces using assets, covers' existing structural image validation, atomic writes, and existing lock registry. Keep collection storage independent of `world_images` to prevent an import cycle. Release the collection lock before dependent campaign cleanup.
-- [ ] Run collection and world-image tests; run import/atomic guards.
-- [ ] Commit the store deliverable and record results in the execution ledger.
+- [x] Write store tests for deduplication, validated immutable publication, traversal, missing members, concurrent publication, and protected writes/deletes. Two identical inputs produce one stored member; a protected delete raises `ImageInCollectionError`.
+- [x] Run new tests with worktree `PYTHONPATH`; observe missing-module failure.
+- [x] Implement the interfaces using assets, covers' existing structural image validation, atomic writes, and existing lock registry. Keep collection storage independent of `world_images` to prevent an import cycle. Release the collection lock before dependent campaign cleanup.
+- [x] Run collection and world-image tests; run import/atomic guards.
+- [x] Commit the store deliverable and record results in the execution ledger.
 
 ### Task 2: Resumable finite-pool harvesting
 
@@ -56,11 +56,11 @@
 
 **Interfaces:** Consume Task 1; produce `sample(wid, source_url, *, duplicate_limit=30, max_requests=200, failure_limit=3, delay=0.25, fetch_image=None) -> dict`, `accept(wid, job_id) -> dict`, `job_path(wid, job_id) -> Path`. `sample` returns job id, collection id, members, invocation counters, and stop reason. `accept` freezes a candidate and preserves recovery state until the private runner completes replacement.
 
-- [ ] Write fake-response tests for new/new/duplicate streams, threshold saturation, request-limit incompleteness, invalid bytes, three failures, interrupted streaks, resume, and repeated acceptance. Assert `requests == valid + failed` and `valid == added + duplicates`.
-- [ ] Run tests and observe missing-module failure.
-- [ ] Implement an exclusive job invocation, persistent progress after every response, network outside the collection lock, explicit candidate acceptance, and no resampling after publication.
-- [ ] Run store/import tests and confirm a final manifest has neither a source nor a harvesting state.
-- [ ] Commit the harvester deliverable and update the ledger.
+- [x] Write fake-response tests for new/new/duplicate streams, threshold saturation, request-limit incompleteness, invalid bytes, three failures, interrupted streaks, resume, and repeated acceptance. Assert `requests == valid + failed` and `valid == added + duplicates`.
+- [x] Run tests and observe missing-module failure.
+- [x] Implement an exclusive job invocation, persistent progress after every response, network outside the collection lock, explicit candidate acceptance, and no resampling after publication.
+- [x] Run store/import tests and confirm a final manifest has neither a source nor a harvesting state.
+- [x] Commit the harvester deliverable and update the ledger.
 
 ### Task 3: Read API and portable exports
 
@@ -68,11 +68,11 @@
 
 **Interfaces:** Consume Task 1. Produce `GET /api/worlds/{wid}/image-collections/{id}` with format, id, ordered local member URLs, and `GET .../{id}/image` serving first available member. Export resolves against the exported campaign's world and packs a first available member deterministically.
 
-- [ ] Write tests for metadata, fallback bytes, all-missing 404, corrupt manifests, protected PUT/DELETE 409, deterministic export packing, and bundle/fork repointing under another world id.
-- [ ] Run tests; observe the new routes and export resolver fail.
-- [ ] Add routes to the existing world-images router before generic entity routing; reuse `_serve_image_file`. Extend export URL recognition and lookup without changing ordinary image resolution.
-- [ ] Run route-order, export, world bundle/fork, and collection route tests.
-- [ ] Commit the API/export deliverable and update the ledger.
+- [x] Write tests for metadata, fallback bytes, all-missing 404, corrupt manifests, protected PUT/DELETE 409, deterministic export packing, and bundle/fork repointing under another world id.
+- [x] Run tests; observe the new routes and export resolver fail.
+- [x] Add routes to the existing world-images router before generic entity routing; reuse `_serve_image_file`. Extend export URL recognition and lookup without changing ordinary image resolution.
+- [x] Run route-order, export, world bundle/fork, and collection route tests.
+- [x] Commit the API/export deliverable and update the ledger.
 
 ### Task 4: Stable random display and controls
 
@@ -80,11 +80,11 @@
 
 **Interfaces:** Produce `MarkdownImage`, stable `markdownImageComponents`, and `ImageExtrasContext`. Recognize only same-origin collection paths; fetch the local manifest and validate every returned member URL. Consumers get the selected image's actual URL.
 
-- [ ] Write tests for random start, Previous/Next wrapping, reroll avoiding the current image, independent occurrences, source changes, stale fetches, missing members, one-member controls, fallback, ordinary images, and streaming stability. Assert rerendering the same occurrence does not choose again.
-- [ ] Install existing frontend dependencies and run the new tests; observe missing-component failure.
-- [ ] Implement collection state in a stable component, context-based extras, accessible controls, same-origin manifest validation, and local fallback. Scope greeting-specific extras to owned image URLs; use span wrappers inside Markdown paragraphs.
-- [ ] Run component, greeting, and streaming tests plus typecheck; build the frontend.
-- [ ] Commit the frontend deliverable and update the ledger.
+- [x] Write tests for random start, Previous/Next wrapping, reroll avoiding the current image, independent occurrences, source changes, stale fetches, missing members, one-member controls, fallback, ordinary images, and streaming stability. Assert rerendering the same occurrence does not choose again.
+- [x] Install existing frontend dependencies and run the new tests; observe missing-component failure.
+- [x] Implement collection state in a stable component, context-based extras, accessible controls, same-origin manifest validation, and local fallback. Scope greeting-specific extras to owned image URLs; use span wrappers inside Markdown paragraphs.
+- [x] Run component, greeting, and streaming tests plus typecheck; build the frontend.
+- [x] Commit the frontend deliverable and update the ledger.
 
 ### Task 5: Repository verification and whole-branch local review
 
@@ -92,10 +92,10 @@
 
 **Interfaces:** Consume all implemented interfaces; produce a reviewed feature branch and built frontend.
 
-- [ ] Run `make check PY=C:/Users/charl/github/grimoire/backend/.venv/Scripts/python.exe` and inspect every result. Use ratchet baselines correctly; no new lint debt.
-- [ ] Review the whole diff against the originating spec, with particular attention to missing-image fallback, lock ordering, resumed journals, and selection stability. Use the executing-plans skill's fresh reviewer when available.
-- [ ] Pin material findings with failing tests, fix them, and rerun affected checks.
-- [ ] Commit verified changes and confirm existing main-checkout edits are untouched.
+- [x] Run `make check PY=C:/Users/charl/github/grimoire/backend/.venv/Scripts/python.exe` and inspect every result. Use ratchet baselines correctly; no new lint debt.
+- [x] Review the whole diff against the originating spec, with particular attention to missing-image fallback, lock ordering, resumed journals, and selection stability. Use the executing-plans skill's fresh reviewer when available.
+- [x] Pin material findings with failing tests, fix them, and rerun affected checks.
+- [x] Commit verified changes and confirm existing main-checkout edits are untouched.
 
 ### Task 6: Private harvesting, migration, and live verification
 
@@ -103,8 +103,10 @@
 
 **Interfaces:** Consume sample/accept, published collection APIs, and the built app. Produce verified local collections and replacement references, with report counters.
 
-- [ ] Inventory explicit source addresses and exact image references, correcting only known aliases. Back up all affected records and the failure CSV.
-- [ ] Sample every source to the duplicate threshold; request-limit or failure outcomes remain resumable. Accept only verified candidates. Keep source mapping until relinking and HTTP verification finish.
-- [ ] Activate the verified worktree build on the existing local service without switching or modifying the main checkout. Perform migration in an editing-quiescent window; compare each target immediately before atomic replacement. Report detected edits rather than overwrite them. External-editor races are outside existing atomic-write guarantees.
-- [ ] Verify every member's served bytes, all replacement references, and absence of runtime source URLs. Remove only resolved CSV entries, retire transient mappings, and preserve historical backups.
-- [ ] Return collection/image/request/duplicate/failure totals and any remaining sources; do not claim mathematical exhaustion from random sampling.
+- [x] Inventory explicit source addresses and exact image references, correcting only known aliases. Back up all affected records and the failure CSV.
+- [x] Sample every source to the duplicate threshold; request-limit or failure outcomes remain resumable. Accept only verified candidates. Keep source mapping until relinking and HTTP verification finish.
+- [x] Activate the verified worktree build on the existing local service without switching or modifying the main checkout. Perform migration in an editing-quiescent window; compare each target immediately before atomic replacement. Report detected edits rather than overwrite them. External-editor races are outside existing atomic-write guarantees.
+- [x] Verify every member's served bytes, all replacement references, and absence of runtime source URLs. Remove only resolved CSV entries, retire transient mappings, and preserve historical backups.
+- [x] Return collection/image/request/duplicate/failure totals and any remaining sources; do not claim mathematical exhaustion from random sampling.
+
+Verification results and review rulings: [verification report](2026-10-04-local-image-collections-verification.md). Repository-wide Windows limitations are recorded there; checks were run without raising baselines.
