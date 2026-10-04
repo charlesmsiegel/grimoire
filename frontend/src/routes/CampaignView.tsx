@@ -4742,7 +4742,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               a rename or a switch must not show it another scene's fields. */}
           {!focus && showTracker && activeId && (
             <div className="panel-slot">
-              <SceneTrackerPanel key={`${cid}:${activeId}`} cid={cid} sid={activeId} />
+              <SceneTrackerPanel key={`${cid}:${activeId}`} cid={cid} sid={activeId}
+                                 onChanged={transcriptActions.refreshTracker} />
             </div>
           )}
           {!focus && showChanges && <ChangesPanel cid={cid} />}

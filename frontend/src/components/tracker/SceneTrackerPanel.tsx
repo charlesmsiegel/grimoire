@@ -12,8 +12,14 @@ import {
  *  A scene may switch an inherited field off or add one of its own, and nothing
  *  else: redefining an inherited field mid-scene would strand the snapshots
  *  already stored against the old definition. So this panel never sends a
- *  `change`, and its only edit to an inherited field is the checkbox. */
-export function SceneTrackerPanel({ cid, sid }: { cid: string; sid: string }) {
+ *  `change`, and its only edit to an inherited field is the checkbox.
+ *
+ *  `onChanged` is called after every save that lands: the play view's tracker
+ *  summary carries the cast tiles' moods and the fields' labels, which this
+ *  layer decides, and it is otherwise re-read only when a turn lands. */
+export function SceneTrackerPanel({ cid, sid, onChanged }: {
+  cid: string; sid: string; onChanged?: () => void;
+}) {
   const scope: TrackerScope = useMemo(() => ({ kind: "scene", cid, sid }), [cid, sid]);
   const [bundle, setBundle] = useState<TrackerLayerBundle | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -56,6 +62,8 @@ export function SceneTrackerPanel({ cid, sid }: { cid: string; sid: string }) {
     setSaving(true); setError(null);
     try {
       const saved = await api.setTrackerFields(scope, { fields: next.fields, off: next.off });
+      // Stored whatever is on screen now, so the summary is stale either way.
+      onChanged?.();
       if (live.current === mine) setBundle(saved);
       return live.current === mine;
     } catch (err) {
