@@ -21,6 +21,7 @@ The 404s are hand-rolled. There is no world equivalent of
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
+from starlette.responses import JSONResponse
 
 from .. import store
 from ..llm import LLMClient
@@ -43,6 +44,35 @@ def _world_or_404(wid: str) -> str:
     if not store.worlds.world_exists(wid):
         raise HTTPException(status_code=404, detail="world not found")
     return wid
+
+
+def _collection_members_or_404(wid: str, collection_id: str) -> list[dict]:
+    _world_or_404(wid)
+    try:
+        members = store.image_collections.available(wid, collection_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image collection not found") from None
+    except store.image_collections.CollectionIdError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except store.image_collections.CollectionInvalidError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    if not members:
+        raise HTTPException(status_code=404, detail="image collection has no available images")
+    return members
+
+
+@router.get("/worlds/{wid}/image-collections/{collection_id}")
+def get_world_image_collection(wid: str, collection_id: str):
+    members = _collection_members_or_404(wid, collection_id)
+    return JSONResponse({"format": 1, "id": collection_id,
+                         "members": [m["url"] for m in members]},
+                        headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/worlds/{wid}/image-collections/{collection_id}/image")
+def get_world_image_collection_fallback(wid: str, collection_id: str, request: Request):
+    members = _collection_members_or_404(wid, collection_id)
+    return _serve_image_file(members[0]["path"], request)
 
 
 # ---- the world's cover (store/covers.py) -----------------------------------
@@ -136,6 +166,8 @@ async def put_world_library_image(wid: str, name: str, file: UploadFile = File(.
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
         stored = store.world_images.put_image(wid, name, data, ext)
+    except store.image_collections.ImageInCollectionError as exc:
+        raise HTTPException(status_code=409, detail="image_in_collection") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # `v` so the client can build the immutable `?v=` URL without a second round
@@ -157,6 +189,8 @@ def delete_world_library_image(wid: str, name: str):
     # never resolved.
     try:
         store.world_images.delete_image(wid, name)
+    except store.image_collections.ImageInCollectionError as exc:
+        raise HTTPException(status_code=409, detail="image_in_collection") from exc
     except OSError as exc:
         raise HTTPException(
             status_code=500, detail="image could not be removed") from exc

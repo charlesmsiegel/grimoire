@@ -1,6 +1,7 @@
 import { Fragment, memo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { markdownImageComponents } from "../../markdown/MarkdownImage";
 import { hideArtHandles } from "../../artHandles";
 import { commentPlugin } from "../../markdown/commentPlugin";
 import { quotePlugin } from "../../markdown/quotePlugin";
@@ -18,7 +19,7 @@ export const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { co
   // their values, so a quote mark inside a note could never have opened a run
   // either way. The order is for reading, not for correctness.
   return (
-    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[commentPlugin, quotePlugin]}>{content}</Markdown>
+    <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[commentPlugin, quotePlugin]}>{content}</Markdown>
   );
 });
 

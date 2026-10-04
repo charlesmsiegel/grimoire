@@ -25,6 +25,10 @@ class CollectionInvalidError(ValueError):
     """An invalid collection must not be published or treated as unreferenced."""
 
 
+class CollectionIdError(CollectionInvalidError):
+    """An invalid address is distinct from corrupt stored collection data."""
+
+
 class ImageInCollectionError(ValueError):
     """Changing these bytes would change an accepted local collection."""
 
@@ -41,7 +45,7 @@ def image_directory(wid: str) -> Path:
 
 def manifest_path(wid: str, collection_id: str) -> Path:
     if not isinstance(collection_id, str) or not _ID.fullmatch(collection_id):
-        raise CollectionInvalidError("invalid image collection id")
+        raise CollectionIdError("invalid image collection id")
     return directory(wid) / f"{collection_id}.json"
 
 
@@ -81,7 +85,7 @@ def referenced(wid: str, name: str) -> bool:
     # writers bracket this scan and their write with image_collection_lock.
     found = False
     for path in directory(wid).glob("*.json"):
-        found |= name in read(wid, path.stem)["members"]
+        found |= name.casefold() in {member.casefold() for member in read(wid, path.stem)["members"]}
     return found
 
 

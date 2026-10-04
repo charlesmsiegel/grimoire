@@ -1166,3 +1166,23 @@ test("creating a greeting includes phase sequence and optional metadata", async 
     expect.objectContaining({ phase: "arrival", sequence: 3, optional: true }),
   ));
 });
+
+
+test("collection members do not expose greeting-owned subject controls", async () => {
+  const id = "a".repeat(32);
+  const member = `/api/worlds/realm/images/collection-image-${"b".repeat(64)}?v=1`;
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true,
+    json: async () => ({ format: 1, id, members: [member] }) }));
+  vi.mocked(api.readGreeting).mockResolvedValue({
+    ...greetingFixture("open", "Open"),
+    body: `![Scene](/api/worlds/realm/image-collections/${id}/image)`,
+  } as any);
+  try {
+    renderGreetings({ selected: "open" });
+    expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member);
+    expect(screen.queryByRole("button", { name: /subjects/i })).not.toBeInTheDocument();
+    expect(api.setImageSubjects).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

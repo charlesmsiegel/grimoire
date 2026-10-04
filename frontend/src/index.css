@@ -4877,3 +4877,8 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      the cast panel, the context/cost breakdowns' `<details>`. */
   summary { min-height: 44px; }
 }
+
+/* Collection navigation is local to the image occurrence, including in prose. */
+.image-collection { display: inline-flex; flex-direction: column; max-width: 100%; gap: .4rem; }
+.image-collection-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .4rem; font-size: .8rem; }
+.image-collection-controls button { min-height: 36px; padding: .3rem .6rem; }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Markdown from "react-markdown";
+import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
 import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
 import { errorText } from "../api/errors";
@@ -1044,7 +1045,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             <div className="detail-main">
               <h3>{contentPreview.name}</h3>
               <div className="detail-rendered">
-                <Markdown remarkPlugins={[remarkGfm]}>{contentPreview.body}</Markdown>
+                <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{contentPreview.body}</Markdown>
               </div>
             </div>
             <aside className="detail-sidebar">
@@ -1111,7 +1112,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                 </>
               )}
               <div className="detail-rendered">
-                <Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown>
+                <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{body}</Markdown>
               </div>
             </div>
             <aside className="detail-sidebar">

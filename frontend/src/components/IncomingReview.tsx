@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
 import { api, type IncomingBlob, type IncomingItem, type IncomingRef } from "../api/client";
 import { CARD_TEXT_FIELDS, PERSONA_FIELDS } from "./cardFields";
@@ -102,7 +103,7 @@ function Value({ text, markdown }: { text: string; markdown: boolean }) {
   if (markdown)
     return (
       <div className="detail-rendered">
-        <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+        <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{text}</Markdown>
       </div>
     );
   return <pre className="incoming-text">{text}</pre>;

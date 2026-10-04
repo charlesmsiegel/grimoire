@@ -1,5 +1,4 @@
 import io
-import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -7,7 +6,7 @@ import pytest
 from PIL import Image
 
 from grimoire.store import image_collections as collections
-from grimoire.store import world_images, worlds
+from grimoire.store import locks, world_images, worlds
 
 
 def png(color='red'):
@@ -85,3 +84,20 @@ def test_two_publishers_cannot_change_an_accepted_collection(wid):
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sum(pool.map(publish, names)) == 1
     assert len(collections.read(wid, cid)['members']) == 1
+
+
+def test_case_aliases_cannot_mutate_members(wid):
+    name = collections.put_member(wid, png())
+    collections.publish(wid, uuid.uuid4().hex, [name])
+    with pytest.raises(collections.ImageInCollectionError):
+        world_images.put_image(wid, name.upper(), png('blue'), 'png')
+    with pytest.raises(collections.ImageInCollectionError):
+        world_images.delete_image(wid, name.upper())
+    assert world_images.image_path(wid, name).read_bytes() == png()
+
+
+def test_windows_world_aliases_share_both_locks(wid):
+    if not worlds.world_exists(wid.upper()):
+        pytest.skip('filesystem has distinct case identities')
+    assert locks.image_collection_lock(wid) is locks.image_collection_lock(wid.upper())
+    assert locks.image_collection_job_lock(wid, 'a' * 64) is locks.image_collection_job_lock(wid.upper(), 'a' * 64)

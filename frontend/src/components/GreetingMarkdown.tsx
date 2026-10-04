@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { ImageExtrasContext, MarkdownImage } from "../markdown/MarkdownImage";
 
 // Renderer for greeting-style card text (first_mes, alternate greetings, world
 // greetings). Chub-style cards open greetings with `#Scene Label#` — not valid
@@ -17,6 +18,7 @@ function SceneLabel({ children }: { children?: ReactNode }) {
 }
 
 const components = {
+  img: MarkdownImage,
   h1: SceneLabel, h2: SceneLabel, h3: SceneLabel,
   h4: SceneLabel, h5: SceneLabel, h6: SceneLabel,
 };
@@ -24,24 +26,14 @@ const components = {
 export function GreetingMarkdown({ children, imageExtras }:
     { children: string; imageExtras?: (src: string) => ReactNode }) {
   const text = children.replace(/^#(.+?)#\s*$/gm, (_m, label) => `### ${label.trim()}`);
-  // imageExtras hangs per-image UI (subject chips, pickers) under each image;
-  // wrapped in spans because react-markdown renders images inside <p>.
-  const withImages = imageExtras
-    ? {
-        ...components,
-        img: ({ src, alt }: { src?: string; alt?: string }) => (
-          <span className="img-block">
-            <img src={src} alt={alt ?? ""} />
-            <span className="img-extras">{imageExtras(src ?? "")}</span>
-          </span>
-        ),
-      }
-    : components;
+  // Context keeps the image component identity stable when extras change.
   return (
     <div className="detail-rendered">
-      <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={withImages}>
+      <ImageExtrasContext.Provider value={imageExtras}>
+      <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
         {text}
       </Markdown>
+      </ImageExtrasContext.Provider>
     </div>
   );
 }

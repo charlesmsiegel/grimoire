@@ -28,6 +28,7 @@ from . import (
     covers,
     entities,
     fetch,
+    image_collections,
     overlay,
     pcs,
     worlds,
@@ -70,6 +71,9 @@ _IMG_URL = re.compile(
     r"|(?P<kind>" + "|".join(entities.ENTITY_KINDS) + r")/(?P<eid>[^/\s]+)"
     r")/images"
     r")/(?P<name>[^/\s?#]+)")
+
+_COLLECTION_URL = re.compile(
+    r"/api/worlds/[^/\s]+/image-collections/(?P<collection>[0-9a-f]{32})/image(?:\?[^\s#]*)?\Z")
 
 _MD_IMG = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
@@ -227,6 +231,19 @@ def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/")
     worse) -- see `Images` for why an image we cannot declare is dropped rather
     than packed under a guess."""
     def sub(m: re.Match) -> str:
+        collection = _COLLECTION_URL.fullmatch(m["url"])
+        if collection:
+            # Like ordinary world image links, resolve in the exported
+            # campaign's world, and respect its hidden-image tombstones.
+            try:
+                wid = campaigns_read.world_root_of(cid).name
+                members = image_collections.read(wid, collection["collection"])["members"]
+                p = next((path for name in members
+                          if (path := campaign_images.image_path(cid, name)) is not None), None)
+            except (FileNotFoundError, ValueError, worlds.WorldNotFound):
+                p = None
+            packed = images.add(p) if p is not None else None
+            return f"![{m['alt']}]({prefix}{packed})" if packed is not None else m["alt"]
         app = _IMG_URL.match(m["url"])
         if app:
             p = _resolve_image(cid, app)

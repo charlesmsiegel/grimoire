@@ -116,6 +116,7 @@ Spec: docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from contextlib import ExitStack, contextmanager
@@ -643,6 +644,7 @@ _image_collection_job_locks: dict[tuple[str, str], _ProcessScopedLock] = {}
 
 def image_collection_lock(wid: str) -> _ProcessScopedLock:
     """World-image membership checks and publication share one process lock."""
+    wid = os.path.normcase(str((paths.home() / "worlds" / wid).resolve()))
     with _registry_guard:
         lock = _image_collection_locks.get(wid)
         if lock is None:
@@ -653,8 +655,9 @@ def image_collection_lock(wid: str) -> _ProcessScopedLock:
 
 def image_collection_job_lock(wid: str, job: str) -> _ProcessScopedLock:
     """Serialize one transient harvest journal; never acquired from an image lock."""
+    wid = os.path.normcase(str((paths.home() / "worlds" / wid).resolve()))
+    key = (wid, job)
     with _registry_guard:
-        key = (wid, job)
         lock = _image_collection_job_locks.get(key)
         if lock is None:
             lock = _image_collection_job_locks[key] = _ProcessScopedLock(

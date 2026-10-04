@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
+import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type Persona, type VersionRef } from "../api/client";
 import { errorText } from "../api/errors";
@@ -263,7 +264,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
       <div className="card-pane-body" role="tabpanel">
         {tab === "persona" && (mode === "view" ? <>
           <div className="form-actions"><button className="subtle" onClick={() => setMode("edit")}>Edit</button></div>
-          <div className="detail-rendered"><Markdown remarkPlugins={[remarkGfm]}>{persona.description}</Markdown></div>
+          <div className="detail-rendered"><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{persona.description}</Markdown></div>
         </> : <div className="form">
           <Field label="Name"><input value={persona.name} onChange={(e) => setPersona({ ...persona, name: e.target.value })} /></Field>
           <Field label="Pronouns"><input value={persona.pronouns} onChange={(e) => setPersona({ ...persona, pronouns: e.target.value })} /></Field>

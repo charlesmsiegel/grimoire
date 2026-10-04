@@ -575,6 +575,9 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
             <div className="detail-main">
               <h3>{form.name}</h3>
               <GreetingMarkdown imageExtras={!worldScope ? undefined : (src) => {
+                // These controls write this greeting's subjects sidecar.
+                // Collection members live in the world library, not here.
+                if (!src.startsWith(`/api/worlds/${wid}/greetings/${gid}/images/`)) return null;
                 const name = imageName(src);
                 return (
                   <>

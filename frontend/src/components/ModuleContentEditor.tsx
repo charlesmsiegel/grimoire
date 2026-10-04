@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
 import { api, type ModuleContentEntry, type ModuleDetail, type ModuleEditResult, type ModuleField } from "../api/client";
 // From `types`, not through `client` — see the note on ENTITY_KINDS there.
@@ -268,7 +269,7 @@ export function ContentSection({ pack, reload }: {
             <div className="detail-main">
               <h3>{viewEntry.name}</h3>
               <div className="detail-rendered">
-                <Markdown remarkPlugins={[remarkGfm]}>{viewEntry.body}</Markdown>
+                <Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{viewEntry.body}</Markdown>
               </div>
             </div>
             <aside className="detail-sidebar">

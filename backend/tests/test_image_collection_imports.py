@@ -60,3 +60,21 @@ def test_invalid_bytes_and_failures_interrupt_completion_evidence(wid):
 def test_bad_limits_are_refused_without_fetching(wid):
     with pytest.raises(ValueError):
         imports.sample(wid, 'https://example.test/rotate', max_requests=0)
+
+
+def test_publication_survives_a_crash_before_journal_confirmation(wid, monkeypatch):
+    source = 'https://example.test/rotate'
+    job = imports.sample(wid, source, max_requests=1, delay=0, fetch_image=lambda _: png())
+    save = imports._save
+    def interrupted(*_):
+        raise OSError('interrupted after publication')
+    monkeypatch.setattr(imports, '_save', interrupted)
+    with pytest.raises(OSError):
+        imports.accept(wid, job['job_id'])
+    monkeypatch.setattr(imports, '_save', save)
+    calls = []
+    resumed = imports.sample(wid, source, max_requests=1, delay=0,
+                             fetch_image=lambda _: calls.append('download') or png('blue'))
+    assert calls == []
+    assert resumed['accepted'] and resumed['stop'] == 'accepted'
+    assert imports.accept(wid, job['job_id'])['members'] == job['members']

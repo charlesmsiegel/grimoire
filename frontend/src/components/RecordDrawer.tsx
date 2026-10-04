@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
+import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
 import { api, type CastDetail, type CastSource } from "../api/client";
 import { THUMB } from "../api/thumbs";
@@ -98,7 +99,7 @@ export function RecordDrawer({ cid, sid, target, onClose }:
           <img className="drawer-avatar" alt={`${title} avatar`} src={avatar} decoding="async"
                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
         )}
-        <div className="detail-rendered"><Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown></div>
+        <div className="detail-rendered"><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{body}</Markdown></div>
       </aside>
     </div>
   );

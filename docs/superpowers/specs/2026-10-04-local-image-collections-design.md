@@ -20,6 +20,8 @@ migration runner. It does not add collection-management screens, scheduled
 downloads, automatic detection of arbitrary rotating hosts, or promotion of
 source archives into playable greetings. Operational inputs, source addresses,
 record inventories, backups, and download reports remain in the private store.
+Each transient harvest job holds an exclusive thread/process lock across an
+invocation, separate from the short collection-storage lock.
 
 ## Final storage and references
 
@@ -130,8 +132,11 @@ Finalization is ordered and idempotent:
 2. Atomically publish the source-free manifest, then verify its local API reads.
 3. Replace only the job's exact external image references with its local
    collection reference, preserving other text and JSON fields. Back up each
-   affected private record first. Refuse to overwrite a concurrent edit; report
-   the conflict and retain progress for retry.
+   affected private record first. Run relinking in an editing-quiescent
+   window and compare each record immediately before publication. Report
+   detected edits and retain progress for retry. This optimistic comparison
+   does not exclude an external editor racing the final check and replacement;
+   the existing store has no general world-record compare-and-swap contract.
 4. Verify persisted replacements and local serving. Only then remove resolved
    entries from the private failure todo CSV, preserving unrelated rows.
 5. Remove the transient source mapping when all intended replacements are
@@ -155,7 +160,9 @@ paths and fetches the local manifest. All other images retain their existing
 behavior. Use it in greeting rendering and the memoized transcript/streaming
 renderer, and in the existing record/Markdown previews that can display those
 references. Preserve greeting image extras and pass their callback the selected
-member's actual image URL, so subject metadata addresses a real image.
+member's actual image URL. Consumers show asset-specific controls only for
+images they own; the greeting subject picker is not shown for world-library
+collection members. Existing ordinary greeting image tagging remains available.
 
 Choose the initial member uniformly once per displayed collection occurrence.
 Previous and Next wrap around the stable member order. Reroll selects uniformly
