@@ -277,6 +277,11 @@ When the campaign's tracker setting resolves to off, `schedule` does nothing.
 - **Updates in one scene run one at a time, in transcript order.** An update
   whose predecessor is `pending` waits for it. If the predecessor `failed`, the
   update starts from the last `ok` record.
+- That ordering is one process's. A second process on the same store runs its
+  own updates beside it, so an update that read its base while a post between
+  that base and its own was still `pending`, or whose base moved (re-run,
+  edited, superseded) before it committed, lands with `upstream_changed`
+  rather than fresh. Nothing re-runs on its account.
 - Each reroll variant runs and keeps its own record. Nothing is cancelled.
 - The record is written `pending` when scheduled, and `ok` or `failed` when the
   run ends.

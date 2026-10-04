@@ -8,7 +8,9 @@ is waited on.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 
 import pytest
 
@@ -682,6 +684,100 @@ def test_a_post_after_an_edited_post_text_lands_flagged(client):
         assert index[key]["flags"]["upstream_changed"]
 
 
+# --- a second process on the same store ----------------------------------------
+#
+# `_scene_lock` orders ONE process's updates for a scene. A second grimoire
+# process on the same store (docs/store-guarantees.md) has a lock of its own,
+# so two adjacent posts' updates can run side by side there. Handing every
+# update a fresh lock is that second process, in-process; the campaign lock
+# both still share is the real cross-process one.
+
+def _unordered(monkeypatch) -> None:
+    monkeypatch.setattr(tracker_routes, "_scene_lock",
+                        lambda app, cid, identity: asyncio.Lock())
+
+
+def _count_prepares(monkeypatch) -> list[threading.Event]:
+    """`[first, second]`: set once that many updates have read their inputs."""
+    real, seen = tracker_routes._prepare, []
+    reached = [threading.Event(), threading.Event()]
+
+    def prepare(*a, **k):
+        out = real(*a, **k)
+        seen.append(a)
+        for n, event in enumerate(reached, 1):
+            if len(seen) >= n:
+                event.set()
+        return out
+
+    monkeypatch.setattr(tracker_routes, "_prepare", prepare)
+    return reached
+
+
+def test_an_update_read_while_its_predecessor_was_pending_lands_flagged(client, monkeypatch):
+    """Post N's update is still answering when post N+1's reads its base: the
+    newest `ok` record is then N-1's, and N+1's result lacks whatever N
+    changes. Whichever of the two commits first, N+1 must not land fresh."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    _played(client, cid, sid, sends=1)
+    _unordered(monkeypatch)
+    reached = _count_prepares(monkeypatch)
+    llm = _held(client)
+    try:
+        _send(client, cid, sid, "Words number 1.")
+        assert reached[1].wait(RUN_TIMEOUT), "both updates should have read their inputs"
+    finally:
+        llm.release()
+    _settle(client, cid, sid)
+    post, reply = _keys(cid, sid)[2:]
+    index = _index(cid, sid)
+    assert index[post]["status"] == "ok"
+    assert index[post]["flags"] == {"upstream_changed": False, "text_changed": False}
+    assert index[reply]["status"] == "ok"
+    assert index[reply]["flags"]["upstream_changed"], \
+        "a record built without its pending predecessor landed fresh"
+
+
+def test_an_update_whose_base_was_rerun_under_it_lands_flagged(client, monkeypatch):
+    """The base was `ok` when the update read it, and was then re-run (by the
+    other process) before the update committed: the result is built on a
+    snapshot that is no longer the base's final state."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    _unordered(monkeypatch)
+    reached = _count_prepares(monkeypatch)
+    llm = _held(client)
+    try:
+        assert client.post(f"{_base(cid, sid)}/records/{keys[3]}/retry").status_code == 200
+        assert reached[0].wait(RUN_TIMEOUT)
+        assert client.post(f"{_base(cid, sid)}/records/{keys[2]}/retry").status_code == 200
+        assert reached[1].wait(RUN_TIMEOUT)
+    finally:
+        llm.release()
+    _settle(client, cid, sid)
+    index = _index(cid, sid)
+    assert index[keys[2]]["flags"] == {"upstream_changed": False, "text_changed": False}
+    assert index[keys[3]]["status"] == "ok"
+    assert index[keys[3]]["flags"]["upstream_changed"], \
+        "a record built on a superseded base landed fresh"
+
+
+def test_updates_one_after_another_still_land_clean(client):
+    """The ordinary path: each update reads its base after the one before it
+    landed, so nothing moved under it and nothing is flagged."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    assert client.post(f"{_base(cid, sid)}/records/{keys[1]}/rerun-from").status_code == 200
+    _settle(client, cid, sid)
+    index = _index(cid, sid)
+    for key in keys:
+        assert index[key]["status"] == "ok"
+        assert index[key]["flags"] == {"upstream_changed": False, "text_changed": False}, key
+
+
 # --- a person's values survive a re-run ---------------------------------------
 
 @pytest.mark.parametrize("action", ["retry", "rerun-from"])
@@ -810,8 +906,6 @@ def test_a_duplicate_retry_cannot_land_over_an_edit(client, monkeypatch):
     open the edit guard while the second was still to run, and let it
     overwrite the edit. The record stays `pending` (an edit refused) until the
     second lands; an edit after that is kept."""
-    import threading
-
     _use(client, _llm())
     cid, sid = _scene(client)
     keys = _played(client, cid, sid, sends=1)
@@ -885,8 +979,6 @@ def _no_record_left(cid, sid) -> None:
 
 
 def test_a_post_taken_back_after_its_update_landed_leaves_no_record(client, monkeypatch):
-    import threading
-
     llm = _failing_turn(client, monkeypatch, hold=CHAT)
     cid, sid = _scene(client)
     box: dict = {}

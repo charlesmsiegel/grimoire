@@ -244,7 +244,8 @@ def start(app, cid: str, sid: str, marked: Mark, client: LLMClient,
     lands (`_commit`). `trust_base` is the first key of an explicit re-run
     from here: the person chose that starting point with its base record's
     warning in view, so a stale base does not make the result stale
-    (`_prepare`)."""
+    (`_prepare`) -- a base that is not its predecessor's final state still
+    does (`Base`)."""
     key, gen = marked
     try:
         run = runs.reserve_background(app, cid, sid, "tracker-update")
@@ -339,7 +340,11 @@ def _scene_lock(app, cid: str, identity: str) -> asyncio.Lock:
 
     Keyed by `(cid, identity)`, not the identity alone: a fork copies its
     source's scene files, identities included, and two campaigns' scenes
-    sharing one lock would queue each other's updates for nothing."""
+    sharing one lock would queue each other's updates for nothing.
+
+    One PROCESS's lock: a second grimoire process on the same store runs its
+    own updates beside these. What keeps that from landing a record built on
+    a base the other process was replacing is `Base`, checked at commit."""
     with _LOCKS_GUARD:
         locks = getattr(app.state, "tracker_locks", None)
         if locks is None:
@@ -416,7 +421,7 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
         written = await run_in_threadpool(
             _commit, cid, identity, prep["sid"], key, snapshot, changed,
             store.tracker.fields.digest(fields), effective_model(conn), flag_later,
-            prep["seen_seq"], gen, prep["stale_base"], restored)
+            prep["seen_seq"], gen, prep["stale_base"], restored, prep["base"])
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
         await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc), gen)
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
@@ -524,7 +529,13 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
     before the post) carries a staleness flag of its own, so the result will
     be built on a state the transcript no longer stands behind -- `_commit`
     raises `upstream_changed` on it. Not for `trust_base` (the first key of an
-    explicit re-run, started from that base on purpose)."""
+    explicit re-run, started from that base on purpose).
+
+    `stale_base` also when a post between that base and this one still has an
+    update `pending`, `trust_base` or not: the base is then not its
+    predecessor's final state, and the result lacks whatever that update
+    changes (`_base_unsettled`). And `base` is the base's fingerprint, which
+    `_commit` takes again (`_base_mark`)."""
     walk = store.tracker.walk
     records = store.tracker.records
     with store.locks.campaign_lock(cid):
@@ -555,7 +566,8 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
         entries = records.read_index(cid, identity)
         seen = records.flag_seq(entries.get(key))
         base_flags = ((entries.get(base_key) or {}).get("flags") or {}) if base_key else {}
-        stale_base = not trust_base and any(base_flags.get(f) for f in records.FLAGS)
+        stale_base = ((not trust_base and any(base_flags.get(f) for f in records.FLAGS))
+                      or _base_unsettled(cid, sid, index, base_key, entries))
         own = records.read_snapshot(cid, identity, key)
         present = walk.present_at(cid, sid, index)
         return {
@@ -568,6 +580,7 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
             "post_msg": located["post_msg"],
             "seen_seq": seen,
             "stale_base": stale_base,
+            "base": _base_mark(base_key, entries),
             "own": own["snapshot"] if own else None,
             # The pairs this post's own record changed, and those a person
             # touched there without moving a value (an awareness-only edit is
@@ -579,6 +592,55 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
                          | {(p[0], p[1]) for p in records.pairs(
                              (entries.get(key) or {}).get(records.TOUCHED))}),
         }
+
+
+Base = tuple[str | None, int, int]
+"""What an update's input stood on, as `_prepare` read it: the base record's
+key (the newest `ok` record before the post, `walk.state_before`) with its
+mark generation and flag sequence. `_commit` reads it again under the lock
+that covers the write, and a result whose base has moved lands with
+`upstream_changed`.
+
+WHY, when `_scene_lock` already runs a scene's updates one at a time: that
+lock is one process's. Two grimoire processes on one store
+(docs/store-guarantees.md, "A second process on the same store") share the
+campaign lock and nothing else, so each can run an adjacent post's update
+while the other's is answering -- and the later one then reads a base the
+earlier is about to replace. Nothing re-runs on its account (the spec's
+rule: later records are flagged, and re-running is the person's call); the
+flag is what keeps a record built on a superseded state from reading fresh.
+
+The generation moves on every `mark_pending` and every hand edit, so a base
+re-run or edited under the update is caught even when it lands back on the
+same key; the sequence catches a flag raised on it. A base re-marked and not
+yet landed is no longer `ok`, so the walk steps past it to an older key."""
+
+
+def _base_mark(base_key: str | None, entries: dict) -> Base:
+    entry = entries.get(base_key) if base_key else None
+    records = store.tracker.records
+    return base_key, records.generation(entry), records.flag_seq(entry)
+
+
+def _base_unsettled(cid: str, sid: str, index: int, base_key: str | None,
+                    entries: dict) -> bool:
+    """Whether a post between the base and the post at `index` has an update
+    still `pending` -- one that will land after this update read its base.
+
+    In one process that cannot be an update queued AHEAD of this one, which
+    `_scene_lock` has already let land; it is another process's update, one
+    queued behind this one (a Retry of an earlier post), or one that died.
+    In every case this result is built without that post's contribution. A
+    `failed` post is not counted: its final state is "no result", and a Retry
+    that gives it one flags every later record itself (`flag_later`)."""
+    for i, key in reversed(store.tracker.walk.ordered_keys(cid, sid)):
+        if i >= index:
+            continue
+        if key == base_key:
+            return False
+        if (entries.get(key) or {}).get("status") == "pending":
+            return True
+    return False
 
 
 def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) -> None:
@@ -600,7 +662,7 @@ def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) 
 def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
             changed: list, digest: str, model: str, flag_later: bool = False,
             seen_seq: int = 0, gen: int | None = None, stale_base: bool = False,
-            touched: list | None = None) -> bool:
+            touched: list | None = None, base: Base | None = None) -> bool:
     """Store the result, unless the post went away while the model answered.
 
     RE-CHECKED under the lock that covers the write, because the check in
@@ -618,7 +680,8 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
 
     `gen` is re-checked here too (`Mark`): a newer run marked, or a hand edit
     made, while the model answered means this result is not the one to keep.
-    `stale_base` (`_prepare`) raises `upstream_changed` in the same write.
+    `stale_base` (`_prepare`) raises `upstream_changed` in the same write, and
+    so does a `base` that has moved since `_prepare` read it (`Base`).
     `touched`: the pairs `merge.keep_user_values` restored, which stay the
     person's (`records.TOUCHED`) so the next re-run restores them too."""
     with store.locks.campaign_lock(cid):
@@ -629,9 +692,14 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
             return False
         if _obsolete(cid, identity, key, gen):
             return False
-        if _locate(cid, sid, key) is None:
+        located = _locate(cid, sid, key)
+        if located is None:
             _settle_unwritten(cid, sid, identity, key, "")
             return False
+        if base is not None and not stale_base:
+            base_key, _ = store.tracker.walk.state_before(cid, sid, located["index"])
+            entries = store.tracker.records.read_index(cid, identity)
+            stale_base = _base_mark(base_key, entries) != base
         # `seen_seq`: the flags are cleared only if none went up since
         # `_prepare` read this result's inputs -- one that did is a write the
         # result never saw, and the record must keep saying so.
