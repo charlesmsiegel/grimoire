@@ -27,9 +27,13 @@ Three things this shares with its campaign-side sibling, and one it does not:
   ``tests/test_lock_domain_guard.py`` recognizes a mutating module by its
   ``assets.put_in``/``assets.delete_in`` call sites, and mutation does not
   propagate across an import.
-- What it does **not** share is a lock. See below.
+- Its membership lock is world-scoped rather than campaign-scoped. See below.
 
-**Nothing here takes a lock, because worlds have no lock domain at all.** That
+**Image writes take the collection-membership lock.** Accepted collections
+reference immutable bytes, so publication and the write/delete guard serialize
+on one world-scoped process lock. Dependent campaign tombstone cleanup happens
+after releasing it, avoiding a new world-to-campaign lock ordering. Other world
+records have no general lock domain. Historically that
 is not a gap this module opens; ``overlay.set_description``'s docstring already
 names it -- the world-side description write is unlocked too, and ``focus.json``
 and ``subjects.json`` race there in exactly the same way. Inventing a half-lock
@@ -57,7 +61,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from . import assets, image_descriptions, image_library, locks, overlay
+from . import assets, image_collections, image_descriptions, image_library, locks, overlay
 from .worlds import paths as worlds_paths
 
 log = logging.getLogger(__name__)
@@ -121,7 +125,9 @@ def put_image(wid: str, name: str, data: bytes, ext: str) -> str:
     """
     if not image_library.addressable(name):
         raise ValueError("image name cannot be used in a link")
-    return assets.put_in(images_dir(wid), name, data, ext, supported_only=True)
+    with locks.image_collection_lock(wid):
+        image_collections.guard_write(wid, name, data)
+        return assets.put_in(images_dir(wid), name, data, ext, supported_only=True)
 
 
 def read_descriptions(wid: str) -> dict[str, str]:
@@ -186,9 +192,11 @@ def delete_image(wid: str, name: str) -> None:
     nothing.
     """
     d = images_dir(wid)
-    assets.delete_in(d, name, supported_only=True)
-    if assets.path_in(d, name, supported_only=True) is not None:
-        raise OSError(f"image could not be removed: {name}")
+    with locks.image_collection_lock(wid):
+        image_collections.guard_write(wid, name)
+        assets.delete_in(d, name, supported_only=True)
+        if assets.path_in(d, name, supported_only=True) is not None:
+            raise OSError(f"image could not be removed: {name}")
     # The description goes with the bytes, as it does on every other image
     # surface: a kept entry would caption the next image uploaded under this
     # name, which is different art and immediately eligible for the narrator.

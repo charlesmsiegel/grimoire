@@ -637,6 +637,29 @@ class _ProcessScopedLock:
 
 _campaign_locks: dict[str, _ProcessScopedLock] = {}
 _world_actor_locks: dict[str, _ProcessScopedLock] = {}
+_image_collection_locks: dict[str, _ProcessScopedLock] = {}
+_image_collection_job_locks: dict[tuple[str, str], _ProcessScopedLock] = {}
+
+
+def image_collection_lock(wid: str) -> _ProcessScopedLock:
+    """World-image membership checks and publication share one process lock."""
+    with _registry_guard:
+        lock = _image_collection_locks.get(wid)
+        if lock is None:
+            lock = _image_collection_locks[wid] = _ProcessScopedLock(
+                "image-collections", wid, StoreBusy)
+        return lock
+
+
+def image_collection_job_lock(wid: str, job: str) -> _ProcessScopedLock:
+    """Serialize one transient harvest journal; never acquired from an image lock."""
+    with _registry_guard:
+        key = (wid, job)
+        lock = _image_collection_job_locks.get(key)
+        if lock is None:
+            lock = _image_collection_job_locks[key] = _ProcessScopedLock(
+                "image-collection-jobs", f"{wid}:{job}", StoreBusy)
+        return lock
 
 
 def world_actor_lock(wid: str) -> _ProcessScopedLock:
