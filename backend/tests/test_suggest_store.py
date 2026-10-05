@@ -162,6 +162,23 @@ def test_snapshot_threads_are_canonical(monkeypatch, tmp_path):
     assert "dormancy" in snap["open_threads"][0]
 
 
+def test_a_continuity_side_failure_still_lists_the_physical_threads(monkeypatch, tmp_path):
+    """Whatever makes the effective projection raise costs the merge (spec
+    3.9), never the threads: the snapshot falls back to the physical ledger,
+    as the briefing and the advance digest do."""
+    from grimoire.store.continuity import effective
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("an unanticipated continuity.json shape")
+
+    cid = _campaign(monkeypatch, tmp_path)
+    plot.set_movement(cid, "maras-map", "Mara's map", "open", "Mara finds it.", "001--gate")
+    monkeypatch.setattr(effective, "threads", _boom)
+    snap = suggest.build_snapshot(cid)
+    assert [t["id"] for t in snap["open_threads"]] == ["maras-map"]
+    assert "dormancy" in snap["open_threads"][0]
+
+
 def test_build_prompt_includes_signals():
     snap = {"now": "2026-01-01", "friendly": "Jan 1",
             "notation": {"example": "", "months": []}, "holidays_today": ["New Year"],

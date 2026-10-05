@@ -331,3 +331,22 @@ def test_snapshot_survives_garbled_continuity_and_ledgers(monkeypatch, tmp_path)
     assert [d for d in out["drivers"] if d["kind"] == "thread"] == []
     assert out["fixed"] == F(cid, "2026-05-10")
 
+
+def test_a_continuity_side_failure_falls_back_to_the_physical_records(monkeypatch, tmp_path):
+    """Defence in depth past `doc.read`: whatever else makes the effective
+    projection raise costs the merge (spec 3.9), never the drivers -- the
+    thread and the commitment are still listed, from the physical ledgers."""
+    from grimoire.store.continuity import effective
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("an unanticipated continuity.json shape")
+
+    cid = _campaign(monkeypatch, tmp_path)
+    _thread(cid)
+    _commitment(cid)
+    monkeypatch.setattr(effective, "threads", _boom)
+    monkeypatch.setattr(effective, "commitments", _boom)
+    found = _by_ref(cid)
+    assert found[MAP]["label"] == "Mara's map"
+    assert found[OATH]["label"] == "Mara's oath"
+
