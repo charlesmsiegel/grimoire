@@ -473,19 +473,33 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     quadratic, and both halves run under whatever load the machine is already
     under, so the comparison holds where an absolute bound does not.
     """
+    import gc
     import time
 
+    # CPU time, not wall time: `process_time` stops while the process is
+    # descheduled, which is what a contended runner does to it for whole
+    # milliseconds at a time -- longer than a 20k-word parse takes. And the
+    # collector off while timing: 40k fresh strings trip collections whose cost
+    # is the size of the WHOLE heap, and late in a full-suite run that heap
+    # dwarfs the parse, so the larger sample paid for the session's garbage.
+    # Both are noise in the measure, not the parser, and both reddened CI at
+    # a 3.9x "scaling" with the parser unchanged.
     def _parse(n):
         q = " ".join(f"w{i}" for i in range(n))
-        started = time.perf_counter()
-        assert len(search.query_terms(q)) == n
-        return time.perf_counter() - started
+        gc.collect()
+        gc.disable()
+        try:
+            started = time.process_time()
+            assert len(search.query_terms(q)) == n
+            return time.process_time() - started
+        finally:
+            gc.enable()
 
-    # Best-of-three at each size. A single sample is dominated by whatever the
+    # Best-of-five at each size. A single sample is dominated by whatever the
     # machine was doing at that instant -- the first call alone measured a 0.74x
     # "scaling" here, which is noise, not sublinearity. The minimum is the run
     # least interfered with, which is what the comparison wants.
-    def _best(n, rounds=3):
+    def _best(n, rounds=5):
         return min(_parse(n) for _ in range(rounds))
 
     # The cyclic collector off for the measure. It triggers on allocation
