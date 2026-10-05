@@ -271,3 +271,54 @@ def test_scene_without_settings_keeps_the_whole_cast_eligible(client):
     record = latest_round(cid, sid)
     assert [e["ref"] for e in record["eligible"]] == [MARA, WINIFRED]
     assert record["mode"] == "directed" and record["plan"] == []
+
+
+def test_directed_with_saved_defaults_keeps_full_roster(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="directed", sitting_out=[], auto_rounds=0)
+    fake = FakeLLM([['{"next":"characters:mara"}'], reply("Mara answers.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    selector = "\n".join(m["content"] for m in fake.requests[0]["messages"])
+    assert SELECTOR in selector
+    assert MARA in selector and WINIFRED in selector
+    assert [e["ref"] for e in latest_round(cid, sid)["eligible"]] == [MARA, WINIFRED]
+
+
+def _legacy_presence(cid, sid, ref):
+    """Drop `ref`'s presence interval for the scene, as cast that predates
+    intervals has none, so the round is what must anchor it."""
+    from grimoire.store.appearances import paths as appearance_paths
+
+    data = appearance_paths.record(cid)
+    data[ref.replace(":", "/", 1)].get("presence", {}).pop(sid, None)
+    appearance_paths._write(cid, data)
+
+
+def _presence(cid, sid, ref):
+    from grimoire.store.appearances import paths as appearance_paths
+
+    return appearance_paths.record(cid)[ref.replace(":", "/", 1)].get("presence", {}).get(sid)
+
+
+def test_sitting_out_npc_still_gets_its_observation_anchor(client):
+    cid, sid, base = seed(client)
+    _legacy_presence(cid, sid, WINIFRED)
+    assert _presence(cid, sid, WINIFRED) is None
+    group(client, base, order="directed", sitting_out=[WINIFRED])
+    use(client, FakeLLM([reply("Mara answers.", None)]))
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    assert [e["ref"] for e in latest_round(cid, sid)["eligible"]] == [MARA]
+    assert _presence(cid, sid, WINIFRED) == [{"start": 0, "end": None}]
+
+
+def test_sitting_out_npc_anchored_by_a_continue_too(client):
+    cid, sid, base = seed(client)
+    _legacy_presence(cid, sid, WINIFRED)
+    group(client, base, order="directed", sitting_out=[WINIFRED])
+    use(client, FakeLLM([reply("Mara continues.", None)]))
+    response = client.post(base + "/chat", json={"content": ""})
+    assert "error" not in response.text, response.text
+    assert _presence(cid, sid, WINIFRED) is not None

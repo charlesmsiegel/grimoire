@@ -267,7 +267,7 @@ def get(cid: str, sid: str, rid: str, *, private=False) -> dict:
 
 def new_round(
     cid: str, sid: str, *, eligible, automatic, post, run_id, actor_ref=None, note="", turn=None,
-    mode="directed", plan=(), auto_remaining=0, round_index=1, auto_total=0,
+    mode="directed", plan=(), auto_remaining=0, round_index=1, auto_total=0, present=None,
 ) -> dict:
     """Open a round, superseding any unfinished one.
 
@@ -275,12 +275,18 @@ def new_round(
     still to speak after `actor_ref`); `auto_remaining`, `round_index` and
     `auto_total` place it in an auto-continue chain. A round written before
     these keys existed reads them with `.get(key, default)` and acts as a
-    lone Directed round."""
+    lone Directed round.
+
+    `present` is everyone in the scene, whose observation is anchored here
+    (`begin_observing`) whether or not they may speak this round -- a
+    character sitting out or filtered from `eligible` is still watching.
+    Defaults to `eligible`."""
     with locks.campaign_lock(cid):
         messages = read.read_scene(cid, sid)["messages"]
         observed_from = next((i for i in range(len(messages) - 1, -1, -1)
                               if messages[i].get("role") == "user"), len(messages))
-        appearance_paths.begin_observing(cid, sid, [a["ref"] for a in eligible], observed_from)
+        watchers = eligible if present is None else present
+        appearance_paths.begin_observing(cid, sid, [a["ref"] for a in watchers], observed_from)
         data = _read(cid)
         scope = _scope(cid, sid, data)
         for previous in scope["rounds"].values():
