@@ -560,3 +560,38 @@ def test_a_payload_filed_under_the_wrong_id_is_refused(monkeypatch, tmp_path):
 
     assert prompt_log.read_entry(cid, first) is None
     assert prompt_log.read_entry(cid, second) is not None
+
+
+def test_prompt_log_round_trips_rows_with_entries(monkeypatch, tmp_path):
+    """Review Focus 5. A World info row carries its entries, their reasons and
+    the names those reasons need, and a capture keeps all of it. A capture
+    written before rows had them still reads."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Harbor Pact", "The pact was signed at dusk.",
+                           keys="harbor")
+    entities.create_entity(croot, "lore", "Ferry", "The ferryman skims the toll.",
+                           keys="ferry", fields={"cooldown": "3"})
+    for text in ("the ferry leaves", "the ferry again", "we make for the harbor"):
+        scenes.append_message(cid, sid, "user", text)
+    _messages, breakdown = context.compose_turn(cid, sid)
+    eid = prompt_log.record(cid, sid, "chat", breakdown, model="test/model")
+
+    row = next(r for r in prompt_log.read_entry(cid, eid)["sections"] if r["id"] == "world_info")
+    sent = next(r for r in breakdown["sections"] if r["id"] == "world_info")
+    assert row["entries"] == sent["entries"]
+    assert [(e["ref"], e["reason"]["type"], e["shed"]) for e in row["entries"]] == [
+        ("lore:harbor-pact", "key", False)]
+    assert row["held_back"] == [{"ref": "lore:ferry", "name": "Ferry",
+                                 "reason": {"type": "cooldown", "remaining": 2}}]
+    assert row["names"] == {}
+
+    path = croot / "prompts" / f"{eid}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for r in data["sections"]:
+        for key in ("entries", "names", "held_back"):
+            r.pop(key, None)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    old = prompt_log.read_entry(cid, eid)
+    assert old is not None
+    assert "entries" not in next(r for r in old["sections"] if r["id"] == "world_info")

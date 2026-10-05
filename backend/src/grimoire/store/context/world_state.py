@@ -169,17 +169,19 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                 pinned_refs: frozenset = frozenset(), excluded_refs: frozenset = frozenset(),
                 scan_depth: int, recursion_depth: int = 0, current_location: str | None = None,
                 recall_text: str = "", actor_ref: str | None = None,
-                ) -> tuple[list[dict], list[dict], activation.Result]:
+                ) -> tuple[list[dict], list[dict], activation.Result, dict[str, str]]:
     """Activated lore/location/item/group/creature entries as
     {"body", "kind", "id", ...} dicts — _assemble renders the bodies and uses
     the refs (e.g. activated groups pull their campaign state into context).
 
-    Returns ``(keyword, recalled, result)``: what the keys (and pins) selected,
-    what semantic recall added on top, and the engine's whole answer -- every
-    hit with its reason, what was held back, and the present set it grew -- for
-    the inspector and the packer. Reasons never reach a prompt: the first two
-    are the entries themselves. The two lists render as separate sections in
-    separate packer tiers -- see the comment at the return statement.
+    Returns ``(keyword, recalled, result, names)``: what the keys (and pins)
+    selected, what semantic recall added on top, the engine's whole answer --
+    every hit with its reason, what was held back, and the present set it grew
+    -- for the inspector and the packer, and the display name of every record
+    listed, activated or not, so a reason naming an item that never activated
+    can still name it. Reasons never reach a prompt: the first two are the
+    entries themselves. The two lists render as separate sections in separate
+    packer tiers -- see the comment at the return statement.
 
     `posts` are the transcript's own `(index, text)` pairs, director notes
     included, and `seed` is this turn's un-persisted input (an opener's prompt,
@@ -201,11 +203,13 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
     while `present` stays the whole scene's, so the owner gate still reads the
     room. None, or the narrator, filters nothing."""
     entries = []
+    names: dict[str, str] = {}
     for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in overlay.list_entities(cid, kind):
             ref = f"{kind}:{meta['id']}"
             if ref in excluded_refs:
                 continue
+            names[ref] = str(meta.get("name") or meta["id"])
             if kind == "locations" and meta["id"] in exclude:
                 # Held back even when pinned: `exclude` is the CURRENT location,
                 # which the Current setting section is already rendering, so
@@ -246,7 +250,8 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                             excluded_refs=excluded_refs,
                             recall=semantic.recall_scored,
                             recall_text=recall_text)
-    return ([h.entry for h in result.keyword], [h.entry for h in result.recalled], result)
+    return ([h.entry for h in result.keyword], [h.entry for h in result.recalled], result,
+            names)
 
 
 def _today_data(cid: str, sid: str, croot) -> dict | None:
