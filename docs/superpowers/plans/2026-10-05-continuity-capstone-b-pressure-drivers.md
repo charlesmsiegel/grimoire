@@ -14,7 +14,7 @@
 - Task 0 characterizes every consumer the slice switches **before** any switch: the frozen sweep gains keys for the absorb snapshots, the briefing, the advance digest and the suggestion prompt, and route tests pin the exact `/ledger` rows, Todo `owed` strings and `/shell` `ledger_open`;
 - direct equality tests against the physical renders;
 - `verify_templates` checks;
-- the frozen-campaign sweep, which passes unregenerated after each switch (the digest's additive `aliases: []` is the one recorded exception, Task 4) and then gains only new keys.
+- the frozen-campaign sweep, which passes unregenerated after each switch and then gains only new keys. (The digest's additive `aliases: []` was planned as a regeneration exception at Task 4, but the frozen fixture has no clock, so `clock.preview[...]` holds only a `ClockError` and holds no digest rows; the digest's no-alias proof is `test_clock_store.py::test_digest_rows_are_pinned_for_an_ordinary_campaign` instead. Ledger: Task 0 ruling.)
 
 **Tech Stack:** Python 3.11, FastAPI, pydantic (v1/v2-agnostic), pytest + `TestClient`; TypeScript, React, vitest.
 
@@ -220,7 +220,7 @@ Later slices own the following:
     - **`AppRail.test.tsx:68`:** the rail label changes.
     - **`TodoView.test.tsx:136` and `:154`:** the cosmetic mock texts change to the new noun.
     - **`test_frozen_campaign.py`:** the module set gains `continuity`.
-    - **`snapshot.json`:** Task 0 adds characterization keys for the switched consumers. Task 4 regenerates once, and only the digest rows gain `aliases: []`. Task 10 adds new `continuity.*` keys only.
+    - **`snapshot.json`:** Task 0 adds characterization keys for the switched consumers. Task 4 does **not** regenerate it: the frozen fixture has no clock, so `clock.preview[...]` is a `ClockError` with no digest rows, and briefing rows strip `aliases`. The digest rows' `aliases: []` lands instead as the one permitted edit to `test_clock_store.py::test_digest_rows_are_pinned_for_an_ordinary_campaign` (ledger: Task 0 ruling). Task 10 adds new `continuity.*` keys only.
 
     Nothing else moves for a no-alias campaign, including one with links (Decision 16).
 
