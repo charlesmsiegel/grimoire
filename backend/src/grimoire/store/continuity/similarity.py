@@ -13,7 +13,9 @@ accident of whoever named the record first, not a statement of what it is about.
 The text is what an embedding is taken of; its first line, the type label, is
 dropped by `body` before the lexical signals are computed, because it is
 identical across every same-type pair and would only add a constant to every
-score (a clarification of §9.2).
+score (a clarification of §9.2). A commitment's ``due`` prefix goes with it for
+the same reason: every dated commitment carries that word, so it would admit
+two unrelated same-cast commitments through the structural clause.
 
 **The constants** below are candidate-generation parameters, not truth
 thresholds. Each is justified by the identity-text layout and by the cost
@@ -29,6 +31,7 @@ sweep raises was scored by exactly the rules absorb staged under.
 from __future__ import annotations
 
 import math
+import re
 import unicodedata
 from collections.abc import Iterable
 from typing import Literal
@@ -156,10 +159,18 @@ _TEXT = {"thread": thread_identity_text, "commitment": commitment_identity_text}
 # ---------------------------------------------------------------- lexical
 
 
+def _kept(ch: str) -> bool:
+    """Alphanumerics, and combining marks: a Devanagari vowel sign or virama
+    is part of its word, and splitting on it would leave bare consonants that
+    any two texts in the script share."""
+    return ch.isalnum() or unicodedata.category(ch).startswith("M")
+
+
 def normalize(text: str) -> str:
-    """NFKC, casefolded, every non-alphanumeric a space, whitespace collapsed."""
+    """NFKC, casefolded, every char that is neither alphanumeric nor a
+    combining mark a space, whitespace collapsed."""
     folded = unicodedata.normalize("NFKC", text).casefold()
-    return " ".join("".join(ch if ch.isalnum() else " " for ch in folded).split())
+    return " ".join("".join(ch if _kept(ch) else " " for ch in folded).split())
 
 
 def title_key(title) -> str:
@@ -171,12 +182,22 @@ def titles_equal(a, b) -> bool:
     return key == title_key(b) != ""
 
 
+def _whole_slug(title) -> str | None:
+    """The title's slug when it spells every character of the title's key, else
+    None. `paths.slugify` drops whatever is not ASCII, so "Mara的海図" and
+    "Mara的灯台" both slug to ``mara``, and two different CJK titles both fall
+    back to ``untitled``: a slug that lost part of its title says nothing."""
+    slug = paths.slugify(fieldtext.text(title))
+    key = title_key(title)
+    if re.fullmatch(r"[a-z0-9 ]+", key) and key.replace(" ", "") == slug.replace("-", ""):
+        return slug
+    return None
+
+
 def slug_equal(a_title, b_title) -> bool:
-    """Equal slugs, ignoring the ``untitled`` fallback `paths.slugify` gives a
-    title with no ASCII alphanumerics (two different CJK titles share it)."""
-    a = paths.slugify(fieldtext.text(a_title))
-    b = paths.slugify(fieldtext.text(b_title))
-    return a == b and a != "untitled"
+    """Equal slugs, counted only when each slug spells its whole title."""
+    a = _whole_slug(a_title)
+    return a is not None and a == _whole_slug(b_title)
 
 
 def tokens(text: str) -> frozenset[str]:
@@ -195,10 +216,19 @@ def jaccard(a: frozenset, b: frozenset) -> float:
     return len(a & b) / len(union) if union else 0.0
 
 
+#: The literal prefix of a commitment's due line (`commitment_identity_text`).
+_DUE = "due "
+
+
 def body(text: str) -> str:
-    """The identity text without its type-label line."""
-    _, _, rest = text.partition("\n")
-    return rest
+    """The identity text without its type-label line and, in a commitment's,
+    without the ``due`` prefix every dated commitment shares (the due phrase
+    itself stays). A beat that happens to begin with lowercase "due " loses
+    that one word too, which costs a single token."""
+    label, _, rest = text.partition("\n")
+    if not label.endswith(" commitment"):
+        return rest
+    return "\n".join(line.removeprefix(_DUE) for line in rest.split("\n"))
 
 
 # ---------------------------------------------------------------- subjects

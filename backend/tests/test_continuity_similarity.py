@@ -48,9 +48,9 @@ def _thread(ref, title, *beats, actors=(), scenes=(), anchors=()):
                               anchors=anchors)
 
 
-def _commitment(ref, title, *beats, kind="", due=""):
+def _commitment(ref, title, *beats, kind="", due="", actors=()):
     record = {"title": title, "beats": [{"text": b} for b in beats], "kind": kind, "due": due}
-    return similarity.subject("commitment", ref, record)
+    return similarity.subject("commitment", ref, record, actors=actors)
 
 
 # ----------------------------------------------------------- identity texts
@@ -109,6 +109,58 @@ def test_stopwords_never_count_as_shared_tokens():
     assert "the" not in got and "of" not in got
     assert got == frozenset({"map", "harbour"})
     assert "s" not in similarity.tokens("Mara's boat")
+
+
+def test_combining_marks_stay_inside_their_word():
+    # A Devanagari vowel sign or virama is a combining mark, not alphanumeric:
+    # split on it, every word breaks into bare consonants that any two texts in
+    # the script share.
+    assert similarity.normalize("किताब खोई") == "किताब खोई"
+    stored = _thread("thread:a", "मारा की नाव", "मारा ने घाट पर अपनी नाव की मरम्मत की।")
+    unrelated = _thread("thread:b", "विनिफ्रेड का दीया", "विनिफ्रेड ने खिड़की में दीया जलाया।")
+    sig = similarity.lexical(stored, unrelated)
+    assert sig["tokens"] < similarity.TOKEN_FLOOR and sig["chars"] < similarity.CHAR_FLOOR
+    assert not sig["title_equal"] and not sig["slug_equal"]
+    assert not similarity.plausible(sig)
+
+    reworded = _thread("thread:c", "मारा की नाव खो गई", "मारा की नाव घाट से गायब हो गई।")
+    sig = similarity.lexical(stored, reworded)
+    assert sig["tokens"] >= similarity.TOKEN_FLOOR
+    assert similarity.admitted_by(sig) == "lexical"
+
+
+def test_a_slug_counts_only_when_it_spells_the_whole_title():
+    # `paths.slugify` drops every non-ASCII character, so different titles that
+    # share only an ASCII remnant slug alike.
+    assert not similarity.slug_equal("Mara的海図", "Mara的灯台")
+    assert not similarity.slug_equal("海図 1", "灯台 1")
+    assert not similarity.slug_equal("Ölmühle", "Älmühle")
+    assert similarity.slug_equal("Mara's map", "Mara-s Map!")
+    sig = similarity.lexical(_thread("thread:a", "Mara的海図", "港で古い海図が盗まれた。"),
+                             _thread("thread:b", "Mara的灯台", "灯台の明かりが消えた夜。"))
+    assert not sig["title_equal"] and not sig["slug_equal"]
+    assert sig["tokens"] < similarity.TOKEN_FLOOR and sig["chars"] < similarity.CHAR_FLOOR
+    assert not similarity.plausible(sig)
+
+
+def test_the_due_prefix_is_not_a_shared_word():
+    # Every dated commitment's identity text carries the line "due <phrase>";
+    # the prefix is layout, like the type label, and says nothing about which
+    # obligation a record is.
+    debt = _commitment("commitment:a", "Mara's debt", "Mara owes the guild.",
+                       due="dawn", actors=[MARA])
+    oath = _commitment("commitment:b", "Winifred's oath", "Winifred swore an oath.",
+                       due="dusk", actors=[MARA])
+    sig = similarity.lexical(debt, oath)
+    assert sig["actors"] == [MARA]
+    assert sig["tokens"] < similarity.WEAK_TOKEN and sig["chars"] < similarity.WEAK_CHAR
+    assert similarity.admitted_by(sig) is None
+    assert "due" not in similarity.tokens(similarity.body(debt.text))
+    # The phrase itself still counts, and "due" written in a title still does.
+    same = _commitment("commitment:c", "Mara's debt", due="dawn")
+    assert "dawn" in similarity.tokens(similarity.body(same.text))
+    titled = _commitment("commitment:d", "The debt comes due", due="dawn")
+    assert "due" in similarity.tokens(similarity.body(titled.text))
 
 
 # ------------------------------------------------------------ plausibility
