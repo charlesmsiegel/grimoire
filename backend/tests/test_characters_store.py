@@ -1866,3 +1866,52 @@ def test_png_export_of_jpeg_avatar_embeds_real_pixels(tmp_path):
     # the original still travels in the card, as ever
     icon = cards.loads(blob, "png")["data"]["assets"][0]
     assert icon["ext"] == "jpg"
+
+
+def _real_jpeg(color, size=(24, 16)) -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def test_png_export_of_jpeg_avatar_reimports_the_original_bytes(tmp_path, monkeypatch):
+    from grimoire.store import assets
+    src, dest = tmp_path / "src", tmp_path / "dest"
+    src.mkdir()
+    dest.mkdir()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(src))
+    cid, vid = ch.create_character(src, "Seraphine")
+    assets.put_image(src, cid, vid, assets.AVATAR, _real_jpeg((200, 30, 30)), "jpg")
+    original = assets.image_path(src, cid, vid, assets.AVATAR).read_bytes()
+    source_hash = ch.card_hash(src, cid, vid)
+    blob, _name = ch.export_card(src, cid, vid, "png")
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(dest))  # a fresh store
+    new_cid, new_vid = ch.import_card(dest, blob, "png")
+
+    p = assets.image_path(dest, new_cid, new_vid, assets.AVATAR)
+    assert p.read_bytes() == original and p.suffix == ".jpg"
+    stored = json.dumps(ch.read_card(dest, new_cid, new_vid))
+    assert "data:image" not in stored
+    assert ch.card_hash(dest, new_cid, new_vid) == source_hash
+
+
+def test_png_import_keeps_plane_when_carried_avatar_is_a_different_picture(tmp_path, monkeypatch):
+    import base64
+
+    from grimoire.store import assets, cards
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    plane = _gallery_png(3, size=(10, 10))
+    other = _real_jpeg((10, 200, 10))
+    card = ch.blank_card("Mara")
+    card["data"]["assets"] = [{
+        "type": "icon", "name": "main", "ext": "jpg",
+        "uri": "data:image/jpeg;base64," + base64.b64encode(other).decode()}]
+    # a third-party style PNG: real pixels, with a card whose icon is another picture
+    png = cards.dumps(card, "png", avatar=(plane, "png"))
+    cid, vid = ch.import_card(tmp_path, png, "png")
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p.suffix == ".png" and p.read_bytes() != other
