@@ -1374,7 +1374,7 @@ def get_response_swipe(cid: str, sid: str, rid: str):
 @router.delete("/campaigns/{cid}/scenes/{sid}/responses/{rid}")
 def delete_response(cid: str, sid: str, rid: str, request: Request):
     _require_scene(cid, sid)
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         messages = store.scenes.read_scene(cid, sid)["messages"]
         at = next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
         try:
@@ -1392,7 +1392,7 @@ def delete_response(cid: str, sid: str, rid: str, request: Request):
 @router.post("/campaigns/{cid}/scenes/{sid}/responses/{rid}/variants/{vid}/activate")
 def activate_response(cid: str, sid: str, rid: str, vid: str, request: Request):
     _require_scene(cid, sid)
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         try:
             store.responses.activate(cid, sid, rid, vid)
         except (store.responses.ResponseNotFound, store.responses.ResponseConflict) as exc:

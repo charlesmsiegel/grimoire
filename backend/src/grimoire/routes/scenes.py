@@ -1471,6 +1471,7 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
         # and parks the current one as a variant. Inside the hold that already
         # covers the swap, so nothing reserves a turn between the two.
         runs.require_scene_free(request.app, cid, sid)
+        runs.require_scene_open(cid, sid)
         # Resolve FIRST. The id comes from a client snapshot that another tab
         # may have moved on from, and retiring a decision is not something a
         # request that then 404s gets to do: a stale click would cancel a
@@ -2842,7 +2843,13 @@ def post_absorb(cid: str, sid: str, request: Request, force: bool = False,
                     "detail": "this scene's id is too long for its review file — "
                               "rename the scene to something shorter, then end it"})
     generation = uuid.uuid4().hex
-    run = runs.reserve_review(request.app, cid, sid, "absorb", generation)
+    # One hold: a closed branch is refused, the review waits for every member
+    # of the group (absorbing this one closes them), and nothing reserves a
+    # turn in a sibling between those checks and this reservation.
+    with store.locks.campaign_lock(cid):
+        runs.require_scene_open(cid, sid)
+        runs.require_group_free(request.app, cid, sid)
+        run = runs.reserve_review(request.app, cid, sid, "absorb", generation)
     with runs.reservation(request.app, run):
         return _absorb_start(cid, sid, force, request, client, conn, run, generation)
 
@@ -4438,6 +4445,11 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
         # already covers the whole sequence, so nothing reserves a turn between
         # the check and the first write.
         runs.require_scene_free(request.app, cid, sid)
+        # A closed branch cannot be absorbed, and absorbing one member closes
+        # the rest -- so this waits for every member, or a turn landing in a
+        # sibling just closed would write to a read-only scene.
+        runs.require_scene_open(cid, sid)
+        runs.require_group_free(request.app, cid, sid)
         # Inside the lock: two saves racing on one token must not both miss.
         prior = store.commits.lookup(cid, body.commit_token)
         progress: dict = {}
@@ -4726,7 +4738,7 @@ def post_scene_cast(cid: str, sid: str, body: Appear, request: Request):
     # reason the plan lists them beside the rename. Held across the check and
     # the write, like every other door.
     try:
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             _seat_cast_member(cid, sid, body)
     except store.appearances.AppearError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -4741,7 +4753,7 @@ def delete_scene_cast(cid: str, sid: str, kind: str, id: str, request: Request):
     # The most destructive of the cast routes, and the one an inventory of them
     # is most likely to miss: `leave` removes the actor AND appends a "leaves
     # the scene" transition whenever the transcript is non-empty.
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         store.appearances.leave(cid, sid, kind, id)
     return {"ok": True}
 
@@ -4755,7 +4767,7 @@ def post_scene_cast_batch(cid: str, sid: str, body: AppearBatch, request: Reques
     added, skipped = 0, []
     # ONE hold over the whole batch, not one per member: a turn reserved
     # mid-loop would otherwise have half the cast seated under it.
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         for ref in body.refs:
             try:
                 _seat_cast_member(cid, sid, ref)
@@ -4799,7 +4811,7 @@ def post_emergent_cast(cid: str, sid: str, body: EmergentCast, request: Request)
         # transition), so the guard belongs around it rather than around the
         # create -- refusing after the character exists is the same shape as the
         # AppearError below, and the character is campaign state either way.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             _seat_cast_member(cid, sid,
                               Appear(kind="characters", id=char, version=version, role=role))
     except store.appearances.AppearError as exc:
@@ -4870,7 +4882,7 @@ def put_scene_location(cid: str, sid: str, body: SceneLocation, request: Request
         # `set_location` appends a transition line, so this moves the transcript
         # a live turn is generating into -- not merely the context it was built
         # from.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             result = store.scenes.set_location(cid, sid, body.location)
     except store.entities.EntityNotFound:
         raise HTTPException(status_code=404, detail="location not found")
@@ -4925,7 +4937,7 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime, request: Request
         # the scene, so this does not merely change the context a live turn was
         # built from -- it mints a new `sid` and can trip the identity fence
         # that discards a completed reply.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             result = store.scenes.set_datetime(cid, sid, body.datetime)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -5177,7 +5189,7 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
         # review caught that it was not: checking and then locking leaves room
         # for a send to reserve and detach in between, so the edit lands under a
         # turn that started after the check said there was none.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             messages = store.scenes.read_scene(cid,sid)["messages"]
             if 0 <= index < len(messages) and messages[index].get("response_id"):
                 try:
@@ -5318,7 +5330,7 @@ def put_scene_message_excluded(cid: str, sid: str, index: int, body: ExcludeMess
     """
     _require_scene(cid, sid)
     try:
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             if _already_absorbed(store.scenes.read_scene(cid, sid)):
                 raise HTTPException(409, detail={
                     "kind": "scene_absorbed",
@@ -5380,7 +5392,7 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
         # Held across the check and the cascade, not merely ahead of it: the
         # campaign lock is reentrant, so the cascade's own acquisitions are
         # free, and a send cannot reserve a turn in the gap.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             report = store.cascade.delete_from(cid, sid, index)
             # The cut posts' tracker records describe posts that no longer
             # exist. Nothing is left after them to flag: a cut takes the tail.
@@ -5419,7 +5431,7 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
     try:
         # One hold over check and rewrite, as for the cascade delete above.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             # The stored-rewrite handling the plain edit gets, in this same
             # hold: the store phase on the new text, then the post's record
             # settled -- replaced when a rule fired, retired when the retcon
@@ -5518,7 +5530,7 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
         # at `index` and reverses everything the removed posts caused. Under a
         # live turn that is history moving out from under a reply already being
         # written.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             report = store.replay.begin(cid, sid, body.index)
             # The cut half of a replay: the held tail's records go with it, as
             # for any cut (a restore brings the posts back untracked, Retry).

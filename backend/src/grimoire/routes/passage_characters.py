@@ -96,7 +96,7 @@ def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: R
 
 @router.post("/campaigns/{cid}/scenes/{sid}/responses/{rid}/character")
 def save_character(cid: str, sid: str, rid: str, body: PassageSave, request: Request):
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         _source(cid, sid, rid, body)
         if body.existing_ref:
             kind, _, aid = body.existing_ref.partition(":")

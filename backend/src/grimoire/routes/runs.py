@@ -1630,6 +1630,48 @@ def scene_held_free(app, cid: str, sid: str):
         yield
 
 
+def require_scene_open(cid: str, sid: str) -> None:
+    """Refuse a change to a scene a sibling branch's absorb has closed.
+
+    A scene is closed while another member of its branch group is absorbed
+    (`scenes.read.closed_by`, derived rather than stored): the campaign's files
+    now hold that member's past, so this one is read-only. Its own check rather
+    than part of `require_scene_free` -- delete, rename and replay accept/cancel
+    stay open on a closed scene, because deleting it is how a player discards a
+    road not taken, and a replay running in it must still be stoppable.
+    """
+    by = scenes.read.closed_by(cid, sid)
+    if by:
+        raise HTTPException(status_code=409, detail={
+            "kind": "branch_closed", "closed_by": by,
+            "detail": "a sibling branch of this scene was absorbed; this branch is read-only"})
+
+
+@contextlib.contextmanager
+def scene_held_open(app, cid: str, sid: str):
+    """`scene_held_free`, plus `require_scene_open` inside the same hold: a
+    transcript-shaping door on a scene that may be a closed branch."""
+    with store.locks.campaign_lock(cid):
+        require_scene_free(app, cid, sid)
+        require_scene_open(cid, sid)
+        yield
+
+
+def require_group_free(app, cid: str, sid: str) -> None:
+    """`require_scene_free` for every OTHER member of this scene's branch group.
+
+    Absorbing one member closes the rest, so it waits for all of them: a turn
+    landing in a sibling just closed would be a write to a read-only scene.
+    Call inside the campaign-lock hold that covers the absorb."""
+    rows = scenes.read.list_scenes(cid)
+    group = next((r.get("branch_group") for r in rows if r["id"] == sid), None)
+    if not group:
+        return
+    for row in rows:
+        if row["id"] != sid and row.get("branch_group") == group:
+            require_scene_free(app, cid, row["id"])
+
+
 @contextlib.contextmanager
 def store_held_still(app):
     """Refuse an operation that moves the STORE ROOT while anything is running,
@@ -1678,9 +1720,14 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
     used verbatim -- the server never rewrites it, because the client has
     already stored it and will ask about it by that name.
     """
-    return _reserve(app, cid, sid, "turn", kind,
-                    attempt_id or uuid.uuid4().hex,
-                    adopt_terminal=adopt_terminal)
+    # The closed check BEFORE reserving (a refusal after it would strand a run),
+    # and in the same campaign-lock hold, so an absorb that closes this scene
+    # cannot land between the check and the reservation. Reentrant.
+    with store.locks.campaign_lock(cid):
+        require_scene_open(cid, sid)
+        return _reserve(app, cid, sid, "turn", kind,
+                        attempt_id or uuid.uuid4().hex,
+                        adopt_terminal=adopt_terminal)
 
 
 def reserve_review(app, cid: str, sid: str, kind: str,
