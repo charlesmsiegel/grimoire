@@ -9,7 +9,9 @@ export const EMPTY_DRAFT: ProfileDraft = { genre: "", tone: "", themes: "", desc
 
 export function profileOf(draft: ProfileDraft): WorldProfile {
   return { genre: draft.genre.trim(), tone: draft.tone.trim(), description: draft.description,
-           themes: draft.themes.split(",").map((t) => t.trim()).filter(Boolean) };
+           // de-duplicated as the store does, so a list echoed back unread
+           // matches what was saved
+           themes: [...new Set(draft.themes.split(",").map((t) => t.trim()).filter(Boolean))] };
 }
 
 export function draftOf(profile: WorldProfile): ProfileDraft {

@@ -155,12 +155,21 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   useEffect(() => {
     if (!vid || !detail) return;
     let active = true;
+    // Cleared first: another version's rows left clickable until this list
+    // lands would ask for a revision this version does not have.
+    setRevisions(null);
     setRevisionError(null);
     api.listPCRevisions(scope, pid, vid)
       .then((list) => { if (active) setRevisions(list); })
       .catch((err: unknown) => { if (active) { setRevisions(null); setRevisionError(errorText(err)); } });
     return () => { active = false; };
   }, [vid, detail]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A preview belongs to the version it was opened on. Every way the selected
+  // version changes -- the picker, a new version, an import, a revert to
+  // inherited that re-reads -- goes through `vid` or a fresh `detail`, so the
+  // preview is dropped there rather than in each of them.
+  useEffect(() => { setRevision(null); }, [vid, detail]);
 
   async function openRevision(rev: PCRevision) {
     setError(null);
@@ -327,7 +336,9 @@ function PCRecord({ campaign }: { campaign: boolean }) {
              ["Goals", revision.persona.goals], ["Notes for the narrator", revision.persona.player_notes],
              ["Birthdate", revision.persona.birthdate]] as const)
             .filter(([, v]) => v).map(([label, v]) =>
-              <div key={label} className="side-section"><h4>{label}</h4><div className="field-hint">{v}</div></div>)}
+              <div key={label} className="side-section"><h4>{label}</h4>{label === "Birthdate"
+                ? <BirthdateDisplay scope={scope} value={v ?? ""} />
+                : <div className="field-hint">{v}</div>}</div>)}
           <div className="detail-rendered"><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{revision.persona.description}</Markdown></div>
         </div> : <>
           <div className="form-actions"><button className="subtle" onClick={() => setMode("edit")}>Edit</button></div>

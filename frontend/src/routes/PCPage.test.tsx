@@ -165,6 +165,29 @@ test("history cannot be opened over an unsaved edit", async () => {
   expect(row).toBeDisabled();
 });
 
+test("switching version drops the other version's history rows and its preview", async () => {
+  const two = { ...DETAIL, versions: [DETAIL.versions[0],
+    { id: "older", name: "older", persona: { ...DETAIL.versions[0].persona, description: "Older one." }, images: [] }] };
+  (api.readPC as any).mockResolvedValue(two);
+  let releaseB: (v: unknown) => void = () => {};
+  (api.listPCRevisions as any).mockImplementation((_s: unknown, _p: string, vid: string) =>
+    vid === "default" ? Promise.resolve([{ id: "rA", saved: "2026-10-04T12:00:00Z", name: "Mara" }])
+      : new Promise((r) => { releaseB = r; }));
+  (api.readPCRevision as any).mockResolvedValue({ ...DETAIL.versions[0].persona, description: "A's past." });
+  renderPC();
+  await screen.findByRole("heading", { name: "Mara", level: 1 });
+  const column = document.querySelector(".context-column") as HTMLElement;
+  fireEvent.click((await within(column).findAllByRole("button")).find((b) => b.classList.contains("history-row"))!);
+  expect(await screen.findByText("A's past.")).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("combobox", { name: "Version" }), { target: { value: "older" } });
+  // B's list has not arrived: A's rows are gone rather than clickable, and so is A's preview
+  await waitFor(() => expect(document.querySelectorAll(".history-row")).toHaveLength(0));
+  expect(screen.queryByText("A's past.")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Restore this text" })).not.toBeInTheDocument();
+  releaseB([]);
+  expect(await screen.findByText("No earlier revisions.")).toBeInTheDocument();
+});
+
 test("a PC with no history says so", async () => {
   renderPC();
   expect(await screen.findByText("No earlier revisions.")).toBeInTheDocument();

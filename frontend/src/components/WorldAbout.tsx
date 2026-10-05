@@ -34,7 +34,11 @@ export function WorldAbout({ wid }: { wid: string }) {
     setSaving(true); setError(null);
     try {
       await api.updateWorld(wid, next);
-      setProfile({ ...next, description: next.description.trim() });
+      // Re-read rather than echo: the store folds and de-duplicates what it
+      // keeps, and the view should show what was kept.
+      const w = await api.getWorld(wid);
+      setProfile({ genre: w.meta.genre ?? "", tone: w.meta.tone ?? "",
+                   themes: w.meta.themes ?? [], description: w.body.trim() });
       setDraft(null);
     } catch (err: unknown) { setError(errorText(err)); }
     finally { setSaving(false); }
