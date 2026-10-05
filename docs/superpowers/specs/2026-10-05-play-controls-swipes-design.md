@@ -160,12 +160,16 @@ when given:
 - **`guidance`** — the reroll steer (`RegenerateBody.guidance`), clipped to
   `alternates.MAX_GUIDANCE_CHARS` (500), the same wire-input bound the legacy
   sidecar and the steering log apply. Empty for a first take.
-- **`note`** — the director note the call's prompt carried: the round's
-  `note`, looked up by the record's `round_id`. **This includes a reroll**: a
-  reroll replays the primary snapshot, and for a director turn that snapshot
-  already ends with the note as its final user message
-  (`compose_director_turn`, `before_post`). A first take with no note, and a
-  reroll of one, record `""`.
+- **`note`** — the director note **the player typed** for the round that
+  produced the response. The round stores it as `typed_note` when it is
+  created (`responses.new_round`), because the round's `note` is not always
+  the player's words: an empty send ("next NPC round") and a replay turn store
+  the `director_note.j2` template text there, and recording that as a note
+  would put app wording in the player's mouth. **A reroll carries the note
+  too**: it replays the primary snapshot, and for a director turn that
+  snapshot already ends with the note as its final user message
+  (`compose_director_turn`, `before_post`). A first take with no typed note,
+  and a reroll of one, record `""`.
 
 **Unknown is absent, never zero.** A variant written before this change has no
 `made_by`; a key the holder lacks is missing (never filled from
@@ -418,3 +422,8 @@ findings and how each was resolved:
   `responses.get` is costly on open, swipes wiped the rolling summary, a
   generate spent the pending chip, guidance was unbounded and settings
   per-variant bloated the ledger → sections 1, 2, 4, 5 and 6.
+
+Plan gate: the same stand-in reviewed the implementation plan; its findings
+were folded into the plan. The one that changed this spec: an empty send's
+round `note` is template text, so `made_by.note` reads the round's new
+`typed_note` instead (section 2).
