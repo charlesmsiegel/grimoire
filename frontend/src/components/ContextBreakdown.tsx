@@ -1,5 +1,6 @@
 import { type SceneContext, type TokenCounting } from "../api/client";
 import { type Model } from "../api/models";
+import { SamplingSummary } from "./SamplingSummary";
 
 /** The context panel's body: the fill bar, the totals, and one collapsible row
  *  per prompt section.
@@ -31,6 +32,9 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
           {ctx.dropped_tokens.toLocaleString()} tok dropped to fit the budget
         </div>
       )}
+      {/* What this turn is (or was) sent with, and what its backend could not
+          take — live for the next turn, frozen for a past one. */}
+      <SamplingSummary report={ctx.sampling} />
       <div className="ctx-caption">Breakdown · click a row to inspect</div>
       {/* Keyed on `id`, because the label stopped being unique the moment #29
           let a reader rename two sections the same string. `label` is the

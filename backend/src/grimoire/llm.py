@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from . import llm_capture, llm_reasoning, model_guidance
+from . import llm_capture, llm_reasoning, llm_sampling, model_guidance
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
@@ -88,6 +88,18 @@ RETRY_CAP = 8.0
 #: its turn immediately, and failing that the user is told about the rate
 #: limit now rather than after a wait they did not choose.
 RETRY_AFTER_CAP = 30.0
+
+#: HTTP statuses that, answering a request carrying sampler parameters, are read
+#: as the PRESET being refused rather than the connection failing. 400 is what
+#: OpenRouter and the OpenAI API send for a parameter they reject; 422 is what
+#: FastAPI-based servers (vLLM among them) send for a field failing validation.
+#: Such an attempt is not handed to the fallback -- see `_resilient`.
+PRESET_REFUSAL_STATUSES = frozenset({400, 422})
+
+#: Where a sampler preset came from, for the scopes that are about the ROUTE
+#: rather than the connection. A route-level answer follows the route onto
+#: whichever connection serves it, the fallback included (`LLMClient._routes`).
+ROUTE_SCOPES = frozenset({"campaign", "global"})
 
 
 def _backoff_delay(attempt: int) -> float:
@@ -391,6 +403,50 @@ def _observe(observer, conn: dict, error: LLMError | None) -> None:
         log.warning("could not record connection health for %r: %s", _label(conn), exc)
 
 
+def fallback_sampling(primary: dict, fallback: dict) -> dict:
+    """`fallback` as it will be sent when it serves `primary`'s generation.
+
+    A preset chosen for the ROUTE follows it onto the fallback; only a
+    connection-level answer stays with its connection. Otherwise a route set to
+    "no preset" -- to keep a role-play preset's token cap off absorb, say --
+    would get that cap back the moment the primary rate-limited and a fallback
+    carrying it took the call. Public because the prompt capture of a fallback
+    attempt (`routes.common._record_prompt`) has to describe the same request.
+    """
+    sampling = primary.get("sampling")
+    if isinstance(sampling, dict) and sampling.get("scope") in ROUTE_SCOPES:
+        return {**fallback, "sampling": sampling}
+    return fallback
+
+
+def _preset_refusal(exc: LLMError, conn: dict) -> LLMError | None:
+    """The error to raise in place of `exc` when it is a preset being refused.
+
+    None when it is not: `exc` carries no refusal status, or this attempt sent
+    no sampler parameters at all, in which case a 400 is the connection's own
+    business and the ordinary fallback rule applies.
+
+    Why this is not handed to the fallback: `_resilient` moves to the next route
+    on any failure, which is right for a connection that cannot serve and wrong
+    for a setting it refused. Every turn would quietly run on the fallback, the
+    primary's health dot would go red over a temperature, and nothing would
+    ever say the preset was the problem.
+    """
+    if exc.status not in PRESET_REFUSAL_STATUSES:
+        return None
+    sent = llm_sampling.sent_names(conn)
+    if not sent:
+        return None
+    sampling = conn.get("sampling") or {}
+    name = sampling.get("preset_name") or sampling.get("preset_id") or "?"
+    return LLMError(
+        exc.kind,
+        f"{exc.detail} — this request carried sampler preset “{name}” "
+        f"({', '.join(sent)}), so the provider may be refusing one of those; "
+        "the fallback connection was not tried",
+        exc.retry_after, status=exc.status)
+
+
 async def _resilient(open_stream, routes, timeout: float,
                      tick: float | None = None,
                      usage: dict | None = None,
@@ -501,6 +557,12 @@ async def _resilient(open_stream, routes, timeout: float,
                 return
             except LLMError as exc:
                 outcome = "error"
+                refused = None if sent else _preset_refusal(exc, conn)
+                if refused is not None:
+                    # Not observed: the connection answered, and what it
+                    # refused was a setting. A health verdict here would mark
+                    # it failing for a problem no connection change can fix.
+                    raise refused from exc
                 _observe(observer, conn, exc)
                 if sent:
                     raise
@@ -626,7 +688,7 @@ class LLMClient:
             log.warning("could not resolve the fallback connection: %s", exc)
             fallback = None
         if fallback and not _same_route(conn, fallback):
-            routes.append((fallback, 0))
+            routes.append((fallback_sampling(conn, fallback), 0))
         return routes
 
     def _usable_routes(self, messages: list[dict], conn: dict) -> list[tuple[dict, int]]:
@@ -658,6 +720,15 @@ class LLMClient:
         if isinstance(messages, model_guidance.PreparedMessages):
             messages = messages.for_model(effective_model(conn))
         kind = conn.get("kind", "openrouter")
+        # Split per ATTEMPT against that attempt's own connection, so a fallback
+        # of a different kind is held to what ITS backend takes. Passed only
+        # when there is something to send: a provider call with no preset is
+        # byte-for-byte the call it was before presets existed.
+        applied, dropped = llm_sampling.split(conn)
+        if dropped:
+            log.debug("sampler preset on %r: not sent %s", _label(conn),
+                      ", ".join(f"{d['param']} ({d['reason']})" for d in dropped))
+        extra = {"sampling": applied} if applied else {}
         if kind == "claude":
             return self._claude.stream(messages, effective_model(conn), usage=usage)
         if kind == "openai_compatible":
@@ -665,9 +736,9 @@ class LLMClient:
                 messages, conn.get("model", ""), conn.get("api_key", ""),
                 conn.get("base_url", ""), strict=conn.get("post_process") == "strict",
                 usage=usage, **({"reasoning_effort": llm_reasoning.glm_effort(conn)}
-                                if llm_reasoning.glm_effort(conn) else {}))
+                                if llm_reasoning.glm_effort(conn) else {}), **extra)
         return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""),
-                                       usage=usage)
+                                       usage=usage, **extra)
 
     def stream(self, messages: list[dict], conn: dict, usage: dict | None = None):
         """Every provider stream leaves the facade idle-bounded — the one place

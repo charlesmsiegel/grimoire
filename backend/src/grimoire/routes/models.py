@@ -17,7 +17,7 @@ rather than on this paragraph.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, PositiveInt
 
@@ -85,6 +85,12 @@ class ConnectionCreate(BaseModel):
     model: str = ""
     post_process: Literal["none", "strict"] = "none"
     reasoning_effort: Literal["", "low", "high", "max"] = ""
+    #: The connection's own sampler preset id, "" for none; checked to exist by
+    #: the handler, not here (sampler presets spec).
+    sampler_preset: str = ""
+    #: Whether an OpenAI-compatible endpoint takes top-k, min-p and repetition
+    #: penalty. "" reads as standard.
+    sampler_support: Literal["", "standard", "extended"] = ""
 
 
 class ConnectionUpdate(BaseModel):
@@ -94,6 +100,8 @@ class ConnectionUpdate(BaseModel):
     model: str | None = None
     post_process: Literal["none", "strict"] | None = None
     reasoning_effort: Literal["", "low", "high", "max"] | None = None
+    sampler_preset: str | None = None
+    sampler_support: Literal["", "standard", "extended"] | None = None
 
 
 class CatalogProbe(BaseModel):
@@ -186,6 +194,10 @@ class RoutingUpdate(BaseModel):
     """
 
     routes: dict | None = None
+    #: `{route: preset_id}` at the same scope -- "" to inherit,
+    #: `sampler_presets.PRESET_CLEAR` for "no preset". Bare `dict` for the same
+    #: pydantic-1 reason as `routes`; the handler validates it.
+    presets: dict | None = None
 
 
 class ResponsePresetCreate(BaseModel):
@@ -1102,3 +1114,23 @@ class ContinuityLinkCreate(BaseModel):
     relation: str
     scene: str | None = None
     note: str | None = None
+
+
+class SamplerPresetBody(BaseModel):
+    """A sampler preset as written. `params` is a bare `dict`, checked by hand
+    in `llm_sampling.validate`: pydantic 1.10 coerces 40.7 into an `int` field
+    where v2 refuses it, and the two builds must agree about what a preset is."""
+
+    name: str
+    params: dict | None = None
+    notes: str = ""
+
+
+class SamplerImportBody(BaseModel):
+    """A SillyTavern preset file, read by the browser and sent as JSON -- which
+    keeps the route off multipart. `data` is whatever the file parsed to; the
+    handler refuses anything but an object."""
+
+    name: str = ""
+    data: Any = None
+    include_max_tokens: bool = False

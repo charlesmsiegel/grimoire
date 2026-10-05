@@ -4892,3 +4892,18 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
 .image-collection { display: inline-flex; flex-direction: column; max-width: 100%; gap: .4rem; }
 .image-collection-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .4rem; font-size: .8rem; }
 .image-collection-controls button { min-height: 36px; padding: .3rem .6rem; }
+
+/* Sampler presets: what a connection is sent from its preset, and what not.
+   The dropped list is plain text with its reason and never collapsed -- saying
+   so is the feature (see SamplingSummary). */
+.sampling-summary { margin: 6px 0 8px; font-size: 13px; }
+.sampling-title { color: var(--muted); }
+.sampling-applied { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.sampling-dropped { list-style: none; margin: 4px 0 0; padding: 0; }
+.sampling-dropped li { margin: 2px 0; }
+.model-routing-row label[for^="preset-"] { margin-top: 8px; }
+.sampler-params { border-collapse: collapse; margin: 0 0 12px; }
+.sampler-params th { text-align: left; padding: 2px 16px 2px 0; color: var(--muted);
+                     font-weight: normal; }
+.sampler-params td { padding: 2px 0; font-variant-numeric: tabular-nums; }
+.sampler-import-report { margin: 0 0 12px; }

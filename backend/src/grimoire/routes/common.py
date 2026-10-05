@@ -23,7 +23,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import llm, model_guidance, store
+from .. import llm, llm_sampling, model_guidance, store
 from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
@@ -318,7 +318,11 @@ def _fallback_connection() -> dict | None:
         conn = store.llm_connections.read_connection_raw(fid)
     except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy, OSError):
         return None
-    return None if _connection_problem(conn) else conn
+    # Task-less on purpose: the fallback is standing policy rather than any one
+    # route's, so what it carries here is its OWN preset. When the primary's
+    # preset came from a route scope, the facade puts that one on it instead
+    # (`llm.LLMClient._routes`) -- the route's answer follows the route.
+    return None if _connection_problem(conn) else _attach_sampling(conn, "", "")
 
 
 def build_llm(health: ProviderHealth | None = None) -> LLMClient:
@@ -403,7 +407,8 @@ def _turn_override(body) -> dict | None:
 
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
                    *, model: str | None = None, kind: str = "",
-                   messages: list[dict] | None = None) -> None:
+                   messages: list[dict] | None = None,
+                   conn: dict | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -420,6 +425,11 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     (`tokens.counting`). A fallback attempt is recorded without one -- the
     variant callback is handed a model id only -- so its counts read as
     estimates, which is the safe direction.
+
+    `conn` is the connection this attempt is sent on, and what the snapshot
+    records about its sampler preset -- `llm_sampling.report`, the same split
+    the facade sends -- so a past turn says what it was sent WITH, and what
+    its backend could not take.
 
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
@@ -438,9 +448,19 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     # off. Nothing to record, and nothing was built to record.
     if breakdown is None:
         return
+    report = llm_sampling.report(conn)
+    if report is not None:
+        breakdown = {**breakdown, "sampling": report}
     if isinstance(messages, model_guidance.PreparedMessages):
-        messages.on_variant = lambda selected, variant: _record_prompt(
-            cid, sid, task, variant, model=selected)
+        def on_variant(selected: str, variant: dict | None) -> None:
+            # The fallback as the facade sends it: re-resolved per generation
+            # exactly as `build_llm`'s resolver is, with the route's preset
+            # carried onto it under the same rule.
+            fallback = _fallback_connection() if conn is not None else None
+            _record_prompt(cid, sid, task, variant, model=selected,
+                           conn=llm.fallback_sampling(conn, fallback)
+                           if conn is not None and fallback is not None else None)
+        messages.on_variant = on_variant
     # The scene check and the append are ONE critical section, on the same lock
     # `record` uses. Another client can rename or delete the scene between the
     # composition and this call, and its cleanup (`repoint_scenes` /
@@ -666,10 +686,13 @@ def _routing_body(scope: str, campaign_meta: dict) -> dict:
     """
     conns = store.llm_connections.list_connections()
     known = {c["id"] for c in conns}
-    bundle = store.routing.bundle(campaign_meta=campaign_meta, cfg=store.read_config(),
+    cfg = store.read_config()
+    bundle = store.routing.bundle(campaign_meta=campaign_meta, cfg=cfg,
                                   exists=lambda conn_id: conn_id in known, scope=scope)
     active = store.llm_connections.get_active()  # routing-ok: names the cascade's base
     return {**bundle, "scope": scope,
+            **_route_sampling(scope, campaign_meta, cfg, conns, bundle["effective"],
+                              active["id"] if active else ""),
             "active_connection_id": active["id"] if active else "",
             "catalog": [{"key": r.key, "label": r.label, "hint": r.hint,
                          "tasks": list(r.tasks)}
@@ -686,6 +709,56 @@ def _routing_body(scope: str, campaign_meta: dict) -> dict:
                              "usable": _connection_problem(
                                  {**c, "api_key": "x" if c.get("key_set") else ""}) is None}
                             for c in conns]}
+
+
+def _route_sampling(scope: str, campaign_meta: dict, cfg: dict, conns: list[dict],
+                    effective: dict[str, str], active_id: str) -> dict:
+    """The routing picker's preset half: what each route would inherit, and
+    what its effective connection will actually be sent from its effective
+    preset.
+
+    The second is the point. Most routes are never captured to the prompt log
+    -- absorb, dossiers, the tracker, every draft -- so this row is the only
+    place a parameter their backend drops is said aloud before the call is
+    made. Computed here from the same `llm_sampling.split` the facade runs, so
+    the row cannot drift from what is sent. Masked connections serve: a split
+    reads the kind, model and sampler fields, never the key.
+    """
+    by_id = {c["id"]: c for c in conns}
+    presets = store.sampler_presets.list_presets()
+    known_ids = {p["id"]: p for p in presets}
+
+    def known(pid: str) -> bool:
+        return pid in known_ids
+
+    inherited: dict[str, str] = {}
+    inherited_from: dict[str, dict] = {}
+    sampling: dict[str, dict | None] = {}
+    for r in store.routing.routes_for(scope):
+        conn = by_id.get(effective.get(r.key) or active_id)
+        without = store.sampler_presets.inherited(
+            scope, r.key, campaign_meta=campaign_meta, cfg=cfg, conn=conn, known=known)
+        inherited[r.key] = without["preset_id"]
+        inherited_from[r.key] = {"scope": without["scope"]}
+        if conn is None:
+            sampling[r.key] = None
+            continue
+        got = store.sampler_presets.resolve(r.tasks[0], campaign_meta=campaign_meta,
+                                            cfg=cfg, conn=conn, known=known)
+        preset = known_ids.get(got["preset_id"])
+        served = {**conn, "sampling": {
+            "preset_id": got["preset_id"], "preset_name": preset["name"] if preset else "",
+            "scope": got["scope"], "params": dict(preset["params"]) if preset else {}}}
+        params = _model_params(conn)
+        if params is not None:
+            served["model_params"] = params
+        sampling[r.key] = llm_sampling.report(served)
+    return {"presets": store.sampler_presets.scope_values(
+                scope, campaign_meta=campaign_meta, cfg=cfg),
+            "preset_inherited": inherited, "preset_inherited_from": inherited_from,
+            "preset_catalog": [{"id": p["id"], "name": p["name"]} for p in presets],
+            "preset_clear": store.sampler_presets.PRESET_CLEAR,
+            "sampling": sampling}
 
 
 def _routing_fields(scope: str, body) -> dict:
@@ -715,6 +788,34 @@ def _routing_fields(scope: str, body) -> dict:
     unknown = sorted({v for v in fields.values() if v and not _connection_exists(v)})
     if unknown:
         raise HTTPException(status_code=400, detail=f"no such connection: {unknown}")
+    return {**fields, **_preset_fields(scope, body)}
+
+
+def _preset_fields(scope: str, body) -> dict:
+    """The `{route: preset_id}` half of a routing PUT, validated for this scope.
+
+    Kept apart from the connection half because the two are refused on
+    different terms: a preset key is not a connection key (`routing.refused`
+    would 400 every one of them), and its value may be the clear sentinel,
+    which names no preset and is exactly as valid as one that does. Unknown
+    ids are refused on write and tolerated on read, `_routing_fields`' rule.
+    """
+    presets = _dump(body).get("presets") or {}
+    if not isinstance(presets, dict):
+        raise HTTPException(status_code=400, detail="presets must be an object")
+    fields = {store.routing.preset_key(str(k)): str(v or "").strip()
+              for k, v in presets.items()}
+    refused = store.sampler_presets.refused(scope, fields)
+    if refused:
+        raise HTTPException(
+            status_code=400,
+            detail=f"no sampler preset at this scope for: "
+                   f"{sorted(k[len('preset_'):] for k in refused)}")
+    clear = store.sampler_presets.PRESET_CLEAR
+    unknown = sorted({v for v in fields.values()
+                      if v and v != clear and not store.sampler_presets.exists(v)})
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"no such sampler preset: {unknown}")
     return fields
 
 
@@ -1187,6 +1288,81 @@ def _routed_connection(task: str, cid: str) -> tuple[dict | None, dict]:
     return seen.get(resolution["connection_id"]), resolution
 
 
+def _model_params(conn: dict) -> list[str] | None:
+    """The request parameters `conn`'s model takes, from its cached catalog, or
+    None when that is not known.
+
+    OpenRouter only, because it is the one provider whose catalog says
+    (`supported_parameters`, kept by `catalog.entry` as `params`) -- and the one
+    that forwards a parameter a model does not take for the model to ignore,
+    which is the silent drop sampler presets exist to report. Read from the
+    sidecar the model picker already fills, so this costs one small file and
+    never a request; no cached catalog means `llm_sampling` says "unverified"
+    rather than guessing.
+    """
+    if conn.get("kind", "openrouter") != "openrouter" or not conn.get("id"):
+        return None
+    try:
+        models = store.llm_connections.cached_models(conn["id"])["models"]
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    model = effective_model(conn)
+    for entry in models:
+        if isinstance(entry, dict) and entry.get("id") == model:
+            params = entry.get("params")
+            return list(params) if isinstance(params, list) else None
+    return None
+
+
+#: What a connection carries when no preset could be resolved for it at all.
+NO_SAMPLING = {"preset_id": "", "preset_name": "", "scope": "none", "params": {}}
+
+
+def _with_sampling(conn: dict | None, task: str, cid: str) -> dict | None:
+    """`_attach_sampling` for a connection that may not exist."""
+    return None if conn is None else _attach_sampling(conn, task, cid)
+
+
+def _attach_sampling(conn: dict, task: str, cid: str) -> dict:
+    """`conn` with its sampler preset attached, for `task` in campaign `cid`.
+
+    Adds `sampling` -- `{preset_id, preset_name, scope, params}` -- and, where
+    the catalog says, `model_params`; `llm_sampling.split` reads both, per
+    attempt, inside the facade. The cascade is `store.sampler_presets.resolve`
+    (campaign route, global route, this connection's own preset, none), fed
+    here because the impure reads belong to the route layer, as routing's do.
+
+    A copy, never a mutation: `conn` can be the dict the store handed back.
+    Never raises: a preset that cannot be read is no preset, and the report
+    the reader sees says "provider defaults" -- which is then the truth about
+    what was sent. An unusable store fails the turn elsewhere, louder.
+    """
+    sampling = dict(NO_SAMPLING)
+    try:
+        seen: dict[str, dict | None] = {}
+
+        def known(pid: str) -> bool:
+            if pid not in seen:
+                seen[pid] = store.sampler_presets.read_preset(pid)
+            return seen[pid] is not None
+
+        got = store.sampler_presets.resolve(
+            task, campaign_meta=_campaign_routing_meta(cid), cfg=store.read_config(),
+            conn=conn, known=known)
+        preset = seen.get(got["preset_id"]) if got["preset_id"] else None
+        sampling = {"preset_id": got["preset_id"],
+                    "preset_name": preset["name"] if preset else "",
+                    "scope": got["scope"],
+                    "params": dict(preset["params"]) if preset else {}}
+    except (store.locks.StoreBusy, OSError, UnicodeDecodeError):
+        pass
+    out = {**conn, "sampling": sampling}
+    params = _model_params(conn)
+    if params is not None:
+        out["model_params"] = params
+    return out
+
+
 def _standing_connection(task: str, cid: str) -> tuple[dict | None, dict, bool]:
     """Where `task` would run, how that was decided, and whether a route chose it.
 
@@ -1202,7 +1378,7 @@ def _standing_connection(task: str, cid: str) -> tuple[dict | None, dict, bool]:
     routed = conn is not None
     if conn is None:
         conn = store.llm_connections.get_active()  # routing-ok: this IS the seam
-    return conn, resolution, routed
+    return _with_sampling(conn, task, cid), resolution, routed
 
 
 def _usable_or_409(conn: dict | None, resolution: dict, routed: bool) -> dict:
@@ -1379,7 +1555,11 @@ def _override_connection(body, task: str = "", cid: str = "") -> tuple[dict, boo
     resolved = {**conn, "model": model} if model else conn
     same = (active is not None and resolved["id"] == active["id"]
             and effective_model(resolved) == effective_model(active))
-    return resolved, not same
+    # Re-attached on the connection that will actually serve: a named override
+    # was read raw above, and a model override changes which catalog entry says
+    # what the model takes. The route's preset still applies (it follows the
+    # route); only the connection-level base and the model's list move.
+    return _attach_sampling(resolved, task, cid), not same
 
 
 def _require_scene(cid: str, sid: str) -> dict:

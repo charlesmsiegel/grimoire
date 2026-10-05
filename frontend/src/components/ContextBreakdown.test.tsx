@@ -44,3 +44,18 @@ test("a compose that fell back on some strings says it is partly a length count"
                            ctx={ctx({ token_count: { tokenizer: "mixed", native: false } })} />);
   expect(screen.getByText(/partly counted with cl100k_base/)).toBeInTheDocument();
 });
+
+test("the inspector says which preset parameters a turn could not send", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sampling: {
+    preset_id: "warm", preset_name: "Warm", scope: "connection", kind: "claude",
+    applied: {}, dropped: [{ param: "temperature",
+                             reason: "the Claude Agent SDK takes no sampling options" }],
+    verified: true } })} />);
+  expect(screen.getByText("Sampler: Warm (from the connection)")).toBeInTheDocument();
+  expect(screen.getByText("Not sent: temperature")).toBeInTheDocument();
+});
+
+test("a snapshot frozen before presets existed renders no sampler line", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx()} />);
+  expect(screen.queryByText(/Sampler:/)).toBeNull();
+});

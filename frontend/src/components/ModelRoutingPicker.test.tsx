@@ -9,6 +9,8 @@ vi.mock("../api/client", async () => {
     setGlobalRouting: vi.fn(),
     getCampaignRouting: vi.fn(),
     setCampaignRouting: vi.fn(),
+    setGlobalRoutingPresets: vi.fn(),
+    setCampaignRoutingPresets: vi.fn(),
   } };
 });
 
@@ -233,4 +235,73 @@ test("a failed load says so instead of rendering an empty picker", async () => {
 
   expect(await screen.findByText("no store")).toBeInTheDocument();
   expect(screen.queryByLabelText("Scene turns")).not.toBeInTheDocument();
+});
+
+
+// ---- sampler presets ----
+
+const CLEAR = "\u2063none";
+
+function withPresets(over: Partial<any> = {}) {
+  return bundle({
+    presets: { scene: "", dossier: "" },
+    preset_inherited: { scene: "warm", dossier: "" },
+    preset_inherited_from: { scene: { scope: "connection" }, dossier: { scope: "global" } },
+    preset_catalog: [{ id: "warm", name: "Warm" }, { id: "cold", name: "Cold" }],
+    preset_clear: CLEAR,
+    sampling: {
+      scene: { preset_id: "warm", preset_name: "Warm", scope: "connection", kind: "claude",
+               applied: {}, dropped: [{ param: "temperature",
+                                        reason: "the Claude Agent SDK takes no sampling options" }],
+               verified: true },
+      dossier: null,
+    },
+    ...over,
+  });
+}
+
+test("each route offers a preset select labelled with what inheriting gets", async () => {
+  vi.mocked(api.getGlobalRouting).mockResolvedValue(withPresets() as never);
+  render(<ModelRoutingPicker scope="global" />);
+  const scene = await screen.findByLabelText<HTMLSelectElement>("Scene turns: sampler preset");
+  expect(scene.value).toBe("");
+  expect(screen.getByText("— inherit (Warm, from the connection) —")).toBeInTheDocument();
+  // A global-scope clear reads as such, not as "provider defaults".
+  expect(screen.getByText("— inherit (no preset, from the global default) —")).toBeInTheDocument();
+  expect(screen.getAllByText("No preset (provider defaults)")).toHaveLength(2);
+});
+
+test("the dropped parameters are said aloud on the row", async () => {
+  vi.mocked(api.getGlobalRouting).mockResolvedValue(withPresets() as never);
+  render(<ModelRoutingPicker scope="global" />);
+  expect(await screen.findByText(/Not sent: temperature/)).toBeInTheDocument();
+  expect(screen.getByText(/Claude Agent SDK takes no sampling options/)).toBeInTheDocument();
+});
+
+test("choosing a preset writes only that route's preset", async () => {
+  vi.mocked(api.getGlobalRouting).mockResolvedValue(withPresets() as never);
+  vi.mocked(api.setGlobalRoutingPresets).mockResolvedValue(withPresets() as never);
+  render(<ModelRoutingPicker scope="global" />);
+  fireEvent.change(await screen.findByLabelText("Dossier refresh: sampler preset"),
+                   { target: { value: CLEAR } });
+  await waitFor(() =>
+    expect(api.setGlobalRoutingPresets).toHaveBeenCalledWith({ dossier: CLEAR }));
+  expect(api.setGlobalRouting).not.toHaveBeenCalled();
+});
+
+test("the campaign scope writes its preset to the campaign", async () => {
+  vi.mocked(api.getCampaignRouting).mockResolvedValue(withPresets({ scope: "campaign" }) as never);
+  vi.mocked(api.setCampaignRoutingPresets).mockResolvedValue(
+    withPresets({ scope: "campaign" }) as never);
+  render(<ModelRoutingPicker scope="campaign" cid="run" />);
+  fireEvent.change(await screen.findByLabelText("Scene turns: sampler preset"),
+                   { target: { value: "cold" } });
+  await waitFor(() =>
+    expect(api.setCampaignRoutingPresets).toHaveBeenCalledWith("run", { scene: "cold" }));
+});
+
+test("a bundle without presets renders no preset select", async () => {
+  render(<ModelRoutingPicker scope="global" />);
+  await screen.findByLabelText("Scene turns");
+  expect(screen.queryByLabelText("Scene turns: sampler preset")).toBeNull();
 });

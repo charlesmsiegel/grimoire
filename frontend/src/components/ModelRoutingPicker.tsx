@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, type RoutingBundle } from "../api/client";
+import { SamplingSummary } from "./SamplingSummary";
 
 /** What went wrong, in the words the server used when it had any. `unknown`
  *  rather than `any`: a rejected fetch is not always an `ApiError`, and typing
@@ -56,6 +57,25 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
 
   useEffect(() => { void load(); }, [load]);
 
+  /** The same write discipline as `choose`, for the route's sampler preset. */
+  async function choosePreset(route: string, presetId: string) {
+    setError(null);
+    setBusy(route);
+    const n = (ticket.current += 1);
+    try {
+      const next = scope === "global"
+        ? await api.setGlobalRoutingPresets({ [route]: presetId })
+        : await api.setCampaignRoutingPresets(cid!, { [route]: presetId });
+      if (n === ticket.current) setBundle(next);
+    } catch (err: unknown) {
+      if (n !== ticket.current) return;
+      await load();
+      setError(reason(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function choose(route: string, connectionId: string) {
     setError(null);
     setBusy(route);
@@ -105,6 +125,22 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
     return eff ? `— inherit (${nameOf(eff)}, from ${from}) —` : "— inherit —";
   };
 
+  const presetName = (id: string) =>
+    bundle.preset_catalog?.find((p) => p.id === id)?.name ?? id;
+  const presetInherited = (route: string) => {
+    // `preset_inherited`, for `inherited`'s reason above. "" is either a scope
+    // that cleared it or nothing set anywhere; the scope says which.
+    const eff = bundle.preset_inherited?.[route] ?? "";
+    const from = bundle.preset_inherited_from?.[route]?.scope;
+    if (eff) {
+      return `— inherit (${presetName(eff)}, from ${from === "connection"
+        ? "the connection" : scopeLabel(from)}) —`;
+    }
+    return from === "campaign" || from === "global"
+      ? `— inherit (no preset, from ${scopeLabel(from)}) —`
+      : "— inherit (provider defaults) —";
+  };
+
   return (
     <div className="model-routing">
       {error && <div className="banner">{error}</div>}
@@ -149,6 +185,32 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
             )}
           </select>
           <p className="field-hint" id={`route-${route.key}-hint`}>{route.hint}</p>
+          {bundle.preset_catalog && (
+            <>
+              <label htmlFor={`preset-${route.key}`}>Sampler preset</label>
+              <select
+                id={`preset-${route.key}`}
+                aria-label={`${route.label}: sampler preset`}
+                value={bundle.presets?.[route.key] ?? ""}
+                disabled={busy === route.key}
+                onChange={(e) => void choosePreset(route.key, e.target.value)}
+              >
+                <option value="">{presetInherited(route.key)}</option>
+                <option value={bundle.preset_clear}>No preset (provider defaults)</option>
+                {bundle.preset_catalog.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+                {/* A stored id this list does not hold (deleted since): shown
+                    as itself rather than misreported as inherit. */}
+                {bundle.presets?.[route.key]
+                  && bundle.presets[route.key] !== bundle.preset_clear
+                  && !bundle.preset_catalog.some((p) => p.id === bundle.presets[route.key]) && (
+                  <option value={bundle.presets[route.key]}>{bundle.presets[route.key]}</option>
+                )}
+              </select>
+              <SamplingSummary report={bundle.sampling?.[route.key]} />
+            </>
+          )}
         </div>
       ))}
     </div>

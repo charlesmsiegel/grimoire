@@ -1,0 +1,158 @@
+"""The sampler parameter table and the per-backend split (sampler presets)."""
+
+import pytest
+
+from grimoire import llm_sampling as ls
+
+
+def _conn(kind, params, **fields):
+    return {"kind": kind, "model": "m", **fields,
+            "sampling": {"preset_id": "p", "preset_name": "P", "scope": "connection",
+                         "params": params}}
+
+
+ALL = {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "min_p": 0.05,
+       "repetition_penalty": 1.08, "frequency_penalty": 0.1, "presence_penalty": 0.2,
+       "max_tokens": 800, "stop": ["\nYou:"]}
+
+
+# ---- validate ----
+
+def test_validate_accepts_every_param_in_bounds():
+    assert ls.validate(ALL) == ALL
+
+
+def test_validate_accepts_an_empty_preset():
+    assert ls.validate({}) == {}
+
+
+def test_validate_keeps_integral_floats_as_ints():
+    assert ls.validate({"top_k": 40.0, "max_tokens": 300.0}) == {"top_k": 40, "max_tokens": 300}
+
+
+@pytest.mark.parametrize("params, needle", [
+    ({"temprature": 1}, "temprature"),
+    ({"temperature": 70}, "temperature"),
+    ({"temperature": "hot"}, "temperature"),
+    ({"temperature": True}, "temperature"),
+    ({"temperature": float("nan")}, "temperature"),
+    ({"top_k": 40.7}, "top_k"),
+    ({"max_tokens": 0}, "max_tokens"),
+    ({"stop": "\n"}, "stop"),
+    ({"stop": [""]}, "stop"),
+    ({"stop": ["x" * 201]}, "stop"),
+    ({"stop": ["a"] * 17}, "stop"),
+    ({"stop": [3]}, "stop"),
+])
+def test_validate_names_the_offending_param(params, needle):
+    with pytest.raises(ValueError, match=needle):
+        ls.validate(params)
+
+
+def test_validate_refuses_a_non_object():
+    with pytest.raises(ValueError):
+        ls.validate(["temperature"])  # type: ignore[arg-type]
+
+
+# ---- split ----
+
+def test_no_preset_sends_nothing():
+    assert ls.split({"kind": "openrouter"}) == ({}, [])
+
+
+def test_openrouter_without_a_catalog_sends_everything():
+    applied, dropped = ls.split(_conn("openrouter", ALL))
+    assert applied == ALL and dropped == []
+
+
+def test_openrouter_drops_what_the_models_catalog_does_not_list():
+    conn = _conn("openrouter", ALL, model_params=["temperature", "top_p", "max_tokens", "stop"])
+    applied, dropped = ls.split(conn)
+    assert applied == {k: ALL[k] for k in ("temperature", "top_p", "max_tokens", "stop")}
+    assert [d["param"] for d in dropped] == [
+        "top_k", "min_p", "repetition_penalty", "frequency_penalty", "presence_penalty"]
+    assert all("catalog" in d["reason"] for d in dropped)
+
+
+def test_standard_openai_compatible_drops_the_three_extensions():
+    applied, dropped = ls.split(_conn("openai_compatible", ALL))
+    assert set(applied) == {"temperature", "top_p", "frequency_penalty", "presence_penalty",
+                            "max_tokens", "stop"}
+    assert [d["param"] for d in dropped] == ["top_k", "min_p", "repetition_penalty"]
+
+
+def test_standard_openai_compatible_drops_a_stop_list_over_four():
+    applied, dropped = ls.split(_conn("openai_compatible", {"stop": list("abcde")}))
+    assert applied == {} and dropped[0]["param"] == "stop"
+    assert "4" in dropped[0]["reason"]
+
+
+def test_extended_sends_both_repetition_spellings():
+    applied, dropped = ls.split(_conn("openai_compatible", ALL, sampler_support="extended"))
+    assert dropped == []
+    assert applied["repetition_penalty"] == applied["repeat_penalty"] == 1.08
+    assert applied["top_k"] == 40 and applied["min_p"] == 0.05
+
+
+def test_extended_keeps_a_long_stop_list():
+    applied, _ = ls.split(_conn("openai_compatible", {"stop": list("abcde")},
+                                sampler_support="extended"))
+    assert applied == {"stop": list("abcde")}
+
+
+def test_claude_sends_nothing_and_says_why():
+    applied, dropped = ls.split(_conn("claude", {"temperature": 0.5, "max_tokens": 10}))
+    assert applied == {}
+    assert [d["param"] for d in dropped] == ["temperature", "max_tokens"]
+    assert "Claude Agent SDK" in dropped[0]["reason"]
+
+
+def test_a_malformed_stored_preset_never_raises():
+    applied, dropped = ls.split(_conn("openrouter", {"temperature": "hot", "top_k": 40,
+                                                     "bogus": 1}))
+    assert applied == {"top_k": 40}
+    assert [d["param"] for d in dropped] == ["temperature"]
+
+
+def test_missing_kind_is_openrouter():
+    conn = _conn("openrouter", {"min_p": 0.1})
+    del conn["kind"]
+    assert ls.split(conn) == ({"min_p": 0.1}, [])
+
+
+# ---- report ----
+
+def test_report_is_none_without_a_preset():
+    assert ls.report({"kind": "openrouter"}) is None
+    assert ls.report(None) is None
+
+
+def test_report_describes_the_split():
+    got = ls.report(_conn("openai_compatible", {"temperature": 0.7, "min_p": 0.1}))
+    assert got == {"preset_id": "p", "preset_name": "P", "scope": "connection",
+                   "kind": "openai_compatible", "applied": {"temperature": 0.7},
+                   "dropped": [{"param": "min_p", "reason": got["dropped"][0]["reason"]}],
+                   "verified": True}
+
+
+def test_report_names_a_cleared_route_too():
+    conn = {"kind": "openrouter", "sampling": {"preset_id": "", "preset_name": "",
+                                               "scope": "global", "params": {}}}
+    assert ls.report(conn)["scope"] == "global"
+
+
+def test_report_says_openrouter_is_unverified_without_a_catalog():
+    assert ls.report(_conn("openrouter", {"temperature": 1}))["verified"] is False
+    assert ls.report(_conn("openrouter", {"temperature": 1},
+                           model_params=["temperature"]))["verified"] is True
+
+
+def test_report_reports_canonical_names_not_wire_duplicates():
+    got = ls.report(_conn("openai_compatible", {"repetition_penalty": 1.1},
+                          sampler_support="extended"))
+    assert got["applied"] == {"repetition_penalty": 1.1}
+
+
+def test_sent_names_lists_what_went_on_the_wire():
+    assert ls.sent_names(_conn("openai_compatible", {"temperature": 1, "min_p": 0.1})) == [
+        "temperature"]

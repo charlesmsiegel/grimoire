@@ -21,7 +21,13 @@ from .paths import home, now_iso, safe_id, slugify, uniquify
 #: .SUPPORTED_KINDS` for the primary -- and a test partitions THIS roster
 #: between them, so a new kind cannot be added without classifying it.
 KINDS = ("openrouter", "claude", "openai_compatible")
-_FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reasoning_effort")
+_FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reasoning_effort",
+           "sampler_preset", "sampler_support")
+#: The fields describing how this connection SAMPLES rather than what it is.
+#: An edit touching only these keeps the connection's `rev` (see
+#: `update_connection`): the rev exists to invalidate the cached model catalog
+#: and the health verdict, and neither describes a sampler preset.
+SAMPLER_FIELDS = frozenset({"sampler_preset", "sampler_support"})
 
 
 class ConnectionNotFound(Exception):
@@ -40,16 +46,19 @@ def _sidecar_path(id: str) -> Path:
     return _dir() / f"{id}.models.json"
 
 
-def _write_raw(id: str, **fields: str) -> None:
+def _write_raw(id: str, keep_rev: str = "", **fields: str) -> None:
     """Unconditional write: stamps a fresh rev and clears any sidecar for
     this id, on every call (create AND update) — simpler than conditioning
     the sidecar clear on which field changed, and no less correct: the rev
     bump alone already makes any stale sidecar invisible on read (see
     cached_models below), so clearing it here is pure hygiene either way."""
     meta = {k: fields.get(k, "") for k in _FIELDS}
-    meta["rev"] = secrets.token_hex(8)
+    # `keep_rev` is the one exception, for an edit nothing the rev guards has
+    # seen: the sidecar and the rev both survive it (see `SAMPLER_FIELDS`).
+    meta["rev"] = keep_rev or secrets.token_hex(8)
     _dir().mkdir(parents=True, exist_ok=True)
-    _sidecar_path(id).unlink(missing_ok=True)
+    if not keep_rev:
+        _sidecar_path(id).unlink(missing_ok=True)
     atomic.write_text(_path(id), dump_frontmatter(meta, ""))
 
 
@@ -155,7 +164,9 @@ def update_connection(id: str, **fields) -> None:
         # working credential on an unrelated update (e.g. a rename).
         fields.pop("api_key", None)
     merged = {**conn, **fields}
-    _write_raw(id, **{k: merged[k] for k in _FIELDS})
+    changed = {k for k in _FIELDS if merged[k] != conn[k]}
+    keep = conn["rev"] if changed and changed <= SAMPLER_FIELDS and conn["rev"] else ""
+    _write_raw(id, keep_rev=keep, **{k: merged[k] for k in _FIELDS})
 
 
 def delete_connection(id: str) -> None:

@@ -11,7 +11,7 @@ vi.mock("../api/client", async () => ({
     listConnections: vi.fn(), readConnection: vi.fn(), createConnection: vi.fn(),
     updateConnection: vi.fn(), deleteConnection: vi.fn(), refreshConnectionModels: vi.fn(),
     getConfig: vi.fn(), putConfig: vi.fn(), previewModels: vi.fn(), checkConnection: vi.fn(),
-    getGlobalRouting: vi.fn(),
+    getGlobalRouting: vi.fn(), listSamplerPresets: vi.fn(),
   },
 }));
 vi.mock("../api/models", () => ({ priceLabel: () => "", contextLabel: () => "" }));
@@ -50,6 +50,9 @@ beforeEach(() => {
   (api.listConnections as any).mockResolvedValue([OPENROUTER, CUSTOM]);
   (api.getConfig as any).mockResolvedValue({ active_connection_id: "openrouter" });
   (api.getGlobalRouting as any).mockResolvedValue(routing());
+  (api.listSamplerPresets as any).mockResolvedValue({
+    presets: [{ id: "warm", name: "Warm", params: { temperature: 0.9 }, notes: "", source: "" }],
+    params: [] });
   (api.readConnection as any).mockImplementation((id: string) => Promise.resolve(
     id === "openrouter"
       ? { ...OPENROUTER, models: [], fetched_at: "", health: UNCHECKED }
@@ -529,4 +532,46 @@ test("GLM 5.3 effort can be saved without replacing credentials", async () => {
   await waitFor(() => expect(api.updateConnection).toHaveBeenCalledWith("zai-glm", expect.objectContaining({ reasoning_effort: "low" })));
   const calls = vi.mocked(api.updateConnection).mock.calls;
   expect(calls[calls.length - 1][1]).not.toHaveProperty("api_key");
+});
+
+
+// ---- sampler presets ----
+
+test("the view sidebar says what the connection's own preset sends and drops", async () => {
+  vi.mocked(api.readConnection).mockResolvedValue({
+    ...CUSTOM, models: [], fetched_at: "", sampler_preset: "warm",
+    sampling: { preset_id: "warm", preset_name: "Warm", scope: "connection",
+                kind: "openai_compatible", applied: { temperature: 0.9 },
+                dropped: [{ param: "min_p", reason: "not part of the OpenAI API" }],
+                verified: true },
+  } as any);
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(within(rail).getByText("z.ai GLM"));
+  const sidebar = (await screen.findByRole("heading", { name: "Sampler preset" }))
+    .closest(".side-section") as HTMLElement;
+  expect(within(sidebar).getByText(/Warm \(from the connection\)/)).toBeInTheDocument();
+  expect(within(sidebar).getByText("temperature 0.9")).toBeInTheDocument();
+  expect(within(sidebar).getByText(/Not sent: min_p/)).toBeInTheDocument();
+});
+
+test("a preset and extended samplers are saved with the connection", async () => {
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(within(rail).getByText("z.ai GLM"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText("Sampler preset"), { target: { value: "warm" } });
+  fireEvent.click(screen.getByLabelText(/Extended samplers/));
+  fireEvent.click(screen.getByRole("button", { name: /^Save connection$/i }));
+  await waitFor(() => expect(api.updateConnection).toHaveBeenCalledWith(
+    "zai-glm", expect.objectContaining({ sampler_preset: "warm", sampler_support: "extended" })));
+});
+
+test("the extended-samplers box is offered for a custom endpoint only", async () => {
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(within(rail).getByText("OpenRouter"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  expect(screen.getByLabelText("Sampler preset")).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Extended samplers/)).toBeNull();
 });

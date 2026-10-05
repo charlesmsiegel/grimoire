@@ -426,3 +426,41 @@ async def test_the_probe_is_bounded_well_under_a_generations_timeout():
 
     await make_client(handler).probe("sk-or-x")
     assert 0 < seen["read"] <= 30 and 0 < seen["connect"] <= 30
+
+
+async def test_sampling_is_merged_into_the_request_body():
+    import json
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, text=SSE_BODY)
+
+    client = make_client(handler)
+    [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "k",
+                                    sampling={"temperature": 0.4, "min_p": 0.1})]
+    assert seen["temperature"] == 0.4 and seen["min_p"] == 0.1
+    assert seen["model"] == "m" and seen["usage"] == {"include": True}
+
+
+async def test_no_sampling_leaves_the_body_as_it_was():
+    import json
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, text=SSE_BODY)
+
+    client = make_client(handler)
+    [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "k")]
+    assert set(seen) == {"model", "messages", "stream", "usage"}
+
+
+async def test_an_http_error_carries_its_status():
+    def handler(request):
+        return httpx.Response(400, json={"error": {"message": "temperature out of range"}})
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "k")]
+    assert exc.value.status == 400

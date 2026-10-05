@@ -27,9 +27,18 @@ def entry(raw: dict) -> dict:
     pricing = raw.get("pricing")
     if not isinstance(pricing, dict):
         pricing = {}
-    return {"id": raw["id"], "name": raw.get("name") or raw["id"],
-            "context": _context(raw),
-            "prompt": pricing.get("prompt"), "completion": pricing.get("completion")}
+    out = {"id": raw["id"], "name": raw.get("name") or raw["id"],
+           "context": _context(raw),
+           "prompt": pricing.get("prompt"), "completion": pricing.get("completion")}
+    # Which request parameters the model takes, when the provider says
+    # (OpenRouter's `supported_parameters`). Kept only as a list of strings and
+    # only when present: an absent list means "unknown", which the sampler split
+    # treats as "send everything and say it is unverified" -- a different fact
+    # from an empty list, which says the model takes none of them.
+    params = raw.get("supported_parameters")
+    if isinstance(params, list):
+        out["params"] = [p for p in params if isinstance(p, str)]
+    return out
 
 
 def _context(raw: dict) -> int | None:

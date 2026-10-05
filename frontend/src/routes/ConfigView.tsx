@@ -12,6 +12,7 @@ import PricingEditor from "../components/PricingEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ModelRoutingPicker } from "../components/ModelRoutingPicker";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
+import { SamplerPresetEditor } from "../components/SamplerPresetEditor";
 import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
@@ -92,9 +93,9 @@ type SectionId =
   | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
   | "setup"
   | "context" | "layout" | "tracker" | "semantic" | "system-prompt" | "response"
-  | "transcript" | "playing" | "appearance";
+  | "samplers" | "transcript" | "playing" | "appearance";
 
-/** The column, as data: three groups, seventeen sections, and which draft fields
+/** The column, as data: three groups, eighteen sections, and which draft fields
  *  each one owns — the last part is what lets a section carry an unsaved dot,
  *  so the footer's count is always findable rather than being a number about
  *  somewhere else. */
@@ -132,6 +133,9 @@ const SECTIONS: SectionDef[] = [
   { id: "system-prompt", group: "What the model sees", label: "System prompt",
     fields: ["system_prompt"] },
   { id: "response", group: "What the model sees", label: "Response targets", fields: [] },
+  // No draft fields: presets are files of their own behind their own routes,
+  // and the editor saves each one itself, like the token rates.
+  { id: "samplers", group: "What the model sees", label: "Sampler presets", fields: [] },
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
   { id: "playing", group: "What you see", label: "While playing",
@@ -759,6 +763,27 @@ export default function ConfigView() {
               response preset, this block saves as you set it.
             </p>
             <ModelRoutingPicker scope="global" />
+          </>
+        )}
+
+        {draft && section === "samplers" && (
+          <>
+            <p className="config-copy">
+              A sampler preset is a named set of temperature, top-p, top-k, min-p,
+              the three penalties, a token cap and stop strings — the settings
+              SillyTavern users share per model. A preset sets only what it names;
+              everything it leaves blank stays at the provider's default.
+            </p>
+            <p className="config-copy">
+              Attach one to a connection (Connections page) or to a job under{" "}
+              <em>Model routing</em>; a campaign can override a job's preset from the
+              scene inspector, the same way it overrides the job's connection. Not
+              every backend takes every parameter — the Claude path takes none, and a
+              standard OpenAI-compatible endpoint takes six of the nine — so what
+              cannot be sent is dropped, and the routing picker and the scene
+              inspector say which.
+            </p>
+            <SamplerPresetEditor />
           </>
         )}
 

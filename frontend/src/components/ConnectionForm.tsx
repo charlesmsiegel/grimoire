@@ -14,6 +14,10 @@ export type ConnectionFormValue = {
   model: string;
   post_process: "none" | "strict";
   reasoning_effort?: "" | "low" | "high" | "max";
+  /** Edited by the Connections page beside this form, not by it: the setup
+   *  wizard shares the form and has no presets to offer yet. */
+  sampler_preset?: string;
+  sampler_support?: "" | "standard" | "extended";
 };
 
 export const BLANK_CONNECTION: ConnectionFormValue = {
