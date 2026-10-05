@@ -289,6 +289,103 @@ def test_jpeg_jfxx_thumbnail_extension_dropped():
     assert sanitize(out) == out
 
 
+def _assert_jpeg_clean(src: bytes) -> bytes:
+    """`src` sanitizes to bytes that decode to the same pixels, keep every
+    scan byte, and sanitize to themselves."""
+    out = sanitize(src)
+    assert image_sanitize.sanitize_checked(src)[1]
+    assert out != src  # the comment went, so it was really rewritten
+    assert b"lighthouse" not in out
+    assert out.endswith(b"\xff\xd9")
+    assert _pixels(out) == _pixels(src)
+    assert sanitize(out) == out
+    return out
+
+
+def _sos_count(raw: bytes) -> int:
+    """How many SOS segments the entropy walk has to step over."""
+    n, pos = 0, 2
+    while pos < len(raw):
+        marker, pos = image_sanitize._jpeg_marker(raw, pos)
+        if marker == 0xD9:
+            return n
+        end, _ = image_sanitize._jpeg_segment(raw, pos, marker)
+        pos = end
+        if marker == 0xDA:
+            n += 1
+            pos = image_sanitize._jpeg_entropy_end(raw, pos)
+    return n
+
+
+def test_jpeg_progressive_scans_kept():
+    # A progressive JPEG is several SOS segments, each followed by entropy
+    # data the walk must step over to the next marker.
+    src = _save(_img((40, 30)), "JPEG", progressive=True, quality=90,
+                comment=b"shot at the lighthouse")
+    assert Image.open(io.BytesIO(src)).info.get("progressive")
+    assert _sos_count(src) > 1
+    out = _assert_jpeg_clean(src)
+    assert _sos_count(out) == _sos_count(src)
+
+
+def test_jpeg_restart_markers_are_entropy_data():
+    # RSTn markers sit inside the entropy-coded data; they are data, not a
+    # segment boundary, and must be copied through.
+    for kw in ({"restart_marker_blocks": 1}, {"restart_marker_rows": 1}):
+        src = _save(_img((40, 30)), "JPEG", quality=90,
+                    comment=b"shot at the lighthouse", **kw)
+        scan = _scan_data(src)
+        assert any(bytes([0xFF, m]) in scan for m in range(0xD0, 0xD8)), kw
+        out = _assert_jpeg_clean(src)
+        assert _scan_data(out) == scan, kw
+
+
+def test_jpeg_mpo_keeps_the_first_picture():
+    # An MPO is a JPEG followed by more JPEGs. A browser draws the first; the
+    # rest come after the first EOI and go, with the MPF index that names them.
+    a, b = _img((40, 30)), _img((40, 30)).transpose(Image.Transpose.ROTATE_180)
+    src = _save(a, "MPO", save_all=True, append_images=[b], quality=90,
+                comment=b"shot at the lighthouse")
+    with Image.open(io.BytesIO(src)) as im:
+        assert im.format == "MPO" and im.n_frames == 2
+    out = _assert_jpeg_clean(src)
+    assert b"MPF\x00" not in out
+    assert out.count(b"\xff\xd8") == 1  # no second picture rides along
+    with Image.open(io.BytesIO(out)) as im:
+        assert getattr(im, "n_frames", 1) == 1
+
+
+def test_jpeg_second_exif_app1_dropped_first_one_read():
+    # Only the first Exif APP1 is read for orientation -- as Pillow's reader and
+    # Chromium's both take the first -- and any later one is dropped whole.
+    src = _save(_img(), "JPEG", exif=_exif(6))
+    second = _exif(3).tobytes()
+    assert second.startswith(b"Exif\x00\x00")
+    pos = src.index(b"\xff\xdb")  # before the first DQT, after the first APP1
+    src = src[:pos] + b"\xff\xe1" + struct.pack(">H", len(second) + 2) + second + src[pos:]
+    assert [p[:6] for m, p in _jpeg_segments(src) if m == 0xE1] == [b"Exif\x00\x00"] * 2
+    out = sanitize(src)
+    app1 = [p for m, p in _jpeg_segments(out) if m == 0xE1]
+    assert len(app1) == 1
+    assert _parse_exif(app1[0])[0] == {0x0112: 6}
+    assert b"AcmeCam" not in out
+    assert _pixels(out) == _pixels(src)
+    assert sanitize(out) == out
+
+
+def test_jpeg_empty_exif_app1_is_not_the_first_one():
+    # Chromium (Skia's read_metadata) skips an Exif APP1 with nothing after its
+    # signature and reads the next; so does the sanitizer, rather than letting
+    # the empty one use up "the first" and dropping the orientation that shows.
+    src = _save(_img(), "JPEG", exif=_exif(6))
+    src = _jpeg_insert(src, 0xE1, b"Exif\x00\x00")
+    assert [len(p) for m, p in _jpeg_segments(src) if m == 0xE1][0] == 6
+    out = sanitize(src)
+    app1 = [p for m, p in _jpeg_segments(out) if m == 0xE1]
+    assert len(app1) == 1 and _parse_exif(app1[0])[0] == {0x0112: 6}
+    assert sanitize(out) == out
+
+
 # --- WebP --------------------------------------------------------------------
 
 def _riff_chunks(raw: bytes) -> list[tuple[bytes, bytes]]:
