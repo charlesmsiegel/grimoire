@@ -883,6 +883,15 @@ def _with_descriptions(images: list[dict], descriptions: dict[str, str]) -> list
             for i in images]
 
 
+def image_id_field(image_id: str | None) -> dict:
+    """``{"image_id": ...}`` for a picture the image store holds, else nothing.
+
+    The one shape every image answer carries it in -- listings and uploads
+    alike: absent (the key, never null) for a picture with no placement, so
+    the client reads "no identity" as one thing."""
+    return {"image_id": image_id} if image_id else {}
+
+
 def _upload_image_ext(data: bytes) -> str:
     """The extension an uploaded record image is stored under, from its bytes (#321).
 

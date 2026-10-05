@@ -2031,6 +2031,7 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
         return []
     described = image_descriptions.read_all(wroot, char_id, vid, names={i["name"] for i in out})
     return [{"name": i["name"], "v": i["v"],
+             **({"image_id": i["image_id"]} if i.get("image_id") else {}),
              **({"description": described[i["name"]]} if i["name"] in described else {})}
             for i in out]
 

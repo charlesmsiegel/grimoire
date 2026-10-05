@@ -46,7 +46,8 @@ out of full-backup retention and scheduling; another manual subset would follow
 the same rule. Selection is by image filename type (common suffixes and MIME
 types), so an image saved without an image extension is outside this archive --
 plus everything the content-addressed store needs to resolve one: its objects
-and every `image-refs/` placement (`_is_image_selected`).
+and every `image-refs/` placement under an `assets/` folder
+(`_is_image_selected`).
 """
 
 from __future__ import annotations
@@ -116,15 +117,20 @@ def _is_image_selected(root: Path, directory: Path, path: Path) -> bool:
     journal). Selecting by image filename alone kept the blob and dropped the
     other two, so a restore could not resolve any image uploaded since the
     store went content-addressed (Codex P1). The blob index and thumbnails stay
-    out with the rest of `.cache`."""
+    out with the rest of `.cache`.
+
+    A placement is a `.json` in an `image-refs/` that sits under an `assets/`
+    path segment, which is where every writer puts one; a user's own folder of
+    that name anywhere else, and anything but `.json` inside a real one, is
+    not image data and stays out."""
     if _is_image_file(path):
-        return True
-    if directory.name == _IMAGE_REFS:
         return True
     try:
         parts = directory.relative_to(root).parts
     except ValueError:
         return False
+    if parts and parts[-1] == _IMAGE_REFS:
+        return path.suffix == ".json" and "assets" in parts[:-1]
     return parts[:len(_IMAGE_STORE)] == _IMAGE_STORE
 
 

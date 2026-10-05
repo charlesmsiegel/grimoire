@@ -36,6 +36,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    image_id_field,
     thumb_query,
 )
 from .models import (
@@ -1083,7 +1084,7 @@ def _gallery_image_id(item: dict) -> dict:
     """``{"image_id": ...}`` for a listing row backed by the image store, else
     nothing -- a legacy file has no identity, and the key is absent rather than
     null so the client reads "no identity" as one thing."""
-    return {"image_id": item["image_id"]} if item.get("image_id") else {}
+    return image_id_field(item.get("image_id"))
 
 
 def _gallery_urls(wid: str, base: str, item: dict) -> dict:
@@ -1175,7 +1176,7 @@ async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadF
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"name": name, "ext": stored,
-            "image_id": store.assets.image_id(root, cid, vid, name)}
+            **image_id_field(store.assets.image_id(root, cid, vid, name))}
 
 
 @router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")

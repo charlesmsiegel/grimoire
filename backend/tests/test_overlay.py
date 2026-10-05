@@ -2256,3 +2256,18 @@ def test_shadowing_a_legacy_file_against_a_placement_of_the_same_picture(monkeyp
     (wd / "gallery_2.png").write_bytes(_real_png(5, b"Winifred"))
     assets.put_image(croot, aid, "default", "gallery_2", _real_png(5), "png")
     assert [i["name"] for i in overlay.shadowed_images(cid, aid, "default")] == ["gallery_2"]
+
+
+def test_shadowed_rows_carry_image_id_where_placed(monkeypatch, tmp_path):
+    """A shadowed row carries the world copy's identity, as the listings do:
+    present for a placement, absent (the key) for a legacy file."""
+    wroot, cid, aid, wd, _cd = _seraphine(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(wroot, aid, "default", "gallery_1", _real_png(6), "png")
+    wd.mkdir(parents=True, exist_ok=True)
+    (wd / "gallery_2.png").write_bytes(_real_png(7))
+    for name, seed in (("gallery_1", 8), ("gallery_2", 9)):
+        assets.put_image(croot, aid, "default", name, _real_png(seed), "png")
+    rows = {i["name"]: i for i in overlay.shadowed_images(cid, aid, "default")}
+    assert rows["gallery_1"]["image_id"] == image_refs.read(wd, "gallery_1").image
+    assert "image_id" not in rows["gallery_2"]

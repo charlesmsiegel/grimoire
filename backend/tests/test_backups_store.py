@@ -788,3 +788,26 @@ def test_image_backup_anchors_the_image_store_at_the_store_root(monkeypatch, tmp
 
     assert not any(n.startswith("worlds/realm/assets/image-store/") for n in names)
     assert any(n.startswith("assets/image-store/objects/") for n in names)
+
+
+def test_image_backup_takes_image_refs_only_under_an_assets_segment(monkeypatch, tmp_path):
+    """Every writer puts placements in an `image-refs/` under some `assets/`;
+    a user's own folder of that name elsewhere is not pulled in, and nothing
+    but the `.json` placements (and journal) is taken from a real one."""
+    root = home(monkeypatch, tmp_path)
+    version = _avatar_store(root)
+    (version / "image-refs" / "notes.txt").write_text("x", encoding="utf-8")
+    own = root / "worlds" / "realm" / "notes" / "image-refs"
+    own.mkdir(parents=True)
+    (own / "list.json").write_text("{}", encoding="utf-8")
+    top = root / "image-refs"
+    top.mkdir()
+    (top / "loose.json").write_text("{}", encoding="utf-8")
+
+    names = names_in(backups.create_image_backup(when=AT))
+
+    rel = version.relative_to(root).as_posix()
+    assert f"{rel}/image-refs/avatar.json" in names
+    assert f"{rel}/image-refs/notes.txt" not in names
+    assert "worlds/realm/notes/image-refs/list.json" not in names
+    assert "image-refs/loose.json" not in names

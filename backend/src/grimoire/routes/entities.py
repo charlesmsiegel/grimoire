@@ -32,6 +32,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    image_id_field,
 )
 from .models import (
     DemoteBody,
@@ -505,7 +506,7 @@ async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFi
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"name": name, "ext": stored,
-            "image_id": store.assets.image_id(root, eid, "default", name, base=kind)}
+            **image_id_field(store.assets.image_id(root, eid, "default", name, base=kind))}
 
 
 def _entity_image_promote(root, kind: str, eid: str, name: str):

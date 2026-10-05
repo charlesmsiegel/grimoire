@@ -1923,7 +1923,7 @@ export const api = {
   putImage: (scope: EntityScope, cid: string, vid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<{ name: string; ext: string }>(
+    return requestForm<{ name: string; ext: string; image_id?: string | null }>(
       `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`, form, "PUT");
   },
   deleteImage: (scope: EntityScope, cid: string, vid: string, name: string) =>
@@ -1937,14 +1937,14 @@ export const api = {
                    opts?: ImageOpts) =>
     withImageQuery(`${entityBase(scope)}/${kind}/${eid}/images/${name}`, opts),
   listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
-    request<{ name: string; ext: string; v: string; description?: string; described?: boolean }[]>(
+    request<{ name: string; ext: string; v: string; image_id?: string | null; description?: string; described?: boolean }[]>(
       "GET", `${entityBase(scope)}/${kind}/${eid}/images`),
   campaignCoverUrl: (cid: string, opts?: ImageOpts) =>
     withImageQuery(`/api/campaigns/${cid}/cover`, opts),
   putCampaignCover: (cid: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<{ ext: string; v: string }>(`/api/campaigns/${cid}/cover`, form, "PUT");
+    return requestForm<{ ext: string; v: string; image_id?: string | null }>(`/api/campaigns/${cid}/cover`, form, "PUT");
   },
   deleteCampaignCover: (cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/cover`),
@@ -1986,7 +1986,7 @@ export const api = {
   putWorldCover: (wid: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<{ ext: string; v: string }>(`/api/worlds/${wid}/cover`, form, "PUT");
+    return requestForm<{ ext: string; v: string; image_id?: string | null }>(`/api/worlds/${wid}/cover`, form, "PUT");
   },
   deleteWorldCover: (wid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/cover`),
@@ -2022,7 +2022,7 @@ export const api = {
   putEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<{ name: string; ext: string }>(
+    return requestForm<{ name: string; ext: string; image_id?: string | null }>(
       `${entityBase(scope)}/${kind}/${eid}/images/${name}`, form, "PUT");
   },
   deleteEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
@@ -2092,12 +2092,12 @@ export const api = {
   pcImageUrl: (scope: EntityScope, pid: string, vid: string, name: string) =>
     `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`,
   listPCImages: (scope: EntityScope, pid: string, vid: string) =>
-    request<{ name: string; ext: string; v: string }[]>(
+    request<{ name: string; ext: string; v: string; image_id?: string | null }[]>(
       "GET", `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images`),
   putPCImage: (scope: EntityScope, pid: string, vid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<{ name: string; ext: string }>(
+    return requestForm<{ name: string; ext: string; image_id?: string | null }>(
       `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`, form, "PUT");
   },
   deletePCImage: (scope: EntityScope, pid: string, vid: string, name: string) =>

@@ -53,6 +53,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    image_id_field,
     leaves_campaign_unchanged,
     pc_history_404,
 )
@@ -687,7 +688,7 @@ async def put_campaign_cover(cid: str, file: UploadFile = File(...)):
         # store's decision to make, not this route's to assume.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ext": stored, "v": store.covers.cover_version(cid),
-            "image_id": store.covers.cover_image_id(cid)}
+            **image_id_field(store.covers.cover_image_id(cid))}
 
 
 @router.delete("/campaigns/{cid}/cover")
@@ -923,7 +924,7 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
         return {"name": name, "ext": stored, "v": placed.blob_sha256,
                 "image_id": placed.image_id}
     return {"name": name, "ext": stored,
-            "v": store.campaign_images.image_version(cid, name), "image_id": None}
+            "v": store.campaign_images.image_version(cid, name)}
 
 
 @router.post("/campaigns/{cid}/images/{name}/restore")
@@ -1989,7 +1990,7 @@ async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: Upl
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"name": name, "ext": stored,
-            "image_id": store.assets.image_id(root, char, vid, name)}
+            **image_id_field(store.assets.image_id(root, char, vid, name))}
 
 
 @router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
@@ -2554,8 +2555,8 @@ async def put_campaign_pc_image(cid: str, pid: str, vid: str, name: str,
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"name": name, "ext": stored,
-            "image_id": store.assets.image_id(root, pid, vid, name,
-                                              base=store.pcs.ASSET_BASE)}
+            **image_id_field(store.assets.image_id(root, pid, vid, name,
+                                                   base=store.pcs.ASSET_BASE))}
 
 
 @router.delete("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")

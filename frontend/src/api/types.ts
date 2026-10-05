@@ -755,7 +755,11 @@ export type BaseVersion = {
 /** The world's copy of a picture that a campaign file of the same name hides
  *  from the version's `images`. Read-only, and served from the WORLD route: the
  *  campaign route resolves that name to the campaign's own file. */
-export type ShadowedImage = { name: string; v: string; description?: string };
+export type ShadowedImage = {
+  name: string; v: string; description?: string;
+  /** The world copy's identity in the image store; absent for a legacy file. */
+  image_id?: string | null;
+};
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
   base_versions?: BaseVersion[];
@@ -1007,7 +1011,12 @@ export type Availability = {
   mark?: GreetingMark;
   recommendation?: "successor" | "phase_optional" | null;
 };
-export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string; copyable?: boolean };
+export type Appearance = {
+  gid: string; greeting_name: string; name: string; url: string; thumb?: string; copyable?: boolean;
+  /** The served picture's identity in the image store; absent for a legacy
+   *  file and for a remote reference. */
+  image_id?: string | null;
+};
 
 // cast
 export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };
@@ -1123,12 +1132,12 @@ export type GalleryImage = {
   described: boolean; description: string;
   subjects?: string[] | null;
   /** The picture's identity in the image store; absent for a legacy file. */
-  image_id?: string;
+  image_id?: string | null;
 };
 export type CampaignImage = {
   name: string; ext: string; v: string;
   /** The picture's identity in the image store; absent for a legacy file. */
-  image_id?: string;
+  image_id?: string | null;
   /** True when the picture belongs to the campaign's WORLD and this campaign
    *  is only reading through to it. The two are different sentences everywhere
    *  they are shown: the picker offers "remove from this campaign" (which hides
@@ -2609,7 +2618,7 @@ export type CampaignLibrary = { images: CampaignImage[]; hidden: string[] };
 export type WorldImage = {
   name: string; ext: string; v: string;
   /** The picture's identity in the image store; absent for a legacy file. */
-  image_id?: string;
+  image_id?: string | null;
   description?: string; described?: boolean;
 };
 

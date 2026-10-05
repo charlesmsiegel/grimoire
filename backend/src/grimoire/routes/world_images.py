@@ -33,6 +33,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    image_id_field,
 )
 from .models import ImageDescription
 
@@ -112,7 +113,7 @@ async def put_world_cover(wid: str, file: UploadFile = File(...)):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ext": stored, "v": store.covers.world_cover_version(wid),
-            "image_id": store.covers.world_cover_image_id(wid)}
+            **image_id_field(store.covers.world_cover_image_id(wid))}
 
 
 @router.delete("/worlds/{wid}/cover")
@@ -181,7 +182,7 @@ async def put_world_library_image(wid: str, name: str, file: UploadFile = File(.
         return {"name": name, "ext": stored, "v": placed.blob_sha256,
                 "image_id": placed.image_id}
     return {"name": name, "ext": stored,
-            "v": store.world_images.image_version(wid, name), "image_id": None}
+            "v": store.world_images.image_version(wid, name)}
 
 
 @router.delete("/worlds/{wid}/images/{name}")
