@@ -246,21 +246,24 @@ def _assign_section(rows: list, stored: dict, section: str,
             # a record that does not exist yet is in neither, so a later new
             # row whose title slugs to it was handed the same id -- and then
             # dropped outright by the one-edit-per-record check below, never
-            # reaching the reviewer. Reserved under this row's title, so the
-            # same title still merges (that is what the dedup is for) and a
-            # different one gets a suffix.
+            # reaching the reviewer. Reserved under a title, so the same title
+            # still merges (that is what the dedup is for) and a different one
+            # gets a suffix.
             #
-            # Under the STORED title when the row omits one, which it may:
-            # `{"id": "the-debt", "beat": ...}` is a valid movement, and
-            # reserving it under "" made the reservation disagree with the
-            # record it names -- so the same record named by TITLE later in the
-            # batch missed the merge and staged `the-debt-2`, which the
-            # reviewer would then approve into a duplicate. The reservation must
-            # say what the id means, not what this row happened to repeat.
+            # Which title is what the id MEANS. For a stored record that is the
+            # STORED title, whatever this row says: `materialize` stages the
+            # stored title for an existing record and apply never renames, so
+            # a row that paraphrases it (`"The old map"` beside `"id":
+            # "the-map"`) or omits it (`{"id": "the-debt", "beat": ...}`)
+            # carries no title of its own. Reserved under the row's words
+            # instead, the same record named by its real title later in the
+            # batch missed the merge and staged `the-map-2` -- two rows with one
+            # label that the reviewer would approve into a duplicate. The row's
+            # title counts only for an id that names nothing stored, where it
+            # becomes the new record's title.
             cur = stored.get(rid)
-            staged.setdefault(
-                rid, (title or (_text(cur.get("title")) if isinstance(cur, dict)
-                                else "")).strip().casefold())
+            meant = _text(cur.get("title")).strip() if isinstance(cur, dict) else ""
+            staged.setdefault(rid, (meant or title).casefold())
         elif any(c.isalnum() for c in title):
             # New record — needs a title with real content, and an id that does
             # not land on somebody else's record.

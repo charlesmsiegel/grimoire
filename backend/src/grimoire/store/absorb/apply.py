@@ -172,6 +172,9 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
     # still exists (#31). Never raises: an unreadable target costs the entry its
     # Undo button, and must not cost the reviewer their approved edit.
     reversal, prior = undo_store.snapshot(cid, e)
+    # Set when a plot or commitment row staged as new is reallocated off an id
+    # taken since, to the target it was written to instead.
+    moved_to: dict | None = None
     try:
         kind, target, after = e["kind"], e["target"], e.get("after", "")
         extra_fields: list[dict] = []
@@ -361,7 +364,7 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                     # Snapshotted from the record the write moved off: no
                     # reversal, as for a reallocated commitment.
                     reversal = None
-                    target = {**target, "id": new}
+                    target = moved_to = {**target, "id": new}
                     p = {**p, "id": new}
             # An absorb never renames an existing thread: `materialize` stages
             # the STORED title for one that already exists (`cur.get("title") or
@@ -448,7 +451,7 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                     # and a reversal here would be a deletion -- the same thing
                     # the `new_*` kinds are declined for.
                     reversal = None
-                    target = {**target, "id": mid}
+                    target = moved_to = {**target, "id": mid}
             cur = commitments.get(cid, mid)
             stored_title = cur.get("title") if isinstance(cur, dict) else None
             title = "" if isinstance(stored_title, str) and stored_title.strip() \
@@ -663,8 +666,28 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
         # so an approved change vanished with nothing on screen to say so.
         return {"state": "failed", "id": eid, "kind": "error",
                 "reason": f"could not apply this change: {exc}"}
-    return {"state": "applied", "id": eid, "recorded": recorded,
-            "journalled": journalled, "relationship": history}
+    out = {"state": "applied", "id": eid, "recorded": recorded,
+           "journalled": journalled, "relationship": history}
+    if moved_to is not None:
+        # The record this write actually went to, reported only when it is not
+        # the staged one: everything `apply_edits` derives after the write --
+        # the citation, the resume reading -- has to name the record that now
+        # holds the beat, not the one it moved off. Only the two reallocations
+        # set it; a `new_*` kind's created id is not reported here, so its
+        # citation keeps the key it has always had.
+        out["target"] = moved_to
+    return out
+
+
+def _as_written(e: dict, outcome: dict) -> dict:
+    """The staged edit `e` with its target replaced by the one `_apply_one`
+    reports having written instead. An outcome that reports none -- the write
+    went where it was staged, or the journal predates the field -- leaves the
+    staged edit as it was."""
+    target = outcome.get("target")
+    if not isinstance(e, dict) or not isinstance(target, dict):
+        return e
+    return {**e, "target": target}
 
 
 #: What a resumed commit says about a step it journalled and never confirmed.
@@ -785,18 +808,24 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
                 # Journalled with the outcome: what the target reads now this
                 # edit has landed is how a LATER slot, resuming after a crash,
                 # recognises the movement as this commit's own work.
-                prior["read"] = conflicts.current_value(cid, e)
+                prior["read"] = conflicts.current_value(cid, _as_written(e, prior))
         if prior.get("state") == "applied":
             applied.append(prior.get("id", ""))
+            # The edit as it landed: a reallocated plot or commitment row wrote
+            # to an id other than the one it was staged at, and its citation and
+            # its reading belong to that record -- keyed off the staged target,
+            # the quote would overwrite the citation of the thread it moved OFF,
+            # which is somebody else's and does not contain this beat.
+            written = _as_written(e, prior)
             # Every kind, not just the browsable ones `recorded` covers: a fact
             # and a plot beat are exactly the continuity lines this exists to
             # make checkable, and neither is browsable.
             if sid:
-                pkey = provenance.key(e)
-                prow = provenance.row(e, sid) if pkey else None
+                pkey = provenance.key(written)
+                prow = provenance.row(written, sid) if pkey else None
                 if pkey and prow:
                     cited[pkey] = prow
-            read, key = prior.get("read"), conflicts.target_key(e)
+            read, key = prior.get("read"), conflicts.target_key(written)
             # Recomputed from the edit rather than journalled beside the reading:
             # the token's fingerprint has already refused any retry whose body
             # differs, so this list is the one the first attempt worked from.
