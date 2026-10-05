@@ -116,3 +116,11 @@ def test_as_images_keeps_every_ref_when_the_limit_exceeds_them():
             {"role": "user", "content": [C], "carrier": True}]
     _out, n = cp.as_images(msgs, 3, lambda _p: DATA)
     assert n == 2
+
+
+def test_scrub_elides_json_escaped_payloads():
+    """A 4xx body that escapes `/` (PHP) or `+` (.NET) when it quotes the
+    request back must not carry the picture into a log."""
+    text = r'{"input":"data:image\/jpeg;base64,\/9j\/4AAQ+SkZJRg=="}'
+    out = cp.scrub(text)
+    assert "9j" not in out and "SkZJ" not in out and "[elided]" in out

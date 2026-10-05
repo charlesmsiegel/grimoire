@@ -146,3 +146,20 @@ def test_a_steered_capture_counts_text_and_images(monkeypatch):
     row, = recorded["sections"]
     assert row["text"] == "see map"
     assert row["tokens"] == store.tokens.count_tokens("see map") + pack.IMAGE_TOKENS
+
+
+class _CountingList(list):
+    iterations = 0
+
+    def __iter__(self):
+        type(self).iterations += 1
+        return super().__iter__()
+
+
+def test_dropping_images_costs_nothing_when_there_are_none():
+    """Every budgeted prompt passes through this step, images or not."""
+    hist = [{"role": "user", "content": "x" * 10} for _ in range(3000)]
+    costs = _CountingList(pack.message_cost(m["content"], COUNT) for m in hist)
+    _CountingList.iterations = 0
+    assert pack._drop_images(hist, costs, 0, COUNT) == 0
+    assert _CountingList.iterations <= 1

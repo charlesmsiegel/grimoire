@@ -49,7 +49,11 @@ CARRIER = "carrier"
 #: knows it is the previous reply's rather than the player's.
 CARRIED_LABEL = "[Image from the previous reply: {alt}]"
 
-_DATA_URI = re.compile(r"data:([\w/+.-]+);base64,[A-Za-z0-9+/=]+")
+#: A `data:` URI's base64 payload, however the text around it is escaped: a
+#: provider quoting the request back in JSON may write `\/` (PHP) or `\u002b`
+#: (.NET), so the payload is everything up to the next delimiter rather than a
+#: strict base64 class that would stop at the first escape.
+_DATA_URI = re.compile(r"data:([\w/\\+.-]+);base64,[^\"'\s<>)\]]+")
 
 
 def ref(url: str, alt: str, carried: bool) -> dict:

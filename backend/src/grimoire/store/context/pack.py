@@ -156,20 +156,27 @@ def _drop_images(hist: list[dict], hist_costs: list[int], room: int, count) -> i
     (`hist` is already a copy; every edited message is a new dict), so the
     caller's history is untouched. Returns the tokens removed, a carrier's
     framing included."""
+    # Every budgeted prompt passes through here, images or not, so a history
+    # with none returns before paying for anything.
+    if not content_parts.has_refs(hist):
+        return 0
+    total = sum(hist_costs)
     dropped = 0
     i = 0
-    while i < len(hist) and sum(hist_costs) > room:
+    while i < len(hist) and total > room:
         if not content_parts.image_refs(hist[i]["content"]):
             i += 1
             continue
         lighter = _without_oldest_image(hist[i])
         if lighter is None:
-            dropped += hist_costs.pop(i)
+            removed = hist_costs.pop(i)
             hist.pop(i)
-            continue
-        cost = message_cost(lighter["content"], count)
-        dropped += hist_costs[i] - cost
-        hist[i], hist_costs[i] = lighter, cost
+        else:
+            cost = message_cost(lighter["content"], count)
+            removed = hist_costs[i] - cost
+            hist[i], hist_costs[i] = lighter, cost
+        dropped += removed
+        total -= removed
     return dropped
 
 
