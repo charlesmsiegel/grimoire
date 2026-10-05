@@ -21,11 +21,14 @@ export type ConnectionFormValue = {
   sampler_support?: "" | "standard" | "extended";
   /** Whether the model may be sent post images (#377); `""` follows the catalog. */
   vision?: VisionOverride;
+  /** Keep writing sends a cut-short reply as a prefill on this connection,
+   *  rather than as an instruction to continue it. Off unless asked for. */
+  prefill?: boolean;
 };
 
 export const BLANK_CONNECTION: ConnectionFormValue = {
   kind: "openrouter", name: "", base_url: "", model: "", post_process: "none", reasoning_effort: "",
-  vision: "",
+  vision: "", prefill: false,
 };
 
 /** The kind/name/credentials/model fields of an LLM connection.
@@ -164,6 +167,19 @@ export function ConnectionForm({
           </Field>
         </>
       )}
+
+      {/* Every kind: whether a trailing assistant message is continued is the
+          MODEL's behaviour, not the adapter's, so only the reader can say. */}
+      <label className="checkbox-row">
+        <input type="checkbox" checked={value.prefill ?? false}
+               onChange={(e) => set({ prefill: e.target.checked })} />
+        {" "}Continue replies by prefill
+      </label>
+      <div className="field-hint">
+        Send a cut-short reply back as the start of the model&apos;s own turn. Only for
+        models that continue a trailing assistant message; most chat models and current
+        Claude models do not, and get an instruction instead.
+      </div>
     </>
   );
 }

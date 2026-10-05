@@ -13,7 +13,7 @@ import { type PromptEntry } from "../api/client";
 const LABELS: Record<PromptEntry["task"], string> = {
   chat: "Send", director: "Director", retry: "Retry",
   regenerate: "Regenerate", continuation: "Roll result", opener: "Opener",
-  replay: "Replay",
+  replay: "Replay", extend: "Extend",
 };
 
 /** Typed against the union above so a new task cannot be forgotten here, read

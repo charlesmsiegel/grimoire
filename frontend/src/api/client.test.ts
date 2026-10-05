@@ -1169,7 +1169,19 @@ const TURN_PRODUCERS: [string,
    (on, a, oi) => api.resolveProposal("c1", "s1", { proposal: "pr-1", action: "decline" },
                                       on, undefined, a, oi)],
   ["replayTurn", (on, a, oi) => api.replayTurn("c1", "s1", on, undefined, a, oi)],
+  ["extendResponse",
+   (on, a, oi) => api.extendResponse("c1", "s1", "r1", on, undefined, undefined, a, oi)],
 ];
+
+test("extendResponse posts its overrides to the response's extend route", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
+  globalThis.fetch = fetchMock;
+  await api.extendResponse("c1", "s1", "r1", () => {},
+                           { guidance: "Colder", connection_id: "", model: "" });
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/c1/scenes/s1/responses/r1/extend");
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual(
+    { guidance: "Colder", connection_id: "", model: "" });
+});
 
 test.each(TURN_PRODUCERS)(
   "%s sends its attempt and reports the wire index", async (_name, call) => {

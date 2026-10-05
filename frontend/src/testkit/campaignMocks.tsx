@@ -37,7 +37,7 @@ export async function campaignApiMock() {
       // does not reach inside `api`: without it every suite would call
       // `undefined(...)` on every scene that ends on a response.
       getResponseSwipe: vi.fn(),
-      regenerateResponse: vi.fn(), passageCharacterEvidence: vi.fn(), draftPassageCharacter: vi.fn(), savePassageCharacter: vi.fn(),
+      regenerateResponse: vi.fn(), extendResponse: vi.fn(), passageCharacterEvidence: vi.fn(), draftPassageCharacter: vi.fn(), savePassageCharacter: vi.fn(),
       // Stop. Closing the connection is no longer the cancel -- a turn outlives
       // its socket now -- so the run has to be told, and a mock without this
       // would make `cancelTurn` throw instead of failing the assertion that

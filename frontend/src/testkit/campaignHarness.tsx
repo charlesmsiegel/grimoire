@@ -154,6 +154,7 @@ export function installCampaignMocks() {
   // swipes render the gutter they were written against. The tests that want
   // arrows say what the read answers.
   (api.getResponseSwipe as any).mockRejectedValue(new Error("no swipe read"));
+  (api.extendResponse as any).mockImplementation(streamsDone);
   (api.getRollProposal as any).mockResolvedValue({ record: null });
   (api.resolveProposal as any).mockImplementation(streamsDone);
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });

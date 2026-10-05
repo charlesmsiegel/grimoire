@@ -633,3 +633,34 @@ describe("Reads images (#377)", () => {
     expect(await screen.findByText(text, { exact: false })).toBeInTheDocument();
   });
 });
+
+test("the prefill switch reads the stored flag and saves the reader's choice", async () => {
+  (api.readConnection as any).mockImplementation((id: string) => Promise.resolve(
+    id === "openrouter"
+      ? { ...OPENROUTER, prefill: true, models: [], fetched_at: "", health: UNCHECKED }
+      : { ...CUSTOM, models: [], fetched_at: "", health: UNCHECKED }));
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("OpenRouter"));
+  await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("openrouter"));
+  expect(screen.getByText("Keep writing: prefill")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  const box = screen.getByRole("checkbox", { name: /continue replies by prefill/i });
+  expect(box).toBeChecked();
+  fireEvent.click(box);
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+  await waitFor(() => expect(api.updateConnection).toHaveBeenCalledWith(
+    "openrouter", expect.objectContaining({ prefill: false })));
+});
+
+test("a new connection is offered prefill off, whatever its kind", async () => {
+  render(<ConnectionEditor />);
+  await screen.findByText("+ New connection");
+  fireEvent.click(screen.getByText("+ New connection"));
+  fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "claude" } });
+  expect(screen.getByRole("checkbox", { name: /continue replies by prefill/i })).not.toBeChecked();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm Claude" } });
+  fireEvent.click(screen.getByRole("button", { name: /create connection/i }));
+  await waitFor(() => expect(api.createConnection).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "claude", prefill: false })));
+});

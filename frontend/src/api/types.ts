@@ -48,6 +48,9 @@ export type LLMConnection = {
    *  penalty; "" reads as standard. */
   sampler_support?: "" | "standard" | "extended";
   vision?: VisionOverride;
+  /** Whether Keep writing sends a cut-short reply back as the start of the
+   *  model's own turn (prefill) rather than asking it to continue. */
+  prefill?: boolean;
   key_set: boolean; rev: string; health: ProviderHealth;
 };
 export type LLMConnectionDetail = LLMConnection & {
@@ -73,7 +76,7 @@ export type LLMConnectionDraft = {
   model?: string; post_process?: "none" | "strict";
   reasoning_effort?: "" | "low" | "high" | "max";
   sampler_preset?: string; sampler_support?: "" | "standard" | "extended";
-  vision?: VisionOverride;
+  vision?: VisionOverride; prefill?: boolean;
 };
 
 /** The nine sampler parameters, as a preset stores them. Every one optional:
@@ -1470,7 +1473,7 @@ export type PinRule = {
 export type PromptEntry = {
   id: string; scene: string; ts: string; model: string;
   task: "chat" | "director" | "retry" | "regenerate" | "continuation" | "opener"
-      | "replay";
+      | "replay" | "extend";
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
 };
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which
