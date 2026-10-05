@@ -557,6 +557,22 @@ def test_one_unnameable_day_costs_only_that_items_label(monkeypatch, tmp_path):
         F(cid, "2026-05-20"), 10, "upcoming", "")
 
 
+def test_one_unnameable_day_keeps_a_past_event_passed(monkeypatch, tmp_path):
+    """The provider-less row fallback must not cost the `passed` reading: it
+    is arithmetic on the day this module dates softly itself, so a past unfired
+    event stays `passed` -- never `ok` -- when another event's day cannot be
+    named."""
+    cid = _campaign(monkeypatch, tmp_path)
+    audience = events.create(cid, "Mara's audience", "2026-05-05")
+    events.create(cid, "The coronation", "2026-05-20")
+    _plugin(tmp_path, "day_raising_test", _DAY_RAISING_PROVIDER_SRC)
+    _primary(cid, "one-bad-day-test-calendar")
+
+    past = _items(cid, "event")[0]
+    assert past["ref"] == f"event:{audience}"
+    assert (past["in_days"], past["state"]) == (-5, "passed")
+
+
 def test_an_overflowing_event_date_costs_only_that_event(monkeypatch, tmp_path):
     date = "99999999999999999999-05-09"   # Gregorian parse: OverflowError, not CalendarError
     cid = _campaign(monkeypatch, tmp_path)

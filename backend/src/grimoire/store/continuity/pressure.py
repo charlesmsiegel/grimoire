@@ -179,15 +179,21 @@ def _item(kind: str, ref: str, label: str, fixed: int | None, ctx: dict, **extra
 
 
 def _event_items(ctx: dict) -> list[dict]:
-    """Every unfired event, plus fired ones on today (Decision 6)."""
+    """Every unfired event, plus fired ones on today (Decision 6). `passed` is
+    `events`' reading, recomputed on the day dated here: the provider-less row
+    fallback (`_event_rows`) cannot read it, and losing it would turn a day the
+    clock has gone by into an `ok` item a suggestion could date itself against."""
     out = []
+    now_fixed = ctx["now_fixed"]
     for row in ctx["events"]:
         fixed = _fixed_of(ctx["provider"], row["date"])
-        today = fixed is not None and fixed == ctx["now_fixed"]
+        today = fixed is not None and fixed == now_fixed
         if row["fired"] is not None and not today:
             continue
+        passed = (row["fired"] is None and fixed is not None and now_fixed is not None
+                  and fixed < now_fixed)
         out.append(_item("event", f"event:{row['id']}", row["name"], fixed, ctx,
-                         native=row["date"], passed=bool(row["passed"])))
+                         native=row["date"], passed=passed))
     return out
 
 
@@ -371,9 +377,9 @@ def _event_rows(cid: str, provider, now_fixed: int | None) -> list[dict]:
     """`events.list_events`, read once. When the provider raises on some row's
     day (plugin code, anything at all), the rows are read again without it: no
     calendar code runs then, so every event is still listed. Each item is then
-    dated and labelled by this module, softly and one day at a time; what the
-    fallback costs is only the `passed` reading, which needs the provider and
-    reads as "cannot tell" (False), as it does with no clock."""
+    dated, labelled and read for `passed` by this module, softly and one day
+    at a time, so the fallback costs no item anything the provider can still
+    answer for it."""
     rows = _soft(events.list_events, None, cid, provider, now_fixed)
     return _soft(events.list_events, [], cid) if rows is None else rows
 
