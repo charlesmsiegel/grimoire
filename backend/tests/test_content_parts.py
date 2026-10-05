@@ -109,3 +109,10 @@ def test_scrub_elides_base64_payloads():
     assert (cp.scrub('bad "data:image/png;base64,iVBORw0KGgo=" x')
             == 'bad "data:image/png;base64,[elided]" x')
     assert cp.scrub("no payload here") == "no payload here"
+
+
+def test_as_images_keeps_every_ref_when_the_limit_exceeds_them():
+    msgs = [{"role": "user", "content": [{"type": "text", "text": "a map"}, R]},
+            {"role": "user", "content": [C], "carrier": True}]
+    _out, n = cp.as_images(msgs, 3, lambda _p: DATA)
+    assert n == 2

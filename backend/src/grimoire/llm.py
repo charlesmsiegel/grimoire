@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from . import llm_capture, llm_reasoning, llm_sampling, model_guidance
+from . import content_parts, llm_capture, llm_reasoning, llm_sampling, model_guidance
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
@@ -164,8 +164,31 @@ ATTEMPTED = "_attempted_conn"
 
 
 def _carries_parts(messages: list[dict]) -> bool:
-    """Does any message hold content PARTS rather than a plain string?"""
-    return any(not isinstance(m.get("content", ""), str) for m in messages)
+    """Does any message hold content parts this facade cannot LOWER to text?
+
+    Image references (#377, `content_parts`) are lowered per route -- a route
+    that cannot read images is sent their text -- so they are no reason to
+    keep a text-only fallback away. An image-description draft's own
+    `image_url` parts are."""
+    return any(not isinstance(m.get("content", ""), str)
+               and not content_parts.lowerable(m["content"]) for m in messages)
+
+
+#: The route marker for a DEGRADE sibling (#377): the same connection, sent
+#: the text lowering of a prompt whose images it just refused. Never persisted
+#: and never sent -- `_dispatch` strips it.
+DEGRADE = "_degrade"
+
+#: The HTTP statuses that mean "not this request" -- a provider refusing an
+#: image for its format, size or content. `bad_response` alone cannot say this:
+#: a 500 maps to it too, and re-sending as text on a server error would drop
+#: the pictures from a turn a plain retry would have served.
+REJECTED_STATUSES = frozenset({400, 413, 415, 422})
+
+
+def _with_degrades(routes: list[tuple[dict, int]]) -> list[tuple[dict, int]]:
+    """Each route followed by its degrade sibling, with no retries of its own."""
+    return [r for conn, n in routes for r in ((conn, n), ({**conn, DEGRADE: True}, 0))]
 
 
 def _same_route(a: dict, b: dict) -> bool:
@@ -514,8 +537,11 @@ async def _resilient(open_stream, routes, timeout: float,
     fallback's failure appended: see the tail of this function.
     """
     # A holder is needed even for callers uninterested in usage: the adapters
-    # receive their recorder through this existing per-attempt seam.
-    if capture is not None and usage is None:
+    # receive their recorder through this existing per-attempt seam, and a
+    # degrade sibling (#377) is decided by how many images the failed attempt
+    # sent, which `_dispatch` writes here. Otherwise none is allocated -- one
+    # per call for nobody would be pure overhead.
+    if usage is None and (capture is not None or any(c.get(DEGRADE) for c, _n in routes)):
         usage = {}
     call_id = uuid.uuid4().hex if capture is not None else ""
     sent = False
@@ -523,7 +549,22 @@ async def _resilient(open_stream, routes, timeout: float,
     first: LLMError | None = None
     last: LLMError | None = None
     fell_back = False
+    sent_images = 0
+    previous: dict | None = None
     for index, (conn, retries) in enumerate(routes):
+        if conn.get(DEGRADE):
+            # The same connection again, sent text -- only when it just refused
+            # a request that carried images. Not a fallback: it sets nothing
+            # `fell_back` reads, and its failure is that connection's word.
+            if not (last is not None and last.status in REJECTED_STATUSES and sent_images > 0):
+                continue
+            log.warning("images refused by %r; retried as text", _label(conn))
+        elif index > 0:
+            fell_back = True
+            log.warning("LLM connection %r gave up (%s: %s); falling back to %r",
+                        _label(previous or conn), last.kind, last.detail, _label(conn))
+        if not conn.get(DEGRADE):
+            previous = conn
         retryable = True
         for attempt in range(max(0, retries) + 1):
             if attempt:
@@ -580,7 +621,10 @@ async def _resilient(open_stream, routes, timeout: float,
                 if sent:
                     raise
                 last = exc
-                first = first if first is not None else exc
+                sent_images = usage.get("images", 0) if usage is not None else 0
+                # The primary's word is its first failure -- or, when its own
+                # degrade sibling ran, that sibling's (#377).
+                first = exc if first is None or (conn.get(DEGRADE) and index == 1) else first
                 retryable = (exc.kind in RETRYABLE_KINDS
                              and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
             finally:
@@ -596,11 +640,6 @@ async def _resilient(open_stream, routes, timeout: float,
                     llm_capture.emit(usage, "end", {"status": outcome})
             if not retryable:
                 break  # a repeat cannot fix this one; the next route might
-        if index + 1 < len(routes):
-            fell_back = True
-            nxt = routes[index + 1][0]
-            log.warning("LLM connection %r gave up (%s: %s); falling back to %r",
-                        _label(conn), last.kind, last.detail, _label(nxt))
     # Only reachable with every attempt swallowed above, which is the only way
     # out of the loops without a return or a raise -- so both are always set.
     if not fell_back:
@@ -633,7 +672,8 @@ class LLMClient:
     """Dispatches each call to the resolved connection's kind."""
 
     def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
-                 retries=None, fallback=None, observer=None, capture=None):
+                 retries=None, fallback=None, observer=None, capture=None,
+                 images=None, load_image=None):
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
@@ -662,6 +702,12 @@ class LLMClient:
         # Resolver returns a sink, or None when capture is off. Like timeout,
         # this keeps runtime configuration in the store and out of the gateway.
         self._capture = capture
+        # Post images (#377), the same contract once more: `images(conn)` is how
+        # many a prompt for that connection may carry right now (0 = none) and
+        # `load_image(campaign, part)` turns one reference into a data URI.
+        # Both are store lookups, so both arrive as callables.
+        self._images = images
+        self._load_image = load_image
 
     def _timeout_seconds(self) -> float:
         if self._timeout is None:
@@ -721,17 +767,74 @@ class LLMClient:
         route at all" from this layer would replace that with something worse.
         """
         routes = self._routes(conn)
-        if not _carries_parts(messages):
-            return routes
-        return routes[:1] + [(c, n) for c, n in routes[1:]
-                             if c.get("kind", "openrouter") not in TEXT_ONLY_KINDS]
+        if _carries_parts(messages):
+            routes = routes[:1] + [(c, n) for c, n in routes[1:]
+                                   if c.get("kind", "openrouter") not in TEXT_ONLY_KINDS]
+        # A pure check: no resolver runs while routes are built, so nothing reads
+        # a catalog sidecar on the event loop. Whether a sibling is attempted is
+        # `_resilient`'s question, asked after the attempt before it.
+        return _with_degrades(routes) if content_parts.has_refs(messages) else routes
 
     def _dispatch(self, messages: list[dict], conn: dict, usage: dict | None = None):
+        # Read before selecting: `for_model` returns a plain list.
+        campaign = getattr(messages, "campaign", "")
+        degrade = bool(conn.get(DEGRADE))
+        if degrade:
+            conn = {k: v for k, v in conn.items() if k != DEGRADE}
         # Select per ATTEMPT: retries retain the frozen prompt, while a
         # fallback repacks that same context with its own model's guidance.
         # Ordinary message lists (JSON extraction, judges, drafts) stay ordinary.
         if isinstance(messages, model_guidance.PreparedMessages):
             messages = messages.for_model(effective_model(conn))
+        if usage is not None:
+            usage["images"] = 0
+        if not content_parts.needs_lowering(messages):
+            return self._provider(messages, conn, usage)
+        return self._lowered(messages, conn, usage, campaign, degrade)
+
+    async def _lowered(self, messages: list[dict], conn: dict, usage: dict | None,
+                       campaign: str, degrade: bool):
+        """`messages` lowered for `conn`, then streamed (#377).
+
+        Lowering resolves the image budget (a catalog sidecar read) and loads
+        pictures (a decode, cached), so it runs off the event loop. The provider
+        stream is closed in `finally`, so a caller's close or a timeout still
+        reaches httpx exactly as `_guard` and `_resilient` intend."""
+        lowered, sent = await asyncio.to_thread(self._lower, messages, conn, campaign, degrade)
+        if usage is not None:
+            usage["images"] = sent
+        inner = self._provider(lowered, conn, usage)
+        try:
+            async for chunk in inner:
+                yield chunk
+        finally:
+            aclose = getattr(inner, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
+    def _lower(self, messages: list[dict], conn: dict, campaign: str,
+               degrade: bool) -> tuple[list[dict], int]:
+        keep = 0 if degrade else self._image_budget(conn)
+        if keep <= 0:
+            return content_parts.as_text(messages), 0
+        return content_parts.as_images(messages, keep, lambda part: self._load(campaign, part))
+
+    def _image_budget(self, conn: dict) -> int:
+        """How many images `conn` may be sent now. Never more than 0 for a kind
+        whose client cannot carry a part, and 0 when the resolver is missing or
+        raises: a broken lookup must not fail a turn the text would serve."""
+        if self._images is None or conn.get("kind", "openrouter") in TEXT_ONLY_KINDS:
+            return 0
+        try:
+            return max(0, int(self._images(conn)))
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            log.warning("could not resolve whether %r reads images: %s", _label(conn), exc)
+            return 0
+
+    def _load(self, campaign: str, part: dict) -> str | None:
+        return self._load_image(campaign, part) if self._load_image is not None else None
+
+    def _provider(self, messages: list[dict], conn: dict, usage: dict | None):
         kind = conn.get("kind", "openrouter")
         # Split per ATTEMPT against that attempt's own connection, so a fallback
         # of a different kind is held to what ITS backend takes. Passed only

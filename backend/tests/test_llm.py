@@ -1194,7 +1194,8 @@ async def test_a_multimodal_call_skips_a_fallback_that_cannot_carry_it():
     had not chosen, instead of the real error from the one they had."""
     provider = RouteRecorder(failing={"primary"})
     client = _retry_client(provider, retries=0, fallback=_claude_route)
-    parts = [{"role": "user", "content": [{"type": "text", "text": "what is this?"}]}]
+    parts = [{"role": "user", "content": [{"type": "text", "text": "what is this?"},
+                                          {"type": "image_url", "image_url": {"url": "data:x"}}]}]
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream(parts, _route("a", "primary"))]
 
