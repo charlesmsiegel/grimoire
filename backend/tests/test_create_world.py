@@ -39,30 +39,30 @@ def _plan(**over) -> dict:
         "pcs": [{"name": "Winifred", "tags": ["Outsider"], "pronouns": "she/her",
                  "summary": "A stranger off the packet boat."}],
         "locations": [
-            {"name": "The Tide Hall", "body": "Where the guild meets.",
-             "keys": ["Tide Hall", "hall"], "fields": {"persistence": "0.5"}},
+            {"name": "The Counting House", "body": "Where the guild meets.",
+             "keys": ["Counting House", "ledger room"], "fields": {"persistence": "0.5"}},
         ],
         "lore": [
-            {"name": "The Drowned Bell", "body": "Rings before a storm.", "keys": ["bell"]},
-            {"name": "Seraphine's Debt", "body": "She owes the guild.",
+            {"name": "The Salt Pact", "body": "An old agreement.", "keys": ["pact"]},
+            {"name": "The Ledger", "body": "She owes the guild.",
              "owners": ["characters:Seraphine"], "secrecy": "secret"},
         ],
         "groups": [
-            {"name": "The Tide Guild", "body": "Reads the water for pay.",
-             "keys": ["Tide Guild", "guild"],
+            {"name": "Salt Circle", "body": "Reads the water for pay.",
+             "keys": ["Salt Circle", "guild"],
              "fields": {"leader": "characters:Seraphine",
-                        "headquarters": "locations:The Tide Hall"}},
+                        "headquarters": "locations:The Counting House"}},
         ],
         "items": [
-            {"name": "Seraphine's Lantern", "body": "Brass, starred glass.",
+            {"name": "Salt Knife", "body": "Brass, starred glass.",
              "owners": ["characters:Seraphine"],
-             "fields": {"holder": "groups:The Tide Guild"}},
+             "fields": {"holder": "groups:Salt Circle"}},
         ],
         "greetings": [
-            {"name": "Off the Packet Boat", "character": "Seraphine",
+            {"name": "Saltmarch Eve", "character": "Seraphine",
              "body": "{{char}} looks {{user}} over at the quay.",
-             "location": "The Tide Hall", "leads_to": ["The Guild's Offer"]},
-            {"name": "The Guild's Offer", "character": "Mara", "present": ["Mara", "Seraphine"],
+             "location": "The Counting House", "leads_to": ["The Reckoning"]},
+            {"name": "The Reckoning", "character": "Mara", "present": ["Mara", "Seraphine"],
              "body": "{{char}} slides a contract across the table.",
              "requires_tags": ["Outsider"]},
         ],
@@ -95,27 +95,27 @@ def test_apply_builds_every_kind_through_the_store(home):
     assert pc["meta"]["tags"] == ["outsider"]
     assert pcs.read_persona(root, "winifred", pc["meta"]["default_version"])["pronouns"] == "she/her"
 
-    hall = entities.read_entity(root, "locations", "the-tide-hall")
-    assert hall["meta"]["keys"] == "Tide Hall, hall"
+    hall = entities.read_entity(root, "locations", "the-counting-house")
+    assert hall["meta"]["keys"] == "Counting House, ledger room"
     assert hall["meta"]["persistence"] == "0.5"
-    debt = entities.read_entity(root, "lore", "seraphine-s-debt")
+    debt = entities.read_entity(root, "lore", "the-ledger")
     assert debt["meta"]["owners"] == "characters:seraphine"
     assert debt["meta"]["secrecy"] == "secret"
-    guild = entities.read_entity(root, "groups", "the-tide-guild")
+    guild = entities.read_entity(root, "groups", "salt-circle")
     assert guild["meta"]["leader"] == "characters:seraphine"
-    assert guild["meta"]["headquarters"] == "locations:the-tide-hall"
-    lantern = entities.read_entity(root, "items", "seraphine-s-lantern")
-    assert lantern["meta"]["holder"] == "groups:the-tide-guild"
+    assert guild["meta"]["headquarters"] == "locations:the-counting-house"
+    lantern = entities.read_entity(root, "items", "salt-knife")
+    assert lantern["meta"]["holder"] == "groups:salt-circle"
 
-    g = greetings.read_greeting(root, "off-the-packet-boat")
+    g = greetings.read_greeting(root, "saltmarch-eve")
     assert g["meta"]["character"] == "seraphine"
-    assert g["meta"]["location"] == "the-tide-hall"
+    assert g["meta"]["location"] == "the-counting-house"
     # {{char}} is baked at write time by the store, {{user}} is left alone
     assert g["body"].strip() == "Seraphine looks {{user}} over at the quay."
-    offer = greetings.read_greeting(root, "the-guild-s-offer")
+    offer = greetings.read_greeting(root, "the-reckoning")
     assert offer["meta"]["present"] == ["mara", "seraphine"]
     assert offer["meta"]["requires_tags"] == ["outsider"]
-    assert greetings.read_plotmap(root)["off-the-packet-boat"]["leads_to"] == ["the-guild-s-offer"]
+    assert greetings.read_plotmap(root)["saltmarch-eve"]["leads_to"] == ["the-reckoning"]
 
     cal = calendars.read_calendar(root)
     assert cal["primary"]["provider"] == "gregorian"
@@ -126,7 +126,7 @@ def test_apply_is_idempotent(home):
     first = _apply(_plan())
     root = worlds.world_root(first["world"])
     before = {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
-    second = _apply(_plan())
+    second = _apply(_plan(), world_id=first["world"])
     assert second["world"] == first["world"]
     after = {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
     assert after == before
@@ -139,29 +139,29 @@ def test_reapply_updates_by_name_and_leaves_omitted_keys(home):
     first = _apply(_plan())
     root = worlds.world_root(first["world"])
     plan = {"world": "Saltmarch",
-            "lore": [{"name": "The Drowned Bell", "body": "Rings twice before a storm."}]}
-    result = _apply(plan)
-    assert _status(result, "lore") == {"The Drowned Bell": "updated"}
-    bell = entities.read_entity(root, "lore", "the-drowned-bell")
-    assert bell["body"].strip() == "Rings twice before a storm."
-    assert bell["meta"]["keys"] == "bell"   # omitted from the plan, so untouched
+            "lore": [{"name": "The Salt Pact", "body": "An older agreement."}]}
+    result = _apply(plan, world_id=first["world"])
+    assert _status(result, "lore") == {"The Salt Pact": "updated"}
+    bell = entities.read_entity(root, "lore", "the-salt-pact")
+    assert bell["body"].strip() == "An older agreement."
+    assert bell["meta"]["keys"] == "pact"   # omitted from the plan, so untouched
     assert len(entities.entity_ids(root, "lore")) == 2
 
 
 def test_new_record_named_like_an_existing_id_is_a_new_record(home):
     first = _apply(_plan())
     root = worlds.world_root(first["world"])
-    # "the-drowned-bell" is an id on disk, but nothing is NAMED that
-    _apply({"world": "Saltmarch", "lore": [{"name": "the-drowned-bell", "body": "x"}]})
+    # "the-salt-pact" is an id on disk, but nothing is NAMED that
+    _apply({"lore": [{"name": "the-salt-pact", "body": "x"}]}, world_id=first["world"])
     assert len(entities.entity_ids(root, "lore")) == 3
 
 
 def test_references_accept_ids_as_well_as_names(home):
     first = _apply(_plan())
     root = worlds.world_root(first["world"])
-    _apply({"world": "Saltmarch",
-            "items": [{"name": "Mara's Chart", "owners": ["characters:mara"]}]})
-    chart = entities.read_entity(root, "items", "mara-s-chart")
+    _apply({"items": [{"name": "Moon Disc", "owners": ["characters:mara"]}]},
+           world_id=first["world"])
+    chart = entities.read_entity(root, "items", "moon-disc")
     assert chart["meta"]["owners"] == "characters:mara"
 
 
@@ -177,10 +177,17 @@ def test_invalid_plan_writes_nothing(home):
 
 @pytest.mark.parametrize("over, needle", [
     ({"lore": [{"name": "X", "owners": ["people:Seraphine"]}]}, "must be <kind>:<name>"),
+    ({"lore": [{"name": "X", "owners": ["groups:Salt Circle"]}]}, "must be <kind>:<name>"),
+    ({"lore": [{"name": "X", "keys": 5}]}, "keys must be a list of names"),
+    ({"lore": [{"name": "X", "keys": ["Salt, March"]}]}, "has a comma"),
+    ({"lore": [{"name": "A\nB"}]}, "a name must be one line"),
+    ({"greetings": [{"name": "A", "present": 5}]}, "present must be a list of names"),
+    ({"pcs": [{"name": "Old Bram", "tags": 5}]}, "tags must be a list of names"),
+    ({"items": [{"name": "X", "fields": {"holder": 5}}]}, "must be a reference"),
     ({"lore": [{"name": "X", "secrecy": "sercet"}]}, "secrecy must be one of"),
     ({"lore": [{"name": "X", "fields": {"climate": "x"}}]}, "lore has no fields ['climate']"),
     ({"locations": [{"name": "X", "fields": {"persistence": "2"}}]}, "invalid value"),
-    ({"groups": [{"name": "X", "fields": {"leader": "locations:The Tide Hall"}}]},
+    ({"groups": [{"name": "X", "fields": {"leader": "locations:The Counting House"}}]},
      "must be <kind>:<name>"),
     ({"lore": [{"name": "X"}, {"name": "x"}]}, "listed twice"),
     ({"lore": [{"name": "X", "colour": "red"}]}, "unknown keys ['colour']"),
@@ -200,11 +207,11 @@ def test_validation_refuses(home, over, needle):
 
 def test_actor_name_taken_in_a_campaign_is_refused(home):
     wid = _apply(_plan())["world"]
-    cid = campaigns.create_campaign("Night Tide", wid)
+    cid = campaigns.create_campaign("Silver Oath", wid)
     from grimoire.store import overlay
-    overlay.create_character(cid, "Corvin")
+    overlay.create_character(cid, "Old Bram")
     problems = create_world.validate_plan(
-        {"world": "Saltmarch", "characters": [{"name": "Corvin"}]},
+        {"world": "Saltmarch", "characters": [{"name": "Old Bram"}]},
         worlds.world_root(wid), wid)
     assert any("already used" in p for p in problems), problems
 
@@ -216,17 +223,17 @@ def test_module_binds_on_a_fresh_world(home):
 
 def test_module_change_refused_once_campaigns_exist(home):
     wid = _apply(_plan())["world"]
-    campaigns.create_campaign("Night Tide", wid)
+    campaigns.create_campaign("Silver Oath", wid)
     with pytest.raises(create_world.PlanError) as exc:
-        _apply(_plan(module="pool-basic"))
+        _apply(_plan(module="pool-basic"), world_id=wid)
     assert any("already has campaigns" in p for p in exc.value.problems)
 
 
 def test_world_id_targets_an_existing_world(home):
     wid = worlds.create_world("Realm")
-    result = _apply({"lore": [{"name": "The Drowned Bell", "body": "x"}]}, world_id=wid)
+    result = _apply({"lore": [{"name": "The Salt Pact", "body": "x"}]}, world_id=wid)
     assert result["world"] == wid
-    assert entities.entity_ids(worlds.world_root(wid), "lore") == ["the-drowned-bell"]
+    assert entities.entity_ids(worlds.world_root(wid), "lore") == ["the-salt-pact"]
 
 
 def test_check_passes_a_well_formed_world(home):
@@ -258,23 +265,23 @@ def test_check_warns_when_only_tagged_pcs_can_start(home):
 
 
 def test_check_reports_activation_choices(home):
-    plan = _plan(locations=[{"name": "Quiet Cove", "body": "A cove."}],
-                 lore=[{"name": "Common Knowledge", "body": "Everyone knows."}],
+    plan = _plan(locations=[{"name": "The Docks", "body": "A cove."}],
+                 lore=[{"name": "The Pact", "body": "Everyone knows."}],
                  groups=[], items=[], greetings=[])
     wid = _apply(plan)["world"]
     warnings = "\n".join(create_world.check_world(wid)["warnings"])
-    assert "locations/quiet-cove: no keys -- reaches the prompt only as the current setting" \
+    assert "locations/the-docks: no keys -- reaches the prompt only as the current setting" \
         in warnings
-    assert "lore/common-knowledge: no keys and no owners -- always on" in warnings
+    assert "lore/the-pact: no keys and no owners -- always on" in warnings
 
 
 def test_check_catches_hand_broken_references(home):
     wid = _apply(_plan())["world"]
     root = worlds.world_root(wid)
-    entities.update_entity(root, "lore", "the-drowned-bell", owners="characters:ghost")
-    greetings.set_edges(root, "the-guild-s-offer", leads_to=["off-the-packet-boat"])
+    entities.update_entity(root, "lore", "the-salt-pact", owners="characters:ghost")
+    greetings.set_edges(root, "the-reckoning", leads_to=["saltmarch-eve"])
     errors = "\n".join(create_world.check_world(wid)["errors"])
-    assert "lore/the-drowned-bell: owner characters:ghost does not exist" in errors
+    assert "lore/the-salt-pact: owner characters:ghost does not exist" in errors
     assert "leads_to cycle" in errors
 
 
@@ -291,7 +298,7 @@ def test_cli_round_trip(home, tmp_path, capsys):
     assert create_world.main(["summary", "--world", wid]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert {c["id"] for c in summary["characters"]} == {"seraphine", "mara"}
-    assert summary["plotmap"]["off-the-packet-boat"]["leads_to"] == ["the-guild-s-offer"]
+    assert summary["plotmap"]["saltmarch-eve"]["leads_to"] == ["the-reckoning"]
 
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"world": "Saltmarch", "lore": [{"name": "X", "owners": "nope"}]}),
@@ -309,3 +316,67 @@ def test_the_skill_example_plan_applies_cleanly(home):
     assert create_world.validate_plan(plan, None, None) == []
     wid = _apply(plan)["world"]
     assert create_world.check_world(wid)["ok"]
+
+
+def test_a_new_plan_never_merges_into_an_existing_world_by_name(home):
+    wid = _apply(_plan())["world"]
+    with pytest.raises(create_world.PlanError) as exc:
+        _apply({"world": "Saltmarch", "lore": [{"name": "The Salt Pact", "body": "clobber"}]})
+    assert any(f"--world-id {wid}" in p for p in exc.value.problems)
+    body = entities.read_entity(worlds.world_root(wid), "lore", "the-salt-pact")["body"]
+    assert body.strip() == "An old agreement."
+
+
+def test_a_reference_that_is_one_name_and_another_id_is_refused(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    entities.update_entity(root, "locations", "the-counting-house", name="Great Hall")
+    problems = create_world.validate_plan(
+        {"locations": [{"name": "the-counting-house"}],
+         "greetings": [{"name": "G", "location": "the-counting-house"}]}, root, wid)
+    assert any("could mean more than one" in p for p in problems), problems
+
+
+def test_a_cycle_closed_across_two_applies_is_refused(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    problems = create_world.validate_plan(
+        {"greetings": [{"name": "The Reckoning", "leads_to": ["Saltmarch Eve"]}]}, root, wid)
+    assert any("cycle" in p for p in problems), problems
+    problems = create_world.validate_plan(
+        {"greetings": [{"name": "The Reckoning", "leads_to": ["saltmarch-eve"]}]}, root, wid)
+    assert any("cycle" in p for p in problems), problems
+
+
+def test_reapply_keeps_a_greeting_version_chosen_in_the_app(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    card = characters.blank_card("Young Mara")
+    vid = characters.create_version(root, "mara", "young", card)
+    greetings.update_greeting(root, "the-reckoning", character="mara", version=vid)
+    _apply(_plan(), world_id=wid)
+    assert greetings.read_greeting(root, "the-reckoning")["meta"]["version"] == vid
+
+
+def test_null_field_clears_rather_than_storing_none(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    _apply({"locations": [{"name": "The Counting House", "fields": {"persistence": None}}]},
+           world_id=wid)
+    assert "persistence" not in entities.read_entity(root, "locations", "the-counting-house")["meta"]
+
+
+def test_duplicate_references_are_written_once(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    _apply({"greetings": [{"name": "Saltmarch Eve", "leads_to": ["The Reckoning", "the reckoning"]}]},
+           world_id=wid)
+    assert greetings.read_plotmap(root)["saltmarch-eve"]["leads_to"] == ["the-reckoning"]
+
+
+def test_check_warns_about_an_owner_that_is_never_present(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    entities.update_entity(root, "lore", "the-salt-pact", owners="groups:salt-circle")
+    warnings = "\n".join(create_world.check_world(wid)["warnings"])
+    assert "owner groups:salt-circle can never be present" in warnings
