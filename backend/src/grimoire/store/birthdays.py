@@ -11,8 +11,14 @@ including ones created only there. Clock digests read the locked appearance
 roster: a character who never appeared has no crossed scene time.
 
 The gather lives here once and each caller supplies its own question:
-`upcoming` for scene ideas, `crossed` for clock advances, and `relevant`
-for birthday questions in conversation.
+`occurrences` is the scan -- every birthday a window holds, each with a ref --
+and `upcoming` (scene ideas) and continuity pressure project it; `crossed`
+answers clock advances, and `relevant` birthday questions in conversation.
+
+The scan is one lazy walk, `_scan`, shared through `_actor_hits`. `upcoming`
+takes only each actor's first hit from it, so it stops on the day it always
+stopped on and never asks the provider about a later one; `occurrences`
+materializes each actor's whole window inside that actor's own `try`.
 
 Sits *below* both callers deliberately. `suggest` and `clock` are siblings and
 either importing the other would close a cycle (`clock` reads the chronicle,
@@ -26,6 +32,7 @@ still show the saved string when the calendar provider is unavailable.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 from . import calendars, characters, overlay, pcs
 from .appearances import cast as appearances_cast
@@ -36,7 +43,9 @@ from .campaigns import paths as campaigns_paths
 def gather(cid: str, roster: list[dict], *, visible_characters: bool = False,
            include_undated: bool = False,
            excluded_refs: frozenset[str] = frozenset()) -> list[dict]:
-    """`[{name, birth}]` for dated roster actors, or all when requested.
+    """`[{name, birth, ref}]` for dated roster actors, or all when requested.
+
+    `ref` is the actor's `<kind>:<id>`, which an occurrence ref is built on.
 
     The character path reads only container metadata, so the visible-roster
     scan does not parse every version card and image sidecar.
@@ -64,7 +73,7 @@ def gather(cid: str, roster: list[dict], *, visible_characters: bool = False,
         except (characters.CharacterNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
             continue
         if birth or include_undated:
-            out.append({"name": name, "birth": birth})
+            out.append({"name": name, "birth": birth, "ref": f"{a['kind']}:{a['id']}"})
         if a["kind"] == "characters":
             seen.add(a["id"])
     if visible_characters:
@@ -86,7 +95,7 @@ def _visible_birthdates(cid: str, seen: set[str], *, include_undated: bool,
         except characters.CharacterNotFound:
             continue
         if birth or include_undated:
-            out.append({"name": name, "birth": birth})
+            out.append({"name": name, "birth": birth, "ref": f"characters:{a['id']}"})
     return out
 
 
@@ -212,27 +221,120 @@ def _friendly_birthdate(provider, birth: str) -> str:
         return birth
 
 
-def _when(provider, birth: str, now_fixed: int) -> tuple[str | None, int | None]:
+def _day_hit(provider, born: int, yearless: bool, day_fixed: int, d: int) -> dict:
+    return {"precision": "yearless" if yearless else "exact", "fixed": day_fixed,
+            "year": provider.describe(day_fixed)["year"], "month_key": None,
+            "month_name": None, "in_days": d,
+            "age": None if yearless else provider.age(born, day_fixed)}
+
+
+def _month_hit(provider, key: str, day_fixed: int) -> dict | None:
+    day = provider.describe(day_fixed)
+    month = provider.months(day["year"])[day["month"] - 1]
+    if str(month["key"]).casefold() != key.casefold():
+        return None
+    return {"precision": "month", "fixed": None, "year": day["year"],
+            "month_key": month["key"], "month_name": day["month_name"],
+            "in_days": None, "age": None}
+
+
+def _scan(provider, birth: str, now_fixed: int, window: int) -> Iterator[dict]:
+    """Every birthday hit in `[now_fixed, now_fixed + window]`, lazily.
+
+    A day-bearing birth matches through the provider's own anniversary rule, so
+    a leap day or leap month is never given a day the year does not have. A
+    month-only birth matches the day's month key literally (case-folded), once
+    per distinct `(year, key)` at its first matching day -- it never gets an
+    invented day. A year alone has no anniversary. A generator on purpose: a
+    caller that takes only the first hit asks the provider about no later day.
+    """
     parts = _parts(birth, provider)
     born = _birth_fixed(provider, birth, now_fixed)
     if parts is not None and not parts[1]:
-        return None, None  # a year alone has no anniversary month
-    for d in range(calendars.UPCOMING_WINDOW_DAYS + 1):
+        return  # a year alone has no anniversary month
+    seen: set[tuple] = set()
+    for d in range(max(window, 0) + 1):
         day_fixed = now_fixed + d
-        if born is not None and provider.is_anniversary(born, day_fixed):
-            return ("today" if d == 0 else f"in {d} days",
-                    None if parts else provider.age(born, day_fixed))
-        if born is None and parts is not None:
-            day = provider.describe(day_fixed)
-            month = provider.months(day["year"])[day["month"] - 1]
-            if str(month["key"]).casefold() == parts[1].casefold():
-                return ("this month" if d == 0 else f"in {day['month_name']}"), None
-    return None, None
+        if born is not None:
+            if provider.is_anniversary(born, day_fixed):
+                yield _day_hit(provider, born, parts is not None, day_fixed, d)
+        elif parts is not None:
+            hit = _month_hit(provider, parts[1], day_fixed)
+            if hit is not None and (hit["year"], hit["month_key"]) not in seen:
+                seen.add((hit["year"], hit["month_key"]))
+                yield hit
+
+
+def _actor_hits(provider, row: dict, now_fixed: int, window: int) -> Iterator[dict]:
+    """`_scan` over one gathered row, each hit made a full occurrence row."""
+    actor = row["ref"]
+    for hit in _scan(provider, row["birth"], now_fixed, window):
+        if hit["fixed"] is None:
+            ref = f"birthday:{actor}:month:{hit['year']}-{hit['month_key']}"
+            native, friendly = "", f"{hit['month_name']} {hit['year']}"
+        else:
+            ref = f"birthday:{actor}:{hit['fixed']}"
+            native = provider.format(hit["fixed"])
+            friendly = provider.describe(hit["fixed"])["friendly"]
+        yield {"ref": ref, "name": row["name"], "actor": actor, **hit,
+               "native": native, "friendly": friendly}
+
+
+def _label(provider, hit: dict, now_fixed: int) -> str:
+    """The `when` text `upcoming` has always rendered for a first hit."""
+    if hit["precision"] == "month":
+        today = provider.describe(now_fixed)
+        key = provider.months(today["year"])[today["month"] - 1]["key"]
+        if (hit["year"], hit["month_key"]) == (today["year"], key):
+            return "this month"
+        return f"in {hit['month_name']}"
+    return "today" if hit["in_days"] == 0 else f"in {hit['in_days']} days"
+
+
+def _when(provider, birth: str, now_fixed: int) -> tuple[str | None, int | None]:
+    hit = next(_scan(provider, birth, now_fixed, calendars.UPCOMING_WINDOW_DAYS), None)
+    if hit is None:
+        return None, None
+    return _label(provider, hit, now_fixed), hit["age"]
+
+
+def occurrences(cid: str, now_fixed: int, window: int = calendars.UPCOMING_WINDOW_DAYS, *,
+                provider=None, roster: list[dict] | None = None,
+                visible_characters: bool = True) -> list[dict]:
+    """Every birthday occurrence in `[now_fixed, now_fixed + window]`, today included.
+
+    Rows are `{ref, name, actor, precision, fixed, year, month_key, month_name,
+    in_days, age, native, friendly}`, in gather order and, within an actor, in
+    day order. `precision` is `exact` (a full date: the only one with an age),
+    `yearless` (`--month-day`) or `month` (`--month`/`year-month`: `fixed`,
+    `in_days` and `age` are None and `native` is empty -- it has no day).
+
+    `roster` None means the appearance roster. `[]` when no provider resolves;
+    a birthdate this calendar cannot read skips that actor's whole window.
+    """
+    if provider is None:
+        provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
+    if provider is None:
+        return []
+    if roster is None:
+        roster = appearances_cast.roster(cid)
+    out: list[dict] = []
+    for row in gather(cid, roster, visible_characters=visible_characters):
+        try:
+            hits = list(_actor_hits(provider, row, now_fixed, window))
+        except calendars.CalendarError:
+            continue
+        out.extend(hits)
+    return out
 
 
 def upcoming(cid: str, now: str, roster: list[dict], *, visible_characters: bool = False) -> list[dict]:
     """Birthdays inside `calendars.UPCOMING_WINDOW_DAYS` of `now`, each
-    `{name, age, when}` where `when` is "today" or "in N days"."""
+    `{name, age, when}` where `when` is "today" or "in N days".
+
+    A projection of each actor's first occurrence. It does not call
+    `occurrences`: it takes only the first hit of the lazy walk, so it stops
+    where it always has rather than reading the whole window per actor."""
     if not now:
         return []
     provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
@@ -245,10 +347,11 @@ def upcoming(cid: str, now: str, roster: list[dict], *, visible_characters: bool
     out: list[dict] = []
     for row in gather(cid, roster, visible_characters=visible_characters):
         try:
-            when, age = _when(provider, row["birth"], now_fixed)
-            if when is None:
+            hit = next(_actor_hits(provider, row, now_fixed, calendars.UPCOMING_WINDOW_DAYS), None)
+            if hit is None:
                 continue
-            out.append({"name": row["name"], "age": age, "when": when})
+            out.append({"name": row["name"], "age": hit["age"],
+                        "when": _label(provider, hit, now_fixed)})
         except calendars.CalendarError:
             continue
     return out
