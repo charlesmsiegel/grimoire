@@ -2354,3 +2354,18 @@ test("a hand-mangled record's rules do not crash the opened rewrite", async () =
   expect(within(detail).getByText("Mara nods. (OOC: she is lying)")).toBeInTheDocument();
   expect(within(detail).getByRole("button", { name: "Restore original" })).toBeInTheDocument();
 });
+
+test("a later part of a response opens its own record, by the key the scene read names", async () => {
+  (api.getSceneRewrites as any).mockResolvedValue({
+    "resp-1": { original: "First part...", rules: ["r-strip"], at: "" },
+    "resp-1#c-2": { original: "Second part...", rules: ["r-strip"], at: "" } });
+  (api.getRegex as any).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
+  render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}}
+    rewritten={[{ index: 4, message: { role: "assistant", content: "Second part…",
+      response_id: "resp-1", response_part: "c-2", rewritten: true,
+      rewrite_key: "resp-1#c-2", speaker: "Mara" } }]} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button", { name: /Rewritten/ }));
+  const detail = await screen.findByRole("region", { name: "Rewrite of post 5" });
+  expect(within(detail).getByText("Second part...")).toBeInTheDocument();
+  expect(within(detail).queryByText("First part...")).not.toBeInTheDocument();
+});

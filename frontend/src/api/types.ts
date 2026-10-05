@@ -435,8 +435,10 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
   post_id?: string;
   /** The text a display-phase regex rule shows in place of `content`, present
    *  only when it differs. `rewritten` marks a post whose stored text a rule
-   *  rewrote; `connection` is the connection that produced it. */
-  shown?: string; rewritten?: boolean; connection?: string };
+   *  rewrote, and `rewrite_key` names the record that says so (a later part of
+   *  a response has a key of its own); `connection` is the connection that
+   *  produced it. */
+  shown?: string; rewritten?: boolean; rewrite_key?: string; connection?: string };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
   variants: { id: string; content: string; reasoning?: string; status: string; issue?: string | null }[] };

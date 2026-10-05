@@ -9,8 +9,14 @@ a record follows a rename without being moved and is never inherited by a
 stranger. The scene DELETE route drops the file (this package may not be
 imported from `store.scenes`, which it imports).
 
-Each record is keyed by the message's `response_id` (a model reply) or
-`post_id` (a player post, or a legacy reply segment), and holds the text
+Each record is keyed by the message it describes (`key_for`): a model reply's
+`response_id`, joined to its `response_part` as `<response_id>#<part>` for
+every part after the first -- a reply resumed after a roll is two messages
+under one `response_id`, and each part's rewrite is its own -- else the
+`post_id` of a player post or a legacy reply segment. Records written before
+parts had keys of their own sit under the bare `response_id` whichever part
+they were made for; `candidates` still offers that key for every part, and the
+stored text decides which part it describes. Each record holds the text
 before the rewrite (`original`), the ids of the rules that changed it
 (`rules`), the text the rewrite stored (`stored`) and when (`at`). Only the
 latest rewrite of a message is kept. `stored` is what lets a reader tell a
@@ -36,6 +42,31 @@ from ..paths import now_iso
 from ..scenes import identity as scenes_identity
 
 _IDENTITY = re.compile(r"\A[0-9a-f]{32}\Z")
+
+
+def key_for(message: dict) -> str:
+    """The key a rewrite of `message` is recorded under now, "" for a message
+    with no id to key one by."""
+    rid = message.get("response_id") or ""
+    part = message.get("response_part") or ""
+    if rid:
+        return f"{rid}#{part}" if part else rid
+    return message.get("post_id") or ""
+
+
+def candidates(message: dict) -> list[str]:
+    """Every key a record of `message` may sit under, the current one first:
+    its part's key, the bare `response_id` (the first part's, and where a
+    later part's record was kept before parts had keys of their own), and the
+    `post_id` a legacy reply was recorded under before the response migration
+    gave it a `response_id` too."""
+    keys = [key_for(message), message.get("response_id") or "", message.get("post_id") or ""]
+    return [k for k in dict.fromkeys(keys) if k]
+
+
+def response_of(key: str) -> str:
+    """The `response_id` (or `post_id`) a record key belongs to."""
+    return key.split("#", 1)[0]
 
 
 def path(cid: str, identity: str) -> Path:
@@ -106,6 +137,30 @@ def record(cid: str, sid: str, key: str, *, original: str, rules: list[str],
         records[key] = {"original": original, "rules": list(rules), "stored": stored,
                         "at": now_iso(), **({"variant": variant} if variant else {})}
         _write(p, records)
+
+
+def carry(cid: str, sid: str, rid: str, before: str, after: str, *, skip: str = "") -> None:
+    """Move every record of response `rid` made for variant `before` onto
+    `after`, except the one under `skip`. A continuation part is a new variant
+    of the same response whose earlier parts are unchanged, so their records
+    still describe them -- left naming `before`, they would stop matching and
+    Restore of an earlier part would be refused. Writes nothing when no
+    record moves."""
+    if not after or after == before:
+        return
+    with locks.campaign_lock(cid):
+        ident = scenes_identity.scene_identity(cid, sid)
+        if not ident:
+            return
+        p = path(cid, ident)
+        records = _read(p)
+        moved = False
+        for key, rec in records.items():
+            if key != skip and response_of(key) == rid and rec.get("variant") == before:
+                rec["variant"] = after
+                moved = True
+        if moved:
+            _write(p, records)
 
 
 def forget(cid: str, sid: str, key: str) -> None:

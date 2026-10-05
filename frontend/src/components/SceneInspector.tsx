@@ -138,8 +138,10 @@ function ruleNames(bundle: RegexBundle | undefined): Record<string, string> {
  *
  *  The record is read on opening rather than with the scene, because only a
  *  restore needs the original and a scene read would carry every one of them.
- *  It is looked up the way the server looks it up (`_still_rewritten`): by
- *  `response_id`, else `post_id`, the first that has one. Restore writes that
+ *  It is looked up by the key the scene read named (`rewrite_key`), which is
+ *  the server's to work out -- a later part of a response has a key of its
+ *  own -- and, from a read that names none, by `response_id`, else `post_id`,
+ *  the first that has one. Restore writes that
  *  original back through the ordinary message edit with `restore`, which the
  *  server refuses (409 `rewrite_stale`) unless the post still says what the
  *  rewrite stored -- so a view that has fallen behind cannot overwrite newer
@@ -156,7 +158,7 @@ function RewriteDetail({ cid, sid, post, locked, onRestored, onStale }: {
   // Read again only when the post itself moves. Every transcript read hands
   // the inspector new message objects, and re-reading on identity would blank
   // the open record to "Loading…" on every turn.
-  const { response_id: responseId, post_id: postId, content } = post.message;
+  const { response_id: responseId, post_id: postId, rewrite_key: rewriteKey, content } = post.message;
   useEffect(() => {
     let live = true;
     setRead(null); setError(null);
@@ -165,11 +167,11 @@ function RewriteDetail({ cid, sid, post, locked, onRestored, onStale }: {
       .then(ruleNames).catch(() => ({}));
     Promise.all([api.getSceneRewrites(cid, sid), names]).then(([records, n]) => {
       if (!live) return;
-      const key = [responseId, postId].find((k) => k && records[k]);
-      setRead({ rec: key ? records[key] : null, names: n });
+      const key = rewriteKey ? rewriteKey : [responseId, postId].find((k) => k && records[k]);
+      setRead({ rec: key ? records[key] ?? null : null, names: n });
     }).catch((err) => { if (live) setError(errorText(err)); });
     return () => { live = false; };
-  }, [cid, sid, responseId, postId, content]);
+  }, [cid, sid, responseId, postId, rewriteKey, content]);
 
   async function restore() {
     if (!read?.rec || busy || locked) return;

@@ -563,3 +563,66 @@ def test_a_rewrite_that_changes_nothing_once_stored_records_nothing(client):
     assert "rewritten" not in reply
     assert records(client, cid, sid) == {}
     assert not (store.campaigns.paths.campaign_root(cid) / "rewrites").exists()
+
+
+def _declined_roll_with_two_rewritten_parts(client):
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    fake = FakeLLM([
+        ['Wait...\n```roll\n{"check":"notice"}\n```'],
+        ['No roll... fine.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    proposal = store.proposals.get(cid, sid)
+    response = client.post(base + "/roll-proposal",
+                           json={"proposal": proposal["id"], "action": "decline"})
+    assert response.status_code == 200 and '"error"' not in response.text, response.text
+    return cid, sid
+
+
+def test_each_part_of_a_continued_response_keeps_its_own_record(client):
+    """Pre-roll narration and its resumed continuation are two transcript
+    messages under one `response_id`. Both rewritten, each keeps its record --
+    the continuation's must not replace the first part's."""
+    cid, sid = _declined_roll_with_two_rewritten_parts(client)
+    shown = messages(client, cid, sid)
+    assert [m["content"] for m in shown[1:]] == ["Wait…", "No roll… fine."]
+    first, second = shown[1], shown[2]
+    assert first["response_id"] == second["response_id"]
+    assert first["rewritten"] is True and second["rewritten"] is True
+    recorded = records(client, cid, sid)
+    assert len(recorded) == 2
+    assert recorded[first["rewrite_key"]]["original"] == "Wait..."
+    assert recorded[second["rewrite_key"]]["original"] == "No roll... fine."
+
+    r = edit(client, cid, sid, 2, "No roll... fine.", restore=True)
+    assert r.status_code == 200, r.text
+    r = edit(client, cid, sid, 1, "Wait...", restore=True)
+    assert r.status_code == 200, r.text
+    raw = store.scenes.read_scene(cid, sid)["messages"]
+    assert [m["content"] for m in raw[1:]] == ["Wait...", "No roll... fine."]
+    assert records(client, cid, sid) == {}
+
+
+def test_a_record_written_under_the_bare_response_id_still_resolves_for_a_later_part(client):
+    """Before records were kept per part, a continuation's rewrite was stored
+    under the bare `response_id`. Such a record still flags, and restores, the
+    part whose text it stored."""
+    cid, sid = _declined_roll_with_two_rewritten_parts(client)
+    shown = messages(client, cid, sid)
+    rid = shown[2]["response_id"]
+    path = rewrites.path(cid, store.scenes.scene_identity(cid, sid))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data = {rid: data[shown[2]["rewrite_key"]]}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    shown = messages(client, cid, sid)
+    assert "rewritten" not in shown[1]
+    assert shown[2]["rewritten"] is True and shown[2]["rewrite_key"] == rid
+    r = edit(client, cid, sid, 1, "No roll... fine.", restore=True)
+    assert r.status_code == 409
+    r = edit(client, cid, sid, 2, "No roll... fine.", restore=True)
+    assert r.status_code == 200, r.text
+    assert records(client, cid, sid) == {}

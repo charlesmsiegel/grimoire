@@ -525,8 +525,11 @@ def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None =
 def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
     """The scene as the reader gets it: each message tagged with its actor, the
     ones a display rule changed carrying `shown` beside the raw `content`, and
-    the ones a stored rewrite changed flagged `rewritten`. A windowed read says
-    where it sits (`offset`, `total`) so depth counts over the whole scene."""
+    the ones a stored rewrite changed flagged `rewritten`, with the key of the
+    record that says so (`rewrite_key`) -- the inspector reads that record, and
+    which of a message's keys holds it is this module's to work out
+    (`_record_for`). A windowed read says where it sits (`offset`, `total`) so
+    depth counts over the whole scene."""
     refs = store.responses.actor_refs(cid, sid)
     scene["messages"] = store.regex.view.annotate_shown(
         scene["messages"], cid=cid, offset=scene.get("offset", 0), total=scene.get("total"))
@@ -536,46 +539,47 @@ def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
         ref = refs.get(message.get("response_id", ""))
         if ref:
             message["actor_ref"] = ref
-        if rewritten and _still_rewritten(message, rewritten, active):
+        found = _record_for(message, rewritten, active) if rewritten else None
+        if found is not None:
             message["rewritten"] = True
+            message["rewrite_key"] = found[0]
     return scene
 
 
-def _record_for(message: dict, records: dict[str, dict]) -> tuple[str, dict] | None:
-    """The store phase's record for this message and the key it is under: by
-    `response_id`, else `post_id`. Both are asked because a legacy reply is
-    recorded under the `post_id` it was minted, and the response migration
-    later gives the same message a `response_id` too."""
-    for key in (message.get("response_id"), message.get("post_id")):
-        rec = records.get(key) if key else None
-        if key and rec is not None:
+def _record_for(message: dict, records: dict[str, dict],
+                active: dict[str, str | None]) -> tuple[str, dict] | None:
+    """The store phase's record that still describes this message, and the key
+    it is under, or None. Every key the message may be recorded under is asked
+    (`rewrites.candidates`): its part's, the bare `response_id` -- where a later
+    part's record sat before parts had keys of their own -- and the `post_id` a
+    legacy reply was recorded under before the response migration gave it a
+    `response_id` too. A key can hold a record that is not this message's (the
+    first part's, a variant since swiped away), so the first that describes it
+    (`_describes`) wins. `active` is `_active_variants`."""
+    for key in store.regex.rewrites.candidates(message):
+        rec = records.get(key)
+        if rec is not None and _describes(message, rec, active):
             return key, rec
     return None
 
 
 def _active_variants(cid: str, sid: str, records: dict[str, dict]) -> dict[str, str | None]:
-    """Each response's active variant, for `_still_rewritten` -- read only when
-    some record names a variant, so a scene without one reads no ledger."""
+    """Each response's active variant, for `_describes` -- read only when some
+    record names a variant, so a scene without one reads no ledger."""
     if not any(rec.get("variant") for rec in records.values()):
         return {}
     return {rid: vid for rid, (vid, _) in store.responses.variants_by_response(cid, sid).items()}
 
 
-def _still_rewritten(message: dict, records: dict[str, dict],
-                     active: dict[str, str | None]) -> bool:
-    """Whether the store phase's record for this message (`_record_for`) still
-    describes it. A record is kept per key, and a reroll or a swipe puts other
-    text under the same `response_id` -- so the flag, and the Restore it offers,
-    holds only while the message says what the rewrite stored, and, for a
-    record that names its variant, while that variant is the one shown (two
-    variants can store the same text). Restoring a record the text has moved
-    past would overwrite the newer text with an original that was never its
-    own. `active` is `_active_variants`."""
-    found = _record_for(message, records)
-    if found is None:
-        return False
-    key, rec = found
-    if rec.get("variant") and active.get(key) != rec["variant"]:
+def _describes(message: dict, rec: dict, active: dict[str, str | None]) -> bool:
+    """Whether `rec` still describes this message. A record is kept per key,
+    and a reroll or a swipe puts other text under the same `response_id` -- so
+    the flag, and the Restore it offers, holds only while the message says what
+    the rewrite stored, and, for a record that names its variant, while that
+    variant is the one shown (two variants can store the same text). Restoring
+    a record the text has moved past would overwrite the newer text with an
+    original that was never its own."""
+    if rec.get("variant") and active.get(message.get("response_id") or "") != rec["variant"]:
         return False
     stored = rec.get("stored")
     content = message.get("content")
@@ -586,7 +590,9 @@ def _still_rewritten(message: dict, records: dict[str, dict],
 @router.get("/campaigns/{cid}/scenes/{sid}/rewrites")
 def get_scene_rewrites(cid: str, sid: str):
     """What the store phase rewrote in this scene, `{key: {original, rules,
-    at}}` by `response_id` or `post_id` -- the originals Restore writes back."""
+    at}}` by `rewrites.key_for` -- the originals Restore writes back. A scene
+    read names the key each rewritten message's record is under
+    (`rewrite_key`)."""
     _require_scene(cid, sid)
     return {key: {"original": rec["original"], "rules": rec.get("rules", []),
                   "at": rec.get("at", "")}
@@ -5113,7 +5119,7 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
             # would change text that Restore could never give back; a synthetic
             # line has no role. A restore runs no phase at all: it would
             # rewrite the original straight back.
-            key = target.get("response_id") or target.get("post_id")
+            key = store.regex.rewrites.key_for(target)
             if body.restore:
                 _require_restorable(cid, sid, target, body.content)
             role = store.regex.apply.role_of(target)
@@ -5146,16 +5152,14 @@ def _require_restorable(cid: str, sid: str, target: dict, content: str) -> None:
 
     A restore writes raw text past the macros and the store phase, so it is
     allowed only as the inverse of a recorded rewrite: the message at `index`
-    has a record under either of its ids (`_record_for`), it still describes
-    the message (`_still_rewritten` -- not a reroll or swipe that moved past
-    it, nor a different message a cut in another tab renumbered into this
-    slot), and `content` is that record's original. Anything else is a stale
-    view of the scene, answered 409 for the client to re-read rather than
-    written over whatever is there now."""
+    has a record that still describes it (`_record_for` -- not a reroll or swipe
+    that moved past it, nor a different message a cut in another tab
+    renumbered into this slot), and `content` is that record's original.
+    Anything else is a stale view of the scene, answered 409 for the client to
+    re-read rather than written over whatever is there now."""
     records = store.regex.rewrites.read_all(cid, sid)
-    found = _record_for(target, records)
-    if (found is None or not _still_rewritten(target, records, _active_variants(cid, sid, records))
-            or content != found[1].get("original")):
+    found = _record_for(target, records, _active_variants(cid, sid, records))
+    if found is None or content != found[1].get("original"):
         raise HTTPException(409, detail={
             "kind": "rewrite_stale",
             "detail": "This message no longer matches its recorded rewrite; reload the scene."})
@@ -5164,36 +5168,40 @@ def _require_restorable(cid: str, sid: str, target: dict, content: str) -> None:
 def _settle_rewrite(cid: str, sid: str, target: dict, key: str, original: str,
                     fired: list[str], content: str) -> None:
     """Bring the message's rewrite record in line with an edit that wrote
-    `content` over `target` (the message as it was before the edit).
+    `content` over `target` (the message as it was before the edit). `key` is
+    the message's own key (`rewrites.key_for`).
 
     Only the latest rewrite is kept: one that fired replaces the record, and an
     edit that replaces the text the record stored -- a restore included --
     leaves the player's own text, with nothing to restore. Any other edit leaves
     the record alone: saving the rewritten text unchanged (an idempotent rule
     has nothing to fire on), or editing another part of the same response,
-    which shares its `response_id`. Forgetting there would delete the only copy
-    of an original. "The same" is compared stripped, as `_still_rewritten`
-    compares, so the two agree on it.
+    which has a key of its own. Forgetting there would delete the only copy of
+    an original. "The same" is compared stripped, as `_describes` compares, so
+    the two agree on it.
 
-    Both of the message's ids are settled, not only `key`: a migrated legacy
-    reply is recorded under its `post_id` while `key` is its `response_id`
-    (`_record_for`). A rewrite that fired supersedes the other id's record, and
-    an edit that clears the rewrite retires whichever there is."""
+    Every record that is this message's is settled, not only `key`'s: a
+    migrated legacy reply is recorded under its `post_id`, and a later part's
+    record from before parts had keys sits under the bare `response_id`
+    (`_record_for`). Its part key and its `post_id` are the message's alone;
+    the bare `response_id` is too for the first part, and for a later part only
+    when its record describes this message -- otherwise it is the first part's.
+    A rewrite that fired supersedes the others, and an edit that clears the
+    rewrite retires them all."""
     records = store.regex.rewrites.read_all(cid, sid)
-    ids = [k for k in (target.get("response_id"), target.get("post_id")) if k in records]
+    found = _record_for(target, records, _active_variants(cid, sid, records))
+    rid = target.get("response_id") or ""
+    own = [k for k in store.regex.rewrites.candidates(target)
+           if k in records and (k != rid or k == key or (found and found[0] == k))]
     if fired:
-        variant = (streaming._active_variant(cid, sid, key)
-                   if key == target.get("response_id") else "")
+        variant = streaming._active_variant(cid, sid, rid) if rid else ""
         streaming._record_rewrite(cid, sid, key, original, fired, content, variant)
-        for other in ids:
+        for other in own:
             if other != key:
                 _forget_rewrite(cid, sid, other)
         return
-    found = _record_for(target, records)
-    if (found is not None
-            and _still_rewritten(target, records, _active_variants(cid, sid, records))
-            and content.strip() != str(found[1]["stored"]).strip()):
-        for k in ids:
+    if found is not None and content.strip() != str(found[1]["stored"]).strip():
+        for k in own:
             _forget_rewrite(cid, sid, k)
 
 

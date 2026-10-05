@@ -193,7 +193,9 @@ existing `expand_macros` call:
 
 When the store phase changes the text, the original and the ids of the rules
 that fired are recorded in `<campaign_root>/rewrites/<scene identity>.json`,
-keyed by the message's `response_id` (model) or `post_id` (player), and the
+keyed by the message's `response_id` (model; a later part of a reply resumed
+after a roll is its own message, keyed `<response_id>#<part>`) or `post_id`
+(player), and the
 message's metadata comment gets `rewritten: 1`. Keyed by the scene's minted
 **identity** rather than its `sid`, so the record survives a rename or a
 re-pad without being moved; `lifecycle.delete_scene` unlinks it with the
