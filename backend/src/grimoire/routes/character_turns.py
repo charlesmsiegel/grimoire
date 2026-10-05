@@ -1693,15 +1693,46 @@ _EXTEND_RETAINED = "The previous response was retained."
 _EXTEND_ROLL = "A continuation cannot propose a roll \u2014 reroll the reply instead"
 
 
+def _refuse(kind: str, detail: str) -> HTTPException:
+    return HTTPException(409, detail={"kind": kind, "detail": detail})
+
+
 def _extend_target(cid: str, sid: str, rid: str) -> ExtendPlan:
-    """The plan for continuing `rid`. Called inside the route's campaign-lock
-    hold, before anything is spent."""
+    """The plan for continuing `rid`, or the refusal that stops it (gate
+    resolution 6). Called inside the route's campaign-lock hold, before the
+    turn is claimed, the steer recorded or anything spent; `run_in_flight` and
+    `branch_closed` were already answered by `reserve_turn`."""
     try:
         store.responses.editable(cid, sid, rid)
         record = store.responses.get(cid, sid, rid, private=True)
     except (store.responses.ResponseNotFound, store.responses.ResponseConflict) as exc:
         raise _public_error(exc) from exc
     messages = store.scenes.read_scene(cid, sid)["messages"]
+    if not store.responses.is_trailing(messages, rid):
+        # Continuing an earlier reply would rewrite what every later post was
+        # built on.
+        raise _refuse("not_last_response", "Only the last reply can be continued.")
+    if not record["snapshot"]:
+        raise _refuse("historical_context_unavailable",
+                      "This legacy response has no frozen prompt. Explicitly replay from here instead.")
+    try:
+        store.responses.require_context_included(messages, record)
+    except store.responses.ResponseConflict as exc:
+        raise _public_error(exc) from exc
+    if store.responses.unfinished(cid, sid) is not None:
+        # Activating the new variant supersedes the round: a paused roll or a
+        # Retry the player has not used would be lost.
+        raise _refuse("round_open", "Finish or discard the open round before continuing a reply.")
+    if (store.proposals.get(cid, sid) or {}).get("status") in store.proposals.NON_TERMINAL:
+        raise _refuse("proposal_pending", "Resolve the proposed roll before continuing a reply.")
+    if store.pending_reviews.read(cid, sid) is not None:
+        # A new variant would invalidate the stored review's watermark: the
+        # longest generation in the app, silently thrown away.
+        raise _refuse("review_pending",
+                      "This scene has a review waiting. Save or dismiss it before continuing a reply.")
+    active = next((v for v in record["variants"] if v["id"] == record["active_variant"]), None)
+    if active is None or active.get("status") != "complete":
+        raise _refuse("variant_incomplete", "Only a completed reply can be continued.")
     parts = [m for m in messages if m.get("response_id") == rid and m.get("response_part")]
     if parts and record.get("resume_snapshot"):
         snapshot, composed = record["resume_snapshot"], "resume"

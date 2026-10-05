@@ -63,6 +63,7 @@ def test_every_transcript_door_refuses_a_closed_scene(closed, client):
         ("post", f"{base}/retry", None),
         ("post", f"{base}/regenerate", None),
         ("post", f"{base}/responses/{rid}/regenerate", {}),
+        ("post", f"{base}/responses/{rid}/extend", {}),
         ("post", f"{base}/replay/turn", None),
         ("post", f"{base}/roll-proposal", {"proposal": "nope", "action": "accept"}),
         ("put", f"{base}/messages/0", {"content": "edited"}),

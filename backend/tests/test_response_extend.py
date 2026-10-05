@@ -6,7 +6,9 @@ import pytest
 
 from grimoire import content_parts, routes, store
 from grimoire.llm import ATTEMPTED
+from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from grimoire.routes import runs as runs_mod
 from grimoire.store import response_protocol
 from tests.llm_fakes import FakeLLM
 from tests.test_character_turns import seed
@@ -324,3 +326,143 @@ def test_extend_is_metered_as_extend_and_not_counted_as_a_reroll(client):
     assert isinstance(row.get("post"), int)
     usage = store.usage.scene_usage(cid, sid)
     assert [b["rerolls"] for b in usage["by_post"]] == [0]
+
+
+# --- refusals -------------------------------------------------------------------
+
+
+def _cut_short(client, base):
+    fake = FakeLLM([["Partial"]], error=LLMError("rate_limit", "Wait"))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    client.post(base + "/chat", json={"content": "Stay", "speaker_ref": "characters:mara"})
+
+
+def _not_last(client, monkeypatch, cid, sid, base):
+    rid = _answer(client, base)
+    _answer(client, base, "Later.")
+    return rid
+
+
+def _roll_after(client, monkeypatch, cid, sid, base):
+    rid = _answer(client, base)
+    store.scenes.append_message(cid, sid, "assistant", "\U0001f3b2 1d20 = 12",
+                                speaker=store.scenes.serialize.ROLL_SPEAKER)
+    return rid
+
+
+def _legacy(client, monkeypatch, cid, sid, base):
+    store.scenes.append_message(cid, sid, "assistant", "Old narration.")
+    return client.get(base).json()["messages"][-1]["response_id"]
+
+
+def _hidden_before(client, monkeypatch, cid, sid, base):
+    fake = FakeLLM([["Original." + _HANDOFF]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    rid = store.scenes.read_scene(cid, sid)["messages"][-1]["response_id"]
+    # The exclusion stamp must be later than the snapshot, which a same-second
+    # tie cannot prove -- so the record is made to look older.
+    ledger = store.responses._read(cid)
+    for scope in ledger["scenes"].values():
+        if rid in scope["responses"]:
+            scope["responses"][rid]["created"] = "2000-01-01T00:00:00Z"
+    store.responses._write(cid, ledger)
+    r = client.put(base + "/messages/0/excluded", json={"excluded": True})
+    assert r.status_code == 200, r.text
+    return rid
+
+
+def _open_round(client, monkeypatch, cid, sid, base):
+    _cut_short(client, base)
+    return store.scenes.read_scene(cid, sid)["messages"][-1]["response_id"]
+
+
+def _incomplete(client, monkeypatch, cid, sid, base):
+    rid = _open_round(client, monkeypatch, cid, sid, base)
+    round_id = store.responses.get(cid, sid, rid)["round_id"]
+    store.responses.update_round(cid, sid, round_id, status="superseded")
+    return rid
+
+
+def _proposed(client, monkeypatch, cid, sid, base):
+    rid = _answer(client, base)
+    store.proposals.new(cid, sid, {"check": "notice"})
+    return rid
+
+
+def _reviewed(client, monkeypatch, cid, sid, base):
+    rid = _answer(client, base)
+    monkeypatch.setattr(store.pending_reviews, "read", lambda c, s: {"review": {}})
+    return rid
+
+
+def _running(client, monkeypatch, cid, sid, base):
+    rid = _answer(client, base)
+    runs_mod.reserve_turn(client.app, cid, sid, "chat", "a-1")
+    return rid
+
+
+#: Each refusal kind, and how to arrange the response that should earn it.
+_REFUSALS = {
+    "not_last_response": _not_last,
+    "applied_mechanics": _roll_after,
+    "historical_context_unavailable": _legacy,
+    "context_excluded": _hidden_before,
+    "round_open": _open_round,
+    "variant_incomplete": _incomplete,
+    "proposal_pending": _proposed,
+    "review_pending": _reviewed,
+    "run_in_flight": _running,
+}
+
+
+@pytest.mark.parametrize("case", sorted(_REFUSALS))
+def test_extend_refusals(client, monkeypatch, case):
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    rid = _REFUSALS[case](client, monkeypatch, cid, sid, base)
+    before = store.scenes.read_scene(cid, sid)["messages"]
+    steering = store.steering.texts(cid, sid)
+    fake = FakeLLM([["Must not run." + _HANDOFF]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    result = client.post(base + f"/responses/{rid}/extend", json={"guidance": "colder"})
+    assert result.status_code == 409, result.text
+    assert result.json()["kind"] == case, result.text
+    assert fake.calls == 0
+    assert store.steering.texts(cid, sid) == steering
+    assert store.scenes.read_scene(cid, sid)["messages"] == before
+
+
+def test_extend_of_a_missing_response_is_a_404(client):
+    cid, sid = seed(client)
+    fake = FakeLLM([["Must not run."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/missing/extend")
+    assert result.status_code == 404 and fake.calls == 0
+
+
+def test_trailing_transition_lines_do_not_make_a_reply_not_last(client):
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    rid = _answer(client, base)
+    store.scenes.append_message(cid, sid, "assistant", "The scene moves to the docks.",
+                                speaker=store.scenes.serialize.TRANSITION_SPEAKER)
+    result, _ = _extend(client, base, rid, "Then rain.")
+    assert result.status_code == 200 and "error" not in result.text, result.text
+    assert store.responses.get(cid, sid, rid)["content"] == "Original.\n\nThen rain."
+
+
+def test_extend_on_a_closed_branch_is_refused(client):
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    _answer(client, base)
+    rid = _answer(client, base, "Later.")
+    branch = store.branch.branch_scene(cid, sid, len(store.scenes.read_scene(cid, sid)["messages"]) - 1)
+    store.scenes.mark_absorbed(cid, sid, "x", "y")
+    branch_rid = store.scenes.read_scene(cid, branch)["messages"][-1]["response_id"]
+    assert branch_rid and rid
+    fake = FakeLLM([["Must not run." + _HANDOFF]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    result = client.post(f"/api/campaigns/{cid}/scenes/{branch}/responses/{branch_rid}/extend")
+    assert result.status_code == 409 and result.json()["kind"] == "branch_closed"
+    assert fake.calls == 0
