@@ -20,7 +20,8 @@ import { ErrorNote } from "./ErrorNote";
  *  trailing run.
  */
 export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onForked,
-                             disabled, latch, onUnanswered }: {
+                             disabled, latch, onUnanswered, branchable = false,
+                             onBranched }: {
   cid: string;
   sid: string;
   /** The post the reader asked to replay from, or null. Set by the transcript
@@ -56,12 +57,23 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
    *  what review caught: the parent already knows how to adopt such a run, and
    *  the answer is to tell it now rather than to duplicate that logic here. */
   onUnanswered?: () => void;
+  /** Offer to replay inside a branch of the scene (play controls III, #151),
+   *  ticked by default: the original is never touched, so a replay that goes
+   *  wrong costs nothing. Only an unabsorbed scene can branch -- an absorbed
+   *  one's branch is a campaign fork, which is "Fork first". */
+  branchable?: boolean;
+  /** Where a replay begun in a branch runs: the caller navigates there, since
+   *  the scene on screen was not touched. */
+  onBranched?: (sid: string) => void;
 }) {
   // The same provider the composer's turns are recorded in, so a replayed turn
   // is discoverable by attempt after the WebView is suspended. `useRunRegistry`
   // degrades to a no-op stand-in with no provider mounted, which is what lets
   // this panel keep standing alone in its own tests.
   const registry = useRunRegistry();
+  /** Replay inside a branch of the scene rather than in place. On by default
+   *  wherever it is offered. */
+  const [inBranch, setInBranch] = useState(true);
   const [session, setSession] = useState<ReplaySession | null>(null);
   // The price, stamped with the post it was taken for. Stamped rather than
   // cleared when `startAt` changes: a clearing effect has to run on every
@@ -176,8 +188,16 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
 
   const start = () => guard(async () => {
     if (startAt === null) return;
-    await api.startReplay(cid, sid, startAt);
-    if (alive.current) onStartHandled();
+    const result = branchable && inBranch
+      ? await api.startReplay(cid, sid, startAt, true)
+      : await api.startReplay(cid, sid, startAt);
+    if (!alive.current) return;
+    onStartHandled();
+    if (result.branched) {
+      // The replay runs in the sibling; this scene is exactly as it was.
+      onBranched?.(result.branched);
+      return;
+    }
     await refresh();
   });
 
@@ -311,12 +331,21 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
               </p>
             )}
             {error != null && <p className="field-hint"><ErrorNote err={error} /></p>}
+            {branchable && (
+              <label className="field-hint replay-branch">
+                <input type="checkbox" checked={inBranch}
+                       onChange={(e) => setInBranch(e.target.checked)} />
+                {" "}Replay in a branch (keeps this scene)
+              </label>
+            )}
             <div className="form-actions">
               <button className="subtle" onClick={onStartHandled}>Cancel</button>
               <button className={priced.fork ? "primary" : "subtle"} disabled={busy}
                       onClick={fork}>Fork first…</button>
               <button className={priced.fork ? "subtle" : "primary"}
-                      disabled={busy || disabled} onClick={start}>Replay in place</button>
+                      disabled={busy || disabled} onClick={start}>
+                {branchable && inBranch ? "Replay in a branch" : "Replay in place"}
+              </button>
             </div>
           </>
         )}

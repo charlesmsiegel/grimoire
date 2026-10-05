@@ -124,6 +124,7 @@ export function installCampaignMocks() {
   (api.createScene as any).mockResolvedValue({ id: "s1" });
   (api.renameScene as any).mockResolvedValue({ id: "s1", title: "New" });
   (api.deleteScene as any).mockResolvedValue({ ok: true });
+  (api.branchScene as any).mockResolvedValue({ id: "s1-b", scene: { meta: {}, messages: [] } });
   // Every streaming route ends a successful turn with a `done` frame — that is
   // how the client knows the backend finalized and persisted, rather than the
   // body merely reaching EOF. A default that resolved silently modelled a

@@ -4344,6 +4344,9 @@ a.hub-row-title { text-decoration: none; color: inherit; }
   font-family: var(--fm, monospace); font-size: 11px;
   color: var(--muted); text-align: right;
 }
+/* The status chip and, for a scene with a sibling branch, the branch chip:
+   one grid cell, so a second chip never claims a track of its own. */
+.scene-item-chips { display: inline-flex; gap: 4px; align-items: center; min-width: 0; }
 .scene-item-title { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The three mono cells share one look: they are all secondary facts about the
    row, and giving each its own size would make the row read as five things
@@ -4425,7 +4428,7 @@ a.hub-row-title { text-decoration: none; color: inherit; }
   /* Folded into one mono line under the title, so an empty figure should take
      no room at all rather than leave a gap in the middle of the sentence. */
   .scene-item-turns:empty, .scene-item-spend:empty { display: none; }
-  .scene-item .chip { grid-column: 1; grid-row: 3; margin-left: 56px; }
+  .scene-item-chips { grid-column: 1; grid-row: 3; margin-left: 56px; }
   .scene-item-act { grid-column: 3; grid-row: 3; min-height: 44px; }
   /* Beside the action, on the action's own line. Not next to the title: the
      one control that cannot be undone does not belong under a thumb reaching
@@ -4794,7 +4797,7 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   }
   /* Aligned under the title rather than under the number. */
   .scene-item-when { padding-left: 46px; }
-  .scene-item .chip { margin-left: 46px; }
+  .scene-item-chips { margin-left: 46px; }
   /* Compact: on the desktop row this sits at the end of a line it shares, so
      it can afford a label. Here it is a second line of its own. */
   .scenes-head .hub-primary { width: auto; min-height: 38px; padding: 0 13px; }

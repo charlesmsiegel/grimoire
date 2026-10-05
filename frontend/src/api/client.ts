@@ -49,7 +49,7 @@ import {
   type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
   type RecordChange, type RegenerateOverrides, type RelationshipChange,
-  type RelationshipSave, type ReplayPreview, type ReplaySession, type ResponseBundle, type GroupSettings, type ResponseFields, type ResponseOverride,
+  type RelationshipSave, type ReplayPreview, type ReplaySession, type ReplayStarted, type ResponseBundle, type GroupSettings, type ResponseFields, type ResponseOverride,
   type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type RoutingBundle, type SamplerImportReport, type SamplerParamSpec,
   type SamplerPreset, type SamplerPresetDraft, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
@@ -1301,9 +1301,11 @@ export const api = {
    *  since it was priced. A client can check that itself and cannot BIND it:
    *  between its own check and this call is a whole request, and only the
    *  server holds the source's lock across the copy. */
-  forkCampaign: (cid: string, name: string, fromScene?: string, guards: ForkGuards = {}) =>
+  forkCampaign: (cid: string, name: string, fromScene?: string, guards: ForkGuards = {},
+                 fromIndex?: number) =>
     request<ForkReport>("POST", `/api/campaigns/${cid}/fork`,
       { name, ...(fromScene ? { from_scene: fromScene } : {}),
+        ...(fromIndex !== undefined ? { from_index: fromIndex } : {}),
         ...(guards.idempotencyKey ? { idempotency_key: guards.idempotencyKey } : {}),
         ...(guards.expectRevision ? { expect_revision: guards.expectRevision } : {}) },
     ).then(notifyCampaigns),
@@ -1498,6 +1500,13 @@ export const api = {
                                            { title }).then(notifyShell),
   deleteScene: (cid: string, sid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}`).then(notifyShell),
+  /** Branch a scene from a post into a sibling (play controls III): the
+   *  sibling keeps the transcript through `through`. `notifyShell`, because a
+   *  new scene is a new open scene on the rail. */
+  branchScene: (cid: string, sid: string, through: number, title?: string) =>
+    request<{ id: string; scene: ScenePage }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/branch`,
+      { through, ...(title ? { title } : {}) }).then(notifyShell),
 
   // `response` is a one-shot, unpersisted per-turn override (the length chip
   // beside Send) — rides only this call, exactly like regenerate's guidance.
@@ -2766,9 +2775,12 @@ export const api = {
                                   undefined, { fresh: true }),
   // Answers with the session in the same shape `getReplay` does, plus the
   // cascade's report — the backlog is never on the wire, however this is asked.
-  startReplay: (cid: string, sid: string, index: number) =>
-    request<ReplaySession & { cascade: CascadeReport }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/replay`, { index }),
+  // `branch` replays inside a sibling of the scene, leaving the original
+  // untouched; the answer then names the sibling under `branched`.
+  startReplay: (cid: string, sid: string, index: number, branch = false) =>
+    request<ReplayStarted>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/replay`,
+      { index, ...(branch ? { branch: true } : {}) }),
   // Streams like `chat` and for the same reason: it re-posts the player's own
   // words and then generates one reply against the edited history. Rerolling
   // that reply is plain `regenerate` — it is the trailing run.

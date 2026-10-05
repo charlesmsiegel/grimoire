@@ -402,3 +402,29 @@ test("a reroll tells the caller its follow-ups are already scheduled", async () 
   expect(onChanged).toHaveBeenCalled();
   expect(onChanged.mock.calls.every(([asked]: any[]) => !asked)).toBe(true);
 });
+
+test("a branchable scene replays in a branch by default, and hands over the sibling", async () => {
+  (api.startReplay as any).mockResolvedValue({ cut: 3, cascade: {}, branched: "s1-b" });
+  const onBranched = vi.fn();
+  const onChanged = vi.fn();
+  await renderPanel({ startAt: 3, branchable: true, onBranched, onChanged });
+  const box = screen.getByRole("checkbox", { name: /replay in a branch \(keeps this scene\)/i });
+  expect(box).toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "Replay in a branch" }));
+  await waitFor(() => expect(api.startReplay).toHaveBeenCalledWith("c1", "s1", 3, true));
+  await waitFor(() => expect(onBranched).toHaveBeenCalledWith("s1-b"));
+  expect(onChanged).not.toHaveBeenCalled();
+});
+
+test("unticking the branch option replays in place", async () => {
+  await renderPanel({ startAt: 3, branchable: true });
+  fireEvent.click(screen.getByRole("checkbox", { name: /replay in a branch/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Replay in place" }));
+  await waitFor(() => expect(api.startReplay).toHaveBeenCalledWith("c1", "s1", 3));
+});
+
+test("a scene that cannot branch offers no branch option", async () => {
+  await renderPanel({ startAt: 3 });
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(screen.getByRole("button", { name: "Replay in place" })).toBeTruthy();
+});

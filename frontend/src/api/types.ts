@@ -407,6 +407,10 @@ export type ForkReport = {
    *  retried after a lost response gets `true` and the first fork's report
    *  verbatim, which is how it learns it did not make a second campaign. */
   replayed: boolean;
+  /** The post a fork AT A POST kept its scene through (play controls III).
+   *  Absent on a fork cut at a scene, and on a report replayed from before it
+   *  existed. */
+  cut_at?: number;
 };
 /** A fork request's optional guards (#409). `idempotencyKey` makes a repeat
  *  safe; `expectRevision` is the source's write token as the caller priced the
@@ -426,6 +430,15 @@ export type SceneMeta = {
    *  "when & where" without a second read per scene. */
   place?: string;
   pcless?: boolean; done?: boolean;
+  /** The scene's branch group (play controls III), present only on a scene
+   *  whose group has more than one member: siblings share it, and the scene
+   *  they were branched from carries it too (its own identity is the group). */
+  branch_group?: string;
+  /** The identity of the scene this one was branched from. */
+  branch_of?: string;
+  /** The absorbed sibling that makes this branch read-only. Derived by the
+   *  server, never stored: deleting or un-absorbing that sibling reopens it. */
+  closed_by?: { sid: string; title: string };
 };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string;
   actor_ref?: string;
@@ -1856,6 +1869,9 @@ export type ChronicleEntry = {
  *  by the time either is non-empty, which is why they are reported rather than
  *  raised. A count of zero beside a name in `failed` means "not known", not
  *  "none". */
+/** What starting a replay answers: the session, the cut's cascade report and,
+ *  for a replay begun inside a branch, the sibling it runs in. */
+export type ReplayStarted = ReplaySession & { cascade: CascadeReport; branched?: string };
 export type CascadeReport = {
   index: number; removed: number; was_absorbed: boolean;
   records: number; refused: { label: string; reason: string }[];

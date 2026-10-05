@@ -60,7 +60,9 @@ type Filter = "all" | "open" | "absorbed";
 function actionFor(s: SceneMeta, waiting: Map<string, number>,
                    turns: Map<string, number>) {
   if (waiting.has(s.id)) return { label: "Wrap up →", tone: "alert" };
-  if (s.done) return { label: "Read →", tone: "quiet" };
+  // A closed branch is read-only: a sibling was absorbed, so there is nothing
+  // here to open or resume.
+  if (s.done || s.closed_by) return { label: "Read →", tone: "quiet" };
   return { label: (turns.get(s.id) ?? 0) > 0 ? "Resume →" : "Open →",
            tone: "accent" };
 }
@@ -144,7 +146,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return (scenes ?? []).filter((s) => {
-      if (filter === "open" && s.done) return false;
+      if (filter === "open" && (s.done || s.closed_by)) return false;
       if (filter === "absorbed" && !s.done) return false;
       if (needle && !s.title.toLowerCase().includes(needle)) return false;
       return true;
@@ -153,9 +155,19 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
 
   const counts = useMemo(() => ({
     all: scenes?.length ?? 0,
-    open: (scenes ?? []).filter((s) => !s.done).length,
+    open: (scenes ?? []).filter((s) => !s.done && !s.closed_by).length,
     absorbed: (scenes ?? []).filter((s) => s.done).length,
   }), [scenes]);
+
+  /** How many listed scenes share each branch group. A group of one is no
+   *  branch at all -- the chip marks scenes that have an alternative. */
+  const groupSize = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of scenes ?? []) {
+      if (s.branch_group) m.set(s.branch_group, (m.get(s.branch_group) ?? 0) + 1);
+    }
+    return m;
+  }, [scenes]);
 
   /** Delete a scene from the list.
    *
@@ -329,7 +341,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
             // "never generated against" is not "cost nothing".
             const price = row ? bucketPrice(row) : null;
             return (
-              <li key={s.id} className={"scene-item" + (s.done ? "" : " open")}>
+              <li key={s.id} className={"scene-item" + (s.done || s.closed_by ? "" : " open")}>
                 {/* Six cells, each fact written ONCE. At full width they are
                     a grid and the list reads down a column; below the
                     breakpoint the same nodes reflow into a mono line under the
@@ -343,10 +355,22 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
                   <span className="scene-item-n">{n ?? "—"}</span>
                   <span className="scene-item-title">{s.title}</span>
                 </Link>
-                <span className={"chip" + (s.done ? "" : " on")}>
-                  {waiting.has(s.id)
-                    ? `${waiting.get(s.id)} unreviewed`
-                    : s.done ? "absorbed" : "open"}
+                {/* One cell for the chips: the status, and `branch` when the
+                    scene has a sibling. A closed branch says so in place of
+                    "open" -- unless a review is waiting, which still wins. */}
+                <span className="scene-item-chips">
+                  {!waiting.has(s.id) && !s.done && s.closed_by ? (
+                    <span className="chip" title="A sibling branch was absorbed">closed</span>
+                  ) : (
+                    <span className={"chip" + (s.done ? "" : " on")}>
+                      {waiting.has(s.id)
+                        ? `${waiting.get(s.id)} unreviewed`
+                        : s.done ? "absorbed" : "open"}
+                    </span>
+                  )}
+                  {s.branch_group && (groupSize.get(s.branch_group) ?? 0) > 1 && (
+                    <span className="chip">branch</span>
+                  )}
                 </span>
                 <span className="scene-item-when">
                   {[s.date, s.place, s.pcless ? "no PC" : null]

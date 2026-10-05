@@ -27,6 +27,7 @@ export async function campaignApiMock() {
       createScene: vi.fn(),
       renameScene: vi.fn(),
       deleteScene: vi.fn(),
+      branchScene: vi.fn(),
       forkCampaign: vi.fn(),
       chat: vi.fn(),
       retry: vi.fn(),
