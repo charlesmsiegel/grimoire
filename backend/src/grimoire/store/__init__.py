@@ -112,6 +112,7 @@ from . import (
     prompt_log,
     proposals,
     provenance,
+    quick_replies,
     reclassify,
     record_refs,
     regex,
@@ -386,6 +387,9 @@ __all__ = [
     "length_drift",
     "response_presets",
     "sampler_presets",
+    # The composer's quick-reply sets (world and campaign layers) -- a
+    # deliberate addition: `routes.quick_replies` reaches it through the facade.
+    "quick_replies",
     "actor_names",
     "response_targets",
     "routing",

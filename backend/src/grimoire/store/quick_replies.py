@@ -41,10 +41,19 @@ the same trade the tracker's world layer makes.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import re
 import uuid
+from pathlib import Path
 
-from . import dice
+from . import atomic, dice, locks
+from .campaigns import paths as campaigns_paths
+from .campaigns import read as campaigns_read
+from .worlds import paths as worlds_paths
+
+log = logging.getLogger(__name__)
 
 VERSION = 1
 KINDS = ("send", "direct", "roll", "task", "opener")
@@ -192,3 +201,189 @@ def validate_set(raw: object, *, campaign: bool) -> list[dict]:
         seen.add(clean["id"])
         out.append(clean)
     return out
+
+
+# --- sets on disk -------------------------------------------------------------
+
+class SetChanged(Exception):  # noqa: N818 - named for the 409 kind it maps to (`set_changed`)
+    """The stored set moved since the caller read it (its `expect` is stale)."""
+
+
+def world_path(wid: str) -> Path:
+    return worlds_paths.world_root(wid) / FILENAME
+
+
+def campaign_path(cid: str) -> Path:
+    return campaigns_paths.campaign_root(cid) / FILENAME
+
+
+def digest(entries: list[dict]) -> str:
+    """A short fingerprint of a stored set, in order -- entries this build does
+    not show included, since a write carries them too."""
+    blob = json.dumps(entries, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _unknown_kind(entry: dict) -> bool:
+    """An entry a newer build (or a future plugin API) wrote: kept, not shown."""
+    kind = entry.get("kind")
+    return (not _is_hide(entry) and isinstance(kind, str) and bool(kind)
+            and kind not in KINDS)
+
+
+def is_shown(entry: dict) -> bool:
+    """A known kind or a hide entry -- what this build reads, shows and edits."""
+    return _is_hide(entry) or entry.get("kind") in KINDS
+
+
+def _salvage(raw: object, *, campaign: bool, path: Path) -> list[dict]:
+    if not isinstance(raw, dict) or raw.get("version") != VERSION:
+        log.warning("quick replies: ignoring %s -- not a version-%d set", path, VERSION)
+        return []
+    replies = raw.get("replies")
+    if not isinstance(replies, list):
+        log.warning("quick replies: ignoring %s -- its replies are not a list", path)
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for entry in replies:
+        if not isinstance(entry, dict):
+            log.warning("quick replies: dropping a non-object entry in %s", path)
+            continue
+        rid = entry.get("id")
+        if not isinstance(rid, str) or not rid or rid in seen:
+            # No minting on read: an id made up here would change on every read.
+            log.warning("quick replies: dropping an entry with a missing or repeated id in %s", path)
+            continue
+        if _unknown_kind(entry):
+            out.append(entry)
+            seen.add(rid)
+            continue
+        try:
+            clean = normalize(entry, campaign=campaign)
+        except QuickReplyError as exc:
+            log.warning("quick replies: dropping %r in %s -- %s", rid, path, exc)
+            continue
+        out.append(clean)
+        seen.add(rid)
+    return out
+
+
+def _load(path: Path, *, campaign: bool) -> list[dict]:
+    """Every entry stored at `path` that survives salvage, unknown kinds
+    included. Never raises: a missing or garbled file is an empty set."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        log.warning("quick replies: ignoring %s -- %s", path, exc)
+        return []
+    return _salvage(raw, campaign=campaign, path=path)
+
+
+def _body(stored: list[dict]) -> dict:
+    return {"version": VERSION, "replies": [e for e in stored if is_shown(e)],
+            "digest": digest(stored)}
+
+
+def _world_stored(wid: str) -> list[dict]:
+    try:
+        return _load(world_path(wid), campaign=False)
+    except worlds_paths.WorldNotFound:
+        return []
+
+
+def world_set(wid: str) -> dict:
+    """The world's set: `{"version", "replies", "digest"}`. An unknown world
+    reads as empty -- a campaign whose world is gone still has a composer."""
+    return _body(_world_stored(wid))
+
+
+def campaign_set(cid: str) -> dict:
+    """The campaign's own set, hide entries included. Raises
+    `CampaignNotFound`."""
+    if not campaigns_paths.campaign_exists(cid):
+        raise campaigns_paths.CampaignNotFound(cid)
+    return _body(_load(campaign_path(cid), campaign=True))
+
+
+def _world_of(cid: str) -> str:
+    return campaigns_read.read_campaign(cid)["meta"].get("world") or ""
+
+
+def layer(world: list[dict], own: list[dict]) -> list[dict]:
+    """The world's replies with the campaign's layered on top: a same-id reply
+    replaces in place, a hide entry hides, the rest follow in order."""
+    by_id = {e["id"]: e for e in own}
+    out: list[dict] = []
+    for reply in world:
+        mine = by_id.get(reply["id"])
+        if mine is None:
+            out.append(reply)
+        elif not _is_hide(mine):
+            out.append(mine)
+    world_ids = {r["id"] for r in world}
+    out.extend(e for e in own if e["id"] not in world_ids and not _is_hide(e))
+    return out
+
+
+def effective(cid: str) -> list[dict]:
+    """What the composer shows for a campaign. Raises `CampaignNotFound`."""
+    wid = _world_of(cid)
+    world = world_set(wid)["replies"] if wid else []
+    return layer(world, campaign_set(cid)["replies"])
+
+
+def _merge(clean: list[dict], stored: list[dict]) -> list[dict]:
+    kept = [e for e in stored if not is_shown(e)]
+    kept_ids = {e["id"] for e in kept}
+    for entry in clean:
+        if entry["id"] in kept_ids:
+            raise QuickReplyError(f"quick reply id {entry['id']!r} is taken by a reply "
+                                  "this version cannot show")
+    merged = clean + kept
+    if len(merged) > MAX_REPLIES:
+        raise QuickReplyError(f"a set holds at most {MAX_REPLIES} quick replies")
+    return merged
+
+
+def _write(path: Path, entries: list[dict]) -> None:
+    atomic.write_text(path, json.dumps({"version": VERSION, "replies": entries},
+                                       indent=2, ensure_ascii=False) + "\n")
+
+
+def write_world(wid: str, replies: object, expect: str) -> dict:
+    """Replace the world's set. Atomic-only, no lock (module docstring).
+
+    Raises `WorldNotFound`, `QuickReplyError`, `SetChanged`."""
+    if not worlds_paths.world_exists(wid):
+        raise worlds_paths.WorldNotFound(wid)
+    clean = validate_set(replies, campaign=False)
+    path = world_path(wid)
+    stored = _load(path, campaign=False)
+    if digest(stored) != expect:
+        raise SetChanged(wid)
+    _write(path, _merge(clean, stored))
+    return world_set(wid)
+
+
+def write_campaign(cid: str, replies: object, expect: str) -> dict:
+    """Replace the campaign's own set; the digest check and the write are one
+    hold of the campaign lock. A hide entry naming no world reply is dropped --
+    it hides nothing and would count toward the cap.
+
+    Raises `CampaignNotFound`, `QuickReplyError`, `SetChanged`."""
+    clean = validate_set(replies, campaign=True)
+    with locks.campaign_lock(cid):
+        if not campaigns_paths.campaign_exists(cid):
+            raise campaigns_paths.CampaignNotFound(cid)
+        path = campaign_path(cid)
+        stored = _load(path, campaign=True)
+        if digest(stored) != expect:
+            raise SetChanged(cid)
+        wid = _world_of(cid)
+        world_ids = {r["id"] for r in world_set(wid)["replies"]} if wid else set()
+        clean = [e for e in clean if not _is_hide(e) or e["id"] in world_ids]
+        _write(path, _merge(clean, stored))
+    return campaign_set(cid)

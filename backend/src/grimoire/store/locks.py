@@ -226,6 +226,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # at once lose one phase). New module, so it starts inside the exclusion
     # rather than joining the frozen `UNREVIEWED` backlog.
     "store.pending_reviews",
+    # `quick_replies.json` (the campaign's quick-reply set) is rewritten whole
+    # from a set the client read, so the digest check that refuses a stale
+    # `expect` and the write have to be one hold -- or two tabs' override and
+    # hide edits each pass the check and one is lost. New module, so it starts
+    # inside the exclusion rather than joining the frozen `UNREVIEWED` backlog.
+    "store.quick_replies",
     # `commitments.json` is rewritten whole by `set_movement` and
     # `repoint_scenes`, exactly like `plot.json` -- but this module is new
     # (#115), so it starts inside the exclusion rather than joining the
