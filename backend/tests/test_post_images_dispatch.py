@@ -234,6 +234,22 @@ async def test_a_fallback_that_kept_an_image_the_primary_packed_away_degrades():
     assert provider.requests[2]["messages"] == text
 
 
+async def test_a_preset_refused_on_the_text_retry_is_still_the_primarys():
+    """The degrade sibling is the primary connection re-sent as text, so a
+    preset it refuses is reported as the preset, not handed to the fallback."""
+    conn = {**_conn(), "sampling": {"preset_id": "p", "preset_name": "Warm",
+                                    "scope": "connection", "params": {"temperature": 1.5}}}
+    provider = SequencedProvider([
+        LLMError("bad_response", "image input is not supported", status=400),
+        LLMError("bad_response", "temperature must be at most 1", status=400),
+        ("from the fallback",)])
+    client = _client(provider, fallback=lambda: _conn("b", model="backup"))
+    with pytest.raises(LLMError) as err:
+        await _run(client, _prepared(), conn)
+    assert "fallback connection was not tried" in err.value.detail
+    assert [r["model"] for r in provider.requests] == ["m", "m"]
+
+
 async def test_plain_prompts_skip_the_thread_hop(monkeypatch):
     async def no_thread(*_a, **_k):
         raise AssertionError("a plain prompt must not pay for lowering")

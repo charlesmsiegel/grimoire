@@ -621,10 +621,13 @@ async def _resilient(open_stream, routes, timeout: float,
                 return
             except LLMError as exc:
                 outcome = "error"
-                # The primary only. A FALLBACK that refuses a preset has
-                # nothing further to skip, and the both-failed message below
-                # already names its failure beside the primary's.
-                refused = None if sent or index else _preset_refusal(exc, conn)
+                # The primary only -- which includes its own degrade sibling
+                # (#377), the same connection re-sent as text. A FALLBACK that
+                # refuses a preset has nothing further to skip, and the
+                # both-failed message below already names its failure beside
+                # the primary's.
+                primary = index == 0 or (index == 1 and bool(conn.get(DEGRADE)))
+                refused = _preset_refusal(exc, conn) if primary and not sent else None
                 if refused is not None:
                     # Not observed: the connection answered, and what it
                     # refused was a setting. A health verdict here would mark
@@ -637,7 +640,7 @@ async def _resilient(open_stream, routes, timeout: float,
                 sent_images = usage.get("images", 0) if usage is not None else 0
                 # The primary's word is its first failure -- or, when its own
                 # degrade sibling ran, that sibling's (#377).
-                first = exc if first is None or (conn.get(DEGRADE) and index == 1) else first
+                first = exc if first is None or (primary and index == 1) else first
                 retryable = (exc.kind in RETRYABLE_KINDS
                              and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
             finally:
