@@ -10,7 +10,7 @@ another world's bundle or export (docs/superpowers/specs/
 2026-10-05-content-addressed-image-store-design.md, section 1.1).
 
 Orientation is the one piece of metadata that is kept, because browsers apply it
-(`thumbs._ORIENTS`): a JPEG's EXIF, or a PNG `eXIf` chunk before the first
+(`image_hash.ORIENTS`): a JPEG's EXIF, or a PNG `eXIf` chunk before the first
 IDAT, is replaced by a minimal EXIF block holding only that tag (and dropped
 outright when the orientation is 1, absent or unreadable). WebP EXIF is dropped
 whole, as browsers do not apply it there.
