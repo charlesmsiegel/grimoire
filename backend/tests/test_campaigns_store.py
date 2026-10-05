@@ -11,6 +11,7 @@ from grimoire.store import (
     characters,
     entities,
     greetings,
+    image_refs,
     overlay,
     pcs,
     worlds,
@@ -318,6 +319,117 @@ def test_slim_keeps_diverged_asset_stored_under_another_extension(monkeypatch, t
     # and the campaign's own copy is what serves, before and after
     assert overlay.image_root(cid, aid, vid, "avatar") == croot
     assert "avatar" in {i["name"] for i in overlay.list_images(cid, aid, vid)}
+
+
+def _fat_actor(wroot, croot, aid):
+    """Hand-copy one world actor into the campaign, as the old create did."""
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+
+
+def test_slimming_prunes_identical_refs_keeps_divergent(monkeypatch, tmp_path):
+    """Placements are deterministic JSON, so byte-identical means the same
+    image and the same crop: that one is pruned, an emptied `image-refs/`
+    with it. A different image id, or the same image with another crop, is a
+    divergence and stays."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    same, vid = characters.create_character(wroot, "Seraphine")
+    other, _ = characters.create_character(wroot, "Mara")
+    cropped, _ = characters.create_character(wroot, "Winifred")
+    for aid in (same, other, cropped):
+        assets.put_image(wroot, aid, vid, "avatar", b"world-" + aid.encode(), "png")
+    assets.write_focus(wroot, cropped, vid, 80)
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    for aid in (same, other, cropped):
+        _fat_actor(wroot, croot, aid)
+    assets.put_image(croot, other, vid, "avatar", b"campaign-own", "png")     # a different id
+    assets.write_focus(croot, cropped, vid, 20)                               # same image, other crop
+    campaigns.write_manifest(cid, {f"characters/{a}": characters.dir_hash(wroot, a)
+                                   for a in (same, other, cropped)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    def refs(aid):
+        return croot / "characters" / aid / "assets" / vid / "image-refs"
+    assert not refs(same).exists()                                  # pruned, directory with it
+    assert overlay.image_root(cid, same, vid, "avatar") == wroot    # served from the world
+    assert (refs(other) / "avatar.json").exists()                   # a different image: kept
+    assert (refs(cropped) / "avatar.json").exists()                 # same image, other crop: kept
+    assert overlay.read_focus(cid, cropped, vid) == 20
+
+
+def test_slimming_prunes_a_focus_sidecar_beside_a_pruned_avatar_placement(monkeypatch, tmp_path):
+    """The focus guard asks whether a campaign avatar is still held, so it must
+    see the placement the same pass prunes as gone."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Seraphine")
+    assets.put_image(wroot, aid, vid, "avatar", b"world-avatar", "png")
+    wdir = assets.version_dir(wroot, aid, vid)
+    (wdir / "focus.json").write_text('{"focus": 70}', encoding="utf-8")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    _fat_actor(wroot, croot, aid)
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert not (croot / "characters" / aid).exists()
+
+
+def test_slimming_keeps_a_focus_sidecar_beside_a_divergent_avatar_placement(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Seraphine")
+    assets.put_image(wroot, aid, vid, "avatar", b"world-avatar", "png")
+    (assets.version_dir(wroot, aid, vid) / "focus.json").write_text('{"focus": 70}', encoding="utf-8")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    _fat_actor(wroot, croot, aid)
+    assets.put_image(croot, aid, vid, "avatar", b"campaign-avatar", "png")
+    # a legacy sidecar (written by an older build), identical to the world's
+    (assets.version_dir(croot, aid, vid) / "focus.json").write_text('{"focus": 70}', encoding="utf-8")
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (assets.version_dir(croot, aid, vid) / "focus.json").exists()
+
+
+def test_slimming_tombstone_by_names_with_refs(monkeypatch, tmp_path):
+    """A world placement name the campaign no longer holds was deleted there
+    and is tombstoned; a name it still holds as a placement is not."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Seraphine")
+    for name in ("avatar", "gallery_1", "gallery_2"):
+        assets.put_image(wroot, aid, vid, name, b"world-" + name.encode(), "png")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    _fat_actor(wroot, croot, aid)
+    cdir = assets.version_dir(croot, aid, vid)
+    assert image_refs.read(cdir, "gallery_1") is not None       # copied as a placement
+    assets.delete_in(cdir, "gallery_1")                         # the user deleted this copy
+    # keep another copy held but divergent, so it must not read as deleted
+    assets.put_image(croot, aid, vid, "gallery_2", b"campaign-own", "png")
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    gone = overlay.deleted(cid)
+    assert f"assets/characters/{aid}/{vid}/gallery_1" in gone
+    assert f"assets/characters/{aid}/{vid}/gallery_2" not in gone
+    assert f"assets/characters/{aid}/{vid}/avatar" not in gone     # held (and then pruned as identical)
+    assert "gallery_1" not in {i["name"] for i in overlay.list_images(cid, aid, vid)}
 
 
 def test_slim_tombstones_user_deleted_copied_asset(monkeypatch, tmp_path):

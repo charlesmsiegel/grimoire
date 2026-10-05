@@ -360,20 +360,19 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
     pre-overlay asset attribution and not #270's manifest-ref attribution
     (Codex review)."""
     gone = overlay.deleted(cid)
-    # Logical names present campaign-side, per version directory. Keyed by
-    # directory because the walk below is sorted, so a record's world images
-    # arrive together and this reads each campaign directory once -- `names_in`
-    # is one `scandir` and no per-file stat, which is why it exists.
-    held: dict[Path, set[str]] = {}
     for kind in ("characters", "pcs", "locations", "lore", "greetings"):
         wbase = wroot / kind
         if not wbase.exists():
             continue
-        for wp in sorted(wbase.rglob("*")):
-            if not wp.is_file() or not _is_world_image(wp.relative_to(wroot).parts, wp):
-                continue   # images only: focus.json / non-image sidecars overlay via files
-            parts = wp.relative_to(wroot).parts
-            aid, vid, name = parts[1], parts[3], wp.stem
+        # Version DIRECTORIES, not image files: a name is whatever `names_in`
+        # says it is -- a legacy stem or a placement that holds an image -- on
+        # both sides, so this asks the question every reader asks and cannot
+        # drift from them. One directory read per side per version.
+        for wdir in sorted(wbase.glob("*/assets/*")):
+            if not wdir.is_dir():
+                continue
+            parts = wdir.relative_to(wroot).parts
+            aid, vid = parts[1], parts[3]
             if f"{kind}/{aid}" not in copied or f"{kind}/{aid}" in gone:
                 continue
             cdir = root / kind / aid / "assets" / vid
@@ -389,24 +388,8 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
             # docstring calls the unrecoverable direction, and it is not the
             # ambiguous case -- an image the campaign still holds was not
             # deleted, whatever it is stored as.
-            if cdir not in held:
-                held[cdir] = assets.names_in(cdir)[0]
-            if name not in held[cdir]:
+            for name in sorted(assets.names_in(wdir)[0] - assets.names_in(cdir)[0]):
                 overlay.add_deleted(cid, f"assets/{kind}/{aid}/{vid}/{name}")
-
-
-def _is_world_image(parts: tuple[str, ...], wp: Path) -> bool:
-    """Whether `wp` (at `parts` under the world root) holds one of a version's
-    images: a legacy ``<kind>/<aid>/assets/<vid>/<name>.<ext>`` file, or a
-    placement that holds an image, ``.../assets/<vid>/image-refs/<name>.json``.
-    An image-less placement (an occurrence override) is not an image."""
-    if len(parts) == 5 and parts[2] == "assets":
-        return bool(assets._norm_ext(wp.suffix))
-    if (len(parts) == 6 and parts[2] == "assets" and parts[4] == image_refs.REFS_DIR
-            and wp.suffix == ".json"):
-        ref = image_refs.read(wp.parent.parent, wp.stem)
-        return ref is not None and ref.image is not None
-    return False
 
 
 def _prune_duplicate_files(root: Path, wroot: Path) -> None:
@@ -418,7 +401,14 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
         base = root / kind
         if not base.exists():
             continue
-        for p in sorted(base.rglob("*")):
+        # Placements first. A focus or description guard below asks whether an
+        # image is still held beside it, and a placement identical to the
+        # world's is about to stop being held: asked in plain path order,
+        # `focus.json` sorts ahead of `image-refs/` and would see a placement
+        # this very pass removes. A placement is deterministic JSON, so
+        # byte-identical means the same image AND the same crop -- a different
+        # focus is a different file and stays.
+        for p in sorted(base.rglob("*"), key=lambda q: (q.parent.name != image_refs.REFS_DIR, q)):
             if not p.is_file():
                 continue
             rel = p.relative_to(root)
@@ -430,7 +420,13 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
                 # avatar sits beside it: overlay.read_focus treats that avatar
                 # as authoritative and won't fall back to the world focus, so
                 # dropping the sidecar would silently reset the crop to center.
-                if p.name == assets.FOCUS_FILE and any(p.parent.glob(f"{assets.AVATAR}.*")):
+                # `path_in` sees an avatar held as a placement as well as a
+                # legacy file; an image-less avatar placement (a crop over an
+                # inherited avatar) owns the crop too, and is kept for the same
+                # reason though it holds no image.
+                if p.name == assets.FOCUS_FILE and (
+                        assets.path_in(p.parent, assets.AVATAR) is not None
+                        or image_refs.read(p.parent, assets.AVATAR) is not None):
                     continue
                 # The same hazard one step broader, for the same reason:
                 # overlay.read_description treats a campaign-side IMAGE as

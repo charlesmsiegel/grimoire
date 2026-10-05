@@ -2010,6 +2010,42 @@ def test_a_byte_identical_campaign_copy_shadows_nothing_worth_showing(monkeypatc
     assert assets.image_path(croot, aid, "default", "avatar") is not None
 
 
+def test_shadowed_images_with_refs(monkeypatch, tmp_path):
+    """Placements are compared by identity: the same image id under the same
+    name is one picture, a different id is a shadowed one, and a world
+    placement against a campaign LEGACY file falls back to bytes."""
+    wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    cdir = assets.version_dir(croot, aid, "default")
+    # same image id (the same bytes ingest to the same object), same name
+    assets.put_image(croot, aid, "default", "gallery_1", PNG + b"2", "png")
+    assert (image_refs.read(cdir, "gallery_1").image
+            == image_refs.read(assets.version_dir(wroot, aid, "default"), "gallery_1").image)
+    assert overlay.shadowed_images(cid, aid, "default") == []
+    # a different id under the same name: the world's picture is shadowed
+    assets.put_image(croot, aid, "default", "gallery_1", b"mine-different", "png")
+    assert [i["name"] for i in overlay.shadowed_images(cid, aid, "default")] == ["gallery_1"]
+    # the campaign holds the world's bytes as a LEGACY file: same picture
+    assets.delete_in(cdir, "gallery_1")
+    assert image_refs.read(cdir, "gallery_1") is None
+    (cdir / "gallery_1.png").write_bytes(PNG + b"2")
+    assert overlay.shadowed_images(cid, aid, "default") == []
+    # ... and a legacy file with other bytes shadows it
+    (cdir / "gallery_1.png").write_bytes(b"legacy-different")
+    assert [i["name"] for i in overlay.shadowed_images(cid, aid, "default")] == ["gallery_1"]
+
+
+def test_a_world_placement_matching_another_campaign_name_by_identity_is_not_shadowed(
+        monkeypatch, tmp_path):
+    """Identity is checked across names: the campaign holding the world's
+    `gallery_1` picture under a second name already shows it."""
+    _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, "default", "gallery_1", b"mine-different", "png")
+    assets.put_image(croot, aid, "default", "gallery_2", PNG + b"2", "png")   # the world's gallery_1
+    assert overlay.shadowed_images(cid, aid, "default") == []
+
+
 def test_shadowed_images_absent_for_a_detached_record(monkeypatch, tmp_path):
     _wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
     assets.put_image(campaigns.campaign_root(cid), aid, "default", "gallery_1", b"mine", "png")
