@@ -642,16 +642,11 @@ def _reasoning_frame(event, watcher, liveness):
     return streaming._sse(event)
 
 
-async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=None):
+async def _stream_events(client, messages, conn, meter, watcher, run, display):
     # Heartbeats are throttled here, at the producer, for `streaming._Liveness`'s
-    # reason: every SSE line arrives as an empty delta.
+    # reason: every SSE line arrives as an empty delta. Liveness records frames
+    # that went out, so a display frame the throttle held back is not one.
     liveness = streaming._Liveness()
-    # Display rules for the connection the turn asked for: the one that answers
-    # is only known once the attempt has run, and a fallback mid-stream is rare
-    # enough that its own rules apply from the save on, not while it streams.
-    # Frames replace `delta` frames one for one, so `keep` counts from this
-    # contribution's `response_start`.
-    display = await run_in_threadpool(streaming._display_stream, cid, conn)
     async with aclosing(llm_reasoning.stream(client, messages, conn, meter.usage)) as source:
         async for event in source:
             if run.cancel_requested:
@@ -661,15 +656,38 @@ async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=
                 yield reasoning
                 continue
             delta = event["delta"]
-            visible = watcher.feed(delta)
-            if visible:
+            frames = streaming._visible_frames(display, watcher.feed(delta))
+            if frames:
                 liveness.sent()
-                for frame in streaming._visible_frames(display, visible):
+                for frame in frames:
                     yield frame
             elif not delta and liveness.due():
                 yield streaming._HEARTBEAT
             if watcher.roll.complete:
                 break
+
+
+async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=None):
+    # Display rules for the connection the turn asked for: the one that answers
+    # is only known once the attempt has run, and a fallback mid-stream is rare
+    # enough that its own rules apply from the save on, not while it streams.
+    # Frames replace `delta` frames one for one, so `keep` counts from this
+    # contribution's `response_start`.
+    display = await run_in_threadpool(streaming._display_stream, cid, conn)
+    try:
+        async with aclosing(
+            _stream_events(client, messages, conn, meter, watcher, run, display)
+        ) as events:
+            async for frame in events:
+                yield frame
+    except LLMError:
+        # What the throttle held back is on screen after a refresh and must be
+        # before it: `_rescue` saves the partial whole. A delta stream has
+        # nothing held back, so it sends nothing here.
+        if display.active:
+            for frame in streaming._visible_frames(display, watcher.finish(), last=True):
+                yield frame
+        raise
     visible = watcher.finish()
     for frame in streaming._visible_frames(display, visible, last=True):
         yield frame

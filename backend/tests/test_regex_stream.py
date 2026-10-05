@@ -12,9 +12,9 @@ from __future__ import annotations
 import json
 
 from grimoire import routes, store
-from grimoire.routes import character_turns
+from grimoire.routes import character_turns, streaming
 from grimoire.store.regex import rules, stream
-from tests.llm_fakes import FakeLLM
+from tests.llm_fakes import FailingOpenRouter, FakeLLM
 
 THINK = {"name": "Strip thinking", "pattern": r"<think>[\s\S]*?</think>", "replacement": ""}
 
@@ -250,3 +250,79 @@ def test_display_frames_replay_from_an_index(client):
     first = next(i for i, f in enumerate(whole) if "display" in f)
     rest = frames_of(client.get(url, params={"from": first + 1}))
     assert rest == whole[first + 1:]
+
+
+# An open block is hidden to the end of what has arrived, so the display text
+# does not move while it grows and no frame goes out for those deltas.
+OPEN_THINK = {"name": "Hide open thinking", "pattern": r"<think>[\s\S]*?(?:</think>|$)",
+              "replacement": ""}
+HIDDEN = ["<think>abc", "", "def", "", "ghi"]
+
+
+def beats(response) -> int:
+    assert response.status_code == 200, response.text
+    return response.text.count(streaming._HEARTBEAT)
+
+
+def test_a_held_back_display_frame_does_not_count_as_proof_of_life(client, monkeypatch):
+    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)   # only a first beat is due
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([HIDDEN])
+    body = {"content": "Hello", "speaker_ref": "characters:mara"}
+    url = f"/api/campaigns/{cid}/scenes/{sid}/chat"
+
+    # Plain deltas are frames, so the first empty one finds the stream recently
+    # heard from and earns nothing...
+    assert beats(client.post(url, json=body)) == 0
+    # ...but while the hidden stretch sends no bytes it must.
+    put_rules(client, f"/api/campaigns/{cid}/regex", OPEN_THINK)
+    assert beats(client.post(url, json=body)) == 1
+
+
+def test_a_held_back_display_frame_does_not_count_as_proof_of_life_legacy(client, monkeypatch):
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([HIDDEN])
+    url = f"/api/campaigns/{cid}/scenes/{sid}/chat"
+
+    assert beats(client.post(url, json={"content": "Hello"})) == 0
+    put_rules(client, f"/api/campaigns/{cid}/regex", OPEN_THINK)
+    assert beats(client.post(url, json={"content": "Hello"})) == 1
+
+
+FAILS = ["Hel", "lo ", "<think>x</think>wor", "ld"]
+
+
+def failing_body(client, cid, sid, **body):
+    client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter(FAILS)
+    return frames_of(client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                                 json={"content": "Hello", **body}))
+
+
+def test_a_failed_turn_flushes_what_the_throttle_held_back(client):
+    cid, sid = seed(client)
+    put_rules(client, f"/api/campaigns/{cid}/regex", THINK)
+    frames = failing_body(client, cid, sid, speaker_ref="characters:mara")
+
+    error = next(i for i, f in enumerate(frames) if "error" in f)
+    assert not any("delta" in f for f in frames)
+    # All of it was on screen before the error, not just the first frame's worth.
+    assert shown(frames[:error]) == "Hello world"
+
+
+def test_a_failed_legacy_turn_flushes_what_the_throttle_held_back(client, monkeypatch):
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    cid, sid = seed(client)
+    put_rules(client, f"/api/campaigns/{cid}/regex", THINK)
+    frames = failing_body(client, cid, sid)
+
+    error = next(i for i, f in enumerate(frames) if "error" in f)
+    assert shown(frames[:error]) == "Hello world"
+
+
+def test_a_failed_turn_without_rules_sends_the_deltas_and_nothing_more(client):
+    cid, sid = seed(client)
+    frames = failing_body(client, cid, sid, speaker_ref="characters:mara")
+    assert [f["delta"] for f in frames if "delta" in f] == FAILS
+    assert not any("display" in f for f in frames)
