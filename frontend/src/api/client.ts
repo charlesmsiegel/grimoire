@@ -27,7 +27,7 @@ import {
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkGuards, type ForkReport,
   type CatalogDraft, type CharacterDetail, type ChronicleLineSave,
-  type Scene, type ResponseRecord, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
+  type Scene, type ResponseRecord, type ResponseSwipe, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
@@ -1663,6 +1663,8 @@ export const api = {
   // the wrong active take, and an arrow promotes a still-valid but wrong id.
   getResponse: (cid: string, sid: string, rid: string) =>
     request<ResponseRecord>("GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
+  getResponseSwipe: (cid: string, sid: string, rid: string) =>
+    request<ResponseSwipe>("GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/swipe`),
   deleteResponse: (cid: string, sid: string, rid: string) =>
     request<Scene>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
   activateResponseVariant: (cid: string, sid: string, rid: string, vid: string) =>

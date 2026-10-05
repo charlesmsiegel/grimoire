@@ -330,3 +330,89 @@ def test_deleting_a_folded_response_resets_the_summary(client):
     _fold(cid, sid, 4)
     store.responses.delete(cid, sid, rid)
     assert _summary(cid, sid)["summary"] == ""
+
+
+def _swipe_path(base, rid):
+    return base + f"/responses/{rid}/swipe"
+
+
+def test_swipe_state_takes_no_lock_and_writes_nothing(client):
+    import threading
+
+    from grimoire.store.campaigns import paths as campaign_paths
+    from grimoire.store.scenes import paths as scene_paths
+
+    cid, sid, _base, rid, old = _two_turns_with_a_reroll(client)
+    watched = (scene_paths._scene_path(cid, sid), campaign_paths.campaign_root(cid) / "responses.json")
+    before = [p.stat().st_mtime_ns for p in watched]
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with store.locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert held.wait(5)
+        answer = {}
+        reader = threading.Thread(
+            target=lambda: answer.update(store.responses.swipe_state(cid, sid, rid)))
+        reader.start()
+        reader.join(1)
+        assert not reader.is_alive(), "swipe_state waited behind the campaign lock"
+    finally:
+        release.set()
+        holder.join()
+    assert [p.stat().st_mtime_ns for p in watched] == before
+    assert answer["editable"] is True and answer["round_open"] is False
+    assert answer["can_reroll"] is True
+    assert len(answer["variants"]) == 2
+    assert answer["variants"][answer["active"]]["id"] != old
+
+
+def test_swipe_state_omits_contents(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    store.responses.save_variant(cid, sid, rid, "Thought.", "complete", activate=False,
+                                 reasoning="Because.", made_by={"task": "turn", "model": "m"})
+    state = store.responses.swipe_state(cid, sid, rid)
+    assert len(state["variants"]) == 3
+    assert state["variants"][-1]["made_by"] == {"task": "turn", "model": "m"}
+    for variant in state["variants"]:
+        assert set(variant) <= {"id", "status", "made_by"}
+        assert "content" not in variant and "reasoning" not in variant
+
+
+def test_swipe_state_not_editable_after_a_roll(client):
+    cid, sid, base, rid, _old = _two_turns_with_a_reroll(client)
+    assert store.responses.swipe_state(cid, sid, rid)["editable"] is True
+    rolled = client.post(base + "/roll", json={"notation": "1d6"})
+    assert rolled.status_code == 200, rolled.text
+    assert store.responses.swipe_state(cid, sid, rid)["editable"] is False
+
+
+def test_swipe_state_not_editable_at_the_audit_boundary(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    store.rolls.append(cid, sid, "Test", {"total": 4})
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert not any(m.get("speaker") == store.scenes.serialize.ROLL_SPEAKER for m in messages)
+    assert store.responses.swipe_state(cid, sid, rid)["editable"] is False
+
+
+def test_swipe_state_round_open_while_paused(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    assert store.responses.swipe_state(cid, sid, rid)["round_open"] is False
+    record = store.responses.new_round(
+        cid, sid, eligible=[{"ref": "characters:mara", "name": "Mara"}],
+        automatic=True, post=0, run_id="run-paused", actor_ref="characters:mara")
+    store.responses.update_round(cid, sid, record["id"], status="paused")
+    assert store.responses.swipe_state(cid, sid, rid)["round_open"] is True
+    store.responses.update_round(cid, sid, record["id"], status="superseded")
+    assert store.responses.swipe_state(cid, sid, rid)["round_open"] is False
+
+
+def test_swipe_state_raises_not_found_for_an_unknown_response(client):
+    cid, sid, *_ = _two_turns_with_a_reroll(client)
+    with pytest.raises(store.responses.ResponseNotFound):
+        store.responses.swipe_state(cid, sid, "missing")

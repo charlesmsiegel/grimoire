@@ -1332,6 +1332,15 @@ def get_response(cid: str, sid: str, rid: str):
         raise _public_error(exc) from exc
 
 
+@router.get("/campaigns/{cid}/scenes/{sid}/responses/{rid}/swipe")
+def get_response_swipe(cid: str, sid: str, rid: str):
+    _require_scene(cid, sid)
+    try:
+        return store.responses.swipe_state(cid, sid, rid)
+    except store.responses.ResponseNotFound as exc:
+        raise _public_error(exc) from exc
+
+
 @router.delete("/campaigns/{cid}/scenes/{sid}/responses/{rid}")
 def delete_response(cid: str, sid: str, rid: str, request: Request):
     _require_scene(cid, sid)

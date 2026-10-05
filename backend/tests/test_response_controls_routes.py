@@ -136,3 +136,23 @@ def test_legacy_cast_retains_observations_across_later_player_rounds(client):
     assert "WITNESSED_SENTINEL" in second_prompt
     assert "PREHISTORY_PRIVATE_SENTINEL" not in second_prompt
     assert paths.record(cid)["characters/winifred"]["presence"][sid] == [{"start": 1, "end": None}]
+
+
+def test_swipe_route_404_for_unknown_response(client):
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    assert client.get(base + "/responses/missing/swipe").status_code == 404
+
+
+def test_swipe_route_404_for_a_deleted_response(client):
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    rid = _answer(client, base)
+    state = client.get(base + f"/responses/{rid}/swipe")
+    assert state.status_code == 200, state.text
+    body = state.json()
+    assert body["editable"] is True and body["can_reroll"] is True
+    assert [v["status"] for v in body["variants"]] == ["complete"] and body["active"] == 0
+    assert client.delete(base + f"/responses/{rid}").status_code == 200
+    # `responses.delete` keeps the ledger record; the transcript no longer has it.
+    assert client.get(base + f"/responses/{rid}/swipe").status_code == 404

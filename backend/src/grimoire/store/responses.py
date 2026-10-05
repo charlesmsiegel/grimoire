@@ -484,25 +484,89 @@ def save_variant(
         return copy.deepcopy(variant)
 
 
+def _response_index(messages: list[dict], rid: str) -> int | None:
+    return next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
+
+
+def _editable_reason(record: dict, messages: list[dict], scene_rolls: bool, rid: str) -> str | None:
+    """Why this response's prose may not change, or `None` when it may.
+
+    The one place the three checks live, so `editable` (which refuses) and
+    `swipe_state` (which reports) cannot drift: the response was mechanically
+    locked, the scene has an audit entry but no roll line left in the
+    transcript to say where it applied (`scene_rolls`: a roll was logged for
+    this scene), or a roll line sits at or after the response's first message.
+    """
+    index = _response_index(messages, rid)
+    has_roll_line = any(m.get("speaker") == serialize.ROLL_SPEAKER for m in messages)
+    if (
+        record.get("mechanically_locked")
+        or (scene_rolls and not has_roll_line)
+        or (index is not None
+            and any(m.get("speaker") == serialize.ROLL_SPEAKER for m in messages[index:]))
+    ):
+        return "applied_mechanics"
+    return None
+
+
 def editable(cid: str, sid: str, rid: str) -> int:
     messages = read.read_scene(cid, sid)["messages"]
-    index = next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
+    index = _response_index(messages, rid)
     if index is None:
         raise ResponseNotFound(rid)
     record = _scope(cid, sid, _read(cid))["responses"].get(rid, {})
-    unknown_audit_boundary = any(r.get("scene") == sid for r in rolls.read(cid)) and not any(
-        m.get("speaker") == serialize.ROLL_SPEAKER for m in messages
-    )
-    if (
-        record.get("mechanically_locked")
-        or unknown_audit_boundary
-        or any(m.get("speaker") == serialize.ROLL_SPEAKER for m in messages[index:])
-    ):
+    scene_rolls = any(r.get("scene") == sid for r in rolls.read(cid))
+    if _editable_reason(record, messages, scene_rolls, rid) is not None:
         raise ResponseConflict(
             "applied_mechanics",
             "A completed roll follows this response. Correct state or explicitly replay before changing this prose.",
         )
     return index
+
+
+def swipe_state(cid: str, sid: str, rid: str) -> dict:
+    """What the swipe arrows need to know about a response, and nothing more.
+
+    Lock-free and write-free, as `variants_by_response` is: the identity comes
+    from `scene_identity` (`_scope` would mint one and write the scene file),
+    the ledger is one file written whole so a single read is one state, and no
+    snapshot is opened. `get` is none of those -- it waits behind the campaign
+    lock, mints, and reads snapshots -- which is what a read made on every
+    scene open and every landed turn cannot afford. A variant's content and
+    reasoning stay out; the disclosure fetches them through `get`.
+
+    `editable` is the answer `editable` would give, evaluated without raising,
+    because the client cannot see the audit boundary. `round_open` is an
+    unfinished round in the scene: `activate` supersedes it, which would
+    destroy a paused roll or a Retry the player has not used. A response the
+    ledger does not know, or that `delete` left a record of after removing it
+    from the transcript, is `ResponseNotFound`.
+    """
+    messages = read.read_scene(cid, sid)["messages"]
+    if _response_index(messages, rid) is None:
+        raise ResponseNotFound(rid)
+    token = identity.scene_identity(cid, sid)
+    scope = _read(cid)["scenes"].get(token, {}) if token else {}
+    record = scope.get("responses", {}).get(rid)
+    if record is None:
+        raise ResponseNotFound(rid)
+    variants = record.get("variants", [])
+    active = next((i for i, v in enumerate(variants) if v["id"] == record.get("active_variant")), None)
+    scene_rolls = any(r.get("scene") == sid for r in rolls.read(cid))
+    return {
+        "active": active,
+        "variants": [
+            {"id": v["id"], "status": v["status"],
+             **({"made_by": copy.deepcopy(v["made_by"])} if "made_by" in v else {})}
+            for v in variants
+        ],
+        "settings": copy.deepcopy(record.get("settings")),
+        "resume_settings": copy.deepcopy(record.get("resume_settings")),
+        "can_reroll": bool(record.get("snapshot_ref") or record.get("snapshot")),
+        "editable": _editable_reason(record, messages, scene_rolls, rid) is None,
+        "round_open": any(r.get("status") in ("pending", "incomplete", "paused")
+                          for r in scope.get("rounds", {}).values()),
+    }
 
 
 def _invalidate(cid, sid, changed_at: int):

@@ -457,6 +457,16 @@ export type ResponseRecord = { content: string; id: string; actor_ref: string | 
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
   variants: ResponseVariant[];
   settings?: ResponseSettingsRecord; resume_settings?: ResponseSettingsRecord };
+// The lock-free read the swipe arrows are drawn from (`GET .../responses/{rid}/swipe`):
+// ids, statuses and provenance, never a variant's text. `active` indexes `variants` and is
+// null when the record's active id matches none; `settings` / `resume_settings` are null
+// for a response from before they were recorded.
+export type ResponseSwipe = {
+  active: number | null;
+  variants: Pick<ResponseVariant, "id" | "status" | "made_by">[];
+  settings: ResponseSettingsRecord | null; resume_settings: ResponseSettingsRecord | null;
+  can_reroll: boolean; editable: boolean; round_open: boolean;
+};
 export type PassageCharacterDraft = { name: string; description: string; mes_example: string; quotes: string[] };
 export type PassageCharacterInput = { name: string; passage: string; source_text: string };
 export type PassageCharacterSave = PassageCharacterInput & { description: string; mes_example: string; existing_ref?: string };
