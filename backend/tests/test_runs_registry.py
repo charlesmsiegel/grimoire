@@ -514,3 +514,127 @@ def test_an_ordinary_pair_of_transitions_still_both_arrive():
     reg.retire(run.id)
 
     assert seen == [1, 0]
+
+
+# ---- one live background run per campaign subject and kind (slice D task 7) ----
+
+CAMPAIGN = ("campaign", "c")
+RECONCILE = "continuity-reconcile"
+
+
+def _single(r, attempt_id=None, subject=CAMPAIGN, kind=RECONCILE):
+    return r.start_or_existing(subject, "background", kind, attempt_id, None,
+                               LABELS, single_live=True)
+
+
+def test_single_live_returns_the_running_run():
+    """End Scene and Refresh both asking for a sweep get one sweep: a second
+    start while the first is live adopts it rather than starting another."""
+    r = runs.RunRegistry()
+    first, fresh = _single(r)
+    again, fresh_again = _single(r)
+    assert fresh is True
+    assert fresh_again is False
+    assert again is first
+
+
+def test_single_live_is_atomic_across_threads():
+    """The scan has to sit inside the registry lock: a check made outside it
+    lets two simultaneous triggers both see nothing live and both create one."""
+    r = runs.RunRegistry()
+    barrier = threading.Barrier(20)
+    got: list = []
+
+    def start():
+        barrier.wait()
+        run, _ = _single(r)
+        got.append(run)
+
+    threads = [threading.Thread(target=start) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(got) == 20
+    assert len({run.id for run in got}) == 1
+
+
+def test_single_live_ignores_other_kinds_terminal_forgotten_and_cancelling_runs():
+    r = runs.RunRegistry()
+    # Another kind on the same subject is not the same sweep.
+    other, _ = _single(r, kind="tracker-update")
+    mine, fresh = _single(r)
+    assert fresh and mine is not other
+
+    # A terminal run is not live.
+    mine.finish("landed")
+    after_terminal, fresh = _single(r)
+    assert fresh and after_terminal is not mine
+
+    # A Stop already pressed must not be adopted by the next Refresh.
+    after_terminal.cancel_requested = True
+    after_cancel, fresh = _single(r)
+    assert fresh and after_cancel is not after_terminal
+
+    # A forgotten run (its campaign was deleted) belongs to nobody now.
+    r.forget_subject(CAMPAIGN)
+    after_forget, fresh = _single(r)
+    assert fresh and after_forget is not after_cancel
+
+    # And without the keyword nothing is adopted at all.
+    plain, fresh = r.start_or_existing(CAMPAIGN, "background", RECONCILE, None,
+                                       None, LABELS)
+    assert fresh and plain is not after_forget
+
+
+def test_single_live_does_not_cross_subjects():
+    r = runs.RunRegistry()
+    first, _ = _single(r)
+    other, fresh = _single(r, subject=("campaign", "d"))
+    assert fresh and other is not first
+
+
+def test_a_refresh_during_a_live_sweep_adopts_it_under_its_own_attempt_in_the_registry():
+    r = runs.RunRegistry()
+    live, _ = _single(r, attempt_id=None)
+    adopted, fresh = _single(r, attempt_id="a1")
+    assert adopted is live and fresh is False
+    assert live.adopted_attempts == ["a1"]
+    assert r.for_attempt(CAMPAIGN, "a1") is live
+    # The same attempt again is an ordinary attempt adoption, not a second alias.
+    again, fresh = _single(r, attempt_id="a1")
+    assert again is live and fresh is False
+    assert live.adopted_attempts == ["a1"]
+
+
+def test_reap_drops_adopted_attempt_aliases():
+    r = runs.RunRegistry()
+    live, _ = _single(r, attempt_id="own")
+    _single(r, attempt_id="a1")
+    live.finish("landed", at=1000.0, monotonic_at=1000.0)
+    assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
+    assert (CAMPAIGN, "own") not in r._by_attempt
+    assert (CAMPAIGN, "a1") not in r._by_attempt
+    assert r.for_attempt(CAMPAIGN, "a1") is None
+
+
+def test_pending_touched_is_taken_once_and_forgotten_with_the_subject():
+    r = runs.RunRegistry()
+    r.pend_touched(CAMPAIGN, ["thread:mara-map"])
+    r.pend_touched(CAMPAIGN, {"commitment:mara-oath", "thread:mara-map"})
+    assert r.take_touched(CAMPAIGN) == {"thread:mara-map", "commitment:mara-oath"}
+    assert r.take_touched(CAMPAIGN) == set()
+
+    r.pend_touched(CAMPAIGN, ["thread:winifred-chart"])
+    r.forget_subject(CAMPAIGN)
+    assert r.take_touched(CAMPAIGN) == set()
+
+    other = ("campaign", "d")
+    r.pend_touched(CAMPAIGN, ["thread:mara-map"])
+    r.pend_touched(other, ["thread:winifred-chart"])
+    app = type("App", (), {})()
+    app.state = type("State", (), {})()
+    app.state.runs = r
+    runs.drop_pending_touched(app)
+    assert r.take_touched(CAMPAIGN) == set()
+    assert r.take_touched(other) == set()
