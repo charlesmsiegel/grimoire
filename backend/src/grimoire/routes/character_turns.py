@@ -470,7 +470,8 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
     the connection that served it, recorded on the variant and its post."""
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
-        text, authority_issue = _normalise(cid, sid, record, watcher.narration)
+        text, authority_issue, rewrite = _normalise(cid, sid, record, watcher.narration,
+                                                    connection)
         if authority_issue:
             watcher.handoff = None
             watcher.issue = authority_issue
@@ -497,6 +498,8 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
                 )
         else:
             saved()
+        if text and rewrite:
+            streaming._record_rewrite(cid, sid, record["id"], *rewrite, text)
         streaming._turn_settled(cid)
         if text and tracked is not None:
             # Marked HERE, in the hold that wrote the variant, where the
@@ -508,7 +511,16 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
         return streaming._tail_length(cid, sid) if text else None
 
 
-def _normalise(cid, sid, record, text):
+def _normalise(cid, sid, record, text, connection=""):
+    """The reply as it is stored, the authority issue if it spoke for another
+    actor, and `(original, fired rule ids)` when the store phase rewrote it
+    (else None).
+
+    The store phase runs LAST, on the text that would otherwise have been
+    stored, rather than beside the macro expansion: what it records is what
+    Restore original writes back, so it has to be stored text already -- not
+    text still carrying markers this function is about to strip. `connection`
+    is the one that served the reply, for its connection-level rules."""
     text, _ = store.state_fence.split_block(text)
     text = store.context.resolve_art_handles(cid, text, sid)
     text = store.context.expand_macros(
@@ -527,7 +539,10 @@ def _normalise(cid, sid, record, text):
             parts.append(text[marker.end() : end].strip())
         else:
             issue = "response attempted to speak for another actor"
-    return "\n\n".join(part for part in parts if part), issue
+    text = "\n\n".join(part for part in parts if part)
+    stored, fired = store.regex.view.store_phase(text, cid=cid, role="model",
+                                                 connection=connection)
+    return (stored.strip(), issue, (text, fired)) if fired else (text, issue, None)
 
 
 def _capture(cid, sid, task, messages, conn):
@@ -1397,7 +1412,7 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
         _fence(cid, sid, run, token)
         if run.cancel_requested or watcher.roll.complete or watcher.roll.truncated:
             return False
-        text, issue = _normalise(cid, sid, record, watcher.narration)
+        text, issue, rewrite = _normalise(cid, sid, record, watcher.narration, connection)
         if issue:
             watcher.handoff = None
             watcher.issue = issue
@@ -1416,6 +1431,8 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
             connection=connection,
         )
         store.responses.activate(cid, sid, rid, variant["id"])
+        if rewrite:
+            streaming._record_rewrite(cid, sid, rid, *rewrite, text.strip())
         # A reroll is a swipe to a new variant: every later tracker record was
         # built on the one it replaced. In this hold, with the swap; fail-soft.
         tracker_routes.after_swipe(cid, sid, rid)

@@ -813,6 +813,10 @@ class ScheduledEventEdit(BaseModel):
 
 class EditMessage(BaseModel):
     content: str
+    #: Restore original: `content` is the original a stored rewrite recorded,
+    #: written back as it is -- no macro expansion, no store phase -- and the
+    #: record is cleared.
+    restore: bool = False
 
 
 class ReplayStart(BaseModel):

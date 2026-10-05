@@ -165,6 +165,10 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # not there), validates against them and writes `regex.json` -- one hold, or
     # a concurrent campaign write lands between the check and the file.
     "store.regex.layers",
+    # The store phase's record of what it rewrote: one whole file per scene,
+    # read-modify-written beside the transcript write it describes and inside
+    # that write's hold -- two unserialized landings would lose one record.
+    "store.regex.rewrites",
     # The tracker's per-scene records: a snapshot file per post plus an
     # `index.json` that is read-modify-written whole on every status or flag
     # change -- two unserialized updates landing at once would lose one entry.
