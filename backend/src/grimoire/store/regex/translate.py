@@ -55,9 +55,9 @@ _NOTE_IU = ("i with u: JavaScript also matches k and s against U+212A and U+017F
             "(and \\w, \\b with them); Python does not.")
 _NOTE_BACKREF = ("A backreference to a group that took no part in the match matches "
                  "nothing in JavaScript and fails the match in Python.")
-_NOTE_EMPTY = ("This pattern can match the empty string. Under g without u, JavaScript "
-               "also tries the position between the two halves of an emoji (or any "
-               "character beyond U+FFFF); Python does not.")
+_NOTE_RESET = ("A repeated group holds a capture that one repetition can skip: "
+               "JavaScript clears it on every repetition, Python keeps the value from "
+               "an earlier one.")
 
 
 class _UntranslatableError(Exception):
@@ -82,7 +82,7 @@ class _Lexer:
         self.refs: list[tuple[int | str, bool]] = []   # (group, closed when referenced)
         self.notes: list[str] = []   # approximate notes, in order
         self.alternation = False
-        self.maybe_unset = False     # a capture that can be skipped
+        self.skippable = 0           # places a capture can be skipped (alternation, `?`, ...)
         self.folds_wide = False      # a non-ASCII cased letter (or a range past ASCII)
         self.k_or_s = False          # something JavaScript's `iu` widens
 
@@ -105,54 +105,59 @@ class _Lexer:
 
     # --- grammar -------------------------------------------------------------
 
-    def pattern(self) -> tuple[str, bool]:
-        text, nullable = self.disjunction()
+    def pattern(self) -> str:
+        text = self.disjunction()
         if self.i < len(self.src):
             raise _UntranslatableError("an unmatched )")
-        return text, nullable
+        return text
 
-    def disjunction(self) -> tuple[str, bool]:
-        parts: list[str] = []
-        nullable = False
-        while True:
-            text, alt_nullable = self.alternative()
-            parts.append(text)
-            nullable = nullable or alt_nullable
-            if self.peek() != "|":
-                return "|".join(parts), nullable
-            self.alternation = True
-            self.i += 1
-
-    def alternative(self) -> tuple[str, bool]:
-        out: list[str] = []
-        nullable = True
-        while self.i < len(self.src) and self.peek() not in "|)":
-            text, term_nullable = self.term()
-            out.append(text)
-            nullable = nullable and term_nullable
-        return "".join(out), nullable
-
-    def term(self) -> tuple[str, bool]:
+    def disjunction(self) -> str:
         before = self.groups
-        text, nullable, quantifiable = self.atom()
-        lo = self.quantifier()
-        if lo is None:
-            return text, nullable
-        if not quantifiable:
-            raise _UntranslatableError(f"nothing to repeat before {lo[1]!r}")
-        if lo[0] == 0 and self.groups > before:
-            self.maybe_unset = True
-        return text + lo[1], nullable or lo[0] == 0
+        parts = [self.alternative()]
+        while self.peek() == "|":
+            self.i += 1
+            self.alternation = True
+            parts.append(self.alternative())
+        if len(parts) > 1 and self.groups > before:
+            self.skippable += 1
+        return "|".join(parts)
 
-    def quantifier(self) -> tuple[int, str] | None:
-        """(minimum, text) for a quantifier at the cursor, or None."""
+    def alternative(self) -> str:
+        out: list[str] = []
+        while self.i < len(self.src) and self.peek() not in "|)":
+            out.append(self.term())
+        return "".join(out)
+
+    def term(self) -> str:
+        groups, skippable = self.groups, self.skippable
+        text, quantifiable = self.atom()
+        quant = self.quantifier()
+        if quant is None:
+            return text
+        lo, hi, qtext = quant
+        if not quantifiable:
+            raise _UntranslatableError(f"nothing to repeat before {qtext!r}")
+        captures = self.groups > groups
+        # JavaScript resets a repeated group's captures on each repetition, so
+        # one a repetition skips is empty there and stale in Python.
+        if captures and (hi is None or hi > 1) and self.skippable > skippable:
+            self.approx(_NOTE_RESET)
+        if captures and lo == 0:
+            self.skippable += 1
+        return text + qtext
+
+    def quantifier(self) -> tuple[int, int | None, str] | None:
+        """(minimum, maximum or None for no limit, text) for a quantifier at
+        the cursor, or None."""
         c = self.peek()
+        hi: int | None
         if c in ("*", "+", "?"):
             self.i += 1
-            lo, text = (1 if c == "+" else 0), c
+            lo, hi, text = (1 if c == "+" else 0), (1 if c == "?" else None), c
         elif c == "{" and (m := _QUANT.match(self.src, self.i)):
             lo = int(m.group(1))
-            if m.group(3) and int(m.group(3)) < lo:
+            hi = lo if not m.group(2) else (int(m.group(3)) if m.group(3) else None)
+            if hi is not None and hi < lo:
                 raise _UntranslatableError(f"the quantifier {m.group(0)} is out of order")
             self.i = m.end()
             text = m.group(0)
@@ -161,20 +166,24 @@ class _Lexer:
         if self.peek() == "?":
             self.i += 1
             text += "?"
-        return lo, text
+        return lo, hi, text
 
-    def atom(self) -> tuple[str, bool, bool]:
-        """(python, nullable, quantifiable) for the atom at the cursor."""
+    def atom(self) -> tuple[str, bool]:
+        """(python, quantifiable) for the atom at the cursor."""
         c = self.peek()
         self.i += 1
         if c in "^$":
-            return self.anchor(c), True, False
+            return self.anchor(c), False
         if c == ".":
-            return ("." if self.dotall else _JS_DOT), False, True
+            # Without u, JavaScript's `.` (like \D, \W, \S and a negated class)
+            # matches half of a character beyond U+FFFF, and Python the whole
+            # character; an empty match under g can likewise land between the
+            # halves. Known residual differences, kept exact per spec §7.
+            return ("." if self.dotall else _JS_DOT), True
         if c == "(":
             return self.group()
         if c == "[":
-            return self.char_class(), False, True
+            return self.char_class(), True
         if c == "\\":
             return self.escape()
         return self.literal(c)
@@ -186,40 +195,44 @@ class _Lexer:
         # Python's `$` also matches before a final newline.
         return "^" if c == "^" else r"\Z"
 
-    def literal(self, c: str) -> tuple[str, bool, bool]:
+    def literal(self, c: str) -> tuple[str, bool]:
         if c in "*+?" or (c == "{" and _QUANT.match(self.src, self.i - 1)):
             raise _UntranslatableError(f"nothing to repeat before {c!r}")
         if c in "{}]":
             if self.u:
                 raise _UntranslatableError(f"a lone {c!r} is a syntax error under u")
-            return "\\" + c, False, True
-        cp = ord(c)
+            return "\\" + c, True
+        self.astral_outside_class(ord(c))
+        self.char(ord(c))
+        return c, True
+
+    def astral_outside_class(self, cp: int) -> None:
+        """Refuse a character beyond U+FFFF that a quantifier follows, without
+        u: JavaScript sees two halves and repeats only the second."""
         if cp > 0xFFFF and not self.u and self.quantifier_next():
-            raise _UntranslatableError("a quantifier on a character beyond U+FFFF without u "
-                           "(JavaScript repeats only its second half)")
-        self.char(cp)
-        return c, False, True
+            raise _UntranslatableError("a quantifier on a character beyond U+FFFF "
+                                       "without u (JavaScript repeats only its second half)")
 
     def quantifier_next(self) -> bool:
         return (self.peek() != "" and self.peek() in "*+?") or bool(
             _QUANT.match(self.src, self.i))
 
-    def group(self) -> tuple[str, bool, bool]:
+    def group(self) -> tuple[str, bool]:
         """`(...)` in any of its forms; the `(` is consumed."""
         src = self.src
         for head in ("?:", "?=", "?!", "?<=", "?<!"):
             if src.startswith(head, self.i):
                 self.i += len(head)
                 before = self.groups
-                text, nullable = self.close_group("(" + head)
+                text = self.close_group("(" + head)
                 if head == "?:":
-                    return text, nullable, True
+                    return text, True
                 # A capture inside a negative lookaround never keeps a value.
                 if "!" in head and self.groups > before:
-                    self.maybe_unset = True
+                    self.skippable += 1
                 # Zero-width, and not repeatable here: JavaScript allows a
                 # quantified lookahead only outside u, and it means nothing.
-                return text, True, False
+                return text, False
         name = None
         if src.startswith("?<", self.i):
             m = _GROUP_NAME.match(src, self.i + 1)
@@ -233,35 +246,38 @@ class _Lexer:
         number = self.groups
         if name is not None:
             self.names.add(name)
-        text, nullable = self.close_group("(" if name is None else f"(?P<{name}>")
+        text = self.close_group("(" if name is None else f"(?P<{name}>")
         self.closed.add(number)
         if name is not None:
             self.closed.add(name)
-        return text, nullable, True
+        return text, True
 
-    def close_group(self, head: str) -> tuple[str, bool]:
-        inner, nullable = self.disjunction()
+    def close_group(self, head: str) -> str:
+        inner = self.disjunction()
         if self.peek() != ")":
             raise _UntranslatableError("a group with no closing )")
         self.i += 1
-        return head + inner + ")", nullable
+        return head + inner + ")"
 
     # --- escapes -------------------------------------------------------------
 
-    def escape(self) -> tuple[str, bool, bool]:
+    def escape(self) -> tuple[str, bool]:
         """`\\` at top level (outside a class); the backslash is consumed."""
         c = self.peek()
         if c in ("b", "B"):
             self.i += 1
             self.k_or_s = True
-            return "\\" + c, True, False
+            # Python 3.11's \B never matches in an empty string, and
+            # JavaScript's does. A known residual difference, kept exact per
+            # spec §7.
+            return "\\" + c, False
         if c and c in "123456789":
             m = re.compile(r"\d+").match(self.src, self.i)
             assert m is not None
             self.i = m.end()
             number = int(m.group(0))
             self.refs.append((number, number in self.closed))
-            return "\\" + m.group(0), True, True
+            return "\\" + m.group(0), True
         if c == "k":
             m = _GROUP_NAME.match(self.src, self.i + 1)
             if m is None:
@@ -269,9 +285,9 @@ class _Lexer:
             self.i = m.end()
             name = m.group(1)
             self.refs.append((name, name in self.closed))
-            return f"(?P={name})", True, True
+            return f"(?P={name})", True
         text, _cp = self.shared_escape(in_class=False)
-        return text, False, True
+        return text, True
 
     def shared_escape(self, *, in_class: bool) -> tuple[str, int | None]:
         """An escape whose meaning is the same in and out of a class, as
@@ -334,6 +350,10 @@ class _Lexer:
         if c.isascii() and c.isalnum():
             raise _UntranslatableError(f"the escape \\{c} is not recognised")
         # An identity escape: JavaScript (without u) reads `\"` as `"`.
+        if in_class:
+            self.astral_in_class(ord(c))
+        else:
+            self.astral_outside_class(ord(c))
         self.char(ord(c))
         return re.escape(c), ord(c)
 
@@ -421,6 +441,11 @@ class _Lexer:
             self.k_or_s = True
         return f"{text}-{hi_text}"
 
+    def astral_in_class(self, cp: int) -> None:
+        if cp > 0xFFFF and not self.u:
+            raise _UntranslatableError("a character beyond U+FFFF inside a class without u "
+                                       "(JavaScript sees its two halves as two members)")
+
     def class_atom(self) -> tuple[str, int | None]:
         c = self.peek()
         if c == "\\":
@@ -434,9 +459,7 @@ class _Lexer:
             return self.shared_escape(in_class=True)
         self.i += 1
         cp = ord(c)
-        if cp > 0xFFFF and not self.u:
-            raise _UntranslatableError("a character beyond U+FFFF inside a class without u "
-                           "(JavaScript sees its two halves as two members)")
+        self.astral_in_class(cp)
         self.char(cp)
         # `[` is escaped because Python warns on what looks like a nested set,
         # and `& ~ | -` because doubled they are reserved set operators.
@@ -475,8 +498,8 @@ def _check_refs(lex: _Lexer) -> None:
             raise _UntranslatableError(f"\\k<{ref}> names no group")
         if not was_closed:
             raise _UntranslatableError(f"a backreference to {ref!r} before that group closes "
-                           "(JavaScript matches it as empty; Python refuses it)")
-    if lex.refs and (lex.alternation or lex.maybe_unset):
+                                       "(JavaScript matches it as empty; Python refuses it)")
+    if lex.refs and (lex.alternation or lex.skippable):
         lex.approx(_NOTE_BACKREF)
 
 
@@ -489,7 +512,7 @@ def translate(body: str, flags: str) -> dict:
         if "u" in flags:
             notes.append(_NOTE_U)
         lex = _Lexer(body, flags)
-        pattern, nullable = lex.pattern()
+        pattern = lex.pattern()
         _check_refs(lex)
     except _UntranslatableError as exc:
         return {"verdict": UNTRANSLATABLE, "pattern": None, "flags": "",
@@ -502,8 +525,6 @@ def translate(body: str, flags: str) -> dict:
             lex.approx(_NOTE_FOLD)
         if "u" in flags and lex.k_or_s:
             lex.approx(_NOTE_IU)
-    if nullable and "g" in flags and "u" not in flags:
-        lex.approx(_NOTE_EMPTY)
     try:
         _compile(pattern, py_flags)
     except (re.error, Warning, RecursionError, OverflowError) as exc:

@@ -234,4 +234,8 @@ def post_regex_import(body: RegexImport):
         except (store.worlds.WorldNotFound, store.campaigns.CampaignNotFound,
                 store.llm_connections.ConnectionNotFound) as exc:
             raise HTTPException(status_code=404, detail="not found") from exc
+        if level == "campaign":
+            # This path is not under /api/campaigns/, so the activity
+            # middleware stamps nothing; the write's own lock hold does.
+            store.revision.bump(key)
     return {**_body(level, key), "added": [r["id"] for r in added]}
