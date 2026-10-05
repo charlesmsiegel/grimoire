@@ -25,6 +25,7 @@ lesson is why `store/locks.py` turned its domain from prose into constants
 - [Atomic writes](#atomic-writes)
 - [The campaign lock](#the-campaign-lock)
 - [A second process on the same store](#a-second-process-on-the-same-store)
+- [The image store](#the-image-store)
 - [What is **not** promised](#what-is-not-promised)
 
 ---
@@ -233,6 +234,7 @@ a stale field; refusing would cost the turn.
 | `locks.config_lock()` | global `config.md` | a leaf — nothing under it takes another lock |
 | `locks.backup_lock()` | one archive of one store at a time (#32) | a leaf; deliberately does **not** take the campaign locks |
 | `locks.module_edit_lock()` | whole-directory module-pack publication | outermost in the ordering above |
+| `locks.image_object_lock(image_id)`, `locks.image_ingest_gc_lock()` | the image store | leaves; see [The image store](#the-image-store) |
 
 The backup lock's exclusion is the interesting one: an archive of a hundred
 campaigns cannot hold a hundred locks for the length of a zip without stalling
@@ -382,6 +384,96 @@ engineering reason it cannot be fixed at this layer.
 
 ---
 
+## The image store
+
+**Modules:** `store/image_store.py`, `store/image_refs.py`, `store/assets.py` ·
+**Spec:** [the content-addressed image store](superpowers/specs/2026-10-05-content-addressed-image-store-design.md) ·
+**Tests:** `test_image_store.py`, `test_image_refs.py`, `test_assets_store.py`,
+`test_image_surfaces.py`
+
+A picture's bytes are kept once, under `<home>/assets/image-store/`, and
+everything that shows one holds a small placement naming it. Two kinds of file
+live in the store: a **blob** (`blobs/<xx>/<sha256>.<ext>`, the encoded bytes)
+and an **image object** (`objects/<xx>/px1-<hex>.json`, a sidecar naming the one
+blob it keeps). A record, a library or a cover holds a **placement**,
+`image-refs/<name>.json`, which is the image id plus occurrence-only data such
+as `focus`. `test_image_surfaces.py` drives every upload route and both
+store-side writers (greeting localization and collection members) and fails
+if any of them leaves an image file in a record directory.
+
+### Blobs are immutable
+
+A blob's name is the SHA-256 of its contents, and `image_store._publish_blob`
+writes one exactly once, through `atomic.write_bytes`. Publishing onto a path
+that already exists checks size and hash first, and a match is left untouched.
+
+**The single rewrite is a repair.** A blob whose bytes disagree with its own
+name (a truncated sync, a disk fault) is overwritten with the bytes being
+ingested, which are by construction the right ones, and the repair is logged as
+`image_blob_repaired`. Nothing else ever replaces a blob's contents. Pinned by
+`test_corrupt_blob_repaired` and `test_same_size_corrupt_blob_repaired`.
+
+An image object keeps exactly one blob. A later upload of the same pixels in a
+different encoding finds the object and discards the newcomer, so the slot goes
+on serving the format that was ingested first: re-uploading a PNG avatar as a
+lossless WebP does not turn it into a WebP
+(`test_the_same_picture_in_another_format_keeps_the_first_format`).
+
+### Two leaf locks
+
+| Lock | Scope | Notes |
+|---|---|---|
+| `locks.image_object_lock(image_id)` | read-modify-write of one object sidecar | one of `IMAGE_OBJECT_STRIPES` stripes keyed by the id's first byte, so the set of lock files is bounded; two objects on one stripe wait on each other, which costs time and never an update |
+| `locks.image_ingest_gc_lock()` | the whole store | held across ingest's find-or-create (blob publish, sidecar write, mtime touch), so a garbage collector that deletes under it cannot interleave with an ingest |
+
+Both are process-scoped like the campaign lock and keyed by the live store
+root (`test_image_locks_are_keyed_per_store`). The order is the ingest lock and
+then a stripe, never the reverse, and **both are leaves**: either may be taken
+while a campaign lock is held, and nothing acquires a campaign lock while
+holding one. No AST guard holds that rule; `store/locks.py` states it beside
+the code and `image_store` is the only module that takes them. Contention
+raises the base `StoreBusy`, which the same handler turns into a 409. No
+collector exists yet, so for now the second lock only serializes ingests.
+
+### Placements are deterministic
+
+`image_refs.write` serializes a placement as
+`json.dumps(obj, sort_keys=True)` plus a newline, written as bytes so no
+platform translates it, and nothing else goes in the file. Two placements of
+the same image with the same focus are therefore byte-identical, which is what
+lets campaign slimming compare them with `filecmp`
+(`test_file_content_is_exact_and_deterministic`,
+`test_files_are_written_as_bytes_with_lf`). An object sidecar is likewise
+written with sorted keys.
+
+### A placement beats a legacy file
+
+Images written before the store existed are still read where they lie. When a
+name has both a placement and a legacy `<name>.<ext>` file, **the placement
+wins**. A placement that does not resolve (its object or blob not synced in
+yet) falls back to the legacy file if one is there, on the rule that redundant
+data beats lost data, and a version's art memo that includes such a placement
+is not cached, so a blob that syncs in later is noticed (`test_ref_wins_over_legacy_and_unresolved_ref_falls_back`,
+`test_version_art_uncacheable_while_ref_unresolved`).
+
+### What it does not promise
+
+- **Devices on different versions.** A build from before the store writes a
+  legacy file, and on a device running this one that file is shadowed by any
+  placement of the same name, so the older device's upload seems not to land.
+  Upgrade every device that shares a library before uploading from either.
+- **One id per JPEG across decoders.** Pixel identity decodes the image, and
+  JPEG decoders are not bit-identical: the desktop wheels and the Android build
+  may decode one file differently. Identical bytes still meet while the blob
+  index is current, since an index hit never decodes, but on a miss a second
+  device can mint a second object for the same file. The cost is a duplicate,
+  never two different pictures merged under one id.
+- **Nothing is collected yet.** Deleting a placement never deletes an object or
+  a blob, so an image nothing places any more stays on disk until a collector
+  is built.
+
+---
+
 ## What is **not** promised
 
 Collected, so that nothing here has to be inferred from an absence.
@@ -420,6 +512,8 @@ Collected, so that nothing here has to be inferred from an absence.
   happened, never a guarantee; the refusal it earns is a re-price, and no write
   depends on it being complete.
 - **Nothing across devices**, and nothing across OS users.
+- **No mixed-version image writes, and no cross-decoder JPEG identity.** See
+  [The image store](#the-image-store).
 - **No background watcher.** The rebuilt app runs no resident machinery;
   conflict detection is on demand, and nothing notices an external write until
   something reads the file.
@@ -440,5 +534,6 @@ Collected, so that nothing here has to be inferred from an absence.
 | what a sync client leaves behind | `backend/src/grimoire/store/external.py` |
 | the memo that makes external writes visible | `backend/src/grimoire/store/statcache.py` |
 | what the campaign write token is, and is not | `backend/src/grimoire/store/revision.py` |
+| how an image is stored, placed and resolved | `backend/src/grimoire/store/image_store.py`, `image_refs.py`, `assets.py` |
 | the rules, as tests | `backend/tests/test_atomic_guard.py`, `test_lock_domain_guard.py`, `test_lock_order_guard.py` |
-| designs | `docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md`, `docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md` |
+| designs | `docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md`, `docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md`, `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md` |
