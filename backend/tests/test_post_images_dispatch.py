@@ -216,6 +216,24 @@ async def test_a_fallback_that_refuses_an_image_degrades_too():
     assert provider.requests[2]["messages"] == cp.as_text(_msgs())
 
 
+async def test_a_fallback_that_kept_an_image_the_primary_packed_away_degrades():
+    """A fallback's variant is packed for its own window, so it can carry a
+    picture the primary's could not; its refusal still gets a text retry."""
+    text = cp.as_text(_msgs())
+    profiles = {"": (text, None), "wide": (_msgs(), None)}
+    prepared = PreparedMessages(
+        "m", lambda model: profiles["wide" if model == "backup" else ""],
+        profiles=profiles, campaign="c")
+    provider = SequencedProvider([LLMError("network", "down"),
+                                  LLMError("bad_response", "no images", status=400),
+                                  ("ok",)])
+    client = _client(provider, fallback=lambda: _conn("b", model="backup"))
+    assert await _run(client, prepared, _conn()) == "ok"
+    assert [r["model"] for r in provider.requests] == ["m", "backup", "backup"]
+    assert _image_roles(provider.requests[1]["messages"]) == ["user", "user"]
+    assert provider.requests[2]["messages"] == text
+
+
 async def test_plain_prompts_skip_the_thread_hop(monkeypatch):
     async def no_thread(*_a, **_k):
         raise AssertionError("a plain prompt must not pay for lowering")

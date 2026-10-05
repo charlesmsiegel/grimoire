@@ -194,6 +194,16 @@ def _with_degrades(routes: list[tuple[dict, int]]) -> list[tuple[dict, int]]:
     return [r for conn, n in routes for r in ((conn, n), ({**conn, DEGRADE: True}, 0))]
 
 
+def _may_send_refs(messages: list[dict]) -> bool:
+    """Whether any route could be sent an image reference -- asked of every
+    variant a prepared prompt holds, not only the primary's: a fallback packed
+    for a larger window can keep a picture the primary's packing gave up, and
+    without a sibling its refusal of that picture would end the turn."""
+    if isinstance(messages, model_guidance.PreparedMessages):
+        return messages.any_variant(content_parts.has_refs)
+    return content_parts.has_refs(messages)
+
+
 def _same_route(a: dict, b: dict) -> bool:
     """Whether two connections would send the same request to the same place.
 
@@ -776,7 +786,7 @@ class LLMClient:
         # A pure check: no resolver runs while routes are built, so nothing reads
         # a catalog sidecar on the event loop. Whether a sibling is attempted is
         # `_resilient`'s question, asked after the attempt before it.
-        return _with_degrades(routes) if content_parts.has_refs(messages) else routes
+        return _with_degrades(routes) if _may_send_refs(messages) else routes
 
     def _dispatch(self, messages: list[dict], conn: dict, usage: dict | None = None):
         # Read before selecting: `for_model` returns a plain list.

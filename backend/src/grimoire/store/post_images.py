@@ -60,7 +60,15 @@ from . import config, export, image_drafts, llm_connections, statcache
 
 log = logging.getLogger(__name__)
 
-YES, NO, UNKNOWN, OFF = "yes", "no", "unknown", "off"
+YES, NO, UNKNOWN, OFF, NONE = "yes", "no", "unknown", "off", "none"
+
+#: The most images one prompt may carry, whatever `send_images_limit` says.
+#: Every one is re-sent on every turn it stays in the window, and each can
+#: encode to `MAX_SEND_BYTES`, so the setting bounds a request's payload and
+#: the memory lowering holds for it -- an unbounded one is a typo away from a
+#: request no provider accepts. Chosen structurally, to be tuned against real
+#: use rather than measured.
+MAX_LIMIT = 20
 
 
 def capability(conn: dict | None) -> str:
@@ -92,7 +100,7 @@ def _catalog_says(conn: dict) -> str:
 def limit() -> int:
     """`send_images_limit` while `send_images` is on, else 0. A malformed or
     negative limit reads as the default rather than raising, like every other
-    numeric knob in config.md."""
+    numeric knob in config.md; one past `MAX_LIMIT` reads as `MAX_LIMIT`."""
     cfg = config.read_config()
     if cfg.get("send_images") != "on":
         return 0
@@ -100,7 +108,7 @@ def limit() -> int:
         n = int(cfg.get("send_images_limit", config.DEFAULT_SEND_IMAGES_LIMIT))
     except (TypeError, ValueError):
         return int(config.DEFAULT_SEND_IMAGES_LIMIT)
-    return n if n >= 0 else int(config.DEFAULT_SEND_IMAGES_LIMIT)
+    return min(n, MAX_LIMIT) if n >= 0 else int(config.DEFAULT_SEND_IMAGES_LIMIT)
 
 
 def images_for(conn: dict | None) -> int:
@@ -111,9 +119,13 @@ def images_for(conn: dict | None) -> int:
 
 
 def reach(conn: dict | None) -> str:
-    """"off" when the setting sends nothing, else `capability(conn)` -- what
-    the Configuration page tells a reader about the connection a turn uses."""
-    return OFF if limit() == 0 else capability(conn)
+    """"off" when the setting sends nothing, "none" when there is no connection
+    to ask about, else `capability(conn)` -- what the Configuration page tells
+    a reader about the connection a turn uses. "none" is not "no": nothing has
+    said a model cannot read images, there is just no model yet."""
+    if limit() == 0:
+        return OFF
+    return NONE if conn is None else capability(conn)
 
 
 # ---- what gets sent ----
@@ -125,6 +137,14 @@ SEND_EDGE = 1024
 #: Ceiling on one encoded image. Its base64 is just under the 5 MB per-image
 #: limit Anthropic applies, the tightest of the common providers'.
 MAX_SEND_BYTES = 3_750_000
+
+#: Ceiling on the pixels one picture may be decoded at. A PNG cannot be decoded
+#: at a reduced size the way a JPEG can (`Image.draft`), so its whole bitmap is
+#: held before `thumbnail` shrinks it -- four bytes a pixel with alpha, which
+#: at Pillow's own decompression-bomb threshold is a third of a gigabyte on a
+#: phone. A picture past this is sent as its description. Measured after the
+#: JPEG draft, so a large camera photo still goes.
+MAX_DECODE_PIXELS = 24_000_000
 
 #: Ceiling on the encode cache, in bytes rather than entries: one PNG with
 #: alpha can be close to `MAX_SEND_BYTES`, and this also runs on Android.
@@ -152,21 +172,40 @@ def decodable(ext: str) -> bool:
     return ext in image_drafts.MEDIA
 
 
+def _drafted(src: Image.Image) -> Image.Image:
+    """`src` with a JPEG's decode scaled down toward `SEND_EDGE` -- a header
+    change, nothing decoded yet -- so its `size` is what decoding would hold."""
+    if src.format == "JPEG":
+        src.draft("RGB", (SEND_EDGE, SEND_EDGE))
+    return src
+
+
+def _too_many_pixels(src: Image.Image) -> bool:
+    width, height = _drafted(src).size
+    return width * height > MAX_DECODE_PIXELS
+
+
 def eligible(cid: str, url: str) -> bool:
     """Whether `url` names a picture this campaign can send: one of the app's
-    own image URLs, resolving to a file whose first bytes sniff as an image this
-    build can decode. Checked at composition, so an image that could never be
-    sent does not take one of the N slots."""
+    own image URLs, resolving to a file within the read cap whose first bytes
+    sniff as an image this build can decode, at a size `load` would decode.
+    Checked at composition, so an image that could never be sent does not take
+    one of the N slots. Reads the header only; never raises."""
     path = export.resolve_url(cid, url)
     if path is None:
         return False
     try:
+        if path.stat().st_size > image_drafts.MAX_BYTES:
+            return False
         with path.open("rb") as fh:
-            head = fh.read(64)
-    except OSError:
+            ext = export.packed_ext(fh.read(64))
+            if ext is None or not decodable(ext):
+                return False
+            fh.seek(0)
+            with Image.open(fh) as src:
+                return not _too_many_pixels(src)
+    except Exception:  # noqa: BLE001 - unreadable or unparseable is ineligible
         return False
-    ext = export.packed_ext(head)
-    return ext is not None and decodable(ext)
 
 
 def _read_capped(path: Path) -> bytes | None:
@@ -178,13 +217,14 @@ def _read_capped(path: Path) -> bytes | None:
     return None if len(data) > image_drafts.MAX_BYTES else data
 
 
-def _encode(data: bytes) -> tuple[str, bytes]:
+def _encode(data: bytes) -> tuple[str, bytes] | None:
     """The first frame, upright, fitted within `SEND_EDGE`, as JPEG -- or PNG
-    when it has alpha. Never WebP: not every OpenAI-compatible server decodes
-    it, which is why sending does not reuse `thumbs`' cache."""
+    when it has alpha; None past `MAX_DECODE_PIXELS`, checked before anything
+    is decoded. Never WebP: not every OpenAI-compatible server decodes it,
+    which is why sending does not reuse `thumbs`' cache."""
     with Image.open(io.BytesIO(data)) as src:
-        if src.format == "JPEG":
-            src.draft("RGB", (SEND_EDGE, SEND_EDGE))
+        if _too_many_pixels(src):
+            return None
         src.seek(0)
         im = ImageOps.exif_transpose(src)
         im.thumbnail((SEND_EDGE, SEND_EDGE))
@@ -225,7 +265,12 @@ def _encoded(path: Path) -> tuple[str, bytes] | None:
         log.warning("post image %s is past the %d-byte read cap; sending its description",
                     path.name, image_drafts.MAX_BYTES)
         return None
-    media, body = _encode(data)
+    encoded = _encode(data)
+    if encoded is None:
+        log.warning("post image %s is past %d pixels; sending its description",
+                    path.name, MAX_DECODE_PIXELS)
+        return None
+    media, body = encoded
     if len(body) > MAX_SEND_BYTES:
         log.warning("post image %s encodes past %d bytes; sending its description",
                     path.name, MAX_SEND_BYTES)
