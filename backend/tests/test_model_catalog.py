@@ -33,7 +33,7 @@ def test_an_entry_keeps_missing_metadata_missing():
     nothing for the first and "Free" for the second."""
     assert catalog.entry({"id": "local-model"}) == {
         "id": "local-model", "name": "local-model", "context": None,
-        "prompt": None, "completion": None}
+        "prompt": None, "completion": None, "vision": None}
 
 
 def test_the_context_window_is_read_from_vllms_field_too():
@@ -81,7 +81,8 @@ def test_a_record_with_no_id_is_dropped_rather_than_raising():
 
 def test_a_non_object_row_is_dropped_too():
     assert catalog.entries(["not-a-model", {"id": "a"}]) == [
-        {"id": "a", "name": "a", "context": None, "prompt": None, "completion": None}]
+        {"id": "a", "name": "a", "context": None, "prompt": None, "completion": None,
+         "vision": None}]
 
 
 # ---- the preview route ----

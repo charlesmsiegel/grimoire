@@ -103,6 +103,7 @@ from . import (
     playing,
     playstate,
     plot,
+    post_images,
     pricing,
     prompt_log,
     proposals,
@@ -313,6 +314,7 @@ __all__ = [
     "playing",
     "PlayError",
     "pins",
+    "post_images",
     # The end-of-scene review held on disk between generating it and saving it
     # (#396) -- a deliberate addition to the facade, not a leak: `routes.scenes`
     # reaches it the way it reaches `store.commits`, which is the other half of

@@ -21,8 +21,10 @@ from .paths import home, now_iso, safe_id, slugify, uniquify
 #: .SUPPORTED_KINDS` for the primary -- and a test partitions THIS roster
 #: between them, so a new kind cannot be added without classifying it.
 KINDS = ("openrouter", "claude", "openai_compatible")
+#: `vision` is "" (auto: the cached catalog decides), "on" or "off" -- whether
+#: this connection's model may be sent post images (#377, `store.post_images`).
 _FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reasoning_effort",
-           "sampler_preset", "sampler_support")
+           "sampler_preset", "sampler_support", "vision")
 #: The fields describing how this connection SAMPLES rather than what it is.
 #: An edit touching only these keeps the connection's `rev` (see
 #: `update_connection`): the rev exists to invalidate the cached model catalog

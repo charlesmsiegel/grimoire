@@ -306,9 +306,9 @@ async def test_list_models_normalizes_and_sorts_by_id():
     models = await make_client(handler).list_models("sk-or-x")
     assert models == [
         {"id": "a/first", "name": "a/first", "context": None,
-         "prompt": None, "completion": None},
+         "prompt": None, "completion": None, "vision": None},
         {"id": "z/last", "name": "Last", "context": 8192,
-         "prompt": "0.000002", "completion": "0.000006"},
+         "prompt": "0.000002", "completion": "0.000006", "vision": None},
     ]
 
 
