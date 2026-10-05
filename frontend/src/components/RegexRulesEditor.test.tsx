@@ -456,3 +456,28 @@ test("an import that lands after the scope moved does not load the old level int
   expect(screen.queryByRole("button", { name: /^Strip asides/ })).toBeNull();
   expect(screen.getByRole("button", { name: /^Fix dashes/ })).toBeInTheDocument();
 });
+
+test("Import… is held while a save of the level is in flight", async () => {
+  // An import appends to the level as it stands on the server; a whole-layer
+  // PUT landing after it would write the layer back without what it added.
+  serve({ rules: [STRIP, QUOTES], off: [] });
+  let release!: (b: RegexBundle) => void;
+  vi.mocked(api.putRegex).mockImplementationOnce(
+    () => new Promise<RegexBundle>((r) => { release = r; }));
+  render(<RegexRulesEditor scope={GLOBAL} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Move Curly quotes up" }));
+  await waitFor(() => expect(api.putRegex).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("button", { name: "Import…" })).toBeDisabled();
+  release(bundle({ rules: [QUOTES, STRIP], off: [] }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Import…" })).toBeEnabled());
+});
+
+test("an imported rule with malformed notes still opens", async () => {
+  const odd = rule("r-odd", {
+    name: "Odd import", imported: { from: "sillytavern", pattern: "/a/" } as never,
+  });
+  serve({ rules: [odd], off: [] });
+  await open("Odd import");
+  expect(screen.getByRole("heading", { name: "Imported notes" })).toBeInTheDocument();
+  expect(screen.getByText("/a/")).toBeInTheDocument();
+});

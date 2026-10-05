@@ -98,3 +98,10 @@ test("Escape closes it", async () => {
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onClose).toHaveBeenCalled();
 });
+
+test("Import selected is held while the level is being saved", async () => {
+  wrap(<RegexImportDialog scope={GLOBAL} held onDone={() => {}} onClose={() => {}} />);
+  pick("[]");
+  await screen.findByText("Edge lines");
+  expect(screen.getByRole("button", { name: "Import selected" })).toBeDisabled();
+});

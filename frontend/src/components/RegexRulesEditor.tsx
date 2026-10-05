@@ -347,7 +347,10 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
             <div className="side-section">
               <h4>Imported notes</h4>
               <div className="field-hint">From {r.imported.from}: <code>{r.imported.pattern}</code></div>
-              {r.imported.notes.map((n) => <div key={n} className="field-hint">{n}</div>)}
+              {/* The server normalises this, but a hand-edited file read by an
+                  older server could carry anything; a missing list draws nothing. */}
+              {(Array.isArray(r.imported.notes) ? r.imported.notes : []).map((n) =>
+                <div key={n} className="field-hint">{n}</div>)}
             </div>
           )}
           {e === null && (
@@ -517,7 +520,10 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
           </div>
         ))}
         <button className="primary new" onClick={startNew}>+ New rule</button>
-        <button className="subtle new" onClick={() => setImporting(true)}>Import…</button>
+        {/* Held while a save is in flight: an import appends to the level as
+            the server has it, and a whole-layer PUT landing after it would
+            write the layer back without the rules it added. */}
+        <button className="subtle new" disabled={saving} onClick={() => setImporting(true)}>Import…</button>
         <details className="regex-test-panel">
           <summary>Test rules</summary>
           <RegexTestPane key={scopeKey} scope={apiScope} draft={testDraft} connections={connections} />
@@ -541,7 +547,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
         )}
       </div>
       {importing && (
-        <RegexImportDialog scope={apiScope} onClose={() => setImporting(false)}
+        <RegexImportDialog scope={apiScope} held={saving} onClose={() => setImporting(false)}
                            onDone={() => { setImporting(false); void reload(); }} />
       )}
     </div>

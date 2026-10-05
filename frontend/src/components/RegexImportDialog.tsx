@@ -24,9 +24,11 @@ const findRegexOf = (original: unknown): string | null => {
  *  here and only its JSON is sent, so a file that is not JSON never reaches the
  *  server. Every row the translator could carry across is offered, checked;
  *  one it could not is listed with its reason and cannot be chosen. Nothing is
- *  written until `Import selected`, and `onDone` follows a landed write. */
-export function RegexImportDialog({ scope, onDone, onClose }: {
-  scope: RegexScope; onDone: () => void; onClose: () => void;
+ *  written until `Import selected`, and `onDone` follows a landed write.
+ *  `held` keeps `Import selected` off while the level is being saved elsewhere,
+ *  for the reason the editor holds its own Import… button. */
+export function RegexImportDialog({ scope, held = false, onDone, onClose }: {
+  scope: RegexScope; held?: boolean; onDone: () => void; onClose: () => void;
 }) {
   const [rows, setRows] = useState<RegexImportRow[] | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
@@ -110,7 +112,8 @@ export function RegexImportDialog({ scope, onDone, onClose }: {
         ))}
         <div className="form-actions">
           <button className="subtle" onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={busy || chosen.length === 0} onClick={() => void submit()}>
+          <button className="primary" disabled={busy || held || chosen.length === 0}
+                  onClick={() => void submit()}>
             Import selected
           </button>
         </div>
