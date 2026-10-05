@@ -72,6 +72,8 @@ from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, now_iso, slugify, uniquify
+from .regex import rewrites as regex_rewrites
+from .scenes import identity as scenes_identity
 from .scenes import lifecycle as scenes_lifecycle
 from .scenes import paths as scenes_paths
 from .scenes import read as scenes_read
@@ -620,6 +622,8 @@ def _cut_after(cid: str, from_scene: str) -> dict:
         records += report.get("records", 0)
         refused.extend(report.get("refused", []))
         failed.extend(f"{sid}/{step}" for step in report.get("failed", []))
+        # Read while the transcript that carries it is certainly there.
+        identity = scenes_identity.scene_identity(cid, sid)
         try:
             scenes_lifecycle.delete_scene(cid, sid)
         except Exception:       # as above
@@ -627,6 +631,17 @@ def _cut_after(cid: str, from_scene: str) -> dict:
             failed.append(sid)
             continue
         removed.append(sid)
+        # The stored-rewrite record travelled with the copy, keyed by the
+        # identity the copy kept, and holds the originals of posts this cut
+        # just took off. Dropped as the scene DELETE route drops it, since
+        # `delete_scene` cannot (`store.regex` imports `store.scenes`).
+        if identity:
+            try:
+                regex_rewrites.drop(cid, identity)
+            except Exception:   # as above
+                log.warning("fork %s: could not drop the stored rewrites of %s",
+                            cid, sid, exc_info=True)
+                failed.append(f"{sid}/rewrites")
     removed.reverse()           # report in play order, not the order they went
     return {"removed_scenes": removed, "records": records,
             "refused": refused, "failed": failed}

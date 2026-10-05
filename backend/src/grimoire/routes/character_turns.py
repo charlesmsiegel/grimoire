@@ -499,7 +499,8 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
         else:
             saved()
         if text and rewrite:
-            streaming._record_rewrite(cid, sid, record["id"], *rewrite, text)
+            streaming._record_rewrite(cid, sid, record["id"], *rewrite, text,
+                                      streaming._active_variant(cid, sid, record["id"]))
         streaming._turn_settled(cid)
         if text and tracked is not None:
             # Marked HERE, in the hold that wrote the variant, where the
@@ -1435,7 +1436,7 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
         )
         store.responses.activate(cid, sid, rid, variant["id"])
         if rewrite:
-            streaming._record_rewrite(cid, sid, rid, *rewrite, text.strip())
+            streaming._record_rewrite(cid, sid, rid, *rewrite, text.strip(), variant["id"])
         # A reroll is a swipe to a new variant: every later tracker record was
         # built on the one it replaced. In this hold, with the swap; fail-soft.
         tracker_routes.after_swipe(cid, sid, rid)

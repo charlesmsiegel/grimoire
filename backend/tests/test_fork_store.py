@@ -21,6 +21,7 @@ from grimoire.store import (
     scenes,
     worlds,
 )
+from grimoire.store.regex import rewrites
 
 
 @pytest.fixture
@@ -505,3 +506,19 @@ def _fork_png() -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
     return buf.getvalue()
+
+
+def test_a_retrospective_fork_drops_the_cut_scenes_rewrite_records(cid):
+    """A scene the fork cut leaves no record of what its posts said: the
+    stored-rewrite file is keyed by the scene's identity, which the copy kept."""
+    kept, cut = _played(cid, "Opening"), _played(cid, "Later")
+    for sid in (kept, cut):
+        rewrites.record(cid, sid, "k", original="She paused...", rules=["r-1"], stored="x")
+    kept_ident = scenes.scene_identity(cid, kept)
+    cut_ident = scenes.scene_identity(cid, cut)
+
+    child = fork.fork_campaign(cid, "Branch", from_scene=kept)["id"]
+    assert rewrites.path(child, kept_ident).exists()
+    assert not rewrites.path(child, cut_ident).exists()
+    # The source is never written to.
+    assert rewrites.path(cid, cut_ident).exists()
