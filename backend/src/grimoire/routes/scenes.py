@@ -530,21 +530,41 @@ def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
     refs = store.responses.actor_refs(cid, sid)
     scene["messages"] = store.regex.view.annotate_shown(
         scene["messages"], cid=cid, offset=scene.get("offset", 0), total=scene.get("total"))
-    rewritten = _rewritten_keys(cid, sid)
+    rewritten = store.regex.rewrites.read_all(cid, sid)
     for message in scene["messages"]:
         ref = refs.get(message.get("response_id", ""))
         if ref:
             message["actor_ref"] = ref
-        if rewritten and (message.get("response_id") in rewritten
-                          or message.get("post_id") in rewritten):
+        if rewritten and _still_rewritten(message, rewritten):
             message["rewritten"] = True
     return scene
 
 
-def _rewritten_keys(cid: str, sid: str) -> set[str]:
-    """The `response_id`/`post_id` of every message a stored-phase rule rewrote
-    in this scene. Nothing records one yet."""
-    return set()
+def _still_rewritten(message: dict, records: dict[str, dict]) -> bool:
+    """Whether the store phase's record for this message (by `response_id`, else
+    `post_id`) still describes it. A record is kept per key, and a reroll or a
+    swipe puts other text under the same `response_id` -- so the flag, and the
+    Restore it offers, holds only while the message says what the rewrite
+    stored. Restoring a record the text has moved past would overwrite the
+    newer text with an original that was never its own."""
+    for key in (message.get("response_id"), message.get("post_id")):
+        rec = records.get(key or "")
+        if rec is not None:
+            stored = rec.get("stored")
+            content = message.get("content")
+            return (isinstance(stored, str) and isinstance(content, str)
+                    and stored.strip() == content.strip())
+    return False
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/rewrites")
+def get_scene_rewrites(cid: str, sid: str):
+    """What the store phase rewrote in this scene, `{key: {original, rules,
+    at}}` by `response_id` or `post_id` -- the originals Restore writes back."""
+    _require_scene(cid, sid)
+    return {key: {"original": rec["original"], "rules": rec.get("rules", []),
+                  "at": rec.get("at", "")}
+            for key, rec in store.regex.rewrites.read_all(cid, sid).items()}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}")
@@ -573,11 +593,24 @@ def delete_scene(cid: str, sid: str, request: Request):
     # reply from being thrown away in the first place.
     try:
         with runs.scene_held_free(request.app, cid, sid):
+            # Read while the transcript that carries it is certainly there.
+            identity = store.scenes.scene_identity(cid, sid)
             store.scenes.delete_scene(cid, sid)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
+    # The store phase's record, keyed by that identity. Here rather than in
+    # `lifecycle.delete_scene` beside the tracker's, because `store.regex`
+    # imports `store.scenes` and the reverse edge would close a cycle. After the
+    # delete and fail-soft, for the tracker's reason: identities are never
+    # reused, so an orphan can be adopted by no scene and is only disk.
+    if identity:
+        try:
+            store.regex.rewrites.drop(cid, identity)
+        except Exception:
+            log.warning("delete_scene: could not drop the stored rewrites of %s/%s (%s)",
+                        cid, sid, identity, exc_info=True)
     return {"ok": True}
 
 
@@ -780,8 +813,12 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # Macros resolved once at persist time (#137): a player's
             # {{roll:1d20}} must not re-roll on every later context build
             # (retry, next turn, ...).
-            content = store.context.expand_macros(
+            original = store.context.expand_macros(
                 turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
+            # The store phase (regex spec 5.1), on the expanded post and before
+            # it is written. `content` is what the transcript holds, which is
+            # also what the take-back below matches the post by.
+            content, fired = store.regex.view.store_phase(original, cid=cid, role="user")
             # The id is minted here, in the same hold as the append, for every
             # new post whatever the tracker's setting: the tracker keys a
             # record to a user post by it (an index renumbers on every cut),
@@ -790,6 +827,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             post_id = uuid.uuid4().hex
             posted_at = store.scenes.append_message(
                 cid, sid, "user", content, speaker=speaker, post_id=post_id)
+            if fired:
+                streaming._record_rewrite(cid, sid, post_id, original, fired, content)
             # The tracker's `pending` mark, in the hold that wrote the post:
             # the acquisition is reentrant here, where after the hold it would
             # be a second wait on the campaign lock in front of the turn.
@@ -5010,8 +5049,9 @@ def _with_avatar_v(cid: str, actor: dict) -> dict:
 def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
                       request: Request):
     _require_scene(cid, sid)
-    # Macros resolved once at persist time (#137), same as a fresh send.
-    content = store.context.expand_macros(
+    # Macros resolved once at persist time (#137), same as a fresh send. Not for
+    # a restore: the original it writes back went through them when it landed.
+    content = body.content if body.restore else store.context.expand_macros(
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
     try:
         # Same pairing as `_persist_reply`: every write to the transcript is
@@ -5031,11 +5071,34 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
                     store.responses.editable(cid,sid,messages[index]["response_id"])
                 except store.responses.ResponseConflict as exc:
                     raise HTTPException(409,detail={"kind":exc.kind,"detail":exc.detail}) from exc
+            target = messages[index] if 0 <= index < len(messages) else {}
+            # The store phase runs on what the player typed, with the edited
+            # message's role and the connection that produced it -- but only
+            # where a record can be kept. A message with neither id (one written
+            # before ids existed) has nothing to key one by, and rewriting it
+            # would change text that Restore could never give back; a synthetic
+            # line has no role. A restore runs no phase at all: it would
+            # rewrite the original straight back.
+            key = target.get("response_id") or target.get("post_id")
+            role = store.regex.apply.role_of(target)
+            original = content
+            fired: list[str] = []
+            if key and role and not body.restore:
+                content, fired = store.regex.view.store_phase(
+                    original, cid=cid, role=role, connection=target.get("connection") or "")
             store.scenes.edit_message(cid, sid, index, content)
             try:
                 store.alternates.reconcile(cid, sid)
             except OSError:
                 pass          # the edit is on disk; the sidecar is not a reason to fail it
+            if key:
+                # Only the latest rewrite is kept: one that fired replaces the
+                # record, and any other edit -- a restore included -- leaves
+                # the player's own text, with nothing to restore.
+                if fired:
+                    streaming._record_rewrite(cid, sid, key, original, fired, content)
+                else:
+                    _forget_rewrite(cid, sid, key)
             # The post's tracker record describes text that is no longer there,
             # and every later record was built on it. Flagged, not re-run (the
             # spec's "nothing re-runs automatically"), and in this hold so no
@@ -5046,6 +5109,16 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
     except store.scenes.RollMessageImmutable:
         raise HTTPException(status_code=400, detail="a dice roll's transcript line can't be edited")
     return {"ok": True}
+
+
+def _forget_rewrite(cid: str, sid: str, key: str) -> None:
+    """Drop a message's stored-rewrite record, fail-soft: the edit is on disk,
+    and a record left behind no longer matches its text, so nothing flags it."""
+    try:
+        store.regex.rewrites.forget(cid, sid, key)
+    except OSError:
+        log.warning("could not forget the stored rewrite of %s in %s/%s",
+                    key, cid, sid, exc_info=True)
 
 
 @router.delete("/campaigns/{cid}/scenes/{sid}/messages/{index}")

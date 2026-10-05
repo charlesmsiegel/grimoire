@@ -36,6 +36,7 @@ import itertools
 import json
 import logging
 import time
+import uuid
 
 import anyio
 from fastapi.responses import StreamingResponse
@@ -208,6 +209,46 @@ def _visible_frames(display, text: str, *, last: bool = False) -> list[str]:
     return [_sse({"display": f}) for f in frames if f]
 
 
+def _store_phase(cid: str, segments: list[dict], connection: str) -> list[tuple]:
+    """Run the store phase over a reply's segments in place, returning
+    `(post_id, original, fired, stored)` for each one it rewrote.
+
+    A segment has no `response_id` to key its record by, so one the phase
+    changed gets a `post_id` minted for it here, before the append writes it.
+    Only one it changed: a segment nothing rewrote keeps the plain block it
+    always had, so a store with no `rewrite_stored` rule writes the transcript
+    it wrote before rules existed. A segment the rewrite emptied is not
+    written, so it records nothing."""
+    out = []
+    for seg in segments:
+        role = store.regex.apply.role_of({"role": "assistant", "speaker": seg["speaker"]})
+        if role is None:
+            continue
+        stored, fired = store.regex.view.store_phase(
+            seg["content"], cid=cid, role=role, connection=connection)
+        if not fired:
+            continue
+        original, seg["content"] = seg["content"], stored
+        if stored.strip():
+            seg["post_id"] = uuid.uuid4().hex
+            out.append((seg["post_id"], original, fired, stored))
+    return out
+
+
+def _record_rewrite(cid: str, sid: str, key: str, original: str, fired: list[str],
+                    stored: str) -> None:
+    """Record what the store phase changed, from inside the hold that wrote
+    `stored`. Fail-soft: the rewritten text is already in the transcript, and a
+    record file that cannot be written must not turn a landed post into a
+    failed one -- it costs Restore original for that message, and is logged."""
+    try:
+        store.regex.rewrites.record(cid, sid, key, original=original, rules=fired,
+                                    stored=stored)
+    except OSError:
+        _log.warning("could not record the stored rewrite of %s in %s/%s",
+                     key, cid, sid, exc_info=True)
+
+
 def _persist_reply(cid: str, sid: str, text: str, connection: str = "") -> int:
     """Split one model reply into per-speaker posts and append them (#744),
     returning how many actually landed.
@@ -227,7 +268,9 @@ def _persist_reply(cid: str, sid: str, text: str, connection: str = "") -> int:
     Macros are expanded before persisting (#137): {{roll}}/{{random}} must be
     resolved once, not re-rolled on every future context build that re-reads
     this now-historical message. Goes through append_reply so the generation
-    records its own turn boundary for drift measurement.
+    records its own turn boundary for drift measurement. The store phase runs
+    on each expanded segment (`_store_phase`), and what it rewrote is recorded
+    in the same hold as the append.
 
     A trailing legacy ``state`` block is split off FIRST, so it never reaches
     `split_reply` and so cannot become a post. Nothing records what it said any
@@ -258,6 +301,7 @@ def _persist_reply(cid: str, sid: str, text: str, connection: str = "") -> int:
                  "content": store.context.expand_macros(seg["content"], subs, cid, sid),
                  **({"connection": connection} if connection else {})}
                 for seg in store.scenes.split_reply(text, players)]
+    rewritten = _store_phase(cid, segments, connection)
     # One lock over both: a reply landing in a slot a reroll emptied is a
     # variant that exists only in the transcript until `reconcile` writes it
     # down, and an edit arriving in between would destroy it. Reentrant, so the
@@ -278,6 +322,8 @@ def _persist_reply(cid: str, sid: str, text: str, connection: str = "") -> int:
             # transcript, never a reason to lose or misreport one. The cost is
             # the round-eleven durability window staying open for this turn.
             pass
+        for post_id, original, fired, stored in rewritten:
+            _record_rewrite(cid, sid, post_id, original, fired, stored)
         # Counted the way `append_reply` filters, because that is what it wrote.
         kept = sum(1 for s in segments if s["content"].strip())
         if kept:
