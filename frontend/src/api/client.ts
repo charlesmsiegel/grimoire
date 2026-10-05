@@ -1731,6 +1731,19 @@ export const api = {
                  patch: { name?: string; body?: string; keys?: string; owners?: string;
                           secrecy?: string; fields?: Record<string, string>; rev?: string }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
+  /** What a record's stashed SillyTavern settings would still add: the native
+   *  fields they map to, and the stash keys that map to nothing. Read-only. */
+  previewAdoptSt: (scope: EntityScope, kind: EntityKind, id: string) =>
+    request<{ fields: Record<string, string>; unmapped: string[] }>(
+      "GET", `${entityBase(scope)}/${kind}/${id}/adopt-st`),
+  adoptSt: (scope: EntityScope, kind: EntityKind, id: string) =>
+    request<{ applied: Record<string, string> }>(
+      "POST", `${entityBase(scope)}/${kind}/${id}/adopt-st`),
+  /** Every record of the world (or the campaign's own), all kinds. */
+  adoptStAll: (scope: EntityScope) =>
+    request<{ applied: { kind: string; id: string; fields: Record<string, string> }[];
+              skipped: { kind: string; id: string; reason: string }[] }>(
+      "POST", `${entityBase(scope)}/adopt-st`),
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),
   /** Move a record to another generic kind, keeping its id where the

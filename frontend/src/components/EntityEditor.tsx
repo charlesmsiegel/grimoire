@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
-import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
+import { ACTIVATION_FIELDS, ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
 import { errorText } from "../api/errors";
 import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
 import { THUMB, thumbSet } from "../api/thumbs";
@@ -173,6 +173,25 @@ function changedFields(
  *  stringify something that has no spelling. */
 const parseRefs = (v: string | undefined): string[] =>
   (v ?? "").split(",").map((r) => r.trim()).filter(Boolean);
+
+/** The activation controls as the field specs the form already knows how to
+ *  draw. `bool` has no spec (it is a checkbox, drawn by hand below); `refs` is
+ *  the multi-ref picker over the two kinds of actor `known_by` may name. */
+const KNOWN_BY_SPEC: EntityFieldSpec = {
+  key: "known_by", label: "Known by", widget: "ref", kinds: ["characters", "pcs"], multi: true,
+};
+const activationSpec = (a: (typeof ACTIVATION_FIELDS)[number]): EntityFieldSpec =>
+  a.widget === "refs" ? KNOWN_BY_SPEC
+    : { key: a.key, label: a.label, widget: a.widget as EntityFieldSpec["widget"],
+        min: a.min, max: a.max, options: a.options };
+// Read at call time, not at import: this module is loaded by suites that mock
+// the client without the catalog and never render an editor.
+const activationKeys = () => ACTIVATION_FIELDS.map((a) => a.key);
+// Timed and windowed values count posts, and the chip says so.
+const ACTIVATION_POSTS = new Set(["sticky", "cooldown", "scan_depth"]);
+// `keep` is "true" or absent on the backend; anything else reads as off there,
+// so the sidebar must not draw a chip for it either.
+const isKeepOn = (v: string | undefined) => (v ?? "").trim().toLowerCase() === "true";
 
 // What a ref that resolves to nothing says when hovered. Not an error and not
 // hidden: a delete deliberately leaves refs dangling (#222), so the chip's job
@@ -440,6 +459,16 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   const [images, setImages] = useState<{ name: string; v: string; description?: string }[]>([]);
   const [contentPreview, setContentPreview] = useState<ModuleContentEntry | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  // Whether the form's Activation disclosure is open. Its contents are drawn
+  // only while it is: they include a second picker over every character and PC,
+  // and a closed one that still rendered them would put two checkboxes named
+  // for the same actor on every lore form -- one under Owners, one here.
+  const [activationOpen, setActivationOpen] = useState(false);
+  // What the record's stashed SillyTavern settings would still add (spec 4.2):
+  // null when there is no stash, nothing pending, or the preview did not load.
+  const [adopt, setAdopt] = useState<{ fields: Record<string, string>; unmapped: string[] } | null>(null);
+  // The bulk button's one-line outcome.
+  const [adoptAllNote, setAdoptAllNote] = useState<string | null>(null);
   const shelfFileRef = useRef<HTMLInputElement>(null);
   const label = KIND_LABELS[kind];
 
@@ -513,6 +542,31 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wid, kind, scope.kind, scope.id]);
 
+  // The actors `known_by` may name, fetched on their own and only when something
+  // draws them -- the Activation disclosure is open, or the record being read
+  // already has a `known_by`. Opening a section is counted by what it lists
+  // (WorldView.test pins it), and a picker nobody opened is not worth two
+  // listings per mount on every kind. The token is bumped whether or not a
+  // fetch follows, so a reply for a scope or a need that has gone is dropped.
+  const [actorOpts, setActorOpts] = useState<RecordRef[]>([]);
+  const [actorsComplete, setActorsComplete] = useState(false);
+  const actorReq = useRef(0);
+  const wantActors = activationOpen || (loadedFields.known_by ?? "").trim() !== "";
+  useEffect(() => {
+    const req = ++actorReq.current;
+    setActorOpts((cur) => (cur.length ? [] : cur));   // same array: no re-render
+    setActorsComplete(false);
+    if (!wantActors) return;
+    refOptions(scope, KNOWN_BY_SPEC.kinds ?? [])
+      .then(({ options, failed }) => {
+        if (req !== actorReq.current) return;
+        setActorOpts(options);
+        setActorsComplete(failed.length === 0);
+      })
+      .catch(() => { if (req === actorReq.current) setActorOpts([]); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wid, kind, scope.kind, scope.id, wantActors]);
+
   /** The candidates one field may name — the same filter the form's picker
    *  applies. The sidebar has to use it too: resolving a value against the
    *  WHOLE union let a `leader` holding `locations:realm` resolve off the
@@ -520,9 +574,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
    *  chip, so the read view called a malformed relationship valid while the
    *  form, one click away, correctly showed it unresolved. */
   const optionsFor = useCallback(
-    (spec: EntityFieldSpec) => refOpts.filter((o) => spec.kinds?.includes(o.kind)),
-    [refOpts],
+    (spec: EntityFieldSpec) =>
+      (spec === KNOWN_BY_SPEC ? actorOpts : refOpts).filter((o) => spec.kinds?.includes(o.kind)),
+    [refOpts, actorOpts],
   );
+  const completeFor = (spec: EntityFieldSpec) =>
+    spec === KNOWN_BY_SPEC ? actorsComplete : refOptsComplete;
 
   /** The record one of `spec`'s stored refs names, or null when nothing this
    *  field may name answers to it — deleted, out of scope, its listing failed,
@@ -595,6 +652,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     setImages([]);
     setContentPreview(null);
     setWizardOpen(false);
+    setAdopt(null);
+    setActivationOpen(false);
     setMode("edit"); // a brand-new entry goes straight to the form
   }
 
@@ -611,15 +670,59 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
     const loaded = Object.fromEntries(
-      fieldSpecs.map((f) => [f.key, String((e.meta as any)[f.key] ?? "")]));
+      [...fieldSpecs.map((f) => f.key), ...activationKeys()]
+        .map((k) => [k, String((e.meta as any)[k] ?? "")]));
     setFields(loaded);
     setLoadedFields(loaded);
+    // Open when the record already sets something in it: that is what the
+    // reader came to see, and what they would otherwise have to go looking for.
+    setActivationOpen(activationKeys().some((k) => loaded[k].trim() !== ""));
     setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
     setSecrecy(asSecrecy(e.meta.secrecy));
     setSdPrompt(e.meta.sd_prompt ?? "");
     setTokenCost(typeof e.tokens === "number" ? e.tokens : null);
     setMode("view");
     reloadImages(id);
+    // Asked only of a record that carries a stash: nothing else can have
+    // anything to adopt, and most records are not imports. Its failure is
+    // silence -- the banner is an offer, not something the record needs.
+    setAdopt(null);
+    const stash = e.meta.st_extensions;
+    if (typeof stash === "string" && stash.trim()) {
+      api.previewAdoptSt(scope, kind, id)
+        .then((p) => {
+          if (req === readReq.current) {
+            setAdopt(Object.keys(p.fields).length ? p : null);
+          }
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  async function applyAdopt() {
+    if (!editing) return;
+    setError(null);
+    try {
+      await api.adoptSt(scope, kind, editing);
+      await reload();
+      await select(editing);   // the new values, and a banner with nothing left
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
+  async function applyAdoptAll() {
+    setError(null);
+    setAdoptAllNote(null);
+    try {
+      const r = await api.adoptStAll(scope);
+      setAdoptAllNote(`Applied to ${r.applied.length} ${r.applied.length === 1 ? "entry" : "entries"}; `
+        + `${r.skipped.length} skipped`);
+      await reload();
+      if (editing) await select(editing);
+    } catch (err) {
+      setError(errorText(err));
+    }
   }
 
   async function selectContent(id: string) {
@@ -972,6 +1075,52 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     </label>
   )), [ownerOpts, owners]);
 
+  /** One declared field as its control -- the kind's own fields and the
+   *  Activation disclosure's both go through here. */
+  const renderSpec = (f: EntityFieldSpec) => {
+    const set = (v: string) => setFields({ ...fields, [f.key]: v });
+    const value = fields[f.key] ?? "";
+    switch (f.widget) {
+      case "ref":
+        return (
+          <RefField key={f.key} spec={f} options={optionsFor(f)} value={value}
+                    unresolvedHint={completeFor(f) ? DANGLING_HINT : UNLOADED_HINT}
+                    optionsComplete={completeFor(f)} onChange={set} />
+        );
+      case "choice":
+        return (
+          <ChoiceField key={f.key} spec={f} options={choiceOptions(f, choiceOpts)}
+                       value={value} onChange={set} />
+        );
+      case "number":
+        if (!numberInputCanShow(value)) break;   // the text box below
+        // `step="any"`: the bound is on the value, not its precision --
+        // a persistence of 0.35 is as valid as 0.5.
+        return (
+          <Field key={f.key} label={f.label}>
+            <input type="number" value={value} min={f.min} max={f.max} step="any"
+                   onChange={(e) => set(e.target.value)} />
+          </Field>
+        );
+      default:
+        break;
+    }
+    return (
+      <Field key={f.key} label={f.label}>
+        <input type="text" value={value} onChange={(e) => set(e.target.value)} />
+      </Field>
+    );
+  };
+
+  // The set activation controls as sidebar chips, in catalog order. `known_by`
+  // is not among them: it names records, so it gets chips of its own.
+  const activationChips: [string, string][] = ACTIVATION_FIELDS.flatMap((a) => {
+    const v = (fields[a.key] ?? "").trim();
+    if (!v || a.widget === "refs") return [];
+    if (a.widget === "bool") return isKeepOn(v) ? [[a.key, a.label] as [string, string]] : [];
+    return [[a.key, `${a.label}: ${v}${ACTIVATION_POSTS.has(a.key) ? " posts" : ""}`] as [string, string]];
+  });
+
   return (
     <div className="editor">
       {/* A rail, where the design has a full-width grid of image cards with
@@ -990,6 +1139,18 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
           detail to settle here. */}
       <div className="editor-list">
         <Link className="primary new" to={sectionPath}>+ New {label}</Link>
+        {/* Adoption is per record on the banner, and here for the whole
+            library: a world's worth of imported entries is not something to
+            walk one at a time. It sweeps every kind, which is why it lives
+            on the one rail an import fills, not on each. */}
+        {kind === "lore" && (
+          <>
+            <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}>
+              Apply imported settings to all
+            </button>
+            {adoptAllNote && <div className="field-hint" role="status">{adoptAllNote}</div>}
+          </>
+        )}
         {/* Shown once there is enough to lose something in. Below that the
             filter is a control that costs a row and saves nothing. */}
         {items.length > 8 && (
@@ -1061,6 +1222,22 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         ) : mode === "view" && editing ? (
           <div className="detail-view">
             <div className="detail-main">
+              {adopt && (
+                <div className="banner adopt-banner" role="status" aria-label="Imported settings">
+                  <p>
+                    <strong>This entry carries imported SillyTavern settings that are not
+                    applied yet:</strong>{" "}
+                    {Object.entries(adopt.fields).map(([k, v], i) => (
+                      <span key={k}>{i > 0 && ", "}<code title={`${k}: ${v}`}>{k}</code></span>
+                    ))}
+                    .
+                    {adopt.unmapped.length > 0 && (
+                      <> Not mapped to anything here: {adopt.unmapped.join(", ")}.</>
+                    )}
+                  </p>
+                  <button className="subtle" onClick={() => { void applyAdopt(); }}>Apply</button>
+                </div>
+              )}
               {editing && hasPrimary ? (
                 <div className="loc-head">
                   <img className="loc-head-img" alt={`${name} primary`} decoding="async"
@@ -1191,6 +1368,46 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                   </div>
                 </div>
               ))}
+              {(activationChips.length > 0 || parseRefs(fields.known_by).length > 0) && (
+                <div className="side-section">
+                  <h4>Activation</h4>
+                  {activationChips.length > 0 && (
+                    <div className="chips">
+                      {activationChips.map(([key, text]) => (
+                        <span key={key} className="chip on">{text}</span>
+                      ))}
+                    </div>
+                  )}
+                  {parseRefs(fields.known_by).length > 0 && (
+                    <>
+                      <div className="field-hint">Known by</div>
+                      <div className="chips">
+                        {parseRefs(fields.known_by).map((ref) => {
+                          const hit = resolveRef(KNOWN_BY_SPEC, ref);
+                          if (hit) {
+                            return (
+                              <button key={ref} className="chip owner-chip"
+                                      onClick={() => onOpenOwner?.(ref)}>
+                                <Portrait src={hit.avatar ?? null} name={hit.label} />
+                                {hit.label}
+                              </button>
+                            );
+                          }
+                          // Gone only if the listing actually arrived; a failed
+                          // or pending one has no standing to say so.
+                          return actorsComplete ? (
+                            <span key={ref} className="chip missing" title={DANGLING_HINT}>
+                              missing: {ref}
+                            </span>
+                          ) : (
+                            <span key={ref} className="chip dangling" title={UNLOADED_HINT}>{ref}</span>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               {sdPrompt && (
                 <div className="side-section">
                   <h4>Image prompt</h4>
@@ -1280,40 +1497,26 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                 ))}
               </div>
             </Field>
-            {fieldSpecs.map((f) => {
-              const set = (v: string) => setFields({ ...fields, [f.key]: v });
-              const value = fields[f.key] ?? "";
-              switch (f.widget) {
-                case "ref":
-                  return (
-                    <RefField key={f.key} spec={f} options={optionsFor(f)} value={value}
-                              unresolvedHint={unresolvedHint} optionsComplete={refOptsComplete}
-                              onChange={set} />
-                  );
-                case "choice":
-                  return (
-                    <ChoiceField key={f.key} spec={f} options={choiceOptions(f, choiceOpts)}
-                                 value={value} onChange={set} />
-                  );
-                case "number":
-                  if (!numberInputCanShow(value)) break;   // the text box below
-                  // `step="any"`: the bound is on the value, not its precision --
-                  // a persistence of 0.35 is as valid as 0.5.
-                  return (
-                    <Field key={f.key} label={f.label}>
-                      <input type="number" value={value} min={f.min} max={f.max} step="any"
-                             onChange={(e) => set(e.target.value)} />
-                    </Field>
-                  );
-                default:
-                  break;
-              }
-              return (
-                <Field key={f.key} label={f.label}>
-                  <input type="text" value={value} onChange={(e) => set(e.target.value)} />
-                </Field>
-              );
-            })}
+            {fieldSpecs.map(renderSpec)}
+            {/* One disclosure for every kind, closed unless the record already
+                sets something in it: most entries use none of these, and nine
+                controls under every body would bury the four that matter. The
+                summary toggles state rather than the native `open`, so the
+                contents can be left undrawn while it is shut. */}
+            <details className="activation-settings" open={activationOpen}>
+              <summary onClick={(e) => { e.preventDefault(); setActivationOpen(!activationOpen); }}>
+                Activation
+              </summary>
+              {activationOpen && ACTIVATION_FIELDS.map((a) => (
+                a.widget === "bool" ? (
+                  <Field key={a.key} label={a.label}
+                         hint="keep this entry when the world-info budget has to drop others">
+                    <input type="checkbox" checked={isKeepOn(fields[a.key])}
+                           onChange={(e) => setFields({ ...fields, [a.key]: e.target.checked ? "true" : "" })} />
+                  </Field>
+                ) : renderSpec(activationSpec(a))
+              ))}
+            </details>
             {kind === "lore" && (
               <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
                 <div className="chips owner-picker">

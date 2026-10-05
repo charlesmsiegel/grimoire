@@ -585,6 +585,37 @@ export const ENTITY_FIELDS: Record<EntityKind, EntityFieldSpec[]> = {
   ],
 };
 
+/** One activation control on a world-info entry. Mirrors
+ *  `store.lore_fields.FIELD_KEYS`, in the same order, and its bounds and enums:
+ *  a bound declared here and not there is an input offering what the save
+ *  boundary refuses with a 400. Every kind carries them, so they live beside
+ *  `ENTITY_FIELDS` rather than inside any one kind's list.
+ *
+ *  Values are flat strings like every other frontmatter field. `bool` is the
+ *  string `"true"`, and its off state is the BLANK string -- the backend takes
+ *  no `"false"` -- which is also how any field is cleared. `refs` is a comma
+ *  list of `characters:<id>` / `pcs:<id>`. */
+export const ACTIVATION_FIELDS: {
+  key: string;
+  label: string;
+  widget: "text" | "number" | "choice" | "bool" | "refs";
+  min?: number;
+  max?: number;
+  options?: string[];
+}[] = [
+  { key: "secondary_keys", label: "Secondary keys", widget: "text" },
+  { key: "key_logic", label: "Key logic", widget: "choice",
+    options: ["and_any", "and_all", "not_any", "not_all"] },
+  { key: "scan_depth", label: "Scan depth", widget: "number", min: 0, max: 100 },
+  { key: "sticky", label: "Sticky", widget: "number", min: 0, max: 50 },
+  { key: "cooldown", label: "Cooldown", widget: "number", min: 0, max: 50 },
+  { key: "priority", label: "Priority", widget: "number", min: 0, max: 1000 },
+  { key: "keep", label: "Keep under budget", widget: "bool" },
+  { key: "recursion", label: "Recursion", widget: "choice",
+    options: ["both", "pulled_only", "pulls_only", "none"] },
+  { key: "known_by", label: "Known by", widget: "refs" },
+];
+
 // Mirrors store.entities.SECRECY_LEVELS. `owners` says what puts an entry in
 // the prompt; `secrecy` says how the prompt may use it once there — "secret"
 // renders under a "don't let uninvolved characters reveal this" heading,
