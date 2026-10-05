@@ -414,6 +414,56 @@ test("Keep stored drops the row from the batch entirely", async () => {
   expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([]);
 });
 
+// Slice D Decision 19: a review staged before one of its records was merged
+// away is refused at save, and the panel's generic save-error path is the whole
+// answer -- the sentence names the rows, rejecting one takes it out of the
+// batch, and the rest saves on the same token. A regression pin: the 409 branch
+// already special-cases `edit_conflicts`, and a change there that swallowed
+// this detail or read it as a conflict list would leave the reader unable to
+// save with nothing on screen saying why.
+test("a save refused for merged records explains it and saves without the rejected row",
+     async () => {
+  const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  const MAP_EDIT = { id: "plot:mara-s-map", kind: "plot",
+    target: { kind: "plot", id: "mara-s-map" }, label: "Mara's map",
+    field: "beat", before: "Mara's map — open", after: "Mara found the coast.",
+    authored: false,
+    payload: { id: "mara-s-map", title: "Mara's map", status: "advanced", scene: "s1" } };
+  absorbs({ ...LORE_REVIEW, edits: [MAP_EDIT, ...LORE_REVIEW.edits] });
+  const detail = "Mara's map was merged into Winifred's chart after this review was " +
+    "staged. Reject that row (or re-absorb) and save again.";
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, detail, "edits_target_merged",
+    { detail, kind: "edits_target_merged",
+      edits: [{ index: 0, id: "mara-s-map", label: "Mara's map", source: "thread:mara-s-map",
+                canonical: "thread:winifred-s-chart", canonical_title: "Winifred's chart" }] }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /accept all .* & save|save \d+ decisions/i }));
+
+  expect(await screen.findByText(`Could not save this review: ${detail}`)).toBeTruthy();
+  // Not read as a conflict list: no row offers keep / replace / merge.
+  expect(screen.queryByText(/no longer match/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /Keep stored/ })).toBeNull();
+  expect(screen.getByLabelText("Scene summary")).toBeTruthy();
+
+  showProposal(() => screen.queryByLabelText("Reject Mara's map"));
+  fireEvent.click(screen.getByLabelText("Reject Mara's map"));
+  (api.saveChronicle as any).mockResolvedValueOnce({
+    id: "s1", one_line: "o", summary: "s", keywords: [], cast: [], location: "",
+    date: "", absorbed: "t", applied: ["lore:the-pact"], failures: [] });
+  fireEvent.click(screen.getByRole("button", { name: /Try saving again/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  const second = (api.saveChronicle as any).mock.calls[1][2];
+  expect(second.edits.map((e: any) => e.id)).toEqual(["lore:the-pact"]);
+  const tokens = (api.saveChronicle as any).mock.calls.map((c: any) => c[2].commit_token);
+  expect(tokens).toEqual(["tok", "tok"]);
+  await waitFor(() => expect(screen.queryByLabelText("Scene summary")).toBeNull());
+});
+
 test("a staged dossier is editable and sent with the save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });

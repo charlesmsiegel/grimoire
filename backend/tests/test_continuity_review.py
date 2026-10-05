@@ -290,3 +290,162 @@ def test_create_link_refuses_an_occupied_null_id(cid):
                        "pays_off")
     assert (refused.status, refused.kind) == (409, "link_exists")
     assert doc.read(cid)["links"] == {lid: None}
+
+
+# ------------------------------------- a review staged before a merge (§22)
+#
+# Slice C redirects a row naming an alias source at STAGING time. A review
+# staged before the merge still names the source, and its `before` token was
+# taken from the source, so redirecting it at save would write a beat onto the
+# canonical that `check_conflicts` never vouched for. The save is refused
+# instead, naming the rows (Slice D Decision 19).
+
+MAP, CHART, FEUD = "mara-s-map", "winifred-s-chart", "the-realm-feud"
+
+
+@pytest.fixture
+def staged(client):
+    """(cid, sid): "Mara's map" and "Winifred's chart" seeded in an earlier
+    scene, a key on the active connection, and a scene "Saltmarch" with two
+    posts whose absorb moves "Mara's map" and "The Realm feud"."""
+    from grimoire import routes
+
+    from .llm_fakes import from_entries
+
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-active"})
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    s0 = store.scenes.create_scene(cid, "Saltmarch docks")
+    store.plot.set_movement(cid, MAP, "Mara's map", "open", "Stolen.", s0)
+    store.plot.set_movement(cid, CHART, "Winifred's chart", "open", "Lost.", s0)
+    store.plot.set_movement(cid, FEUD, "The Realm feud", "open", "Begun.", s0)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Saltmarch"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "Mara unrolled the map.")
+    store.scenes.append_message(cid, sid, "assistant", "Winifred traced the coast.")
+    extraction = json.dumps({
+        "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+        "plot_movements": [{"id": MAP, "status": "advanced",
+                            "beat": "Mara found the coast on the map."},
+                           {"id": FEUD, "status": "advanced",
+                            "beat": "Winifred named the Realm feud aloud."}]})
+    fake = from_entries([{"when": {"system_contains":
+                                   "You are absorbing a completed role-play scene"},
+                          "reply": extraction}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    return cid, sid
+
+
+def _absorbed(client, cid, sid) -> dict:
+    from . import review_runs
+
+    r = review_runs.absorb(client, cid, sid)
+    assert r.status_code == 200, r.json()
+    return r.json()
+
+
+def _save(client, cid, sid, body, edits=None):
+    return client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={
+        "one_line": body["one_line"], "summary": body["summary"],
+        "keywords": body["keywords"], "timeline_events": body["timeline_events"],
+        "edits": body["edits"] if edits is None else edits,
+        "commit_token": body["commit_token"]})
+
+
+def _merge(client, cid):
+    r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
+                    json={"ref": f"thread:{MAP}", "to": f"thread:{CHART}"})
+    assert r.status_code == 200, r.json()
+
+
+def _plot_index(body, pid):
+    return next(i for i, e in enumerate(body["edits"])
+                if e["kind"] == "plot" and e["target"]["id"] == pid)
+
+
+def test_a_review_staged_before_a_merge_is_refused_naming_the_merged_rows(client, staged):
+    cid, sid = staged
+    body = _absorbed(client, cid, sid)
+    index = _plot_index(body, MAP)
+    assert len(body["edits"]) > 1, "the batch needs a second row to keep"
+    _merge(client, cid)
+    before = store.plot.get(cid, MAP)
+    r = _save(client, cid, sid, body)
+    assert r.status_code == 409, r.json()
+    answer = r.json()
+    assert answer["kind"] == "edits_target_merged"
+    assert answer["detail"] == ("Mara's map was merged into Winifred's chart after this "
+                                "review was staged. Reject that row (or re-absorb) and "
+                                "save again.")
+    assert answer["edits"] == [{
+        "index": index, "id": MAP, "label": body["edits"][index]["label"],
+        "source": f"thread:{MAP}", "canonical": f"thread:{CHART}",
+        "canonical_title": "Winifred's chart"}]
+    assert store.plot.get(cid, MAP) == before
+    assert store.chronicle.get_record(cid, sid) is None
+    assert store.plot.get(cid, FEUD)["beats"][-1]["text"] == "Begun."
+
+
+def test_saving_without_the_merged_rows_succeeds(client, staged):
+    cid, sid = staged
+    body = _absorbed(client, cid, sid)
+    index = _plot_index(body, MAP)
+    _merge(client, cid)
+    before = store.plot.get(cid, MAP)
+    # Refused first, on the same token: the refusal leaves it unspent.
+    assert _save(client, cid, sid, body).status_code == 409
+    kept = [e for i, e in enumerate(body["edits"]) if i != index]
+    r = _save(client, cid, sid, body, edits=kept)
+    assert r.status_code == 200, r.json()
+    assert store.plot.get(cid, MAP) == before
+    assert store.chronicle.get_record(cid, sid) is not None
+    assert store.plot.get(cid, FEUD)["beats"][-1]["text"] == "Winifred named the Realm feud aloud."
+
+
+def test_a_review_staged_after_the_merge_saves(client, staged):
+    cid, sid = staged
+    _merge(client, cid)
+    body = _absorbed(client, cid, sid)
+    edit = body["edits"][_plot_index(body, CHART)]
+    assert "merged into Winifred's chart" in edit["label"]
+    r = _save(client, cid, sid, body)
+    assert r.status_code == 200, r.json()
+    assert store.plot.get(cid, CHART)["beats"][-1]["text"] == "Mara found the coast on the map."
+
+
+def test_a_replay_of_a_completed_save_is_not_refused(client, staged):
+    cid, sid = staged
+    body = _absorbed(client, cid, sid)
+    first = _save(client, cid, sid, body)
+    assert first.status_code == 200, first.json()
+    _merge(client, cid)
+    again = _save(client, cid, sid, body)
+    assert again.status_code == 200, again.json()
+    assert again.json() == first.json()
+
+
+def test_merged_edit_targets_lists_plot_and_commitment_sources(cid):
+    review.create_alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    review.create_alias(cid, "commitment:mara-promise", "commitment:mara-oath")
+    edits = [
+        {"kind": "plot", "target": {"kind": "plot", "id": "winifreds-chart"}, "label": "kept"},
+        {"kind": "plot", "target": {"kind": "plot", "id": "maras-map"}, "label": "Map row"},
+        {"kind": "lore", "target": {"kind": "lore", "id": "maras-map"}, "label": "lore"},
+        {"kind": "commitment", "target": {"kind": "commitments", "id": "mara-promise"},
+         "label": "Promise row"},
+        {"kind": "plot", "target": "nonsense", "label": "malformed"},
+        "not an edit",
+    ]
+    assert review.merged_edit_targets(cid, edits) == [
+        {"index": 1, "id": "maras-map", "label": "Map row", "source": "thread:maras-map",
+         "canonical": "thread:winifreds-chart", "canonical_title": "Winifred's chart"},
+        {"index": 3, "id": "mara-promise", "label": "Promise row",
+         "source": "commitment:mara-promise", "canonical": "commitment:mara-oath",
+         "canonical_title": "Mara's oath"},
+    ]
+
+
+def test_merged_edit_targets_is_empty_over_a_malformed_file(cid):
+    review.create_alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    (_root(cid) / "continuity.json").write_text("{ no", encoding="utf-8")
+    edits = [{"kind": "plot", "target": {"kind": "plot", "id": "maras-map"}, "label": "x"}]
+    assert review.merged_edit_targets(cid, edits) == []

@@ -28,6 +28,7 @@ from .. import llm_sampling, prompts, store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..store.continuity import identity as continuity_identity
+from ..store.continuity import review as continuity_review
 from ..store.continuity import similarity as continuity_similarity
 from . import character_turns, runs, streaming
 from . import continuity as continuity_routes
@@ -4443,6 +4444,18 @@ def _clear_pending_review(cid: str, sid: str, token: str) -> None:
                     cid, sid, exc_info=True)
 
 
+def _merged_detail(cid: str, merged: list[dict]) -> str:
+    """The sentence a save refused for merged records shows: which record went
+    into which, and what to do about it. The panel shows it verbatim through
+    its generic save-error path, so it has to say everything on its own."""
+    names = "; ".join(
+        f"{continuity_review.describe(cid, m['source'])} was merged into "
+        f"{m['canonical_title']}" for m in merged)
+    rows = "that row" if len(merged) == 1 else "those rows"
+    return (f"{names} after this review was staged. "
+            f"Reject {rows} (or re-absorb) and save again.")
+
+
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
 def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
                   client: LLMClient = Depends(get_llm)):
@@ -4609,6 +4622,18 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
                     detail={"detail": "some proposed changes no longer match what is "
                                       "stored — review them and save again",
                             "kind": "edit_conflicts", "conflicts": drifted})
+            # A row staged against a record merged away since (Slice D Decision
+            # 19). Refused, never redirected: its `before` token was read off
+            # the alias source, so writing its beat onto the canonical is a
+            # write `check_conflicts` above never vouched for. Same place and
+            # same reason as that check -- ahead of the first write, so the
+            # reviewer rejects the named rows and the rest saves on this token.
+            merged = continuity_review.merged_edit_targets(cid, body.edits)
+            if merged:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"detail": _merged_detail(cid, merged),
+                            "kind": "edits_target_merged", "edits": merged})
         record = store.chronicle.absorb(cid, {
             "id": sid, "one_line": body.one_line, "summary": body.summary,
             "keywords": body.keywords, **facts})
