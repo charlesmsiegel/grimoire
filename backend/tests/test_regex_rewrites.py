@@ -526,3 +526,17 @@ def test_a_declined_roll_continuation_keeps_the_first_parts_record(client):
     r = edit(client, cid, sid, 1, "Wait...", restore=True)
     assert r.status_code == 200, r.text
     assert store.scenes.read_scene(cid, sid)["messages"][1]["content"] == "Wait..."
+
+
+def test_a_rewrite_that_changes_nothing_once_stored_records_nothing(client):
+    cid, sid = seed(client)
+    put_rules(client, cid,
+              {**ELLIPSIS, "name": "There", "pattern": r"\.\.\.", "replacement": "…"},
+              {**ELLIPSIS, "name": "Back", "pattern": "…", "replacement": "..."},
+              {**ELLIPSIS, "name": "Pad", "pattern": r"\Z", "replacement": "  \n"})
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    reply = messages(client, cid, sid)[-1]
+    assert reply["content"] == "She paused... then spoke."
+    assert "rewritten" not in reply
+    assert records(client, cid, sid) == {}
+    assert not (store.campaigns.paths.campaign_root(cid) / "rewrites").exists()

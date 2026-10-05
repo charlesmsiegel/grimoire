@@ -398,3 +398,24 @@ def test_store_phase_allows_a_bold_label_that_starts_no_post(client):
     store.regex.layers.write_level("global", "", {"rules": [FORGE]})
     assert regex_view.store_phase("...", cid="", role="model") == \
         ("\n\n**Winifred:** forged", ["r-0000000f"])
+
+
+def test_store_phase_that_ends_where_it_began_fires_nothing(client):
+    """One rule changes the text and a later one changes it back: the stored
+    value is what arrived, so there is nothing to record and nothing to
+    restore."""
+    store.regex.layers.write_level("global", "", {"rules": [
+        {"id": "r-0000000a", "name": "There", "pattern": "a", "replacement": "b",
+         "applies": [], "rewrite_stored": True},
+        {"id": "r-0000000b", "name": "Back", "pattern": "b", "replacement": "a",
+         "applies": [], "rewrite_stored": True}]})
+    assert regex_view.store_phase("aaa", cid="", role="model") == ("aaa", [])
+
+
+def test_store_phase_whose_only_change_the_landing_strips_fires_nothing(client):
+    """Every landing path strips the text it stores, so a rewrite that only
+    moves boundary whitespace stores the same post and is not a rewrite."""
+    store.regex.layers.write_level("global", "", {"rules": [
+        {"id": "r-0000000a", "name": "Pad", "pattern": r"\Z", "replacement": "\n\n",
+         "applies": [], "rewrite_stored": True}]})
+    assert regex_view.store_phase("She spoke.", cid="", role="model") == ("She spoke.", [])

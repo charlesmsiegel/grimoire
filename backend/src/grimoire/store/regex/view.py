@@ -92,7 +92,10 @@ def store_phase(text: str, *, cid: str, role: str,
                 connection: str = "") -> tuple[str, list[str]]:
     """`text` through the rules that rewrite stored text, and the ids of the
     rules that changed it (a rule that matched nothing, or replaced a match
-    with itself, is not one of them).
+    with itself, is not one of them). When the text the landing path would
+    store -- every one strips it -- is what arrived, no rule fired at all,
+    whatever happened on the way: rules that undid each other, or a change to
+    boundary whitespace only, leave no record and no Restore to offer.
 
     A rewrite that would leave nothing (empty or whitespace only) is not
     applied: the text comes back exactly as it arrived, with no rule fired, so
@@ -110,6 +113,11 @@ def store_phase(text: str, *, cid: str, role: str,
         if step["applied"] and step["text_after"] != text:
             fired.append(step["rule_id"])
         text = step["text_after"]
+    if fired and text.strip() == before.strip():
+        # Rules that undid each other, or moved only the boundary whitespace
+        # every landing path strips: what would be stored is what arrived, so
+        # there is no rewrite to record and no original to restore.
+        return before, []
     if fired and not text.strip():
         log.warning("store phase: not applying a rewrite that empties the text (rules %s)",
                     ", ".join(fired))
