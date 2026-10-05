@@ -495,9 +495,10 @@ fact on the object, so a campaign-side description write edits the shared
 object. Where the world's text already differs, migration reports a conflict
 (§11).
 
-This is a real semantic change. **Open decision (D1)** asks the reviewer to
-confirm it, or to keep the campaign-side override as the first explicit
-contextual override.
+This is a real semantic change, and it was confirmed in review (**D1**). The
+campaign-side override does not survive as a contextual override. A campaign
+that later needs its own reading of a picture gets an explicit override
+feature, designed separately under §18 of the brief.
 
 ### 10. Collections, covers, libraries, export, bundles, backups
 
@@ -835,12 +836,10 @@ every invariant above for what it has touched.
 - The ref wins over a legacy file, and mixed-version devices are unsupported
   for writes (§6).
 
-**Open, for the reviewer:**
+**Decided in review:**
 
-- **D1.** Should a campaign-side description edit change the shared object
-  (recommended, as the brief's model), or should today's campaign override
-  survive as the first explicit contextual override?
-- **D2.** Should record-image uploads gain the 25 MB library cap now that every
-  upload is decoded at ingest? This design keeps today's no-cap behaviour.
-- **D3.** Is the blob-index cache acceptable as the one place byte→object is
-  looked up, or should ingest always decode (simpler, slower)?
+- **D1.** A campaign-side description edit changes the shared object (§9).
+  Existing campaign/world disagreements become migration conflicts.
+- **D2.** Record-image uploads stay uncapped, as today. The pixel budget
+  bounds decode cost, and an oversized raster takes opaque identity.
+- **D3.** The rebuildable blob-index cache is the byte→object lookup (§5).
