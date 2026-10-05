@@ -268,3 +268,42 @@ def test_made_by_is_fail_soft():
 
     assert character_turns._made_by(None, "chat", "primary", "") is None
     assert character_turns._made_by(Broken(), "chat", "primary", "") is None
+
+
+def test_ledger_reroll_records_its_steer(client):
+    cid, sid = seed(client)
+    fake = FakeLLM([[HANDOFF], [HANDOFF]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    rid = _made_by(client, cid, sid)[0]["id"]
+    response = client.post(base + f"/responses/{rid}/regenerate", json={"guidance": "Colder."})
+    assert "error" not in response.text, response.text
+    assert store.steering.texts(cid, sid) == ["Colder."]
+
+
+def test_empty_guidance_records_no_steer(client):
+    cid, sid = seed(client)
+    fake = FakeLLM([[HANDOFF], [HANDOFF], [HANDOFF]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    rid = _made_by(client, cid, sid)[0]["id"]
+    for body in (None, {}, {"guidance": ""}):
+        response = client.post(base + f"/responses/{rid}/regenerate", json=body)
+        assert "error" not in response.text, response.text
+    assert fake.calls == 4
+    assert store.steering.texts(cid, sid) == []
+
+
+def test_refused_reroll_records_no_steer(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "assistant", "Old narration.")
+    fake = FakeLLM([["Must not run"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    rid = client.get(base).json()["messages"][-1]["response_id"]
+    result = client.post(base + f"/responses/{rid}/regenerate", json={"guidance": "Colder."})
+    assert result.status_code == 409 and "historical_context_unavailable" in result.text
+    assert fake.calls == 0
+    assert store.steering.texts(cid, sid) == []

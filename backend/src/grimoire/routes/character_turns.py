@@ -1402,6 +1402,11 @@ def regenerate_response(
                         "detail": "This legacy response has no frozen prompt. Explicitly replay from here instead.",
                     },
                 )
+            # The durable half of the steer (store/steering.py), which the
+            # end-of-scene absorb reads. After the refusals above, so a reroll
+            # that never runs does not say a correction it never made.
+            if body and body.guidance:
+                store.steering.record(cid, sid, body.guidance)
             token = streaming._claim_turn(cid, sid)
             # Lock-free and non-minting, inside this hold: the round's typed
             # note, which a reroll of a director turn replays with its snapshot.
