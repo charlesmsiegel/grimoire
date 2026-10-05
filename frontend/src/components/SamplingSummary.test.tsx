@@ -38,3 +38,14 @@ test("no report renders nothing", () => {
   const { container } = render(<SamplingSummary report={null} />);
   expect(container).toBeEmptyDOMElement();
 });
+
+
+test("a sent max-tokens cap warns that thinking may count against it", () => {
+  render(<SamplingSummary report={{ ...BASE, applied: { max_tokens: 400 } }} />);
+  expect(screen.getByText(/count\s+the thinking against it/)).toBeInTheDocument();
+});
+
+test("no cap, no thinking warning", () => {
+  render(<SamplingSummary report={BASE} />);
+  expect(screen.queryByText(/thinking against it/)).toBeNull();
+});

@@ -53,7 +53,10 @@ typed pydantic model: pydantic 1.10 (the Android set) coerces `40.7` to an
 `max_tokens` is the dangerous one, and it is labelled so wherever it is edited:
 it caps *every* call that uses the preset, and nothing in the backend reads a
 `finish_reason`, so a reply cut off by it lands as though it were complete — a
-truncated post, or a JSON extraction that fails to parse. Grimoire's own
+truncated post, or a JSON extraction that fails to parse. On a reasoning
+model, many providers count the thinking against `max_tokens` as well, so a
+cap sized for the prose can be spent before the reply begins; the editor, the
+import form and every sampling report that sends a cap say so. Grimoire's own
 response-length controls (`response_targets`, `lengths`) are the tool for
 prose length; this one exists for the reader who knows they want a hard cap.
 
