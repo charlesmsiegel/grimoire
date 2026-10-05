@@ -27,6 +27,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import llm_sampling, prompts, store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
+from ..store.continuity import identity as continuity_identity
+from ..store.continuity import similarity as continuity_similarity
 from . import character_turns, runs, streaming
 from . import tracker as tracker_routes
 from .common import (
@@ -1720,10 +1722,11 @@ def _budget_overrun(exc: BaseException) -> bool:
     return isinstance(exc, LLMError) and exc.detail == BUDGET_EXHAUSTED
 
 
-def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
-    """One row per LLM-backed step of this absorb, in run order: was it
-    attempted, how did it end, and was the shared time budget what stopped it
-    (#243/#236 follow-up).
+def _phase_report(dossiers: dict, voice: dict, mechanics: dict,
+                  identity_block: dict) -> list[dict]:
+    """One row per LLM-backed step of this absorb, in run order -- extraction,
+    identity, dossiers, voice, audit: was it attempted, how did it end, and was
+    the shared time budget what stopped it (#243/#236 follow-up).
 
     Without it, a slow-but-healthy extraction that eats the whole budget returns
     an absorb with fewer proposed edits and no way to tell that apart from a
@@ -1736,6 +1739,10 @@ def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
 
     Extraction gets no block because it has no partial outcome: `post_absorb`
     raises when it fails, so reaching this call already proves it succeeded.
+    The identity row sits right after it because it is chained onto it (see
+    `_extract_and_identify`), and it has no retry route: a duplicate check
+    that failed leaves its rows staged as new with hints, which the reviewer
+    can act on without asking again.
 
     ("Phase" here means a step of one absorb run; the `Phase 2:`/`Phase 5:`
     comments elsewhere in this file are roadmap milestones, unrelated.)"""
@@ -1743,8 +1750,161 @@ def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
     return [{"name": "extraction", "status": "ok", "reason": None,
              "attempted": True, "budget_exhausted": False}] + \
            [{"name": name, **{k: block[k] for k in keys}}
-            for name, block in (("dossiers", dossiers), ("voice", voice),
-                                ("audit", mechanics))]
+            for name, block in (("identity", identity_block), ("dossiers", dossiers),
+                                ("voice", voice), ("audit", mechanics))]
+
+
+#: What the identity phase reports when the embeddings provider could not be
+#: used and lexical and structural matching stood in (spec §26).
+_SEMANTIC_UNAVAILABLE = "semantic matching unavailable — basic matching used"
+#: The same, when it was this absorb's own clock that cut the embed short --
+#: `EmbeddingsClient` reports a passed deadline as a network error, and the
+#: deadline may be the budget's.
+_SEMANTIC_BUDGET = ("the absorb time budget ran out during semantic matching — "
+                    "basic matching used")
+_IDENTITY_REFUSED = "the absorb time budget ran out before the duplicate check could run"
+_IDENTITY_UNREADABLE = "the duplicate check returned no readable answer"
+_IDENTITY_STAGING_FAILED = ("the duplicate check's staging step failed; "
+                            "rows staged without alternatives")
+
+
+def _embedding_reason(cid: str, sid: str, exam: continuity_identity.Examination,
+                      budget: _Budget, block: dict) -> str:
+    """Why semantic matching did not stand, or "" when it did (or was off).
+
+    A failed embed under a spent budget is this absorb's clock, not the
+    provider -- the line `BudgetRefused.llm_call_failed` and `_budget_overrun`
+    draw for LLM calls -- so it writes no error row. Any other failure writes
+    one counts-only row, so a dead endpoint reaches the error store (#156):
+    the detail is a constant, never a title, beat or identity text."""
+    if exam.embedding != "failure":
+        return ""
+    if budget.spent():
+        block["budget_exhausted"] = True
+        return _SEMANTIC_BUDGET
+    store.errors.record("continuity-identity", exam.embedding_error or "network",
+                        "semantic matching failed; basic matching used",
+                        campaign=cid, scene=sid, task="continuity-identity")
+    return _SEMANTIC_UNAVAILABLE
+
+
+def _identity_status(exam: continuity_identity.Examination,
+                     unavailable: str) -> tuple[str, str | None]:
+    """(status, reason) once the resolver's decisions are in. A partial
+    answer is a partial failure, not `ok`."""
+    if exam.all_unchecked():
+        return "degraded", "the duplicate check answered none of the rows"
+    if exam.counts()["unchecked"] > 0:
+        return "degraded", "the duplicate check left some rows unanswered"
+    if unavailable:
+        return "degraded", unavailable
+    return "ok", None
+
+
+async def _resolve_identity(cid: str, sid: str, client: LLMClient, conn: dict | None,
+                            why: str, exam: continuity_identity.Examination,
+                            budget: _Budget, block: dict) -> None:
+    """Decide `exam`'s rows, recording the outcome in `block`: no rows, no
+    connection, or the one batched resolver call. Raises what that call
+    raises; `_identify` turns it into the phase's status."""
+    unavailable = _embedding_reason(cid, sid, exam, budget, block)
+    if not exam.rows:
+        block.update(status="degraded" if unavailable else "skipped",
+                     reason=unavailable or "no close existing records")
+        return
+    if conn is None:
+        reason = why or "no connection"
+        exam.hint_only(reason)
+        block.update(status="failed", reason=reason)
+        return
+    with store.usage.meter("continuity-identity", campaign=cid, scene=sid) as m:
+        reply = await budget.run(
+            client.complete(continuity_identity.build_prompt(exam.prompt_rows()), conn, m.usage),
+            lambda: block.__setitem__("attempted", True),
+            on_timeout=_noting(client, conn, m.usage))
+    decisions = continuity_identity.parse_output(reply)
+    if decisions is None:
+        exam.hint_only(_IDENTITY_UNREADABLE)
+        block.update(status="failed", reason=_IDENTITY_UNREADABLE)
+        return
+    exam.decide(decisions)
+    block["status"], block["reason"] = _identity_status(exam, unavailable)
+
+
+def _identity_outcome(cid: str, sid: str, exam: continuity_identity.Examination | None,
+                      parsed: dict, block: dict) -> dict:
+    """Steps 9-10: the rewritten rows, the counts and the log row. The log
+    row carries counts and modes only -- no titles, beats, texts or reasons."""
+    result = exam.rewritten(parsed) if exam is not None else parsed
+    block["counts"] = exam.counts() if exam is not None else {}
+    store.logs.record("info", __name__, "continuity identity check",
+                      kind="continuity-identity", campaign=cid, scene=sid,
+                      status=block["status"], matching=block["matching"],
+                      embedding=exam.embedding if exam is not None else "",
+                      embedding_error=exam.embedding_error if exam is not None else "",
+                      **block["counts"])
+    return result
+
+
+async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, why: str,
+                    parsed: dict, prepared: _Prepared, budget: _Budget) -> tuple[dict, dict]:
+    """The identity phase (spec §10.4): `(parsed_for_materialize, block)`.
+
+    Examines the extraction's proposed-new threads and commitments against
+    the stored same-type records and, when any has a plausible neighbour,
+    asks ONE batched resolver call which are the same business. Never raises
+    but for `Abandoned` and cancellation: every failure -- the examination,
+    the embeddings provider, the routed call, its reply, the rewrite -- is
+    this phase's status, and the extraction's rows still stage. `matching`
+    is set on every path from the one definition the continuity read uses.
+    """
+    block = {"status": "skipped", "reason": "no new records proposed", "attempted": False,
+             "budget_exhausted": False, "matching": continuity_similarity.matching(),
+             "counts": {}}
+    if not continuity_identity.has_proposals(parsed):
+        return parsed, block
+    exam: continuity_identity.Examination | None = None
+    try:
+        exam = await run_in_threadpool(
+            continuity_identity.examine, cid, sid, parsed, prepared.facts,
+            embed_deadline=continuity_similarity.deadline(budget.remaining()))
+        block["matching"] = exam.matching
+        await _resolve_identity(cid, sid, client, conn, why, exam, budget, block)
+    except Abandoned:
+        raise
+    except BudgetRefused:
+        # Never asked: the rows the examination found keep their hints.
+        if exam is not None:
+            exam.hint_only(_IDENTITY_REFUSED)
+        block.update(status="failed", budget_exhausted=True, reason=_IDENTITY_REFUSED)
+    except Exception as exc:  # noqa: BLE001 -- LLMError, EmbeddingsError, store errors: a failed phase, never a failed absorb
+        # Deliberately covers `EmbeddingsError` (an `LLMError`) too, so it can
+        # never reach `_absorb_work`'s fatal `except LLMError`.
+        store.errors.record_exception(exc, "continuity-identity", campaign=cid, scene=sid)
+        reason = f"duplicate check failed: {exc}"
+        if exam is not None:
+            exam.hint_only(reason)
+        block.update(status="failed", budget_exhausted=_budget_overrun(exc), reason=reason)
+    try:
+        return _identity_outcome(cid, sid, exam, parsed, block), block
+    except Exception as exc:  # noqa: BLE001 -- a defect in the rewrite, counts or log row: a failed phase, the rows staged as extracted
+        store.errors.record_exception(exc, "continuity-identity", campaign=cid, scene=sid)
+        block.update(status="failed", reason=f"duplicate check failed: {exc}", counts={})
+        return parsed, block
+
+
+async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClient,
+                                prepared: _Prepared, budget: _Budget,
+                                ident_conn: dict | None, ident_why: str) -> tuple[dict, dict]:
+    """The extraction, then the identity phase chained onto it.
+
+    `extraction` is the already-built extraction awaitable: its
+    `client.complete(...)` is spelled in `_absorb_work`, under the absorb
+    meter, so the usage guard sees it metered. Its failure stays fatal; the
+    identity phase never raises for absorb."""
+    text = await extraction
+    return await _identify(cid, sid, client, ident_conn, ident_why,
+                           store.absorb.parse_output(text), prepared, budget)
 
 
 def _soft_connection(resolve) -> tuple[dict | None, str]:
@@ -2598,24 +2758,28 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # `_run_audit` re-reads the scene and transcript itself and never
         # touches `parsed`, and both per-NPC phases take only `transcript`,
         # captured from the snapshot above -- so what read as a pipeline was
-        # only ever a fan-out written as a chain.
+        # only ever a fan-out written as a chain. The one real dependency --
+        # the identity check reads the extraction's rows -- is chained inside
+        # the first entry (`_extract_and_identify`) rather than added as a
+        # step after the fan-out.
         #
         # The extraction is first in the list so it claims the first semaphore
         # slot: it is the one phase whose failure is fatal, so it must never be
         # the one left queued.
         #
-        # Each phase resolves its OWN connection (#142): they are four
-        # different routes -- extraction, the per-NPC dossier loop, voice drift
-        # and the mechanics audit -- and sharing one `conn` would make three of
-        # those four settings do nothing whenever an absorb was what ran them.
+        # Each phase resolves its OWN connection (#142): they are five
+        # different routes -- extraction, the identity check, the per-NPC
+        # dossier loop, voice drift and the mechanics audit -- and sharing one
+        # `conn` would make four of those five settings do nothing whenever an
+        # absorb was what ran them.
         #
-        # All three resolved HERE, before the meter opens and before a single
+        # All four secondary ones resolved HERE, before the meter opens and before a single
         # coroutine is built. Resolved inline in the `_gather_phases(...)`
         # argument list instead, a failure from the third would leave the first
         # two coroutines created and never awaited.
         #
         # And resolved through `_phase_connection`, which reports instead of
-        # raising: these three promise never to fail an absorb, so a route
+        # raising: these four promise never to fail an absorb, so a route
         # pointing one of them at a keyless connection has to come back as that
         # phase's status rather than as a 409 that discards the extraction's
         # result too.
@@ -2625,6 +2789,8 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
             lambda: _require_connection("voice-drift", cid))
         audit_conn, audit_why = _soft_connection(
             lambda: _require_connection("audit", cid))
+        ident_conn, ident_why = _soft_connection(
+            lambda: _require_connection("continuity-identity", cid))
         with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
             # ONE race, around the whole fan-out, rather than a predicate
             # threaded into each phase. Two reasons, and the second is the one
@@ -2642,30 +2808,40 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
             # the task holding it is cancelled, which is exactly what
             # `_watched` does to it here.
             results = await _watched(_gather_phases(
-                budget.run(client.complete(prepared.messages, conn, m.usage),
-                           on_timeout=_noting(client, conn, m.usage)),
+                _extract_and_identify(
+                    budget.run(client.complete(prepared.messages, conn, m.usage),
+                               on_timeout=_noting(client, conn, m.usage)),
+                    cid, sid, client, prepared, budget, ident_conn, ident_why),
                 _stage_dossiers(cid, sid, prepared.transcript, client, dossier_conn,
                                 budget, unroutable=dossier_why),
                 _stage_voice_drift(cid, sid, prepared.transcript, client, voice_conn,
                                    budget, unroutable=voice_why),
                 _run_audit(cid, sid, client, audit_conn, budget, unroutable=audit_why),
                 limit=store.config.absorb_concurrency()), abandoned)
-        text, dossier_result, voice_result, audit_result = results
-        if isinstance(text, BaseException):
+        extraction, dossier_result, voice_result, audit_result = results
+        if isinstance(extraction, BaseException):
             # Only the extraction is fatal, and a budget overrun on it is
             # included: nothing has been produced yet, so there is nothing to
             # degrade to. The other three never raise for absorb except to
             # report abandonment (each has its own failure boundary), so
             # anything else from one of them is a bug in that boundary rather
             # than a state to report -- `_phase_or_raise` says so.
-            raise text
-        parsed = store.absorb.parse_output(text)
+            raise extraction
+        parsed, identity_block = extraction
+
+        def identity_staging_failed(exc: BaseException) -> None:
+            # A defect in an identity-only staging pass reports on the
+            # identity row; the rows stage without alternatives.
+            identity_block["status"] = "failed"
+            identity_block["reason"] = _IDENTITY_STAGING_FAILED
+
         # The transcript the citations (#112) are judged against comes from the
         # SAME snapshot the model was shown: a reroll or an append landing while
         # the call was in flight would otherwise have them judged against text
         # it never saw.
         edits = store.absorb.materialize(cid, sid, parsed, prepared.scene["messages"],
-                                         player_label=prepared.player_label)
+                                         player_label=prepared.player_label,
+                                         on_identity_error=identity_staging_failed)
         # Unpacked in the order the phases were listed, not the order they
         # finished, so `edits` reads the same way every time.
         dossier_edits, dossiers = _phase_or_raise(dossier_result)
@@ -2693,10 +2869,10 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # for, and it lights up exactly where it matters: a re-extraction
         # after a retcon of an old scene.
         "contradictions": _contradictions(cid, sid, staged),
-        "dossiers": dossiers, "voice": voice,
+        "dossiers": dossiers, "voice": voice, "identity": identity_block,
         # One uniform row per step so a short absorb is legible as one
         # (see _phase_report) rather than as a model with nothing to say.
-        "phases": _phase_report(dossiers, voice, mechanics),
+        "phases": _phase_report(dossiers, voice, mechanics, identity_block),
         # Idempotency key for the save this review will become (#235): the
         # commit appends in six places, so a replay whose first response was
         # lost must return that result rather than apply it again. It also

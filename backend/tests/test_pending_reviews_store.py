@@ -416,9 +416,10 @@ def test_a_phase_row_carries_exactly_what_the_phase_report_puts_in_one():
 
     block = {"status": "ok", "reason": None, "attempted": True,
              "budget_exhausted": False}
-    built = routes_scenes._phase_report(block, block, block)
+    built = routes_scenes._phase_report(block, block, block, block)
 
-    assert {r["name"] for r in built} == {"extraction", "dossiers", "voice", "audit"}
+    assert [r["name"] for r in built] == ["extraction", "identity", "dossiers", "voice",
+                                          "audit"]
     for row in built:
         assert set(row) == {"name", *store.pending_reviews.PHASE_KEYS}
 

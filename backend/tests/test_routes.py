@@ -9129,7 +9129,9 @@ def _phase(body, name):
 def test_absorb_reports_every_phase_attempted(client, npc_module_scene, monkeypatch):
     """The whole point of `phases`: a reviewer can tell an absorb that ran every
     step from one that only looks like it did. The voice check is one of them
-    (#59) -- omitting it would make a run that skipped it look complete."""
+    (#59) -- omitting it would make a run that skipped it look complete. The
+    identity check is the exception here: ABSORB_JSON proposes no thread or
+    commitment, so it is skipped without ever reaching the model."""
     cid, sid = npc_module_scene
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
@@ -9139,9 +9141,13 @@ def test_absorb_reports_every_phase_attempted(client, npc_module_scene, monkeypa
 
     body = review_runs.absorb(client, cid, sid).json()
 
-    assert [p["name"] for p in body["phases"]] == ["extraction", "dossiers", "voice", "audit"]
-    assert all(p["attempted"] for p in body["phases"])
-    assert all(p["status"] == "ok" for p in body["phases"])
+    assert [p["name"] for p in body["phases"]] == ["extraction", "identity", "dossiers",
+                                                   "voice", "audit"]
+    others = [p for p in body["phases"] if p["name"] != "identity"]
+    assert all(p["attempted"] for p in others)
+    assert all(p["status"] == "ok" for p in others)
+    assert _phase(body, "identity")["status"] == "skipped"
+    assert _phase(body, "identity")["attempted"] is False
     assert not any(p["budget_exhausted"] for p in body["phases"])
 
 
@@ -9182,7 +9188,8 @@ def test_absorb_phases_mirror_the_dossier_and_mechanics_blocks(
 
     body = review_runs.absorb(client, cid, sid).json()
 
-    for name, block in (("dossiers", "dossiers"), ("audit", "mechanics")):
+    for name, block in (("dossiers", "dossiers"), ("audit", "mechanics"),
+                        ("identity", "identity")):
         for key in ("status", "reason", "attempted", "budget_exhausted"):
             assert _phase(body, name)[key] == body[block][key], (name, key)
 
