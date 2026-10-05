@@ -15,7 +15,9 @@ before the rewrite (`original`), the ids of the rules that changed it
 (`rules`), the text the rewrite stored (`stored`) and when (`at`). Only the
 latest rewrite of a message is kept. `stored` is what lets a reader tell a
 record from the text that has since replaced it under the same key -- a reroll
-or a swipe puts a different variant under one `response_id`.
+or a swipe puts a different variant under one `response_id`. Two variants can
+store the same text, though, so a model reply's record also names the variant
+it was made for (`variant`), and a swipe back to another one does not match.
 
 Nothing here is written unless a rule fired: a store with no `rewrite_stored`
 rule never gets a `rewrites/` directory.
@@ -77,14 +79,16 @@ def read_all(cid: str, sid: str) -> dict[str, dict]:
 
 
 def record(cid: str, sid: str, key: str, *, original: str, rules: list[str],
-           stored: str) -> None:
+           stored: str, variant: str = "") -> None:
     """Record (or replace) the rewrite of the message `key`. Called inside the
-    hold that wrote `stored` to the transcript; the acquisition is reentrant."""
+    hold that wrote `stored` to the transcript; the acquisition is reentrant.
+    `variant` is the response variant a model reply's rewrite belongs to;
+    "" (a player post, a legacy segment) stores none."""
     with locks.campaign_lock(cid):
         p = path(cid, scenes_identity.ensure_identity(cid, sid))
         records = _read(p)
         records[key] = {"original": original, "rules": list(rules), "stored": stored,
-                        "at": now_iso()}
+                        "at": now_iso(), **({"variant": variant} if variant else {})}
         _write(p, records)
 
 

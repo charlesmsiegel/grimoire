@@ -265,15 +265,22 @@ def _store_phase(cid: str, segments: list[dict], connection: str) -> list[tuple]
     return out
 
 
+def _active_variant(cid: str, sid: str, rid: str) -> str:
+    """The variant response `rid` shows now, "" when the ledger names none. Read
+    inside the hold that wrote it, so it is the variant a rewrite belongs to."""
+    return store.responses.variants_by_response(cid, sid).get(rid, (None, []))[0] or ""
+
+
 def _record_rewrite(cid: str, sid: str, key: str, original: str, fired: list[str],
-                    stored: str) -> None:
+                    stored: str, variant: str = "") -> None:
     """Record what the store phase changed, from inside the hold that wrote
     `stored`. Fail-soft: the rewritten text is already in the transcript, and a
     record file that cannot be written must not turn a landed post into a
-    failed one -- it costs Restore original for that message, and is logged."""
+    failed one -- it costs Restore original for that message, and is logged.
+    `variant` is the response variant a model reply's rewrite belongs to."""
     try:
         store.regex.rewrites.record(cid, sid, key, original=original, rules=fired,
-                                    stored=stored)
+                                    stored=stored, variant=variant)
     except OSError:
         _log.warning("could not record the stored rewrite of %s in %s/%s",
                      key, cid, sid, exc_info=True)

@@ -430,3 +430,72 @@ def test_a_legacy_reply_runs_its_store_phase_inside_the_append_hold(client, monk
     assert ("model", True) in held
     assert all(owned for _, owned in held)
     assert messages(client, cid, sid)[-1]["content"] == "She paused… then spoke."
+
+
+DOTS = {"name": "Dots", "pattern": r"\.{3,}", "replacement": "…",
+        "rewrite_stored": True, "applies": []}
+
+
+def test_a_swipe_back_to_a_variant_that_stored_the_same_text_is_not_restorable(client):
+    """Two variants of one response can store the same text. The record is the
+    newer one's, so a swipe back to the older must not offer its original."""
+    cid, sid = seed(client)
+    put_rules(client, cid, DOTS)
+    send(client, cid, sid, "Wait... no.", speaker_ref="characters:mara")
+    rid = messages(client, cid, sid)[-1]["response_id"]
+    first = store.responses.get(cid, sid, rid)["active_variant"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Wait..... no."]])
+    result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate",
+                         json={})
+    assert '"error"' not in result.text, result.text
+    assert records(client, cid, sid)[rid]["original"] == "Wait..... no."
+
+    response = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/variants/{first}/activate")
+    assert response.status_code == 200, response.text
+    reply = messages(client, cid, sid)[-1]
+    assert reply["content"] == "Wait… no."
+    assert "rewritten" not in reply
+    r = edit(client, cid, sid, 1, "Wait..... no.", restore=True)
+    assert r.status_code == 409
+    assert r.json()["kind"] == "rewrite_stale"
+    assert store.scenes.read_scene(cid, sid)["messages"][-1]["content"] == "Wait… no."
+
+
+def legacy_reply_migrated(client, monkeypatch):
+    """A legacy reply, rewritten and recorded under its `post_id`, that the
+    response migration has since given a `response_id` too."""
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.")
+    monkeypatch.setattr(character_turns, "enabled", lambda: True)
+    store.responses.migrate(cid, sid)
+    reply = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert reply["post_id"] and reply["response_id"]
+    assert set(records(client, cid, sid)) == {reply["post_id"]}
+    return cid, sid, reply
+
+
+def test_a_migrated_legacy_reply_restores_from_its_post_record(client, monkeypatch):
+    cid, sid, _ = legacy_reply_migrated(client, monkeypatch)
+    assert messages(client, cid, sid)[-1]["rewritten"] is True
+    r = edit(client, cid, sid, 1, "She paused... then spoke.", restore=True)
+    assert r.status_code == 200, r.text
+    assert store.scenes.read_scene(cid, sid)["messages"][-1]["content"] == \
+        "She paused... then spoke."
+    assert records(client, cid, sid) == {}
+
+
+def test_a_clearing_edit_of_a_migrated_legacy_reply_retires_its_post_record(client, monkeypatch):
+    cid, sid, _ = legacy_reply_migrated(client, monkeypatch)
+    assert edit(client, cid, sid, 1, "plain").status_code == 200
+    assert records(client, cid, sid) == {}
+    assert "rewritten" not in messages(client, cid, sid)[-1]
+
+
+def test_a_rewriting_edit_of_a_migrated_legacy_reply_keeps_one_record(client, monkeypatch):
+    cid, sid, reply = legacy_reply_migrated(client, monkeypatch)
+    assert edit(client, cid, sid, 1, "a...b").status_code == 200
+    assert set(records(client, cid, sid)) == {reply["response_id"]}
+    assert records(client, cid, sid)[reply["response_id"]]["original"] == "a...b"
