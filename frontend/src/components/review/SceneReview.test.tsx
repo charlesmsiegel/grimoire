@@ -2515,6 +2515,31 @@ test("the transcript sits beside the review, and a row's quote lights its line",
   await waitFor(() => expect(document.querySelectorAll(".review-post.cited")).toHaveLength(1));
 });
 
+test("the pane shows a post as its display rules do, and a quote only the rule's text carries still lights it", async () => {
+  // The server judged the citation against the prompt view, which a rule
+  // rewrote; the stored text never said "side". Matching `shown` as well as
+  // `content` is what lets that quote be found at all.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "<think>x</think>She pressed a hand to her flank.",
+      shown: "She pressed a hand to her side.", speaker: "Grimoire" },
+  ] });
+  absorbs(ROUTED_REVIEW);
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText(/accepted ·/i);
+
+  const pane = within(screen.getByRole("complementary", { name: /for checking/i }));
+  expect(pane.getByText("She pressed a hand to her side.")).toBeInTheDocument();
+  expect(pane.queryByText(/flank/)).toBeNull();
+
+  fireEvent.click(reviewColumn().getByRole("button", { name: /character state/i }));
+  fireEvent.click(screen.getByRole("button", { name: /Find Seraphine — current state in transcript/i }));
+  await waitFor(() => expect(document.querySelectorAll(".review-post.cited")).toHaveLength(1));
+});
+
 test("an uncited row offers no find, because there is nothing to find", async () => {
   await openRoutedReview({ ...ROUTED_REVIEW, edits: [
     { id: "fact:f1", kind: "fact", target: { kind: "fact", id: "f1" },
