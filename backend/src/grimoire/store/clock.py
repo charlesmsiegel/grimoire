@@ -55,9 +55,11 @@ from . import (
     birthdays,
     calendars,
     chronicle,
+    commitments,
     config,
     events,
     locks,
+    plot,
     revision,
 )
 from .appearances import cast as appearances_cast
@@ -375,6 +377,24 @@ def _holidays(cid: str, primary, lo_fixed: int, hi_fixed: int) -> list[dict]:
     return out
 
 
+def _owed(canonical, physical, cid: str) -> list[dict]:
+    """One of the digest's two obligation lists: the effective rows, else the
+    physical ledger's, else nothing. A continuity-side failure costs the merge
+    (spec 3.9) and never the obligations -- the fallback the prompt render
+    helpers keep -- and only a ledger that will not read empties the list."""
+    try:
+        return canonical(cid)
+    except Exception:  # noqa: BLE001 — a continuity-side failure degrades to the physical rows (spec §3.9)
+        return _physical(physical, cid)
+
+
+def _physical(read, cid: str) -> list[dict]:
+    try:
+        return read(cid)
+    except Exception:  # noqa: BLE001 — garbled plot.json/commitments.json
+        return []
+
+
 def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
     """What the move from `from_native` to `to_native` crosses.
 
@@ -434,17 +454,11 @@ def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
             truncated = True
             holidays, crossed_birthdays = holidays[:MAX_ROWS], crossed_birthdays[:MAX_ROWS]
 
-    try:
-        # Every open thread is untouched by construction: a skip contains no
-        # scenes, so nothing in it can have moved one. Which is the point —
-        # this is what the campaign still owes after a month nobody played.
-        threads = effective.threads(cid)
-    except Exception:  # noqa: BLE001 — garbled plot.json
-        threads = []
-    try:
-        owed = effective.commitments(cid)
-    except Exception:  # noqa: BLE001 — garbled commitments.json
-        owed = []
+    # Every open thread is untouched by construction: a skip contains no
+    # scenes, so nothing in it can have moved one. Which is the point — this
+    # is what the campaign still owes after a month nobody played.
+    threads = _owed(effective.threads, plot.open_threads, cid)
+    owed = _owed(effective.commitments, commitments.open_commitments, cid)
 
     # Aged against the moment the move LANDS on, not the one it leaves (#103).
     # That is what lets a preview answer the question a reader actually has

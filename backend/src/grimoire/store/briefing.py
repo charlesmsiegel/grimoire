@@ -37,7 +37,7 @@ has just run, which makes that window this view's normal case, not a remote one.
 
 from __future__ import annotations
 
-from . import chronicle, locks, relationships
+from . import chronicle, commitments, locks, plot, relationships
 from .appearances import cast as appearances_cast
 from .continuity import effective, involvement
 from .scenes import read as scenes_read
@@ -78,6 +78,18 @@ def _physical_keys(rows: list[dict]) -> list[dict]:
     """Effective rows without their ``aliases`` key: the briefing renders no
     merge note, so its row shape stays exactly the physical projection's."""
     return [{k: v for k, v in row.items() if k != "aliases"} for row in rows]
+
+
+def _canonical_or_physical(canonical, physical) -> list[dict]:
+    """The effective rows, or the physical projection's when the continuity side
+    fails. A continuity.json nobody anticipated costs the merge (spec 3.9),
+    never the obligations -- the fallback `effective.render_threads` keeps for
+    the prompts. A garbled ledger still raises out of `physical`, and the
+    caller's own tolerance empties the section, as it always did."""
+    try:
+        return _physical_keys(canonical())
+    except Exception:  # noqa: BLE001 -- a continuity-side failure degrades to the physical rows (spec §3.9)
+        return physical()
 
 
 def _flagged(rows: list[dict], touched: dict[str, set[str]],
@@ -178,10 +190,15 @@ def build(cid: str, sid: str) -> dict:
         # fine -- some shape neither of them anticipated -- and pairing them
         # would let that cost every row in the section rather than every flag.
         # Losing the narrowing is this view degrading; losing the obligations
-        # is it lying.
-        threads = _tolerant(lambda: _physical_keys(effective.threads(cid)), [])
+        # is it lying -- which is also why a failure on the continuity side
+        # falls back to the physical rows (`_canonical_or_physical`) rather
+        # than to an empty section.
+        threads = _tolerant(lambda: _canonical_or_physical(
+            lambda: effective.threads(cid), lambda: plot.open_threads(cid)), [])
         thread_scenes = _tolerant(lambda: involvement.group_touched(cid, "thread"), {})
-        owed = _tolerant(lambda: _physical_keys(effective.commitments(cid)), [])
+        owed = _tolerant(lambda: _canonical_or_physical(
+            lambda: effective.commitments(cid),
+            lambda: commitments.open_commitments(cid)), [])
         owed_scenes = _tolerant(lambda: involvement.group_touched(cid, "commitment"), {})
         # The whole present cast, not just `focus`: a feeling between two NPCs
         # in the room is exactly the kind of thing a briefing is for, and

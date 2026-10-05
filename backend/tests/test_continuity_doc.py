@@ -60,6 +60,28 @@ def test_unparseable_file_reads_empty_and_refuses_writes(cid):
     assert _file(cid).read_text(encoding="utf-8") == "{ no"
 
 
+# Two hand-edited shapes `json.loads` refuses with something other than a
+# JSONDecodeError: an integer literal past Python's 4300-digit conversion limit
+# (a plain ValueError) and nesting deep enough to exhaust the C scanner's
+# recursion guard (RecursionError).
+_HOSTILE = [
+    pytest.param('{"aliases": {}, "n": ' + "9" * 5000 + "}", id="overlong-int"),
+    pytest.param("[" * 200000, id="deep-nesting"),
+]
+
+
+@pytest.mark.parametrize("text", _HOSTILE)
+def test_a_file_json_refuses_without_a_decode_error_still_reads_empty(cid, text):
+    """`read` never raises over the file, whatever `json.loads` raises over it:
+    every prompt section, the briefing and the advance digest read through it."""
+    _file(cid).write_text(text, encoding="utf-8")
+    assert doc.read(cid) == {"version": 1, "aliases": {}, "links": {}, "suppressions": {}}
+    assert doc.malformed(cid) == ["file"]
+    with pytest.raises(doc.ContinuityError):
+        doc.put_alias(cid, "thread:maras-map", _alias())
+    assert _file(cid).read_text(encoding="utf-8") == text
+
+
 def test_non_dict_top_level_is_the_whole_file_malformed(cid):
     _file(cid).write_text("[]", encoding="utf-8")
     assert doc.malformed(cid) == ["file"]
