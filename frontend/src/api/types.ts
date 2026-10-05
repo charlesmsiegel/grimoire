@@ -1543,6 +1543,42 @@ export type StagedEdit = {
    *  overwriting *that* text, not whatever the record holds by the time the
    *  save lands. */
   resolve_from?: string;
+  /** Present on a proposed-new plot thread or commitment the existing-record
+   *  check examined (spec §10.3), and only there: a row with no plausible
+   *  stored neighbour carries none. Optional because reviews stored before the
+   *  check existed lack it. */
+  identity_check?: IdentityCheck;
+};
+/** Why a stored record was offered as a possible match, as the server measured
+ *  it (`continuity.similarity.lexical`, plus the clause that admitted it). */
+export type IdentitySignals = {
+  title_equal: boolean; slug_equal: boolean;
+  /** Token and character-3-gram Jaccard over the identity texts. */
+  tokens: number; chars: number;
+  /** Null when semantic matching was off or either text had no vector. */
+  cosine: number | null;
+  actors: string[]; scenes: string[]; anchors: string[];
+  via?: "lexical" | "structural" | "semantic" | null;
+};
+/** One stored record the proposed row might be. `ref` is a prefixed canonical
+ *  ref (`thread:<id>` / `commitment:<id>`), never a bare id. */
+export type IdentityCandidate = {
+  ref: string; title: string; status: string; latest_beat: string;
+  signals: IdentitySignals;
+};
+export type IdentityCheck = {
+  /** The resolver's word, or `unchecked` when it gave none for this row. */
+  decision: "existing" | "new" | "uncertain" | "unchecked";
+  /** `downgraded`: an `existing` the acceptance guard refused (closed, already
+   *  moved, never offered). `hint_only`: the check never answered. */
+  status: "accepted" | "downgraded" | "hint_only";
+  reason: string;
+  proposed: { title: string; why_new: string; distinguished_from: string[] };
+  candidates: IdentityCandidate[];
+  /** Complete staged rows the reviewer may swap this one for, each with its
+   *  own server-computed `before`. Client-side only once staged: the save
+   *  strips them (`editRows.wireEdit`). */
+  alternatives?: StagedEdit[];
 };
 /** A staged edit whose target no longer matches the value it was staged
  *  against (#111). Carries everything the three choices need — what is stored
@@ -1596,8 +1632,15 @@ export type VoiceCheck = PhaseAttempt & {
  *  the extraction, so a run cut short by the time budget is legible as one instead
  *  of looking like a model with nothing to suggest. */
 export type AbsorbPhase = PhaseAttempt & {
-  name: "extraction" | "dossiers" | "voice" | "audit";
+  name: "extraction" | "identity" | "dossiers" | "voice" | "audit";
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+};
+/** The existing-record check's phase block (spec §10.4). `matching` says where
+ *  the possible-match lists came from; `counts` is flat and text-free. */
+export type IdentityPhase = PhaseAttempt & {
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+  matching: "basic" | "semantic";
+  counts: Record<string, number>;
 };
 export type SceneAbsorb = {
   one_line: string; summary: string; keywords: string[];
@@ -1609,6 +1652,8 @@ export type SceneAbsorb = {
   commit_token: string;
   dossiers: Dossiers;
   voice: VoiceCheck;
+  /** Absent on reviews stored before the existing-record check existed. */
+  identity?: IdentityPhase;
   phases: AbsorbPhase[];
   /** Empty for the ordinary end-of-scene absorb, which has no later scene to
    *  disagree with. Non-empty after a retcon of an older scene, which is the

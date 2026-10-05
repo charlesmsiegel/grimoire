@@ -2196,6 +2196,14 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    is attribution, not a verdict, and nothing about the save turns on it -- so it
    must not read like the conflict badge above, which IS blocking. */
 .absorb-contradiction-badge { margin-left: 6px; font-size: 11px; color: var(--muted); }
+/* The existing-record check (continuity identity): the chip sits beside the
+   contradiction badge and reads the same way -- advisory, quiet -- and the block
+   under the evidence holds the reason, the possible matches and the swaps. */
+.absorb-identity-badge { margin-left: 6px; font-size: 11px; color: var(--muted); }
+.absorb-identity { margin: 4px 0 6px; }
+.absorb-identity .field-hint { margin: 2px 0; }
+.absorb-identity-candidates { margin: 2px 0 4px; padding-left: 18px; font-size: 12px;
+                              color: var(--muted); }
 
 /* Confidence routing (#110/#112). The band chip is quiet for `high` and
    `medium` and accented only for `low`: its job is to say why a row is NOT

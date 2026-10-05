@@ -34,6 +34,7 @@ export const NO_SCENE_BREAK = {
 // cut short by the time budget, so no budget notice renders.
 export const PHASES_NONE_CUT = [
   { name: "extraction", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+  { name: "identity", status: "skipped", reason: null, attempted: false, budget_exhausted: false },
   { name: "dossiers", status: "ok", reason: null, attempted: true, budget_exhausted: false },
   { name: "audit", status: "ok", reason: null, attempted: true, budget_exhausted: false },
 ];
