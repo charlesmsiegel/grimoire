@@ -5094,13 +5094,7 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
             except OSError:
                 pass          # the edit is on disk; the sidecar is not a reason to fail it
             if key:
-                # Only the latest rewrite is kept: one that fired replaces the
-                # record, and any other edit -- a restore included -- leaves
-                # the player's own text, with nothing to restore.
-                if fired:
-                    streaming._record_rewrite(cid, sid, key, original, fired, content)
-                else:
-                    _forget_rewrite(cid, sid, key)
+                _settle_rewrite(cid, sid, target, key, original, fired, content)
             # The post's tracker record describes text that is no longer there,
             # and every later record was built on it. Flagged, not re-run (the
             # spec's "nothing re-runs automatically"), and in this hold so no
@@ -5130,6 +5124,28 @@ def _require_restorable(cid: str, sid: str, target: dict, key: str | None,
         raise HTTPException(409, detail={
             "kind": "rewrite_stale",
             "detail": "This message no longer matches its recorded rewrite; reload the scene."})
+
+
+def _settle_rewrite(cid: str, sid: str, target: dict, key: str, original: str,
+                    fired: list[str], content: str) -> None:
+    """Bring the message's rewrite record in line with an edit that wrote
+    `content` over `target` (the message as it was before the edit).
+
+    Only the latest rewrite is kept: one that fired replaces the record, and an
+    edit that replaces the text the record stored -- a restore included --
+    leaves the player's own text, with nothing to restore. Any other edit leaves
+    the record alone: saving the rewritten text unchanged (an idempotent rule
+    has nothing to fire on), or editing another part of the same response,
+    which shares its `response_id`. Forgetting there would delete the only copy
+    of an original. "The same" is compared stripped, as `_still_rewritten`
+    compares, so the two agree on it."""
+    if fired:
+        streaming._record_rewrite(cid, sid, key, original, fired, content)
+        return
+    rec = store.regex.rewrites.read_all(cid, sid).get(key)
+    if (rec is not None and _still_rewritten(target, {key: rec})
+            and content.strip() != str(rec["stored"]).strip()):
+        _forget_rewrite(cid, sid, key)
 
 
 def _forget_rewrite(cid: str, sid: str, key: str) -> None:
