@@ -1975,8 +1975,9 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,
             return [], {**mech, "status": "failed",
                         "reason": "all scoped sheets invalid", "dropped": excluded}
         scene = store.scenes.read_scene(cid, sid)
+        shown = store.regex.view.view(scene["messages"], cid=cid, phase="prompt")
         transcript = store.chronicle.transcript_text(
-            scene["messages"], store.appearances.player_label(cid, sid))
+            shown, store.appearances.player_label(cid, sid))
         messages = store.audit.build_prompt(transcript, blocks,
                                             store.audit.roll_lines(cid, sid))
         # `mech` is the accumulator every failure return below spreads, so the
@@ -2555,6 +2556,10 @@ class _Prepared(NamedTuple):
     #: flight would otherwise have every citation of those lines judged against
     #: a name the prompt never used.
     player_label: str
+    #: `scene["messages"]` through the prompt phase (`store/regex`): what
+    #: `transcript` was rendered from, so the citations are judged against the
+    #: text the model was shown rather than the raw text the rules cleaned.
+    shown: list
 
 
 class _ReviewCancelledError(Exception):
@@ -2735,10 +2740,14 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     # save with every check returning green.
     facts = store.chronicle.scene_facts(cid, sid)
     player_label = store.appearances.player_label(cid, sid)
-    transcript = store.chronicle.transcript_text(scene["messages"], player_label)
+    # The prompt view, computed once: the transcript the model is shown and the
+    # one its citations are judged against are the same text. The watermark
+    # below stays on the raw scene -- it is about what is stored.
+    shown = store.regex.view.view(scene["messages"], cid=cid, phase="prompt")
+    transcript = store.chronicle.transcript_text(shown, player_label)
     prepared = _Prepared(
         epoch=epoch, scene=scene, tracked=tracked, facts=facts, transcript=transcript,
-        player_label=player_label,
+        player_label=player_label, shown=shown,
         messages=store.absorb.build_prompt(
             transcript, facts,
             store.absorb.state_snapshot(cid, sid),
@@ -2847,7 +2856,7 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # SAME snapshot the model was shown: a reroll or an append landing while
         # the call was in flight would otherwise have them judged against text
         # it never saw.
-        edits = store.absorb.materialize(cid, sid, parsed, prepared.scene["messages"],
+        edits = store.absorb.materialize(cid, sid, parsed, prepared.shown,
                                          player_label=prepared.player_label,
                                          on_identity_error=identity_staging_failed)
         # Unpacked in the order the phases were listed, not the order they
@@ -3553,10 +3562,12 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     covered, base = len(messages), view["base"]
     digest = store.rolling_summary.covered_digest(
         messages, store.appearances.player_label(cid, sid))
+    # Depth counts over the whole snapshot, not the slice being folded.
+    shown = store.regex.view.view(messages[base:], cid=cid, phase="prompt",
+                                  offset=base, total=len(messages))
     prompt = store.rolling_summary.build_prompt(
         view["prior"],
-        store.chronicle.transcript_text(messages[base:],
-                                        store.appearances.player_label(cid, sid)),
+        store.chronicle.transcript_text(shown, store.appearances.player_label(cid, sid)),
         facts)
     try:
         with store.usage.meter("rolling-summary", campaign=cid, scene=sid) as m:
@@ -3796,9 +3807,10 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     # file as an answer about all fifty.
     base = min(view["stored"]["at"], len(messages)) if view["intact"] else 0
     facts = store.chronicle.scene_facts(cid, sid)
+    shown = store.regex.view.view(messages[base:], cid=cid, phase="prompt",
+                                  offset=base, total=len(messages))
     prompt = store.scene_break.build_prompt(
-        store.chronicle.transcript_text(messages[base:],
-                                        store.appearances.player_label(cid, sid)),
+        store.chronicle.transcript_text(shown, store.appearances.player_label(cid, sid)),
         view["signals"], facts,
         scene["meta"].get("title", ""))
     try:
@@ -4084,8 +4096,9 @@ def post_dossiers(cid: str, sid: str, request: Request,
         # guard: with nothing to audit it simply finds nothing, where this would
         # stage a proposal to overwrite a real dossier with fiction.
         raise HTTPException(status_code=400, detail="nothing to build dossiers from")
+    shown = store.regex.view.view(scene["messages"], cid=cid, phase="prompt")
     transcript = store.chronicle.transcript_text(
-        scene["messages"], store.appearances.player_label(cid, sid))
+        shown, store.appearances.player_label(cid, sid))
 
     def work_for(run, generation):
         async def work():

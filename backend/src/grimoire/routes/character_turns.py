@@ -398,12 +398,16 @@ def _successor(cid, sid, round_record, handoff, cancelled, actor=None):
 
 def _selector_messages(cid, sid, round_record):
     messages = store.scenes.read_scene(cid, sid)["messages"]
+    tail = messages[-12:]
+    # The prompt view of the posts it reads, depth counted over the whole scene.
+    shown = store.regex.view.view(tail, cid=cid, phase="prompt",
+                                  offset=len(messages) - len(tail), total=len(messages))
     public = [
         {
             "speaker": m.get("speaker") or ("You" if m["role"] == "user" else "Grimoire"),
             "content": m["content"],
         }
-        for m in messages[-12:]
+        for m in shown
         if m.get("speaker") not in store.scenes.SYNTHETIC_SPEAKERS
     ]
     return [
