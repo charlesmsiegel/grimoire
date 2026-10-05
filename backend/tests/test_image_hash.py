@@ -19,11 +19,10 @@ import pytest
 from PIL import Image
 
 from grimoire.store import image_hash, image_sanitize, thumbs
+from tests.fixtures.images import make_fixtures
 
 FIX = Path(__file__).parent / "fixtures" / "images"
-_FIXTURE_FILES = sorted(
-    p.name for p in FIX.iterdir() if p.suffix in {".png", ".jpg", ".gif", ".webp"}
-)
+_FIXTURE_FILES = sorted(make_fixtures.NAMES)
 
 
 def _read(name: str) -> bytes:
@@ -121,6 +120,29 @@ def test_icc_profile_changes_id():
 
 def test_cicp_changes_id():
     assert _id("png_cicp.png") != _id("base.png")
+
+
+def test_colour_descriptor_is_tagged_with_its_source():
+    # A PNG's colour descriptor is its raw colour chunks; a JPEG's is its ICC
+    # bytes. Untagged, an ICC profile crafted to equal a PNG's chunk bytes
+    # would merge two pictures a browser reads under different colour rules.
+    from tests.fixtures.images.make_fixtures import _noise, insert_before_idat
+
+    gama = (45455).to_bytes(4, "big")
+    buf = io.BytesIO()
+    _noise(4).save(buf, "JPEG", quality=90, icc_profile=b"gAMA" + gama)
+    jpg = buf.getvalue()
+    with Image.open(io.BytesIO(jpg)) as im:
+        raster = im.convert("RGB")
+    raster.info.clear()  # no iCCP carried over: the PNG's only colour chunk is gAMA
+    png = insert_before_idat(_png_bytes(raster), b"gAMA", gama)
+    with Image.open(io.BytesIO(jpg)) as j, Image.open(io.BytesIO(png)) as p:
+        assert j.info["icc_profile"] == image_hash._png_colour(png)  # the probe holds
+        assert j.convert("RGBA").tobytes() == p.convert("RGBA").tobytes()
+    assert _ident(jpg).id != _ident(png).id
+    # Without colour data on either side the descriptor is empty, untagged,
+    # and the two formats still share an id.
+    assert _id("jpeg_plain.jpg") == _id("jpeg_plain_as.png")
 
 
 def test_visible_rgb_still_counts():
@@ -247,6 +269,31 @@ def test_opaque_cases(monkeypatch):
     assert _assert_opaque(b"").reason == "undecodable"
 
 
+def test_no_decompression_bomb_warning_escapes(monkeypatch, recwarn):
+    # Between Pillow's warning and error thresholds Image.open warns on stderr;
+    # identity has a budget of its own, so the warning is noise and must not
+    # escape -- not as a printed warning, and not (under -W error) as a raise
+    # that would turn a decodable picture into an "undecodable" opaque id.
+    w, h = 24, 16
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", w * h - 1)  # warn, not raise
+    # Pillow checks each band's crop too; a band is at most _BAND_PIXELS, far
+    # below the real threshold, so the probe keeps it below the lowered one.
+    monkeypatch.setattr(image_hash, "_BAND_PIXELS", w)
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        got = _ident(_read("base.png"))
+    assert got.identity == "pixels"
+    assert got.id == _id_unpatched("base.png")
+    _ident(_read("base.png"))
+    assert not [w for w in recwarn if issubclass(w.category, Image.DecompressionBombWarning)]
+
+
+def _id_unpatched(name: str) -> str:
+    return json.loads((FIX / "pixel_ids.json").read_text())[name]
+
+
 def test_opaque_modes_other_than_cmyk():
     for mode in ("I", "F", "I;16"):
         buf = io.BytesIO()
@@ -325,6 +372,9 @@ def test_opaque_id_domain():
 def test_fixture_ids_pinned():
     pinned = json.loads((FIX / "pixel_ids.json").read_text())
     assert sorted(pinned) == _FIXTURE_FILES  # a fixture with no pin is a hole
+    # ... and a committed image the generator does not own is a stray.
+    on_disk = {p.name for p in FIX.iterdir() if p.suffix in {".png", ".jpg", ".gif", ".webp"}}
+    assert on_disk == make_fixtures.NAMES
     for name in _FIXTURE_FILES:
         assert _id(name) == pinned[name], name
 
@@ -360,3 +410,16 @@ def test_never_raises():
         assert image_hash.is_image_id(got.id)
     for data in samples[:60]:
         assert _ident(data).identity == "bytes"
+
+
+def test_make_fixtures_pins_only_its_own_names(tmp_path, monkeypatch):
+    # A stray image beside the fixtures is neither picked up nor pinned.
+    for name in make_fixtures.NAMES:
+        (tmp_path / name).write_bytes(_read(name))
+    (tmp_path / "stray.png").write_bytes(_read("base.png"))
+    monkeypatch.setattr(make_fixtures, "HERE", tmp_path)
+    make_fixtures.write()
+    pinned = json.loads((tmp_path / "pixel_ids.json").read_text())
+    assert set(pinned) == make_fixtures.NAMES
+    # The committed pins are what the generator writes.
+    assert pinned == json.loads((FIX / "pixel_ids.json").read_text())
