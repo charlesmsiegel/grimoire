@@ -123,9 +123,9 @@ def test_pair_fingerprint_ignores_side_order_and_beats():
 
 
 def test_lifecycle_fingerprint_has_no_last_scene():
-    base = dict(kind="possible_thread_closure", ref="thread:a", status="advanced",
-                beat_count=2, latest_beat="Mara found a page.", due="",
-                temporal_link_ids=["l2", "l1"])
+    base = {"kind": "possible_thread_closure", "ref": "thread:a", "status": "advanced",
+            "beat_count": 2, "latest_beat": "Mara found a page.", "due": "",
+            "temporal_link_ids": ["l2", "l1"]}
     fp = canon.lifecycle_fingerprint(**base)
     assert fp == canon.lifecycle_fingerprint(**dict(base, temporal_link_ids=["l1", "l2"]))
     assert fp != canon.lifecycle_fingerprint(**dict(base, beat_count=3))
