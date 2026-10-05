@@ -16,7 +16,10 @@ second move of one record) is ignored. An id-less row whose slug collision the
 §10.5 predicate honours -- an open record with the same title -- is the model
 naming a record it was shown, and materialize stages it onto that record
 whatever a resolver would say; it is a target here, like an explicit id, and is
-not asked about (deviation 2).
+not asked about (deviation 2). A proposed row is matched under the title the
+new record would carry -- its title, or else its assigned id (§10.2) -- so an
+id-only row is not compared by a blank title line; §9.1's "no ids" rule is
+about stored records' ids, not this.
 
 **Neighbours** come from `similarity.pool`: effective records, closed and
 resolved included (a closed thread is shown so the resolver knows it was
@@ -73,7 +76,7 @@ class Examined:
         self.kind = kind
         self.row = row                # the parsed row as given
         self.assigned = assigned      # the id materialize would open it under
-        self.title = _text(row.get("title")) or _text(row.get("id"))
+        self.title = _staged_title(row, assigned)
         self.candidates = candidates
         self.distinguished_from = distinguished_from
         self.decision = "unchecked"
@@ -102,6 +105,19 @@ class Examination:
 
 def _text(value) -> str:
     return fieldtext.text(value).strip()
+
+
+def _staged_title(row: dict, assigned: str) -> str:
+    """The title the record materialize would open carries: the row's title,
+    or else its assigned id (`materialize`'s ``title or pid``, spec §10.2).
+
+    The proposed subject is matched under it, not under the blank title line.
+    §9.1's "no ids" rule is about a STORED record's id; this is the title the
+    new record will actually be shown and stored under, so a row that names a
+    half-remembered id and no title (``the-lost-map`` beside a stored "The lost
+    map") is compared by the words it will be read by.
+    """
+    return _text(row.get("title")) or assigned
 
 
 def _live(cid: str, ledgers: effective.Ledgers) -> dict[str, str]:
@@ -154,9 +170,9 @@ class _Proposal:
         self.subject = subject
 
 
-def _subject(kind: similarity.Kind, n: int, row: dict, sid: str,
+def _subject(kind: similarity.Kind, n: int, row: dict, assigned: str, sid: str,
              actors: set[str]) -> similarity.Subject:
-    record = {"title": _text(row.get("title")),
+    record = {"title": _staged_title(row, assigned),
               "beats": [{"text": _text(row.get("beat")), "scene": sid}],
               "kind": _text(row.get("kind")), "due": _text(row.get("due"))}
     # The ref never leaves `examine`: keys are given to examined rows only.
@@ -189,7 +205,8 @@ def _classify(cid: str, sid: str, parsed: dict, facts: dict, ledgers: effective.
             if actors is None:
                 actors = _actors(cid, sid, facts)
             proposals.append(_Proposal(section, i, kind, row, slot.id,
-                                       _subject(kind, len(proposals) + 1, row, sid, actors)))
+                                       _subject(kind, len(proposals) + 1, row, slot.id, sid,
+                                                actors)))
     return proposals, targets
 
 
