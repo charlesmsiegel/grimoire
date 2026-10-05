@@ -899,7 +899,7 @@ export default function ConfigView() {
                         value={draft.offscene_known_limit}
                         onChange={(v) => edit("offscene_known_limit", v)} />
             </div>
-            <p className="config-copy">Each present character writes a separate response. Continue and Respond as request one additional contribution.</p>
+            <p className="config-copy">Each present character writes a separate response. Continue, or a reply chip with an empty composer, requests one additional contribution; a reply chip with text posts it with that character leading the round.</p>
             <label className="checkbox-row">
               <input
                 type="checkbox"
