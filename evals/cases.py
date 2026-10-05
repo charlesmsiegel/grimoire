@@ -845,6 +845,7 @@ def _identity_prompt(ctx: dict) -> list[dict]:
     exam = _identity_examine(ctx)
     ctx["exam"] = exam
     ctx["offered"] = {key: set(ids) for key, ids in _offers(exam).items()}
+    ctx["kinds"] = {e.key: e.kind for e in exam.rows}
     ctx["expected"] = {e.key: IDENTITY_VERDICTS[e.index] for e in exam.rows
                        if e.section == "plot_movements"}
     return identity.build_prompt(exam.prompt_rows())
@@ -873,7 +874,8 @@ def grade_continuity_identity(ctx: dict, output: str) -> list[Check]:
     same_type = Check("prompt.same_type_only", not mixed,
                       f"rows offered a candidate of another type: {mixed}")
     return [*prompt, same_type,
-            *graders.grade_identity(output, ctx["expected"], ctx["offered"])]
+            *graders.grade_identity(output, ctx["expected"], ctx["offered"],
+                                    ctx["kinds"])]
 
 
 # ------------------------------------------------------------------- the suite

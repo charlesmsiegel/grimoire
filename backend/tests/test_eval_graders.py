@@ -425,6 +425,8 @@ IDENTITY_EXPECTED = {
 }
 IDENTITY_OFFERED = {"r1": {"find-the-ledger"}, "r2": {"the-saltmarch-smuggling"},
                     "r3": {"seraphines-debts"}}
+#: The kind each row was examined as: all three are plot movements.
+IDENTITY_KINDS = {"r1": "thread", "r2": "thread", "r3": "thread"}
 
 
 def _identity_json(*decisions: dict) -> str:
@@ -437,12 +439,14 @@ _R3 = {"row": "r3", "decision": "new", "id": "", "reason": "It grew out of the d
 
 
 def _identity(text: str) -> set[str]:
-    return failed(graders.grade_identity(text, IDENTITY_EXPECTED, IDENTITY_OFFERED))
+    return failed(graders.grade_identity(text, IDENTITY_EXPECTED, IDENTITY_OFFERED,
+                                          IDENTITY_KINDS))
 
 
 def test_identity_compliant_passes():
     checks = graders.grade_identity(_identity_json(_R1, _R2, _R3),
-                                    IDENTITY_EXPECTED, IDENTITY_OFFERED)
+                                    IDENTITY_EXPECTED, IDENTITY_OFFERED,
+                                    IDENTITY_KINDS)
     assert failed(checks) == set()
     assert {c.name for c in checks} == {
         "identity.json", "identity.shape", "identity.enum", "identity.known_ids",
@@ -453,7 +457,8 @@ def test_identity_compliant_passes():
 def test_identity_prose_fails_json_only():
     """No object at all short-circuits: nothing else is reported."""
     checks = graders.grade_identity("They look like the same ledger to me.",
-                                    IDENTITY_EXPECTED, IDENTITY_OFFERED)
+                                    IDENTITY_EXPECTED, IDENTITY_OFFERED,
+                                    IDENTITY_KINDS)
     assert [(c.name, c.ok) for c in checks] == [("identity.json", False)]
 
 
@@ -475,11 +480,24 @@ def test_identity_unoffered_id_fails_known_ids():
         "identity.known_ids", "identity.same_obligation"}
 
 
+def test_identity_strips_only_the_rows_own_kind_prefix():
+    """`Examination.decide` removes a ``<kind>:`` prefix only for the row's own
+    kind, so a thread row answered with ``commitment:find-the-ledger`` is
+    downgraded as not offered. The grader has to refuse it the same way, or a
+    live run certifies a reply the app turns down. The row's own prefix is
+    still accepted."""
+    wrong = {**_R1, "id": "commitment:find-the-ledger"}
+    assert _identity(_identity_json(wrong, _R2, _R3)) == {
+        "identity.known_ids", "identity.same_obligation"}
+    assert _identity(_identity_json({**_R1, "id": "thread:find-the-ledger"}, _R2, _R3)) == set()
+
+
 def test_identity_missing_row_fails_covers_rows():
     """A row with no decision is reported once, by covers_rows: its own verdict
     check is not reported beside it, so the two failures stay separable."""
     checks = graders.grade_identity(_identity_json(_R1, _R2),
-                                    IDENTITY_EXPECTED, IDENTITY_OFFERED)
+                                    IDENTITY_EXPECTED, IDENTITY_OFFERED,
+                                    IDENTITY_KINDS)
     assert failed(checks) == {"identity.covers_rows"}
     assert "identity.continuation" not in {c.name for c in checks}
 
