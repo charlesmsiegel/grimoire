@@ -622,6 +622,14 @@ None of these reads and rewrites bytes. A legacy source is ingested once first.
   moved on, for example a stale journal that synced in after later edits. That
   journal is discarded, not replayed.
 
+  A promotion is refused, with nothing written, while either slot holds a ref
+  whose object or blob has not arrived. Recovery is also run by every writer
+  on the directory, not only by readers.
+
+  **Known limit.** A stale journal from an A→B→A promotion sequence that syncs
+  in late matches its own `pre` state and is replayed. The pre/post rule cannot
+  tell that case apart from a genuine crash.
+
   User-visible behaviour is unchanged.
 - **`overlay.promote_image`, `sync`, forks and campaign materialization** use
   §6's per-slot copy. Within one library they write no blob.
