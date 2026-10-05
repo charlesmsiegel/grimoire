@@ -136,22 +136,43 @@ def _certainty(value) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
+def _fixed(subject: similarity.Subject) -> tuple[str, str]:
+    """The candidate fields the prompt cannot cut: its bare canonical id, which
+    the resolver names it back by, and its kind, which a cut to nothing would
+    show as the ``promise`` a blank kind means."""
+    return subject.ref.partition(":")[2], _text(subject.record.get("kind"))
+
+
+def _offerable(subject: similarity.Subject) -> bool:
+    """`_fixed` fits `similarity.CONTINUITY_IDENTITY_BYTES`. A ledger route
+    slugifies a title of any length into the record's id, and an id cannot be
+    clipped without losing the record it names, so a record whose id alone
+    overruns the bound is never a candidate: it is left out of the pool rather
+    than carried whole into the shared resolver prompt."""
+    return (sum(len(text.encode("utf-8")) for text in _fixed(subject))
+            <= similarity.CONTINUITY_IDENTITY_BYTES)
+
+
 def _candidate(subject: similarity.Subject, signals: dict) -> dict:
     """One neighbour as the resolver prompt shows it: its bare canonical id,
     what it is, its latest beat and up to `similarity.PREVIOUS_BEATS` earlier
     ones, newest first.
 
-    Its stored text -- title, kind, due, latest beat, earlier beats, in that
-    priority, so a short structural field keeps its meaning -- shares one `similarity.CONTINUITY_IDENTITY_BYTES` budget
-    (`similarity.clip_fields`), the bound its identity text was embedded under:
-    a closed record is in the pool though not in the extraction's snapshot, and
-    its title can select it whatever length its beats run to. An earlier beat
-    the budget no longer reaches is left out rather than shown blank."""
+    Its stored text -- id, kind, title, due, latest beat, earlier beats --
+    shares one `similarity.CONTINUITY_IDENTITY_BYTES` budget, the bound its
+    identity text was embedded under: a closed record is in the pool though not
+    in the extraction's snapshot, and its title can select it whatever length
+    its text runs to. The `_fixed` fields come first and whole (`examine` offers
+    only records they fit, `_offerable`); the rest share what they leave
+    (`similarity.clip_fields`), in that priority. An earlier beat the budget no
+    longer reaches is left out rather than shown blank."""
     rec = subject.record
+    rid, kind = _fixed(subject)
     latest, earlier = similarity.beat_lines(rec)
-    title, kind, due, latest, *earlier = similarity.clip_fields(
-        [subject.title, _text(rec.get("kind")), _text(rec.get("due")), latest, *earlier])
-    return {"id": subject.ref.partition(":")[2], "title": title,
+    left = similarity.CONTINUITY_IDENTITY_BYTES - len(rid.encode("utf-8"))
+    kind, title, due, latest, *earlier = similarity.clip_fields(
+        [kind, subject.title, _text(rec.get("due")), latest, *earlier], left)
+    return {"id": rid, "title": title,
             "status": subject.status, "kind": kind, "due": due, "latest_beat": latest,
             "earlier": [beat for beat in earlier if beat], "signals": dict(signals)}
 
@@ -502,7 +523,8 @@ def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
     live = _live(cid, ledgers)
     proposals, targets = _classify(cid, sid, parsed, facts, ledgers, live)
     kinds = sorted({p.kind for p in proposals})
-    pools = {kind: similarity.pool(cid, kind) for kind in kinds}
+    pools = {kind: [s for s in similarity.pool(cid, kind) if _offerable(s)]
+             for kind in kinds}
     sem = _semantic(proposals, pools, embed_deadline)
     vecs = sem.vectors if sem.mode != "off" else None
     stored = {"thread": ledgers.threads or {}, "commitment": ledgers.commitments or {}}

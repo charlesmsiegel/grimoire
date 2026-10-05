@@ -667,7 +667,8 @@ def test_build_prompt_with_no_optional_fields_renders():
 
 
 def _candidate_text_bytes(cand):
-    fields = [cand["title"], cand["kind"], cand["due"], cand["latest_beat"], *cand["earlier"]]
+    fields = [cand["id"], cand["title"], cand["kind"], cand["due"], cand["latest_beat"],
+              *cand["earlier"]]
     return sum(len(f.encode("utf-8")) for f in fields)
 
 
@@ -699,7 +700,9 @@ def test_a_long_stored_beat_is_clipped_in_the_resolver_prompt(cid, s0, sid):
 
 def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, sid):
     bound = similarity.CONTINUITY_IDENTITY_BYTES
-    record = {"title": "The Saltmarch tithe " + "t" * bound, "kind": "debt " + "k" * bound,
+    # The kind is what a ledger route stores (one of `commitments.KINDS`); the
+    # id is the resolver's handle: both are shown whole, the rest shares what is left.
+    record = {"title": "The Saltmarch tithe " + "t" * bound, "kind": "threat",
               "due": "midsummer " + "d" * bound, "status": "open",
               "beats": [{"text": "Mara swore it. " + "e" * bound, "scene": s0},
                         {"text": "Mara owes the tithe. " + "b" * bound, "scene": s0}]}
@@ -710,11 +713,48 @@ def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, si
     [cand] = identity.Examination([examined], 1, "basic", "off", "", 0, set(),
                                   {}).prompt_rows()[0]["candidates"]
     assert _candidate_text_bytes(cand) <= bound
+    assert (cand["id"], cand["kind"]) == ("the-saltmarch-tithe", "threat")
     assert cand["title"].startswith("The Saltmarch tithe t")
     assert all(not text or (text in record["kind"] or text in record["due"]
                             or any(text in b["text"] for b in record["beats"]))
                for text in (cand["kind"], cand["due"], cand["latest_beat"], *cand["earlier"]))
     assert "" not in cand["earlier"]
+
+
+def test_a_record_whose_id_overruns_the_bound_is_never_a_candidate(cid, s0, sid):
+    # A ledger route slugifies a title of any length into the record's id, and
+    # the resolver has to name a candidate back by that id, so it cannot be
+    # clipped: a record whose id alone overruns the identity-text bound is not
+    # offered, and the prompt does not grow with it.
+    bound = similarity.CONTINUITY_IDENTITY_BYTES
+    _seed_prompt_fixture(cid, s0)
+    long_title = "Find the ledger " + "x" * 30000
+    long_id = store.paths.slugify(long_title)
+    store.plot.set_movement(cid, long_id, long_title, "closed", "Mara hid it.", s0)
+    exam = _examine(cid, sid, plot=[REOPENED_LEDGER])
+    [row] = exam.prompt_rows()
+    assert [c["id"] for c in row["candidates"]] == ["find-the-ledger"]
+    assert [s.ref for s, _ in exam.rows[0].candidates] == ["thread:find-the-ledger"]
+    _, user = identity.build_prompt([row])
+    assert len(user["content"].encode("utf-8")) <= 2 * bound
+
+
+def test_a_title_filling_the_bound_does_not_relabel_a_commitment_kind(s0):
+    bound = similarity.CONTINUITY_IDENTITY_BYTES
+    record = {"title": "The Saltmarch tithe " + "t" * bound, "kind": "threat",
+              "status": "open", "beats": [{"text": "Mara swore it.", "scene": s0}]}
+    stored = similarity.subject("commitment", "commitment:the-saltmarch-tithe", record)
+    examined = identity.Examined("commitment_movements", 0, "r1", "commitment",
+                                 {"title": "Saltmarch tithe", "beat": "Mara owes."},
+                                 "saltmarch-tithe", [(stored, {"via": "lexical"})], [])
+    [row] = identity.Examination([examined], 1, "basic", "off", "", 0, set(),
+                                 {}).prompt_rows()
+    [cand] = row["candidates"]
+    assert cand["kind"] == "threat"
+    assert _candidate_text_bytes(cand) <= bound
+    _, user = identity.build_prompt([row])
+    assert "(threat, open)" in user["content"]
+    assert "promise" not in user["content"]
 
 
 # ------------------------------------------------------------ deciding rows
