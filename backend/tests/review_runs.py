@@ -18,6 +18,7 @@ asserting on one of those is asserting on the real response.
 
 from __future__ import annotations
 
+import json
 import time
 
 #: How long to wait for a run to reach a terminal state. Generous: these tests
@@ -47,6 +48,23 @@ RECOVER_THE_LEDGER = {"title": "Recover the harbour ledger",
 SALTMARCH_TITHE = {"title": "The Saltmarch tithe",
                    "beat": "The guild demanded Mara pay the Saltmarch tithe.",
                    "status": "open"}
+
+#: An extraction reply proposing `RECOVER_THE_LEDGER` and nothing else, as the
+#: string the model sends.
+EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER = json.dumps(
+    {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+     "plot_movements": [RECOVER_THE_LEDGER]})
+
+#: The system-prompt phrase that marks a request as the identity resolver's.
+IDENTITY_SYSTEM = "You are checking whether newly proposed story records"
+
+
+def identity_requests(fake):
+    """The requests `fake` received from the identity resolver: those whose
+    system message carries `IDENTITY_SYSTEM`."""
+    return [r for r in fake.requests
+            if any(m.get("role") == "system" and IDENTITY_SYSTEM in (m.get("content") or "")
+                   for m in r["messages"])]
 
 
 class Answer:

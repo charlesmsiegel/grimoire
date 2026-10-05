@@ -174,6 +174,23 @@ def _drive_tracker(client, wid, cid, sid):
         assert run.terminal.wait(timeout=10), "a tracker update never finished"
 
 
+def _drive_continuity(client, wid, cid, sid):
+    # The duplicate check beside absorb runs only when a proposed record has a
+    # plausible stored neighbour, so one is seeded -- in the absorbed scene
+    # itself, so the structural clause applies too, though the proposed title
+    # clears the lexical floors on its own. Every call answers with the
+    # extraction: the resolver reads it as a decodable reply with no decisions
+    # (the phase is `degraded`), and the assertion is only about which
+    # connection the check used, so the extraction's request is forgotten.
+    pid, title, beat = review_runs.LEDGER_THREAD
+    store.plot.set_movement(cid, pid, title, "open", beat, sid)
+    fake = client.app.dependency_overrides[routes.get_llm]()
+    fake.turns = [[review_runs.EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER]]
+    review_runs.absorb(client, cid, sid)
+    fake.requests[:] = review_runs.identity_requests(fake)
+    assert fake.requests, "the absorb made no identity call"
+
+
 #: route key -> what a user does to reach it. Every route in the registry is
 #: here; `test_every_route_has_a_driver` fails if one is added without one,
 #: which is the same "no phantoms" rule the guard applies to tasks.
@@ -189,6 +206,7 @@ DRIVERS = {
     "tagline": _drive_tagline,
     "scenario": _drive_scenario,
     "tracker": _drive_tracker,
+    "continuity": _drive_continuity,
 }
 
 #: The routes a campaign may override, which is the registry's own answer.
