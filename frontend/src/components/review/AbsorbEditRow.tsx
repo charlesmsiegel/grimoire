@@ -5,8 +5,8 @@
 // and the submitted batch are both keyed on, so it is passed in rather than
 // recomputed from either list's own ordering.
 import {
-  AUTHORITY_LABELS, CONTRADICTION_SOURCES, IDENTITY_NO_ALTERNATIVE_HINT, IDENTITY_UNCERTAIN_HINT,
-  identityChip, isCandidateAlternative, isUncited, targetTaken, type EditRow,
+  AUTHORITY_LABELS, CONTRADICTION_SOURCES, identityChip, identityHint, isCandidateAlternative,
+  isUncited, targetTaken, type EditRow,
 } from "./editRows";
 import type { SceneReview } from "./useSceneReview";
 
@@ -19,6 +19,7 @@ export default function AbsorbEditRow({ e, i, review }: {
   } = review;
   const ic = e.identity_check;
   const chip = identityChip(e);
+  const hint = identityHint(e);
   const alternatives = ic?.alternatives ?? [];
   const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
   const conflict = conflictByRow.get(i);
@@ -100,13 +101,7 @@ export default function AbsorbEditRow({ e, i, review }: {
       {ic && (
         <div className="absorb-identity">
           {ic.reason && <p className="field-hint">{ic.reason}</p>}
-          {/* The spec's hint names a switch; a row with nothing to switch to
-              (its only candidate is closed, or another row holds it) gets the
-              sentence that is true of it instead. */}
-          {ic.decision === "uncertain" && (
-            <p className="field-hint">
-              {alternatives.length > 0 ? IDENTITY_UNCERTAIN_HINT : IDENTITY_NO_ALTERNATIVE_HINT}
-            </p>)}
+          {hint && <p className="field-hint">{hint}</p>}
           {ic.candidates.length > 0 && (
             <ul className="absorb-identity-candidates">
               {ic.candidates.map((c) => (

@@ -5,8 +5,8 @@
 // shows up there as a row missing from a drawer, three hundred lines from the
 // line that decided it.
 import {
-  approvedByDefault, dossierNotice, drawerKey, editBand, groupOf, identityChip,
-  isCandidateAlternative, isUncited, wireEdit,
+  approvedByDefault, dossierNotice, drawerKey, editBand, groupOf, IDENTITY_NO_ALTERNATIVE_HINT,
+  IDENTITY_UNCERTAIN_HINT, identityChip, identityHint, isCandidateAlternative, isUncited, wireEdit,
 } from "./editRows";
 import type { Dossiers, IdentityCheck, StagedEdit } from "../../api/client";
 
@@ -172,6 +172,29 @@ test("identityChip wording per decision", () => {
                                                                 alternatives: [asNew] }) }))
     .toBe("Matched an existing record");
   expect(identityChip({ ...asNew, identity_check: check({ decision: "new" }) })).toBeNull();
+});
+
+test("the chip and hint follow the record the row writes now, not the staged verdict", () => {
+  // A swap keeps the server's check (decision, status, reason) and changes
+  // only the target, so the wording has to be read off the target: a row
+  // switched onto a candidate is no longer a possible duplicate, and an
+  // accepted retarget kept as new no longer matches anything.
+  const uncertainSwapped = { ...ontoLedger, identity_check: check({ alternatives: [asNew] }) };
+  expect(identityChip(uncertainSwapped)).toBe("Switched to an existing record");
+  expect(identityHint(uncertainSwapped)).toBeNull();
+  const acceptedKeptNew = { ...asNew, identity_check: check({ decision: "existing",
+                                                              alternatives: [ontoLedger] }) };
+  expect(identityChip(acceptedKeptNew)).toBeNull();
+  expect(identityHint(acceptedKeptNew)).toBeNull();
+  // ...and the rows as staged read exactly as before
+  expect(identityHint({ ...asNew, identity_check: check() })).toBe(IDENTITY_UNCERTAIN_HINT);
+  expect(identityHint({ ...asNew, identity_check: check({ alternatives: [] }) }))
+    .toBe(IDENTITY_NO_ALTERNATIVE_HINT);
+  expect(identityHint({ ...ontoLedger, identity_check: check({ decision: "existing",
+                                                               alternatives: [asNew] }) }))
+    .toBeNull();
+  expect(identityHint({ ...asNew, identity_check: check({ decision: "new" }) })).toBeNull();
+  expect(identityHint(asNew)).toBeNull();
 });
 
 test("isCandidateAlternative compares prefixed refs", () => {
