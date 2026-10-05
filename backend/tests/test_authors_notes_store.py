@@ -69,7 +69,7 @@ def test_set_and_clear_each_level(cid):
 
 def test_applies_cadence():
     n3 = {**NOTE, "every": 3}
-    assert [t for t in range(0, 10) if authors_notes.applies(n3, t)] == [3, 6, 9]
+    assert [t for t in range(10) if authors_notes.applies(n3, t)] == [3, 6, 9]
     assert authors_notes.applies(NOTE, 0) and not authors_notes.applies(n3, 4)
 
 

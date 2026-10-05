@@ -26,6 +26,7 @@ from typing import NamedTuple
 
 from ... import content_parts, model_guidance, prompts
 from .. import (
+    authors_notes,
     birthdays,
     characters,
     config,
@@ -48,6 +49,7 @@ from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..continuity import effective
 from ..regex import view as regex_view
+from ..scenes import identity as scenes_identity
 from ..scenes import read as scenes_read
 from ..scenes import serialize as scenes_serialize
 from ..tracker import fields as tracker_fields
@@ -63,6 +65,7 @@ from . import (
     actor,
     archive,
     art,
+    authors_note,
     layout,
     macros,
     mechanics,
@@ -117,12 +120,19 @@ def compose_opener(cid: str, sid: str, prompt: str,
                        "preceding opening. Do not write for other actors." if adapt else
                        "Write only this assigned NPC's contribution after the preceding opening. "
                        "Do not write for other actors.")
+    # Author's notes: an opener has no history to place them in, so the ones
+    # that apply (every-turn notes only -- an opener is turn 0) follow the
+    # prompt and any prior contributions, ahead of the instruction, and are
+    # reserved like the rest of what is appended.
+    note_rows = tuple((f"Author's note — {level}", text) for level, text in a["opener_notes"])
     extra = (("Greeting to adapt" if adapt else "Opener prompt", user_text),
              ("Previous opening contributions", prior_text),
+             *note_rows,
              ("Assigned opener instruction", instruction))
     before = [{"role": "user", "content": user_text}]
     if prior_text:
         before.append({"role": "assistant", "content": prior_text})
+    before += [{"role": "system", "content": text} for _level, text in a["opener_notes"]]
     return _prepare(a, cid, sid, model=model, describe=describe, opener=True,
                     before_post=tuple(before),
                     after_post=({"role": "system", "content": instruction},), extra=extra)
@@ -219,6 +229,16 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # `history` because the index-based steps above (`pins.active`,
     # `actor.observed_history`) count it, and `_project_history` drops it itself.
     visible = scenes_serialize.without_excluded(history)
+    # Author's notes (play controls V). The cadence counts the FULL transcript
+    # -- not this actor's observed slice, and hidden posts included -- so every
+    # call of one turn agrees on it; an opener is turn 0 whatever the scene
+    # holds. Scene notes are keyed by identity, which follows the scene
+    # through a rename. A bad notes file reads as no notes.
+    note_turn = 0 if opener else authors_note.note_turn(scene["messages"])
+    applied_notes, skipped_notes = authors_note.applicable(
+        authors_notes.read(cid), scenes_identity.scene_identity(cid, sid),
+        actor_ref if actor_scoped else None,
+        response_actor["name"] if actor_scoped and response_actor else "", note_turn)
 
     npc_cards: list[dict] = []
     npc_ids: list[str] = []
@@ -534,17 +554,33 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                                   length_correction=length_correction)
     post_history = _expanded(post_history)
 
+    # The notes go INTO the projected history, each its own system message at
+    # its depth (`authors_note.inject`); their positions travel beside it in
+    # `notes`, never on the wire. An opener sends no history, so its notes ride
+    # in `before_post` instead (`compose_opener`).
+    in_history = [] if opener else applied_notes
     if images > 0:
         # The newest `images` pictures stay as references (#377): projected as
         # sentinels, expanded like any other text, then split into parts.
-        projected, image_table, nonce = story._project_history_refs(history, images=images,
-                                                                    cid=cid)
+        refs: dict = {}
+
+        def project(messages: list[dict]) -> list[dict]:
+            projected, refs["table"], refs["nonce"] = story._project_history_refs(
+                messages, images=images, cid=cid)
+            return projected
+
+        projected, positions = authors_note.inject(history, in_history, project)
         sub_history = _split_refs([{"role": m["role"], "content": _expanded(m["content"])}
-                                   for m in projected], image_table, nonce)
+                                   for m in projected], refs["table"], refs["nonce"])
     else:
+        projected, positions = authors_note.inject(history, in_history)
         sub_history = [{"role": m["role"], "content": _expanded(m["content"])}
-                       for m in story._project_history(history)]
+                       for m in projected]
+    notes = positions + [{**n, "index": None, "status": "skipped"} for n in skipped_notes]
+    opener_notes = ([(n["level"], _expanded(authors_note.render(n))) for n in applied_notes]
+                    if opener else [])
     return {"data": data, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
+            "notes": notes, "opener_notes": opener_notes,
             "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
             "lore": lore,
             "response_settings": {"style_id": budget["style_id"], "phase": phase,
@@ -1415,7 +1451,9 @@ def _packed(a: dict, cid: str, sid: str, opener: bool = False,
     # but a frozen snapshot would keep claiming it forever.
     packed = pack.pack(_render_sections(a, cid, sid, opener=opener),
                        [] if opener else a["history"], reserved, budget,
-                       compose=_compose_system)
+                       compose=_compose_system,
+                       notes=frozenset() if opener else frozenset(
+                           n["index"] for n in a.get("notes", ()) if n["index"] is not None))
     # After the fit, never before: what the packer DROPPED is what decides
     # whether two runs of a shared heading became one.
     _dedupe_runs(packed["sections"])
@@ -1478,6 +1516,10 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
                                                   datetime_subs=a.get("datetime_subs")).strip()
     compose = _compose_system
     history = deepcopy([] if opener else a["history"])
+    notes = deepcopy([] if opener else a.get("notes", []))
+    # Which history messages are author's notes: the packer keeps them off its
+    # floor, and the breakdown reports them in a row of their own.
+    note_index = frozenset(n["index"] for n in notes if n["index"] is not None)
     post_history = a["post_history"]
     before_post, after_post = deepcopy(before_post), deepcopy(after_post)
     budget = pack.budget_tokens()
@@ -1487,7 +1529,8 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
 
     def variant(guidance):
         sections = _profile_sections(base, guidance)
-        packed = pack.pack(sections, history, reserved, budget, compose=compose, count=count)
+        packed = pack.pack(sections, history, reserved, budget, compose=compose, count=count,
+                           notes=note_index)
         _dedupe_runs(packed["sections"])
         packed["budget"] = budget
         system = compose([s["text"] for s in packed["sections"] if not s["dropped"]])
@@ -1496,7 +1539,8 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         if post_history:
             messages.append({"role": "system", "content": post_history})
         messages += after_post
-        detail = (_breakdown({"post_history": post_history}, packed, list(extra), count=count)
+        detail = (_breakdown({"post_history": post_history, "notes": notes}, packed,
+                             list(extra), count=count)
                   if describe else None)
         return messages, detail
 

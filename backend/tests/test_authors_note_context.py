@@ -7,15 +7,15 @@ from grimoire.store.context.authors_note import applicable, inject, note_turn, r
 from grimoire.store.scenes import serialize as scenes_serialize
 
 
-def P(n):
+def post(n):
     return {"role": "user", "content": f"P{n}"}
 
 
-def R(n):
+def reply(n):
     return {"role": "assistant", "content": f"R{n}", "speaker": "Mara"}
 
 
-H = [P(1), R(1), P(2), R(2), P(3), R(3)]
+H = [post(1), reply(1), post(2), reply(2), post(3), reply(3)]
 C = {"text": "Storm.", "depth": 4, "every": 1}
 S = {"text": "Rain.", "depth": 2, "every": 1}
 M = {"text": "Whisper.", "depth": 0, "every": 1}
@@ -26,14 +26,14 @@ def test_split_point_depths():
     assert split_point(H, 0) == 6          # after the last post
     assert split_point(H, 50) == 0         # clamped to the start
     assert split_point(H, 3) == 2          # R2 snaps back to P2
-    assert split_point([R(1), R(2)], 1) == 0
-    assert split_point([P(1), R(1), P(2), P(3)], 1) == 2   # P3 is mid-run; snaps to the run's start
+    assert split_point([reply(1), reply(2)], 1) == 0
+    assert split_point([post(1), reply(1), post(2), post(3)], 1) == 2   # P3 is mid-run; snaps to the run's start
     assert split_point([], 4) == 0
     assert split_point([], 0) == 0
 
 
 def test_note_turn_counts_excluded_and_director_lines():
-    msgs = [P(1), {**P(2), "excluded": "2026-10-05T00:00:00"}, R(1),
+    msgs = [post(1), {**post(2), "excluded": "2026-10-05T00:00:00"}, reply(1),
             {"role": "assistant", "content": "steer", "speaker": scenes_serialize.DIRECTOR_SPEAKER}]
     assert note_turn(msgs) == 3
     assert note_turn([]) == 0
@@ -92,9 +92,9 @@ def test_inject_orders_notes_at_one_point_and_spreads_others():
 
 
 def test_inject_counts_only_posts_in_context():
-    hidden = {**P(9), "excluded": "2026-10-05T00:00:00"}
+    hidden = {**post(9), "excluded": "2026-10-05T00:00:00"}
     note = {"role": "assistant", "content": "steer", "speaker": scenes_serialize.DIRECTOR_SPEAKER}
-    msgs = [P(1), R(1), P(2), R(2), P(3), R(3), hidden, note]
+    msgs = [post(1), reply(1), post(2), reply(2), post(3), reply(3), hidden, note]
     projected, pos = inject(msgs, [{"level": "campaign", "name": "", "text": "S", "depth": 2,
                                     "every": 1}])
     assert "P3" in projected[pos[0]["index"] + 1]["content"]
