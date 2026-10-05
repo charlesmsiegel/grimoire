@@ -61,6 +61,7 @@ import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
 import { applyDisplay } from "../components/play/displayFrames";
+import { quotedIn } from "../components/play/citation";
 import { RegexTestDialog, type RegexTestTarget } from "../components/play/RegexTestDialog";
 import {
   DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun,
@@ -1569,7 +1570,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   function goToQuote(quote: string) {
     const needle = quote.trim().toLowerCase();
     if (!needle) return;
-    if (!messages.some((m) => m.content.toLowerCase().includes(needle))) return;
+    if (!messages.some((m) => quotedIn(m, needle))) return;
     setCitedQuote(quote);
     // Queued behind the render that paints the highlight, so the element it
     // scrolls to is the one that is about to be marked.
@@ -4103,8 +4104,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // review's "find in transcript". They can never both be open — the review
   // replaces the play view outright — so one piece of state serves both.
   const citedNeedle = (citedQuote || review.reviewQuote).trim().toLowerCase();
-  const isCited = (text: string) =>
-    citedNeedle !== "" && text.toLowerCase().includes(citedNeedle);
+  const isCited = (m: Message) => quotedIn(m, citedNeedle);
 
   /** How many notes this scene is holding, for the toggle's label.
    *

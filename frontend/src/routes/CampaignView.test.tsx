@@ -7631,6 +7631,56 @@ test("a dossier row carries its citation, and hovering it lights the transcript 
   await waitFor(() => expect(document.querySelectorAll(".msg.cited")).toHaveLength(0));
 });
 
+test("a citation of a rule's text lights the post, and Go to turn reaches it", async () => {
+  // The quote exists only in `shown`: a rule rewrote "mud" to "marsh" for
+  // both the screen and the prompt the reviewer judged.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "aud", role: "npc", name: "Sister Aud" }]);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant", content: "I'd rather the mud than his company.",
+      shown: "I'd rather the marsh than his company.", speaker: "Sister Aud" },
+    { role: "assistant", content: "The tide had been going out since before dawn." },
+  ] });
+  (api.getCasefile as any).mockResolvedValue({
+    kind: "characters", id: "aud", name: "Sister Aud", version: "v1", role: "npc",
+    scenes: ["s1"], last_seen: "s1",
+    standing: "Guarded. Will not be alone with the Reeve.",
+    knows: "", suspects: "", dossier: "", tagline: "",
+    feels_toward: [], standing_facts: [],
+  });
+  (api.campaignProvenance as any).mockResolvedValue({
+    "characters/aud#current_state": {
+      quote: "I'd rather the marsh than his company.", speaker: "Sister Aud",
+      certainty: 0.92, authority: "self", band: "high", scene: "s1",
+      recorded: "2026-08-13T10:00:00Z",
+    },
+  });
+  // jsdom may not define it at all, so it is installed and put back by
+  // descriptor rather than spied on.
+  const scrolled = vi.fn();
+  const before = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+  Object.defineProperty(Element.prototype, "scrollIntoView",
+                        { value: scrolled, configurable: true, writable: true });
+  try {
+    renderCampaign();
+    const column = within(await screen.findByRole("complementary"));
+    fireEvent.click(await column.findByText("Sister Aud"));
+
+    const marker = await screen.findByRole("button", { name: /^Standing: Cited/ });
+    fireEvent.focus(marker);
+    await waitFor(() => expect(document.querySelectorAll(".msg.cited")).toHaveLength(1));
+    expect((document.querySelector(".msg.cited") as HTMLElement).textContent)
+      .toMatch(/rather the marsh/);
+
+    fireEvent.mouseDown(screen.getByRole("button", { name: /Go to turn/ }));
+    await waitFor(() => expect(scrolled).toHaveBeenCalled());
+  } finally {
+    if (before) Object.defineProperty(Element.prototype, "scrollIntoView", before);
+    else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  }
+});
+
 test("a campaign whose provenance cannot be read shows uncited rows, not an error", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getCast as any).mockResolvedValue([

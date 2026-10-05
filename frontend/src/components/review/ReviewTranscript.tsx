@@ -7,16 +7,17 @@ import type { Message } from "../../api/client";
 export default function ReviewTranscript({ messages, speakerOf, isCited }: {
   messages: Message[];
   speakerOf: (m: Message) => string;
-  /** The quote the reviewer asked to find, if it is in this post. */
-  isCited: (text: string) => boolean;
+  /** The quote the reviewer asked to find, if it is in this post. Asked of the
+   *  whole post, since the quote may be in its stored or its shown text. */
+  isCited: (m: Message) => boolean;
 }) {
   return (
     <aside className="review-transcript" aria-label="The scene, for checking">
       <div className="section-label">The scene, for checking</div>
       {messages.map((m, i) => (
-        <div className={"review-post" + (isCited(m.content) ? " cited" : "")} key={i}>
+        <div className={"review-post" + (isCited(m) ? " cited" : "")} key={i}>
           <div className="review-post-speaker">{speakerOf(m)}</div>
-          <div className="review-post-body">{m.content}</div>
+          <div className="review-post-body">{m.shown ?? m.content}</div>
         </div>
       ))}
       {messages.length === 0 && (

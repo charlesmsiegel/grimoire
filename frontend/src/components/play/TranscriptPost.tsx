@@ -7,6 +7,7 @@ import RerollRoutePicker, { type RerollRoute } from "../RerollRoute";
 import { SavedThinking } from "../Thinking";
 import { TrackerDisclosure } from "../tracker/TrackerDisclosure";
 import { RenderedMarkdown } from "./StreamingMarkdown";
+import { quotedIn } from "./citation";
 
 // Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
 // Prefixed with an invisible separator so it can never collide with a real
@@ -185,7 +186,7 @@ export const TranscriptRun = memo(function TranscriptRun({
             key={index} m={m} index={index} actor={run.actor} speaker={run.speaker}
             // Substring, for the reason `goToQuote` gives: the citation records
             // an excerpt, and there is no index to trust.
-            cited={ctx.citedNeedle !== "" && m.content.toLowerCase().includes(ctx.citedNeedle)}
+            cited={quotedIn(m, ctx.citedNeedle)}
             editingText={editing?.index === index ? editing.text : null}
             busy={ctx.busy} rolling={ctx.rolling} active={ctx.active}
             rerollButton={rerollRow && ctx.canReroll && !m.response_id}
