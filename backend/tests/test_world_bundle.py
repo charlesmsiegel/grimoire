@@ -1050,3 +1050,31 @@ def test_import_sanitizes_a_planted_blob(monkeypatch, tmp_path):
     later = image_store.ingest(clean.getvalue(), "png")
     assert later.id == resolved.image_id
     assert later.blob_sha256 == resolved.blob_sha256
+
+
+def test_import_refuses_one_object_past_the_per_object_cap(monkeypatch, tmp_path):
+    """The total cap does not bound a single object: one under the total but
+    past the per-object cap is refused before it is read."""
+    _home(monkeypatch, tmp_path)
+    data = _pixels(25)
+    sha, blob_name = _blob_entry(data)
+    claimed = "px1-" + "c" * 64
+    body = _object_body(claimed, sha, len(data), description="Mara at the gate.")
+    monkeypatch.setattr(world_bundle, "MAX_OBJECT_MEMBER_BYTES", len(body) - 1)
+    assert len(body) < world_bundle.MAX_OBJECT_BYTES
+    bundle = _hand_bundle(tmp_path, "one-fat", {
+        blob_name: data, f"image-store/objects/cc/{claimed}.json": body})
+    read: list[str] = []
+    real_read = zipfile.ZipFile.read
+
+    def spy(self, name, *a, **k):
+        read.append(name.filename if isinstance(name, zipfile.ZipInfo) else str(name))
+        return real_read(self, name, *a, **k)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", spy)
+    with pytest.raises(world_bundle.BundleError, match="too large"):
+        world_bundle.import_bundle(bundle)
+    monkeypatch.setattr(zipfile.ZipFile, "read", real_read)
+    assert not any(n.startswith("image-store/objects/") for n in read)
+    assert worlds.list_worlds() == []
+    assert not (image_store.store_root() / "blobs").exists()

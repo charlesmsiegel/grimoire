@@ -105,6 +105,9 @@ _OBJECT_MEMBER = re.compile(
 # alone let a small archive of many objects naming one tiny blob expand into
 # gigabytes of parsed metadata (review).
 MAX_OBJECT_BYTES = 64 * 1024 * 1024
+# ...and each object on its own, refused from its header before it is read:
+# the total cap alone still let one 64 MiB object be parsed whole.
+MAX_OBJECT_MEMBER_BYTES = 1024 * 1024
 # The longest bundle description merged. Longer is not a description of a
 # picture; it is dropped (and logged) and the image imports undescribed.
 MAX_IMPORTED_DESCRIPTION = 4000
@@ -380,7 +383,7 @@ def _read_objects(z: zipfile.ZipFile, members: _Members,
     claimed: set[str] = set()
     for bundle_id, info in members.objects.items():
         try:
-            raw = json.loads(_read_member(z, info, MAX_OBJECT_BYTES))
+            raw = json.loads(_read_member(z, info, MAX_OBJECT_MEMBER_BYTES))
         except (ValueError, RecursionError) as e:
             raise BundleError(f"unreadable image object {info.filename}: {e}") from e
         blob = raw.get("blob") if isinstance(raw, dict) else None
