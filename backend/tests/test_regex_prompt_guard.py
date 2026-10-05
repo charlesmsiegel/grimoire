@@ -9,6 +9,11 @@ strip, and an absorb then judges its citations against text the model never
 saw. Held against the AST of `routes/` and `store/context/`, in the style of
 `test_routing_guard.py`:
 
+- "a call to `view(`" below means the regex view by its attribute chain --
+  `regex_view.view(...)` or `<...>regex.view.view(...)` -- with the keyword
+  `phase="prompt"`. Another module's `view` (`overlay.view`) is not it, and
+  neither is the display phase, which a reader could otherwise ask for and
+  pass while showing the model the screen's text;
 - every `transcript_text(...)` call renders a list bound by a call to `view(`
   in the same function (or the `view(...)` call itself);
 - every `absorb.materialize(...)` call judges citations against a viewed list
@@ -84,6 +89,25 @@ def _calls(node: ast.AST, name: str | None = None):
             yield sub
 
 
+def _is_prompt_view(node: ast.AST) -> bool:
+    """`node` is `regex_view.view(..., phase="prompt")` or
+    `<...>regex.view.view(..., phase="prompt")`."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "view"):
+        return False
+    owner = node.func.value
+    regex_view = (isinstance(owner, ast.Name) and owner.id == "regex_view") or (
+        isinstance(owner, ast.Attribute) and owner.attr == "view"
+        and ((isinstance(owner.value, ast.Name) and owner.value.id == "regex")
+             or (isinstance(owner.value, ast.Attribute) and owner.value.attr == "regex")))
+    phase = next((k.value for k in node.keywords if k.arg == "phase"), None)
+    return regex_view and isinstance(phase, ast.Constant) and phase.value == "prompt"
+
+
+def _views(node: ast.AST):
+    return (sub for sub in ast.walk(node) if _is_prompt_view(sub))
+
+
 def _functions(tree: ast.AST):
     return [n for n in ast.walk(tree) if isinstance(n, _FUNCTIONS)]
 
@@ -101,15 +125,15 @@ def _bound_by_view(fn) -> set[str]:
     """Names assigned from a `view(...)` call in `fn`."""
     out: set[str] = set()
     for node in ast.walk(fn):
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Call) \
-                and _name(node.value) == "view":
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None \
+                and _is_prompt_view(node.value):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             out |= {t.id for t in targets if isinstance(t, ast.Name)}
     return out
 
 
 def _viewed(arg, fn, *, snapshot: bool = False) -> bool:
-    if isinstance(arg, ast.Call) and _name(arg) == "view":
+    if _is_prompt_view(arg):
         return True
     if isinstance(arg, ast.Name) and fn is not None and arg.id in _bound_by_view(fn):
         return True
@@ -130,9 +154,9 @@ def _reads_content(fn) -> bool:
 
 def _reaches_view(fn, helpers: dict[str, ast.AST]) -> bool:
     """`fn` calls `view(`, or calls a function of its own module that does."""
-    if any(True for _ in _calls(fn, "view")):
+    if any(True for _ in _views(fn)):
         return True
-    return any(_name(c) in helpers and any(True for _ in _calls(helpers[_name(c)], "view"))
+    return any(_name(c) in helpers and any(True for _ in _views(helpers[_name(c)]))
                for c in _calls(fn))
 
 
@@ -269,9 +293,27 @@ def test_the_guard_catches_a_raw_reader(tmp_path, monkeypatch):
         "def good(cid, sid):\n"
         "    scene = store.scenes.read_scene(cid, sid)\n"
         "    shown = store.regex.view.view(scene['messages'], cid=cid, phase='prompt')\n"
-        "    return prompts.render('x.j2', t=chronicle.transcript_text(shown))\n",
+        "    return prompts.render('x.j2', t=chronicle.transcript_text(shown))\n"
+        "\n"
+        "def displayed(cid, sid):\n"
+        "    scene = store.scenes.read_scene(cid, sid)\n"
+        "    shown = store.regex.view.view(scene['messages'], cid=cid, phase='display')\n"
+        "    return chronicle.transcript_text(shown)\n"
+        "\n"
+        "def overlaid(cid, sid):\n"
+        "    shown = store.overlay.view(cid)\n"
+        "    return chronicle.transcript_text(shown)\n"
+        "\n"
+        "def unphased(cid, sid, messages):\n"
+        "    return chronicle.transcript_text(regex_view.view(messages, cid=cid))\n"
+        "\n"
+        "def also_good(cid, sid, messages):\n"
+        "    a = chronicle.transcript_text(regex_view.view(messages, cid=cid, phase='prompt'))\n"
+        "    return a + chronicle.transcript_text(regex.view.view(messages, cid=cid, phase='prompt'))\n",
         encoding="utf-8")
     monkeypatch.setitem(globals(), "PACKAGE", tmp_path)
     offences, _ = _scan()
+    # Only `regex_view.view` / `regex.view.view` with `phase="prompt"` counts:
+    # another module's `view` (the overlay's) and the display phase do not.
     assert [o.split(":")[1] for o in offences if o.startswith("routes/bad.py:")] == \
-        ["3", "10", "5"]
+        ["3", "20", "24", "27", "10", "5"]
