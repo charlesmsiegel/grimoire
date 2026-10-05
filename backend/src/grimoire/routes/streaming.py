@@ -707,9 +707,10 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                         yield _HEARTBEAT  # the facade is still waiting on the model
                     continue
                 out = redactor.feed(watcher.feed(delta))
-                if out:
+                frames = _visible_frames(display, out)
+                if frames:
                     liveness.sent()
-                    for frame in _visible_frames(display, out):
+                    for frame in frames:
                         yield frame
                 if watcher.complete:
                     break  # stop-after-fence: ignore anything past the close
