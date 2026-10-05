@@ -766,3 +766,78 @@ def drop_scene(cid: str, sid: str) -> None:
                 response_snapshots.remove(cid, reference)
         data["scenes"].pop(token, None)
         _write(cid, data)
+
+
+def _snapshot_kind(reference: str) -> str:
+    """`primary` or `resume`: the prefix of a reference's file name."""
+    return reference.rsplit("/", 1)[-1].split("-", 1)[0]
+
+
+def clone_for_branch(cid: str, src_sid: str, dst_sid: str,
+                     rid_map: dict[str, str], locked: set[str]) -> None:
+    """Copy the records `rid_map` names from one scene's ledger scope into a
+    branch's, each under its NEW response id (play controls III).
+
+    New ids, not shared ones, because `drop_scene` removes every snapshot a
+    record references: two scenes holding one id would mean deleting either
+    took the other's prompts. Each snapshot is therefore re-published under
+    the new id (the bytes are identical, so the digest is too).
+
+    `mechanically_locked` is recomputed rather than inherited: the branch's
+    caller decides which clones a kept roll line follows (`locked`), since the
+    source may have locked a record for a roll the branch does not keep.
+
+    Rounds the clones name are copied under the same round id, pointing at the
+    clone of their pending response (else none), and one still unfinished is
+    marked `superseded` -- a branch starts with no turn in flight. An old id
+    with no record (a manual post that only looks like a response) is skipped.
+    """
+    with locks.campaign_lock(cid):
+        data = _read(cid)
+        token = identity.scene_identity(cid, src_sid)
+        source = data["scenes"].get(token) if token else None
+        if not source:
+            return
+        scope = _scope(cid, dst_sid, data)
+        rounds: set[str] = set()
+        for old, new in rid_map.items():
+            record = source["responses"].get(old)
+            if record is None:
+                continue
+            scope["responses"][new] = _cloned_record(cid, record, new, new in locked)
+            if record.get("round_id"):
+                rounds.add(record["round_id"])
+        for round_id in rounds:
+            original = source["rounds"].get(round_id)
+            if original is not None:
+                scope["rounds"][round_id] = _cloned_round(original, rid_map)
+        _write(cid, data)
+
+
+def _cloned_record(cid: str, record: dict, new: str, locked: bool) -> dict:
+    clone = copy.deepcopy(record)
+    clone["id"] = new
+    for field in ("snapshot_ref", "resume_snapshot_ref"):
+        if clone.get(field):
+            clone[field] = _republish(cid, new, clone[field])
+    if clone.get("resume_snapshot_refs"):
+        clone["resume_snapshot_refs"] = [
+            _republish(cid, new, ref) for ref in clone["resume_snapshot_refs"]]
+    if locked:
+        clone["mechanically_locked"] = True
+    else:
+        clone.pop("mechanically_locked", None)
+    return clone
+
+
+def _cloned_round(original: dict, rid_map: dict[str, str]) -> dict:
+    copied = copy.deepcopy(original)
+    copied["pending_response"] = rid_map.get(original.get("pending_response") or "")
+    if copied.get("status") in ("pending", "incomplete", "paused"):
+        copied["status"] = "superseded"
+    return copied
+
+
+def _republish(cid: str, rid: str, reference: str) -> str:
+    return response_snapshots.write(cid, rid, _snapshot_kind(reference),
+                                    response_snapshots.read(cid, reference))

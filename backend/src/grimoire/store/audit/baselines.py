@@ -8,6 +8,7 @@ Deliberately free of any `scenes` import: `capture_baseline` runs from
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import threading
@@ -166,4 +167,28 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
                 data[new] = data.pop(old)
                 hit = True
         if hit:
+            _write(cid, data)
+
+
+def copy_baseline(cid: str, src_sid: str, dst_sid: str) -> None:
+    """Give a branch its source's scene-start baseline (play controls III).
+
+    The branch starts from the sheets its source started from, not from "now":
+    its audit delta has to measure the same span of play. A source with no
+    baseline (no module bound when it was made) gives the branch none.
+    Campaign lock, then the baseline lock -- `capture_baseline`'s order."""
+    with locks.campaign_lock(cid), _lock(cid):
+        data = read_baselines(cid)
+        if src_sid not in data:
+            return
+        data[dst_sid] = copy.deepcopy(data[src_sid])
+        _write(cid, data)
+
+
+def drop_baseline(cid: str, sid: str) -> None:
+    """Forget one scene's baseline -- a branch that failed half-way is removed
+    whole, and its id must not hand a later scene this entry."""
+    with locks.campaign_lock(cid), _lock(cid):
+        data = read_baselines(cid)
+        if data.pop(sid, None) is not None:
             _write(cid, data)
