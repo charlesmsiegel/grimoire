@@ -742,7 +742,7 @@ def test_every_book_format_names_the_player_rather_than_you(monkeypatch, tmp_pat
 # --- a post hidden from context: kept, and marked -----------------------------
 
 def _hidden_scene(monkeypatch, tmp_path):
-    wid, cid = _campaign(monkeypatch, tmp_path)
+    _wid, cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "The Pier")
     scenes.append_message(cid, sid, "user", "hi")
     scenes.append_message(cid, sid, "user", "ooc: brb")
