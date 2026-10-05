@@ -2095,3 +2095,32 @@ def test_png_round_trip_of_a_cmyk_or_palette_avatar_keeps_the_original(
         tmp_path, monkeypatch, avatar, ext)
     assert p.read_bytes() == original and p.suffix == f".{ext}"
     assert new_hash == source_hash
+
+
+def test_chub_gallery_replace_lists_slots_inside_its_lock_hold(tmp_path, monkeypatch):
+    """An upload landing between the gallery listing and the lock hold was
+    left out of a listing taken before the locks, so it survived the replace
+    on a stale view. The listing is taken under the hold now: a slot that
+    exists when the replacement takes its locks is replaced like the rest."""
+    import contextlib
+
+    from grimoire.store import assets
+    cid, vid, node = _gallery_setup(tmp_path, monkeypatch, ["u/1"],
+                                    {"u/1": (_gallery_png(1), "png")})
+    assets.put_image(tmp_path, cid, vid, "gallery_0", _gallery_png(2), "png")
+    real = assets._image_locks_held
+    injected = []
+
+    @contextlib.contextmanager
+    def upload_first(d, *names):
+        if not injected:            # the gap: after any early listing, before the locks
+            assets.put_image(tmp_path, cid, vid, "gallery_5", _gallery_png(3), "png")
+            injected.append("gallery_5")
+        with real(d, *names):
+            yield
+
+    monkeypatch.setattr(assets, "_image_locks_held", upload_first)
+    list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+
+    assert injected == ["gallery_5"]
+    assert set(_gallery_ids(tmp_path, cid, vid)) == {"gallery_0"}
