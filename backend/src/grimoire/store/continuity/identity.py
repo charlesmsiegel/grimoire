@@ -24,7 +24,9 @@ about stored records' ids, not this.
 **Neighbours** come from `similarity.pool`: effective records, closed and
 resolved included (a closed thread is shown so the resolver knows it was
 settled), keyed by canonical ref, so a merged-away alias source is never a
-candidate. At most `similarity.IDENTITY_TOP_K` per row, never padded.
+candidate -- less any record whose id and kind alone overrun the identity-text
+bound (`_offerable`), which the resolver could not be shown. At most
+`similarity.IDENTITY_TOP_K` per row, never padded.
 
 **Embeddings** are an enhancement. When a space is configured, each proposed
 text whose kind has a same-type record to compare against is embedded (one with
@@ -146,8 +148,8 @@ def _fixed(subject: similarity.Subject) -> tuple[str, str]:
 def _offerable(subject: similarity.Subject) -> bool:
     """`_fixed` fits `similarity.CONTINUITY_IDENTITY_BYTES`. A ledger route
     slugifies a title of any length into the record's id, and an id cannot be
-    clipped without losing the record it names, so a record whose id alone
-    overruns the bound is never a candidate: it is left out of the pool rather
+    clipped without losing the record it names, so a record whose id and kind
+    together overrun the bound is never a candidate: it is left out of the pool rather
     than carried whole into the shared resolver prompt."""
     return (sum(len(text.encode("utf-8")) for text in _fixed(subject))
             <= similarity.CONTINUITY_IDENTITY_BYTES)
@@ -158,7 +160,7 @@ def _candidate(subject: similarity.Subject, signals: dict) -> dict:
     what it is, its latest beat and up to `similarity.PREVIOUS_BEATS` earlier
     ones, newest first.
 
-    Its stored text -- id, kind, title, due, latest beat, earlier beats --
+    Its stored text -- id, kind, status, title, due, latest beat, earlier beats --
     shares one `similarity.CONTINUITY_IDENTITY_BYTES` budget, the bound its
     identity text was embedded under: a closed record is in the pool though not
     in the extraction's snapshot, and its title can select it whatever length
@@ -170,10 +172,13 @@ def _candidate(subject: similarity.Subject, signals: dict) -> dict:
     rid, kind = _fixed(subject)
     latest, earlier = similarity.beat_lines(rec)
     left = similarity.CONTINUITY_IDENTITY_BYTES - len(rid.encode("utf-8"))
-    kind, title, due, latest, *earlier = similarity.clip_fields(
-        [kind, subject.title, _text(rec.get("due")), latest, *earlier], left)
+    # The status rides the shared budget too: a route stores only a known one,
+    # but plot.json and commitments.json are hand-editable and the effective
+    # record passes a status through as written.
+    kind, status, title, due, latest, *earlier = similarity.clip_fields(
+        [kind, subject.status, subject.title, _text(rec.get("due")), latest, *earlier], left)
     return {"id": rid, "title": title,
-            "status": subject.status, "kind": kind, "due": due, "latest_beat": latest,
+            "status": status, "kind": kind, "due": due, "latest_beat": latest,
             "earlier": [beat for beat in earlier if beat], "signals": dict(signals)}
 
 
