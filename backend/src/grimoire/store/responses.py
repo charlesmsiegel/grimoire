@@ -266,8 +266,16 @@ def get(cid: str, sid: str, rid: str, *, private=False) -> dict:
 
 
 def new_round(
-    cid: str, sid: str, *, eligible, automatic, post, run_id, actor_ref=None, note="", turn=None
+    cid: str, sid: str, *, eligible, automatic, post, run_id, actor_ref=None, note="", turn=None,
+    mode="directed", plan=(), auto_remaining=0, round_index=1, auto_total=0,
 ) -> dict:
+    """Open a round, superseding any unfinished one.
+
+    `mode` and `plan` are the group-play order this round follows (the refs
+    still to speak after `actor_ref`); `auto_remaining`, `round_index` and
+    `auto_total` place it in an auto-continue chain. A round written before
+    these keys existed reads them with `.get(key, default)` and acts as a
+    lone Directed round."""
     with locks.campaign_lock(cid):
         messages = read.read_scene(cid, sid)["messages"]
         observed_from = next((i for i in range(len(messages) - 1, -1, -1)
@@ -293,6 +301,11 @@ def new_round(
             "pending_response": None,
             "watermark": len(messages),
             "transcript_hash": transcript_hash(messages),
+            "mode": mode,
+            "plan": list(plan),
+            "auto_remaining": auto_remaining,
+            "round_index": round_index,
+            "auto_total": auto_total,
         }
         scope["rounds"][round_id] = record
         _write(cid, data)
