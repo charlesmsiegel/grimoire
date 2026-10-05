@@ -13,6 +13,7 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``characters``  /worlds/{wid}/characters
   ``greetings``   /worlds/{wid}/greetings and /campaigns/{cid}/greetings
   ``campaigns``   /campaigns
+  ``continuity``  /campaigns/{cid}/continuity, reviewed aliases and links
   ``scenes``      /campaigns/{cid}/scenes
   ``weather``     /campaigns/{cid}/weather
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
@@ -58,6 +59,7 @@ from . import (
     characters,
     common,
     config,
+    continuity,
     entities,
     greetings,
     ledger,
@@ -162,7 +164,7 @@ def _compose(domain: APIRouter) -> None:
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, modules, worlds, characters, world_images, greetings,
                 runs, scenes, character_turns, passage_characters, weather, mechanics, usage, observability,
-                campaigns, ledger, search, shell, todo, tracker):
+                campaigns, continuity, ledger, search, shell, todo, tracker):
     _compose(_domain.router)
 
 _compose(entities.router)  # keep last: generic /{kind} catch-alls
