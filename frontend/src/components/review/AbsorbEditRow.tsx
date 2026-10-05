@@ -5,8 +5,8 @@
 // and the submitted batch are both keyed on, so it is passed in rather than
 // recomputed from either list's own ordering.
 import {
-  AUTHORITY_LABELS, CONTRADICTION_SOURCES, identityChip, identityHint, isCandidateAlternative,
-  isUncited, targetTaken, type EditRow,
+  AUTHORITY_LABELS, CONTRADICTION_SOURCES, identityChip, identityHint, identityProposal,
+  isCandidateAlternative, isUncited, targetTaken, type EditRow,
 } from "./editRows";
 import type { SceneReview } from "./useSceneReview";
 
@@ -20,6 +20,7 @@ export default function AbsorbEditRow({ e, i, review }: {
   const ic = e.identity_check;
   const chip = identityChip(e);
   const hint = identityHint(e);
+  const proposal = ic ? identityProposal(ic) : null;
   const alternatives = ic?.alternatives ?? [];
   const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
   const conflict = conflictByRow.get(i);
@@ -100,6 +101,10 @@ export default function AbsorbEditRow({ e, i, review }: {
         </p>)}
       {ic && (
         <div className="absorb-identity">
+          {/* What the model meant to open, in its own words: a matched row
+              is labelled from the stored record, so this line is the only
+              visible trace of the proposal the match replaced. */}
+          {proposal && <p className="field-hint absorb-identity-proposed">{proposal}</p>}
           {ic.reason && <p className="field-hint">{ic.reason}</p>}
           {hint && <p className="field-hint">{hint}</p>}
           {ic.candidates.length > 0 && (
