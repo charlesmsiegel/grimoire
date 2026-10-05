@@ -1,21 +1,25 @@
 """The output-processing regex rules' HTTP surface (store/regex/).
 
-One GET/PUT per level -- global, world, campaign and connection -- and the test
-pane's `POST /regex/test`. Each GET answers `inherited` (what the level sits on,
-in run order, `off` laid over it) next to its own `layer`, the shape the tracker
-layers use, so an editor shows what a change would be changing without a second
-request. A PUT replaces the level's whole file and is validated as a unit.
+One GET/PUT per level -- global, world, campaign and connection -- the test
+pane's `POST /regex/test`, and the SillyTavern import (a preview that writes
+nothing, then a commit of the rows the user kept). Each GET answers `inherited`
+(what the level sits on, in run order, `off` laid over it) next to its own
+`layer`, the shape the tracker layers use, so an editor shows what a change
+would be changing without a second request. A PUT replaces the level's whole
+file and is validated as a unit.
 
 Nothing here is a detached run: the handlers are short, synchronous reads and
 writes, and none reserves."""
 
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter, HTTPException
 
 from .. import store
 from .common import _dump
-from .models import RegexLayer, RegexTest
+from .models import RegexImport, RegexImportPreview, RegexLayer, RegexTest
 
 router = APIRouter()
 
@@ -177,3 +181,57 @@ def post_regex_test(body: RegexTest):
     steps = store.regex.apply.trace(
         body.text, entries, role=body.role, phase=body.phase, depth=max(body.depth, 0))
     return {"steps": steps, "result": steps[-1]["text_after"] if steps else body.text}
+
+
+# --- SillyTavern import ------------------------------------------------------
+
+@router.post("/regex/import/preview")
+def post_regex_import_preview(body: RegexImportPreview):
+    try:
+        rows = store.regex.st_import.preview(body.data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"rows": rows}
+
+
+def _level_lock(level: str, key: str):
+    """The campaign lock for a campaign level, held across the read and the
+    write so an append cannot lose a PUT that lands in between; the other
+    levels' writers take none (`store/locks.py` says why)."""
+    if level == "campaign":
+        return store.locks.campaign_lock(key)
+    return contextlib.nullcontext()
+
+
+@router.post("/regex/import")
+def post_regex_import(body: RegexImport):
+    """Append the kept rows to a level, in order, after its own rules. Every row
+    gets a fresh id: SillyTavern's are not ours, and a second import of the same
+    file must not collide with the first."""
+    level, key = _scope_key(body.scope)
+    if not body.rows:
+        raise HTTPException(status_code=400, detail="rows: nothing to import")
+    layers = store.regex.layers
+    with _level_lock(level, key):
+        doc = layers.read_level(level, key)
+        used = {r["id"] for r in doc["rules"]}
+        used |= {e["rule"]["id"] for e in layers.inherited(level, key)}
+        added: list[dict] = []
+        for i, raw in enumerate(body.rows):
+            try:
+                rule = store.regex.rules.normalise(
+                    {k: v for k, v in raw.items() if k != "id"}, index=i)
+            except store.regex.rules.RuleError as exc:
+                raise _invalid(exc) from exc
+            while rule["id"] in used:
+                rule["id"] = store.regex.rules.mint_id()
+            used.add(rule["id"])
+            added.append(rule)
+        try:
+            layers.write_level(level, key, {**doc, "rules": doc["rules"] + added})
+        except store.regex.rules.RuleError as exc:
+            raise _invalid(exc) from exc
+        except (store.worlds.WorldNotFound, store.campaigns.CampaignNotFound,
+                store.llm_connections.ConnectionNotFound) as exc:
+            raise HTTPException(status_code=404, detail="not found") from exc
+    return {**_body(level, key), "added": [r["id"] for r in added]}

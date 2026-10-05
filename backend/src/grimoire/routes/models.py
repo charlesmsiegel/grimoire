@@ -191,6 +191,20 @@ class RegexTest(BaseModel):
     connection: str = ""
 
 
+class RegexImportPreview(BaseModel):
+    """A SillyTavern regex upload, parsed by the client: one script, a list, or
+    a settings / preset export carrying `regex_scripts`."""
+
+    data: Any = None
+
+
+class RegexImport(BaseModel):
+    """The preview rows the user kept (their rules), and the level they go to."""
+
+    scope: dict
+    rows: list[dict] = []
+
+
 class TrackerLayer(BaseModel):
     """One layer of tracker field definitions (world, campaign or scene)."""
 
