@@ -58,6 +58,7 @@ from .models import (
     ChronicleSave,
     Dismiss,
     EditMessage,
+    ExcludeMessage,
     EmergentCast,
     NewScene,
     RegenerateBody,
@@ -5289,6 +5290,44 @@ def _forget_rewrite(cid: str, sid: str, key: str) -> None:
     except OSError:
         log.warning("could not forget the stored rewrite of %s in %s/%s",
                     key, cid, sid, exc_info=True)
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/messages/{index}/excluded")
+def put_scene_message_excluded(cid: str, sid: str, index: int, body: ExcludeMessage,
+                               request: Request):
+    """Hide a post from context, or return it.
+
+    It stays in the transcript, the play view and every export; it reaches no
+    prompt. Refused on an absorbed scene (no future prompt to protect, and what
+    absorb took from it is corrected by retcon or re-absorb) and while a round
+    is open (the toggle moves `transcript_hash`, stranding that round's Retry or
+    roll resolution). Every check sits inside the same hold as the write, for
+    the reason `put_scene_message` gives.
+    """
+    _require_scene(cid, sid)
+    try:
+        with runs.scene_held_free(request.app, cid, sid):
+            if _already_absorbed(store.scenes.read_scene(cid, sid)):
+                raise HTTPException(409, detail={
+                    "kind": "scene_absorbed",
+                    "detail": "this scene has been absorbed; its posts can no longer be hidden"})
+            if store.responses.unfinished(cid, sid) is not None:
+                raise HTTPException(409, detail={
+                    "kind": "round_open",
+                    "detail": "finish or discard the open round before hiding a post"})
+            if store.scenes.set_excluded(cid, sid, index, body.excluded):
+                # What later tracker records were built on has changed, as after
+                # an edit: flagged, not re-run, and in this hold. Fail-soft.
+                tracker_routes.after_text_edit(cid, sid, index)
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail="message index out of range") from exc
+    except store.scenes.NotExcludable as exc:
+        raise HTTPException(status_code=400, detail={
+            "kind": "not_excludable",
+            "detail": "a roll, scene-transition or director-note line can't be hidden from context"}) from exc
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
+    return {"ok": True}
 
 
 @router.delete("/campaigns/{cid}/scenes/{sid}/messages/{index}")

@@ -833,6 +833,10 @@ class EditMessage(BaseModel):
     restore: bool = False
 
 
+class ExcludeMessage(BaseModel):
+    excluded: bool
+
+
 class ReplayStart(BaseModel):
     #: The first post to replay -- the one AFTER the retconned post.
     index: int

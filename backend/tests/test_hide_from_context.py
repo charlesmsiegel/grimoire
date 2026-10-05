@@ -202,3 +202,89 @@ def test_excluding_a_post_moves_every_digest():
     assert store.responses.transcript_hash(flagged) != store.responses.transcript_hash(MSGS)
     assert store.rolling_summary.covered_digest(flagged) != store.rolling_summary.covered_digest(MSGS)
     assert store.pending_reviews.watermark(flagged)["digest"] != store.pending_reviews.watermark(MSGS)["digest"]
+
+
+# --- the toggle route, and refusing a stale frozen prompt -------------------
+
+SYNTHETIC = [store.scenes.ROLL_SPEAKER, store.scenes.TRANSITION_SPEAKER, store.scenes.DIRECTOR_SPEAKER]
+
+
+def test_route_excludes_and_reincludes(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "ooc: brb")
+    url = f"/api/campaigns/{cid}/scenes/{sid}/messages/0/excluded"
+    assert client.put(url, json={"excluded": True}).json() == {"ok": True}
+    assert _messages(cid, sid)[0]["excluded"]
+    assert client.put(url, json={"excluded": False}).status_code == 200
+    assert "excluded" not in _messages(cid, sid)[0]
+
+
+@pytest.mark.parametrize("speaker", SYNTHETIC)
+def test_route_refuses_a_synthetic_line(client, speaker):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "assistant", "a synthetic line", speaker=speaker)
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/0/excluded", json={"excluded": True})
+    assert r.status_code == 400 and r.json()["kind"] == "not_excludable"
+    assert "excluded" not in _messages(cid, sid)[0]
+
+
+def test_route_refuses_out_of_range_unknown_and_absorbed(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "ooc: brb")
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    assert client.put(base + "/messages/9/excluded", json={"excluded": True}).status_code == 400
+    assert client.put(f"/api/campaigns/{cid}/scenes/nope/messages/0/excluded",
+                      json={"excluded": True}).status_code == 404
+    store.scenes.mark_absorbed(cid, sid, "x", "y")
+    r = client.put(base + "/messages/0/excluded", json={"excluded": True})
+    assert r.status_code == 409 and r.json()["kind"] == "scene_absorbed"
+    assert "excluded" not in _messages(cid, sid)[0]
+
+
+def test_route_refuses_while_a_round_is_open(client):
+    cid, sid = seed(client)
+    fake = FakeLLM([['Wait.\n```roll\n{"check":"notice"}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    assert store.responses.unfinished(cid, sid) is not None
+    r = client.put(base + "/messages/0/excluded", json={"excluded": True})
+    assert r.status_code == 409 and r.json()["kind"] == "round_open"
+    assert "excluded" not in _messages(cid, sid)[0]
+
+
+def _chat(client, base, content="Hello", reply="Hm."):
+    fake = FakeLLM([[reply + '\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    result = client.post(base + "/chat", json={"content": content, "speaker_ref": "characters:mara"})
+    assert "error" not in result.text, result.text
+    return fake, client.get(base).json()["messages"][-1]["response_id"]
+
+
+def test_reroll_of_a_reply_composed_before_an_exclusion_is_refused(client, monkeypatch):
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    fake, rid = _chat(client, base)
+    monkeypatch.setattr(store.scenes.write, "now_iso", lambda: "2999-01-01T00:00:00Z")
+    assert client.put(base + "/messages/0/excluded", json={"excluded": True}).status_code == 200
+    r = client.post(base + f"/responses/{rid}/regenerate")
+    assert r.status_code == 409 and r.json()["kind"] == "context_excluded"
+    assert r.json()["detail"] == ("A post this reply was written from is now hidden. "
+                                  "Replay from here to regenerate without it.")
+    assert fake.calls == 1   # no second generation
+
+
+def test_a_reply_composed_after_the_exclusion_rerolls(client, monkeypatch):
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    store.scenes.append_message(cid, sid, "user", "ooc: brb")
+    with monkeypatch.context() as m:
+        m.setattr(store.scenes.write, "now_iso", lambda: "2000-01-01T00:00:00Z")
+        assert client.put(base + "/messages/0/excluded", json={"excluded": True}).status_code == 200
+    _, rid = _chat(client, base)
+    before = len(store.responses.get(cid, sid, rid)["variants"])
+    fake = FakeLLM([['Again.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(base + f"/responses/{rid}/regenerate")
+    assert r.status_code == 200 and "error" not in r.text, r.text
+    assert len(store.responses.get(cid, sid, rid)["variants"]) == before + 1

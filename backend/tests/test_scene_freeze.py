@@ -47,6 +47,7 @@ def test_every_shape_change_is_refused_while_a_run_holds_the_scene(held_scene, c
         ("put",    base,                        {"title": "Winifred"}),
         ("delete", base,                        None),
         ("put",    f"{base}/messages/0",        {"content": "edited"}),
+        ("put",    f"{base}/messages/0/excluded", {"excluded": True}),
         ("delete", f"{base}/messages/0",        None),
         ("post",   f"{base}/messages/0/retcon", {"content": "retconned"}),
         ("post",   f"{base}/alternates/v-nope",  None),

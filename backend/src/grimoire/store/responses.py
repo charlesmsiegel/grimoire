@@ -504,6 +504,26 @@ def _response_index(messages: list[dict], rid: str) -> int | None:
     return next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
 
 
+def require_context_included(messages: list[dict], record: dict) -> None:
+    """Refuse to replay a frozen prompt that still holds a now-hidden post.
+
+    A reroll replays the response's snapshot rather than recomposing, so a
+    snapshot taken before a preceding post was hidden still contains it. The
+    flag's value is when it was set; a record created at or before the latest
+    exclusion preceding the response is refused (a same-second tie cannot
+    prove the snapshot came after, so it refuses -- replay is the safe way out).
+    """
+    index = _response_index(messages, record["id"])
+    if index is None:
+        return
+    since = serialize.excluded_since(messages, index)
+    if since and since >= record.get("created", ""):
+        raise ResponseConflict(
+            "context_excluded",
+            "A post this reply was written from is now hidden. Replay from here to regenerate without it.",
+        )
+
+
 def _editable_reason(record: dict, messages: list[dict], scene_rolls: bool, rid: str) -> str | None:
     """Why this response's prose may not change, or `None` when it may.
 

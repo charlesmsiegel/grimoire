@@ -1435,6 +1435,11 @@ def regenerate_response(
                         "detail": "This legacy response has no frozen prompt. Explicitly replay from here instead.",
                     },
                 )
+            try:
+                store.responses.require_context_included(
+                    store.scenes.read_scene(cid, sid)["messages"], record)
+            except store.responses.ResponseConflict as exc:
+                raise _public_error(exc) from exc
             token = streaming._claim_turn(cid, sid)
             # Lock-free and non-minting, inside this hold: the round's typed
             # note, which a reroll of a director turn replays with its snapshot.
