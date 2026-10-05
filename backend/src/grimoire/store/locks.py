@@ -315,6 +315,13 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # module (#129), so it starts inside the exclusion rather than joining the
     # frozen `UNREVIEWED` backlog.
     "store.pins",
+    # authors_notes.json the same: rewritten whole by every save, so two
+    # unlocked saves lose one note -- and a lost write here is a steer the
+    # player set and then finds the next turn ignoring, the reason `pins`
+    # gives. Reads stay lock-free (the opener composes on the event loop).
+    # New module (play controls V), so it starts inside the exclusion rather
+    # than joining the frozen `UNREVIEWED` backlog.
+    "store.authors_notes",
     # Forking copies one campaign's whole directory into another and, for a
     # retrospective fork, cuts the copy back to an earlier scene. It is the
     # only mutator in the package whose critical section spans TWO campaigns,

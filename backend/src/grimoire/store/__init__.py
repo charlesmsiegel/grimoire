@@ -34,6 +34,7 @@ from . import (
     assets,
     atomic,
     attempts,
+    authors_notes,
     audit,
     backups,
     birthdays,
@@ -321,6 +322,9 @@ __all__ = [
     "playing",
     "PlayError",
     "pins",
+    # Author's notes (play controls V): read by the context builder and
+    # written by `routes.authors_notes` -- reached the way `pins` is.
+    "authors_notes",
     "post_images",
     # The end-of-scene review held on disk between generating it and saving it
     # (#396) -- a deliberate addition to the facade, not a leak: `routes.scenes`
