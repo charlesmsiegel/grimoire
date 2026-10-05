@@ -3845,6 +3845,31 @@ test("Use … instead is disabled when another row already targets that record",
   expect(screen.getByRole("button", { name: USE_LEDGER })).toBeDisabled();
 });
 
+test("an accepted retarget shows, as visible text, the record the extraction proposed and why",
+  async () => {
+    const accepted = { ...ONTO_LEDGER, review: MEDIUM_CITED,
+      identity_check: identityCheck({ decision: "existing", reason: "the same search",
+        proposed: { title: "The Saltmarch tithe", why_new: "the guild's demand is a new debt",
+                    distinguished_from: ["find-the-ledger"] },
+        alternatives: [{ ...TITHE_AS_NEW, review: MEDIUM_CITED }] }) };
+    await openIdentityReview([accepted]);
+    const card = cardFor(/Find the ledger — advanced/);
+    const proposal = card.querySelector(".absorb-identity-proposed");
+    expect(proposal).not.toBeNull();
+    // visible text, not an aria-label: the model's own title, its reason, and
+    // the stored record it said this was not -- by title, not by bare id
+    expect(proposal!.textContent).toBe(
+      "Proposed as new: “The Saltmarch tithe” — the guild's demand is a new debt"
+      + " (set apart from Find the ledger)");
+  });
+
+test("a proposal with no why_new shows the proposed title alone", async () => {
+  await openIdentityReview([UNCERTAIN_TITHE]);
+  const card = cardFor(/The Saltmarch tithe/);
+  expect(card.querySelector(".absorb-identity-proposed")?.textContent)
+    .toBe("Proposed as new: “The Saltmarch tithe”");
+});
+
 test("rows without identity_check, and reviews stored before this slice, show no chip",
   async () => {
     // No `identity` block, no identity phase row, no `identity_check`: exactly
@@ -3856,6 +3881,8 @@ test("rows without identity_check, and reviews stored before this slice, show no
     expect(screen.queryByText("Possible existing record")).toBeNull();
     expect(screen.queryByText("Matched an existing record")).toBeNull();
     expect(document.querySelector(".absorb-identity")).toBeNull();
+    expect(document.querySelector(".absorb-identity-proposed")).toBeNull();
+    expect(screen.queryByText(/Proposed as new/)).toBeNull();
     expect(screen.queryByText(/existing-record check/)).toBeNull();
     expect(screen.queryByText(/Basic matching/)).toBeNull();
   });

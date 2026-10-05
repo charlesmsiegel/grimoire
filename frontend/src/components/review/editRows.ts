@@ -213,6 +213,25 @@ export function identityHint(e: StagedEdit): string | null {
   return (ic.alternatives ?? []).length > 0 ? IDENTITY_UNCERTAIN_HINT : IDENTITY_NO_ALTERNATIVE_HINT;
 }
 
+/** What the extraction itself proposed, as one visible line, or null when the
+ *  check carries no title. A matched or switched row is labelled from the
+ *  STORED record, so without this the reviewer weighing whether the match is
+ *  wrong cannot see the record the model meant to open -- the escape hatch's
+ *  own text is a bare "Keep as a new record". `distinguished_from` holds bare
+ *  ids of stored records the model said this is not; each is named by its
+ *  candidate's title where the candidates list it, by its id otherwise. */
+export function identityProposal(ic: IdentityCheck): string | null {
+  const title = ic.proposed?.title?.trim();
+  if (!title) return null;
+  let line = `Proposed as new: “${title}”`;
+  const why = ic.proposed.why_new?.trim();
+  if (why) line += ` — ${why}`;
+  const apart = (ic.proposed.distinguished_from ?? []).map((id) =>
+    ic.candidates.find((c) => c.ref.slice(c.ref.indexOf(":") + 1) === id)?.title || id);
+  if (apart.length > 0) line += ` (set apart from ${apart.join(", ")})`;
+  return line;
+}
+
 /** Whether an alternative stages onto an existing record, as against being
  *  the as-new variant. Read off the alternative itself first: a non-empty
  *  `before` is the stored record it writes, and the as-new variant's is
