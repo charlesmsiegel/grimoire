@@ -56,6 +56,17 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
             ? "The existing-record check could not run; rows still list their possible matches."
             : "The existing-record check could not run."}</p>
         </div>)}
+      {/* Degraded is its own notice, not a variant of the basic-matching hint
+          below: a failed embeddings call leaves `matching` at "semantic" (it
+          is configured) while the lists are word and cast overlap only, and a
+          resolver that left rows unanswered is partial too. The phase's
+          reason says which. */}
+      {absorb.identity?.status === "degraded" && (
+        <div className="mechanics-notice">
+          <p>{absorb.identity.reason
+            ? `The existing-record check is incomplete: ${absorb.identity.reason}`
+            : "The existing-record check is incomplete."}</p>
+        </div>)}
       {/* Where the possible-match lists came from (spec §3.3): without an
           embeddings connection they are word and cast overlap only, and a
           reviewer weighing a short list deserves to know it is the short one. */}

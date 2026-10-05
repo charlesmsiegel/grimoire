@@ -4042,6 +4042,27 @@ test("a failed identity phase with no checked rows says only that the check coul
       .toBeTruthy();
   });
 
+test("a degraded identity phase says why, even with semantic matching configured",
+  async () => {
+    // The embeddings endpoint failed but lexical candidates survived: matching
+    // is still "semantic" (it is configured), the phase is degraded, and the
+    // possible-match lists are the short ones -- the reviewer must be told.
+    const reason = "semantic matching unavailable — basic matching used";
+    absorbWithPhases(PHASES_WITH_IDENTITY, {
+      identity: { ...IDENTITY_OK, status: "degraded", reason }, edits: [UNCERTAIN_TITHE] });
+    const view = await openAbsorb();
+    const notice = screen.getByText(/The existing-record check is incomplete/);
+    expect(notice.textContent).toContain(reason);
+    expect(notice.closest(".mechanics-notice")).toBeTruthy();
+    view.unmount();
+
+    // an ok phase says nothing about it
+    absorbWithPhases(PHASES_WITH_IDENTITY, { identity: IDENTITY_OK, edits: [UNCERTAIN_TITHE] });
+    await openAbsorb();
+    expect(screen.queryByText(/The existing-record check/)).toBeNull();
+    expect(screen.queryByText(reason)).toBeNull();
+  });
+
 test("basic matching is named when the possible-match lists came from basic matching",
   async () => {
     const BASIC = "Basic matching active — semantic matching not configured";
