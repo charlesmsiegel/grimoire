@@ -199,3 +199,130 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
                 hit = True
         if hit:
             _write(cid, data)
+
+
+# ---------------------------------------------------------------- restores
+#
+# What `undo` puts back. The journal's compare-and-swap covers only the one
+# record being restored, so it cannot see that putting an alias back would close
+# a cycle with one made since, or that a link put back duplicates an equivalent
+# one made since -- these validate for exactly that, and refuse with
+# `ContinuityError`, which `undo.write_value` turns into a 409.
+#
+# This module may not import `canon` or `effective` (it is the leaf they build
+# on), so the relation table and the alias walk are private copies here; a test
+# holds the table to `effective.RELATIONS`. Record existence is not visible from
+# here, which makes "equivalent" the alias-graph approximation of an equivalent
+# effective link -- `effective` checks existence again at read.
+
+_ALIASABLE = ("thread", "commitment")
+_RELATIONS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "continues": (frozenset({"thread"}), frozenset({"thread"})),
+    "subthread_of": (frozenset({"thread"}), frozenset({"thread"})),
+    "pays_off": (frozenset({"thread"}), frozenset({"commitment"})),
+    **{rel: (frozenset({"thread", "commitment"}), frozenset({"event"}))
+       for rel in ("before", "on", "after", "by")},
+    "related_to": (frozenset({"thread", "commitment", "event"}),
+                   frozenset({"thread", "commitment", "event"})),
+}
+_SYMMETRIC = frozenset({"related_to"})
+
+
+def _prefix(ref) -> str | None:
+    if not isinstance(ref, str):
+        return None
+    prefix, sep, rest = ref.partition(":")
+    return prefix if sep and prefix and rest else None
+
+
+def _target(record) -> str | None:
+    to = record.get("to") if isinstance(record, dict) else None
+    return to if isinstance(to, str) and to else None
+
+
+def _reaches(aliases: dict, start: str, target: str) -> bool:
+    """Does following the stored mappings from `start` arrive at `target`?"""
+    seen, cur = set(), start
+    while cur not in seen:
+        if cur == target:
+            return True
+        seen.add(cur)
+        nxt = _target(aliases.get(cur))
+        if nxt is None:
+            return False
+        cur = nxt
+    return False
+
+
+def _alias_walk(aliases: dict, ref: str) -> str:
+    """Where `ref`'s same-type alias chain ends; itself on a cycle."""
+    seen, cur = {ref}, ref
+    while True:
+        nxt = _target(aliases.get(cur))
+        if nxt is None or _prefix(nxt) != _prefix(cur):
+            return cur
+        if nxt in seen:
+            return ref
+        seen.add(nxt)
+        cur = nxt
+
+
+def _link_key(aliases: dict, record) -> tuple[str, str, str] | None:
+    if not isinstance(record, dict):
+        return None
+    a, b, relation = record.get("a"), record.get("b"), record.get("relation")
+    if not (isinstance(a, str) and isinstance(b, str) and isinstance(relation, str)):
+        return None
+    ca, cb = _alias_walk(aliases, a), _alias_walk(aliases, b)
+    if relation in _SYMMETRIC:
+        ca, cb = sorted((ca, cb))
+    return relation, ca, cb
+
+
+def restore_alias(cid: str, ref: str, value) -> None:
+    """Put one alias back (``None`` removes it), refusing a record that is not a
+    same-type thread/commitment alias or that would close a cycle."""
+    with locks.campaign_lock(cid):
+        data = _mutable(cid, "aliases")
+        if value is None:
+            if data["aliases"].pop(ref, None) is not None:
+                _write(cid, data)
+            return
+        to = _target(value)
+        if to is None:
+            raise ContinuityError("an alias needs a target")
+        if _prefix(ref) != _prefix(to) or _prefix(ref) not in _ALIASABLE:
+            raise ContinuityError("an alias joins two threads or two commitments")
+        if ref == to:
+            raise ContinuityError("a record cannot be merged into itself")
+        if _reaches(data["aliases"], to, ref):
+            raise ContinuityError(
+                "putting this merge back would make a loop with a merge made since")
+        data["aliases"][ref] = value
+        _write(cid, data)
+
+
+def restore_link(cid: str, lid: str, value) -> None:
+    """Put one link back (``None`` removes it), refusing a record outside the
+    relation vocabulary or one equivalent to another link stored since."""
+    with locks.campaign_lock(cid):
+        data = _mutable(cid, "links")
+        if value is None:
+            if data["links"].pop(lid, None) is not None:
+                _write(cid, data)
+            return
+        stored = data.get("aliases")
+        aliases: dict = stored if isinstance(stored, dict) else {}
+        key = _link_key(aliases, value)
+        if key is None:
+            raise ContinuityError("a link needs two refs and a relation")
+        rule = _RELATIONS.get(key[0])
+        if rule is None or _prefix(value["a"]) not in rule[0] or _prefix(value["b"]) not in rule[1]:
+            raise ContinuityError("that relation cannot join those two records")
+        for other, record in data["links"].items():
+            if other != lid and _link_key(aliases, record) == key:
+                raise ContinuityError(
+                    "an equivalent link has been made since; putting this one back "
+                    "would duplicate it")
+        data["links"][lid] = value
+        _write(cid, data)
