@@ -40,6 +40,23 @@ test("runs the trace and shows each step with its reason", async () => {
   expect(skipped).toHaveTextContent("targets player posts only");
 });
 
+test("a deletion is shown struck through, as text and never as markup", async () => {
+  // Stripping a thinking block is the main use, and it adds nothing to mark.
+  const after = "She nodded.";
+  vi.mocked(api.testRegex).mockResolvedValue({ steps: [
+    { rule_id: "r-t", level: "global", name: "Strip thinking", applied: true, reason: null,
+      matches: 1, text_after: after }], result: after });
+  render(<RegexTestPane scope={GLOBAL} />);
+  fireEvent.change(screen.getByLabelText("Text to test"),
+                   { target: { value: "<think><b>plan</b></think>She nodded." } });
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
+  await screen.findByText("Strip thinking");
+  const dels = [...document.querySelectorAll(".regex-trace del")];
+  expect(dels.map((d) => d.textContent)).toEqual(["<think><b>plan</b></think>"]);
+  expect(document.querySelector(".regex-trace del b")).toBeNull();
+  expect(document.querySelectorAll(".regex-trace mark")).toHaveLength(0);
+});
+
 test("passes the draft rule", async () => {
   const draft: RegexRule = {
     id: "r-draft", name: "Mine", enabled: true, pattern: "Seraphine", flags: "g", replacement: "Mara",

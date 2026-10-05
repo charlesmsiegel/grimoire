@@ -77,6 +77,14 @@ def test_campaign_get_lists_inherited_with_levels(client, ids):
     assert client.get(_url("global", ids)).json()["inherited"] == []
 
 
+def test_campaign_get_names_a_world_switch_off(client, ids):
+    glob = client.put(_url("global", ids), json={"rules": [_rule("Glob")]}).json()
+    client.put(_url("world", ids), json={"rules": [],
+                                         "off": [glob["layer"]["rules"][0]["id"]]})
+    entry = client.get(_url("campaign", ids)).json()["inherited"][0]
+    assert (entry["rule"]["name"], entry["off"], entry["off_by"]) == ("Glob", False, "world")
+
+
 def test_inherited_id_collision_is_a_400(client, ids):
     glob = client.put(_url("global", ids), json={"rules": [_rule("Glob")]}).json()
     clash = _rule("Clash", id=glob["layer"]["rules"][0]["id"])

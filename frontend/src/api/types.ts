@@ -2613,8 +2613,14 @@ export type RegexRule = {
 };
 export type RegexLevel = "connection" | "global" | "world" | "campaign";
 /** A rule as a level inherits it. `source` is the connection id for a
- *  connection's rule and empty for every other level. */
-export type RegexEntry = { level: RegexLevel; rule: RegexRule; off: boolean; source: string };
+ *  connection's rule and empty for every other level. `off` is "switched off
+ *  by THIS level"; `off_by` names the level whose `off` switched it off, absent
+ *  while none has. At a campaign, `off_by: "world"` on a connection or global
+ *  rule is a switch the campaign cannot undo: the rule never runs there. */
+export type RegexEntry = {
+  level: RegexLevel; rule: RegexRule; off: boolean; source: string;
+  off_by?: "world" | "campaign";
+};
 /** One level's file. `off` names inherited rule ids; only the world and the
  *  campaign may carry any. */
 export type RegexLayer = { rules: RegexRule[]; off: string[] };
