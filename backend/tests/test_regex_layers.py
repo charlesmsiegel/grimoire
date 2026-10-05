@@ -362,3 +362,45 @@ def test_an_unreadable_file_reads_empty_and_says_so_once(home, caplog):
         assert layers.read_level("global") == {"rules": [], "off": []}
     logged = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(logged) == 1 and str(p) in logged[0].getMessage()
+
+
+def test_a_new_connection_rule_remints_an_id_a_sibling_connection_uses(home):
+    """Every connection's rules are inherited together by a world or campaign,
+    whose `off` is by id -- so two connections may not share one."""
+    _, _, conn = home
+    other = llm_connections.create_connection("openrouter", "Winifred", api_key="k")
+    taken = layers.write_level("connection", conn, {"rules": [_rule("A")]})["rules"][0]["id"]
+    out = layers.write_level("connection", other, {"rules": [{**_rule("B"), "id": taken}]})
+    assert out["rules"][0]["id"] != taken
+    assert layers.read_level("connection", other)["rules"][0]["id"] == out["rules"][0]["id"]
+
+
+def test_a_new_connection_rule_remints_an_id_global_uses(home):
+    _, _, conn = home
+    taken = layers.write_level("global", "", {"rules": [_rule("G")]})["rules"][0]["id"]
+    out = layers.write_level("connection", conn, {"rules": [{**_rule("C"), "id": taken}]})
+    assert out["rules"][0]["id"] != taken
+
+
+def test_a_new_global_rule_remints_an_id_a_connection_uses(home):
+    _, _, conn = home
+    taken = layers.write_level("connection", conn, {"rules": [_rule("C")]})["rules"][0]["id"]
+    out = layers.write_level("global", "", {"rules": [{**_rule("G"), "id": taken}]})
+    assert out["rules"][0]["id"] != taken
+
+
+def test_a_sibling_collision_already_on_disk_is_not_reminted_on_save(home):
+    """Only an id the file does not already hold is re-minted at a sibling
+    level: a lower level's `off` may name the one already stored, and moving it
+    would quietly switch that rule back on."""
+    wid, _, conn = home
+    other = llm_connections.create_connection("openrouter", "Winifred", api_key="k")
+    layers.write_level("connection", conn, {"rules": [_rule("A", id="r-0000000a")]})
+    llm_connections.regex_path(other).write_text(json.dumps(
+        {"rules": [_rule("B", id="r-0000000a")]}), encoding="utf-8")
+    out = layers.write_level("connection", other, layers.read_level("connection", other))
+    assert out["rules"][0]["id"] == "r-0000000a"
+    # What `off` does with the pair: both entries carry the id, so both go.
+    layers.write_level("world", wid, {"rules": [], "off": ["r-0000000a"]})
+    entries = layers.inherited("world", wid)
+    assert [(e["rule"]["name"], e["off"]) for e in entries] == [("A", True), ("B", True)]

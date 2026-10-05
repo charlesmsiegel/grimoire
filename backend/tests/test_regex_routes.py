@@ -267,3 +267,17 @@ def test_an_id_that_is_not_a_string_is_a_400(client, ids, bad_id):
     res = client.put(_url("global", ids), json={"rules": [_rule("Odd", id=bad_id)]})
     assert res.status_code == 400
     assert res.json()["field"] == "id"
+
+
+def test_sibling_connection_id_collision_is_reminted(client, ids):
+    first = client.put(_url("connection", ids), json={"rules": [_rule("ConnA")]}).json()
+    taken = first["layer"]["rules"][0]["id"]
+    other = store.llm_connections.create_connection("openrouter", "Winifred", api_key="k")
+    res = client.put(f"/api/llm-connections/{other}/regex",
+                     json={"rules": [_rule("ConnB", id=taken)]})
+    assert res.status_code == 200, res.text
+    [rule] = res.json()["layer"]["rules"]
+    assert rule["name"] == "ConnB" and rule["id"] != taken
+    res = client.put(_url("global", ids), json={"rules": [_rule("Glob", id=taken)]})
+    [rule] = res.json()["layer"]["rules"]
+    assert rule["name"] == "Glob" and rule["id"] != taken

@@ -496,3 +496,18 @@ test("a saved rule whose id the server re-minted is the one selected", async () 
   expect(await screen.findByRole("heading", { name: "Mine" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
 });
+
+test("two inherited rules sharing an id (a collision already on disk) both draw", async () => {
+  // Two connections' files can hold one id from before the server re-minted
+  // sibling collisions, or from a hand edit; each row is still its own.
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  serve({ rules: [], off: [] }, [
+    { level: "connection", rule: CONN_RULE, off: false, source: "conn-a" },
+    { level: "connection", rule: { ...CONN_RULE, name: "Other think tags" }, off: false,
+      source: "conn-b" },
+  ] as RegexEntry[]);
+  render(<RegexRulesEditor scope={WORLD} />);
+  expect(await screen.findByRole("button", { name: /^Other think tags/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Drop think tags/ })).toBeInTheDocument();
+  expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+});
