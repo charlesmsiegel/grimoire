@@ -491,6 +491,7 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             reasoning=watcher.reasoning + watcher.preparation_note,
             connection=connection,
         )
+        before = streaming._active_variant(cid, sid, record["id"]) if continuation else ""
         if continuation and status == "complete":
             if not store.proposals.commit_narration(cid, sid, continuation, saved):
                 raise store.responses.ResponseConflict(
@@ -501,6 +502,8 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
         if text and rewrite:
             streaming._record_rewrite(cid, sid, record["id"], *rewrite, text,
                                       streaming._active_variant(cid, sid, record["id"]))
+        elif before:
+            streaming._carry_rewrite(cid, sid, record["id"], before)
         streaming._turn_settled(cid)
         if text and tracked is not None:
             # Marked HERE, in the hold that wrote the variant, where the
