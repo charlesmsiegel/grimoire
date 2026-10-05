@@ -267,10 +267,12 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         # (#148), so a reader adding them to a total would count a cached prefix
         # twice. `_add` is where that promise is kept for rollups.
         # `images` is how many post images the call sent (#377), absent when
-        # none. The money columns already include what a provider charged for
-        # them, but a MODELLED figure cannot -- the rate table prices tokens,
-        # not pictures -- so this is what tells a reader a turn carried images
-        # the estimate may not cover.
+        # none. A billed figure already includes what the provider charged for
+        # them, and a MODELLED one prices them only as far as the provider
+        # counted them into `prompt_tokens` -- which is how image input is
+        # billed and reported by the providers that report usage at all, but
+        # nothing here can check. So this is what tells a reader a turn carried
+        # images, not a correction to any figure.
         for key, count in (("prompt_tokens", prompt_tokens),
                            ("completion_tokens", completion_tokens),
                            ("cache_read_tokens", cache_read_tokens),
