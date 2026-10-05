@@ -208,6 +208,14 @@ def recall(candidates: list[dict], recent_text: str) -> list[dict]:
     already admitted — see the module docstring. Returns at most `depth` of
     them, each scoring at least `threshold`.
     """
+    return [e for e, _ in recall_scored(candidates, recent_text)]
+
+
+def recall_scored(candidates: list[dict], recent_text: str) -> list[tuple[dict, float]]:
+    """`recall`, with the cosine each hit scored: `(entry, score)` pairs, most
+    similar first. The score is what the inspector shows as the reason an entry
+    was recalled; the selection is `recall`'s exactly.
+    """
     if not candidates or not recent_text.strip():
         return []
     cfg = settings()
@@ -279,7 +287,7 @@ def recall(candidates: list[dict], recent_text: str) -> list[dict]:
             # same store always recalls the same entries in the same order.
             hits.append((-score, i))
     hits.sort()
-    return [candidates[i] for _, i in hits[:cfg["depth"]]]
+    return [(candidates[i], -neg) for neg, i in hits[:cfg["depth"]]]
 
 
 def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] | None:
