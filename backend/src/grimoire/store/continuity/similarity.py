@@ -23,6 +23,20 @@ model -- a false positive costs a share of one batched resolver call, a false
 negative costs a duplicate record -- and every one is to be tuned against real
 prompts later.
 
+**Embeddings** (§9.4) are an enhancement with a bounded cost. `semantic` is
+the module's only writer, takes no campaign id, and writes only the global
+vector cache. It READS every cached vector it is offered (`cached`: a whole
+pool, so a lexically unrelated record an earlier run or Slice D's sweep warmed
+still gets a cosine) but EMBEDS only the required texts plus at most
+`IDENTITY_WARM_LIMIT` warm misses, under one deadline shared with the absorb
+budget, so the common case is one round trip on the extraction's critical
+path. Vectors of a width other than the run's reference width are forgotten
+rather than scored, and the forgotten required and warm texts are re-embedded
+once in the same run: an endpoint that changed width under the same model id
+heals instead of leaving a permanently unscorable cache hit. Any provider
+failure is a mode (``"failure"``), never an exception -- basic matching still
+answers.
+
 Slice D's reconcile sweep reuses `pool`, `lexical` and `nearest` unchanged
 (and the embedding mechanics, `semantic`, that sit beside them), so a pair the
 sweep raises was scored by exactly the rules absorb staged under.
@@ -32,12 +46,15 @@ from __future__ import annotations
 
 import math
 import re
+import time
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable
 from typing import Literal
 
+from ... import embeddings
 from .. import embed_space, fieldtext, paths, vectors
-from . import effective, involvement
+from . import drivers, effective, involvement
 
 #: The identity text's byte bound. The text is a label, a title, at most three
 #: one-sentence beats and a due phrase; 2000 bytes holds that even in a
@@ -98,6 +115,18 @@ COSINE_FLOOR = 0.5
 WEAK_TOKEN = 0.1
 WEAK_CHAR = 0.15
 WEAK_COSINE = 0.35
+
+#: Uncached neighbours one run may embed. The identity step sits on the
+#: extraction's critical path, so the common case must be one embedding round
+#: trip: with up to `embeddings.BATCH` minus this many proposed rows, the
+#: proposals plus the warm run fit one batch. To be tuned against real prompts
+#: later.
+IDENTITY_WARM_LIMIT = 32
+
+#: The module's own client, a singleton like `semsearch`'s and
+#: `context.semantic`'s (`main.py` names every one). Tests replace it with
+#: `llm_fakes.FakeEmbeddings`.
+_CLIENT = embeddings.EmbeddingsClient()
 
 #: What the ledger readers raise on a file that will not parse or holds the
 #: wrong shape -- the whole of what `pool` answers empty for.
@@ -378,3 +407,148 @@ def nearest(subject: Subject, candidates: list[Subject],
             kept.append((other, {**signals, "via": via}))
     kept.sort(key=lambda pair: rank_key(pair[1], pair[0].ref))
     return kept[:top_k]
+
+
+# -------------------------------------------------------------- embeddings
+
+
+def available() -> dict | None:
+    """The configured embedding space, or None. Recall depth is never
+    consulted: it bounds lore recall, not whether continuity may embed."""
+    return embed_space.resolve()
+
+
+def matching() -> str:
+    """``"semantic"`` or ``"basic"`` (spec §3.3) -- a delegate to
+    `drivers.matching`, so the field has one definition and the identity block
+    cannot disagree with the continuity read."""
+    return drivers.matching()
+
+
+def deadline(remaining: float | None) -> float | None:
+    """The monotonic instant an absorb-side embed must finish by: `TIMEOUT`
+    from now, or sooner when the absorb budget has less `remaining`. None when
+    that budget is already spent -- do not call the provider at all."""
+    now = time.monotonic()
+    if remaining is None:
+        return now + embeddings.TIMEOUT
+    if remaining <= 0:
+        return None
+    return now + min(embeddings.TIMEOUT, remaining)
+
+
+def _most_common(widths: list[int]) -> int | None:
+    counts = Counter(widths)
+    return min(counts, key=lambda w: (-counts[w], w)) if counts else None
+
+
+def reference_width(fresh: list[list[float]], loaded: dict[str, list[float]]) -> int | None:
+    """The width a run scores at: the most common among the vectors embedded
+    in it, else among the loaded ones (a fully cached run has no fresh vector
+    to compare against). Ties go to the smaller width. None with neither."""
+    if fresh:
+        return _most_common([len(v) for v in fresh])
+    return _most_common([len(v) for v in loaded.values()])
+
+
+def embed_missing(space: dict, texts: list[str], *,
+                  deadline: float) -> tuple[dict[str, list[float]], str]:
+    """Embed `texts` in `embeddings.BATCH` chunks under one `deadline`, caching
+    each chunk as it lands. Returns the unit vectors and ``""``, or -- on a
+    provider failure -- what earlier chunks produced and the failure's kind, so
+    a chunk that failed never costs the ones already saved."""
+    unique = list(dict.fromkeys(texts))
+    out: dict[str, list[float]] = {}
+    batch = embeddings.BATCH
+    for start in range(0, len(unique), batch):
+        chunk = unique[start:start + batch]
+        try:
+            got = _CLIENT.embed(chunk, space["model"], space["key"], space["base_url"],
+                                deadline=deadline)
+        except embeddings.EmbeddingsError as exc:
+            return out, exc.kind
+        except OSError:
+            return out, "network"
+        if len(got) != len(chunk):
+            return out, "bad_response"
+        for text, vector in zip(chunk, got, strict=True):
+            vectors.save(space["space"], text, vector)
+            normalized = vectors.unit(vector)
+            if normalized is not None:
+                out[text] = normalized
+    return out, ""
+
+
+class Semantic:
+    """What one embedding run produced: the usable vectors by text, the mode
+    (``off`` unconfigured, ``failure`` when a provider call failed, else
+    ``configured``), how many texts the provider answered, and the failure's
+    kind."""
+
+    __slots__ = ("embedded", "error", "mode", "vectors")
+
+    def __init__(self, vectors: dict[str, list[float]],
+                 mode: Literal["off", "configured", "failure"],
+                 embedded: int = 0, error: str = ""):
+        self.vectors = vectors
+        self.mode = mode
+        self.embedded = embedded
+        self.error = error
+
+
+def _keep_width(name: str, held: dict[str, list[float]],
+                width: int | None) -> tuple[dict[str, list[float]], set[str]]:
+    """`held` at `width`; every other vector is forgotten from the cache."""
+    kept: dict[str, list[float]] = {}
+    forgotten: set[str] = set()
+    for text, vector in held.items():
+        if len(vector) == width:
+            kept[text] = vector
+        else:
+            vectors.forget(name, text)
+            forgotten.add(text)
+    return kept, forgotten
+
+
+def _retry_texts(required: list[str], warm: list[str], forgotten: set[str],
+                 room: int) -> list[str]:
+    """The forgotten LOADED texts that were eligible to embed: every required
+    one, then warm ones up to `room` (what is left of the warm limit)."""
+    again = [t for t in required if t in forgotten]
+    taken = set(again)
+    extra = [t for t in warm if t in forgotten and t not in taken]
+    return again + extra[:max(room, 0)]
+
+
+def semantic(required: list[str], warm: list[str], *, deadline: float | None,
+             space: dict | None = None, cached: Iterable[str] = ()) -> Semantic:
+    """Vectors for `required` (always embedded when missing), `warm` (embedded
+    when missing, best first, up to `IDENTITY_WARM_LIMIT`) and `cached` (read
+    only). `deadline` None embeds nothing. Every vector is held to one
+    reference width; an off-width one is forgotten, and a forgotten loaded
+    required or warm text is re-embedded once, deadline permitting."""
+    space = space or available()
+    if space is None:
+        return Semantic({}, "off")
+    name = space["space"]
+    required = list(dict.fromkeys(required))
+    need = set(required)
+    warm = [t for t in dict.fromkeys(warm) if t not in need]
+    loaded = vectors.load(name, [*required, *warm, *cached])
+    warm_misses = [t for t in warm if t not in loaded][:IDENTITY_WARM_LIMIT]
+    fresh: dict[str, list[float]] = {}
+    error = ""
+    if deadline is not None:
+        fresh, error = embed_missing(space, [*(t for t in required if t not in loaded),
+                                             *warm_misses], deadline=deadline)
+    width = reference_width(list(fresh.values()), loaded)
+    kept, forgotten = _keep_width(name, {**loaded, **fresh}, width)
+    again = _retry_texts(required, warm, forgotten - set(fresh),
+                         IDENTITY_WARM_LIMIT - len(warm_misses))
+    embedded = len(fresh)
+    if again and deadline is not None and time.monotonic() < deadline:
+        healed, retry_error = embed_missing(space, again, deadline=deadline)
+        embedded += len(healed)
+        error = error or retry_error
+        kept.update(_keep_width(name, healed, width)[0])
+    return Semantic(kept, "failure" if error else "configured", embedded, error)

@@ -228,9 +228,10 @@ async def _lifespan(app: FastAPI):
         # other pool nor bury the exception on its way out.
         #
         # Blind spot: these are the pools an *app* owns. The `EmbeddingsClient`
-        # singletons in `store/semsearch` and `store/context/semantic` are
-        # reachable only from store code with no app to hang them on, and are
-        # still closed by nobody. `test_llm_lifecycle` fails if a closable is
+        # singletons in `store/semsearch`, `store/context/semantic`,
+        # `store/context/art` and `store/continuity/similarity` are reachable
+        # only from store code with no app to hang them on, and are still
+        # closed by nobody. `test_llm_lifecycle` fails if a closable is
         # added to `app.state` and left out of the loop below.
         for client in (app.state.llm, app.state.openai_compatible):
             try:

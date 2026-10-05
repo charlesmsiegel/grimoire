@@ -11,14 +11,18 @@ silently somewhere else.
 import importlib
 import json
 import math
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
+from grimoire import embeddings
 from grimoire.main import create_app
+from grimoire.store import config, embed_space, llm_connections, vectors
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import effective, review, similarity
+from tests.llm_fakes import FakeEmbeddings
 
 S1, S2 = "001--saltmarch", "002--realm"
 MARA = "characters:mara"
@@ -330,3 +334,240 @@ def test_anchors_come_from_reviewed_event_links(cid):
     by_ref = {s.ref: s for s in similarity.pool(cid, "thread")}
     assert by_ref["thread:x"].anchors == frozenset({f"event:{eid}"})
     assert by_ref["thread:y"].anchors == frozenset()
+
+
+# ------------------------------------------------------- embedding mechanics
+#
+# One shared double, `llm_fakes.FakeEmbeddings`, installed over the module's
+# `_CLIENT`. The cache namespace is always asked of `embed_space.resolve()`:
+# it carries the connection's `rev`, so a literal would quietly stop testing.
+
+
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    double = FakeEmbeddings()
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    return double
+
+
+def _configure(depth="2"):
+    """Embeddings on, as `test_context_semantic.configure` sets them."""
+    conn = llm_connections.create_connection("openai_compatible", "Vectors",
+                                             base_url="https://vectors.example/v1",
+                                             api_key="sk-x", model="", post_process="none")
+    config.write_config(semantic_recall_depth=depth, semantic_recall_threshold="0.4",
+                        embeddings_model="embed-1", embeddings_connection_id=conn)
+
+
+def _space():
+    return embed_space.resolve()["space"]
+
+
+def _soon():
+    return time.monotonic() + embeddings.TIMEOUT
+
+
+def test_unconfigured_is_off_and_never_calls(home, fake):
+    config.write_config(semantic_recall_depth="0", embeddings_connection_id="",
+                        embeddings_model="embed-1")
+    got = similarity.semantic(["x"], [], deadline=_soon())
+    assert got.mode == "off"
+    assert got.vectors == {}
+    assert fake.calls == []
+
+
+def test_availability_ignores_recall_depth(home, fake):
+    _configure(depth="0")
+    assert similarity.available() is not None
+    got = similarity.semantic(["x"], [], deadline=_soon())
+    assert got.mode == "configured"
+    assert fake.calls == [["x"]]
+    assert set(got.vectors) == {"x"}
+
+
+def test_matching_label_and_its_exception_policy(home, monkeypatch):
+    assert similarity.matching() == "basic"
+    _configure()
+    assert similarity.matching() == "semantic"
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("garbled config")
+
+    monkeypatch.setattr(embed_space, "resolve", boom)
+    assert similarity.matching() == "basic"
+
+
+def test_required_texts_embed_and_cache(home, fake):
+    _configure()
+    first = similarity.semantic(["Mara's map", "Saltmarch"], [], deadline=_soon())
+    assert fake.calls == [["Mara's map", "Saltmarch"]]
+    assert first.embedded == 2
+    second = similarity.semantic(["Mara's map", "Saltmarch"], [], deadline=_soon())
+    assert fake.calls == [["Mara's map", "Saltmarch"]]          # no second call
+    assert second.embedded == 0
+    assert second.mode == "configured"
+    assert second.vectors == vectors.load(_space(), ["Mara's map", "Saltmarch"])
+    assert set(second.vectors) == {"Mara's map", "Saltmarch"}
+
+
+def test_warm_limit_is_honoured(home, fake):
+    _configure()
+    warm = [f"neighbour {i}" for i in range(40)]
+    similarity.semantic(["Mara's map"], warm, deadline=_soon())
+    sent = [t for call in fake.calls for t in call]
+    assert sent == ["Mara's map", *warm[:similarity.IDENTITY_WARM_LIMIT]]
+
+
+def test_width_mismatch_forgets_and_re_embeds_off_width_vectors(home, fake):
+    _configure()
+    n = "Winifred's chart"
+    vectors.save(_space(), n, [1.0, 0.0, 0.0])
+    got = similarity.semantic(["Mara's map"], [n], deadline=_soon())
+    assert fake.calls[0] == ["Mara's map"]
+    assert fake.calls[1] == [n]
+    assert len(got.vectors[n]) == 2
+    assert len(vectors.load(_space(), [n])[n]) == 2
+    assert got.mode == "configured"
+
+
+def test_mixed_width_fresh_chunks_are_filtered_and_forgotten(home, monkeypatch):
+    _configure()
+    monkeypatch.setattr(embeddings, "BATCH", 2)
+    wide = {"Saltmarch tithe"}
+    double = FakeEmbeddings(vector_for=lambda t: [0.0, 0.0, 1.0] if t in wide else [1.0, 0.0])
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    texts = ["Mara's map", "Winifred's chart", "Saltmarch tithe"]
+    got = similarity.semantic(texts, [], deadline=_soon())
+    assert double.calls == [texts[:2], texts[2:]]
+    cache = vectors.load(_space(), texts)
+    assert set(got.vectors) == {"Mara's map", "Winifred's chart"}
+    assert set(cache) == {"Mara's map", "Winifred's chart"}
+    assert len(double.calls) == 2                    # a fresh off-width text is not re-asked
+
+
+def test_off_width_cached_only_text_is_forgotten_not_embedded(home, fake):
+    _configure()
+    n = "Winifred's chart"
+    vectors.save(_space(), n, [1.0, 0.0, 0.0])
+    got = similarity.semantic(["Mara's map"], [], deadline=_soon(), cached=[n])
+    assert n not in got.vectors
+    assert vectors.load(_space(), [n]) == {}
+    assert all(n not in call for call in fake.calls)
+
+
+def test_cached_vectors_are_read_for_texts_never_embedded(home, fake):
+    _configure()
+    n = "The coronation"
+    vectors.save(_space(), n, [0.0, 1.0])
+    got = similarity.semantic(["Mara's map"], [], deadline=_soon(), cached=[n])
+    assert got.vectors[n] == pytest.approx([0.0, 1.0])
+    assert fake.calls == [["Mara's map"]]
+
+
+def test_fully_cached_run_uses_the_most_common_loaded_width(home, fake):
+    _configure()
+    space = _space()
+    vectors.save(space, "a", [1.0, 0.0])
+    vectors.save(space, "b", [0.0, 1.0])
+    vectors.save(space, "c", [1.0, 0.0, 0.0])
+    got = similarity.semantic(["a"], ["b"], deadline=None, cached=["c"])
+    assert set(got.vectors) == {"a", "b"}
+    assert set(vectors.load(space, ["a", "b", "c"])) == {"a", "b"}
+    assert fake.calls == []
+
+
+def test_reference_width_ties_and_sources():
+    assert similarity.reference_width([], {}) is None
+    assert similarity.reference_width([[1.0, 0.0, 0.0]], {"a": [1.0, 0.0], "b": [0.0, 1.0]}) == 3
+    assert similarity.reference_width([], {"a": [1.0], "b": [1.0, 0.0]}) == 1
+    assert similarity.reference_width([[1.0, 0.0], [1.0], [0.0, 1.0]], {}) == 2
+
+
+def test_partial_batch_failure_keeps_earlier_chunks(home, monkeypatch):
+    _configure()
+    monkeypatch.setattr(embeddings, "BATCH", 2)
+    double = FakeEmbeddings(error=embeddings.EmbeddingsError("network", "down"), fail_after=1)
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    texts = ["Mara's map", "Winifred's chart", "Saltmarch tithe", "The coronation", "Realm"]
+    got = similarity.semantic(texts, [], deadline=_soon())
+    assert got.mode == "failure"
+    assert got.error == "network"
+    assert set(got.vectors) == set(texts[:2])
+    assert set(vectors.load(_space(), texts)) == set(texts[:2])
+
+
+def test_a_wrong_length_reply_is_a_bad_response(home, monkeypatch):
+    _configure()
+
+    class Short(FakeEmbeddings):
+        def embed(self, texts, model, key, base_url, deadline=None):
+            return super().embed(texts, model, key, base_url, deadline)[:-1]
+
+    monkeypatch.setattr(similarity, "_CLIENT", Short())
+    got = similarity.semantic(["Mara's map", "Realm"], [], deadline=_soon())
+    assert got.mode == "failure"
+    assert got.error == "bad_response"
+    assert got.vectors == {}
+
+
+def test_embedding_failure_mode_on_oserror(home, monkeypatch):
+    _configure()
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(error=OSError("reset")))
+    got = similarity.semantic(["Mara's map"], [], deadline=_soon())
+    assert got.mode == "failure"
+    assert got.error == "network"
+    assert got.vectors == {}
+
+
+def test_deadline_is_shared_and_bounded(home, monkeypatch):
+    _configure()
+    monkeypatch.setattr(embeddings, "BATCH", 1)
+    double = FakeEmbeddings()
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    n = "Winifred's chart"
+    vectors.save(_space(), n, [1.0, 0.0, 0.0])        # forces the step-7 second call
+    similarity.semantic(["Mara's map", "Realm"], [n], deadline=similarity.deadline(None))
+    assert len(double.deadlines) == 3
+    assert len(set(double.deadlines)) == 1
+    assert double.deadlines[0] <= time.monotonic() + embeddings.TIMEOUT
+
+
+def test_deadline_helper():
+    assert similarity.deadline(None) <= time.monotonic() + embeddings.TIMEOUT
+    assert similarity.deadline(None) > time.monotonic()
+    assert similarity.deadline(0) is None
+    assert similarity.deadline(-1) is None
+    before = time.monotonic()
+    got = similarity.deadline(5)
+    assert before + 5 - 0.5 <= got <= time.monotonic() + 5
+    assert similarity.deadline(embeddings.TIMEOUT * 10) <= time.monotonic() + embeddings.TIMEOUT
+
+
+def test_no_deadline_means_cache_only(home, fake):
+    _configure()
+    vectors.save(_space(), "Mara's map", [1.0, 0.0])
+    got = similarity.semantic(["Mara's map", "Realm"], [], deadline=None)
+    assert fake.calls == []
+    assert got.mode == "configured"
+    assert set(got.vectors) == {"Mara's map"}
+
+
+def test_nearest_uses_cosine_when_both_vectors_present(home, monkeypatch):
+    _configure()
+    a = _thread("proposed:x", "Mara's map", "Stolen at dawn.")
+    b = _thread("thread:b", "Winifred's chart", "Lost overboard.")
+    sig = similarity.lexical(a, b)
+    assert sig["tokens"] == 0 and sig["chars"] < similarity.WEAK_CHAR
+    near = {a.text: [1.0, 0.0], b.text: [0.9, math.sqrt(1 - 0.81)]}
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(vector_for=lambda t: near[t]))
+    got = similarity.semantic([a.text], [b.text], deadline=_soon())
+    [(other, signals)] = similarity.nearest(a, [b], got.vectors)
+    assert other.ref == "thread:b"
+    assert signals["cosine"] == pytest.approx(0.9, abs=1e-3)
+    assert signals["via"] == "semantic"
