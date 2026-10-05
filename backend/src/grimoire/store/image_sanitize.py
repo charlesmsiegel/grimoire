@@ -13,7 +13,11 @@ Orientation is the one piece of metadata that is kept, because browsers apply it
 (`image_hash.ORIENTS`): a JPEG's EXIF, or a PNG `eXIf` chunk before the first
 IDAT, is replaced by a minimal EXIF block holding only that tag (and dropped
 outright when the orientation is 1, absent or unreadable). WebP EXIF is dropped
-whole, as browsers do not apply it there.
+whole, as browsers do not apply it there. A JPEG may carry more than one Exif
+APP1: only the first (with any bytes after its signature) is read for
+orientation, which is the one Chromium reads too, and every later one is
+dropped whole, unread. Pillow concatenates them, but parses from the first, so
+an identity computed on either side of sanitizing agrees.
 
 What is kept is allowlisted, never the reverse: a PNG keeps `_PNG_KEEP`, a WebP
 `_WEBP_KEEP` (and, inside each animation frame, only its frame data), and a
@@ -246,8 +250,14 @@ def _jpeg_segment(raw: bytes, pos: int, marker: int) -> tuple[int, bytes]:
 def _jpeg_kept(marker: int, payload: bytes, segment: bytes, seen: set[int]) -> bytes:
     """What of one segment survives, given the rebuilt kinds already `seen`:
     the first Exif APP1 and the first JFIF APP0 are rebuilt (any later one
-    goes), the rest kept or dropped whole by `_jpeg_keeps`."""
+    goes), the rest kept or dropped whole by `_jpeg_keeps`.
+
+    "First" is the browser's: Chromium (Skia's `read_metadata`) takes the first
+    Exif APP1 with anything after its signature and stops, so an empty one is
+    dropped without counting, and a second is dropped unread."""
     if marker == 0xE1 and payload.startswith(_EXIF_PREFIX):
+        if len(payload) <= len(_EXIF_PREFIX):
+            return b""
         rebuild = _jpeg_exif_segment
     elif marker == 0xE0 and payload.startswith(_JFIF):
         rebuild = _jpeg_jfif_segment
