@@ -470,10 +470,14 @@ def _semantic(proposals: list[_Proposal], pools: _Pools,
     space = similarity.available()
     if space is None:
         return similarity.Semantic({}, "off")
-    if not proposals:
+    # A proposal with no record of its own type to compare against cannot
+    # produce a candidate: embedding its text would send campaign prose to the
+    # provider, on the extraction's critical path, for nothing (spec §10.4).
+    comparable = [p for p in proposals if pools[p.kind]]
+    if not comparable:
         return similarity.Semantic({}, "configured")
     cached = [s.text for pool in pools.values() for s in pool]
-    return similarity.semantic([p.subject.text for p in proposals], _warm(proposals, pools),
+    return similarity.semantic([p.subject.text for p in comparable], _warm(comparable, pools),
                                deadline=embed_deadline, space=space, cached=cached)
 
 
