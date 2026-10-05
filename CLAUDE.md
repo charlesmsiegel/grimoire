@@ -616,6 +616,16 @@ would answer neither question.
   invalidate the very expectation the caller took it to protect. What the token
   cannot see, and why a mismatch is a re-price rather than an error, is in that
   module's docstring and in `docs/store-guarantees.md`.
+- **Images live in the content-addressed store, never in a record's folder.**
+  Every image write goes through the `store.assets` primitives: `put_in` /
+  `put_image` ingest the bytes into `<home>/assets/image-store/`, `link_in`
+  places an image already there, and either way the record keeps only a
+  placement, `image-refs/<name>.json`. Copying, forking or promoting
+  art moves placements and writes no bytes. A route or script that writes a
+  `.png` into a record directory is a regression, and the surface roster in
+  `backend/tests/test_image_surfaces.py` fails on it. What the store promises
+  is in `docs/store-guarantees.md`; the design is
+  `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
 - **Adding an LLM call site?** Resolve its connection with
   `_require_connection(<task>, cid)` and name the task the call meters under.
   `store/routing.py` maps that task to a route the user can point at a
