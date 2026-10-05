@@ -111,7 +111,8 @@ async def put_world_cover(wid: str, file: UploadFile = File(...)):
         stored = store.covers.put_world_cover(wid, data, ext)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ext": stored, "v": store.covers.world_cover_version(wid)}
+    return {"ext": stored, "v": store.covers.world_cover_version(wid),
+            "image_id": store.covers.world_cover_image_id(wid)}
 
 
 @router.delete("/worlds/{wid}/cover")
@@ -173,8 +174,10 @@ async def put_world_library_image(wid: str, name: str, file: UploadFile = File(.
     # `v` so the client can build the immutable `?v=` URL without a second round
     # trip. It resolves and stats, and answers "" rather than raising if the
     # file went between the two -- a write that landed must not report a 500.
+    placed = store.assets.resolve(store.world_images.images_dir(wid), name)
     return {"name": name, "ext": stored,
-            "v": store.world_images.image_version(wid, name)}
+            "v": store.world_images.image_version(wid, name),
+            "image_id": placed.image_id if placed is not None else None}
 
 
 @router.delete("/worlds/{wid}/images/{name}")

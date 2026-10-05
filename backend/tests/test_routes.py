@@ -126,6 +126,12 @@ def _set_scene_updated(cid, sid, value):
     path.write_text(new, encoding="utf-8")
 
 
+def _sans_image_id(body: dict) -> dict:
+    """An upload's answer without its `image_id`, for the tests that pin the
+    rest of it: the identity is asserted on its own where it matters."""
+    return {k: v for k, v in body.items() if k != "image_id"}
+
+
 def _campaign(client, name="Run"):
     wid = _world(client)
     return wid, client.post("/api/campaigns", json={"name": name, "world": wid}).json()["id"]
@@ -676,7 +682,7 @@ def test_character_image_routes(client):
     png = _png_bytes()
     files = {"file": ("a.png", io.BytesIO(png), "image/png")}
     r = client.put(f"{base}/avatar", files=files)
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
     listed = client.get(base).json()
     assert [(i["name"], i["ext"]) for i in listed] == [("avatar", "png")] and listed[0]["v"]
     got = client.get(f"{base}/avatar")
@@ -1274,7 +1280,7 @@ def test_image_upload_stores_the_extension_the_bytes_are(client):
                  f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"):
         lying = {"file": ("avatar.png", io.BytesIO(jpeg), "image/png")}  # a fresh stream each time
         r = client.put(f"{base}/avatar", files=lying)
-        assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "jpg"}, base
+        assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "jpg"}, base
         got = client.get(f"{base}/avatar")
         assert got.content == jpeg and got.headers["content-type"] == "image/jpeg", base
 
@@ -1304,7 +1310,7 @@ def test_image_upload_names_every_format_the_store_accepts(client):
         data = _image_bytes(fmt, size=(4 + i, 4))
         r = client.put(f"{base}/avatar",
                        files={"file": ("avatar.jpeg", io.BytesIO(data), "image/jpeg")})
-        assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": ext}, fmt
+        assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": ext}, fmt
         assert [(i["name"], i["ext"]) for i in client.get(base).json()] == [("avatar", ext)], fmt
         got = client.get(f"{base}/avatar")
         assert got.content == data and got.headers["content-type"] == media, fmt
@@ -1369,7 +1375,7 @@ def test_campaign_character_image_routes_isolated(client):
 
     camp_base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
     r = client.put(f"{camp_base}/avatar", files={"file": ("b.png", io.BytesIO(camp_png), "image/png")})
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
 
     # campaign copy changed; world's shared copy untouched
     assert client.get(f"{camp_base}/avatar").content == camp_png
@@ -1474,7 +1480,7 @@ def test_campaign_copy_image_from_greeting_inherited_greeting(client):
 
     copy_url = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/copy-from-greeting"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
     assert client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar").content == b"art"
 
 
@@ -1491,7 +1497,7 @@ def test_campaign_copy_image_from_greeting(client):
 
     copy_url = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/copy-from-greeting"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
     assert client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar").content == b"art"
 
 
@@ -1616,7 +1622,7 @@ def test_pc_image_routes(client):
     # upload
     png = _png_bytes()
     r = client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(png), "image/png")})
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
     listed = client.get(base).json()
     assert [(i["name"], i["ext"]) for i in listed] == [("avatar", "png")] and listed[0]["v"]
     got = client.get(f"{base}/avatar")
@@ -1625,7 +1631,7 @@ def test_pc_image_routes(client):
     # the bytes name the type, not the filename (#321), on this surface too
     jpeg = _jpeg_bytes()
     lying = client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(jpeg), "image/png")})
-    assert lying.json() == {"name": "avatar", "ext": "jpg"}
+    assert _sans_image_id(lying.json()) == {"name": "avatar", "ext": "jpg"}
     assert client.get(f"{base}/avatar").headers["content-type"] == "image/jpeg"
     # bytes that are no image at all
     bad = client.put(f"{base}/avatar",
@@ -1751,7 +1757,7 @@ def test_campaign_pc_image_routes_isolated(client):
     assert [i["name"] for i in client.get(cbase).json()] == ["avatar"]
 
     r = client.put(f"{cbase}/avatar", files={"file": ("b.png", io.BytesIO(camp_png), "image/png")})
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
     assert client.get(f"{cbase}/avatar").content == camp_png
     assert client.get(f"{wbase}/avatar").content == world_png
 
@@ -1934,7 +1940,7 @@ def test_entity_images_crud_promote_and_has_image(client):
 
     day, night = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
     r = client.put(f"{base}/avatar", files={"file": ("w.png", io.BytesIO(day), "image/png")})
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
     client.put(f"{base}/gallery_1", files={"file": ("n.png", io.BytesIO(night), "image/png")})
 
     assert client.get(f"/api/worlds/{wid}/locations").json()[0]["has_image"] is True
@@ -2220,7 +2226,7 @@ def test_appearances_and_copy_from_greeting(client):
 
     copy_url = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/copy-from-greeting"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
-    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
     assert client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar").content == b"art"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "gallery"})
     assert r.json()["name"] == "gallery_1"
@@ -15430,3 +15436,137 @@ def test_greeting_phase_metadata_roundtrips_through_world_and_campaign_routes(cl
     assert client.get(
         f"/api/campaigns/{cid}/greetings/{campaign_gid}"
     ).json()["meta"]["sequence"] is None
+
+
+# ---- image identity over HTTP: byte-sha ETags and `image_id` (image store) ----
+def _default_world_char(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Aese"}).json()["character"]
+    return wid, cid
+
+
+def _put_world_char_avatar(client, wid, cid, data, name="avatar"):
+    return client.put(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/{name}",
+                      files={"file": ("a.png", io.BytesIO(data), "image/png")})
+
+
+def test_serve_blob_etag_is_byte_sha(client):
+    """A blob is named by the sha of its bytes, so that is its validator: the
+    same bytes under any placement, mtime or device revalidate as one."""
+    import hashlib
+    wid, cid = _default_world_char(client)
+    assert _put_world_char_avatar(client, wid, cid, _png_bytes()).status_code == 200
+    url = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar"
+    r = client.get(url)
+    assert r.status_code == 200
+    assert r.headers["etag"] == f'"{hashlib.sha256(r.content).hexdigest()}"'
+    assert client.get(url, headers={"If-None-Match": r.headers["etag"]}).status_code == 304
+    # the thumbnail's tag names the same source, the bucket and the generation
+    t = client.get(f"{url}?w=256")
+    assert t.headers["etag"].startswith(f'"{hashlib.sha256(r.content).hexdigest()}-')
+
+
+def test_legacy_file_keeps_mtime_etag(client):
+    """A file with no placement behind it still validates by mtime and size."""
+    wid, cid = _default_world_char(client)
+    root = store.worlds.world_root(wid)
+    d = store.assets._dir(root, cid, "default", "characters")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "avatar.png").write_bytes(_png_bytes())    # placed by hand: no object, no blob
+    p = store.assets.image_path(root, cid, "default", "avatar")
+    assert p is not None and store.image_store.blob_sha_of(p) is None
+    st = p.stat()
+    r = client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar")
+    assert r.status_code == 200
+    assert r.headers["etag"] == f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+
+
+def test_a_blob_that_vanished_is_a_404_not_a_500(client):
+    """A blob's tag needs no stat, so the 404 comes from the read (and from the
+    thumbnail path falling through to it)."""
+    from fastapi import HTTPException
+    wid, cid = _default_world_char(client)
+    _put_world_char_avatar(client, wid, cid, _png_bytes())
+    p = store.assets.image_path(store.worlds.world_root(wid), cid, "default", "avatar")
+    p.unlink()
+    for query in ("", "?w=256"):
+        req = Request({"type": "http", "headers": [], "query_string": query.lstrip("?").encode()})
+        with pytest.raises(HTTPException) as err:
+            routes.common._serve_image_file(p, req)
+        assert err.value.status_code == 404
+
+
+def test_put_record_image_returns_image_id(client):
+    from grimoire.store import image_hash
+    # a world character
+    wid, cid = _default_world_char(client)
+    r = _put_world_char_avatar(client, wid, cid, _png_bytes())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "avatar" and body["ext"] == "png"
+    assert image_hash.is_image_id(body["image_id"])
+    # the same picture, uploaded again under another name, is the same image
+    again = _put_world_char_avatar(client, wid, cid, _png_bytes(), name="gallery_1").json()
+    assert again["image_id"] == body["image_id"]
+    # a different picture is a different image
+    other = _put_world_char_avatar(client, wid, cid, _png_bytes(color=(1, 90, 3)),
+                                   name="gallery_2").json()
+    assert other["image_id"] != body["image_id"]
+
+    # a campaign PC
+    cwid, camp = _campaign(client)
+    pid = client.post(f"/api/worlds/{cwid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    r = client.put(f"/api/campaigns/{camp}/pcs/{pid}/versions/default/images/avatar",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert image_hash.is_image_id(r.json()["image_id"])
+    assert r.json()["image_id"] == body["image_id"]   # identity is the picture, not the place
+
+    # a world location
+    lid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"}).json()["id"]
+    r = client.put(f"/api/worlds/{wid}/locations/{lid}/images/avatar",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert r.status_code == 200
+    assert r.json()["image_id"] == body["image_id"]
+
+
+def test_library_and_cover_puts_return_image_id(client):
+    from grimoire.store import image_hash
+    wid, cid = _campaign(client)
+    png = ("a.png", io.BytesIO(_png_bytes()), "image/png")
+    w = client.put(f"/api/worlds/{wid}/images/coastline", files={"file": png}).json()
+    c = client.put(f"/api/campaigns/{cid}/images/harbour",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}).json()
+    wc = client.put(f"/api/worlds/{wid}/cover",
+                    files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}).json()
+    cc = client.put(f"/api/campaigns/{cid}/cover",
+                    files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}).json()
+    ids = {w["image_id"], c["image_id"], wc["image_id"], cc["image_id"]}
+    assert len(ids) == 1 and image_hash.is_image_id(ids.pop())
+
+
+def test_listing_and_detail_carry_image_id(client):
+    wid, cid = _default_world_char(client)
+    put = _put_world_char_avatar(client, wid, cid, _png_bytes()).json()
+    base = f"/api/worlds/{wid}/characters/{cid}"
+    listed = client.get(f"{base}/versions/default/images").json()
+    assert [(i["name"], i["image_id"]) for i in listed] == [("avatar", put["image_id"])]
+    detail = client.get(base).json()["versions"][0]
+    assert detail["image_ids"] == {"avatar": put["image_id"]}
+    # the gallery's tiles carry it too
+    gallery = client.get(f"/api/worlds/{wid}/gallery").json()
+    assert [g["image_id"] for g in gallery if g["kind"] == "characters"] == [put["image_id"]]
+    # ...and so does a campaign's read of the same character, through the overlay
+    camp = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    cdetail = client.get(f"/api/campaigns/{camp}/characters/{cid}").json()["versions"][0]
+    assert cdetail["image_ids"] == {"avatar": put["image_id"]}
+    cgallery = client.get(f"/api/campaigns/{camp}/gallery").json()
+    assert [g["image_id"] for g in cgallery if g["kind"] == "characters"] == [put["image_id"]]
+    # a legacy file has no identity, so no entry and no key
+    root = store.worlds.world_root(wid)
+    d = store.assets._dir(root, cid, "default", "characters")
+    (d / "gallery_9.png").write_bytes(_png_bytes(color=(5, 5, 5)))
+    detail = client.get(base).json()["versions"][0]
+    assert "gallery_9" in detail["images"] and "gallery_9" not in detail["image_ids"]
+    row = next(i for i in client.get(f"{base}/versions/default/images").json()
+               if i["name"] == "gallery_9")
+    assert "image_id" not in row

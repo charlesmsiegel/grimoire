@@ -994,11 +994,17 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     frontend dutifully marking a valid cover broken. Those surface as a 500,
     which is what they are.
     """
-    try:
-        st = p.stat()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
-    source = f"{st.st_mtime_ns:x}-{st.st_size:x}"
+    # A content-addressed blob is named by its byte sha: the bytes are the
+    # identity, so the validator is the sha and no stat is paid (a missing
+    # blob is still a 404, from the read or the thumbnail path below). A
+    # legacy file has only its stat to say what it holds.
+    source = store.image_store.blob_sha_of(p)
+    if source is None:
+        try:
+            st = p.stat()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="image not found")
+        source = f"{st.st_mtime_ns:x}-{st.st_size:x}"
     etag = f'"{source}"'
     versioned = request is not None and "v" in request.query_params
     cache = "public, max-age=31536000, immutable" if versioned else "no-cache"

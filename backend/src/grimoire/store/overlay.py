@@ -1967,6 +1967,7 @@ def base_versions(cid: str, char_id: str, *, v: View | None = None) -> list[dict
             "name": characters.version_label(wroot, char_id, vid),
             "images": [i["name"] for i in images],
             "image_v": {i["name"]: i["v"] for i in images},
+            "image_ids": {i["name"]: i["image_id"] for i in images if i.get("image_id")},
             "image_descriptions": read_descriptions(cid, char_id, vid, v=v),
         })
     return out
@@ -2074,6 +2075,7 @@ def read_character(cid: str, char_id: str, *, v: View | None = None) -> dict:
         images = list_images(cid, char_id, ver["id"], v=v)
         ver["images"] = [i["name"] for i in images]
         ver["image_v"] = {i["name"]: i["v"] for i in images}
+        ver["image_ids"] = {i["name"]: i["image_id"] for i in images if i.get("image_id")}
         # Which of those names the campaign holds no file for -- the Art tab
         # shelves the campaign's own pictures apart from the world's. Names
         # only: the token and caption of an inherited picture are the union's.

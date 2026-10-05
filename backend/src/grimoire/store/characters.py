@@ -423,6 +423,10 @@ def read_character(root: Path, cid: str) -> dict:
             # the serve route resolves, so the token always names the bytes a
             # `?v=` URL will return -- and that URL is cached immutable.
             "image_v": {i["name"]: i["v"] for i in version_images},
+            # Only for placements backed by the image store: a legacy file
+            # has no identity to report, so it has no entry here.
+            "image_ids": {i["name"]: i["image_id"] for i in version_images
+                          if i.get("image_id")},
             "avatar_focus": assets.read_focus(root, cid, vid),
             # Beside `images`/`image_v`/`avatar_focus`: asset-derived, so it
             # travels with them rather than through a second round trip.

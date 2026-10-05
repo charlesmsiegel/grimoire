@@ -141,6 +141,13 @@ def cover_version(cid: str) -> str:
         return ""
 
 
+def cover_image_id(cid: str) -> str | None:
+    """The image id the cover placement resolves to, None for a legacy file
+    or no cover."""
+    placed = assets.resolve(_assets_dir(cid), NAME)
+    return placed.image_id if placed is not None else None
+
+
 def put_cover(cid: str, data: bytes, ext: str) -> str:
     """Store `data` as the cover; returns the stored extension.
 
@@ -206,6 +213,12 @@ def _world_assets_dir(wid: str) -> Path:
 
 def world_cover_path(wid: str) -> Path | None:
     return assets.path_in(_world_assets_dir(wid), NAME, supported_only=True)
+
+
+def world_cover_image_id(wid: str) -> str | None:
+    """`cover_image_id`'s world face."""
+    placed = assets.resolve(_world_assets_dir(wid), NAME)
+    return placed.image_id if placed is not None else None
 
 
 def world_cover_version(wid: str) -> str:

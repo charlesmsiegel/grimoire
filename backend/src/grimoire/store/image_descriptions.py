@@ -290,7 +290,9 @@ def catalog(root: Path, base: str = "characters") -> list[dict]:
             out.append({"id": rec.name, "vid": vdir.name, "name": img["name"],
                         "ext": img["ext"], "v": img["v"],
                         "described": img["name"] in reviewed,
-                        "description": text if isinstance(text, str) else ""})
+                        "description": text if isinstance(text, str) else "",
+                        # Only a placement backed by the image store has one.
+                        **({"image_id": img["image_id"]} if img.get("image_id") else {})})
     return out
 
 
