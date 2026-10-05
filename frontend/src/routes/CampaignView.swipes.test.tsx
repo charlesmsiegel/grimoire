@@ -296,6 +296,35 @@ describe("the keys", () => {
     expect(api.activateResponseVariant).not.toHaveBeenCalled();
   });
 
+  // The box it opens is a ledger reroll, which streams the frozen snapshot and
+  // ignores a `response` override -- so it neither sends the pending length
+  // chip nor spends it.
+  test("→ at the newest, then Reroll ▸, regenerates without spending the length chip", async () => {
+    playing();
+    reads({ active: 2 });
+    let finish: (() => void) | undefined;
+    (api.regenerateResponse as any).mockImplementation(
+      (_c: string, _s: string, _r: string, onEvent: (e: unknown) => void) => new Promise<void>((resolve) => {
+        finish = () => { onEvent({ done: true }); resolve(); };
+      }));
+    renderCampaign();
+    expect(await screen.findByText("3/3")).toBeInTheDocument();
+    const picker = screen.getByLabelText("Next reply words");
+    await waitFor(() => expect(picker).toHaveValue(null));
+    fireEvent.change(picker, { target: { value: "120" } });
+    press("ArrowRight");
+    fireEvent.change(await screen.findByLabelText("Reroll guidance"), { target: { value: "Colder" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reroll ▸" }));
+    await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
+    const call = (api.regenerateResponse as any).mock.calls[0];
+    expect(call[2]).toBe("rB");
+    expect(call[4]).toEqual({ guidance: "Colder", connection_id: "", model: "" });
+    expect(call[4].response).toBeUndefined();
+    await act(async () => finish?.());
+    await waitFor(() => expect(screen.getByText("The second answer.")).toBeInTheDocument());
+    expect(picker).toHaveValue(120);
+  });
+
   test("→ at the newest does nothing when the response cannot be rerolled", async () => {
     playing();
     reads({ active: 2, can_reroll: false });

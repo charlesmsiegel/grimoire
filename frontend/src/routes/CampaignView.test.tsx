@@ -8519,7 +8519,9 @@ test("individual response deletion uses its stable id and keeps cut-from-here se
 });
 
 
-test("individual reroll keeps the old reply until accepted and spends its one-shot override without transcript growth", async () => {
+// A ledger reroll streams the frozen snapshot, so the server ignores a
+// `response` override: the client neither sends the pending chip nor spends it.
+test("individual reroll keeps the old reply until accepted and leaves its one-shot override pending, without transcript growth", async () => {
   vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
   const message = { role: "assistant" as const, content: "The accepted response.", speaker: "Mara",
     response_id: "response-a", response_status: "complete" as const, response_can_reroll: true };
@@ -8542,12 +8544,12 @@ test("individual reroll keeps the old reply until accepted and spends its one-sh
   fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
   await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledOnce());
   expect(vi.mocked(api.regenerateResponse).mock.calls[0][2]).toBe("response-a");
-  expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual({ guidance: "Calmer", response: { response_continuation_words: "120" }, connection_id: "", model: "" });
+  expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual({ guidance: "Calmer", connection_id: "", model: "" });
   expect(screen.getByText("The accepted response.")).toBeInTheDocument();
   expect(api.regenerate).not.toHaveBeenCalled();
   await act(async () => finish?.());
   await screen.findByText("The revised response.");
-  await waitFor(() => expect(picker).toHaveValue(null));
+  expect(picker).toHaveValue(120);
 });
 
 test("streaming response boundaries display separate speakers and Stop remains the parent-run control", async () => {

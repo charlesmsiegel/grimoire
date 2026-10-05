@@ -3519,22 +3519,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     }
   }
 
-  /** `keepPending` is the swipe's ›: a ledger reroll streams the frozen
-   *  snapshot and the server ignores `response`, so sending the pending
-   *  one-shot override -- and clearing it on landing -- would spend the
-   *  player's next-turn length chip on a request that never used it. */
-  async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE,
-                                { keepPending = false }: { keepPending?: boolean } = {}) {
+  /** A ledger reroll -- the swipe's ›, the reroll box (↻, `r`, → at the
+   *  newest) and the Response variants disclosure alike. It streams the frozen
+   *  snapshot and the server ignores `response`, so it never sends the pending
+   *  one-shot override and never clears it: doing either would spend the
+   *  player's next-turn length chip on a request that never used it. The
+   *  legacy `reroll` path, which recomposes, still carries and spends it. */
+  async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
     if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
     const sid = activeId;
-    const response = keepPending ? undefined : pendingResponse ?? undefined;
-    const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.regenerateResponse(cid, sid, id, onEvent,
-        { guidance, response, ...route }, signal, attempt, onIndex),
+    await runStream(sid, (onEvent, signal, attempt, onIndex) =>
+      api.regenerateResponse(cid, sid, id, onEvent, { guidance, ...route }, signal, attempt, onIndex),
       undefined, true, "", true);
     // No swipe refresh here: `runStream`'s finally asks again on every
     // outcome, including a failed generate that kept the previous variant.
-    if (landed && !keepPending) setPendingResponse(null);
   }
 
   async function respondAs(ref: string) {
@@ -4347,7 +4345,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (!variantSwipe || !rid) return;
     if (delta < 0 ? variantSwipe.previousDisabled : variantSwipe.nextDisabled) return;
     if (delta > 0 && variantSwipe.generates) {
-      void rerollResponse(rid, "", NO_REROLL_ROUTE, { keepPending: true });
+      void rerollResponse(rid, "", NO_REROLL_ROUTE);
       return;
     }
     const vid = swipeComplete[variantSwipe.position + delta];

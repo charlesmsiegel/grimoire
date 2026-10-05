@@ -80,9 +80,12 @@ never reaches absorb's steering snapshot.
   "preset" is the response style plus the length targets, and that is what is
   recorded. When samplers arrive they join the recorded settings.
 - Honouring a one-shot response override on a ledger reroll. The reroll
-  streams the frozen snapshot, so the client's `response` field on that
-  request is already ignored. This spec stops the client from *spending* the
-  player's pending chip on it (below) and otherwise leaves it.
+  streams the frozen snapshot, so a `response` field on that request is
+  ignored. The client therefore neither sends the player's pending chip on
+  *any* ledger reroll — the swipe's ›, the reroll box (↻, `r`, → at the
+  newest) or the Response variants disclosure — nor clears it when one lands,
+  so the chip is still there for the next turn. The legacy `reroll` path,
+  which recomposes, still carries and spends it.
 
 ## Design
 
@@ -305,9 +308,10 @@ disclosure.
 - **‹** activates the previous complete variant; disabled at the first.
 - **›** activates the next complete variant. At the newest it **generates**:
   `rerollResponse(id, "", NO_REROLL_ROUTE)`, the reroll popover's plain submit.
-  This is the SillyTavern gesture. It sends `response: undefined` and does
-  **not** clear `pendingResponse`: the server ignores the field on a ledger
-  reroll, so clearing would silently spend the player's next-turn length chip.
+  This is the SillyTavern gesture. Like every ledger reroll (see *Non-goals*)
+  it sends no `response` and does **not** clear `pendingResponse`: the server
+  ignores the field on a ledger reroll, so clearing would silently spend the
+  player's next-turn length chip.
 - Incomplete variants are skipped; the disclosure still lists them.
 
 **Disabled when.** Stepping and generating both require: `!responseDisabled`
@@ -418,7 +422,8 @@ Frontend (`CampaignView.test.tsx` with the shared `testkit/` harness;
 - ‹ / › activate the neighbouring complete variant, skip incomplete ones, and
   the counter follows (the refetch fires on content change with the same rid);
 - › at the newest calls `regenerateResponse` with empty guidance and no
-  `response`, and leaves the pending chip set;
+  `response`, and leaves the pending chip set; so does the reroll box's submit
+  (reached by → at the newest) on a ledger response;
 - all controls are disabled with a live proposal, `round_open`, `!editable`,
   or a landed review;
 - `arrowleft` / `arrowright` step, → at the newest opens the reroll box and
