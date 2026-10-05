@@ -313,8 +313,9 @@ discard the gesture. It fires only when:
 - no text selection exists when it ends.
 
 A left swipe (finger moving right-to-left) is **›**; a right swipe is **‹** —
-SillyTavern's mapping. `touch-action: pan-y` on the swipe target keeps vertical
-scrolling native. The constants are structural (a thumb's travel, a scroll's
+SillyTavern's mapping. `touch-action: pan-y pinch-zoom` on the swipe target keeps vertical
+scrolling native, and pinch-zoom stays available because the gesture already
+discards a second pointer. The constants are structural (a thumb's travel, a scroll's
 angle) and should be tuned on a device. The Android shell needs nothing: it is
 the same frontend in a WebView.
 

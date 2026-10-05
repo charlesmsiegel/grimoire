@@ -273,7 +273,7 @@ def test_swipe_route_404_for_a_deleted_response(client): ...  # DELETE .../respo
 **Files:**
 - Modify: `frontend/src/routes/CampaignView.tsx` (swipe target, `useResponseSwipe`, step/generate, `useHotkeys`, `transcriptReroll`)
 - Modify: `frontend/src/components/play/TranscriptPost.tsx` (ledger swipe rendering and gesture)
-- Modify: `frontend/src/index.css` (`.msg.swipe-target { touch-action: pan-y; }`)
+- Modify: `frontend/src/index.css` (`.msg.swipe-target { touch-action: pan-y pinch-zoom; }`)
 - Modify: `frontend/src/testkit/campaignMocks.tsx` (add `getResponseSwipe: vi.fn()` to the `api` list — `...actual` does not reach `api`, so without it every CampaignView suite calls `undefined(...)`)
 - Modify: `frontend/src/testkit/campaignHarness.tsx` (`installCampaignMocks` default: `getResponseSwipe` rejects, i.e. "no arrows")
 - Test: `frontend/src/routes/CampaignView.swipes.test.tsx` (new; header and mocks copied from `CampaignView.shortcuts.test.tsx`)
@@ -300,7 +300,7 @@ Behaviour (spec §6):
   - one complete variant and `can_reroll: false` → no arrows;
   - `arrowleft` steps; `arrowright` at the newest opens the reroll box and calls nothing, and does nothing at all when `can_reroll` is false; both listed in the `?` sheet; neither fires with the caret in the composer;
   - a trailing reply with no `response_id` (mocked scene) still shows the legacy arrows from `getAlternates`;
-  - `.msg.swipe-target` carries `touch-action: pan-y` (assert through `testkit/stylesheet.ts` — jsdom applies no CSS).
+  - `.msg.swipe-target` carries `touch-action: pan-y pinch-zoom` (assert through `testkit/stylesheet.ts` — jsdom applies no CSS).
 - [ ] **Step 2: Run, verify FAIL.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the new file plus `CampaignView.test.tsx CampaignView.shortcuts.test.tsx CampaignView.render.test.tsx components/review/SceneReview.test.tsx` and `npm run typecheck` — PASS.
