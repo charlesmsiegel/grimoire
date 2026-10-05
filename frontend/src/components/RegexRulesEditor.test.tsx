@@ -481,3 +481,18 @@ test("an imported rule with malformed notes still opens", async () => {
   expect(screen.getByRole("heading", { name: "Imported notes" })).toBeInTheDocument();
   expect(screen.getByText("/a/")).toBeInTheDocument();
 });
+
+test("a saved rule whose id the server re-minted is the one selected", async () => {
+  // The id the form sent collides with an inherited rule's, so the server
+  // stores the rule under a fresh one; the view must follow the stored rule.
+  serve({ rules: [], off: [] }, inherited());
+  vi.mocked(api.putRegex).mockImplementation(async (_s, sent) =>
+    bundle({ ...sent, rules: sent.rules.map((r) => ({ ...r, id: "r-fresh" })) }, inherited()));
+  render(<RegexRulesEditor scope={WORLD} />);
+  fireEvent.click(await screen.findByRole("button", { name: "+ New rule" }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Mine" } });
+  fireEvent.change(screen.getByLabelText("Pattern"), { target: { value: "a" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByRole("heading", { name: "Mine" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+});
