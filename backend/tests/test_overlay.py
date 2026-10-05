@@ -14,6 +14,8 @@ from grimoire.store import (
     failsoft,
     greetings,
     groupstate,
+    image_refs,
+    image_store,
     locks,
     overlay,
     pcs,
@@ -2036,3 +2038,111 @@ def test_read_character_carries_each_versions_shadowed_world_copies(monkeypatch,
     by_id = {v["id"]: v for v in detail["versions"]}
     assert [i["name"] for i in by_id["default"]["world_shadowed"]] == ["gallery_1"]
     assert by_id["dark"]["world_shadowed"] == []
+
+
+# ---- per-slot tree copies (image store, spec section 6 "B1") ----------------
+
+def _seraphine(monkeypatch, tmp_path):
+    """A world character with a campaign on its world; (wroot, cid, aid, the
+    world version folder, the campaign version folder)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    aid, _ = characters.create_character(wroot, "Seraphine")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    return (wroot, cid, aid, assets.version_dir(wroot, aid, "default"),
+            assets.version_dir(croot, aid, "default"))
+
+
+def _blob_files():
+    root = image_store.store_root() / "blobs"
+    return sorted(p for p in root.rglob("*") if p.is_file()) if root.exists() else []
+
+
+def test_demote_copy_respects_name_tombstone_for_refs(monkeypatch, tmp_path):
+    wroot, cid, aid, _wd, cd = _seraphine(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "gallery_2", PNG + b"g2", "png")
+    overlay.delete_image(cid, aid, "default", "gallery_2")
+    assert f"assets/characters/{aid}/default/gallery_2" in overlay.deleted(cid)
+
+    overlay.copy_record_dir_down(cid, "characters", aid)
+
+    assert image_refs.read(cd, "gallery_2") is None
+    assert "gallery_2" not in assets.names_in(cd)[0]
+    assert "gallery_2" not in {i["name"] for i in overlay.list_images(cid, aid, "default")}
+
+
+def test_demote_copy_keeps_campaign_legacy_art(monkeypatch, tmp_path):
+    wroot, cid, aid, _wd, cd = _seraphine(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "gallery_1", PNG + b"world", "png")
+    cd.mkdir(parents=True, exist_ok=True)
+    (cd / "gallery_1.png").write_bytes(PNG + b"mine")
+
+    overlay.copy_record_dir_down(cid, "characters", aid)
+
+    assert image_refs.read(cd, "gallery_1") is None
+    croot = overlay.image_root(cid, aid, "default", "gallery_1")
+    assert assets.image_path(croot, aid, "default", "gallery_1").read_bytes() == PNG + b"mine"
+
+
+def test_demote_copy_never_copies_journal(monkeypatch, tmp_path):
+    wroot, cid, aid, wd, cd = _seraphine(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG + b"a", "png")
+    assets.put_image(wroot, aid, "default", "gallery_1", PNG + b"g", "png")
+    image_refs.write_journal(wd, {"name": "gallery_1"})
+    # A promotion in flight on the world side: its locks are busy, so the
+    # read-side recovery leaves the journal where it is while the copy runs.
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with assets.sidecar_lock(wd, assets.DESCRIPTIONS_FILE):
+            held.set()
+            release.wait(10)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    held.wait(10)
+    try:
+        overlay.copy_record_dir_down(cid, "characters", aid)
+    finally:
+        release.set()
+        t.join(10)
+
+    assert image_refs.read_journal(wd) is not None          # still the world's
+    assert not (cd / image_refs.REFS_DIR / image_refs.JOURNAL).exists()
+    assert assets.names_in(cd)[0] == {"avatar", "gallery_1"}
+
+
+def test_demote_copy_fills_override_ref_keeping_focus(monkeypatch, tmp_path):
+    wroot, cid, aid, wd, cd = _seraphine(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG + b"a", "png")
+    world_id = image_refs.read(wd, "avatar").image
+    croot = campaigns.campaign_root(cid)
+    assets.write_focus(croot, aid, "default", 30)            # override on an inherited avatar
+    assert image_refs.read(cd, "avatar") == image_refs.Ref("avatar", None, 30)
+
+    overlay.copy_record_dir_down(cid, "characters", aid)
+
+    assert image_refs.read(cd, "avatar") == image_refs.Ref("avatar", world_id, 30)
+    assert assets.image_path(croot, aid, "default", "avatar").read_bytes() == PNG + b"a"
+    assert overlay.read_focus(cid, aid, "default") == 30
+
+
+def test_overlay_promote_links(monkeypatch, tmp_path):
+    wroot, cid, aid, wd, cd = _seraphine(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "gallery_1", PNG + b"g", "png")
+    world_id = image_refs.read(wd, "gallery_1").image
+    before = _blob_files()
+
+    def no_ingest(*args, **kwargs):
+        raise AssertionError("bytes were re-ingested")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(image_store, "ingest", no_ingest)
+        overlay.promote_image(cid, aid, "default", "gallery_1")
+
+    assert _blob_files() == before
+    assert image_refs.read(cd, "avatar").image == world_id
+    assert image_refs.read(wd, "gallery_1").image == world_id    # the world is untouched
+    assert {i["name"] for i in overlay.list_images(cid, aid, "default")} == {"avatar"}
