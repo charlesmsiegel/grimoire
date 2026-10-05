@@ -133,13 +133,16 @@ def _serving_url(wid: str, cid: str, vid: str, name: str) -> str:
     return f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}"
 
 
-def _store(root, cid, vid, got, base: str = "characters") -> str | None:
+def _store(root, cid, vid, got, base: str = "characters", *,
+           source_url: str | None = None) -> str | None:
     """Store downloaded bytes under a content-hash name; None if the store
-    rejects them (keeps localization best-effort even for an odd fetcher)."""
+    rejects them (keeps localization best-effort even for an odd fetcher).
+    `source_url` is the remote address they were fetched from -- never a
+    `data:` URI, which names no place."""
     raw, ext = got
     name = "embed-" + hashlib.sha256(raw).hexdigest()[:12]
     try:
-        assets.put_image(root, cid, vid, name, raw, ext, base=base)
+        assets.put_image(root, cid, vid, name, raw, ext, base=base, source_url=source_url)
     except Exception:  # noqa: BLE001 — e.g. unsupported ext from a caller's fetch
         return None
     return name
@@ -215,7 +218,7 @@ def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
                 else:
                     got_failed = False
                 if got is not None:
-                    name = _store(root, cid, vid, got)
+                    name = _store(root, cid, vid, got, source_url=ref.url)
                     if name is None:
                         failed += 1  # downloaded but the store rejected the bytes
                 elif not got_failed:
@@ -275,7 +278,7 @@ def localize_greeting(root, gid, wid, *, fetch=None, cap=10) -> dict:
                 if got is None:
                     skipped += 1  # download returned None (non-image / blocked host)
             if got is not None:
-                name = _store(root, gid, "default", got, base="greetings")
+                name = _store(root, gid, "default", got, base="greetings", source_url=ref.url)
                 if name is None:
                     failed += 1  # downloaded but the store rejected the bytes
         if name is not None:

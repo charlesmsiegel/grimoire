@@ -366,9 +366,17 @@ def _usable_avatar(avatar: tuple[bytes, str] | None) -> tuple[bytes, str] | None
     return (blob, ext) if blob and ext in _EXT_MIME else None
 
 
-def dumps(card: dict, fmt: str, avatar: tuple[bytes, str] | None = None) -> bytes:
+def dumps(card: dict, fmt: str, avatar: tuple[bytes, str] | None = None, *,
+          plane_png: bytes | None = None) -> bytes:
     """Serialize `card`, embedding `(bytes, ext)` as its avatar where the format
-    allows (see the module docstring). Pure: `card` is never mutated."""
+    allows (see the module docstring). Pure: `card` is never mutated.
+
+    `plane_png` is for a PNG export whose avatar is not itself a PNG: the caller
+    (which has a decoder; this module has none) hands over the avatar re-encoded
+    as a PNG, and that becomes the image plane in place of the placeholder. The
+    original avatar still travels in the card's assets exactly as without it, so
+    nothing is lost to the re-encode. Ignored by the other formats and whenever
+    the avatar is already a usable PNG."""
     card = to_v3(card)
     avatar = _usable_avatar(avatar)
     if fmt == "json":
@@ -382,6 +390,10 @@ def dumps(card: dict, fmt: str, avatar: tuple[bytes, str] | None = None) -> byte
             # decoder, and this module has none. Rather than lose the picture,
             # send it in the card and let the import prefer it over these pixels.
             card = _with_avatar_asset(card, _data_uri(*avatar), avatar[1])
+            if plane_png is not None:
+                # The caller decoded it for us: show the real picture in the
+                # file's own image plane too (a viewer that ignores the card).
+                pixels = _png_image_plane(plane_png)
         text = base64.b64encode(_canonical(card).encode("utf-8")).decode("latin-1")
         return _PNG_SIG + (pixels or _placeholder_png_pixels()) + _png_chunk(
             b"tEXt", b"ccv3\x00" + text.encode("latin-1")

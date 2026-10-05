@@ -1731,3 +1731,138 @@ def test_a_card_whose_extensions_are_not_an_object_still_reads(tmp_path):
     labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
     assert labels[vid] == "salvaged"
     assert [c["id"] for c in ch.list_characters(tmp_path)] == [cid]
+
+
+# ---- chub gallery: ingest everything first, replace only after -------------
+
+def _gallery_png(seed: int, size=(8, 6)) -> bytes:
+    import io
+
+    from PIL import Image
+    im = Image.new("RGB", size, (seed * 40 % 256, seed * 90 % 256, 20))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _gallery_setup(tmp_path, monkeypatch, paths, served):
+    from grimoire.store import chub
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: list(paths))
+
+    def fake_download(url):
+        got = served[url]
+        if isinstance(got, Exception):
+            raise got
+        return got
+
+    monkeypatch.setattr(fetch, "download_url", fake_download)
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    return cid, vid, {"id": 9, "hasGallery": True}
+
+
+def _gallery_ids(tmp_path, cid, vid):
+    from grimoire.store import assets
+    return {i["name"]: assets.image_id(tmp_path, cid, vid, i["name"])
+            for i in assets.list_images(tmp_path, cid, vid) if i["name"].startswith("gallery_")}
+
+
+def test_chub_gallery_failure_midway_keeps_old_gallery(tmp_path, monkeypatch):
+    from grimoire.store import assets
+    old = [_gallery_png(1), _gallery_png(2)]
+    cid, vid, node = _gallery_setup(
+        tmp_path, monkeypatch, ["u/1", "u/2"],
+        {"u/1": (old[0], "png"), "u/2": (old[1], "png")})
+    list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+    before = _gallery_ids(tmp_path, cid, vid)
+    assert len(before) == 2 and None not in before.values()
+
+    _gallery_setup(tmp_path, monkeypatch, ["n/1", "n/2"],
+                   {"n/1": (_gallery_png(7), "png"), "n/2": RuntimeError("network down")})
+    with pytest.raises(RuntimeError):
+        list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+
+    assert _gallery_ids(tmp_path, cid, vid) == before
+    for name in before:
+        assert assets.image_path(tmp_path, cid, vid, name) is not None
+
+
+def test_chub_gallery_replaces_after_download(tmp_path, monkeypatch):
+    cid, vid, node = _gallery_setup(
+        tmp_path, monkeypatch, ["u/1", "u/2", "u/3"],
+        {"u/1": (_gallery_png(1), "png"), "u/2": (_gallery_png(2), "png"),
+         "u/3": (_gallery_png(3), "png")})
+    events = list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+    assert events[0] == {"total": 3}
+    assert events[-1] == {"summary": {"attempted": 3, "stored": 3}}
+    assert set(_gallery_ids(tmp_path, cid, vid)) == {"gallery_0", "gallery_1", "gallery_2"}
+
+    # The gallery shrank: the slot past the new count goes, the rest re-point.
+    _gallery_setup(tmp_path, monkeypatch, ["n/1"], {"n/1": (_gallery_png(9), "png")})
+    list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+    got = _gallery_ids(tmp_path, cid, vid)
+    assert list(got) == ["gallery_0"] and got["gallery_0"] is not None
+
+
+def test_chub_replaced_slot_drops_description(tmp_path, monkeypatch):
+    from grimoire.store import assets, image_descriptions
+    cid, vid, node = _gallery_setup(
+        tmp_path, monkeypatch, ["u/1", "u/2"],
+        {"u/1": (_gallery_png(1), "png"), "u/2": (_gallery_png(2), "png")})
+    list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+    d = assets.version_dir(tmp_path, cid, vid)
+    assets.edit_sidecar(d, assets.DESCRIPTIONS_FILE,
+                        {"gallery_0": "kept: same picture", "gallery_1": "dropped: new picture"})
+
+    # slot 0 serves the same bytes again; slot 1 now serves different art
+    _gallery_setup(tmp_path, monkeypatch, ["u/1", "n/2"],
+                   {"u/1": (_gallery_png(1), "png"), "n/2": (_gallery_png(5), "png")})
+    list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+
+    descs = image_descriptions.read_all(tmp_path, cid, vid)
+    assert descs.get("gallery_0") == "kept: same picture"
+    assert "gallery_1" not in descs
+
+
+def test_chub_gallery_records_each_url_as_a_source(tmp_path, monkeypatch):
+    from grimoire.store import assets, image_store
+    cid, vid, node = _gallery_setup(
+        tmp_path, monkeypatch, ["https://g.example/1.png"],
+        {"https://g.example/1.png": (_gallery_png(1), "png")})
+    list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+    obj = image_store.read(assets.image_id(tmp_path, cid, vid, "gallery_0"))
+    assert obj.raw["sources"] == [{"url": "https://g.example/1.png"}]
+
+
+def test_import_card_url_avatar_records_source_url(tmp_path, monkeypatch):
+    from grimoire.store import assets, image_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    card = ch.blank_card("Mara")
+    card["data"]["assets"] = [{"type": "icon", "name": "main", "uri": "https://a.example/mara.png",
+                               "ext": "png"}]
+    monkeypatch.setattr(fetch, "download_url", lambda url: (_gallery_png(4), "png"))
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
+    obj = image_store.read(assets.image_id(tmp_path, cid, vid, assets.AVATAR))
+    assert obj.raw["sources"] == [{"url": "https://a.example/mara.png"}]
+
+
+def test_png_export_of_jpeg_avatar_embeds_real_pixels(tmp_path):
+    import io
+
+    from PIL import Image
+
+    from grimoire.store import assets, cards
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    buf = io.BytesIO()
+    Image.new("RGB", (24, 16), (200, 30, 30)).save(buf, "JPEG")
+    jpg = buf.getvalue()
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, jpg, "jpg")
+
+    blob, _name = ch.export_card(tmp_path, cid, vid, "png")
+
+    with Image.open(io.BytesIO(blob)) as im:
+        assert im.size == (24, 16)  # the avatar's pixels, not the 1x1 placeholder
+    assert not cards.is_placeholder_png(blob)
+    # the original still travels in the card, as ever
+    icon = cards.loads(blob, "png")["data"]["assets"][0]
+    assert icon["ext"] == "jpg"

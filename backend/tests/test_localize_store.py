@@ -296,3 +296,25 @@ def test_localize_greeting_respects_cap_and_dedups(tmp_path):
     assert calls == ["https://h/a.png"]
     assert summary == {"total": 3, "localized": 2, "skipped": 1,
                        "failed": 0, "capped": True}
+
+
+def test_localize_records_source_url(tmp_path, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from grimoire.store import characters, image_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid, vid = characters.create_character(tmp_path, "Seraphine")
+    card = characters.read_card(tmp_path, cid, vid)
+    card["data"]["description"] = "![](https://h.example/a.png)"
+    buf = io.BytesIO()
+    Image.new("RGB", (5, 5), (9, 9, 9)).save(buf, "PNG")
+
+    list(localize.localize_card(card, tmp_path, cid, vid, "realm",
+                                fetch=lambda url: (buf.getvalue(), "png")))
+
+    [name] = [i["name"] for i in assets.list_images(tmp_path, cid, vid)
+              if i["name"].startswith("embed-")]
+    obj = image_store.read(assets.image_id(tmp_path, cid, vid, name))
+    assert obj.raw["sources"] == [{"url": "https://h.example/a.png"}]
