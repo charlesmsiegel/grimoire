@@ -84,6 +84,7 @@ from . import (
     image_descriptions,
     image_drafts,
     image_library,
+    image_sanitize,
     image_subjects,
     journal,
     length_drift,
