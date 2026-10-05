@@ -86,8 +86,8 @@ run green.
 
 [`.claude/skills/`](.claude/skills/) holds task-specific procedures —
 launching an isolated instance for end-to-end verification (`verify`),
-authoring a mechanics module, ingesting a campaign log, populating world
-content in bulk, folding a freshly imported batch of cards into a World by
-hand. If one covers what you are doing, use it; it knows the ports, the
+authoring a mechanics module, building a World from a concept, ingesting a
+campaign log, populating world content in bulk, folding a freshly imported
+batch of cards into a World by hand. If one covers what you are doing, use it; it knows the ports, the
 mocks and the isolation rules that keep a verification run away from the
 user's real library.
