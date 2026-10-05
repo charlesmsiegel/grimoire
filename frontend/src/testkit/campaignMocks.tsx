@@ -125,6 +125,8 @@ export async function campaignApiMock() {
       getAuthorsNotes: vi.fn(), setCampaignAuthorsNote: vi.fn(),
       setCharacterAuthorsNote: vi.fn(), setSceneAuthorsNote: vi.fn(),
       getAuthorsNotesNext: vi.fn(),
+      // Quick replies: the composer's strip reads the effective set.
+      getEffectiveQuickReplies: vi.fn(), getQuickReplies: vi.fn(), setQuickReplies: vi.fn(),
       // The width a portrait asks for is part of the URL a test reads, so a
       // plate that fell back to the full-size original says so.
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string,

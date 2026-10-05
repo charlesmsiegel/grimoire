@@ -297,6 +297,7 @@ export function installCampaignMocks() {
   (api.getSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
   (api.askSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, asked: false });
   (api.dismissSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  (api.getEffectiveQuickReplies as any).mockResolvedValue({ replies: [] });
 }
 
 // The two paths the play view answers to, nested exactly as App.tsx nests them

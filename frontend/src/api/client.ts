@@ -68,6 +68,7 @@ import {
   type CalendarYear, type ChoreItems,
   type ShellPayload, type TodoPayload,
   type CampaignTrackerSetting, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
+  type QuickReply, type QuickReplyDraft, type QuickReplyEntry, type QuickReplyScope, type QuickReplySet,
   type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
   type RegexBundle, type RegexImportRow, type RegexLayer, type RegexRule, type RegexScope,
   type RegexStep, type RegexTestBody, type SceneRewrite,
@@ -1085,6 +1086,13 @@ export function invalidateConfigCache() {
 
 /** The `PCCreate` body, which both PC create routes take (#14). */
 type PCCreateBody = { name: string; tags?: string[]; version_name?: string; persona?: Persona };
+
+/** A quick-reply set's path: the world's, or the campaign's own layer. */
+function quickRepliesPath(scope: QuickReplyScope): string {
+  return scope.kind === "world"
+    ? `/api/worlds/${scope.wid}/quick-replies`
+    : `/api/campaigns/${scope.cid}/quick-replies`;
+}
 
 /** The tracker's three field-definition layers share one body and differ only in path. */
 function trackerFieldsPath(scope: TrackerScope): string {
@@ -3312,6 +3320,14 @@ export const api = {
     request<{ rows: RegexImportRow[] }>("POST", "/api/regex/import/preview", { data }),
   importRegex: (scope: RegexScope, rows: Omit<RegexRule, "id">[]) =>
     request<RegexBundle & { added: string[] }>("POST", "/api/regex/import", { scope, rows }),
+  getQuickReplies: (scope: QuickReplyScope) =>
+    request<QuickReplySet>("GET", quickRepliesPath(scope)),
+  /** Replaces the whole set; `expect` is the digest the caller read (409
+   *  `set_changed` when the stored set moved since). */
+  setQuickReplies: (scope: QuickReplyScope, replies: (QuickReplyEntry | QuickReplyDraft)[], expect: string) =>
+    request<QuickReplySet>("PUT", quickRepliesPath(scope), { replies, expect }),
+  getEffectiveQuickReplies: (cid: string) =>
+    request<{ replies: QuickReply[] }>("GET", `/api/campaigns/${cid}/quick-replies/effective`),
   getCampaignTracker: (cid: string) =>
     request<CampaignTrackerSetting>("GET", `/api/campaigns/${cid}/tracker`),
   setCampaignTracker: (cid: string, setting: TrackerSetting) =>

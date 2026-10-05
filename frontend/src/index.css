@@ -996,6 +996,21 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
      without something between them. */
   padding-right: 12px; margin-right: 4px; border-right: 1px solid var(--line);
 }
+/* Quick replies: one row between the composer's meta strip and the input bar.
+   It scrolls sideways rather than wrapping, so a long set on a phone costs one
+   row of height, not five. */
+.quick-replies {
+  display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto;
+  padding: 8px 26px 0;
+}
+.quick-reply {
+  flex: none; min-height: 34px; padding: 4px 12px; cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: 3px; background: transparent;
+  color: var(--ink); font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; white-space: nowrap;
+}
+.quick-reply:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.quick-reply:disabled { opacity: 0.4; cursor: default; }
 .composer-link {
   background: none; border: 0; cursor: pointer; color: var(--muted);
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; line-height: 22px;

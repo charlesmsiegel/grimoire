@@ -2726,3 +2726,26 @@ export type AuthorsNotesNext = {
   notes: { level: "campaign" | "scene" | "character"; depth: number; every: number;
            applies: boolean; ref?: string; name?: string }[];
 };
+
+
+/** A composer quick reply (store/quick_replies.py). The kind decides which of
+ *  the optional fields it carries: `send`/`direct` → `text` + `mode`; `roll` →
+ *  `notation` + `roll_label?`; `task` → `task`; `opener` → none. */
+export type QuickReplyKind = "send" | "direct" | "roll" | "task" | "opener";
+export type QuickReplyTask = "rolling_summary" | "scene_break" | "next_scene";
+export type QuickReplyMode = "send" | "insert";
+export type QuickReply = {
+  id: string; label: string; kind: QuickReplyKind;
+  text?: string; mode?: QuickReplyMode; notation?: string; roll_label?: string; task?: QuickReplyTask;
+};
+/** A campaign entry hiding the world reply with the same id. */
+export type QuickReplyHide = { id: string; hidden: true };
+export type QuickReplyEntry = QuickReply | QuickReplyHide;
+/** An entry not saved yet: the server mints its id. */
+export type QuickReplyDraft = Omit<QuickReply, "id"> & { id?: string };
+/** A stored set. `digest` goes back as `expect` on the next PUT; a campaign
+ *  set also carries the world replies it layers on as `inherited`. */
+export type QuickReplySet = {
+  version: 1; replies: QuickReplyEntry[]; digest: string; inherited?: QuickReply[];
+};
+export type QuickReplyScope = { kind: "world"; wid: string } | { kind: "campaign"; cid: string };
