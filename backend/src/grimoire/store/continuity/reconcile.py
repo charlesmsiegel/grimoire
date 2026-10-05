@@ -6,7 +6,8 @@ worth asking about" and nothing more. A pair clearing every floor merges
 nothing, a thread past its staleness threshold is not closed, and a deadline
 behind the campaign's present resolves nothing: each becomes a *finding* in
 the candidate cache, and only a reader's apply writes the ledgers. `discover`
-itself writes nothing at all -- the persists write the cache, under the lock.
+itself writes nothing to the campaign -- the persists write the cache, under
+the lock; the only thing a sweep warms is the global vector cache.
 
 **What discovery finds** (Decisions 10 and 11):
 
@@ -35,6 +36,22 @@ itself writes nothing at all -- the persists write the cache, under the lock.
 - *Lifecycle.* A stale thread is nominated for closure, an overdue commitment
   (a passed due, or a reached before/by/on event) for resolution. Both are
   persisted deterministically, with or without a model.
+
+**Embeddings** (§9.4, Decision 12) are an enhancement with a bounded cost. One
+`vectors.load` over every scored text is the sweep's only read of the vector
+cache; it finds the uncached texts. An incremental sweep requires the changed
+refs' uncached texts, and the rest of `RECONCILE_WARM_LIMIT` goes to a window
+of the other uncached texts that `embed_space.warm_window` rotates on the
+campaign id plus the run's stamp -- the stamp is what makes the rotation real,
+since a seed of the campaign alone hands two runs the same offset and a text
+stuck there would be retried forever. `similarity.semantic` embeds in
+`embeddings.BATCH` chunks under one `embeddings.TIMEOUT` deadline, saving each
+chunk as it lands and forgetting off-width vectors. A provider failure is mode
+``failure`` and one counts-only error row; the lexical candidates stand. While
+a space is configured, a ref left without a vector (a failure, or outside this
+run's window) is scored lexically but not reported rescored: its basis entry
+stays, so its prior pairs are kept and it is scored semantically once its
+vector exists.
 
 **Model-only nominations** (Decision 9). Two kinds of nomination carry no
 deterministic signal worth showing on its own: a *temporal pair* (a commitment
@@ -68,7 +85,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, Literal, TypeVar
 
 from ... import embeddings
-from .. import aging, calendars, chronicle, clock, fieldtext, paths
+from .. import aging, calendars, chronicle, clock, embed_space, errors, fieldtext, paths, vectors
 from . import candidates, canon, effective, pending, pressure, similarity
 
 #: Uncached texts one sweep may embed: four `embeddings.BATCH` round trips under
@@ -124,6 +141,9 @@ _DEADLINE_SOURCES = frozenset({"deadline", "linked_deadline"})
 _LIFECYCLE_OF = {"thread": "possible_thread_closure",
                  "commitment": "possible_commitment_resolution"}
 _NO_DEADLINE = {"state": "ok", "in_days": None, "friendly": ""}
+#: The error row's module and task. A counts-only row: no title, beat or text.
+_TASK = "continuity-reconcile"
+_SEMANTIC_UNAVAILABLE = "semantic matching unavailable — basic matching used"
 # The ledgers (`pending.Current.unreadable` prefixes) each source reads. A
 # source whose ledger could not be read is never reported checked: its
 # nominations are only what it could see, so they cannot retract anything.
@@ -294,21 +314,73 @@ def _pair_signals(signals: dict) -> dict:
             "via": signals["via"]}
 
 
+def _rescored(sweep: Sweep, finished: frozenset[str], by_ref: dict[str, similarity.Subject],
+              vecs: dict[str, list[float]], pools_whole: bool) -> frozenset[str]:
+    """The finished refs a persist may record as scored. None with a pool
+    missing; with a space configured, only those that had a vector (Decision
+    10), so a vectorless ref keeps its basis entry and is scored again once
+    its vector exists."""
+    if not pools_whole:
+        return frozenset()
+    if sweep.embedding == "off":
+        return finished
+    return frozenset(ref for ref in finished if by_ref[ref].text in vecs)
+
+
 def _pairs(sweep: Sweep, current: pending.Current, subjects: list[similarity.Subject],
-           basis: dict, pools_whole: bool) -> None:
-    """Score and keep the pairs. With a pool missing (`pools_whole` False) no
-    ref's every pair was scored -- none was paired against the records that
-    could not be read -- so nothing is reported rescored, and a persist keeps
-    the cached pairs rather than retract them on a partial view."""
-    order = _order(subjects, sweep.hashes, basis, sweep.full)
-    scored, finished, count, capped = _score_pairs(order, subjects, {}, RECONCILE_MAX_PAIRS)
-    sweep.rescored = finished if pools_whole else frozenset()
-    sweep.pairs_scored, sweep.pairs_capped = count, capped
+           order: list[str], vecs: dict[str, list[float]], pools_whole: bool) -> None:
+    """Score and keep the pairs, with a cosine where both texts have a vector.
+    With a pool missing (`pools_whole` False) no ref's every pair was scored --
+    none was paired against the records that could not be read -- so nothing
+    is reported rescored, and a persist keeps the cached pairs rather than
+    retract them on a partial view."""
+    scored, finished, count, capped = _score_pairs(order, subjects, vecs, RECONCILE_MAX_PAIRS)
     by_ref = {s.ref: s for s in subjects}
+    sweep.rescored = _rescored(sweep, finished, by_ref, vecs, pools_whole)
+    sweep.pairs_scored, sweep.pairs_capped = count, capped
     for a, b in sorted(_top_k(scored, by_ref, finished)):
         kind = "possible_duplicate" if by_ref[a].kind == by_ref[b].kind else "possible_relation"
         _nominate(sweep.discovered, current, kind, sorted((a, b)),
                   _pair_signals(scored[(a, b)]))
+
+
+# --------------------------------------------------------------- embeddings
+
+
+def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subject],
+              order: list[str]) -> similarity.Semantic:
+    """Vectors for the sweep (Decision 12): one probe of the cache, the changed
+    refs' uncached texts required (incremental only), and a rotating window of
+    the other uncached texts, all within `RECONCILE_WARM_LIMIT`."""
+    text_of = {s.ref: s.text for s in subjects}
+    texts = list(dict.fromkeys(text_of[ref] for ref in sorted(text_of)))
+    loaded = vectors.load(space["space"], texts)
+    uncached = [t for t in texts if t not in loaded]
+    required: list[str] = []
+    if not sweep.full:
+        changed = (text_of[ref] for ref in order if text_of[ref] not in loaded)
+        required = list(dict.fromkeys(changed))[:RECONCILE_WARM_LIMIT]
+    need = set(required)
+    warm = embed_space.warm_window([t for t in uncached if t not in need],
+                                   f"{cid}\0{sweep.stamp}",
+                                   RECONCILE_WARM_LIMIT - len(required))
+    return similarity.semantic(required, warm, deadline=time.monotonic() + embeddings.TIMEOUT,
+                               space=space, cached=texts, warm_limit=RECONCILE_WARM_LIMIT,
+                               loaded=loaded)
+
+
+def _embed(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subject],
+           order: list[str]) -> dict[str, list[float]]:
+    """Run `_semantic`, record its mode on `sweep`, and answer its vectors. A
+    failure (or anything unexpected) keeps basic matching and writes one
+    counts-only error row."""
+    failed = similarity.Semantic({}, "failure", error="unexpected")
+    sem = _soft(_semantic, failed, cid, sweep, space, subjects, order)
+    sweep.embedding, sweep.embedding_error = sem.mode, sem.error
+    if sem.mode == "failure":
+        errors.record(_TASK, sem.error or "network", _SEMANTIC_UNAVAILABLE,
+                      campaign=cid, task=_TASK)
+    return sem.vectors
 
 
 # ---------------------------------------------------------------- lifecycle
@@ -467,10 +539,11 @@ def _subjects(cid: str, current: pending.Current) -> tuple[list[similarity.Subje
 
 def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
              embed: bool = True) -> Sweep:
-    """One discovery pass over the campaign's ledgers. Read-only, and never
-    raises for an existing campaign. `touched` names the records a scene moved
-    (incremental sweeps only). `embed` False skips the embedding step, leaving
-    mode ``off``; this pass embeds nothing yet, so it is honoured trivially."""
+    """One discovery pass over the campaign's ledgers. Read-only on the
+    campaign (the only write is the global vector cache, through
+    `similarity.semantic`), and never raises for an existing campaign.
+    `touched` names the records a scene moved (incremental sweeps only).
+    `embed` False skips the embedding step, leaving mode ``off``."""
     sweep = Sweep(stamp, full)
     space = _soft(similarity.available, None)
     if space is not None:
@@ -486,7 +559,9 @@ def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
     subjects, pools_whole = _subjects(cid, current)
     sweep.hashes = {s.ref: _identity_hash(sweep.space, s.text) for s in subjects}
     sweep.text_hashes = {s.ref: _text_hash(s.text) for s in subjects}
-    _pairs(sweep, current, subjects, basis, pools_whole)
+    order = _order(subjects, sweep.hashes, basis, sweep.full)
+    vecs = _embed(cid, sweep, space, subjects, order) if embed and space is not None else {}
+    _pairs(sweep, current, subjects, order, vecs, pools_whole)
     now = _soft(clock.now, "", cid)
     found, moved, checked = _lifecycle(cid, current, _touched_refs(sweep, basis, touched), now)
     temporal, temporal_ok = _temporal(cid, current, now)

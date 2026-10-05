@@ -11,21 +11,29 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zlib
 
 import pytest
 
+from grimoire import embeddings
 from grimoire.store import (
     calendars,
     campaigns,
     clock,
     commitments,
+    config,
+    embed_space,
+    errors,
     events,
+    llm_connections,
     plot,
     scenes,
+    vectors,
     worlds,
 )
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import candidates, canon, doc, pending, reconcile, similarity
+from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC
 
@@ -652,6 +660,254 @@ def test_discovery_makes_no_store_write(cid):
     sweep = _sweep(cid, full=False, touched=[MAP])
     assert sweep.discovered
     assert snapshot() == before
+
+
+# --------------------------------------------------------------- embeddings
+#
+# One shared double, `llm_fakes.FakeEmbeddings`, installed over
+# `similarity._CLIENT`; embeddings are turned on as
+# `test_context_semantic.configure` does. The space is always asked of
+# `embed_space.resolve()`, since it carries the connection's `rev`.
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    double = FakeEmbeddings()
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    return double
+
+
+def _configure():
+    conn = llm_connections.create_connection("openai_compatible", "Vectors",
+                                             base_url="https://vectors.example/v1",
+                                             api_key="sk-x", model="", post_process="none")
+    config.write_config(embeddings_model="embed-1", embeddings_connection_id=conn)
+
+
+def _vector_space():
+    return embed_space.resolve()["space"]
+
+
+def _chores(cid, scene, n=10):
+    """`n` threads with distinct titles, refs ``thread:saltmarch-errand-<i>``."""
+    for i in range(n):
+        plot.set_movement(cid, f"saltmarch-errand-{i}", f"Saltmarch errand {i}", "open",
+                          f"Errand {i} began.", scene)
+    return {s.ref: s.text for s in similarity.pool(cid, "thread")}
+
+
+def _embedded(cid, *, full=True, stamp="00000000000000000010-a"):
+    return reconcile.discover(cid, stamp=stamp, full=full)
+
+
+def _sent(double):
+    return [text for call in double.calls for text in call]
+
+
+def _load_spy(monkeypatch):
+    calls = []
+    real = vectors.load
+
+    def spy(space, texts):
+        calls.append(list(texts))
+        return real(space, texts)
+
+    monkeypatch.setattr(vectors, "load", spy)
+    return calls
+
+
+def _window_spy(monkeypatch):
+    calls = []
+    real = embed_space.warm_window
+
+    def spy(uncached, seed, limit):
+        got = real(uncached, seed, limit)
+        calls.append({"uncached": list(uncached), "seed": seed, "limit": limit, "got": got})
+        return got
+
+    monkeypatch.setattr(embed_space, "warm_window", spy)
+    return calls
+
+
+def test_sweep_embeds_at_most_the_warm_limit(cid, s0, fake, monkeypatch):
+    _configure()
+    _chores(cid, s0)
+    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 4)
+    loads = _load_spy(monkeypatch)
+
+    sweep = _embedded(cid)
+    assert 0 < len(_sent(fake)) <= 4
+    assert len(loads) == 1
+    assert sweep.embedding == "configured"
+    assert (sweep.space, sweep.model) == (_vector_space(), "embed-1")
+
+    _embedded(cid, stamp="00000000000000000020-b")
+    assert len(loads) == 2                      # one read of the cache per sweep
+
+
+def test_incremental_changed_texts_are_required(cid, s0, fake, monkeypatch):
+    _configure()
+    texts = _chores(cid, s0)
+    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 2)
+    changed = "thread:saltmarch-errand-9"
+    first = _sweep(cid)                         # embed=False: nothing cached yet
+    _write_basis(cid, {**first.hashes, changed: "moved"}, space=first.space,
+                 texts=first.text_hashes)
+    uncached = [texts[ref] for ref in sorted(texts)]
+    stamp = next(s for s in (f"0000000000000000001{i}-run" for i in range(10))
+                 if texts[changed] not in embed_space.warm_window(
+                     uncached, f"{cid}\0{s}", reconcile.RECONCILE_WARM_LIMIT))
+
+    sweep = _embedded(cid, full=False, stamp=stamp)
+    assert texts[changed] in fake.calls[0]
+    assert len(_sent(fake)) <= 2
+    assert sweep.rescored == {changed}
+
+
+def test_warm_window_rotates_between_runs(cid, s0, monkeypatch):
+    _configure()
+    _chores(cid, s0)
+    # A zero vector is never cached (`vectors.save`), so both sweeps see the
+    # same ten uncached texts.
+    double = FakeEmbeddings(vector_for=lambda t: [0.0, 0.0])
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 4)
+    windows = _window_spy(monkeypatch)
+    one, two = "00000000000000000010-a", "00000000000000000020-b"
+    assert (zlib.crc32(f"{cid}\0{one}".encode()) % 10
+            != zlib.crc32(f"{cid}\0{two}".encode()) % 10)
+
+    _embedded(cid, stamp=one)
+    _embedded(cid, stamp=two)
+    assert len(windows) == 2
+    assert windows[0]["uncached"] == windows[1]["uncached"]
+    assert len(windows[0]["uncached"]) == 10
+    assert all(w["seed"].startswith(cid) for w in windows)
+    assert windows[0]["got"] != windows[1]["got"]
+    assert double.calls == [windows[0]["got"], windows[1]["got"]]
+
+
+def test_per_chunk_saves_survive_a_later_failure(cid, s0, monkeypatch):
+    _configure()
+    _chores(cid, s0)
+    monkeypatch.setattr(embeddings, "BATCH", 2)
+    double = FakeEmbeddings(error=embeddings.EmbeddingsError("network", "x"), fail_after=1)
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+
+    sweep = _embedded(cid)
+    assert sweep.embedding == "failure"
+    assert sweep.embedding_error == "network"
+    [saved, _failed] = double.calls
+    assert len(saved) == 2
+    assert set(vectors.load(_vector_space(), saved)) == set(saved)
+
+
+def test_embedding_failure_keeps_lexical_candidates(cid, s0, monkeypatch):
+    _configure()
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    assert _signals(cid, LEDGER, RECOVER)["tokens"] >= similarity.TOKEN_FLOOR
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(
+        error=embeddings.EmbeddingsError("network", "connection refused")))
+
+    sweep = _embedded(cid)
+    assert sweep.embedding == "failure"
+    assert canon.candidate_id("possible_duplicate", [LEDGER, RECOVER]) in sweep.discovered
+    rows = [r for r in errors.summary(campaign=cid)["rows"]
+            if r.get("task") == "continuity-reconcile"]
+    [row] = rows
+    assert row["kind"] == "network"
+    titles = (LEDGER_THREAD[1], LEDGER_THREAD[2], RECOVER_THE_LEDGER["title"],
+              RECOVER_THE_LEDGER["beat"])
+    for value in row.values():
+        assert not any(title in str(value) for title in titles)
+
+
+def test_off_width_vectors_are_forgotten(cid, s0, fake):
+    _configure()
+    texts = _chores(cid, s0, n=4)
+    wide = texts["thread:saltmarch-errand-0"]
+    vectors.save(_vector_space(), wide, [1.0, 0.0, 0.0])
+
+    sweep = _embedded(cid)
+    assert fake.calls and all(len(fake.vector_for(t)) == 2 for t in _sent(fake))
+    assert vectors.load(_vector_space(), [wide]) == {}
+    assert sweep.embedding == "configured"
+
+
+def test_cosine_admits_a_pair_with_no_shared_words(cid, s0, fake):
+    _configure()
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Stolen at dawn.", s0)
+    plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open", "Lost overboard.", s0)
+    chart = "thread:winifred-s-chart"
+    signals = _signals(cid, MAP, chart)
+    assert signals["tokens"] < similarity.WEAK_TOKEN
+    assert signals["chars"] < similarity.WEAK_CHAR
+    texts = _subjects(cid)
+    # One text cached, the other embedded by the sweep: both map to one vector.
+    vectors.save(_vector_space(), texts[MAP].text, [1.0, 0.0])
+
+    sweep = _embedded(cid)
+    assert fake.calls == [[texts[chart].text]]
+    record = sweep.discovered[canon.candidate_id("possible_duplicate", [MAP, chart])]
+    assert record["signals"]["via"] == "semantic"
+    assert isinstance(record["signals"]["cosine"], float)
+    assert record["signals"]["cosine"] == pytest.approx(1.0)
+
+
+def test_unconfigured_makes_no_embedding_call(cid, s0, fake):
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    sweep = _embedded(cid)
+    assert fake.calls == []
+    assert sweep.matching == "basic"
+    assert sweep.embedding == "off"
+    assert canon.candidate_id("possible_duplicate", [LEDGER, RECOVER]) in sweep.discovered
+
+
+def test_a_vectorless_ref_is_not_rescored(cid, s0, fake, monkeypatch):
+    """Decision 10: with a space configured, a ref left without a vector (past
+    the warm limit here) is scored lexically but not reported rescored, so its
+    basis entry stays and it is scored semantically once its vector exists."""
+    _configure()
+    texts = _chores(cid, s0, n=3)
+    sweep = _embedded(cid)
+    embedded = set(_sent(fake))
+    assert len(embedded) == 2                   # the window is a proper subset
+    assert sweep.pairs_scored == 3
+    assert sweep.rescored == {ref for ref, text in texts.items() if text in embedded}
+
+
+def test_an_embedding_failure_rescores_no_vectorless_ref(cid, s0, monkeypatch):
+    _configure()
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(
+        error=embeddings.EmbeddingsError("network", "down")))
+    sweep = _embedded(cid)
+    assert sweep.embedding == "failure"
+    assert sweep.pairs_scored == 1
+    assert sweep.rescored == frozenset()
+
+
+def test_an_unexpected_embedding_error_is_a_failure_not_a_raise(cid, s0, monkeypatch):
+    _configure()
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(error=RuntimeError("boom")))
+    sweep = _embedded(cid)
+    assert sweep.embedding == "failure"
+    assert canon.candidate_id("possible_duplicate", [LEDGER, RECOVER]) in sweep.discovered
+    assert [r["kind"] for r in errors.summary(campaign=cid)["rows"]
+            if r.get("task") == "continuity-reconcile"] == ["unexpected"]
+
+
+def test_without_a_space_every_finished_ref_is_rescored(cid, s0):
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    sweep = _embedded(cid)
+    assert sweep.embedding == "off"
+    assert sweep.rescored == {LEDGER, RECOVER}
 
 
 # ---------------------------------------------------------- pressure_by_ref

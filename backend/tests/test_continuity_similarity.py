@@ -424,6 +424,43 @@ def test_warm_limit_is_honoured(home, fake):
     assert sent == ["Mara's map", *warm[:similarity.IDENTITY_WARM_LIMIT]]
 
 
+def test_semantic_warm_limit_defaults_to_identity(home, monkeypatch):
+    _configure()
+    first = FakeEmbeddings()
+    monkeypatch.setattr(similarity, "_CLIENT", first)
+    warm = [f"neighbour {i}" for i in range(40)]
+    similarity.semantic([], warm, deadline=_soon())
+    assert sum(len(call) for call in first.calls) == similarity.IDENTITY_WARM_LIMIT
+
+    second = FakeEmbeddings()
+    monkeypatch.setattr(similarity, "_CLIENT", second)
+    wider = [f"Saltmarch errand {i}" for i in range(40)]
+    similarity.semantic([], wider, deadline=_soon(), warm_limit=40)
+    assert len(second.calls[0]) == 40
+
+
+def test_semantic_uses_a_given_loaded_map(home, fake, monkeypatch):
+    _configure()
+    calls = []
+    real = vectors.load
+
+    def spy(space, texts):
+        calls.append(list(texts))
+        return real(space, texts)
+
+    monkeypatch.setattr(vectors, "load", spy)
+    got = similarity.semantic(["Mara's map"], [], deadline=_soon(), loaded={})
+    assert calls == []
+    assert fake.calls == [["Mara's map"]]
+    assert set(got.vectors) == {"Mara's map"}
+
+    held = similarity.semantic(["Winifred's chart"], [], deadline=_soon(),
+                               loaded={"Winifred's chart": [0.0, 1.0]})
+    assert calls == []
+    assert fake.calls == [["Mara's map"]]                 # a given vector is not re-embedded
+    assert held.vectors["Winifred's chart"] == [0.0, 1.0]
+
+
 def test_width_mismatch_forgets_and_re_embeds_off_width_vectors(home, fake):
     _configure()
     n = "Winifred's chart"
