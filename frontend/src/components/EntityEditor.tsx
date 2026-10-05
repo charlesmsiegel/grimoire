@@ -1163,12 +1163,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // record, and the form's unsaved text would go with it. A blank NEW form has
   // no record to re-read, so it is not blocked.
   const adoptAllBlocked = mode === "edit" && editing !== null;
-  const activationChips: [string, string][] = ACTIVATION_FIELDS.flatMap((a) => {
+  // Each is [key, heading, chip]: the heading is the label the form's
+  // Activation disclosure uses, so the sidebar and the form say the same word.
+  const activationChips: [string, string, string][] = ACTIVATION_FIELDS.flatMap((a) => {
     const v = (fields[a.key] ?? "").trim();
     if (!v || a.widget === "refs") return [];
-    if (a.widget === "bool") return isKeepOn(v) ? [[a.key, a.label] as [string, string]] : [];
+    if (a.widget === "bool") return isKeepOn(v) ? [[a.key, a.label, "yes"] as [string, string, string]] : [];
     const unit = ACTIVATION_POSTS.has(a.key) ? (v === "1" ? " post" : " posts") : "";
-    return [[a.key, `${a.label}: ${v}${unit}`] as [string, string]];
+    return [[a.key, a.label, `${v}${unit}`] as [string, string, string]];
   });
 
   return (
@@ -1431,51 +1433,49 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                   </div>
                 </div>
               ))}
-              {(activationChips.length > 0 || parseRefs(fields.known_by).length > 0) && (
+              {/* One section per set activation field (spec 3), as the
+                  other metadata above is drawn. */}
+              {activationChips.map(([key, heading, text]) => (
+                <div key={key} className="side-section">
+                  <h4>{heading}</h4>
+                  <div className="chips">
+                    <span className="chip on">{text}</span>
+                  </div>
+                </div>
+              ))}
+              {parseRefs(fields.known_by).length > 0 && (
                 <div className="side-section">
-                  <h4>Activation</h4>
-                  {activationChips.length > 0 && (
-                    <div className="chips">
-                      {activationChips.map(([key, text]) => (
-                        <span key={key} className="chip on">{text}</span>
-                      ))}
-                    </div>
-                  )}
-                  {parseRefs(fields.known_by).length > 0 && (
-                    <>
-                      <div className="field-hint">Known by</div>
-                      <div className="chips">
-                        {parseRefs(fields.known_by).map((ref) => {
-                          const hit = resolveRef(KNOWN_BY_SPEC, ref);
-                          if (hit) {
-                            // A host that cannot open an actor gets a label, not
-                            // a button that does nothing when pressed.
-                            return onOpenOwner ? (
-                              <button key={ref} className="chip owner-chip"
-                                      onClick={() => onOpenOwner(ref)}>
-                                <Portrait src={hit.avatar ?? null} name={hit.label} />
-                                {hit.label}
-                              </button>
-                            ) : (
-                              <span key={ref} className="chip on">
-                                <Portrait src={hit.avatar ?? null} name={hit.label} />
-                                {hit.label}
-                              </span>
-                            );
-                          }
-                          // Gone only if the listing actually arrived; a failed
-                          // or pending one has no standing to say so.
-                          return actorsComplete ? (
-                            <span key={ref} className="chip missing" title={DANGLING_HINT}>
-                              missing: {ref}
-                            </span>
-                          ) : (
-                            <span key={ref} className="chip dangling" title={UNLOADED_HINT}>{ref}</span>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
+                  <h4>{KNOWN_BY_SPEC.label}</h4>
+                  <div className="chips">
+                    {parseRefs(fields.known_by).map((ref) => {
+                      const hit = resolveRef(KNOWN_BY_SPEC, ref);
+                      if (hit) {
+                        // A host that cannot open an actor gets a label, not
+                        // a button that does nothing when pressed.
+                        return onOpenOwner ? (
+                          <button key={ref} className="chip owner-chip"
+                                  onClick={() => onOpenOwner(ref)}>
+                            <Portrait src={hit.avatar ?? null} name={hit.label} />
+                            {hit.label}
+                          </button>
+                        ) : (
+                          <span key={ref} className="chip on">
+                            <Portrait src={hit.avatar ?? null} name={hit.label} />
+                            {hit.label}
+                          </span>
+                        );
+                      }
+                      // Gone only if the listing actually arrived; a failed
+                      // or pending one has no standing to say so.
+                      return actorsComplete ? (
+                        <span key={ref} className="chip missing" title={DANGLING_HINT}>
+                          missing: {ref}
+                        </span>
+                      ) : (
+                        <span key={ref} className="chip dangling" title={UNLOADED_HINT}>{ref}</span>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {sdPrompt && (

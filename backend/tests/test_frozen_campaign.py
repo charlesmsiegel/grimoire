@@ -327,6 +327,11 @@ def test_absorbing_a_frozen_scene_stages_the_movements_it_reports(frozen_client)
     ids = {e["id"] for e in body["edits"]}
     assert "plot:the-debt" in ids
     assert "commitment:salt-owed" in ids
+    # A suggested record of a kind other than lore stages as that kind (spec
+    # §9.1): the id carries it, and so does the target the review will create.
+    scale = next(e for e in body["edits"] if e["id"] == "new_lore:items/salt-scale")
+    assert scale["target"] == {"kind": "items", "id": ""}
+    assert scale["payload"]["kind"] == "items"
     # Absorb stages; it must not have written the movements yet.
     assert store.plot.get(CAMPAIGN, "the-debt")["status"] == "open"
 

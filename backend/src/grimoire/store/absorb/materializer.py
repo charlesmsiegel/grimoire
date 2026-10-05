@@ -64,6 +64,26 @@ _NEW_RECORD_NOUNS = {"locations": "location", "lore": "lore entry", "items": "it
                      "groups": "group", "creatures": "creature"}
 
 
+def record_taken(cid: str, kind: str, name: str) -> str | None:
+    """Why a new `kind` record named `name` would duplicate one the campaign
+    already has -- the same name-or-slug test staging dedupes on -- or None.
+
+    Asked again at apply, because staging asked it of the row as the model
+    wrote it: the reviewer can change a `new_lore` row's kind (and its name),
+    and an entry staged as lore may land as an item the campaign already has.
+    `create_entity` would then suffix the slug and make a quiet duplicate."""
+    name = name.strip()
+    noun = _NEW_RECORD_NOUNS.get(kind, kind)
+    noun = ("an " if noun[0] in "aeiou" else "a ") + noun
+    if name.lower() in {ent["name"].strip().lower() for ent in overlay.list_entities(cid, kind)}:
+        return f"this campaign already has {noun} named {name}"
+    try:
+        overlay.read_entity(cid, kind, slugify(name))
+    except entities.EntityNotFound:
+        return None
+    return f"this campaign already has {noun} with the id {slugify(name)}"
+
+
 def _char_name(cid: str, char_id: str) -> str:
     """Overlay-aware: a thin campaign's NPC is usually still inherited (never
     materialized croot-side), so the display name must resolve across the union."""

@@ -599,6 +599,11 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             p = e["payload"]
             # A client-edited payload is clamped like the model's word is.
             lore_kind = parse.new_lore_kind(p.get("kind"))
+            # In the kind it lands as, which the reviewer may have changed since
+            # staging deduped it -- reported, not suffixed into a duplicate.
+            taken = materializer.record_taken(cid, lore_kind, p["name"])
+            if taken:
+                return {"state": "failed", "id": eid, "kind": "conflict", "reason": taken}
             new_eid = overlay.create_entity(cid, lore_kind, p["name"], after, p.get("keys", ""))
             target = {"kind": lore_kind, "id": new_eid}
         else:
