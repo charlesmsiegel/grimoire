@@ -40,6 +40,51 @@ ROLL_SPEAKER = "⁣Roll"
 # the unlabelled narration it was before tagging — identical to the untagged
 # ones already sitting in every existing campaign.
 TRANSITION_SPEAKER = "⁣Scene"
+# A post HIDDEN FROM CONTEXT stays in the transcript, the play view and every
+# export, and reaches no prompt. The flag is one more key in the per-post
+# metadata comment, stored as the ISO time it was set (what a reroll compares
+# its frozen prompt's age against -- `responses.require_context_included`); an
+# included post has no key at all, never `false`. Every reader filters through
+# the helpers below, so "what counts as in context" is one rule, not twelve.
+#
+# Exports mark a hidden post with this line, and import strips it back into the
+# flag; it lives here so neither module has to import the other.
+EXCLUDED_MARKER = "*(not in context)*"
+
+
+def excludable(m: dict) -> bool:
+    """Whether a post may be hidden: player and model posts, never a synthetic
+    line (a roll is half of an immutable rolls.json fact, a transition is half
+    of the scene's location/time history, a note never reaches a story prompt)."""
+    return m.get("speaker") not in SYNTHETIC_SPEAKERS
+
+
+def is_excluded(m: dict) -> bool:
+    """Whether this post is hidden from context."""
+    return bool(m.get("excluded"))
+
+
+def without_excluded(messages: list[dict]) -> list[dict]:
+    """Drop hidden posts only -- for inputs that today still see director notes,
+    so their behaviour for notes does not change."""
+    return [m for m in messages if not is_excluded(m)]
+
+
+def in_context(messages: list[dict]) -> list[dict]:
+    """Drop hidden posts AND director notes -- for inputs that already drop notes."""
+    return [m for m in messages if not is_excluded(m) and not is_director_note(m)]
+
+
+def excluded_since(messages: list[dict], before_index: int) -> str | None:
+    """The latest exclusion stamp among hidden posts before `before_index`.
+
+    A hand-edited non-string truthy value stringifies (e.g. "True"), which
+    sorts after any ISO time -- so a comparison against it refuses, the safe
+    direction."""
+    stamps = [str(m["excluded"]) for m in messages[:before_index] if is_excluded(m)]
+    return max(stamps) if stamps else None
+
+
 # Speakers that mark a message as not-model-output. Both are excluded from
 # drift metrics and neither is ever consumed by reroll — a roll BLOCKS reroll
 # (its transcript line must stay in lockstep with rolls.json), a trailing
@@ -359,11 +404,12 @@ def _append_block(body: str, block: str) -> str:
 #: output-processing rules a connection owns apply only to its own replies, so
 #: the message says who wrote it. Absent on anything written before it existed.
 RESPONSE_METADATA = ("response_thinking", "response_part", "response_id", "response_status", "response_can_reroll",
-                     "context_changed", "post_id", "connection")
+                     "context_changed", "post_id", "connection", "excluded")
 
 
 def _message_block(m: dict) -> str:
-    metadata = {k: m[k] for k in RESPONSE_METADATA if k in m}
+    # `excluded` is written only while truthy: an included post carries no key.
+    metadata = {k: m[k] for k in RESPONSE_METADATA if k in m and (k != "excluded" or m[k])}
     content = m["content"]
     if metadata:
         content = "<!-- grimoire-response " + json.dumps(metadata) + " -->\n" + content
