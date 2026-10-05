@@ -199,9 +199,12 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
 
     `actor_ref` names an NPC's own call (spec §8.1): the candidates are then
     only what that actor `actor.knows`, so an entry it cannot know neither
-    activates, pulls by recursion, confers presence nor takes a recall slot --
-    while `present` stays the whole scene's, so the owner gate still reads the
-    room. None, or the narrator, filters nothing."""
+    activates, pulls by recursion, confers presence by activating nor takes a
+    recall slot. What is in the room stays the whole scene's: `present` is
+    the scene's, and structural presence still reads every entry, so an item
+    someone present holds is present -- and opens the gate on its public
+    lore -- whether or not this NPC knows of the item. None, or the
+    narrator, filters nothing."""
     entries = []
     names: dict[str, str] = {}
     for kind in ("lore", "locations", "items", "groups", "creatures"):
@@ -231,8 +234,10 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                             "controls": lore_fields.parse(e["meta"]),
                             "refs": {f: entity_schema.parse_refs(e["meta"].get(f))
                                      for f in _STRUCTURAL_FIELDS}})
-    if actor_ref not in (None, "grimoire"):
-        entries = actor_scope.known_entries(entries, actor_ref)
+    # On an NPC's call only what it knows is a candidate; the room is still
+    # the scene's, so structural presence reads every entry (§8.1).
+    candidates = (entries if actor_ref in (None, "grimoire")
+                  else actor_scope.known_entries(entries, actor_ref))
     # The only production caller that supplies a second stage, so the strategy
     # is chosen in one visible place and `activation.run` stays a pure function
     # of its arguments. The attribute is resolved off the module on every call,
@@ -244,12 +249,12 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
     # World info section until the packer dropped the whole thing, keyword
     # hits included -- so enabling recall could REMOVE lore, which is exactly
     # what this layer promises never to do.
-    result = activation.run(entries, posts, seed, present or {}, scan_depth=scan_depth,
+    result = activation.run(candidates, posts, seed, present or {}, scan_depth=scan_depth,
                             recursion_depth=recursion_depth,
                             current_location=current_location, pinned_refs=pinned_refs,
                             excluded_refs=excluded_refs,
                             recall=semantic.recall_scored,
-                            recall_text=recall_text)
+                            recall_text=recall_text, scene_entries=entries)
     return ([h.entry for h in result.keyword], [h.entry for h in result.recalled], result,
             names)
 

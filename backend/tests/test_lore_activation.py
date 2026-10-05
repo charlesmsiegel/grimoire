@@ -629,6 +629,29 @@ def test_hidden_entries_confer_no_presence(hidden):
     assert set(got.present) == {"characters:mara"}
 
 
+def test_scene_entries_confer_structural_presence_only():
+    # An NPC's call: the ledger is not a candidate (that NPC does not know of
+    # it), but Mara holds it, so it is in the room -- its public lore opens.
+    # Not being a candidate, it never activates, so it confers nothing by
+    # activating: the guild it names is not pulled or made present.
+    mara = {"characters:mara": {"type": "cast"}}
+    ledger = _e("items", "ledger", keys=["ledger"], body="the guild's ledger",
+                refs={"holder": ["characters:mara"]})
+    charm = _e("items", "charm", keys=["charm"])
+    guild = _e("groups", "guild", keys=["guild"])
+    known = [_e("lore", "ink", owners=["items:ledger"]),
+             _e("lore", "ward", owners=["items:charm"]), guild]
+    got = _run(known, ["the ledger and the charm"], present=mara, rec=1,
+               scene_entries=[ledger, charm, *known])
+    assert _refs(got.keyword) == ["lore:ink"]
+    assert got.present["items:ledger"] == {"type": "held_by", "via": "characters:mara"}
+    assert "items:charm" not in got.present and "groups:guild" not in got.present
+    # Hidden entries in the wider set still confer nothing.
+    hidden = _run(known, ["calm"], present=mara,
+                  scene_entries=[{**ledger, "secrecy": "gm-only"}, *known])
+    assert "items:ledger" not in hidden.present
+
+
 def test_negative_recursion_depth_reads_as_zero():
     entries = [_e("groups", "guild", keys=["guild"]),
                _e("lore", "vault", keys=["vault"], owners=["groups:guild"])]

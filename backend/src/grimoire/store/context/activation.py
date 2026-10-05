@@ -456,16 +456,17 @@ class _Bodies:
 
 class _Turn:
     """`run`'s working state: the hits and holds so far, the growing present
-    set, and each entry's window decision, made at most once."""
+    set, and each entry's window decision, made at most once. `scene` is what
+    structural presence re-closes over, which may be wider than `entries`."""
 
     def __init__(self, entries: list[dict], idx: KeyIndex, depth: int,
-                 present: dict[str, dict], visible: list[dict],
+                 present: dict[str, dict], scene: list[dict],
                  current_location: str | None) -> None:
         self.entries = entries
         self.idx = idx
         self.depth = depth
         self.present = present
-        self.visible = visible
+        self.scene = scene
         self.here = current_location
         self.bodies = _Bodies()
         self.hits: dict[int, Hit] = {}
@@ -496,7 +497,7 @@ class _Turn:
                 self.present[ref] = dict(_ACTIVATED)
                 grew = True
         if grew:
-            self.present = structural_presence(self.visible, self.present, self.here)
+            self.present = structural_presence(self.scene, self.present, self.here)
 
     def decide(self, pos: int, level: int, pullers: list[int]) -> bool:
         """Activate the entry at `level` if it may; True when it did."""
@@ -564,8 +565,15 @@ def run(entries: list[dict], posts: Sequence[tuple[int, str]], seed: str,
         current_location: str | None, pinned_refs: frozenset = frozenset(),
         excluded_refs: frozenset = frozenset(),
         recall: Callable[[list[dict], str], list[tuple[dict, float]]] | None = None,
-        recall_text: str = "") -> Result:
+        recall_text: str = "", scene_entries: list[dict] | None = None) -> Result:
     """One turn's world-info activation (§5.2), with every hit's reason.
+
+    `entries` are the candidates: what may activate, pull, become present by
+    activating or take a recall slot. `scene_entries`, when given, is the
+    wider set structural presence reads -- an NPC's call activates only what
+    that NPC knows, but what is in the room is the scene's (§8.1), so an item
+    held by someone present is present whether or not this NPC knows of it.
+    None reads `entries` for both.
 
     `keyword` is in input order whatever level an entry came from, so prompt
     bytes never depend on discovery order; `recalled` is in the order `recall`
@@ -574,13 +582,15 @@ def run(entries: list[dict], posts: Sequence[tuple[int, str]], seed: str,
     # gm-only and excluded records are not in the prompt by any path, so they
     # confer no presence either: they are left out of the structural fixed
     # point here, and never activate, so never become present by activating.
-    visible = [pos for pos, entry in enumerate(entries)
-               if entities.normalize_secrecy(entry.get("secrecy")) != entities.GM_ONLY
-               and _ref(entry) not in excluded_refs]
-    shown = [entries[pos] for pos in visible]
+    def shows(entry: dict) -> bool:
+        return (entities.normalize_secrecy(entry.get("secrecy")) != entities.GM_ONLY
+                and _ref(entry) not in excluded_refs)
+
+    visible = [pos for pos, entry in enumerate(entries) if shows(entry)]
+    scene = [e for e in (entries if scene_entries is None else scene_entries) if shows(e)]
     turn = _Turn(entries, KeyIndex(posts, seed), scan_depth,
-                 structural_presence(shown, base_present, current_location),
-                 shown, current_location)
+                 structural_presence(scene, base_present, current_location),
+                 scene, current_location)
     pending: list[int] = []
     for pos in visible:
         entry = entries[pos]
