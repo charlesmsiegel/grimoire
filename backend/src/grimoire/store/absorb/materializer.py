@@ -323,6 +323,17 @@ def _assign_section(rows: list, stored: dict, section: str,
             cur = stored.get(rid)
             meant = _text(cur.get("title")).strip() if isinstance(cur, dict) else ""
             staged.setdefault(rid, (meant or title).casefold())
+            if source is not None:
+                # The SOURCE id is reserved too, under its own stored title. A
+                # later id-less row titled like the source slugs onto it; the
+                # reservation is checked before the alias map, so the slug is
+                # taken, redirected to the canonical, and dropped as a second
+                # move of it. Unreserved, `_free` asks `_merge_honoured`, which
+                # refuses a settled canonical -- and the row stages `slug-N`, a
+                # new record duplicating the source this row already moved.
+                src = stored.get(source)
+                said = _text(src.get("title")).strip() if isinstance(src, dict) else ""
+                staged.setdefault(source, (said or title).casefold())
         elif any(c.isalnum() for c in title):
             # New record — needs a title with real content, and an id that does
             # not land on somebody else's record.

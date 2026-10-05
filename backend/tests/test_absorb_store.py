@@ -3380,3 +3380,35 @@ def test_explicit_source_id_with_closed_canonical_is_labelled_closed(monkeypatch
         {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "Mara found a clue."}]})
     assert row["target"]["id"] == "winifreds-chart"
     assert row["label"].endswith("→ merged into Winifred's chart (closed)")
+
+
+def test_explicit_source_reserves_its_own_slug_with_closed_canonical(monkeypatch, tmp_path):
+    """An explicit source id followed by an id-less row titled like the source
+    is ONE record named twice. The canonical being closed must not turn the
+    second row into a new `mara-s-map-2` the reviewer would approve beside the
+    reopened canonical: the source id is reserved under the source's title, so
+    the slug lands on it, follows it to the canonical, and is a second move."""
+    cid, sid = _alias_campaign(monkeypatch, tmp_path, canonical_status="closed")
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "First."},
+        {"id": "", "title": "Mara's map", "status": "open", "beat": "Second."}]})
+    assert [(e["id"], e["after"]) for e in staged] == [("plot:winifreds-chart", "First.")]
+
+
+def test_commitment_explicit_source_reserves_its_own_slug_with_resolved_canonical(
+        monkeypatch, tmp_path):
+    from grimoire.store import commitments
+    from grimoire.store.continuity import review
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", None,
+                             "Mara swore.", "s1")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "fulfilled", None,
+                             "Mara repaid the guild.", "s1")
+    review.create_alias(cid, "commitment:mara-s-oath", "commitment:the-debt",
+                        accept_status_change=True)
+    staged = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "mara-s-oath", "title": "", "kind": "", "status": "", "beat": "First."},
+        {"id": "", "title": "Mara's oath", "kind": "promise", "status": "open",
+         "beat": "Second."}]})
+    assert [(e["id"], e["after"]) for e in staged] == [("commitment:the-debt", "First.")]
