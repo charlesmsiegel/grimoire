@@ -265,6 +265,11 @@ def _new_raw(sha: str, ext: str, size: int, pid: image_hash.PixelIdentity) -> di
 def _index_get(sha: str) -> str | None:
     if not _index_root().is_dir():
         rebuild_index()
+    return _index_lookup(sha)
+
+
+def _index_lookup(sha: str) -> str | None:
+    """The index's entry for `sha`, unvalidated; never writes (no rebuild)."""
     try:
         got = _index_path(sha).read_text(encoding="utf-8").strip()
     except OSError:
@@ -330,6 +335,38 @@ def _ingest_hit(image_id: str, sha: str, data: bytes,
         return _finish(image_id, copy.deepcopy(obj.raw), False, source_url)
 
 
+def _prepared(data: bytes, ext: str, sanitize: bool) -> tuple[bytes, str, str]:
+    """`(bytes, ext, sha)` as the store would keep them: sniffed (falling back
+    to the caller's `ext`, validated) and sanitised where they sniff."""
+    sniffed = fetch.sniff_ext(data)
+    if sniffed is None:
+        ext = _norm_ext(ext)
+    else:
+        ext = sniffed
+        if sanitize:
+            data = image_sanitize.sanitize(data)
+    return data, ext, hashlib.sha256(data).hexdigest()
+
+
+def identify(data: bytes, ext: str) -> str:
+    """The image id ``ingest(data, ext)`` would return, with nothing written.
+
+    For a caller that only needs to COMPARE an upload with an image it already
+    holds (a collection member's guard): ingesting to learn the id would leave
+    a refused upload behind as an orphan object and blob. No blob, sidecar or
+    index entry is written and no mtime touched -- the blob index is consulted
+    only when it exists, and a hit is validated exactly as ingest validates it,
+    without restoring a missing blob.
+    """
+    data, _ext, sha = _prepared(data, ext, True)
+    hit = _index_lookup(sha)
+    if hit is not None:
+        obj = read(hit)
+        if obj is not None and obj.blob_sha256 == sha:
+            return hit
+    return image_hash.pixel_identity(data, sha).id
+
+
 def ingest(data: bytes, ext: str, *, source_url: str | None = None,
            sanitize: bool = True) -> ImageObject:
     """Store `data` and return its object -- the one way in (spec section 5).
@@ -338,14 +375,7 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None,
     stored verbatim under it with opaque identity. ``sanitize=False`` is for
     bundle import, whose blobs are already stored bytes.
     """
-    sniffed = fetch.sniff_ext(data)
-    if sniffed is None:
-        ext = _norm_ext(ext)
-    else:
-        ext = sniffed
-        if sanitize:
-            data = image_sanitize.sanitize(data)
-    sha = hashlib.sha256(data).hexdigest()
+    data, ext, sha = _prepared(data, ext, sanitize)
 
     hit = _index_get(sha)
     if hit is not None:

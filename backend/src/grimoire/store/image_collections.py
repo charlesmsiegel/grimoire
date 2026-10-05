@@ -108,7 +108,8 @@ def guard_write(wid: str, name: str, data: bytes | None = None) -> None:
     if data is not None:
         placed = _placed_image(wid, name)
         if placed is not None:
-            if image_store.ingest(data, fetch.sniff_ext(data) or "png").id == placed:
+            # Identified, not ingested: a refused upload must not be stored.
+            if image_store.identify(data, fetch.sniff_ext(data) or "png") == placed:
                 return
             raise ImageInCollectionError("image is a member of an image collection")
     path = assets.path_in(image_directory(wid), name, supported_only=True)
@@ -142,18 +143,21 @@ def put_member(wid: str, data: bytes) -> str:
     name = MEMBER_PREFIX + hashlib.sha256(data).hexdigest()
     with locks.image_collection_lock(wid):
         d = image_directory(wid)
-        obj = image_store.ingest(data, ext)
+        # Compared before anything is stored, so a refusal leaves no orphan
+        # object or blob behind. A member that matches is still ingested: that
+        # restores a blob gone missing and touches the object off GC.
         placed = _placed_image(wid, name)
         if placed is not None:
-            if placed != obj.id:
+            if placed != image_store.identify(data, ext):
                 raise CollectionInvalidError("stored collection member has changed")
+            image_store.ingest(data, ext)
             return name
         legacy = assets.path_in(d, name, supported_only=True)
         if legacy is not None:
             if legacy.read_bytes() != data:
                 raise CollectionInvalidError("stored collection member has changed")
         else:
-            assets.link_in(d, name, obj.id)
+            assets.link_in(d, name, image_store.ingest(data, ext).id)
     return name
 
 

@@ -217,3 +217,32 @@ def test_legacy_member_rules_unchanged(wid):
         collections.put_member(wid, data)
     with pytest.raises(collections.CollectionInvalidError):
         collections.publish(wid, uuid.uuid4().hex, [name])
+
+
+def _store_files():
+    root = image_store.store_root()
+    return sorted(p for p in root.rglob('*') if p.is_file())
+
+
+def test_a_refused_overwrite_stores_nothing(wid):
+    name = collections.put_member(wid, png())
+    collections.publish(wid, uuid.uuid4().hex, [name])
+    before = _store_files()
+    with pytest.raises(collections.ImageInCollectionError):
+        collections.guard_write(wid, name, png('blue'))
+    with pytest.raises(collections.ImageInCollectionError):
+        world_images.put_image(wid, name, png('green'), 'png')
+    assert _store_files() == before
+
+
+def test_put_member_refusal_stores_nothing(wid):
+    # A placement under the member's name that names other pixels, and bytes
+    # the store has never seen: refusing them must not leave them stored.
+    data = png()
+    name = collections.MEMBER_PREFIX + hashlib.sha256(data).hexdigest()
+    other = image_store.ingest(png('blue'), 'png').id
+    assets.link_in(collections.image_directory(wid), name, other)
+    before = _store_files()
+    with pytest.raises(collections.CollectionInvalidError):
+        collections.put_member(wid, data)
+    assert _store_files() == before

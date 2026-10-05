@@ -20,7 +20,8 @@ another:
   wherever alpha is exactly 0.
 - **Animated** (`grimoire-anim-v1`): a GIF, APNG or WebP of more than one frame,
   hashed one composited frame at a time (never all of them in memory) together
-  with each frame's duration and the loop count.
+  with each frame's duration and the total number of plays (0 for forever),
+  which is how a browser reads each container's own loop field.
 - **Opaque** (`grimoire-pixels-v1-opaque`): an input that cannot be reduced to
   canonical pixels without risking a merge of pictures that display differently
   (a many-to-one decode such as CMYK or 16-bit samples), or without unbounded
@@ -88,7 +89,6 @@ ORIENTS = frozenset({"JPEG", "MPO", "PNG"})
 #: bytes, before the first IDAT: Pillow 12 drops cICP, and reports the others
 #: only partly.
 _PNG_COLOUR_CHUNKS = frozenset({b"iCCP", b"gAMA", b"cHRM", b"sRGB", b"cICP"})
-_NO_LOOP = 0xFFFFFFFF
 _ALPHA_ON = [0] + [255] * 255
 
 
@@ -296,15 +296,33 @@ def _static(im: Image.Image, data: bytes) -> PixelIdentity:
     return PixelIdentity("px1-" + hasher.hexdigest(), "pixels", None, w, h, False)
 
 
+def _total_plays(fmt: str | None, loop: int | None) -> int:
+    """How many times a browser plays the animation through, 0 for forever.
+
+    Pillow's `loop` is each container's own field, and they count differently:
+    a GIF's NETSCAPE loop count is the repeats AFTER the first play (so N > 0
+    is N + 1 plays), and a GIF without that extension plays once; an APNG's
+    `num_plays` and a WebP's ANIM loop count are already the total. 0 is
+    forever in all three. Both of the latter fields are mandatory wherever the
+    file animates at all, so a missing one takes the value Pillow's encoders
+    write by default, 0."""
+    if fmt == "GIF":
+        if loop is None:
+            return 1
+        n = int(loop)
+        return 0 if n == 0 else n + 1
+    return 0 if loop is None else int(loop)
+
+
 def _animated(im: Image.Image, data: bytes, size: tuple[int, int], n: int) -> PixelIdentity:
     color = _colour(im, data)
-    loop = im.info.get("loop")
+    plays = _total_plays(im.format, im.info.get("loop"))
     w, h = size
     hasher = hashlib.sha256(
         b"grimoire-anim-v1\0"
         + _u32(w)
         + _u32(h)
-        + _u32(_NO_LOOP if loop is None else int(loop))
+        + _u32(plays)
         + _u32(n)
         + _u32(len(color))
         + color

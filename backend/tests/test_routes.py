@@ -127,9 +127,12 @@ def _set_scene_updated(cid, sid, value):
 
 
 def _sans_image_id(body: dict) -> dict:
-    """An upload's answer without its `image_id`, for the tests that pin the
-    rest of it: the identity is asserted on its own where it matters."""
-    return {k: v for k, v in body.items() if k != "image_id"}
+    """An upload's answer without its `image_id`, which must be there and be
+    an image id: every record image PUT pins one. The rest is returned for the
+    caller to pin."""
+    rest = dict(body)
+    assert store.image_hash.is_image_id(rest.pop("image_id", None)), body
+    return rest
 
 
 def _campaign(client, name="Run"):
@@ -1480,7 +1483,7 @@ def test_campaign_copy_image_from_greeting_inherited_greeting(client):
 
     copy_url = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/copy-from-greeting"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
-    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
     assert client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar").content == b"art"
 
 
@@ -1497,7 +1500,7 @@ def test_campaign_copy_image_from_greeting(client):
 
     copy_url = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/copy-from-greeting"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
-    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
     assert client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar").content == b"art"
 
 
@@ -2226,7 +2229,7 @@ def test_appearances_and_copy_from_greeting(client):
 
     copy_url = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/copy-from-greeting"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
-    assert r.status_code == 200 and _sans_image_id(r.json()) == {"name": "avatar", "ext": "png"}
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
     assert client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar").content == b"art"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "gallery"})
     assert r.json()["name"] == "gallery_1"
@@ -15542,6 +15545,22 @@ def test_library_and_cover_puts_return_image_id(client):
                     files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}).json()
     ids = {w["image_id"], c["image_id"], wc["image_id"], cc["image_id"]}
     assert len(ids) == 1 and image_hash.is_image_id(ids.pop())
+
+
+def test_library_puts_take_v_from_the_placement_they_report(client, monkeypatch):
+    """`v` and `image_id` describe one upload: both come from the placement
+    the PUT resolved, never from a second lookup that could see a later write."""
+    wid, cid = _campaign(client)
+    monkeypatch.setattr(store.world_images, "image_version", lambda *a: "later")
+    monkeypatch.setattr(store.campaign_images, "image_version", lambda *a: "later")
+    for url, d in ((f"/api/worlds/{wid}/images/coastline",
+                    lambda: store.world_images.images_dir(wid)),
+                   (f"/api/campaigns/{cid}/images/harbour",
+                    lambda: store.campaign_images.images_dir(cid))):
+        body = client.put(url, files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}).json()
+        placed = store.assets.resolve(d(), url.rsplit("/", 1)[1])
+        assert body["image_id"] == placed.image_id, url
+        assert body["v"] == placed.blob_sha256, url
 
 
 def test_listing_and_detail_carry_image_id(client):

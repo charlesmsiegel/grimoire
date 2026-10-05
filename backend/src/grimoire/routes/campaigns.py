@@ -914,12 +914,16 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
         code = 409 if "belongs to the world" in str(exc) else 400
         raise HTTPException(status_code=code, detail=str(exc))
     # `v` so the client can build the immutable `?v=` URL without a second round
-    # trip. It resolves and stats, and answers "" rather than raising if the
-    # file went between the two -- a write that landed must not report a 500.
+    # trip. Taken from the placement `image_id` comes from, so the two describe
+    # the same upload; only with no placement (a legacy file) does it resolve
+    # and stat, answering "" rather than raising if the file went between the
+    # two -- a write that landed must not report a 500.
     placed = store.assets.resolve(store.campaign_images.images_dir(cid), name)
+    if placed is not None:
+        return {"name": name, "ext": stored, "v": placed.blob_sha256,
+                "image_id": placed.image_id}
     return {"name": name, "ext": stored,
-            "v": store.campaign_images.image_version(cid, name),
-            "image_id": placed.image_id if placed is not None else None}
+            "v": store.campaign_images.image_version(cid, name), "image_id": None}
 
 
 @router.post("/campaigns/{cid}/images/{name}/restore")

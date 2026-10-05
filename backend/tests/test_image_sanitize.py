@@ -251,6 +251,44 @@ def test_jpeg_keeps_jfif_and_adobe_and_drops_trailing_data():
     assert _pixels(out) == _pixels(src)
 
 
+def _with_app0(raw: bytes, payload: bytes) -> bytes:
+    """`raw` with its leading APP0 replaced by one carrying `payload`."""
+    assert raw[2:4] == b"\xff\xe0"
+    (n,) = struct.unpack(">H", raw[4:6])
+    seg = b"\xff\xe0" + struct.pack(">H", len(payload) + 2) + payload
+    return raw[:2] + seg + raw[4 + n:]
+
+
+_JFIF_HEAD = b"JFIF\x00\x01\x02\x01\x00\x48\x00\x48"   # v1.02, dpi, 72x72
+
+
+def test_jpeg_jfif_thumbnail_dropped_header_kept():
+    thumb = b"THUMBNAILRGB"                             # 2x2 RGB: a picture of its own
+    src = _with_app0(_save(_img(), "JPEG"), _JFIF_HEAD + b"\x02\x02" + thumb)
+    app0 = [p for m, p in _jpeg_segments(src) if m == 0xE0]
+    assert len(app0[0]) == 14 + 12
+    out = sanitize(src)
+    assert out[2:4] == b"\xff\xe0"
+    assert struct.unpack(">H", out[4:6])[0] == 16       # the minimal JFIF segment
+    app0 = [p for m, p in _jpeg_segments(out) if m == 0xE0]
+    assert app0 == [_JFIF_HEAD + b"\x00\x00"]           # version, units, density kept
+    assert thumb not in out
+    assert _pixels(out) == _pixels(src)
+    assert _scan_data(out) == _scan_data(src)
+    assert sanitize(out) == out
+
+
+def test_jpeg_jfxx_thumbnail_extension_dropped():
+    src = _save(_img(), "JPEG")
+    jfxx = b"JFXX\x00\x13\x02\x02" + bytes(range(12))   # RGB thumbnail extension
+    src = src[:20] + b"\xff\xe0" + struct.pack(">H", len(jfxx) + 2) + jfxx + src[20:]
+    assert [p[:5] for m, p in _jpeg_segments(src) if m == 0xE0] == [b"JFIF\x00", b"JFXX\x00"]
+    out = sanitize(src)
+    assert [p[:5] for m, p in _jpeg_segments(out) if m == 0xE0] == [b"JFIF\x00"]
+    assert _pixels(out) == _pixels(src)
+    assert sanitize(out) == out
+
+
 # --- WebP --------------------------------------------------------------------
 
 def _riff_chunks(raw: bytes) -> list[tuple[bytes, bytes]]:
@@ -292,6 +330,46 @@ def test_webp_animation_kept():
     assert b.n_frames == a.n_frames == 2
     b.seek(1), a.seek(1)
     assert b.convert("RGBA").tobytes() == a.convert("RGBA").tobytes()
+
+
+def _riff(chunks: list[tuple[bytes, bytes]]) -> bytes:
+    body = b"WEBP" + b"".join(k + struct.pack("<I", len(p)) + p + b"\x00" * (len(p) & 1)
+                              for k, p in chunks)
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def test_webp_unknown_chunks_dropped():
+    icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    src = _save(_img(), "WEBP", lossless=True, icc_profile=icc)   # extended: VP8X
+    chunks = _riff_chunks(src)
+    assert chunks[0][0] == b"VP8X"
+    src = _riff([*chunks, (b"ABCD", b"Seraphine's note"), (b"abcd", b"odd")])
+    assert _pixels(src) == _pixels(_save(_img(), "WEBP", lossless=True, icc_profile=icc))
+    out = sanitize(src)
+    assert [k for k, _ in _riff_chunks(out)] == [k for k, _ in chunks]
+    assert b"Seraphine" not in out and b"odd" not in out
+    assert _pixels(out) == _pixels(src)
+    assert sanitize(out) == out
+
+
+def test_webp_unknown_chunk_inside_a_frame_dropped():
+    frames = [_img(), _img().transpose(Image.FLIP_TOP_BOTTOM)]
+    clean = _save(frames[0], "WEBP", save_all=True, append_images=frames[1:], lossless=True)
+    chunks = _riff_chunks(clean)
+    i = [k for k, _ in chunks].index(b"ANMF")
+    note = b"ABCD" + struct.pack("<I", 9) + b"Seraphine\x00"     # odd size: padded
+    chunks[i] = (b"ANMF", chunks[i][1] + note)
+    src = _riff(chunks)
+    a = Image.open(io.BytesIO(src))
+    assert a.n_frames == 2
+    out = sanitize(src)
+    assert b"Seraphine" not in out and b"ABCD" not in out
+    assert out == clean
+    b = Image.open(io.BytesIO(out))
+    for n in range(2):
+        a.seek(n), b.seek(n)
+        assert b.convert("RGBA").tobytes() == a.convert("RGBA").tobytes()
+    assert sanitize(out) == out
 
 
 # --- GIF ---------------------------------------------------------------------

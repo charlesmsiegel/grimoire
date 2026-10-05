@@ -419,3 +419,60 @@ def test_image_locks_are_keyed_per_store(tmp_path, monkeypatch):
     assert locks.image_ingest_gc_lock() is not g1
     with locks.image_ingest_gc_lock(), locks.image_object_lock(image_id):
         pass
+
+
+# --- identify: ingest's answer, with nothing written ---------------------------
+
+
+def _snapshot() -> dict:
+    """Every path under the store's home -- the store root, the blob index and
+    anything else -- with its mtime, so a stray utime shows as well as a file."""
+    home = paths.home()
+    return {str(p.relative_to(home)): p.stat().st_mtime_ns for p in home.rglob("*")}
+
+
+def test_identify_matches_ingest_and_writes_nothing():
+    first = _png(_img(1))
+    stored = image_store.ingest(first, "png")
+    before = _snapshot()
+    time.sleep(0.01)                       # so a utime would move an mtime
+    # Index hit, sanitised duplicate (other metadata), new pixels, unsniffable.
+    info = PngInfo()
+    info.add_text("Comment", "Seraphine")
+    noted = _png(_img(1), pnginfo=info)
+    fresh = _png(_img(2))
+    opaque = b"not an image at all"
+    got = {name: image_store.identify(data, "png")
+           for name, data in (("first", first), ("noted", noted),
+                              ("fresh", fresh), ("opaque", opaque))}
+    assert _snapshot() == before
+    assert got["first"] == got["noted"] == stored.id
+    assert got["fresh"] == image_store.ingest(fresh, "png").id
+    assert got["opaque"] == image_store.ingest(opaque, "png").id
+
+
+def test_identify_does_not_rebuild_a_missing_index():
+    stored = image_store.ingest(_png(_img(3)), "png")
+    shutil.rmtree(_index_dir())
+    before = _snapshot()
+    assert image_store.identify(_png(_img(3)), "png") == stored.id
+    assert _snapshot() == before
+    assert not _index_dir().exists()
+
+
+def test_identify_hashes_through_the_module_attribute(monkeypatch):
+    calls = []
+    real = image_hash.pixel_identity
+
+    def spy(data, sha):
+        calls.append(sha)
+        return real(data, sha)
+
+    monkeypatch.setattr(image_hash, "pixel_identity", spy)
+    image_store.identify(_png(_img(4)), "png")
+    assert calls
+
+
+def test_identify_rejects_an_unsupported_ext_for_unsniffable_bytes():
+    with pytest.raises(ValueError):
+        image_store.identify(b"plain text", "bmp")

@@ -242,14 +242,20 @@ of identity. Sanitization never drops colour chunks, so this is stable.
 `n_frames > 1`. They are hashed in their own domain, one frame at a time:
 
 ```
-SHA256("grimoire-anim-v1\0" ‖ u32be(w) ‖ u32be(h) ‖ u32be(loop) ‖ u32be(n)
+SHA256("grimoire-anim-v1\0" ‖ u32be(w) ‖ u32be(h) ‖ u32be(total_plays) ‖ u32be(n)
        ‖ u32be(len(color)) ‖ color ‖ for each frame: u32be(duration_ms) ‖ rgba_bytes)
 ```
 
 - Each frame is the fully composited canvas after `seek(i)`, converted to RGBA
   and alpha-normalized as above.
-- A missing `loop` is encoded as `0xFFFFFFFF`, which is distinct from `0`
-  (infinite).
+- `total_plays` is how many times a browser plays the animation through, with
+  `0` for forever. Each container's own loop field is normalised to it,
+  because they count differently: a GIF NETSCAPE `loop=N` with N > 0 is N
+  repeats after the first play (N + 1 plays), `loop=0` is forever, and a GIF
+  with no loop extension plays once; an APNG `num_plays` and a WebP ANIM loop
+  count are already the total (0 forever), and a missing one -- both fields are
+  mandatory wherever the file animates -- reads as `0`. So the same frames
+  playing the same number of times share an id across the three formats.
 
 **Opaque identity.** Some inputs cannot be canonicalized without risking a
 merge of pictures that display differently, or without unbounded memory:
