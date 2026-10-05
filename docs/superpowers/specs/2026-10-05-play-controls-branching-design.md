@@ -273,3 +273,9 @@ Spec → planning gate: independent adversarial review (stand-in for
     `locks.DOMAIN_MODULES` and binds submodules per the import guard; the
     tracker prune uses `store.tracker.walk.prune`; new scene-row keys are
     emitted only when present so the frozen-campaign snapshot does not move.
+
+**Plan-gate amendments (binding):** a scene's group is `branch_group or
+identity`, so the source gains no key and is never written (replaces the
+"written onto the source too" wording); roll lines from checks match by label
+plus the formatted result segment (the notation head is not in a check line);
+a branch point inside a multi-part response snaps forward to its last part.

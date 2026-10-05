@@ -536,3 +536,48 @@ test("⑂ on an unabsorbed scene branches and opens the sibling", async () => {
 ### Task 10: Gate
 
 - [ ] **Step 1:** `make check PY=$(pwd)/backend/.venv/bin/python`. Fix what fails; if a ratchet reports a changed count, `make baseline` and commit the new `lint-baselines/*.json` with the fix that moved it. Nothing else in this task.
+
+## Plan-gate rulings (binding; override the tasks above where they differ)
+
+Plan → implementation gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`; owner-approved). The spec's gate record is
+amended to match items 1, 2 and 9.
+
+1. **Roll matching fallback.** A check line (`checks.format_check_roll`) drops
+   the `` `notation` → `` head, so the fallback matches when the entry's label is
+   in the line **and** `_DICE_HEAD_RE.sub("", dice.format_roll(result), count=1)`
+   is in the line. The matching lives in `store/branch.py` (rolls must not
+   import checks — that is a cycle); `rolls.copy_for_branch` takes the explicit
+   entry ids to copy and recomputes `r{len(entries)+1}` after each append.
+2. **The source is never written.** A scene's group is `branch_group or
+   identity`: the source keeps no new key; the sibling gets `branch_group` =
+   the source's group and `branch_of` = the source's identity. Membership of
+   group G = scenes whose `branch_group == G` or whose identity == G. The replay
+   test asserts the source file is byte-identical.
+3. **Failure paths bump the revision** inside the hold: a `begin` refusal after
+   branching (sibling deleted, appended roll entries remain) and a
+   `branch_scene` exception after any write.
+4. **`passage_characters.save_character`** (it can append a cast-appear line) uses
+   `scene_held_open` and gets a door-table row.
+5. **Door-table fixtures**: the replay-turn row begins a replay in `b` before
+   `sid` is absorbed; the scene-regenerate row branches at `through=1`; the
+   `/branch` `branch_closed` row is added in Task 5.
+6. **Fork-by-number test** gives the branch a title that sorts **before** the
+   source (`"Abel"` → `001--abel`) so it fails on today's string comparison.
+7. **`require_scene_open` runs before `_reserve`** in `reserve_turn` (a 409 after
+   reserving would strand a run).
+8. **Gate 13 deviation (recorded):** the sibling seats the actors present at
+   `through` (plus legacy members with no presence record); actors who had left
+   keep their clipped intervals but are not seated — `leave` already removes an
+   actor from `scenes`.
+9. **`through` inside a multi-part response snaps forward** to that response's
+   last part (parts are one reply).
+10. `clone_for_branch` skips an old response id with no ledger record.
+11. Test chat helpers pass `speaker_ref` (no selector call eats the scripted
+    reply).
+12. The cleanup on failure also drops the sibling's `sheet_baselines.json`
+    entry.
+13. A closed scene hides End scene / absorb; `ScenesView`'s "Open" filter and
+    "Open →" action exclude closed scenes.
+14. `closed_by` returns `None` when the campaign is missing (the existing
+    not-found mapping wins).
