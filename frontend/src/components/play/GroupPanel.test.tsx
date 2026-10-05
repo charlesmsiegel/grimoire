@@ -138,7 +138,44 @@ test("List mode lists the NPCs in order and Move Winifred up writes the order", 
 test("List order follows the stored list, with newcomers after it", () => {
   setup({ order: "list", order_list: ["characters:winifred"] });
   const up = screen.getAllByRole("button", { name: /^Move .* up$/ }).map((b) => b.getAttribute("aria-label") ?? b.textContent);
-  expect(up).toEqual(["Move Winifred up", "Move Mara up"]);
+  expect(up).toEqual(["Move Winifred up", "Move Mara up", "Move Grimoire up"]);
+});
+
+test("List mode offers a Grimoire row, last by default, to move but not tune", () => {
+  setup({ order: "list" });
+  const up = screen.getAllByRole("button", { name: /^Move .* up$/ }).map((b) => b.getAttribute("aria-label"));
+  expect(up).toEqual(["Move Mara up", "Move Winifred up", "Move Grimoire up"]);
+  expect(screen.getByRole("button", { name: "Move Grimoire down" })).toBeDisabled();
+  expect(screen.queryByLabelText("Grimoire talkativeness")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Grimoire sits out")).not.toBeInTheDocument();
+});
+
+test.each(["directed", "manual", "natural"] as const)("no Grimoire row in %s", (order) => {
+  setup({ order });
+  expect(screen.queryByText("Grimoire")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Grimoire/ })).not.toBeInTheDocument();
+});
+
+test("moving Grimoire up writes it into the order at that slot", async () => {
+  setup({ order: "list" });
+  fireEvent.click(screen.getByRole("button", { name: "Move Grimoire up" }));
+  await waitFor(() => expect(setSceneGroup).toHaveBeenCalledOnce());
+  expect(setSceneGroup.mock.calls[0][2].order_list)
+    .toEqual(["characters:mara", "grimoire", "characters:winifred"]);
+});
+
+test("moving a character leaves an unplaced Grimoire out of the stored order", async () => {
+  setup({ order: "list" });
+  fireEvent.click(screen.getByRole("button", { name: "Move Winifred up" }));
+  await waitFor(() => expect(setSceneGroup).toHaveBeenCalledOnce());
+  expect(setSceneGroup.mock.calls[0][2].order_list)
+    .toEqual(["characters:winifred", "characters:mara"]);
+});
+
+test("a stored Grimoire keeps its slot", () => {
+  setup({ order: "list", order_list: ["grimoire", "characters:winifred"] });
+  const up = screen.getAllByRole("button", { name: /^Move .* up$/ }).map((b) => b.getAttribute("aria-label"));
+  expect(up).toEqual(["Move Grimoire up", "Move Winifred up", "Move Mara up"]);
 });
 
 test("the list controls are absent outside List mode", () => {

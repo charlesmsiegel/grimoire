@@ -17,12 +17,20 @@ const ORDERS: { value: Order; label: string }[] = [
 const effectiveTalkativeness = (s: GroupSettings, ref: string) =>
   s.talkativeness[ref] ?? (s.order === "natural" ? 50 : 100);
 
+/** The narrator's ref. List mode can place it in the order like a character;
+ *  it never sits out and has no talkativeness. */
+const GRIMOIRE = "grimoire";
+
 /** The order the list shows: the stored list first (for those still present),
- *  then anyone not yet in it, in cast order. */
+ *  then anyone not yet in it, in cast order. In List mode Grimoire is a row
+ *  too, last until the player places it: unplaced, the planner only falls back
+ *  to it when nobody else can speak. */
 function displayedRefs(s: GroupSettings, npcRefs: string[]): string[] {
-  const present = new Set(npcRefs);
+  const listed = s.order === "list";
+  const present = new Set(listed ? [...npcRefs, GRIMOIRE] : npcRefs);
   const known = s.order_list.filter((r, i) => present.has(r) && s.order_list.indexOf(r) === i);
-  return [...known, ...npcRefs.filter((r) => !known.includes(r))];
+  const tail = listed && !known.includes(GRIMOIRE) ? [GRIMOIRE] : [];
+  return [...known, ...npcRefs.filter((r) => !known.includes(r)), ...tail];
 }
 
 /** Write a new order for the DISPLAYED refs into the stored list without
@@ -114,7 +122,11 @@ export default function GroupPanel(
     next.splice(at, 1);
     next.splice(to, 0, ref);
     const current = latest.current;
-    commit({ ...current, order_list: mergeOrder(current.order_list, next) });
+    // An unplaced Grimoire still at the end was not moved: writing it now
+    // would turn the planner's fallback into a fixed last slot.
+    const placed = current.order_list.includes(GRIMOIRE) || next[next.length - 1] !== GRIMOIRE;
+    const written = placed ? next : next.filter((r) => r !== GRIMOIRE);
+    commit({ ...current, order_list: mergeOrder(current.order_list, written) });
   }
 
   return (
@@ -143,23 +155,27 @@ export default function GroupPanel(
       )}
       <ul className="group-panel-rows">
         {refs.map((ref) => {
-          const a = byRef.get(ref);
-          if (!a) return null;
+          const narrator = ref === GRIMOIRE;
+          const name = narrator ? "Grimoire" : byRef.get(ref)?.name;
+          if (!name) return null;
           return (
             <li key={ref} className="group-panel-row">
-              <span className="group-panel-name">{a.name}</span>
+              <span className="group-panel-name">{name}</span>
               {view.order === "list" && (
                 <span className="group-panel-moves">
-                  <button type="button" aria-label={`Move ${a.name} up`}
+                  <button type="button" aria-label={`Move ${name} up`}
                     disabled={refs.indexOf(ref) === 0} onClick={() => move(ref, -1)}>↑</button>
-                  <button type="button" aria-label={`Move ${a.name} down`}
+                  <button type="button" aria-label={`Move ${name} down`}
                     disabled={refs.indexOf(ref) === refs.length - 1} onClick={() => move(ref, 1)}>↓</button>
                 </span>
               )}
-              {showSlider && (
+              {narrator && !view.order_list.includes(GRIMOIRE) && (
+                <span className="composer-meta-hint">only when nobody else can</span>
+              )}
+              {showSlider && !narrator && (
                 <label className="group-panel-slider">
                   <input type="range" min={0} max={100} step={5}
-                    aria-label={`${a.name} talkativeness`}
+                    aria-label={`${name} talkativeness`}
                     value={effectiveTalkativeness(view, ref)}
                     onChange={(e) => {
                       const current = latest.current;
@@ -169,8 +185,8 @@ export default function GroupPanel(
                   <span className="composer-meta-hint">{effectiveTalkativeness(view, ref)}</span>
                 </label>
               )}
-              <label className="group-panel-sit">
-                <input type="checkbox" aria-label={`${a.name} sits out`}
+              {!narrator && <label className="group-panel-sit">
+                <input type="checkbox" aria-label={`${name} sits out`}
                   checked={view.sitting_out.includes(ref)}
                   onChange={(e) => {
                     const current = latest.current;
@@ -178,7 +194,7 @@ export default function GroupPanel(
                     commit({ ...current, sitting_out: e.target.checked ? [...rest, ref] : rest });
                   }} />
                 <span className="composer-meta-hint">sits out</span>
-              </label>
+              </label>}
             </li>
           );
         })}
