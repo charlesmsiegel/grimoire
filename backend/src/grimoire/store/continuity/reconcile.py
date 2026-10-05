@@ -83,6 +83,14 @@ a word outside the candidate's vocabulary, a direction the link rules refuse,
 or a closure without a reason and a known evidence scene is ``uncertain``, and
 a reply with no decodable object is None -- a failed run, not "no proposals".
 
+**Two persists** (§11.1 steps 2 and 4, Decisions 7 and 8) share one campaign
+lock hold. Persist 1 writes what the sweep found plus every cached record it
+did not ask about again; persist 2 sets the model's proposals. Each re-judges
+every record against continuity.json as it stands under that hold, so a
+dismissal, merge or link that landed after discovery is never undone, and each
+is fenced on the run's generation, so a newer run's cache is never overwritten.
+One that would leave the cache as it was writes nothing and moves no token.
+
 **Soft all the way down.** Pools, aging, the clock and pressure can each run
 user calendar-plugin code or read a garbled ledger, so each is read through
 `_soft`; a source that fell back, or whose ledger or chronicle could not be
@@ -112,12 +120,15 @@ from .. import (
     embed_space,
     errors,
     fieldtext,
+    locks,
     paths,
     relationships,
+    revision,
     scene_ids,
     vectors,
 )
 from ..absorb import parse as absorb_parse
+from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
 from . import candidates, canon, effective, involvement, pending, pressure, similarity
 
@@ -395,8 +406,10 @@ def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Sub
         required = list(dict.fromkeys(changed))[:RECONCILE_WARM_LIMIT]
     need = set(required)
     seed = f"{cid}\0{sweep.stamp}"
-    warm = embed_space.warm_window([t for t in uncached if t not in need], seed,
-                                   RECONCILE_WARM_LIMIT - len(required))
+    room = max(RECONCILE_WARM_LIMIT - len(required), 0)
+    # Sliced as well: `warm_window` hands back a lone text whatever its limit,
+    # which past a full `required` would embed one text over the bound.
+    warm = embed_space.warm_window([t for t in uncached if t not in need], seed, room)[:room]
     return similarity.semantic(required, warm, deadline=time.monotonic() + embeddings.TIMEOUT,
                                space=space, cached=texts, warm_limit=RECONCILE_WARM_LIMIT,
                                loaded=loaded, rotate=seed)
@@ -603,6 +616,201 @@ def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
     sweep.lifecycle_checked = {**checked, "temporal": temporal_ok}
     sweep.model_only = _live_only(current, {**temporal, **moved})
     return sweep
+
+
+# ----------------------------------------------------------------- persists
+#
+# §11.1 steps 2 and 4 (Decisions 4, 7 and 8). Both run the same hold
+# (`_commit`); they differ only in what they build from the cache as it
+# stands under that hold.
+
+#: The shape `generation` writes: twenty digits, a dash, the run id.
+_GENERATION = re.compile(r"\A\d{20}-")
+#: The verdicts a persist keeps (Decision 2): a finding a ledger it cannot
+#: read says nothing about is never thrown away.
+_KEPT = frozenset({"live", "settled", "unknown"})
+_RETRACTABLE = ("stale", "overdue")
+
+Build = Callable[[dict, pending.Current], tuple[dict, dict]]
+
+
+def _superseded(stamp: str, stored: str) -> bool:
+    """Decision 4: a run that started after this one already wrote the cache.
+    A stored generation from this machine's future fences nothing -- another
+    device whose clock runs ahead (the store may sit in a synced folder) would
+    otherwise freeze every local sweep until the clock caught up -- and a
+    missing or unparseable one is older than everything."""
+    if not _GENERATION.match(stored):
+        return False
+    return stamp < stored <= f"{time.time_ns():020d}~"
+
+
+def _rank(scored: dict[str, str]) -> dict[str, int]:
+    """`basis.scored` as the order it gives `_order`: each ref's dense rank."""
+    ranks = {stamp: n for n, stamp in enumerate(sorted(set(scored.values())))}
+    return {ref: ranks[stamp] for ref, stamp in scored.items()}
+
+
+def _same_basis(a: dict, b: dict) -> bool:
+    """Equal, reading `scored` by the order it gives rather than by its stamps.
+    `_order` is its only reader, and an uncapped full sweep restamps every ref
+    without changing which was least recently scored -- so two identical
+    sweeps write once, while a capped one, which moves the refs it finished to
+    the back of the order, still writes."""
+    rest = [k for k in a if k != "scored"]
+    return ([a[k] for k in rest] == [b.get(k) for k in rest]
+            and _rank(a["scored"]) == _rank(b["scored"]))
+
+
+def _keep(current: pending.Current, records: dict[str, dict]) -> tuple[dict[str, dict], int]:
+    """The records a persist keeps, and how many of them are ``live``. A
+    record no normalization foresaw reads ``gone``, as `pending.findings`
+    reads it."""
+    kept: dict[str, dict] = {}
+    live = 0
+    for key, record in records.items():
+        verdict = _soft(pending.verdict, "gone", current, record)
+        if verdict in _KEPT:
+            kept[key] = record
+            live += verdict == "live"
+    return kept, live
+
+
+def _result(**changes: Any) -> dict:
+    return {"written": False, "superseded": False, "gone": False, "cancelled": False,
+            "continuity": "ok", "candidates": 0, **changes}
+
+
+def _commit(cid: str, sweep: Sweep, build: Build, stillborn: Callable[[], bool]) -> dict:
+    """Decision 7's hold, in order: a run that was stopped or forgotten writes
+    nothing, nor does a run whose campaign is gone (no directory is
+    recreated); a newer generation fences this one; continuity.json malformed
+    leaves the cache as it is, since every decision would read as absent;
+    then build, filter by verdict, and write and stamp only when the records
+    or the basis moved. An End Scene that found nothing new must not move the
+    write token, which a time-skip preview re-prices over."""
+    with locks.campaign_lock(cid):
+        if stillborn():
+            return _result(cancelled=True)
+        if not campaigns_paths.campaign_exists(cid):
+            return _result(gone=True)
+        stored = candidates.read(cid)
+        if _superseded(sweep.stamp, stored["generation"]):
+            return _result(superseded=True)
+        current = pending.Current.load(cid)
+        if current.continuity_malformed:
+            return _result(continuity="malformed")
+        built, basis = build(stored, current)
+        records, live = _keep(current, built)
+        if (records == stored["records"] and _same_basis(basis, stored["basis"])
+                and not candidates.malformed(cid)):
+            return _result(candidates=live)
+        candidates.write(cid, {"version": candidates.VERSION, "generated": paths.now_iso(),
+                               "generation": sweep.stamp, "basis": basis, "records": records})
+        revision.bump(cid)
+        return _result(written=True, candidates=live)
+
+
+def _retracted(key: str, record: dict, sweep: Sweep) -> bool:
+    """Decision 8: a cached record this sweep asked about again and did not
+    find. A pair is asked again when one of its refs was rescored; a stale or
+    overdue finding when its source was read whole; a temporal pair when the
+    calendar, commitments and events were. A touched re-check is never asked
+    again by a sweep, so it is never retracted by one."""
+    if key in sweep.discovered:
+        return False
+    if pending.is_temporal(record):
+        return sweep.lifecycle_checked["temporal"] and key not in sweep.temporal_ids
+    if record["kind"] in candidates.PAIR_KINDS:
+        return any(ref in sweep.rescored for ref in record["refs"])
+    reason = record["signals"].get("reason")
+    return reason in _RETRACTABLE and sweep.lifecycle_checked[reason]
+
+
+def _carried(record: dict, cached: dict | None) -> dict:
+    """A rediscovered record keeps its first `created`, and its proposal, when
+    the cached copy meant the same records."""
+    if cached is None or cached["fingerprint"] != record["fingerprint"]:
+        return record
+    return {**record, "proposal": cached["proposal"], "created": cached["created"]
+            or record["created"]}
+
+
+def _unvoided(record: dict, scenes: set[str] | None) -> dict:
+    """A proposal citing a scene that no longer exists (a rename, a first
+    datetime stamp, a repad) becomes None, so `select` asks it again (§5.6).
+    A declined model-only nomination keeps its answer: it is never applied,
+    and nulling it would surface it. An unreadable scene list voids nothing."""
+    if scenes is None or pending.settled(record) or pending.evidence_ok(record["proposal"],
+                                                                        scenes):
+        return record
+    return {**record, "proposal": None}
+
+
+def _found_basis(sweep: Sweep, current: pending.Current, old: dict) -> dict:
+    """The rescored refs' hashes and stamp; every other ref that still exists
+    keeps its old entries (absent when new), so a ref the cap or a missing
+    vector left unscored is still changed next time."""
+    def exists(ref: str) -> bool:
+        return ref in current.records or ref.partition(":")[0] in current.unreadable
+
+    fresh = {"identity_hashes": sweep.hashes, "text_hashes": sweep.text_hashes,
+             "scored": dict.fromkeys(sweep.hashes, sweep.stamp)}
+    basis: dict[str, Any] = {"embedding_space": sweep.space, "embedding_model": sweep.model}
+    for part, new in fresh.items():
+        entries = {ref: value for ref, value in old[part].items() if exists(ref)}
+        entries.update((ref, new[ref]) for ref in sweep.rescored if ref in new)
+        basis[part] = entries
+    return basis
+
+
+def persist_found(cid: str, sweep: Sweep, *,
+                  stillborn: Callable[[], bool] = lambda: False) -> dict:
+    """Persist 1 (§11.1 step 2): what the sweep discovered, plus every cached
+    record it did not retract, re-judged against continuity.json as it stands
+    under the lock -- so a dismissal, merge or link that landed after
+    discovery is honoured. Model-only nominations wait for persist 2.
+
+    Returns ``{written, superseded, gone, cancelled, continuity, candidates}``,
+    `candidates` counting the ``live`` records."""
+    def build(stored: dict, current: pending.Current) -> tuple[dict, dict]:
+        cached = stored["records"]
+        records = {key: rec for key, rec in cached.items() if not _retracted(key, rec, sweep)}
+        records.update((key, _carried(rec, cached.get(key)))
+                       for key, rec in sweep.discovered.items())
+        rows = _soft(scenes_read.list_scenes, None, cid)
+        scenes = None if rows is None else {row["id"] for row in rows}
+        records = {key: _unvoided(rec, scenes) for key, rec in records.items()}
+        return records, _found_basis(sweep, current, stored["basis"])
+
+    return _commit(cid, sweep, build, stillborn)
+
+
+def persist_proposals(cid: str, sweep: Sweep, proposals: dict[str, dict], *,
+                      stillborn: Callable[[], bool] = lambda: False) -> dict:
+    """Persist 2 (§11.1 step 4): the model's proposals, set only on records
+    still cached and still ``live`` -- one applied, dismissed or merged since
+    persist 1 is never brought back (§22). A model-only nomination lands here
+    or nowhere: with its proposal, and only while its fingerprint holds. One
+    the model declined is ``settled``: kept, shown to nobody (Decision 9).
+
+    Same hold and result as `persist_found`; the basis is left as it is."""
+    def build(stored: dict, current: pending.Current) -> tuple[dict, dict]:
+        records = dict(stored["records"])
+        for key, proposal in proposals.items():
+            cached = records.get(key)
+            if cached is not None:
+                if _soft(pending.verdict, "", current, cached) == "live":
+                    records[key] = {**cached, "proposal": proposal}
+                continue
+            nominated = sweep.model_only.get(key)
+            if nominated is not None and _soft(
+                    pending.fingerprint, None, current, nominated["kind"],
+                    nominated["refs"]) == nominated["fingerprint"]:
+                records[key] = {**nominated, "proposal": proposal}
+        return records, stored["basis"]
+
+    return _commit(cid, sweep, build, stillborn)
 
 
 # ------------------------------------------------------------------ pressure

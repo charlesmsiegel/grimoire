@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 import zlib
 
 import pytest
@@ -26,13 +28,23 @@ from grimoire.store import (
     errors,
     events,
     llm_connections,
+    locks,
     plot,
+    revision,
     scenes,
     vectors,
     worlds,
 )
 from grimoire.store.campaigns import paths as campaigns_paths
-from grimoire.store.continuity import candidates, canon, doc, pending, reconcile, similarity
+from grimoire.store.continuity import (
+    candidates,
+    canon,
+    doc,
+    pending,
+    reconcile,
+    review,
+    similarity,
+)
 from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC
@@ -1006,3 +1018,462 @@ def test_pressure_by_ref_is_soft(cid, s0, tmp_path):
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
     _broken_calendar(cid, tmp_path)
     assert isinstance(reconcile.pressure_by_ref(cid), dict)
+
+
+# ----------------------------------------------------------------- persists
+#
+# The two persists (§11.1 steps 2 and 4, Decisions 4, 7 and 8): what a sweep
+# found lands in the cache under the campaign lock, fenced on the run's
+# generation, re-checked against the decisions continuity.json holds NOW, and
+# never resurrecting a finding a reader settled between discovery and write.
+
+PAIR = canon.candidate_id("possible_duplicate", [LEDGER, RECOVER])
+CLOSE_MAP = canon.candidate_id("possible_thread_closure", [MAP])
+
+
+def _cache(cid):
+    return _root(cid) / "continuity_candidates.json"
+
+
+FIRST = _stamp(10)
+
+
+def _found(cid, scene, *, stamp=FIRST):
+    _ledger(cid, scene)
+    _recover(cid, scene)
+    sweep = _sweep(cid, stamp=stamp)
+    assert PAIR in sweep.discovered
+    return sweep
+
+
+def _proposal(decision="duplicate", *, frm="", to="", relation="", status="",
+              reason="The same business.", evidence=()):
+    return {"decision": decision, "from": frm, "to": to, "relation": relation,
+            "status": status, "reason": reason, "evidence_scenes": list(evidence)}
+
+
+def _records(cid):
+    return candidates.read(cid)["records"]
+
+
+def _verdicts(cid):
+    return {key: v for key, _rec, v in pending.findings(cid)}
+
+
+def test_persist_writes_discovered_and_bumps_the_token(cid, s0):
+    sweep = _found(cid, s0)
+    before = revision.current(cid)
+
+    out = reconcile.persist_found(cid, sweep)
+    assert out == {"written": True, "superseded": False, "gone": False, "cancelled": False,
+                   "continuity": "ok", "candidates": len(sweep.discovered)}
+    stored = candidates.read(cid)
+    assert stored["generation"] == sweep.stamp
+    assert stored["generated"]
+    assert set(stored["records"]) == set(sweep.discovered)
+    assert stored["records"][PAIR]["fingerprint"] == sweep.discovered[PAIR]["fingerprint"]
+    assert revision.current(cid) != before
+
+
+def test_a_persist_after_a_dismiss_does_not_resurrect(cid, s0):
+    sweep = _found(cid, s0)
+    _suppress(cid, "possible_duplicate", sweep.discovered[PAIR]["refs"])
+
+    reconcile.persist_found(cid, sweep)
+    assert PAIR not in _records(cid)
+
+
+def test_a_persist_after_a_merge_drops_the_pair(cid, s0):
+    sweep = _found(cid, s0)
+    review.create_alias(cid, RECOVER, LEDGER)
+    current = pending.Current.load(cid)
+    assert pending.verdict(current, sweep.discovered[PAIR]) == "gone"
+
+    reconcile.persist_found(cid, sweep)
+    assert PAIR not in _records(cid)
+
+
+def test_a_persist_after_a_link_drops_the_pair(cid, s0):
+    sweep = _found(cid, s0)
+    _link(cid, LEDGER, RECOVER, "related_to")
+    assert pending.verdict(pending.Current.load(cid), sweep.discovered[PAIR]) == "satisfied"
+
+    reconcile.persist_found(cid, sweep)
+    assert PAIR not in _records(cid)
+
+
+def test_a_record_changed_since_discovery_is_dropped(cid, s0):
+    sweep = _found(cid, s0)
+    plot.set_movement(cid, "recover-the-harbour-ledger", "Recover the Saltmarch harbour ledger",
+                      "", "", s0)
+    assert pending.verdict(pending.Current.load(cid), sweep.discovered[PAIR]) == "stale"
+
+    reconcile.persist_found(cid, sweep)
+    assert PAIR not in _records(cid)
+
+
+def test_cached_proposals_carry_forward_when_the_fingerprint_holds(cid, s0):
+    sweep = _found(cid, s0)
+    reconcile.persist_found(cid, sweep)
+    proposal = _proposal(frm=RECOVER, to=LEDGER)
+    reconcile.persist_proposals(cid, sweep, {PAIR: proposal})
+    created = _records(cid)[PAIR]["created"]
+
+    again = _sweep(cid, stamp=_stamp(11))
+    assert again.discovered[PAIR]["proposal"] is None
+    reconcile.persist_found(cid, again)
+    record = _records(cid)[PAIR]
+    assert record["proposal"] == proposal
+    assert record["created"] == created
+
+
+def test_cached_proposals_are_dropped_when_it_moved(cid, s0):
+    sweep = _found(cid, s0)
+    reconcile.persist_found(cid, sweep)
+    reconcile.persist_proposals(cid, sweep, {PAIR: _proposal(frm=RECOVER, to=LEDGER)})
+    plot.set_movement(cid, "recover-the-harbour-ledger", "", "closed", "", s0)
+
+    again = _sweep(cid, stamp=_stamp(11))
+    assert again.discovered[PAIR]["fingerprint"] != sweep.discovered[PAIR]["fingerprint"]
+    reconcile.persist_found(cid, again)
+    record = _records(cid)[PAIR]
+    assert record["proposal"] is None
+    assert record["fingerprint"] == again.discovered[PAIR]["fingerprint"]
+
+
+def test_a_newer_generation_supersedes_an_older_run(cid, s0):
+    sweep = _found(cid, s0, stamp=reconcile.generation("a"))
+    newer = reconcile.generation("b")
+    assert sweep.stamp < newer <= f"{time.time_ns():020d}~"
+    data = candidates.empty()
+    data["generation"] = newer
+    candidates.write(cid, data)
+    before, token = _cache(cid).read_bytes(), revision.current(cid)
+
+    out = reconcile.persist_found(cid, sweep)
+    assert out["superseded"] is True and out["written"] is False
+    out = reconcile.persist_proposals(cid, sweep, {PAIR: _proposal(frm=RECOVER, to=LEDGER)})
+    assert out["superseded"] is True and out["written"] is False
+    assert _cache(cid).read_bytes() == before
+    assert revision.current(cid) == token
+
+
+@pytest.mark.parametrize("stored", ["future", "not-a-generation"])
+def test_a_future_dated_generation_does_not_fence_forever(cid, s0, stored):
+    sweep = _found(cid, s0, stamp=reconcile.generation("a"))
+    data = candidates.empty()
+    if stored == "future":
+        data["generation"] = f"{time.time_ns() + 3_600 * 10**9:020d}-x"
+    else:
+        # Sorts between this run's stamp and the clock, but is not a stamp.
+        data["generation"] = f"{time.time_ns():020d}~x"
+        assert sweep.stamp < data["generation"] <= f"{time.time_ns():020d}~"
+    candidates.write(cid, data)
+
+    out = reconcile.persist_found(cid, sweep)
+    assert out["written"] is True and out["superseded"] is False
+    assert candidates.read(cid)["generation"] == sweep.stamp
+
+
+def test_persist_two_never_resurrects_an_applied_candidate(cid, s0):
+    sweep = _found(cid, s0)
+    reconcile.persist_found(cid, sweep)
+    assert candidates.drop(cid, PAIR) is not None
+
+    reconcile.persist_proposals(cid, sweep, {PAIR: _proposal(frm=RECOVER, to=LEDGER)})
+    assert PAIR not in _records(cid)
+
+
+def test_persist_two_adds_model_only_with_a_proposal_and_marks_declined_settled(cid, s0):
+    clock.advance(cid, to="2026-05-10")
+    _map(cid, s0)
+    plot.set_movement(cid, "seraphine-s-letter", "Seraphine's letter", "open",
+                      "Seraphine sealed it.", s0)
+    letter = "thread:seraphine-s-letter"
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                             "before the bells stop", "Mara swore it.", s0)
+    coronation, eve = ("event:" + events.create(cid, name, date) for name, date in (
+        ("The coronation", "2026-05-13"), ("Saltmarch Eve", "2026-05-15")))
+    sweep = _sweep(cid, full=False, touched=[MAP, letter])
+    dated, declined = _temporal_key(OATH, coronation), _temporal_key(OATH, eve)
+    closing = canon.candidate_id("possible_thread_closure", [letter])
+    assert {dated, declined, CLOSE_MAP, closing} <= set(sweep.model_only)
+
+    reconcile.persist_found(cid, sweep)
+    assert not set(sweep.model_only) & set(_records(cid))      # never without a proposal
+
+    # The letter moves after discovery: its nomination no longer means what
+    # the model was asked, so it is not added.
+    plot.set_movement(cid, "seraphine-s-letter", "", "", "Seraphine burned it.", s0)
+    out = reconcile.persist_proposals(cid, sweep, {
+        dated: _proposal("before", frm=OATH, to=coronation, relation="before"),
+        declined: _proposal("unrelated", reason=""),
+        CLOSE_MAP: _proposal("keep_open", reason="Still unfinished."),
+        closing: _proposal("close", status="closed", evidence=[s0]),
+    })
+    assert out["written"] is True
+    verdicts = _verdicts(cid)
+    assert {key: verdicts.get(key) for key in (dated, declined, CLOSE_MAP, closing)} == {
+        dated: "live", declined: "settled", CLOSE_MAP: "settled", closing: None}
+    assert out["candidates"] == sum(v == "live" for v in verdicts.values())
+
+
+def test_stillborn_and_deleted_campaign_write_nothing(cid, s0):
+    sweep = _found(cid, s0)
+    proposals = {PAIR: _proposal(frm=RECOVER, to=LEDGER)}
+    for out in (reconcile.persist_found(cid, sweep, stillborn=lambda: True),
+                reconcile.persist_proposals(cid, sweep, proposals, stillborn=lambda: True)):
+        assert out["cancelled"] is True and out["written"] is False
+    assert not _cache(cid).exists()
+
+    root = _root(cid)
+    campaigns.delete_campaign(cid)
+    for out in (reconcile.persist_found(cid, sweep),
+                reconcile.persist_proposals(cid, sweep, proposals)):
+        assert out["gone"] is True and out["written"] is False
+    assert not root.exists()
+
+
+def test_basis_keeps_old_hashes_for_unscored_refs(cid, s0, monkeypatch):
+    refs = _five(cid, s0)
+    deleted = "thread:winifred-s-lost-errand"
+    old = {ref: f"old-{ref}" for ref in [*refs, deleted]}
+    scored = {ref: _stamp(1) for ref in [*refs, deleted]}
+    texts = {ref: f"text-{ref}" for ref in [*refs, deleted]}
+    _write_basis(cid, old, scored=scored, texts=texts)
+    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 5)
+
+    sweep = _sweep(cid, stamp=_stamp(2))
+    assert sweep.pairs_capped is True and sweep.rescored == {refs[0]}
+    reconcile.persist_found(cid, sweep)
+    basis = candidates.read(cid)["basis"]
+    assert basis["identity_hashes"][refs[0]] == sweep.hashes[refs[0]]
+    assert basis["text_hashes"][refs[0]] == sweep.text_hashes[refs[0]]
+    assert basis["scored"][refs[0]] == sweep.stamp
+    for ref in refs[1:]:
+        assert basis["identity_hashes"][ref] == old[ref]
+        assert basis["text_hashes"][ref] == texts[ref]
+        assert basis["scored"][ref] == scored[ref]
+    # A ref that no longer exists is not carried.
+    for key in ("identity_hashes", "text_hashes", "scored"):
+        assert deleted not in basis[key]
+
+
+def test_embedding_failure_keeps_prior_semantic_pairs_and_rescores_next_time(
+        cid, s0, fake, monkeypatch):
+    _configure()
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Stolen at dawn.", s0)
+    plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open", "Lost overboard.", s0)
+    chart = "thread:winifred-s-chart"
+    key = canon.candidate_id("possible_duplicate", [MAP, chart])
+    # A full sweep warms a proper subset of the uncached texts: cache one.
+    vectors.save(_vector_space(), _subjects(cid)[MAP].text, [1.0, 0.0])
+    sweep = _embedded(cid, stamp=_stamp(10))
+    assert sweep.discovered[key]["signals"]["via"] == "semantic"
+    assert sweep.rescored == {MAP, chart}
+    reconcile.persist_found(cid, sweep)
+    before = candidates.read(cid)["basis"]
+
+    _map(cid, s0, beat="Mara traced the coast on it.")
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(
+        error=embeddings.EmbeddingsError("network", "down")))
+    sweep = _embedded(cid, full=False, stamp=_stamp(11))
+    assert sweep.embedding == "failure" and MAP not in sweep.rescored
+    reconcile.persist_found(cid, sweep)
+    stored = candidates.read(cid)
+    assert key in stored["records"]
+    for part in ("identity_hashes", "scored", "text_hashes"):
+        assert stored["basis"][part][MAP] == before[part][MAP]
+
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings())
+    sweep = _embedded(cid, full=False, stamp=_stamp(12))
+    assert MAP in sweep.rescored
+    assert sweep.discovered[key]["signals"]["via"] == "semantic"
+
+
+def test_warm_overflow_refs_are_not_marked_scored(cid, s0, fake, monkeypatch):
+    _configure()
+    texts = _chores(cid, s0, n=5)
+    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 2)
+
+    sweep = _embedded(cid, full=False, stamp=_stamp(10))
+    assert len(sweep.rescored) == 2
+    reconcile.persist_found(cid, sweep)
+    basis = candidates.read(cid)["basis"]
+    waiting = set(texts) - sweep.rescored
+    assert len(waiting) == 3
+    for part in ("identity_hashes", "scored", "text_hashes"):
+        assert set(basis[part]) == set(sweep.rescored)
+
+    sweep = _embedded(cid, full=False, stamp=_stamp(11))
+    assert sweep.rescored < waiting and len(sweep.rescored) == 2
+    reconcile.persist_found(cid, sweep)
+    last = waiting - sweep.rescored
+    sweep = _embedded(cid, full=False, stamp=_stamp(12))
+    assert sweep.rescored == last
+    reconcile.persist_found(cid, sweep)
+    assert set(candidates.read(cid)["basis"]["scored"]) == set(texts)
+
+
+@pytest.mark.parametrize("change", ["rewound", "broken_calendar"])
+def test_a_lifecycle_finding_is_retracted_when_its_condition_clears(cid, tmp_path, change):
+    sid = _dated_scene(cid, "Saltmarch docks", "2026-05-01")
+    _map(cid, sid)
+    later = _dated_scene(cid, "Saltmarch quay", "2026-07-10")
+    plot.set_movement(cid, "seraphine-s-letter", "Seraphine's letter", "open",
+                      "Seraphine sealed it.", later)
+    letter = "thread:seraphine-s-letter"
+    clock.advance(cid, to="2026-07-15")
+    sweep = _sweep(cid, stamp=_stamp(10), full=False, touched=[letter])
+    assert sweep.discovered[CLOSE_MAP]["signals"]["reason"] == "stale"
+    touched = canon.candidate_id("possible_thread_closure", [letter])
+    assert touched in sweep.model_only and touched not in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    reconcile.persist_proposals(cid, sweep, {touched: _proposal(
+        "close", status="closed", reason="Sealed and sent.", evidence=[sid])})
+    assert {CLOSE_MAP, touched} <= set(_records(cid))
+    assert _records(cid)[touched]["signals"]["reason"] == "touched"
+
+    if change == "rewound":
+        clock.advance(cid, to="2026-05-02")
+    else:
+        _broken_calendar(cid, tmp_path)
+    sweep = _sweep(cid, stamp=_stamp(11))
+    assert CLOSE_MAP not in sweep.discovered
+    assert sweep.lifecycle_checked["stale"] is (change == "rewound")
+    reconcile.persist_found(cid, sweep)
+    records = _records(cid)
+    assert (CLOSE_MAP in records) is (change == "broken_calendar")
+    assert touched in records                   # a touched finding is never retracted so
+
+
+@pytest.mark.parametrize("change", ["event_passed", "linked_elsewhere", "broken_calendar"])
+def test_a_temporal_finding_is_retracted_when_its_condition_clears(cid, s0, tmp_path, change):
+    clock.advance(cid, to="2026-05-10")
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                             "before the bells stop", "Mara swore it.", s0)
+    coronation, eve = ("event:" + events.create(cid, name, date) for name, date in (
+        ("The coronation", "2026-05-13"), ("Saltmarch Eve", "2026-05-15")))
+    key = _temporal_key(OATH, coronation)
+    sweep = _sweep(cid, stamp=_stamp(10))
+    assert key in sweep.model_only
+    reconcile.persist_found(cid, sweep)
+    reconcile.persist_proposals(cid, sweep, {key: _proposal(
+        "before", frm=OATH, to=coronation, relation="before")})
+    assert _verdicts(cid)[key] == "live"
+
+    if change == "event_passed":
+        clock.advance(cid, to="2026-05-20")
+    elif change == "linked_elsewhere":
+        _link(cid, OATH, eve, "before")
+    else:
+        _broken_calendar(cid, tmp_path)
+    assert _verdicts(cid)[key] == "live"         # nothing in the fingerprint moved
+    sweep = _sweep(cid, stamp=_stamp(11))
+    assert sweep.lifecycle_checked["temporal"] is (change != "broken_calendar")
+    reconcile.persist_found(cid, sweep)
+    assert (key in _records(cid)) is (change == "broken_calendar")
+
+
+def test_a_renamed_evidence_scene_is_readjudicated_not_stuck(cid):
+    sid = _dated_scene(cid, "Saltmarch docks", "2026-05-01")
+    _map(cid, sid)
+    clock.advance(cid, to="2026-07-15")
+    sweep = _sweep(cid, stamp=_stamp(10))
+    reconcile.persist_found(cid, sweep)
+    reconcile.persist_proposals(cid, sweep, {CLOSE_MAP: _proposal(
+        "close", status="closed", reason="Mara found it.", evidence=[sid])})
+    assert _records(cid)[CLOSE_MAP]["proposal"]["evidence_scenes"] == [sid]
+    assert CLOSE_MAP not in {s["id"] for s in reconcile.select(cid, sweep)}
+
+    assert scenes.rename_scene(cid, sid, "Saltmarch quay") != sid
+    sweep = _sweep(cid, stamp=_stamp(11))
+    reconcile.persist_found(cid, sweep)
+    assert _records(cid)[CLOSE_MAP]["proposal"] is None
+    assert CLOSE_MAP in {s["id"] for s in reconcile.select(cid, sweep)}
+
+
+def test_a_malformed_continuity_file_leaves_the_cache_untouched(cid, s0):
+    sweep = _found(cid, s0)
+    candidates.write(cid, candidates.empty())
+    before, token = _cache(cid).read_bytes(), revision.current(cid)
+    (_root(cid) / "continuity.json").write_text("{ no", encoding="utf-8")
+
+    for out in (reconcile.persist_found(cid, sweep),
+                reconcile.persist_proposals(cid, sweep, {PAIR: _proposal(frm=RECOVER,
+                                                                         to=LEDGER)})):
+        assert out["written"] is False and out["continuity"] == "malformed"
+    assert _cache(cid).read_bytes() == before
+    assert revision.current(cid) == token
+
+
+def test_a_persist_that_changes_nothing_moves_no_token(cid, s0):
+    sid = _dated_scene(cid, "Saltmarch quay", "2026-05-01")
+    _map(cid, sid)
+    clock.advance(cid, to="2026-07-15")
+    assert reconcile.persist_found(cid, _found(cid, s0))["written"] is True
+    token, mtime = revision.current(cid), _cache(cid).stat().st_mtime_ns
+
+    out = reconcile.persist_found(cid, _sweep(cid, stamp=_stamp(11)))
+    assert out["written"] is False and out["superseded"] is False
+    assert out["candidates"] == len(_records(cid))
+    assert revision.current(cid) == token
+    assert _cache(cid).stat().st_mtime_ns == mtime
+
+
+def test_a_capped_sweep_that_rotates_still_writes(cid, s0, monkeypatch):
+    """`basis.scored` is compared by the order it gives, not by its stamps --
+    but a capped sweep moves the ref it finished to the back of that order,
+    and the next sweep must see that or rescore the same ref for ever
+    (Review Focus 3)."""
+    refs = _five(cid, s0)
+    full = _sweep(cid, stamp=_stamp(1))
+    _write_basis(cid, full.hashes, scored=dict.fromkeys(refs, _stamp(1)),
+                 texts=full.text_hashes)
+    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 5)
+    for i, ref in enumerate(refs):
+        sweep = _sweep(cid, stamp=_stamp(10 + i))
+        assert sweep.rescored == {ref}
+        reconcile.persist_found(cid, sweep)
+        assert candidates.read(cid)["basis"]["scored"][ref] == sweep.stamp
+
+
+def test_persists_hold_the_campaign_lock(cid, s0, monkeypatch):
+    sweep = _found(cid, s0)
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    try:
+        assert held.wait(10), "holder thread never took the lock"
+        with pytest.raises(locks.StoreBusy):
+            reconcile.persist_found(cid, sweep)
+        with pytest.raises(locks.StoreBusy):
+            reconcile.persist_proposals(cid, sweep, {PAIR: _proposal()})
+    finally:
+        release.set()
+        t.join(10)
+    assert not _cache(cid).exists()
+
+
+def test_a_malformed_cache_is_overwritten(cid, s0):
+    sweep = _found(cid, s0)
+    _cache(cid).write_text("{ no", encoding="utf-8")
+    assert candidates.malformed(cid)
+
+    assert reconcile.persist_found(cid, sweep)["written"] is True
+    assert not candidates.malformed(cid)
+    assert PAIR in _records(cid)
+
+
+def test_a_malformed_cache_is_overwritten_by_a_sweep_that_found_nothing(cid):
+    _cache(cid).write_text("{ no", encoding="utf-8")
+    out = reconcile.persist_found(cid, reconcile.Sweep(_stamp(10), True))
+    assert out["written"] is True
+    assert not candidates.malformed(cid)

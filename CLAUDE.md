@@ -598,7 +598,11 @@ would answer neither question.
   for a review's terminal write, `_rolling_commit` and `_break_commit` for the
   follow-ups a landed turn schedules (#397), and `routes/streaming._turn_settled`
   at each of a turn's terminal points, which is not the same thing as "a post
-  landed": a closed roll fence writes a proposal and no post at all. A prompt
+  landed": a closed roll fence writes a proposal and no post at all. The
+  continuity sweep's two persists (`reconcile.persist_found` and
+  `persist_proposals`) stamp the same way, since they land after a 202 or after
+  End Scene's save has already answered; one that would leave the candidate
+  cache as it was stamps nothing. A prompt
   capture (`routes/common._record_prompt`) bumps after its write and under the
   lock that covers it, because the one route reaching it while persisting
   nothing else is the greeting opener, which is `@computes_only` — and a token

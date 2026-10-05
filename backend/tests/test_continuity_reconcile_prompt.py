@@ -91,18 +91,6 @@ def _sweep(cid, *, stamp="00000000000000000010-run"):
     return reconcile.discover(cid, stamp=stamp, full=True, embed=False)
 
 
-def _persist_found(cid, sweep):
-    """Persist 1's write, as far as `select` reads it: the cache's records plus
-    what the sweep discovered, keeping only ``live`` ones. A stand-in until
-    Task 6's `reconcile.persist_found` exists."""
-    current = pending.Current.load(cid)
-    stored = candidates.read(cid)
-    records = {**stored["records"], **sweep.discovered}
-    stored["records"] = {key: rec for key, rec in records.items()
-                         if pending.verdict(current, rec) == "live"}
-    candidates.write(cid, stored)
-
-
 def _payload(cid, sweep=None):
     sweep = sweep or reconcile.Sweep("00000000000000000010-run", True)
     return reconcile.build_payload(cid, reconcile.select(cid, sweep))
@@ -391,7 +379,7 @@ def test_select_skips_suppressed_and_satisfied_model_only_nominations(cid, s0):
 
     for n in range(2):
         sweep = _sweep(cid, stamp=f"0000000000000000001{n}-run")
-        _persist_found(cid, sweep)
+        reconcile.persist_found(cid, sweep)
         selected = reconcile.select(cid, sweep)
         assert not hidden & {s["id"] for s in selected}
         assert visible in {s["id"] for s in selected}
