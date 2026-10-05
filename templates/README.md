@@ -184,11 +184,16 @@ rules and the evidence floor. `user.j2` vars (`reconcile.template_vars()` over
 (`[{id, one_line}]` — the chronicle lines of every beat scene shown and of the
 last `RECONCILE_RECENT_SCENES` scenes), and `candidates`, each `{key ("c1",
 …), label, words (the vocabulary its answer must come from), records,
-signal_text}`. Each record is `{letter ("A" | "B"), ref, line, beats ([{scene,
-text}], its last `RECONCILE_BEATS`), pressure, links, actors}`; `line` is
+signal_text}`. Each record is `{letter ("A" | "B"), ref, type, line, beats
+([{scene, text}], its last `RECONCILE_BEATS`), pressure, links, actors}`;
+`type` (`plot thread` / `commitment`, blank for an event) is printed beside the
+letter, because a cross pair stores the commitment as A; `line` is
 `snippets/plot_thread_line/absorb.j2` or `snippets/commitment_line/absorb.j2`
 with no latest beat (the beats follow it), or `event: <name> (<date>)`,
-rendered by Python. No transcript is ever sent. Every key is always passed; a
+rendered by Python. Only scenes that exist are shown: a beat in a deleted
+scene loses its scene marker and a deleted scene's chronicle line is dropped,
+so the evidence the parser accepts is evidence the apply can check. No
+transcript is ever sent. Every key is always passed; a
 blank optional one renders nothing.
 Reply shape: ONLY `{"decisions": [{"candidate": "<key>", "decision":
 "<word>", "from": "A" | "B", "to": "A" | "B", "reason": "<one short

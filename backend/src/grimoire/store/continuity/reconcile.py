@@ -114,9 +114,11 @@ from .. import (
     fieldtext,
     paths,
     relationships,
+    scene_ids,
     vectors,
 )
 from ..absorb import parse as absorb_parse
+from ..scenes import read as scenes_read
 from . import candidates, canon, effective, involvement, pending, pressure, similarity
 
 #: Uncached texts one sweep may embed: four `embeddings.BATCH` round trips under
@@ -677,6 +679,10 @@ _DIRECTED = frozenset({"duplicate", "continuation", "subthread", "pays_off"})
 _STATUS_OF = {"close": "closed", "fulfilled": "fulfilled", "broken": "broken",
               "expired": "expired"}
 _LETTERS = ("A", "B")
+#: A record's type as its prompt line names it, so a letter can never be read
+#: as the other record (a cross pair stores the commitment first). An event's
+#: line already begins ``event:``.
+_TYPE_OF = {"thread": "plot thread", "commitment": "commitment"}
 #: A leading ``candidate`` word, as the user prompt prints a key (``Candidate c1``).
 _CANDIDATE_WORD = re.compile(r"^candidate(?![a-z0-9])[\s:#.-]*")
 
@@ -803,11 +809,30 @@ def _pressure_text(reading: dict | None) -> str:
     return f"{state}, {when}" if when else state
 
 
+def _play_key(row: dict) -> tuple:
+    """A scene's place in play order: legacy ids (outside `scene_ids`' grammar,
+    which replaced them) first by creation stamp, then numbered ids by number."""
+    parsed = scene_ids.parse_sid(row["id"])
+    if parsed is None:
+        return (0, 0, fieldtext.text(row.get("created")), row["id"])
+    return (1, parsed["number"], "", row["id"])
+
+
+def _live_scenes(cid: str) -> list[str]:
+    """The scenes that exist, in play order -- the set persist 1's
+    `pending.evidence_ok` checks a proposal against, so nothing outside it is
+    shown as evidence. Empty when the scene list cannot be read."""
+    none: list[dict] = []
+    rows = _soft(scenes_read.list_scenes, none, cid)
+    return [row["id"] for row in sorted(rows, key=_play_key)]
+
+
 class _Context:
     """What `build_payload` reads once for every record it shows."""
 
-    def __init__(self, cid: str, refs: list[str]):
+    def __init__(self, cid: str, refs: list[str], live: list[str]):
         self.cid = cid
+        self.live = frozenset(live)
         self.current: pending.Current = pending.Current.load(cid)
         self.pressure = pressure_by_ref(cid)
         ledgered = [r for r in refs if not r.startswith("event:")]
@@ -834,8 +859,9 @@ def _record_view(ctx: _Context, letter: str, ref: str) -> dict:
     """One record as the prompt shows it (§11.2): its line, last beats with
     their scenes, pressure, effective links and involvement actors. An event
     carries a line only."""
-    view: dict[str, Any] = {"letter": letter, "ref": ref, "line": ref, "beats": [],
-                            "pressure": "", "links": [], "actors": []}
+    view: dict[str, Any] = {"letter": letter, "ref": ref,
+                            "type": _TYPE_OF.get(ref.partition(":")[0], ""), "line": ref,
+                            "beats": [], "pressure": "", "links": [], "actors": []}
     side = pending.side(ctx.current, ref)
     if side is None:
         return view
@@ -844,7 +870,9 @@ def _record_view(ctx: _Context, letter: str, ref: str) -> dict:
     if rec is None:                             # an event
         return view
     actors = ctx.involved.get(ref, {}).get("actors") or []
-    view.update(beats=_beats(rec), pressure=_pressure_text(ctx.pressure.get(ref)),
+    beats = [{**b, "scene": b["scene"] if b["scene"] in ctx.live else ""}
+             for b in _beats(rec)]
+    view.update(beats=beats, pressure=_pressure_text(ctx.pressure.get(ref)),
                 links=[f"{ctx.title(link['a'])} {link['relation']} {ctx.title(link['b'])}"
                        for link in ctx.current.links if ref in (link["a"], link["b"])],
                 actors=[ctx.name(a) for a in actors[:RECONCILE_ACTORS]])
@@ -908,16 +936,18 @@ def _campaign_date(cid: str) -> str:
     return built["friendly"] or built["now"] or ""
 
 
-def _scene_lines(cid: str, beat_scenes: set[str]) -> list[dict]:
+def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]:
     """Chronicle one-lines for every beat scene shown and the last
-    `RECONCILE_RECENT_SCENES` scenes, by id; a scene with no line is not
-    shown."""
+    `RECONCILE_RECENT_SCENES` live scenes, in play order. Only scenes that
+    exist are shown (`delete_scene` leaves the chronicle line behind), and a
+    scene with no line is not."""
     read: Any = _soft(chronicle.read_chronicle, {}, cid)
     chron: dict = read if isinstance(read, dict) else {}
-    ids = sorted(sid for sid in chron if isinstance(sid, str))
-    recent = ids[-RECONCILE_RECENT_SCENES:] if RECONCILE_RECENT_SCENES > 0 else []
+    recent = set(live[-RECONCILE_RECENT_SCENES:]) if RECONCILE_RECENT_SCENES > 0 else set()
     out: list[dict] = []
-    for sid in sorted(beat_scenes | set(recent)):
+    for sid in live:
+        if sid not in beat_scenes and sid not in recent:
+            continue
         rec = chron.get(sid)
         line = fieldtext.text(rec.get("one_line")).strip() if isinstance(rec, dict) else ""
         if line:
@@ -930,15 +960,18 @@ def build_payload(cid: str, selected: list[dict]) -> dict:
     keyed ``c1``... in selection order. Only the records the candidates name
     are sent, with their last beats and the chronicle lines around them --
     never a transcript. `known_scenes` (beat scenes and chronicle lines shown)
-    is the only evidence `parse_output` accepts (§11.4)."""
-    ctx = _Context(cid, sorted({ref for item in selected for ref in item["refs"]}))
+    is the only evidence `parse_output` accepts (§11.4). Both come from the
+    scenes that exist: a beat in a deleted scene is shown without its scene,
+    so the parser never accepts evidence persist 1 would void."""
+    live = _live_scenes(cid)
+    ctx = _Context(cid, sorted({ref for item in selected for ref in item["refs"]}), live)
     out: list[dict] = []
     for n, item in enumerate(selected, 1):
         records = [_record_view(ctx, letter, ref) for letter, ref in zip(_LETTERS, item["refs"], strict=False)]
         out.append({"key": f"c{n}", "id": item["id"], "vocabulary": vocabulary(item),
                     "records": records, "signal_text": _signal_text(ctx, item)})
     beat_scenes = {b["scene"] for c in out for r in c["records"] for b in r["beats"]} - {""}
-    lines = _scene_lines(cid, beat_scenes)
+    lines = _scene_lines(cid, beat_scenes, live)
     return {"now": _campaign_date(cid), "chronicle": lines, "candidates": out,
             "known_scenes": sorted(beat_scenes | {line["id"] for line in lines})}
 
