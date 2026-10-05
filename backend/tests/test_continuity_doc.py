@@ -114,3 +114,40 @@ def test_written_json_is_sorted_and_newline_terminated(cid):
     text = _file(cid).read_text(encoding="utf-8")
     assert text.endswith("\n")
     assert text == json.dumps(json.loads(text), indent=2, sort_keys=True) + "\n"
+
+
+# -------------------------------------------------------------- scene renames
+
+
+def test_repoint_rewrites_link_scene(cid):
+    doc.put_link(cid, "l1", dict(_link(), scene="003--old"))
+    doc.repoint_scenes(cid, {"003--old": "003--new"})
+    assert doc.get_link(cid, "l1")["scene"] == "003--new"
+
+
+def test_repoint_skips_unparseable_file(cid):
+    _file(cid).write_text("{ no", encoding="utf-8")
+    doc.repoint_scenes(cid, {"003--old": "003--new"})
+    assert _file(cid).read_text(encoding="utf-8") == "{ no"
+
+
+def test_repoint_tolerates_hand_edited_shapes(cid):
+    _file(cid).write_text(json.dumps({"links": {"l1": 3, "l2": {"scene": ["x"]},
+                                                "l3": dict(_link(), scene="003--old")}}),
+                          encoding="utf-8")
+    doc.repoint_scenes(cid, {"003--old": "003--new"})
+    on_disk = json.loads(_file(cid).read_text(encoding="utf-8"))
+    assert on_disk["links"]["l1"] == 3
+    assert on_disk["links"]["l2"] == {"scene": ["x"]}
+    assert on_disk["links"]["l3"]["scene"] == "003--new"
+
+
+def test_repoint_never_creates_absent_file(cid):
+    doc.repoint_scenes(cid, {"003--old": "003--new"})
+    assert not _file(cid).exists()
+
+
+def test_scene_refs_fans_out_to_continuity(cid):
+    doc.put_link(cid, "l1", dict(_link(), scene="003--old"))
+    store.scene_refs.repoint(cid, {"003--old": "003--new"})
+    assert doc.get_link(cid, "l1")["scene"] == "003--new"

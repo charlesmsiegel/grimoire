@@ -173,3 +173,29 @@ def put_suppression(cid: str, fp: str, record: dict) -> None:
 def drop_suppression(cid: str, fp: str):
     with locks.campaign_lock(cid):
         return _drop(cid, "suppressions", fp)
+
+
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids in each reviewed link's ``scene``.
+
+    Tolerant the way `commitments.repoint_scenes` is and for its reason: this
+    runs from `scene_refs.repoint` AFTER the scene file has been renamed, so
+    raising would 500 the rename and leave every store after this one in the
+    sweep pointing at an id that no longer exists. A file, section or record it
+    cannot read keeps its stale id -- the outcome of never having been
+    repointed, and strictly better than aborting the sweep. It writes only when
+    something matched, so an absent file stays absent.
+    """
+    with locks.campaign_lock(cid):
+        try:
+            data = _mutable(cid, "links")
+        except ContinuityError:
+            return
+        hit = False
+        for record in data["links"].values():
+            scene = record.get("scene") if isinstance(record, dict) else None
+            if isinstance(scene, str) and scene in mapping:
+                record["scene"] = mapping[scene]
+                hit = True
+        if hit:
+            _write(cid, data)
