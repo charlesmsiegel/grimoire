@@ -93,8 +93,11 @@ Eligible next speakers:
 {% for actor in response_candidates %}- {{ actor.name }}: {{ actor.ref }}
 {% else %}None. Return control to the player.
 {% endfor %}
-The current actor and everyone who has already responded are excluded. Use only
-the references listed here. {% if response_candidates %}For a handoff, use this shape with the chosen eligible reference:
+{% if response_repeat is defined and response_repeat %}The current actor is excluded. Choosing
+someone who has already responded begins another round of the conversation,
+with them speaking first. Use only
+{% else %}The current actor and everyone who has already responded are excluded. Use only
+{% endif %}the references listed here. {% if response_candidates %}For a handoff, use this shape with the chosen eligible reference:
 ```handoff
 {"next": {{ response_candidates[0].ref | tojson }}}
 ```

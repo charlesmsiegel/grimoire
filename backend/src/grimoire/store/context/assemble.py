@@ -379,6 +379,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "response_roster": roster,
         "response_candidates": [{"ref": e["ref"], "name": e["name"]}
                                 for e in (eligible_speakers or [])],
+        # A candidate marked `responded` has already spoken this round, which
+        # an automatic chain offers on purpose: naming them begins the next
+        # round (`routes.character_turns._compose`). The handoff text says so.
+        "response_repeat": any(e.get("responded") for e in (eligible_speakers or [])),
         "global_system_prompt": cfg.get("system_prompt", ""),
         # The campaign's world as its author describes it (#38), read live
         # through the world like every record the campaign inherits. Public
