@@ -693,3 +693,82 @@ def test_a_backup_takes_the_backup_lock(monkeypatch, tmp_path):
     backups.create_backup(when=AT)
 
     assert seen == [True]
+
+
+# ---- the content-addressed image store ------------------------------------
+
+def _png() -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (200, 30, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _avatar_store(root):
+    """One character version whose avatar went through the real upload path."""
+    from grimoire.store import assets
+    assets.put_image(root, "seraphine", "v1", "avatar", _png(), ".png")
+    return assets.version_dir(root, "seraphine", "v1")
+
+
+def test_image_backup_contains_store_and_refs(monkeypatch, tmp_path):
+    """A new upload is a hashed blob, an object sidecar and a placement; an
+    image-only restore point that holds only the blob cannot resolve it."""
+    root = home(monkeypatch, tmp_path)
+    version = _avatar_store(root)
+    (root / "campaigns" / "saltmarch").mkdir(parents=True)
+    (root / "campaigns" / "saltmarch" / "campaign.md").write_text("# S\n", encoding="utf-8")
+    # A transient journal sits beside the placements and is still carried.
+    (version / "image-refs" / ".promote.json").write_text("{}", encoding="utf-8")
+
+    names = names_in(backups.create_image_backup(when=AT))
+
+    assert any(n.startswith("assets/image-store/blobs/") and n.endswith(".png") for n in names)
+    assert any(n.startswith("assets/image-store/objects/") and n.endswith(".json")
+               for n in names)
+    rel = version.relative_to(root).as_posix()
+    assert f"{rel}/image-refs/avatar.json" in names
+    assert f"{rel}/image-refs/.promote.json" in names
+    assert "campaigns/saltmarch/campaign.md" not in names
+
+
+def test_image_backup_leaves_the_derived_cache_out(monkeypatch, tmp_path):
+    root = home(monkeypatch, tmp_path)
+    _avatar_store(root)
+    (root / ".cache" / "image-store" / "blob-index").mkdir(parents=True, exist_ok=True)
+    (root / ".cache" / "image-store" / "blob-index" / "ab").write_text("x", encoding="utf-8")
+
+    names = names_in(backups.create_image_backup(when=AT))
+
+    assert not any(n.startswith(".cache/") for n in names)
+
+
+def test_image_backup_restores_a_resolvable_upload(monkeypatch, tmp_path):
+    """Unzip the image-only archive into a fresh home: the placement resolves."""
+    from grimoire.store import assets
+    root = tmp_path / "live"
+    home(monkeypatch, root)
+    version = _avatar_store(root)
+    archive = backups.create_image_backup(when=AT)
+
+    restored = tmp_path / "restored"
+    with zipfile.ZipFile(archive) as z:
+        z.extractall(restored)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(restored))
+
+    got = assets.resolve(restored / version.relative_to(root), "avatar")
+    assert got is not None
+    assert got.blob_path.read_bytes() == _png()
+
+
+def test_full_backup_contains_image_store(monkeypatch, tmp_path):
+    root = home(monkeypatch, tmp_path)
+    version = _avatar_store(root)
+
+    names = names_in(backups.create_backup(when=AT))
+
+    assert any(n.startswith("assets/image-store/blobs/") for n in names)
+    assert any(n.startswith("assets/image-store/objects/") for n in names)
+    assert f"{version.relative_to(root).as_posix()}/image-refs/avatar.json" in names

@@ -44,7 +44,9 @@ An image archive is a filtered view of that same resolved store walk, with the
 same relative paths and failure policy. Its distinct filename series keeps it
 out of full-backup retention and scheduling; another manual subset would follow
 the same rule. Selection is by image filename type (common suffixes and MIME
-types), so an image saved without an image extension is outside this archive.
+types), so an image saved without an image extension is outside this archive --
+plus everything the content-addressed store needs to resolve one: its objects
+and every `image-refs/` placement (`_is_image_selected`).
 """
 
 from __future__ import annotations
@@ -94,6 +96,37 @@ def _is_image_file(path: Path) -> bool:
         return True
     media_type, _encoding = mimetypes.guess_type(path.name)
     return bool(media_type and media_type.startswith("image/"))
+
+#: Where the content-addressed image store lives, relative to the store root
+#: (`image_store.root()`), and the directory name of a record's placements
+#: (`image_refs.REFS_DIR`). Matched by path shape rather than imported, for the
+#: reason `_DERIVED` is: this module must not depend on every module that keeps
+#: images. `test_backups_store.py` writes through the real paths, so a layout
+#: that moved fails there rather than silently emptying an image backup.
+_IMAGE_STORE = ("assets", "image-store")
+_IMAGE_REFS = "image-refs"
+
+
+def _is_image_selected(root: Path, directory: Path, path: Path) -> bool:
+    """Whether the image-only archive carries `path`.
+
+    A new upload is three files, not one: a hashed blob (an image filename), a
+    JSON object sidecar beside it under `assets/image-store/`, and a JSON
+    placement in the record's `image-refs/` (plus its transient promote
+    journal). Selecting by image filename alone kept the blob and dropped the
+    other two, so a restore could not resolve any image uploaded since the
+    store went content-addressed (Codex P1). The blob index and thumbnails stay
+    out with the rest of `.cache`."""
+    if _is_image_file(path):
+        return True
+    if directory.name == _IMAGE_REFS:
+        return True
+    try:
+        parts = directory.relative_to(root).parts
+    except ValueError:
+        return False
+    return parts[:len(_IMAGE_STORE)] == _IMAGE_STORE
+
 
 #: Rebuildable derived data, relative to the store root.
 _DERIVED = ".cache"
@@ -324,7 +357,7 @@ def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path,
                 path = here / name
                 if in_backup_dir and _is_backup_artifact(name):
                     continue
-                if images_only and not _is_image_file(path):
+                if images_only and not _is_image_selected(root, here, path):
                     continue
                 try:
                     if not path.is_file():
