@@ -55,8 +55,24 @@ def _read(p: Path) -> dict[str, dict]:
         return {}
     if not isinstance(data, dict):
         return {}
-    return {k: v for k, v in data.items()
+    return {k: _shaped(v) for k, v in data.items()
             if isinstance(v, dict) and isinstance(v.get("original"), str)}
+
+
+def _shaped(rec: dict) -> dict:
+    """A record whose `original` survived, with every field a reader
+    dereferences put back in shape: `rules` a list of rule-id strings, `stored`
+    and `at` strings, `variant` kept only as a non-empty string. A hand edit or
+    a sync conflict can leave any of them as anything, and the inspector maps
+    over `rules`. Unknown fields are dropped."""
+    rules = rec.get("rules")
+    out = {"original": rec["original"],
+           "rules": [r for r in rules if isinstance(r, str)] if isinstance(rules, list) else [],
+           "stored": rec["stored"] if isinstance(rec.get("stored"), str) else "",
+           "at": rec["at"] if isinstance(rec.get("at"), str) else ""}
+    if isinstance(rec.get("variant"), str) and rec["variant"]:
+        out["variant"] = rec["variant"]
+    return out
 
 
 def _write(p: Path, records: dict[str, dict]) -> None:

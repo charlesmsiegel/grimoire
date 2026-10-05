@@ -204,7 +204,10 @@ function RewriteDetail({ cid, sid, post, locked, onRestored, onStale }: {
           <pre className="regex-code">{content}</pre>
           <div className="field-hint">Changed by</div>
           <div>
-            {read.rec.rules.map((id) => (
+            {/* A record the server could not vouch for may carry anything here;
+                a sync conflict is not a reason to lose the inspector. */}
+            {(Array.isArray(read.rec.rules) ? read.rec.rules : [])
+              .filter((id): id is string => typeof id === "string").map((id) => (
               <span key={id} className="chip on">{read.names[id] || id}</span>
             ))}
           </div>
