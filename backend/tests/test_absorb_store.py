@@ -3614,6 +3614,61 @@ def test_two_candidates_sharing_a_canonical_yield_one_alternative(monkeypatch, t
         ["seraphine-s-map"]
 
 
+def test_candidates_follow_a_merge_made_during_the_absorb(monkeypatch, tmp_path):
+    """A merge that lands between the examination and staging moves a
+    candidate onto its canonical. The listed candidates must name the record
+    each alternative actually writes -- the client reads an alternative absent
+    from them as the as-new variant -- so they are re-resolved through the
+    same alias map the alternatives are: the merged source is shown as its
+    canonical, two that now share one are one, and one whose record is gone
+    is dropped."""
+    from grimoire.store import plot
+    from grimoire.store.continuity import doc
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    doc.put_alias(cid, "thread:winifred-s-chart",
+                  {"to": "thread:seraphine-s-map", "created": "", "source": "manual", "note": ""})
+    gone = ("thread:the-coronation", "The coronation", "open")
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted", _MAP, _CHART, _SERA, gone))]})
+    ic = row["identity_check"]
+    alt_refs = [f"thread:{a['target']['id']}" for a in ic["alternatives"]]
+    assert alt_refs == ["thread:mara-s-map", "thread:seraphine-s-map"]
+    assert [c["ref"] for c in ic["candidates"]] == alt_refs
+    sera = ic["candidates"][1]
+    assert (sera["title"], sera["status"]) == ("Seraphine's map", "open")
+    assert sera["latest_beat"] == plot.get(cid, "seraphine-s-map")["beats"][-1]["text"]
+
+
+def test_a_lone_candidate_merged_away_is_listed_as_its_canonical(monkeypatch, tmp_path):
+    """The finding's shape exactly: the only candidate merged into another
+    record mid-absorb -- its one alternative writes the canonical, and the
+    candidate list says so rather than naming the hidden source."""
+    from grimoire.store.continuity import doc
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    doc.put_alias(cid, "thread:winifred-s-chart",
+                  {"to": "thread:seraphine-s-map", "created": "", "source": "manual", "note": ""})
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted", _CHART))]})
+    ic = row["identity_check"]
+    assert [a["target"]["id"] for a in ic["alternatives"]] == ["seraphine-s-map"]
+    assert [(c["ref"], c["title"]) for c in ic["candidates"]] == \
+        [("thread:seraphine-s-map", "Seraphine's map")]
+
+
+def test_a_candidate_closed_during_the_absorb_stays_listed_as_closed(monkeypatch, tmp_path):
+    """Unlike an alternative, a closed candidate is still listed -- the
+    examination shows settled records on purpose, and the no-alternative hint
+    names one -- but with the status it has now, not the one examined."""
+    from grimoire.store import plot
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted", _MAP))]})
+    ic = row["identity_check"]
+    assert ic["alternatives"] == []
+    assert [(c["ref"], c["status"]) for c in ic["candidates"]] == [("thread:mara-s-map", "closed")]
+
+
 def test_two_as_new_variants_never_share_an_id(monkeypatch, tmp_path):
     """Two accepted rows whose own titles slug alike (and fold alike) must not
     be offered one fresh record: swapping both in would merge them."""

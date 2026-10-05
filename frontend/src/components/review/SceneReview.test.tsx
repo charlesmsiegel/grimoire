@@ -3685,6 +3685,21 @@ test("the second of two rows mapped to one record shows the chip and the no-alte
     expect(within(card).queryByRole("button", { name: /^Use .* instead/ })).toBeNull();
   });
 
+test("an alternative onto a stored record missing from the candidates is never offered as a new record",
+  async () => {
+    // A review prepared before candidates followed merges made mid-absorb:
+    // the alternative writes the stored thread a listed candidate was merged
+    // into, so its own `before` is what says it is not a new record.
+    const stale = { ...UNCERTAIN_TITHE, identity_check: identityCheck({
+      candidates: [{ ...LEDGER_CANDIDATE, ref: "thread:mara-s-map", title: "Mara's map" }] }) };
+    await openIdentityReview([stale]);
+    const card = cardFor(/The Saltmarch tithe/);
+    expect(within(card).queryByRole("button", { name: /as a new record/ })).toBeNull();
+    expect(within(card).queryByText("Keep as a new record")).toBeNull();
+    const use = within(card).getByRole("button", { name: USE_LEDGER });
+    expect(use).toHaveTextContent("Use Find the ledger instead");
+  });
+
 test("an accepted retarget wears \"Matched an existing record\" and \"Keep as a new record\" restores the model's title and id",
   async () => {
     const accepted = { ...ONTO_LEDGER, review: MEDIUM_CITED,

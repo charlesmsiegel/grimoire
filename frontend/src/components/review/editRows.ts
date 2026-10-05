@@ -213,13 +213,20 @@ export function identityHint(e: StagedEdit): string | null {
   return (ic.alternatives ?? []).length > 0 ? IDENTITY_UNCERTAIN_HINT : IDENTITY_NO_ALTERNATIVE_HINT;
 }
 
-/** Whether an alternative stages onto one of the row's candidates, as against
- *  being the as-new variant. Candidate refs are PREFIXED canonical refs
- *  (`thread:find-the-ledger`) while a staged target is a bare id under the
- *  store's own kind (`plot` / `commitments`), so the comparison spells the
- *  prefix out. It also classifies the original row pushed back after a swap:
- *  an accepted retarget's original targets a candidate, an as-new one does not. */
+/** Whether an alternative stages onto an existing record, as against being
+ *  the as-new variant. Read off the alternative itself first: a non-empty
+ *  `before` is the stored record it writes, and the as-new variant's is
+ *  always empty -- so a row onto a record the candidates do not name (one
+ *  merged into another while the review was prepared, in a review stored
+ *  before the server re-resolved its candidates) is never offered as new.
+ *  Otherwise it is matched against the candidates, whose refs are PREFIXED
+ *  canonical refs (`thread:find-the-ledger`) while a staged target is a bare
+ *  id under the store's own kind (`plot` / `commitments`), so the comparison
+ *  spells the prefix out. It also classifies the original row pushed back
+ *  after a swap: an accepted retarget's original targets a candidate, an
+ *  as-new one does not. */
 export function isCandidateAlternative(alt: StagedEdit, ic: IdentityCheck): boolean {
+  if (alt.before !== "") return true;
   const ref = `${alt.target.kind === "plot" ? "thread" : "commitment"}:${alt.target.id}`;
   return ic.candidates.some((c) => c.ref === ref);
 }

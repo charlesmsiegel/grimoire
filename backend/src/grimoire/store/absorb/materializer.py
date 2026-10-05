@@ -617,26 +617,66 @@ def _fresh_id(stored: dict, staged: dict[str, str], slug: str) -> str:
     return candidate
 
 
-def _candidate_alternatives(sid: str, kind: str, original: dict, ic: dict, stored: dict,
-                            live: dict[str, str], taken: set[tuple[str, str]]) -> list[dict]:
+def _latest_beat(rec: dict) -> str:
+    """The text of `rec`'s last appended beat, or "" -- a stored record's own
+    `latest_beat`, as `plot.open_threads` projects it."""
+    beats = rec.get("beats")
+    last = beats[-1] if isinstance(beats, list) and beats else None
+    return _text(last.get("text")) if isinstance(last, dict) else ""
+
+
+def _current_candidates(kind: str, ic: dict, stored: dict,
+                        live: dict[str, str]) -> list[dict]:
+    """`ic`'s candidates as the records they are at staging, not at the
+    examination.
+
+    Each ref is followed through the CURRENT alias map -- the one the
+    alternatives are built against -- so a candidate merged away while the
+    absorb ran is listed as the canonical its alternative writes; the client
+    reads an alternative missing from this list as the as-new variant. Two
+    that now share a canonical are one, keeping the first one's signals; one
+    whose canonical is not stored is dropped. A closed or resolved one stays:
+    the examination shows settled records on purpose (the reviewer is told
+    the match is closed), so only its alternative is withheld. Title and
+    status are the stored canonical's; the latest beat is too wherever the
+    ref moved, and is otherwise the examined one (which a merged group's
+    effective record supplies)."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for cand in ic.get("candidates") or []:
+        ref = cand.get("ref") if isinstance(cand, dict) else None
+        if not isinstance(ref, str):
+            continue
+        canonical = live.get(ref, ref)
+        prefix, _, rid = canonical.partition(":")
+        cur = stored.get(rid) if prefix == kind else None
+        if not isinstance(cur, dict) or canonical in seen:
+            continue
+        seen.add(canonical)
+        moved = canonical != ref
+        out.append({**cand, "ref": canonical, "title": _text(cur.get("title")) or rid,
+                    "status": _text(cur.get("status")),
+                    "latest_beat": (_latest_beat(cur) if moved
+                                    else cand.get("latest_beat", _latest_beat(cur)))})
+    return out
+
+
+def _candidate_alternatives(sid: str, kind: str, original: dict, candidates: list[dict],
+                            stored: dict, taken: set[tuple[str, str]]) -> list[dict]:
     """One staged row per candidate that is still a live, untaken record.
 
-    Revalidated against the state materialize read, never the examination's
-    snapshot: each candidate is followed through the CURRENT alias map, and
-    its canonical must be stored, live, and moved by no edit in this batch
-    (this row's own target included). Two candidates that now share a
-    canonical are one alternative."""
+    `candidates` are `_current_candidates`: already followed through the
+    current alias map, deduplicated, and stored. Each must also be live and
+    moved by no edit in this batch (this row's own target included)."""
     build = _plot_edit if kind == "thread" else _commitment_edit
     target_kind = "plot" if kind == "thread" else "commitments"
     alts: list[dict] = []
-    for cand in ic.get("candidates") or []:
-        ref = cand.get("ref") if isinstance(cand, dict) else None
-        prefix, _, rid = live.get(ref, ref).partition(":") if isinstance(ref, str) else ("", "", "")
-        cur = stored.get(rid) if prefix == kind else None
-        if (not isinstance(cur, dict) or (target_kind, rid) in taken
+    for cand in candidates:
+        rid = cand["ref"].partition(":")[2]
+        cur = stored[rid]
+        if ((target_kind, rid) in taken
                 or not continuity_effective.is_live(kind, cur.get("status"))):
             continue
-        taken = taken | {(target_kind, rid)}
         alts.append(build(sid, _onto_existing(kind, original, rid), rid, stored))
     return alts
 
@@ -664,18 +704,21 @@ def _attach_alternatives(sid: str, out: list[dict], rows_by_edit: dict[str, dict
                          threads: dict, owed: dict, live: dict[str, str],
                          staged_plot_titles: dict[str, str],
                          staged_titles: dict[str, str]) -> None:
-    """Fill each examined row's `identity_check.alternatives` (spec §10.3).
+    """Fill each examined row's `identity_check.alternatives` (spec §10.3),
+    and bring its `candidates` up to the same state (`_current_candidates`),
+    so every alternative onto a record names a listed candidate.
 
     A second pass, after every primary row is staged, so "not targeted
     elsewhere in the batch" and the as-new allocation see the whole batch.
     Alternatives are built by the same helpers as primary rows, so their
     labels, payloads and `before` tokens are what a primary row on that record
     would carry. Each copies its row's review block and carries no
-    `identity_check`. Assigned only once every row's list is built, so a
-    failure part-way leaves every list at ``[]``."""
+    `identity_check`. Assigned only once every row's lists are built, so a
+    failure part-way leaves every alternatives list at ``[]`` (and the
+    candidates as examined)."""
     taken = {(e["target"]["kind"], e["target"]["id"]) for e in out
              if e.get("kind") in ("plot", "commitment")}
-    found: dict[str, list[dict]] = {}
+    found: dict[str, tuple[list[dict], list[dict]]] = {}
     for edit in out:
         ic, row = edit.get("identity_check"), rows_by_edit.get(edit["id"])
         if not isinstance(ic, dict) or row is None:
@@ -683,14 +726,18 @@ def _attach_alternatives(sid: str, out: list[dict], rows_by_edit: dict[str, dict
         kind = "thread" if edit["kind"] == "plot" else "commitment"
         stored, staged = (threads, staged_plot_titles) if kind == "thread" else (owed, staged_titles)
         original = row.get(AS_NEW_KEY) if _accepted_existing(ic) else None
+        candidates = _current_candidates(kind, ic, stored, live)
         alts = _candidate_alternatives(sid, kind, original if isinstance(original, dict) else row,
-                                       ic, stored, live, taken)
+                                       candidates, stored, taken)
         if isinstance(original, dict):
             alts.append(_as_new_alternative(sid, kind, original, stored, staged))
-        found[edit["id"]] = [{**alt, "review": dict(edit["review"])} for alt in alts]
+        found[edit["id"]] = (candidates,
+                             [{**alt, "review": dict(edit["review"])} for alt in alts])
     for edit in out:
         if edit["id"] in found:
-            edit["identity_check"]["alternatives"] = found[edit["id"]]
+            candidates, alts = found[edit["id"]]
+            edit["identity_check"]["candidates"] = candidates
+            edit["identity_check"]["alternatives"] = alts
 
 
 def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
