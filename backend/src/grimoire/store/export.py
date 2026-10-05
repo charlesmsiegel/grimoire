@@ -225,32 +225,40 @@ def _first(lookup, name: str) -> Path | None:
     return lookup(name)
 
 
+def resolve_url(cid: str, url: str) -> Path | None:
+    """The file an app image URL names, for campaign `cid`, or None.
+
+    Every localized shape the app writes -- a record image, a library image, a
+    local collection -- and nothing else: a remote or unrecognized URL is None.
+    Resolved against `cid` rather than the campaign id written in the URL (see
+    `_resolve_image`). Shared by `rewrite_images` and by what a scene sends a
+    model (`post_images`, #377), so the two cannot disagree about which picture
+    a URL means.
+    """
+    collection = _COLLECTION_URL.fullmatch(url)
+    if collection:
+        # Like ordinary world image links, resolve in the exported
+        # campaign's world, and respect its hidden-image tombstones.
+        try:
+            wid = campaigns_read.world_root_of(cid).name
+            members = image_collections.read(wid, collection["collection"])["members"]
+            return next((path for name in members
+                         if (path := campaign_images.image_path(cid, name)) is not None), None)
+        except (FileNotFoundError, ValueError, worlds.WorldNotFound):
+            return None
+    app = _IMG_URL.match(url)
+    return _resolve_image(cid, app) if app else None
+
+
 def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/") -> str:
     """Point every markdown image at its packed copy under `prefix`; remote,
     missing, and unnamable images degrade to their alt text (a broken img is
     worse) -- see `Images` for why an image we cannot declare is dropped rather
     than packed under a guess."""
     def sub(m: re.Match) -> str:
-        collection = _COLLECTION_URL.fullmatch(m["url"])
-        if collection:
-            # Like ordinary world image links, resolve in the exported
-            # campaign's world, and respect its hidden-image tombstones.
-            try:
-                wid = campaigns_read.world_root_of(cid).name
-                members = image_collections.read(wid, collection["collection"])["members"]
-                p = next((path for name in members
-                          if (path := campaign_images.image_path(cid, name)) is not None), None)
-            except (FileNotFoundError, ValueError, worlds.WorldNotFound):
-                p = None
-            packed = images.add(p) if p is not None else None
-            return f"![{m['alt']}]({prefix}{packed})" if packed is not None else m["alt"]
-        app = _IMG_URL.match(m["url"])
-        if app:
-            p = _resolve_image(cid, app)
-            packed = images.add(p) if p is not None else None
-            if packed is not None:
-                return f"![{m['alt']}]({prefix}{packed})"
-        return m["alt"]
+        p = resolve_url(cid, m["url"])
+        packed = images.add(p) if p is not None else None
+        return f"![{m['alt']}]({prefix}{packed})" if packed is not None else m["alt"]
     return _MD_IMG.sub(sub, text)
 
 
