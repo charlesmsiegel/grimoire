@@ -102,6 +102,7 @@ from . import (
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import paths as campaigns_paths
+from .continuity import doc as continuity_doc
 from .scenes import paths as scenes_paths
 
 log = logging.getLogger(__name__)
@@ -319,6 +320,10 @@ def read_value(cid: str, target: dict):
         return facts.get(cid, target["id"])
     if w == "chronicle":
         return chronicle.get_record(cid, target["id"])
+    if w == "continuity_alias":
+        return continuity_doc.get_alias(cid, target["ref"])
+    if w == "continuity_link":
+        return continuity_doc.get_link(cid, target["id"])
     raise UndoError(f"no reversal is defined for {w!r}")
 
 
@@ -364,6 +369,17 @@ def write_value(cid: str, target: dict, value) -> None:
         facts.restore(cid, target["id"], value)
     elif w == "chronicle":
         chronicle.restore(cid, target["id"], value)
+    elif w in ("continuity_alias", "continuity_link"):
+        # The compare-and-swap covered only this record; the restore checks it
+        # against everything else (a cycle, an equivalent link made since), and
+        # its refusal is the reader's conflict to act on, not a 500.
+        try:
+            if w == "continuity_alias":
+                continuity_doc.restore_alias(cid, target["ref"], value)
+            else:
+                continuity_doc.restore_link(cid, target["id"], value)
+        except continuity_doc.ContinuityError as exc:
+            raise UndoConflict(str(exc)) from exc
     else:
         raise UndoError(f"no reversal is defined for {w!r}")
 
