@@ -60,7 +60,10 @@ reported by `routes.config._public_config`, writable through `ConfigUpdate`:
   tuned against real play.
 
 `_public_config` also reports `send_images_reach`, the effective answer for the
-**active** connection: `"off"` (setting off or limit 0), `"yes"`, `"no"` (the
+connection the **global `chat` route** resolves to (what a turn in a campaign
+with no route of its own runs on, through `store/routing.py`; the active
+connection when chat is not routed): `"off"` (setting off or limit 0), `"yes"`,
+`"no"` (the
 connection or its catalog says text-only), or `"unknown"` (auto, and the
 catalog does not say — no cached list, no matching row, or a row without the
 field). `ConfigView` shows a checkbox ("Send post images to models that can
@@ -69,7 +72,11 @@ read them") and the limit (disabled while the checkbox is off) in the
 images are not being sent and why ("the active connection's model is not known
 to read images — open it under Connections to refresh its model list, or set
 Reads images there"). Turning the setting on is otherwise silent when nothing
-can read images; this line is what makes it not silent.
+can read images; this line is what makes it not silent. A campaign whose chat
+is routed elsewhere gets its per-turn answer from the scene inspector, whose
+`GET .../context` response carries the same field computed for that scene's
+routed connection, and whose Images row is present exactly when images would be
+sent.
 
 ## Which connections can read images
 
@@ -160,14 +167,19 @@ posts, so:
   (`carried: True`) is placed at the **start** of the next user message in the
   projected history. When the assistant message is the last one in the history
   window, the refs ride on a **carrier**: a user message appended after the
-  history whose content is only those refs.
+  history, marked `"carrier": True`, whose content is only those refs. When the
+  prompt then appends a user message of its own before the post-history block
+  (a director note, `before_post`), the carried refs are prepended to *that*
+  message instead and no carrier is emitted, so the carrier never sits beside
+  another user message.
 
 The content rule that makes lowering trivial: **the text parts of a message,
 concatenated, are exactly the string today's code produces for it** (alt text in
-place of each image, in its own message), and a carrier has no text parts at
-all. Lowering to text is therefore "concatenate text parts; drop a message left
-with no parts" — the carrier vanishes and every other message becomes today's
-string. Lowering for a route that reads images emits, for a carried ref, a
+place of each image, in its own message; an empty string stays an empty `text`
+part rather than vanishing), and a carrier has no text parts at all. Lowering
+to text is therefore "concatenate text parts; drop messages marked as
+carriers" — the carrier vanishes and every other message becomes today's
+string, an empty one included. Lowering for a route that reads images emits, for a carried ref, a
 short text part naming it as the image from the previous reply
 (`[Image from the previous reply: <alt>]`) before the picture, so the model
 knows whose picture it is; an inline ref needs none, since its alt text is
@@ -184,18 +196,23 @@ shape:
   parts.
 - `image_refs(content) -> list[dict]` — the `image_ref` parts, in order.
 - `has_refs(messages) -> bool`.
-- `lowerable(content) -> bool` — a string, or a list of only `text` /
-  `image_ref` parts.
-- `as_text(messages) -> list[dict]` — a NEW list of NEW message dicts: every
-  lowerable list content becomes `text_of`, a message left empty is dropped,
-  anything else is copied as is.
+- `lowerable(content) -> bool` — a list of only `text` / `image_ref` parts.
+- `needs_lowering(messages) -> bool` — any message is a carrier or has
+  lowerable list content. This, not `has_refs`, is what makes dispatch lower:
+  a list left with only text parts must still become a string before it
+  reaches a provider (`claude_agent._flatten` would f-string a list).
+- `as_text(messages) -> list[dict]` — a NEW list of NEW message dicts: carrier
+  messages dropped, every lowerable list content becomes `text_of`, anything
+  else copied as is. Never drops a non-carrier message, however empty.
 - `as_images(messages, keep, load) -> tuple[list[dict], int]` — a new list:
   the newest `keep` `image_ref` parts (counted across all messages from the end)
   become `{"type": "image_url", "image_url": {"url": load(part)}}` (with the
   carried label before a carried one); older refs, and refs whose `load`
   returns `None` or raises, are dropped. A content left with no image part
-  collapses to `text_of`; a message left with no content is dropped. Returns
-  how many images were actually included. Never mutates its input.
+  collapses to `text_of`; a carrier left with no image is dropped. The
+  `carrier` marker is removed from what is returned (it is ours, not the
+  provider's). Returns how many images were actually included. Never mutates
+  its input.
 - `scrub(text) -> str` — replaces every `data:<type>;base64,<payload>` run with
   `data:<type>;base64,[elided]`.
 
@@ -257,7 +274,11 @@ the id written in the URL. It is factored out of `export.rewrite_images` into
 `export.resolve_url(cid, url) -> Path | None`, which both now call, so the two
 cannot drift. The sniff at step 1 is `export.packed_ext` over the first bytes,
 the same detector the export names a packed image with, so an image the export
-would refuse is not given a slot. A remote `https://` image is never sent:
+would refuse is not given a slot — narrowed further to the formats this build's
+Pillow can decode (`post_images.decodable`): a WebP is only eligible where
+`PIL.features.check("webp")` holds, since Chaquopy's Android Pillow has no
+libwebp, and a slot given to a picture that cannot be decoded is a slot an
+older, sendable one was denied. A remote `https://` image is never sent:
 handing a third-party URL to a provider is a fetch the reader did not ask for.
 It stays alt text.
 
@@ -267,8 +288,14 @@ It stays alt text.
 IMAGE_TOKENS * len(image_refs(content)) + MESSAGE_OVERHEAD`.
 
 `pack.pack` gets a step before every other: **while over budget and any image
-remains, the oldest remaining `image_ref` is removed** (and a carrier left with
-none is removed). Only then does today's algorithm run, on costs that are by
+remains, the oldest remaining `image_ref` is removed**. A content left with no
+ref collapses to `text_of` (a string, exactly today's), and a carrier left with
+none is removed outright — so the packed history never holds a list that is
+only text, nor an empty carrier. `pack` edits **copies**: `_prepare` packs the
+same history once per guidance profile, so a message `pack` changes is replaced
+by a new dict in its own output list, never edited in place. Carrier removal
+here is image removal, counted in `dropped_tokens` and never in
+`history_trimmed`. Only then does today's algorithm run, on costs that are by
 then exactly today's text costs. So under budget pressure a picture is given up
 before a section or a line of history, and a route that receives the text
 lowering gets byte-for-byte the packing today's code produces: if every image
@@ -284,8 +311,8 @@ tokens, and its docstring says so.
 
 ## The inspector and the bar
 
-`_breakdown` reports the history row with `text_of` each kept message as its
-text and `sum(count(text_of) + MESSAGE_OVERHEAD)` as its tokens, and adds an
+`_breakdown` reports the history row with `text_of` each kept non-carrier
+message as its text (a carrier contributes no blank entry to the join) and `sum(count(text_of) + MESSAGE_OVERHEAD)` as its tokens, and adds an
 **Images** row — `id: "history_images"`, `label: "Images (n)"`, tier `history`,
 text listing each kept ref's alt text and URL, tokens `n * IMAGE_TOKENS` — when
 the kept history carries any. `total_tokens` is computed as today, from
@@ -322,9 +349,11 @@ attribute set by the scene composers (and by `from_snapshot(..., campaign=)`,
 which every snapshot restore passes the running campaign's id to), carried
 through `with_appended`. A plain message list has none and never carries refs.
 
-`_dispatch(messages, conn, usage)` selects the model variant as today, then:
+`_dispatch(messages, conn, usage)` reads `messages.campaign` first (the
+variant `for_model` returns is a plain list), selects the model variant as
+today, then:
 
-- no `image_ref` anywhere → the messages go to the provider unchanged, with no
+- `needs_lowering` false → the messages go to the provider unchanged, with no
   thread hop (absorb, judges and drafts pay nothing for this feature);
 - otherwise it returns an async generator that runs
   `images(conn)` and then `as_images(..., keep, load)` or `as_text` in
@@ -343,15 +372,38 @@ connection's timeout — accepted, and stated in the docstring.
 
 A provider can refuse an image for its format, size or content policy, and in a
 role-play library the last is not hypothetical. Without a degrade, that one
-picture fails every turn until it ages out of the window. So when the attempt's
-messages carry refs and the route was going to be sent images, `_usable_routes`
-inserts a **degrade route** immediately after the primary: the same connection,
-marked to be sent the text lowering, with zero retries. `_resilient` attempts it
-only when the route before it failed with `bad_response` (a 4xx that is neither
-auth nor a rate limit) and moves past it otherwise. Its failure is not reported
-as "the fallback failed too": it is the same connection, so a lone primary with
-a degrade still raises its own error. The degrade is logged at warning
-(`images refused by <connection>; retried as text`) so the cause is findable.
+picture fails every turn until it ages out of the window.
+
+`LLMError` gains an optional `status: int | None` — the HTTP status of the
+response that produced it, `None` for anything that was not one — set by both
+adapters where they already map a status to a kind. `bad_response` alone cannot
+carry this decision: it is also what a 500, 502 or 503 maps to, and re-sending
+as text on a server error would drop the pictures from a turn that a plain
+retry would have served. `REJECTED_STATUSES = {400, 413, 415, 422}` is the
+provider saying "not this request".
+
+When the messages carry refs (`has_refs`, a pure check — no resolver runs while
+routes are built, so nothing reads a sidecar on the event loop),
+`_usable_routes` follows **every** route with a **degrade sibling**: the same
+connection, marked to be sent the text lowering, with zero retries. `_resilient`
+attempts a degrade sibling only when the attempt just before it, on the same
+connection, actually sent images (the holder's `images > 0`) and failed with a
+status in `REJECTED_STATUSES`; otherwise it moves past it without an attempt.
+So a fallback that reads images and refuses one is degraded too.
+
+Moving onto or past a degrade sibling is not falling back: it does not set
+`fell_back`, and the error that connection reports is the **last** one it
+raised (the degrade's, when it ran — so its `retry_after` survives), which is
+then combined with the other connection's exactly as today. A lone primary
+with a degrade sibling still raises its own error, never "the fallback failed
+too". The degrade is logged at warning (`images refused by <connection>;
+retried as text`) so the cause is findable.
+
+A known limit, pre-existing and not widened here: OpenRouter reports an error
+that arises after streaming has begun as an SSE `{"error": …}` frame on an HTTP
+200, which `openrouter.stream` does not read, so such a refusal ends a turn
+empty rather than degrading. Image refusals are overwhelmingly pre-stream
+validation, which arrives as an HTTP status and is covered.
 
 `_carries_parts` becomes "carries a part that cannot be lowered": a message of
 `text` / `image_ref` parts is not a reason to drop a `claude` fallback, because
@@ -383,7 +435,11 @@ uses; two strings join exactly as today. System messages are always strings.
    under the 5 MB per-image limit Anthropic applies).
 5. Cache the encoded bytes in a small in-process LRU keyed by
    `(path, mtime_ns, size)` — a picture stays in the window for many turns,
-   and re-decoding it every turn is pointless. Bounded by entry count (16).
+   and re-decoding it every turn is pointless. Bounded by **total bytes**
+   (`CACHE_BYTES = 16 MB`, evicting least recently used), not entry count,
+   because one PNG may be close to `MAX_SEND_BYTES` and the app also runs on a
+   phone; guarded by a lock, because it is filled from concurrent
+   `to_thread` workers.
 
 `SEND_EDGE` because providers downscale to roughly this size before tokenising
 anyway, so more pixels buy nothing but upload, and it is what keeps N images
@@ -456,8 +512,13 @@ prefix stable.
 - `LLMClient`: a vision route receives `image_url` parts with `data:` URIs only
   in user messages, the holder's `images` count; a text route the identical
   `images=0` string; a claude fallback kept and sent text; a draft's
-  `image_url` parts still exclude it; a `bad_response` with images retried once
-  on the same connection as text, a `rate_limit` not; the setting turned off
+  `image_url` parts still exclude it; a 400/413/415/422 after images were sent
+  retried once on the same connection as text (on the fallback too), a 5xx or
+  a 429 not, a rejection on an attempt that sent no image not, no "fallback
+  failed too" for a lone primary, the degrade's own error reported when it
+  fails; a text-only list (every ref packed away) still lowered to a string
+  before a `claude` route; a carrier merged into a director note's user
+  message rather than emitted beside it; the setting turned off
   between compose and dispatch sends text; the wrapper closes the provider
   stream on caller close; no thread hop without refs.
 - `_strict_messages` folds list content and folds strings exactly as before.
