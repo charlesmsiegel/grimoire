@@ -33,4 +33,7 @@ guard forbids. Importers name the submodule they want:
   signals that rank possible duplicates; scores rank, they never write.
 - ``identity`` -- which absorb rows would open a new thread or commitment, and
   the stored same-type records each might already be; read-only.
+- ``reconcile`` -- the reconciliation sweep: deterministic discovery of possible
+  overlaps, closures and resolutions over the whole ledger; scores rank, they
+  never write.
 """
