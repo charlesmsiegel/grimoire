@@ -70,6 +70,7 @@ test("the max-tokens box warns what it caps", async () => {
   render(<SamplerPresetEditor />);
   fireEvent.click(await screen.findByText("+ New preset"));
   expect(screen.getByText(/absorb and dossiers included/)).toBeInTheDocument();
+  expect(screen.getByText(/count the model's thinking against this cap/)).toBeInTheDocument();
 });
 
 test("an import shows what mapped and what did not", async () => {

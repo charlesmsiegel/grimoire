@@ -332,7 +332,7 @@ export function SamplerPresetEditor() {
             ) : (
               <Field key={spec.name} label={spec.label}
                      hint={spec.name === "max_tokens"
-                       ? "Caps every call this preset reaches — absorb and dossiers included — and a reply cut off by it is kept as if complete. Response targets are the tool for prose length."
+                       ? "Caps every call this preset reaches — absorb and dossiers included — and a reply cut off by it is kept as if complete. On a reasoning model, many providers count the model's thinking against this cap too, so a cap sized for the prose can be spent before the reply starts. Response targets (words and paragraphs) are the tool for prose length."
                        : `${spec.min} to ${spec.max}`}>
                 <input type="number" inputMode="decimal"
                        step={spec.kind === "int" ? 1 : "any"}
@@ -378,7 +378,8 @@ export function SamplerPresetEditor() {
             <p className="field-hint">
               Off by default: SillyTavern writes a response length into every
               preset, and as a hard cap it would cut off absorb and dossiers as
-              well as prose.
+              well as prose — and on a reasoning model the thinking may count
+              against it too, leaving little or nothing for the reply.
             </p>
             <div className="form-actions">
               <button className="primary" onClick={() => void runImport()}

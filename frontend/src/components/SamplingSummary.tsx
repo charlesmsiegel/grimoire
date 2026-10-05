@@ -47,6 +47,16 @@ export function SamplingSummary({ report }: { report: SamplingReport | null | un
           ))}
         </ul>
       )}
+      {/* Said where the cap is actually being SENT, not only where it is
+          edited: a cap that eats a reasoning model's reply looks, from the
+          transcript, like a model that stopped mid-sentence for no reason. */}
+      {report.applied.max_tokens !== undefined && (
+        <div className="field-hint">
+          A max-tokens cap is sent. On a reasoning model, many providers count
+          the thinking against it as well, so a reply can be cut short — or
+          never start — under a cap sized for the prose.
+        </div>
+      )}
       {!report.verified && (
         <div className="field-hint">
           Unverified: this connection's cached model list does not say which
