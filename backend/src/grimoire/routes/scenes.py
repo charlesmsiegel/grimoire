@@ -3663,6 +3663,11 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     so. Omitted (the panel's own button, which is held while a turn streams) the
     scene is taken as it is.
     """
+    # A forced fold on a closed branch spends a call on a scene nobody can play
+    # (play controls III). The unforced call is the automatic path and is left
+    # alone: a closed scene takes no turns, so it has nothing due to fold.
+    if force:
+        runs.require_scene_open(cid, sid)
     # Two passes at most. The second only happens for a FORCED call that found
     # another fold already at the provider: it waits for that one, then starts
     # over from a fresh read, because everything below -- the scene, the facts,
@@ -3971,6 +3976,10 @@ async def post_scene_break(cid: str, sid: str, force: bool = False,
     simply wins. `_break_commit` still refuses a write whose transcript moved
     underneath it, which is the case that actually corrupts.
     """
+    # `post_rolling_summary`'s refusal, for its reason: a forced question about
+    # a closed branch is a paid answer about a scene nobody can play.
+    if force:
+        runs.require_scene_open(cid, sid)
     return await _break_once(cid, sid, force, upto, client)
 
 

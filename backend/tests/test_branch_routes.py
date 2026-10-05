@@ -113,6 +113,33 @@ def test_an_absorb_phase_retry_on_a_closed_scene_is_refused(closed, client):
     assert r.json()["closed_by"]["sid"] == absorbed
 
 
+def test_llm_spending_work_on_a_closed_scene_is_refused(closed, client, monkeypatch):
+    """Not transcript doors, but each spends a call on a scene nobody can play:
+    a forced rolling summary, a forced scene-break check, and a tracker retry
+    or re-run. Refused before the provider is reached. The unforced summary and
+    break check -- the automatic path -- and the plain reads are not."""
+    cid, absorbed, sid = closed
+    monkeypatch.setattr(store.config, "DEFAULT_TRACKER", "on")
+    fake = FakeLLM([["unused"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    key = next(k for _, k in store.tracker.walk.ordered_keys(cid, sid))
+    for path in (f"{base}/rolling-summary?force=true", f"{base}/scene-break?force=true",
+                 f"{base}/tracker/records/{key}/retry",
+                 f"{base}/tracker/records/{key}/rerun-from"):
+        r = client.post(path)
+        assert r.status_code == 409, f"{path} answered {r.status_code}: {r.text}"
+        assert r.json().get("kind") == "branch_closed", f"{path}: {r.json()}"
+        assert r.json()["closed_by"]["sid"] == absorbed
+    for path in (f"{base}/rolling-summary", f"{base}/scene-break"):
+        r = client.post(path)
+        assert r.status_code == 200, f"{path} answered {r.status_code}: {r.text}"
+    for path in (f"{base}/rolling-summary", f"{base}/scene-break", f"{base}/tracker"):
+        r = client.get(path)
+        assert r.status_code == 200, f"{path} answered {r.status_code}: {r.text}"
+    assert fake.calls == 0
+
+
 def test_a_manual_check_on_a_closed_scene_is_refused(client):
     """Set up in full, as test_scene_freeze's check case: an unresolvable check
     is a 400 raised before the lock, which would pass with no guard at all."""

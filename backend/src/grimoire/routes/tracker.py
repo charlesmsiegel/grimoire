@@ -994,8 +994,11 @@ def post_tracker_retry(cid: str, sid: str, key: str, request: Request,
 
     When the record had no usable result (failed, interrupted, or never
     tracked), a success flags every later record: each was built without this
-    post's contribution. A retry of an `ok` record leaves them alone."""
+    post's contribution. A retry of an `ok` record leaves them alone.
+
+    Refused on a closed branch: a paid update of a scene nobody can play."""
     _require_scene(cid, sid)
+    runs.require_scene_open(cid, sid)
     _require_key(key)
     _require_on(cid)
     if _locate(cid, sid, key) is None:
@@ -1019,8 +1022,10 @@ def post_tracker_rerun_from(cid: str, sid: str, key: str, request: Request,
     so each starts from what the one before it just wrote. Each save clears its
     own flags; nothing needs flagging, because everything after is re-run.
     The first is started from its base record on purpose (`trust_base`): the
-    person chose to re-run from here with that record's warning in view."""
+    person chose to re-run from here with that record's warning in view.
+    Refused on a closed branch, as `post_tracker_retry` is."""
     _require_scene(cid, sid)
+    runs.require_scene_open(cid, sid)
     _require_key(key)
     _require_on(cid)
     ordered = [k for _, k in store.tracker.walk.ordered_keys(cid, sid)]
