@@ -20,4 +20,6 @@ guard forbids. Importers name the submodule they want:
   current-state reader uses, and the prompt-snippet renders.
 - ``involvement`` -- which actors and scenes a record has touched.
 - ``review`` -- validated, journalled alias and link writes.
+- ``pressure`` -- temporal pressure: one dated item list over events, holidays,
+  birthdays and deadlines; read-only, and never imported by ``clock``.
 """
