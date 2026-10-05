@@ -1,0 +1,4 @@
+# Pre-existing backend test failures before stage 1 (environmental: suite run as root,
+# so chmod-based read-only protections do not apply). Not regressions.
+tests/test_atomic.py::test_a_read_only_record_is_not_silently_replaced
+# Full run: 1 failed, 9780 passed, 2 skipped (~26 min, serial).
