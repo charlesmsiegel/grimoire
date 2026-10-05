@@ -270,13 +270,16 @@ def inherited(level: str, key: str = "") -> list[Entry]:
     return _stack(level, key, off)
 
 
-def effective(*, cid: str | None, connection: str = "") -> list[Entry]:
+def effective(*, cid: str | None, connection: str = "", world: str = "") -> list[Entry]:
     """The rules for one message, in run order: the producing connection's, then
     global, world, campaign. An entry the world or campaign switched off is
     kept, marked `off`, so the editor can show it struck through. A missing or
     deleted connection contributes nothing. Entries share their rules with the
-    cache: read them, do not edit them."""
-    wid = world_of(cid) if cid else ""
+    cache: read them, do not edit them.
+
+    `world` names the world directly for a caller with no campaign (the editor's
+    test pane, cut at the world level); a `cid` takes its world from the campaign."""
+    wid = world_of(cid) if cid else world
     world_off = set(_load("world", wid)["off"]) if wid else set()
     campaign_off = set(_load("campaign", cid)["off"]) if cid else set()
     # The world may switch off connection and global rules, the campaign those

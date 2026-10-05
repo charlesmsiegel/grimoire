@@ -184,3 +184,70 @@ def test_test_endpoint_bad_draft_is_a_400(client, ids):
     detail = res.json()  # the app flattens a dict detail into the body
     assert detail["kind"] == "invalid_rule" and detail["field"] == "pattern"
     assert detail["index"] is None
+
+
+def _two_connections(client, ids):
+    """Connection `ids[2]` and a second, each with a rule, plus a global and a
+    world rule and the world's off list left empty."""
+    other = store.llm_connections.create_connection("openrouter", "Winifred", api_key="k")
+    client.put(_url("connection", ids), json={"rules": [_rule("ConnA", "a", "a")]})
+    client.put(f"/api/llm-connections/{other}/regex", json={"rules": [_rule("ConnB", "b", "b")]})
+    client.put(_url("global", ids), json={"rules": [_rule("Glob", "g", "g")]})
+    client.put(_url("world", ids), json={"rules": [_rule("Wld", "w", "w")]})
+    return other
+
+
+def _names(body: dict) -> list[str]:
+    return [s["name"] for s in body["steps"]]
+
+
+def test_world_scope_runs_one_connection_then_global_then_world(client, ids):
+    other = _two_connections(client, ids)
+    scope = _scope("world", ids)
+    mine = client.post("/api/regex/test", json={
+        "scope": scope, "text": "x", "connection": ids[2]}).json()
+    assert _names(mine) == ["ConnA", "Glob", "Wld"]
+    theirs = client.post("/api/regex/test", json={
+        "scope": scope, "text": "x", "connection": other}).json()
+    assert _names(theirs) == ["ConnB", "Glob", "Wld"]
+    none = client.post("/api/regex/test", json={"scope": scope, "text": "x"}).json()
+    assert _names(none) == ["Glob", "Wld"]
+
+
+def test_world_scope_applies_the_worlds_off(client, ids):
+    _two_connections(client, ids)
+    glob = client.get("/api/regex").json()["layer"]["rules"][0]["id"]
+    client.put(_url("world", ids), json={"rules": [_rule("Wld", "w", "w")], "off": [glob]})
+    body = client.post("/api/regex/test", json={
+        "scope": _scope("world", ids), "text": "x", "connection": ids[2]}).json()
+    assert [(s["name"], s["reason"]) for s in body["steps"]] == [
+        ("ConnA", None), ("Glob", "switched off"), ("Wld", None)]
+
+
+def test_global_scope_takes_the_connection_then_global(client, ids):
+    other = _two_connections(client, ids)
+    scope = {"kind": "global"}
+    mine = client.post("/api/regex/test", json={
+        "scope": scope, "text": "x", "connection": other}).json()
+    assert _names(mine) == ["ConnB", "Glob"]
+    none = client.post("/api/regex/test", json={"scope": scope, "text": "x"}).json()
+    assert _names(none) == ["Glob"]
+
+
+def test_connection_scope_is_its_own_rules_then_global(client, ids):
+    other = _two_connections(client, ids)
+    body = client.post("/api/regex/test", json={
+        "scope": _scope("connection", ids), "text": "x", "connection": other}).json()
+    assert _names(body) == ["ConnA", "Glob"]
+    assert body["steps"][0]["level"] == "connection"
+    # A new draft runs with the connection's rules, ahead of the global ones.
+    drafted = client.post("/api/regex/test", json={
+        "scope": _scope("connection", ids), "text": "x", "draft": _rule("New")}).json()
+    assert _names(drafted) == ["ConnA", "New", "Glob"]
+
+
+def test_put_campaign_regex_moves_the_write_token(client, ids):
+    cid = ids[1]
+    before = store.revision.current(cid)
+    assert client.put(_url("campaign", ids), json={"rules": [_rule("Camp")]}).status_code == 200
+    assert store.revision.current(cid) != before
