@@ -99,6 +99,24 @@ def _visible_birthdates(cid: str, seen: set[str], *, include_undated: bool,
     return out
 
 
+def _yearless_parts(birth: str) -> tuple[None, str, int | None]:
+    """`--month-day` or `--month`: the parts of a birthdate with no year."""
+    raw = birth[2:]
+    month, sep, day = raw.rpartition("-")
+    if sep and day.isdigit():
+        # `isdigit` admits superscripts (`"²"`) that `int` refuses; an
+        # unreadable day is the data's failure, so say so as one.
+        if not re.fullmatch(r"[0-9]+", day):
+            raise calendars.CalendarError(f"bad birthdate: {birth!r}")
+        n = int(day)
+        if month and 1 <= n <= 31:
+            return None, month, n
+        raise calendars.CalendarError(f"bad birthdate: {birth!r}")
+    if raw:
+        return None, raw, None
+    raise calendars.CalendarError(f"bad birthdate: {birth!r}")
+
+
 def _parts(birth: str, provider=None) -> tuple[int | None, str, int | None] | None:
     """Incomplete year/month/day parts, or None for a full date.
 
@@ -106,16 +124,7 @@ def _parts(birth: str, provider=None) -> tuple[int | None, str, int | None] | No
     preserves month keys such as `Mirtul` without imposing Gregorian notation.
     """
     if birth.startswith("--"):
-        raw = birth[2:]
-        month, sep, day = raw.rpartition("-")
-        if sep and day.isdigit():
-            n = int(day)
-            if month and 1 <= n <= 31:
-                return None, month, n
-            raise calendars.CalendarError(f"bad birthdate: {birth!r}")
-        if raw:
-            return None, raw, None
-        raise calendars.CalendarError(f"bad birthdate: {birth!r}")
+        return _yearless_parts(birth)
     if re.fullmatch(r"-?\d+", birth):
         # A plugin may use a numeric string as its *complete* native date.
         # Ask it before treating the same syntax as a partial year.
@@ -298,6 +307,14 @@ def _when(provider, birth: str, now_fixed: int) -> tuple[str | None, int | None]
     return _label(provider, hit, now_fixed), hit["age"]
 
 
+# What reading one actor's birthdate can raise when the *string* is the problem.
+# A PUT stores any text, and a provider's date arithmetic raises OverflowError on
+# a year past its range rather than CalendarError -- so the per-actor guards in
+# `occurrences` and `upcoming` catch the same data failures `_friendly_birthdate`
+# already does, and one unreadable card costs only that card.
+_UNREADABLE = (calendars.CalendarError, ValueError, OverflowError)
+
+
 def occurrences(cid: str, now_fixed: int, window: int = calendars.UPCOMING_WINDOW_DAYS, *,
                 provider=None, roster: list[dict] | None = None,
                 visible_characters: bool = True) -> list[dict]:
@@ -322,7 +339,7 @@ def occurrences(cid: str, now_fixed: int, window: int = calendars.UPCOMING_WINDO
     for row in gather(cid, roster, visible_characters=visible_characters):
         try:
             hits = list(_actor_hits(provider, row, now_fixed, window))
-        except calendars.CalendarError:
+        except _UNREADABLE:
             continue
         out.extend(hits)
     return out
@@ -352,7 +369,7 @@ def upcoming(cid: str, now: str, roster: list[dict], *, visible_characters: bool
                 continue
             out.append({"name": row["name"], "age": hit["age"],
                         "when": _label(provider, hit, now_fixed)})
-        except calendars.CalendarError:
+        except _UNREADABLE:
             continue
     return out
 
