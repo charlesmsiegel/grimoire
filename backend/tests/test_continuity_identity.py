@@ -601,3 +601,316 @@ def test_build_prompt_with_no_optional_fields_renders():
                   "Distinguished from:", "Earlier:"):
         assert label not in text, label
     assert not text.endswith("\n")
+
+
+# ------------------------------------------------------------ deciding rows
+
+#: A second reword of `LEDGER_THREAD`, so two rows can name one record.
+RECOVER_THE_LEDGER_AGAIN = {"title": "Recover the ledger",
+                            "beat": "Winifred searched the harbour for the ledger.",
+                            "status": "open"}
+
+#: A proposed commitment rewording `the-midnight-deadline`, with no due phrase.
+SERAPHINES_THREAT = {"title": "Seraphine's midnight deadline",
+                     "beat": "Seraphine must pay the midnight deadline.",
+                     "kind": "threat", "status": "open"}
+
+#: A citation, as `parse_output` carries one.
+CITED = {"quote": "I want that ledger back.", "speaker": "Winifred", "certainty": 0.8}
+
+
+def _say(*answers):
+    """A resolver reply, through `parse_output` as the route reads one."""
+    return identity.parse_output(json.dumps({"decisions": [
+        {"row": row, "decision": word, "id": rid, "reason": f"because {row}"}
+        for row, word, rid in answers]}))
+
+
+def _assert_ledger_candidate(cid, sid, row):
+    sig = similarity.lexical(_proposed("thread", row, sid), _pooled(cid, "thread:find-the-ledger"))
+    assert sig["tokens"] >= similarity.TOKEN_FLOOR
+
+
+def _seed_deadline(cid, scene, status="open"):
+    store.commitments.set_movement(cid, "the-midnight-deadline", "The midnight deadline",
+                                   "threat", status, "midnight",
+                                   "Seraphine must pay by midnight.", scene)
+
+
+def _rewrite(exam, plot=(), owed=()):
+    parsed = {"plot_movements": [dict(r) for r in plot],
+              "commitment_movements": [dict(r) for r in owed], "one_line": "o"}
+    return parsed, exam.rewritten(parsed)
+
+
+def test_accepted_existing_rewrites_plot_row_status_never_open(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    _assert_ledger_candidate(cid, sid, RECOVER_THE_LEDGER)
+    for given, staged in (("open", "advanced"), ("advanced", "advanced"), ("closed", "closed")):
+        row = {**RECOVER_THE_LEDGER, "status": given}
+        exam = _examine(cid, sid, plot=[row])
+        exam.decide(_say(("r1", "existing", "find-the-ledger")))
+        [examined] = exam.rows
+        assert (examined.decision, examined.status, examined.target) == (
+            "existing", "accepted", "find-the-ledger")
+        parsed, out = _rewrite(exam, plot=[row])
+        [new] = out["plot_movements"]
+        assert new["id"] == "find-the-ledger"
+        assert new["title"] == ""
+        assert new["status"] == staged
+        assert new["beat"] == row["beat"]
+        assert new[identity.AS_NEW_KEY] == row
+        assert parsed["plot_movements"] == [row]          # the input is not mutated
+        assert out["plot_movements"] is not parsed["plot_movements"]
+        assert out["one_line"] == "o"
+
+
+def test_accepted_existing_rewrites_commitment_fields(cid, s0, sid):
+    _seed_deadline(cid, s0)
+    sig = similarity.lexical(_proposed("commitment", SERAPHINES_THREAT, sid),
+                             _pooled(cid, "commitment:the-midnight-deadline"))
+    assert sig["tokens"] >= similarity.TOKEN_FLOOR
+    exam = _examine(cid, sid, owed=[SERAPHINES_THREAT])
+    exam.decide(_say(("r1", "existing", "the-midnight-deadline")))
+    [new] = _rewrite(exam, owed=[SERAPHINES_THREAT])[1]["commitment_movements"]
+    assert (new["id"], new["title"], new["kind"], new["status"]) == (
+        "the-midnight-deadline", "", "", "")
+    assert "due" not in new
+    assert new[identity.AS_NEW_KEY] == SERAPHINES_THREAT
+
+    kept = {**SERAPHINES_THREAT, "status": "fulfilled", "due": "midnight"}
+    exam = _examine(cid, sid, owed=[kept])
+    exam.decide(_say(("r1", "existing", "the-midnight-deadline")))
+    [new] = _rewrite(exam, owed=[kept])[1]["commitment_movements"]
+    assert (new["id"], new["kind"], new["status"], new["due"]) == (
+        "the-midnight-deadline", "", "fulfilled", "midnight")
+
+
+def test_existing_naming_an_unoffered_id_is_uncertain(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    _seed_deadline(cid, s0)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER])
+    # A stored record of another type, and an id that names nothing.
+    for rid in ("the-midnight-deadline", "nope", ""):
+        exam.decide(_say(("r1", "existing", rid)))
+        [examined] = exam.rows
+        assert (examined.decision, examined.status, examined.reason, examined.target) == (
+            "uncertain", "downgraded", "named a record that was not offered", None)
+    [new] = _rewrite(exam, plot=[RECOVER_THE_LEDGER])[1]["plot_movements"]
+    assert "id" not in new and new["title"] == RECOVER_THE_LEDGER["title"]
+    assert identity.AS_NEW_KEY not in new
+
+
+def test_existing_naming_a_closed_candidate_is_downgraded(cid, s0, sid):
+    _seed_ledger(cid, s0, status="closed")
+    row = {**RECOVER_THE_LEDGER, "id": "recover-the-harbour-ledger"}
+    exam = _examine(cid, sid, plot=[row])
+    [examined] = exam.rows
+    [(cand, _)] = examined.candidates
+    assert cand.ref == "thread:find-the-ledger" and cand.live is False
+    exam.decide(_say(("r1", "existing", "find-the-ledger")))
+    assert (examined.decision, examined.status, examined.reason, examined.target) == (
+        "uncertain", "downgraded", "that record is already closed or resolved", None)
+    [new] = _rewrite(exam, plot=[row])[1]["plot_movements"]
+    assert new["id"] == "recover-the-harbour-ledger"
+    assert new["title"] == row["title"] and new["status"] == "open"
+    assert new["identity_check"]["decision"] == "uncertain"
+    assert identity.AS_NEW_KEY not in new
+
+
+def test_existing_naming_a_resolved_commitment_is_downgraded(cid, s0, sid):
+    _seed_deadline(cid, s0, status="broken")
+    exam = _examine(cid, sid, owed=[SERAPHINES_THREAT])
+    exam.decide(_say(("r1", "existing", "commitment:the-midnight-deadline")))
+    [examined] = exam.rows
+    assert (examined.decision, examined.status) == ("uncertain", "downgraded")
+    assert examined.reason == "that record is already closed or resolved"
+
+
+def test_second_row_mapping_to_the_same_record_is_downgraded(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    _assert_ledger_candidate(cid, sid, RECOVER_THE_LEDGER)
+    _assert_ledger_candidate(cid, sid, RECOVER_THE_LEDGER_AGAIN)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER, RECOVER_THE_LEDGER_AGAIN])
+    first, second = exam.rows
+    assert (first.key, second.key) == ("r1", "r2")
+    exam.decide(_say(("r1", "existing", "find-the-ledger"), ("r2", "existing", "find-the-ledger")))
+    assert (first.decision, first.status, first.target) == ("existing", "accepted",
+                                                            "find-the-ledger")
+    assert (second.decision, second.status, second.reason, second.target) == (
+        "uncertain", "downgraded", "another row in this scene already moves that record", None)
+
+
+def test_existing_naming_a_record_an_explicit_row_already_moves_is_downgraded(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    explicit = {"id": "find-the-ledger", "title": "", "beat": "Winifred found a page.",
+                "status": "advanced"}
+    exam = _examine(cid, sid, plot=[explicit, RECOVER_THE_LEDGER])
+    assert exam.targets == {("thread", "find-the-ledger")}
+    [examined] = exam.rows
+    assert (examined.key, examined.index) == ("r1", 1)
+    exam.decide(_say(("r1", "existing", "find-the-ledger")))
+    assert (examined.decision, examined.status, examined.reason) == (
+        "uncertain", "downgraded", "another row in this scene already moves that record")
+    # decide never adds to the examination's own targets.
+    assert exam.targets == {("thread", "find-the-ledger")}
+
+
+def test_existing_named_by_alias_source_or_ref_form_is_accepted(cid, s0, sid):
+    _seed_alias(cid, s0)
+    row = {"title": "Mara's map", "beat": "Mara hunted for her map.", "status": "open"}
+    exam = _examine(cid, sid, plot=[row])
+    [examined] = exam.rows
+    assert "thread:b" in _refs(examined)
+    for named in ("a", "thread:b", "thread:a", "b"):
+        exam.decide(_say(("r1", "existing", named)))
+        assert (examined.decision, examined.status, examined.target) == (
+            "existing", "accepted", "b"), named
+    [new] = _rewrite(exam, plot=[row])[1]["plot_movements"]
+    assert new["id"] == "b"
+
+
+def test_a_ref_prefix_of_the_other_kind_is_not_stripped(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER])
+    exam.decide(_say(("r1", "existing", "commitment:find-the-ledger")))
+    [examined] = exam.rows
+    assert (examined.decision, examined.status) == ("uncertain", "downgraded")
+    assert examined.reason == "named a record that was not offered"
+
+
+def test_missing_decision_is_unchecked_hint_only(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER, RECOVER_THE_LEDGER_AGAIN])
+    first, second = exam.rows
+    exam.decide(_say(("r1", "new", "")))
+    assert (first.decision, first.status, first.reason) == ("new", "accepted", "because r1")
+    assert (second.decision, second.status, second.reason, second.target) == (
+        "unchecked", "hint_only", "the check gave no answer for this row", None)
+    assert not exam.all_unchecked()
+    exam.decide([])
+    assert exam.all_unchecked()
+
+
+def test_new_and_uncertain_arrive_as_given_with_the_models_reason(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER, RECOVER_THE_LEDGER_AGAIN])
+    first, second = exam.rows
+    exam.decide(_say(("r1", "uncertain", "find-the-ledger"), ("r2", "new", "find-the-ledger")))
+    assert (first.decision, first.status, first.reason, first.target) == (
+        "uncertain", "accepted", "because r1", None)
+    assert (second.decision, second.status, second.reason, second.target) == (
+        "new", "accepted", "because r2", None)
+
+
+def test_unknown_decision_word_arrives_as_uncertain_accepted(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER])
+    exam.decide(_say(("r1", "maybe", "find-the-ledger")))
+    [examined] = exam.rows
+    assert (examined.decision, examined.status, examined.target) == (
+        "uncertain", "accepted", None)
+
+
+def test_hint_only_discards_decide(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER])
+    exam.decide(_say(("r1", "existing", "find-the-ledger")))
+    for _ in range(2):   # idempotent
+        exam.hint_only("no connection")
+        [examined] = exam.rows
+        assert (examined.decision, examined.status, examined.reason, examined.target) == (
+            "unchecked", "hint_only", "no connection", None)
+    assert exam.all_unchecked()
+    [new] = _rewrite(exam, plot=[RECOVER_THE_LEDGER])[1]["plot_movements"]
+    assert "id" not in new and new["title"] == RECOVER_THE_LEDGER["title"]
+    assert identity.AS_NEW_KEY not in new
+    assert new["identity_check"]["decision"] == "unchecked"
+
+
+def test_citations_survive_rewrite(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    cited = {**RECOVER_THE_LEDGER, **CITED}
+    again = {**RECOVER_THE_LEDGER_AGAIN, **CITED}
+    exam = _examine(cid, sid, plot=[cited, again])
+    exam.decide(_say(("r1", "existing", "find-the-ledger"), ("r2", "uncertain", "")))
+    accepted, uncertain = _rewrite(exam, plot=[cited, again])[1]["plot_movements"]
+    for new in (accepted, uncertain):
+        assert {k: new[k] for k in CITED} == CITED
+
+
+def test_identity_check_shape(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    row = {**RECOVER_THE_LEDGER, "why_new": "A second search.",
+           "distinguished_from": ["find-the-ledger", "nope"]}
+    exam = _examine(cid, sid, plot=[row, SALTMARCH_TITHE])
+    exam.decide(_say(("r1", "existing", "find-the-ledger")))
+    [new, plain] = _rewrite(exam, plot=[row, SALTMARCH_TITHE])[1]["plot_movements"]
+    assert plain == SALTMARCH_TITHE   # no plausible candidate: untouched
+    ic = new["identity_check"]
+    assert set(ic) == {"decision", "status", "reason", "proposed", "candidates"}
+    assert (ic["decision"], ic["status"], ic["reason"]) == ("existing", "accepted",
+                                                            "because r1")
+    assert ic["proposed"] == {"title": "Recover the harbour ledger",
+                              "why_new": "A second search.",
+                              "distinguished_from": ["find-the-ledger"]}
+    [cand] = ic["candidates"]
+    assert set(cand) == {"ref", "title", "status", "latest_beat", "signals"}
+    assert (cand["ref"], cand["title"], cand["status"], cand["latest_beat"]) == (
+        "thread:find-the-ledger", "Find the ledger", "open",
+        "Winifred learned the harbour ledger exists.")
+    assert cand["signals"]["via"] == "lexical"
+    # The private original carries no identity_check of its own.
+    assert "identity_check" not in new[identity.AS_NEW_KEY]
+    json.dumps(new)   # stored with the review, so plain JSON
+
+
+def test_proposed_title_falls_back_to_the_assigned_id(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    row = {"id": "recover-the-harbour-ledger", "title": "", "beat": RECOVER_THE_LEDGER["beat"],
+           "status": "open"}
+    exam = _examine(cid, sid, plot=[row])
+    [new] = _rewrite(exam, plot=[row])[1]["plot_movements"]
+    assert new["identity_check"]["proposed"]["title"] == "recover-the-harbour-ledger"
+    assert new["identity_check"]["proposed"]["why_new"] == ""
+
+
+COUNT_KEYS = {"proposed", "examined", "candidates", "deterministic", "semantic", "embedded",
+              "existing", "new", "uncertain", "unchecked", "downgraded", "hint_only"}
+
+
+def test_counts_are_flat_ints(cid, s0, sid, monkeypatch):
+    _configure()
+    proposed = _seed_paraphrase_fixture(cid, s0, sid, cached=True)
+    near = [0.9, math.sqrt(1 - 0.81)]
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(
+        vector_for=lambda t: near if t == proposed.text else [0.0, 1.0]))
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER, PARAPHRASE, SALTMARCH_TITHE],
+                    deadline=_soon())
+    before = exam.counts()
+    assert set(before) == COUNT_KEYS
+    assert all(type(v) is int for v in before.values())
+    assert (before["proposed"], before["examined"], before["candidates"]) == (3, 2, 2)
+    assert (before["deterministic"], before["semantic"]) == (1, 1)
+    assert before["embedded"] == exam.embedded
+    assert (before["unchecked"], before["hint_only"], before["existing"]) == (2, 2, 0)
+
+    exam.decide(_say(("r1", "existing", "find-the-ledger"), ("r2", "existing", "find-the-ledger")))
+    counts = exam.counts()
+    assert set(counts) == COUNT_KEYS
+    assert all(type(v) is int for v in counts.values())
+    assert counts["deterministic"] + counts["semantic"] == counts["candidates"]
+    assert {k: counts[k] for k in ("existing", "new", "uncertain", "unchecked", "downgraded",
+                                   "hint_only")} == {
+        "existing": 1, "new": 0, "uncertain": 1, "unchecked": 0, "downgraded": 1,
+        "hint_only": 0}
+
+
+def test_all_unchecked_is_false_with_no_examined_rows(cid, s0, sid):
+    _seed_ledger(cid, s0)
+    exam = _examine(cid, sid, plot=[SALTMARCH_TITHE])
+    assert exam.rows == []
+    exam.decide([])
+    assert not exam.all_unchecked()
+    assert exam.rewritten({"plot_movements": [SALTMARCH_TITHE]}) == {
+        "plot_movements": [SALTMARCH_TITHE]}
