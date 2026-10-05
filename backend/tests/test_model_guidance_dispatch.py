@@ -111,3 +111,20 @@ async def test_strict_endpoint_receives_selected_profile_and_final_content_only(
     assert "GLM profile." in payload["messages"][0]["content"]
     assert payload["messages"][-1]["content"] == "Keep it brief."
     assert not {"temperature", "top_p", "thinking", "reasoning_effort"} & payload.keys()
+
+
+async def test_a_prefill_prompt_falls_back_with_the_instruction_tail():
+    primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
+    fallback = ScriptedProvider(chunks=(" and left.",))
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
+                           fallback={"kind": "openai_compatible", "model": "vendor/unknown"})
+    conn = {"model": "vendor/unknown", "prefill": True}
+    messages = _prepared("vendor/unknown").with_tails(
+        {"prefill": [{"role": "assistant", "content": "Mara paused"}],
+         "instruction": [{"role": "assistant", "content": "Mara paused"},
+                         {"role": "user", "content": "Continue exactly where your last message stops."}]},
+        lambda c: "prefill" if llm.prefill_capable(c) else "instruction", conn)
+    assert await facade.complete(messages, conn) == " and left."
+    assert primary.requests[0]["messages"][-1] == {"role": "assistant", "content": "Mara paused"}
+    assert fallback.requests[0]["messages"][-2] == {"role": "assistant", "content": "Mara paused"}
+    assert fallback.requests[0]["messages"][-1]["role"] == "user"

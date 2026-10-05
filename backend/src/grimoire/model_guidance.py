@@ -78,6 +78,11 @@ class PreparedMessages(list):
         self.campaign = campaign
         # The response settings the prompt rendered; set by `assemble._prepare`.
         self.settings: dict | None = None
+        #: Alternative endings chosen per dispatched ATTEMPT (`with_tails`), and
+        #: the chooser that picks one from the attempt's connection. None for
+        #: every ordinary prompt.
+        self._tails: dict[str, list[dict]] | None = None
+        self._choose: Callable[[dict], str] | None = None
         super().__init__(deepcopy(messages))
 
     def for_model(self, model: str) -> list[dict]:
@@ -95,6 +100,48 @@ class PreparedMessages(list):
                     # usable fallback into another provider failure.
                     _log.exception("Could not record model prompt variant")
         return deepcopy(messages)
+
+    def with_tails(self, tails: dict[str, list[dict]], choose: Callable[[dict], str],
+                   primary: dict) -> PreparedMessages:
+        """A copy whose sent messages end in one of `tails`, chosen per attempt.
+
+        "Keep writing" sends a partial reply either as a prefill (the reply is
+        the last message) or followed by an instruction to continue it, and
+        which one a route can take depends on that route's connection -- so a
+        fallback of another sort has to get its own ending, not the primary's.
+        `choose(conn)` names the tail for a connection; `primary` is the one
+        the call starts on, and the list body (what the prompt log and a fake
+        LLM see) is what that primary attempt sends.
+
+        Built from the factory rather than `snapshot()`, which refuses a prompt
+        that was never frozen. No breakdown: the old one does not measure the
+        appended tail, so callers get None rather than a falsely precise total.
+        """
+        copy = PreparedMessages(self._primary_model, self._factory,
+                                profiles=self._frozen_profiles, campaign=self.campaign)
+        copy._tails = deepcopy(tails)
+        copy._choose = choose
+        copy.breakdown = None
+        copy.settings = deepcopy(self.settings)
+        copy[:] = [*copy, *deepcopy(tails[choose(primary)])]
+        return copy
+
+    def for_connection(self, conn: dict, model: str) -> list[dict]:
+        """`for_model`, plus the tail this attempt's connection chooses.
+
+        `on_variant` still fires from `for_model`, once per fallback model; an
+        observer recording a tailed prompt reads `for_connection` with the
+        fallback's connection (`character_turns._capture` does), so the prompt
+        log holds the ending that fallback was really sent."""
+        if self._tails is None or self._choose is None:
+            return self.for_model(model)
+        return [*self.for_model(model), *deepcopy(self._tails[self._choose(conn)])]
+
+    def mode_for(self, conn: dict) -> str | None:
+        """The tail `conn` would be sent, or None for an untailed prompt."""
+        if self._tails is None or self._choose is None:
+            return None
+        return self._choose(conn)
 
     def any_variant(self, test: Callable[[list[dict]], bool]) -> bool:
         """Whether `test` holds for any variant this prompt could send, without

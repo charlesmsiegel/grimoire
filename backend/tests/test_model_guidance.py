@@ -232,3 +232,23 @@ def test_system_template_includes_are_frozen_for_fallback(scene, template_root, 
     header.write_text("Edited scene header", encoding="utf-8")
     assert messages.for_model("")[0]["content"].startswith("Original scene header")
     assert messages.for_model("glm-5.3")[0]["content"].startswith("Original scene header")
+
+
+def test_for_connection_appends_the_tail_the_connection_chooses():
+    guidance = importlib.import_module("grimoire.model_guidance")
+    base = guidance.PreparedMessages("m", lambda model: ([{"role": "system", "content": "S"}], None))
+    tails = {"prefill": [{"role": "assistant", "content": "Mara"}],
+             "instruction": [{"role": "assistant", "content": "Mara"},
+                             {"role": "user", "content": "Continue."}]}
+    def choose(c):
+        return "prefill" if c.get("prefill") is True else "instruction"
+    tailed = base.with_tails(tails, choose, {"prefill": True})
+    assert list(tailed)[-1] == {"role": "assistant", "content": "Mara"}
+    assert len(tailed) == 2 and tailed.breakdown is None
+    assert tailed.for_connection({"prefill": False}, "m")[-1]["role"] == "user"
+    assert tailed.for_connection({"prefill": True}, "m")[-1]["role"] == "assistant"
+    assert tailed.mode_for({}) == "instruction" and base.mode_for({}) is None
+    assert base.for_connection({"prefill": True}, "m") == base.for_model("m")
+    # The tails are copies: an adapter mutating what it was sent changes nothing.
+    tailed.for_connection({}, "m")[-1]["content"] = "mutated"
+    assert tailed.for_connection({}, "m")[-1]["content"] == "Continue."

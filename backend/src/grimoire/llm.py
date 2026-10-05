@@ -813,7 +813,11 @@ class LLMClient:
         # fallback repacks that same context with its own model's guidance.
         # Ordinary message lists (JSON extraction, judges, drafts) stay ordinary.
         if isinstance(messages, model_guidance.PreparedMessages):
-            messages = messages.for_model(effective_model(conn))
+            # `for_connection`, not `for_model`: a prompt with per-attempt
+            # tails ("Keep writing") ends the way THIS attempt's connection
+            # can take -- a fallback that cannot continue a prefill is sent
+            # the instruction instead. Untailed prompts are `for_model`.
+            messages = messages.for_connection(conn, effective_model(conn))
         if usage is not None:
             usage["images"] = 0
         if not content_parts.needs_lowering(messages):
