@@ -42,7 +42,9 @@ snapshot without anything in `store/` having regressed:
   US federal holidays from the `holidays` package; a release that renames one
   moves the snapshot. The suite already carries that exposure
   (`test_calendars.py` and `test_context.py` both assert holiday names), so the
-  section is snapshotted rather than stripped.
+  section is snapshotted rather than stripped. The scene-suggestion prompt
+  (`suggest.build_prompt`) lists upcoming holidays from the same package, so
+  it is coupled exactly the same way and snapshotted for the same reason.
 - The campaign binds the **built-in** `d20-basic` module pack, which ships
   inside `grimoire.store.builtin_modules` rather than in the fixture, so an
   edit to that pack moves the sheet, rules and check-roster sections. That is
@@ -102,6 +104,17 @@ def _sections(breakdown: dict) -> list[dict]:
     docstring on why the numbers are not snapshotted."""
     return [{"label": r["label"], "tier": r["tier"], "dropped": r["dropped"],
              "trimmed": r["trimmed"]} for r in breakdown["sections"]]
+
+
+def _or_error(fn):
+    """`fn()`, or `{"error": <exception type>}` when the fixture cannot answer
+    it (a clock read with no clock, say). Recording the failure keeps the key
+    present, so a reader that starts or stops failing is a diff rather than a
+    section that silently appeared or vanished."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 -- the sweep records a failure as data so a key is never silently absent
+        return {"error": type(e).__name__}
 
 
 def sweep(home: Path) -> dict:
@@ -171,6 +184,19 @@ def _campaign(out: dict, cid: str) -> None:
     out[f"commitments.render_open[{cid}]"] = store.commitments.render_open(cid, with_id=True)
     out[f"relationships.read[{cid}]"] = store.relationships.read(cid)
     out[f"sheets.coverage[{cid}]"] = store.sheets.coverage(cid)
+    # The other readers of the open ledgers: what the absorb prompt is shown,
+    # what an advance would report, and the scene-suggestion prompt. The prompt
+    # rather than the snapshot dict, because the prompt is the contract -- a
+    # field the template does not render is not a change anyone reads.
+    out[f"absorb.plot_snapshot[{cid}]"] = _or_error(
+        lambda: store.absorb.snapshots.plot_snapshot(cid))
+    out[f"absorb.commitment_snapshot[{cid}]"] = _or_error(
+        lambda: store.absorb.snapshots.commitment_snapshot(cid))
+    out[f"clock.preview[{cid}]"] = _or_error(lambda: store.clock.preview(cid, days=1))
+    for o in (False, True):
+        out[f"suggest.build_prompt[{cid}/offscreen={o}]"] = _or_error(
+            lambda o=o: store.suggest.build_prompt(
+                store.suggest.build_snapshot(cid, offscreen=o), offscreen=o))
 
     for ch in out[f"overlay.list_characters[{cid}]"]:
         out[f"dossiers.read[{cid}/{ch['id']}]"] = store.dossiers.read(croot, ch["id"])
@@ -191,6 +217,7 @@ def _scene(out: dict, cid: str, sid: str) -> None:
     out[f"scenes.get_time_history[{cid}/{sid}]"] = store.scenes.get_time_history(cid, sid)
     out[f"chronicle.scene_facts[{cid}/{sid}]"] = store.chronicle.scene_facts(cid, sid)
     out[f"checks.available_checks[{cid}/{sid}]"] = store.checks.available_checks(cid, sid)
+    out[f"briefing.build[{cid}/{sid}]"] = _or_error(lambda: store.briefing.build(cid, sid))
     # The prompt itself: the reason this harness exists. A store refactor that
     # drops a section, or a template edit that changes the assembled text,
     # lands here as a line-level diff.

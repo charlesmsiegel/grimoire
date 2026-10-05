@@ -403,3 +403,14 @@ def test_an_unreadable_campaign_directory_does_not_break_the_read(client, campai
     (tmp_path / "campaigns" / "not-a-campaign").mkdir(parents=True, exist_ok=True)
     assert _shell(client)["campaigns"] == 1
 
+
+
+def test_ledger_open_counts_open_commitments(client, campaign):
+    """A characterization of the rail's ledger tail for a campaign with no
+    aliases: open commitments only, so a fulfilled one is not counted."""
+    sid = store.scenes.create_scene(campaign, "The Pier at Dusk")
+    for mid, title, status in (("maras-oath", "Mara's oath", "open"),
+                               ("winifreds-promise", "Winifred's promise", "open"),
+                               ("seraphines-favour", "Seraphine's favour", "fulfilled")):
+        store.commitments.set_movement(campaign, mid, title, "promise", status, "", "", sid)
+    assert _shell(client, campaign)["campaign"]["ledger_open"] == 2
