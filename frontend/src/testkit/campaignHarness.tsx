@@ -52,6 +52,12 @@ export const RESPONSE_BUNDLE = {
     "continuation.words": { scope: "default", source: "default" } },
 };
 
+// What GET .../scenes/:sid/group returns for a scene nobody has configured.
+export const DEFAULT_GROUP = {
+  order: "directed" as const, order_list: [] as string[],
+  talkativeness: {} as Record<string, number>, sitting_out: [] as string[], auto_rounds: 0,
+};
+
 /** What `api.absorbScene` resolves to now (#396).
  *
  *  The absorb is a detached run: the client starts it, polls it, and reads the
@@ -194,6 +200,7 @@ export function installCampaignMocks() {
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.listStyles as any).mockResolvedValue([]);
   (api.getSceneResponse as any).mockResolvedValue(RESPONSE_BUNDLE);
+  (api.getSceneGroup as any).mockResolvedValue(DEFAULT_GROUP);
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);

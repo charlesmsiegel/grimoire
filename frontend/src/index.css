@@ -1041,6 +1041,9 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 /* Stack the run actions in one column so adding Stop does not squeeze the
    text box on a phone. Continue stays visible throughout speaker selection. */
 .composer-run-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+/* A sitting-out NPC is out of the automatic order, not out of reach: dimmed,
+   still tappable. */
+.reply-chip.sitting-out { opacity: .55; }
 .composer-run-actions .send.cancel-turn { min-height: 44px; }
 .inputbar .send.cancel-turn { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
 

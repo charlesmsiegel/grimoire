@@ -32,7 +32,7 @@ import { api, ApiError } from "../api/client";
 import { onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import {
-  here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
+  DEFAULT_GROUP, here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
   renderCampaign, withPalette,
 } from "../testkit/campaignHarness";
 
@@ -8273,7 +8273,17 @@ test("with nobody seated the plate keeps the reserved label", async () => {
 });
 
 
-test("Continue sends one empty request; Respond as sends the selected present NPC reference", async () => {
+test("Continue sends one empty request", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(screen.getByRole("button", { name: /Continue ▶/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.chat).mock.calls[0][2]).toBe("");
+  expect(vi.mocked(api.chat).mock.calls[0][9]).toBeUndefined();
+});
+
+test("a reply chip with an empty composer sends one targeted request", async () => {
   vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
   vi.mocked(api.getCast).mockResolvedValue([
     { kind: "characters", id: "mara", name: "Mara", role: "npc" },
@@ -8281,34 +8291,65 @@ test("Continue sends one empty request; Respond as sends the selected present NP
   ]);
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
-  fireEvent.click(screen.getByRole("button", { name: /Continue ▶/ }));
+  const chips = await screen.findByRole("group", { name: "Reply as" });
+  expect(within(chips).queryByRole("button", { name: "Winifred" })).not.toBeInTheDocument();
+  fireEvent.click(within(chips).getByRole("button", { name: "Mara" }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
   expect(vi.mocked(api.chat).mock.calls[0][2]).toBe("");
-  await waitFor(() => expect(screen.getByRole("button", { name: "Respond as" })).toBeDisabled());
-  const picker = screen.getByLabelText("Respond as speaker");
-  expect(within(picker).queryByRole("option", { name: "Winifred" })).not.toBeInTheDocument();
-  fireEvent.change(picker, { target: { value: "characters:mara" } });
-  await waitFor(() => expect(screen.getByRole("button", { name: "Respond as" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Respond as" }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledTimes(2));
-  expect(vi.mocked(api.chat).mock.calls[1][9]).toBe("characters:mara");
+  expect(vi.mocked(api.chat).mock.calls[0][9]).toBe("characters:mara");
 });
 
-test("Respond as can select Grimoire with no NPC in the scene", async () => {
+test("a reply chip with text posts it with that speaker leading", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([
+    { kind: "characters", id: "mara", name: "Mara", role: "npc" },
+  ]);
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.change(screen.getByPlaceholderText("Speak your intent…"), { target: { value: "Hello" } });
+  const chips = await screen.findByRole("group", { name: "Reply as" });
+  fireEvent.click(within(chips).getByRole("button", { name: "Mara" }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.chat).mock.calls[0][2]).toBe("Hello");
+  expect(vi.mocked(api.chat).mock.calls[0][9]).toBe("characters:mara");
+});
+
+test("Grimoire chip works with no NPC in the scene", async () => {
   vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
   vi.mocked(api.getCast).mockResolvedValue([]);
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
-
-  const picker = screen.getByLabelText("Respond as speaker");
-  expect(within(picker).getByRole("option", { name: "Grimoire" })).toBeInTheDocument();
-  fireEvent.change(picker, { target: { value: "grimoire" } });
-  const respond = screen.getByRole("button", { name: "Respond as" });
-  expect(respond).toBeEnabled();
-  fireEvent.click(respond);
-
+  const chips = await screen.findByRole("group", { name: "Reply as" });
+  fireEvent.click(within(chips).getByRole("button", { name: "Grimoire" }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
   expect(vi.mocked(api.chat).mock.calls[0][9]).toBe("grimoire");
+});
+
+test("reply chips still work when the group settings fail to load", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([
+    { kind: "characters", id: "mara", name: "Mara", role: "npc" },
+  ]);
+  vi.mocked(api.getSceneGroup).mockRejectedValue(new Error("boom"));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  const chips = await screen.findByRole("group", { name: "Reply as" });
+  const mara = within(chips).getByRole("button", { name: "Mara" });
+  expect(mara).not.toHaveClass("sitting-out");
+  fireEvent.click(mara);
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+});
+
+test("a sitting-out NPC's chip is dimmed", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([
+    { kind: "characters", id: "mara", name: "Mara", role: "npc" },
+  ]);
+  vi.mocked(api.getSceneGroup).mockResolvedValue({ ...DEFAULT_GROUP, sitting_out: ["characters:mara"] });
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  const chips = await screen.findByRole("group", { name: "Reply as" });
+  await waitFor(() => expect(within(chips).getByRole("button", { name: "Mara" })).toHaveClass("sitting-out"));
 });
 
 test("individual response deletion uses its stable id and keeps cut-from-here separate", async () => {

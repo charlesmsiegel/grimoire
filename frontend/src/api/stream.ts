@@ -81,6 +81,8 @@ export type ChatEvent = {
   thinking_reset?: boolean;
   response_start?: { id: string; speaker: string; actor_ref: string };
   response_end?: { id: string; status: "complete" | "incomplete" };
+  /** Group play: this turn is round `index` of `of` automatic rounds. */
+  round_start?: { index: number; of: number };
   run?: RunHandle;
   error?: { detail: string; kind: string; post_returned?: boolean };
 };
