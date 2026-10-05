@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from grimoire.routes import continuity as continuity_routes
 from grimoire.store import (
     appearances,
     campaigns,
@@ -71,6 +72,9 @@ def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "tracker: keep the scene tracker's shipped default (on) for this test")
+    config.addinivalue_line(
+        "markers",
+        "reconcile: keep the automatic continuity sweep after End Scene on for this test")
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +91,22 @@ def _tracker_off_unless_asked(request, monkeypatch):
     """
     if request.node.get_closest_marker("tracker") is None:
         monkeypatch.setattr(store.config, "DEFAULT_TRACKER", "off")
+
+
+@pytest.fixture(autouse=True)
+def _auto_reconcile_off_unless_asked(request, monkeypatch):
+    """The continuity sweep after End Scene is shipped ON, and in the suite it is
+    OFF unless a test asks for it with `@pytest.mark.reconcile` -- the
+    `_tracker_off_unless_asked` precedent.
+
+    On, every `PUT /chronicle` starts a lifespan-hosted `background` run. A fake
+    scripted by call order would hand it the turns a test scripted for
+    something else; it writes the candidate cache and moves the campaign's
+    write token after the response the test is asserting on; and while it is
+    live it refuses `PUT /config/data-dir`. The sweep's own suite opts in.
+    """
+    if request.node.get_closest_marker("reconcile") is None:
+        monkeypatch.setattr(continuity_routes, "AUTO_RECONCILE", False)
 
 
 @pytest.fixture

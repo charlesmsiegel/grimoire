@@ -68,9 +68,9 @@ ROUTES: tuple[Route, ...] = (
           "model saves the most.",
           ("dossier",), True),
     Route("continuity", "Continuity checks",
-          "The duplicate check beside absorb: one call, only when a proposed new "
-          "thread or commitment closely resembles an existing one.",
-          ("continuity-identity",), True),
+          "The duplicate check beside absorb and the reconciliation sweep after "
+          "End Scene or a refresh.",
+          ("continuity-identity", "continuity-reconcile"), True),
     Route("summary", "Summaries & scene-break checks",
           "The live rolling summary and the is-this-scene-over question.",
           ("rolling-summary", "scene-break"), True),

@@ -182,6 +182,7 @@ def test_get_continuity_reports_malformed_sections(client, cid):
     ("delete", "/continuity/aliases?ref=thread:a", None),
     ("post", "/continuity/links", {"a": "thread:a", "b": "thread:b", "relation": "continues"}),
     ("delete", "/continuity/links/l1", None),
+    ("post", "/continuity/reconcile", None),
 ])
 def test_unknown_campaign_404_on_every_route(client, method, path, body):
     kwargs = {"json": body} if body is not None else {}

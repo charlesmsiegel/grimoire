@@ -355,7 +355,12 @@ _FILL = {"sid": "s1", "rid": "r1", "gid": "g1", "eid": "e1", "kind": "locations"
          # hand-edit routes take one.
          "fid": "f1", "collection_id": "0" * 32,
          # An author's-note character key is a full actor ref (play controls V).
-         "ref": "characters:c1"}
+         "ref": "characters:c1",
+         # The continuity review's candidate and suppression addresses: a
+         # candidate id is `<kind>-<hash>` (`canon.candidate_id`), a
+         # suppression is keyed by its fingerprint.
+         "candidate_id": "possible_duplicate-0123456789abcdef",
+         "fingerprint": "fp1_" + "0" * 64}
 
 
 # Enumerated from the OpenAPI schema, not from `router.routes`: the router is
