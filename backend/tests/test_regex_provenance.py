@@ -1,0 +1,185 @@
+"""Which connection served a reply is recorded on the reply (regex spec 3.1).
+
+A connection-level output rule applies only to that connection's replies, so
+the message has to say who wrote it. Stored beside the other response
+metadata, and absent on anything written before it existed.
+"""
+
+import json
+
+import pytest
+
+from grimoire import llm, routes, store
+from grimoire.llm import LLMClient
+from grimoire.llm_errors import LLMError
+from grimoire.routes import character_turns
+from grimoire.store.scenes import serialize
+from tests.llm_fakes import FakeLLM
+
+
+def seed(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    response = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Mara"})
+    assert response.status_code == 200, response.text
+    actor = response.json()["character"]
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
+    assert response.status_code == 200, response.text
+    return cid, sid
+
+
+def send(client, cid, sid, content="Hello"):
+    response = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/chat",
+        json={"content": content, "speaker_ref": "characters:mara"},
+    )
+    assert response.status_code == 200, response.text
+    return response
+
+
+def replies(cid, sid):
+    return [m for m in store.scenes.read_scene(cid, sid)["messages"] if m.get("response_id")]
+
+
+def active_variant(cid, sid, rid):
+    ledger = json.loads((store.campaigns.paths.campaign_root(cid) / "responses.json").read_text())
+    record = next(r for scope in ledger["scenes"].values() for k, r in scope["responses"].items()
+                  if k == rid)
+    return next(v for v in record["variants"] if v["id"] == record["active_variant"])
+
+
+def test_chat_turn_records_connection(client):
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Mara answers."]])
+    send(client, cid, sid)
+
+    last = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert last["connection"] == "openrouter"
+    assert active_variant(cid, sid, last["response_id"])["connection"] == "openrouter"
+
+
+def test_connection_survives_edit_and_cut(client):
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Mara answers."]])
+    send(client, cid, sid, "one")
+    send(client, cid, sid, "two")
+    base = f"/api/campaigns/{cid}/scenes/{sid}/messages"
+    assert [m["connection"] for m in replies(cid, sid)] == ["openrouter", "openrouter"]
+
+    assert client.put(f"{base}/1", json={"content": "Mara answers, edited."}).status_code == 200
+    assert client.put(f"{base}/0", json={"content": "A user post, edited."}).status_code == 200
+    assert client.delete(f"{base}/3").status_code == 200   # the last reply
+
+    survivors = replies(cid, sid)
+    assert [m["content"] for m in survivors] == ["Mara answers, edited."]
+    assert survivors[0]["connection"] == "openrouter"
+
+
+def test_reroll_records_connection(client):
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Mara answers."]])
+    send(client, cid, sid)
+    rid = replies(cid, sid)[0]["response_id"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Mara, again."]])
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate")
+    assert response.status_code == 200, response.text
+
+    last = replies(cid, sid)[0]
+    assert last["content"] == "Mara, again."
+    assert last["connection"] == "openrouter"
+
+
+class TransientProvider:
+    """Fails `failures` times, then answers; the real facade does the failing over."""
+
+    def __init__(self, failures):
+        self.failures, self.models = failures, []
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.models.append(model)
+        if len(self.models) <= self.failures:
+            raise LLMError("rate_limit", "upstream is busy")
+        yield "Mara answers."
+
+
+@pytest.fixture
+def instant(monkeypatch):
+    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+
+
+def test_fallback_records_serving_connection(client, instant):
+    cid, sid = seed(client)
+    backup = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Backup", "model": "backup",
+        "api_key": "sk-backup"}).json()["id"]
+    client.put("/api/config", json={"llm_retries": "1", "fallback_connection_id": backup})
+    provider = TransientProvider(failures=2)
+    client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
+        openrouter=provider, claude=provider, openai_compatible=provider,
+        timeout=120, retries=store.config.llm_retries,
+        fallback=routes.common._fallback_connection)
+    send(client, cid, sid)
+
+    assert provider.models == ["primary", "primary", "backup"]
+    last = replies(cid, sid)[-1]
+    assert last["connection"] == backup != "openrouter"
+    assert active_variant(cid, sid, last["response_id"])["connection"] == backup
+
+
+def test_swipe_carries_variant_connection(client):
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Mara answers."]])
+    send(client, cid, sid)
+    first = replies(cid, sid)[0]
+    rid = first["response_id"]
+    original = active_variant(cid, sid, rid)["id"]
+
+    other = store.responses.save_variant(
+        cid, sid, rid, "Mara, elsewhere.", "complete", activate=False, connection="backup")
+    store.responses.activate(cid, sid, rid, other["id"])
+    assert replies(cid, sid)[0]["connection"] == "backup"
+
+    store.responses.activate(cid, sid, rid, original)
+    assert replies(cid, sid)[0]["connection"] == "openrouter"
+
+
+def test_a_variant_with_no_connection_swipes_to_a_message_with_no_key(client):
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Mara answers."]])
+    send(client, cid, sid)
+    rid = replies(cid, sid)[0]["response_id"]
+    legacy = store.responses.save_variant(
+        cid, sid, rid, "Written before provenance.", "complete", activate=False)
+    assert "connection" not in legacy
+
+    store.responses.activate(cid, sid, rid, legacy["id"])
+    assert "connection" not in replies(cid, sid)[0]
+
+
+def test_legacy_stream_records_connection(client, monkeypatch):
+    """The retired combined producer still persists through `_persist_reply`."""
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["The tide turns."]])
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
+    assert response.status_code == 200, response.text
+
+    last = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert last["content"] == "The tide turns."
+    assert last["connection"] == "openrouter"
+    # the player's own post is nobody's reply
+    assert "connection" not in store.scenes.read_scene(cid, sid)["messages"][0]
+
+
+def test_a_message_without_connection_serializes_unchanged():
+    message = {"role": "assistant", "speaker": "Mara", "content": "Hi.", "response_id": "r1"}
+    block = serialize._message_block(message)
+    assert "connection" not in block
+    assert block == ('**Mara:** <!-- grimoire-response {"response_id": "r1"} -->\nHi.\n')
+    with_connection = serialize._message_block({**message, "connection": "backup"})
+    assert '"connection": "backup"' in with_connection

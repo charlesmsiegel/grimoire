@@ -42,7 +42,7 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .. import store
-from ..llm import LLMClient
+from ..llm import ATTEMPTED, LLMClient
 from ..llm_errors import LLMError
 
 _log = logging.getLogger(__name__)
@@ -176,9 +176,22 @@ def _turn_settled(cid: str) -> None:
     store.revision.bump(cid)
 
 
-def _persist_reply(cid: str, sid: str, text: str) -> int:
+def _served(meter, conn: dict) -> str:
+    """The id of the connection that actually answered `meter`'s call: the one
+    the facade stamped on the attempt that ran, which is the fallback when the
+    primary was exhausted, else the one the turn asked for. "" for a connection
+    with no id."""
+    attempted = ((meter.usage if meter else None) or {}).get(ATTEMPTED)
+    return (attempted or conn).get("id", "")
+
+
+def _persist_reply(cid: str, sid: str, text: str, connection: str = "") -> int:
     """Split one model reply into per-speaker posts and append them (#744),
     returning how many actually landed.
+
+    `connection` is the id of the connection that served it, recorded on every
+    post so a rule owned by a connection can tell its own replies. Left empty
+    by a caller that did not generate the text (a hand-adopted opener).
 
     The count is what a caller needs to tell "the model said something" from
     "the transcript grew". They are not the same question and the gap is not
@@ -219,7 +232,8 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
     players = frozenset(store.appearances.player_names(cid, sid))
     subs = store.context.scene_substitutions(cid, sid)
     segments = [{"speaker": seg["speaker"],
-                 "content": store.context.expand_macros(seg["content"], subs, cid, sid)}
+                 "content": store.context.expand_macros(seg["content"], subs, cid, sid),
+                 **({"connection": connection} if connection else {})}
                 for seg in store.scenes.split_reply(text, players)]
     # One lock over both: a reply landing in a slot a reroll emptied is a
     # variant that exists only in the transcript until `reconcile` writes it
@@ -681,6 +695,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # timing and the route and no token counts -- which is the honest
             # answer, and why the ledger records an absent price rather than a
             # zero one.
+            watcher.connection = _served(meter, conn)
             meter.done()
         except LLMError as exc:
             # Flush the redactor too, and emit what it lets go BEFORE the error
@@ -692,6 +707,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             flushed = redactor.feed(watcher.finish()) + redactor.finish()
             if flushed:
                 yield _sse({"delta": flushed})
+            watcher.connection = _served(meter, conn)
             meter.done("error", exc.kind, detail=exc.detail)
             note: dict = {}
             if on_error is not None:
@@ -755,6 +771,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # away, which is not a failure of anything and must not inflate an
             # error rate. It is still a row -- the provider generated, and on a
             # metered connection it was billed.
+            watcher.connection = _served(meter, conn)
             meter.done("aborted")
             await _flush_on_abort(on_abort, watcher)
             # A Stop can flush a partial, and a flushed partial is a post: the
@@ -931,12 +948,12 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 # `store.proposals.new`. A director turn passes None, and the
                 # continuation inherits that rather than inventing one.
                 rec = store.proposals.new(cid, sid, payload, post)  # heals before replacing
-            _persist_reply(cid, sid, watcher.narration)
+            _persist_reply(cid, sid, watcher.narration, watcher.connection)
             # Read under the hold this whole function runs in, so the follow-ups
             # fold exactly the transcript this turn left (#397).
             box.persisted(_tail_length(cid, sid))
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
-        elif _persist_reply(cid, sid, watcher.narration):
+        elif _persist_reply(cid, sid, watcher.narration, watcher.connection):
             box.persisted(_tail_length(cid, sid))   # it landed; see above (#397)
         elif restore_removed is not None:
             # A turn that *succeeded* and produced nothing — a clean EOF with no
@@ -1000,7 +1017,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 # roll back went with it. `_fence_stream` has already recorded
                 # the provider failure that brought us here.
                 return {}
-            if _persist_reply(cid, sid, watcher.narration):
+            if _persist_reply(cid, sid, watcher.narration, watcher.connection):
                 # A partial is still a post, and still moves both gates (#397).
                 box.persisted(_tail_length(cid, sid))
                 return {}            # a normal turn keeps its partial reply
@@ -1164,7 +1181,7 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
         if watcher.narration.strip() and not _would_land(cid, sid, watcher.narration):
             frames.append(_sse({"done": True}))
             return frames
-        persist = lambda: _persist_reply(cid, sid, watcher.narration)
+        persist = lambda: _persist_reply(cid, sid, watcher.narration, watcher.connection)
         # Whether this continuation put anything in the transcript, which is
         # what decides if the follow-ups are worth scheduling (#397). Both
         # halves: the guard above has already returned for narration that would

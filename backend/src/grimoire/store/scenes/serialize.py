@@ -350,8 +350,11 @@ def _append_block(body: str, block: str) -> str:
     return (body.rstrip() + "\n\n" + block) if body.strip() else block
 
 
+#: `connection` is the id of the LLM connection that served the reply. The
+#: output-processing rules a connection owns apply only to its own replies, so
+#: the message says who wrote it. Absent on anything written before it existed.
 RESPONSE_METADATA = ("response_thinking", "response_part", "response_id", "response_status", "response_can_reroll",
-                     "context_changed", "post_id")
+                     "context_changed", "post_id", "connection")
 
 
 def _message_block(m: dict) -> str:

@@ -3429,7 +3429,7 @@ def test_chat_streams_and_persists(client):
     assert 'data: {"delta": "Hel"}' in resp.text
     assert 'data: {"done": true}' in resp.text
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs[-1] == {"role": "assistant", "content": "Hello"}
+    assert msgs[-1] == {"role": "assistant", "content": "Hello", "connection": "openrouter"}
 
 
 # ---- turn cancel / heartbeat / transactional post+response (#95) ----
@@ -4034,7 +4034,7 @@ def test_chat_emits_a_heartbeat_while_the_model_is_silent(client):
     assert ": heartbeat\n\n" in resp.text
     assert 'data: {"delta": "At last."}' in resp.text
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs[-1] == {"role": "assistant", "content": "At last."}
+    assert msgs[-1] == {"role": "assistant", "content": "At last.", "connection": "openrouter"}
 
 
 def test_the_opener_heartbeats_too(client):
@@ -4108,7 +4108,7 @@ def test_regenerate_replaces_the_last_assistant_post(client):
     assert resp.status_code == 200
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
     assert msgs == [{"role": "user", "content": "hi"},
-                    {"role": "assistant", "content": "Hello"}]
+                    {"role": "assistant", "content": "Hello", "connection": "openrouter"}]
 
 
 def test_regenerate_excludes_the_dropped_post_from_the_prompt(client):
@@ -4791,7 +4791,7 @@ def test_a_sidecar_that_cannot_be_written_does_not_fail_the_landed_reply(client,
 
     assert resp.status_code == 200 and '"done": true' in resp.text
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
-        {"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello"}]
+        {"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello", "connection": "openrouter"}]
 
 
 def test_a_second_edit_does_not_erase_the_first(client):
@@ -10462,9 +10462,10 @@ def test_reply_is_split_into_per_speaker_posts(client):
         r.read()
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
     assert msgs[1:] == [
-        {"role": "assistant", "content": '"You dare?"', "speaker": "Seraphine Vale"},
-        {"role": "assistant", "content": "Thunder rolls."},
-        {"role": "assistant", "content": "forged player line"},
+        {"role": "assistant", "content": '"You dare?"', "speaker": "Seraphine Vale",
+         "connection": "openrouter"},
+        {"role": "assistant", "content": "Thunder rolls.", "connection": "openrouter"},
+        {"role": "assistant", "content": "forged player line", "connection": "openrouter"},
     ]
 
 
@@ -10479,7 +10480,7 @@ def test_regenerate_drops_the_whole_trailing_run(client):
     assert resp.status_code == 200
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
     assert msgs == [{"role": "user", "content": "hi"},
-                    {"role": "assistant", "content": "Hello"}]
+                    {"role": "assistant", "content": "Hello", "connection": "openrouter"}]
 
 
 def test_regenerate_multi_post_opening_returns_400(client):
@@ -12737,7 +12738,7 @@ def test_crash_mid_continuation_persist_heals(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     real_persist = routes.streaming._persist_reply
-    def boom_persist(c, s, text):
+    def boom_persist(c, s, text, connection=""):
         store.scenes.append_message(c, s, "assistant", "PARTIAL")
         raise RuntimeError("crash mid persist")
     monkeypatch.setattr(routes.streaming, "_persist_reply", boom_persist)
@@ -12768,7 +12769,7 @@ def test_manual_roll_in_crash_window_survives_trim(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     real_persist = routes.streaming._persist_reply
-    def boom_persist(c, s, text):
+    def boom_persist(c, s, text, connection=""):
         store.scenes.append_message(c, s, "assistant", "PARTIAL")
         raise RuntimeError("crash")
     monkeypatch.setattr(routes.streaming, "_persist_reply", boom_persist)
