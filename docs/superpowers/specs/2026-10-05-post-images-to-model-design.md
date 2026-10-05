@@ -95,7 +95,8 @@ read as unknown.
 
 `store.llm_connections._FIELDS` gains `vision`, stored as `""` (auto), `"on"`
 or `"off"`; anything else read from disk is auto. `ConnectionCreate` /
-`ConnectionUpdate` accept it and the route refuses any other value with 400.
+`ConnectionUpdate` accept it as `Literal["", "on", "off"]`, the same way they
+already constrain `post_process`, so any other value is refused at validation.
 `ConnectionForm` shows a "Reads images" select (Auto / Yes / No) for
 `openrouter` and `openai_compatible` connections, with a hint stating what the
 catalog says about the selected model (reads images / text only / not stated).
