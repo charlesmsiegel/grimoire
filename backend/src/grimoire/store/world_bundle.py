@@ -302,6 +302,13 @@ class _Members:
 _EXACT_NAMES = (image_refs.REFS_DIR, image_refs.JOURNAL)
 
 
+def _fold(name: str) -> str:
+    """`name` as a case-insensitive filesystem compares it. Upper-casing first
+    is what catches a dotless i (U+0131), which ``casefold`` leaves alone but NTFS
+    upper-cases to ``I``."""
+    return name.upper().casefold()
+
+
 def _check_placement_spelling(parts: list[str], filename: str) -> None:
     """Refuse a member under a case variant of ``image-refs/`` or named a case
     variant of the promotion journal.
@@ -312,7 +319,7 @@ def _check_placement_spelling(parts: list[str], filename: str) -> None:
     place whatever local image it names. No grimoire writes one, so a bundle
     holding one was built by hand, and is refused before anything is written."""
     for part in parts[1:]:
-        folded = part.casefold()
+        folded = _fold(part)
         for exact in _EXACT_NAMES:
             if folded == exact and part != exact:
                 raise BundleError(f"bundle entry uses another spelling of {exact!r}: {filename}")
@@ -507,18 +514,18 @@ def _contain_refs(staging: Path, id_map: dict[str, str], contained: set[str]) ->
     # Names are compared case-folded, as a case-insensitive filesystem reads
     # them -- behind `_check_placement_spelling`, which refuses the variants.
     for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
-        if Path(dirpath).name.casefold() != image_refs.REFS_DIR:
+        if _fold(Path(dirpath).name) != image_refs.REFS_DIR:
             continue
         dirnames[:] = []
         owner = Path(dirpath).parent
         for f in filenames:
-            if f.casefold() == image_refs.JOURNAL:
+            if _fold(f) == image_refs.JOURNAL:
                 (Path(dirpath) / f).unlink()
                 journals += 1
         dropped += sum(_contain_ref(owner, f[: -len(".json")], id_map, contained)
                        for f in filenames
-                       if f.casefold() != image_refs.JOURNAL
-                       and f.casefold().endswith(".json"))
+                       if _fold(f) != image_refs.JOURNAL
+                       and _fold(f).endswith(".json"))
     if dropped or journals:
         logs.record("warning", __name__,
                     "bundle placements named images the bundle does not carry; dropped",

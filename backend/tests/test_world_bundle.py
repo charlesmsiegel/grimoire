@@ -1253,6 +1253,7 @@ def test_export_finishes_a_crashed_promotion_first(monkeypatch, tmp_path):
 @pytest.mark.parametrize("member", [
     "world/assets/IMAGE-REFS/cover.json",
     "world/assets/Image-Refs/cover.json",
+    "world/assets/\u0131mage-refs/cover.json",
     "world/characters/mara/assets/default/image-refs/.PROMOTE.JSON",
     "world/characters/mara/assets/default/image-refs/.Promote.json",
 ])
