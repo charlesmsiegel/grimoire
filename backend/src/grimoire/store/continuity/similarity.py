@@ -554,17 +554,43 @@ def _retry_texts(required: list[str], warm: list[str], forgotten: set[str],
     return again + extra[:max(room, 0)]
 
 
+def _embed_apart(space: dict, required: list[str], warm: list[str], rotate: str,
+                 deadline: float) -> tuple[dict[str, list[float]], str]:
+    """`required` and `warm` embedded in separate calls, so a text the provider
+    refuses costs its own set and not the other: one refused required text
+    held at the head of a single call would fail the warm window behind it on
+    every sweep, since a changed ref with no vector stays changed and so stays
+    required. When the required call fails, its unsaved texts are tried once
+    more as a proper subset rotated on `rotate` (`embed_space.warm_window`),
+    so the texts sharing a chunk with the refused one are reached within a few
+    sweeps instead of never. The first failure's kind is the one reported."""
+    fresh, error = embed_missing(space, required, deadline=deadline)
+    unsaved = [t for t in required if t not in fresh]
+    if error and len(unsaved) > 1 and time.monotonic() < deadline:
+        retry = embed_space.warm_window(unsaved, rotate, len(unsaved) - 1)
+        fresh.update(embed_missing(space, retry, deadline=deadline)[0])
+    if warm and time.monotonic() < deadline:
+        got, warm_error = embed_missing(space, warm, deadline=deadline)
+        fresh.update(got)
+        error = error or warm_error
+    return fresh, error
+
+
 def semantic(required: list[str], warm: list[str], *, deadline: float | None,
              space: dict | None = None, cached: Iterable[str] = (),
              warm_limit: int = IDENTITY_WARM_LIMIT,
-             loaded: dict[str, list[float]] | None = None) -> Semantic:
+             loaded: dict[str, list[float]] | None = None,
+             rotate: str | None = None) -> Semantic:
     """Vectors for `required` (always embedded when missing), `warm` (embedded
     when missing, best first, up to `warm_limit`) and `cached` (read only).
     `deadline` None embeds nothing. Every vector is held to one reference
     width; an off-width one is forgotten, and a forgotten loaded required or
     warm text is re-embedded once, deadline permitting, within what is left of
     `warm_limit`. A given `loaded` is the cache already read for these texts
-    by the caller (the reconcile sweep's one probe), so it is not read again."""
+    by the caller (the reconcile sweep's one probe), so it is not read again.
+    A given `rotate` (the sweep's rotation seed) embeds the required and warm
+    texts apart (`_embed_apart`); without one -- absorb, whose required texts
+    are this absorb's own and never carried to another -- they share a call."""
     space = space or available()
     if space is None:
         return Semantic({}, "off")
@@ -577,9 +603,12 @@ def semantic(required: list[str], warm: list[str], *, deadline: float | None,
     warm_misses = [t for t in warm if t not in loaded][:warm_limit]
     fresh: dict[str, list[float]] = {}
     error = ""
-    if deadline is not None:
-        fresh, error = embed_missing(space, [*(t for t in required if t not in loaded),
-                                             *warm_misses], deadline=deadline)
+    required_misses = [t for t in required if t not in loaded]
+    if deadline is not None and rotate is not None:
+        fresh, error = _embed_apart(space, required_misses, warm_misses, rotate, deadline)
+    elif deadline is not None:
+        fresh, error = embed_missing(space, [*required_misses, *warm_misses],
+                                     deadline=deadline)
     width = reference_width(list(fresh.values()), loaded)
     kept, forgotten = _keep_width(name, {**loaded, **fresh}, width)
     again = _retry_texts(required, warm, forgotten - set(fresh),
