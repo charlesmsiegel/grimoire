@@ -146,10 +146,13 @@ Bounds are deliberate. `sticky + cooldown ≤ 100` bounds the replay horizon (§
 error, not clamped. Numbers are justified structurally, not measured, and can
 be tuned later.
 
-`known_by` refs are maintained everywhere `owners` refs are. That means
-`entities.rewrite_owner_refs` / `overlay.rewrite_owner_refs` on reclassify, and
-the dangling-ref sweep at `entities.py:395`. A test fails if a reclassify leaves
-a `known_by` naming the old ref.
+`known_by` names only actors (`characters:` / `pcs:`). Reclassification
+(`store/reclassify.py`) moves only the five generic kinds and never an actor,
+so no reclassify can change a ref `known_by` accepts, and the field needs no
+rewrite sweep. A `known_by` ref to an actor that has since been deleted is
+inert: it names nobody who can be on a call, the same way a dangling `owners`
+ref names nobody who can be present. The editor shows it as a missing ref
+rather than dropping it.
 
 The Owners picker (`frontend/src/api/loreOwners.ts`) widens to items, groups and
 creatures (#220). The kinds were deferred only because nothing could make them
@@ -341,8 +344,16 @@ composed system message after each, until the prompt fits. Shed order:
 1. lowest `priority` first;
 2. on a tie, an entry that activated only by recursion or presence-unlock before
    one that matched directly;
-3. then the entry whose match is oldest (sticky carry counts from the post that
-   started it);
+3. then by **match age**, oldest first. Every entry has a total, comparable
+   age, defined as a post index where higher means newer:
+   - a transcript match: the index of the newest matching post;
+   - sticky carry: the index of the post that started it;
+   - a seed-only match (opener prompt, director note): one past the last post,
+     i.e. newest of all, because the seed is this turn's own input;
+   - no match of its own (keyless always-on, recursion pull, presence unlock):
+     **-1**, i.e. oldest of all. It is standing context rather than something
+     the conversation just raised. A recursion or presence hit has already
+     sorted ahead at step 2, so this only orders entries within the same group.
 4. then reverse prompt order, so a store always packs the same way.
 
 Never shed: `keep: true` entries and pinned entries. If only those remain and the
@@ -374,8 +385,13 @@ seated actors and current location *structurally imply*, from the ref fields
 | a group | its `leader` is present, or its `headquarters` is the current location |
 | a creature | one of its `habitat` locations is the current location |
 
-This is one pass over the world-info candidates, which `_world_info` already
-reads. Presence does **not** activate the item's own entry. "Mara holds the
+The rules chain: Mara present → the group she leads present → the item that
+group holds present. So structural presence is computed **to a fixed point**,
+not in one pass. Repeat the three rules over the world-info candidates
+(which `_world_info` already reads) until a pass adds nothing. Each pass adds
+at least one ref or stops, so this terminates within the number of candidate
+items, groups and creatures. Iteration order therefore cannot change the
+result, which a test holds by shuffling the candidates. Presence does **not** activate the item's own entry. "Mara holds the
 lantern" makes the lantern present for unlocking lore it *owns*. The lantern's
 own entry still needs its keys, a pin, or always-on, exactly as today.
 
@@ -463,19 +479,58 @@ does.
 ### 9.3 Provenance
 
 On apply, a created record gets a `provenance` frontmatter key:
-`{"source": "absorb", "scene": <sid>, "quote": ..., "speaker": ..., "date": <in-fiction date if known>}`.
-It is one JSON scalar, the same way `st_extensions` is stored. It is shown in
-the detail sidebar ("From play: <quote> — <speaker>, scene <name>", with the
-scene name linking to that scene) and is **never** read by the context builder.
+`{"source": "absorb", "campaign": <cid>, "scene": <sid>, "scene_title": ...,
+"quote": ..., "speaker": ..., "date": <in-fiction date if known>}`.
+It is one JSON scalar, the same way `st_extensions` is stored, and is **never**
+read by the context builder.
+
+The detail sidebar shows it as text first: "From play: <quote> — <speaker>,
+<scene_title>". The title is captured at apply time precisely so the
+provenance still reads correctly when no link can be made. The scene title
+becomes a **link only when the reader is inside campaign `<cid>` and `<sid>`
+still resolves there.** A scene id is campaign-scoped and moves on rename, so:
+
+- in the world editor, or in another campaign that inherits a published
+  record, there is no link;
+- after a rename or delete, the id no longer resolves and the text stands alone.
+
+Provenance is a citation, not a live reference. It deliberately does **not**
+join the `scene_refs.repoint` fan-out: a world file is not a campaign store
+that fan-out could reach, and a stale citation that degrades to its own
+captured text is the honest failure.
 A test asserts the quote string is absent from a prompt that activates the
 record.
 
 ### 9.4 Destination: world
 
 A row marked *World library* is created campaign-local exactly as today, inside
-the chronicle save. **After the save's lock hold is released**, each such
-record is published with `sync.promote(cid, kind, eid)`, under the same locking
-the `POST .../promote` route takes. Promote failing never fails the save. The
+the chronicle save. It is then published with `sync.promote(cid, kind, eid)`
+as **a journalled step of that same commit** (`store/commits.py`, #271), not as
+an after-the-fact call. The commit journal exists because `PUT /chronicle` is a
+multi-step, non-idempotent write. Publishing is one more such step, and doing
+it outside the journal reopens exactly the hole the journal closes. If a
+response is lost after promote wrote the world file, the retry must not see its
+own record in the world and report a collision. So:
+
+- **Before** calling promote, the commit journals `publish:<kind>/<eid>` as
+  attempted. **After** it returns, the commit journals the outcome
+  (`published`, or `failed` with the reason).
+- A retry that finds the step's outcome in the journal reuses that outcome and
+  does not call promote again.
+- A retry that finds the step only *attempted* (a crash between the call and
+  the outcome) asks whether the world already holds this record and the
+  campaign's sync base for it matches. That base is what `promote` writes first,
+  and the world file second. If both are present, the retry records
+  `published`; otherwise it calls promote again. Promote's own precondition (no
+  world record under that id) makes the base-without-world-file residue retry
+  cleanly, as `sync.promote`'s docstring already describes.
+- A spent token replays the stored result, `published` lists included, as it
+  already does for the rest of the save.
+
+Promote runs under the same locking the `POST .../promote` route takes. The plan
+must confirm that its lock order composes with the chronicle save's
+`campaign_lock` hold (`locks.hold_all` if it needs more than one campaign) and
+that the lock-order guard passes. A promote that fails never fails the save. The
 save response gains `published: [...]` and
 `publish_failed: [{kind, id, reason}]`. The review shows any failure ("kept in
 the campaign: the world already has a record named X — publish from the editor
@@ -552,22 +607,30 @@ field, which the byte-identity test of §1 holds them to.
   move explained.
 - **Key logic.** All four operators, plus an empty secondary list.
 - **Timed effects.** Sticky carry, cooldown hold, a scene boundary resetting
-  both, a cut and a reroll changing the outcome as the transcript does, and a
-  director note not advancing a timer.
+  both, a cut and a reroll changing the outcome as the transcript does, and a stored
+  director note counting as one message for timers and matching keys exactly as
+  it does in today's scan window (§5.3).
 - **Recursion.** The depth cap; each of the four `recursion` values; a cycle
   (A pulls B pulls A) terminating; recall not pulling.
-- **Presence.** Each structural rule, presence by activation unlocking owned lore
-  with recursion 0, and an absent owner beating sticky.
+- **Presence.** Each structural rule; a chained case (leader → group → item
+  the group holds) reaching its fixed point under a shuffled candidate order;
+  presence by activation unlocking owned lore with recursion 0; and an absent
+  owner beating sticky.
 - **`known_by`.** Narrator vs the named actor vs another actor. Location-owned
-  public lore reaches an NPC; character-owned lore still does not. Rewrite on
-  reclassify.
-- **Shedding.** Priority order and tie-breaks; `keep` and pins never shed; a
+  public lore reaches an NPC; character-owned lore still does not. A `known_by`
+  naming a deleted actor reaches no call and does not raise.
+- **Shedding.** Priority order and every tie-break, including keyless, seed-only
+  and recursion entries at equal priority; `keep` and pins never shed; a
   secret shed with its entry; a section without `shed` packing exactly as
   before; an unbounded budget untouched.
 - **Reasons out of the prompt.** Reason and provenance text absent from every
   composed prompt.
-- **Absorb.** Kind clamped; provenance written; publish success and the
-  precondition failure; undo refused after publish.
+- **Absorb.** Kind clamped; provenance written with its campaign and title, and
+  not linked from the world editor; publish success and the precondition
+  failure; a lost-response retry after a successful publish replaying
+  `published` rather than `publish_failed`; a crash between promote and its
+  journalled outcome resolved by the base-and-file check; undo refused after
+  publish.
 - **Frontend.** Following the list/detail rule: the Activation disclosure in
   edit, the chips in view, the adopt banner, the inspector entry lines, and the
   review row's keys, kind and destination.
