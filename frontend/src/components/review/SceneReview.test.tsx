@@ -586,6 +586,136 @@ test("new_location shows the setting checkbox only when the scene has no locatio
       payload: expect.objectContaining({ current_setting: true }) })] })));
 });
 
+// Task 14: a new_lore row's keys, kind and destination travel in the staged
+// edit's payload, and publish failures from the save are reported.
+function stageNewLore(payload: Record<string, unknown> = { name: "Tidebell", keys: "tide", kind: "lore" }) {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbs({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
+    dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    voice: { status: "skipped", reason: null, checked: [], flagged: [], unjudged: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
+    edits: [{ id: "new_lore:tidebell", kind: "new_lore",
+      target: { kind: "lore", id: "" }, label: "New lore — Tidebell",
+      field: "body", before: "", after: "A bell rung at the turn of the tide.", authored: false,
+      payload }] });
+}
+const SAVE_BUTTON = /accept all .* & save|save \d+ decisions/i;
+
+test("new_lore row edits keys, kind and destination and saves them", async () => {
+  stageNewLore();
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const keys = await screen.findByLabelText("Keys New lore — Tidebell");
+  expect(keys).toHaveValue("tide");
+  expect(screen.getByLabelText("Kind New lore — Tidebell")).toHaveValue("lore");
+  expect(screen.getByLabelText("Campaign")).toBeChecked();
+  fireEvent.change(keys, { target: { value: "tide, harbour" } });
+  fireEvent.change(screen.getByLabelText("Kind New lore — Tidebell"), { target: { value: "items" } });
+  fireEvent.click(screen.getByLabelText("World library"));
+  fireEvent.click(screen.getByRole("button", { name: SAVE_BUTTON }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const sent = (api.saveChronicle as any).mock.calls[0][2].edits[0].payload;
+  expect(sent).toEqual(expect.objectContaining({ keys: "tide, harbour", kind: "items", destination: "world" }));
+});
+
+test("the kind select offers the four kinds in order", async () => {
+  stageNewLore({ name: "Tidebell", keys: "tide" });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const kind = await screen.findByLabelText("Kind New lore — Tidebell");
+  expect(kind).toHaveValue("lore");  // no kind on the payload defaults to lore
+  const opts = Array.from((kind as HTMLSelectElement).options).map((o) => [o.value, o.textContent]);
+  expect(opts).toEqual([["lore", "Lore"], ["items", "Item"], ["groups", "Group"], ["creatures", "Creature"]]);
+});
+
+test("an untouched destination sends no destination, and a switch back strips it", async () => {
+  stageNewLore();
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByLabelText("World library"));
+  fireEvent.click(screen.getByLabelText("Campaign"));
+  fireEvent.click(screen.getByRole("button", { name: SAVE_BUTTON }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const sent = (api.saveChronicle as any).mock.calls[0][2].edits[0].payload;
+  expect("destination" in sent).toBe(false);
+});
+
+test("world destination explains how it is undone", async () => {
+  stageNewLore();
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByLabelText("Keys New lore — Tidebell");
+  expect(screen.getByText(/undone from the world page/)).toBeInTheDocument();
+});
+
+test("new_location row edits keys and destination but has no kind", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbs({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
+    dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    voice: { status: "skipped", reason: null, checked: [], flagged: [], unjudged: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
+    edits: [{ id: "new_location:the-crypt", kind: "new_location",
+      target: { kind: "locations", id: "" }, label: "New location — The Crypt",
+      field: "body", before: "", after: "A cold crypt.", authored: false,
+      payload: { name: "The Crypt", keys: "crypt", sd_prompt: "", current_setting: false } }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const keys = await screen.findByLabelText("Keys New location — The Crypt");
+  expect(screen.queryByLabelText("Kind New location — The Crypt")).toBeNull();
+  fireEvent.change(keys, { target: { value: "crypt, tomb" } });
+  fireEvent.click(screen.getByLabelText("World library"));
+  fireEvent.click(screen.getByRole("button", { name: SAVE_BUTTON }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const sent = (api.saveChronicle as any).mock.calls[0][2].edits[0].payload;
+  expect(sent).toEqual(expect.objectContaining({ keys: "crypt, tomb", destination: "world" }));
+  expect("kind" in sent).toBe(false);
+});
+
+test("a publish failure is reported after save", async () => {
+  stageNewLore();
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
+    cast: [], location: "", date: "", absorbed: "t", applied: ["new_lore:tidebell"], failures: [],
+    published: [],
+    publish_failed: [{ kind: "lore", id: "x", reason: "the world already has a record named x" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByLabelText("World library"));
+  fireEvent.click(screen.getByRole("button", { name: SAVE_BUTTON }));
+  expect(await screen.findByText(/the world already has a record named x/)).toBeInTheDocument();
+  expect(screen.getByText(/1 record could not be published to the world library/)).toBeInTheDocument();
+  expect(screen.queryByText(/did not apply/)).toBeNull();
+  // a new absorb clears the stale notice
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await waitFor(() => expect(screen.queryByText(/could not be published/)).toBeNull());
+});
+
+test("a save result from before publishing existed (no published keys) still saves", async () => {
+  stageNewLore();
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
+    cast: [], location: "", date: "", absorbed: "t", applied: ["new_lore:tidebell"], failures: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByRole("button", { name: SAVE_BUTTON }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  await waitFor(() => expect(screen.queryByLabelText("Keys New lore — Tidebell")).toBeNull());
+  expect(screen.queryByText(/could not be published/)).toBeNull();
+});
+
 test("new_location hides the setting checkbox when the scene already has a location", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });

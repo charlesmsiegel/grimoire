@@ -10,6 +10,12 @@ import {
 } from "./editRows";
 import type { SceneReview } from "./useSceneReview";
 
+// The record kinds a new lore row can become, in the order and words the
+// reviewer picks from. The values are the store's own collection names.
+const LORE_KINDS: [string, string][] = [
+  ["lore", "Lore"], ["items", "Item"], ["groups", "Group"], ["creatures", "Creature"],
+];
+
 export default function AbsorbEditRow({ e, i, review }: {
   e: EditRow; i: number; review: SceneReview;
 }) {
@@ -23,6 +29,7 @@ export default function AbsorbEditRow({ e, i, review }: {
   const proposal = ic ? identityProposal(ic) : null;
   const alternatives = ic?.alternatives ?? [];
   const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
+  const hasKeysAndDestination = e.kind === "new_location" || e.kind === "new_lore";
   const conflict = conflictByRow.get(i);
   const setPayload = (patch: Record<string, unknown>) => editPayload(i, patch);
   // An approved row collapses to one dimmed line. Not hidden — a decision you
@@ -157,6 +164,41 @@ export default function AbsorbEditRow({ e, i, review }: {
       {isNewRecord && (
         <input aria-label={`Name ${e.label}`} value={(e.payload?.name as string) ?? ""}
                onChange={(ev) => setPayload({ name: ev.target.value })} />
+      )}
+      {hasKeysAndDestination && (
+        <>
+          <input aria-label={`Keys ${e.label}`} placeholder="Keys"
+                 value={(e.payload?.keys as string) ?? ""}
+                 onChange={(ev) => setPayload({ keys: ev.target.value })} />
+          {e.kind === "new_lore" && (
+            <select aria-label={`Kind ${e.label}`}
+                    value={(e.payload?.kind as string) ?? "lore"}
+                    onChange={(ev) => setPayload({ kind: ev.target.value })}>
+              {LORE_KINDS.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>))}
+            </select>)}
+          {/* "campaign" is the absence of the choice: the row only carries a
+              `destination` once World is picked, and the save drops it again
+              if the reviewer goes back, so an untouched row's PUT body is the
+              one it always was. */}
+          <div role="radiogroup" aria-label={`Destination ${e.label}`}>
+            <label>
+              <input type="radio" name={`dest-${i}`} value="campaign"
+                     checked={e.payload?.destination !== "world"}
+                     onChange={() => setPayload({ destination: "campaign" })} />
+              Campaign
+            </label>
+            <label>
+              <input type="radio" name={`dest-${i}`} value="world"
+                     checked={e.payload?.destination === "world"}
+                     onChange={() => setPayload({ destination: "world" })} />
+              World library
+            </label>
+          </div>
+          <p className="field-hint">
+            Publishing to the library is undone from the world page (demote), not from Changes.
+          </p>
+        </>
       )}
       {e.kind === "sheet" ? (
         <>
