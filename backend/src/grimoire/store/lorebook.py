@@ -267,16 +267,29 @@ def adopt(stash: Mapping[str, object]) -> AdoptResult:
     return AdoptResult(fields, tuple(unmapped))
 
 
+def _stash(meta: Mapping[str, object]):
+    """A record's parsed `st_extensions`, or None when it has none or the text
+    does not parse. The result may still not be a dict -- callers check."""
+    raw = meta.get("st_extensions")
+    try:
+        return json.loads(raw) if isinstance(raw, str) and raw.strip() else None
+    except ValueError:
+        return None
+
+
+def unreadable_stash(meta: Mapping[str, object]) -> bool:
+    """Does the record carry an `st_extensions` that is not a JSON object? A
+    stash that is simply absent is not unreadable; it is nothing to adopt."""
+    raw = meta.get("st_extensions")
+    return bool(isinstance(raw, str) and raw.strip()) and not isinstance(_stash(meta), dict)
+
+
 def pending_adopt(meta: Mapping[str, object]) -> AdoptResult:
     """What adopting a record's stash would still change: `adopt` over its
     `st_extensions`, less every field the record already has. An author's edit
     beats a stale import, so a field with any value is left alone. No stash, or
     one that is not a JSON object, is nothing to adopt."""
-    raw = meta.get("st_extensions")
-    try:
-        stash = json.loads(raw) if isinstance(raw, str) and raw.strip() else None
-    except ValueError:
-        stash = None
+    stash = _stash(meta)
     if not isinstance(stash, dict):
         return AdoptResult({}, ())
     res = adopt(stash)

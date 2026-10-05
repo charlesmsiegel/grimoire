@@ -287,6 +287,108 @@ def post_campaign_entity_reclassify(cid: str, kind: str, eid: str, body: EntityR
     return {"id": store.reclassify.campaign_entity(cid, kind, eid, to)}
 
 
+# ---- adopt imported SillyTavern settings (spec 4.2) ------------------------
+# Registered ahead of the generic `/{kind}` routes below: `adopt-st` as the third
+# segment of `POST /worlds/{wid}/{kind}` would otherwise be an entity create.
+_UNREADABLE_STASH = "unreadable st_extensions"
+
+
+def _adopt_preview(meta: dict) -> dict:
+    res = store.lorebook.pending_adopt(meta)
+    return {"fields": res.fields, "unmapped": list(res.unmapped)}
+
+
+def _world_adopt(root, kind: str, eid: str, meta: dict) -> dict:
+    """Write the fields a record's stash would still add; return what landed.
+    Nothing pending writes nothing, so a second call is a no-op."""
+    fields = store.lorebook.pending_adopt(meta).fields
+    if fields:
+        store.entities.update_entity(root, kind, eid, fields=fields)
+    return fields
+
+
+def _campaign_adopt(cid: str, kind: str, eid: str, meta: dict) -> dict:
+    """`_world_adopt` for a campaign record, journalled as one change so one
+    Undo takes back every key it added. The caller holds the campaign lock: the
+    pending set is read and written under one hold, so a hand edit cannot land
+    between and be overwritten, and the journal's compare-and-swap is binding."""
+    fields = store.lorebook.pending_adopt(meta).fields
+    if fields:
+        label = f"Adopted SillyTavern settings: {meta.get('name') or eid}"
+        with store.undo.journalled(
+                cid, {"w": "entity_fields", "kind": kind, "id": eid, "fields": sorted(fields)},
+                kind="lore", ref={"kind": kind, "id": eid}, field="activation", label=label):
+            store.overlay.update_entity(cid, kind, eid, fields=fields)
+    return fields
+
+
+def _adopt_bulk(kind: str, records, apply, applied: list, skipped: list) -> None:
+    for row in records:
+        eid = row["id"]
+        if store.lorebook.unreadable_stash(row):
+            skipped.append({"kind": kind, "id": eid, "reason": _UNREADABLE_STASH})
+            continue
+        fields = apply(kind, eid, row)
+        if fields:
+            applied.append({"kind": kind, "id": eid, "fields": fields})
+
+
+@router.post("/worlds/{wid}/adopt-st")
+def post_world_adopt_st(wid: str):
+    """Adopt every world record's pending SillyTavern settings."""
+    root = _world_root_or_404(wid)
+    applied: list[dict] = []
+    skipped: list[dict] = []
+    for kind in store.entities.ENTITY_KINDS:
+        _adopt_bulk(kind, store.entities.list_entities(root, kind),
+                    lambda k, e, m: _world_adopt(root, k, e, m), applied, skipped)
+    return {"applied": applied, "skipped": skipped}
+
+
+@router.post("/campaigns/{cid}/adopt-st")
+def post_campaign_adopt_st(cid: str):
+    """Adopt pending settings on the records this campaign itself holds. A record
+    it only inherits is the world's to adopt: materializing every one would fork
+    the campaign off its world for a change nobody asked it to make."""
+    croot = _campaign_root_or_404(cid)
+    applied: list[dict] = []
+    skipped: list[dict] = []
+    with store.locks.campaign_lock(cid):
+        for kind in store.entities.ENTITY_KINDS:
+            # overlay-ok: the campaign's OWN records on purpose -- an inherited one
+            # is the world's to adopt, and the overlay listing would materialize it
+            _adopt_bulk(kind, store.entities.list_entities(croot, kind),
+                        lambda k, e, m: _campaign_adopt(cid, k, e, m), applied, skipped)
+    return {"applied": applied, "skipped": skipped}
+
+
+@router.get("/worlds/{wid}/{kind}/{eid}/adopt-st")
+def get_world_entity_adopt_st(wid: str, kind: str, eid: str):
+    root = _world_entity_or_404(wid, kind, eid)
+    return _adopt_preview(store.entities.read_entity(root, kind, eid)["meta"])
+
+
+@router.post("/worlds/{wid}/{kind}/{eid}/adopt-st")
+def post_world_entity_adopt_st(wid: str, kind: str, eid: str):
+    root = _world_entity_or_404(wid, kind, eid)
+    meta = store.entities.read_entity(root, kind, eid)["meta"]
+    return {"applied": _world_adopt(root, kind, eid, meta)}
+
+
+@router.get("/campaigns/{cid}/{kind}/{eid}/adopt-st")
+def get_campaign_entity_adopt_st(cid: str, kind: str, eid: str):
+    _campaign_entity_or_404(cid, kind, eid)
+    return _adopt_preview(store.overlay.read_entity(cid, kind, eid)["meta"])
+
+
+@router.post("/campaigns/{cid}/{kind}/{eid}/adopt-st")
+def post_campaign_entity_adopt_st(cid: str, kind: str, eid: str):
+    _campaign_entity_or_404(cid, kind, eid)
+    with store.locks.campaign_lock(cid):
+        meta = store.overlay.read_entity(cid, kind, eid)["meta"]
+        return {"applied": _campaign_adopt(cid, kind, eid, meta)}
+
+
 @router.get("/worlds/{wid}/{kind}")
 def get_world_entities(wid: str, kind: str):
     return _entity_list(_world_root_or_404(wid), kind)

@@ -296,6 +296,12 @@ def read_value(cid: str, target: dict):
         return voice_drift.read_record(croot, target["id"])
     if w == "entity":
         return overlay.read_entity(cid, target["kind"], target["id"])["body"]
+    if w == "entity_fields":
+        # Frontmatter keys, not the body: `entity` snapshots only the text, and
+        # an adopt of imported settings writes only keys. `None` is a key the
+        # record does not hold, which is what restoring it has to remove.
+        meta = overlay.read_entity(cid, target["kind"], target["id"])["meta"]
+        return {k: meta.get(k) for k in target["fields"]}
     if w == "card":
         # `locked_actor_root`, the same root `absorb.apply` writes the card
         # through: an appeared actor's campaign copy is authoritative at its
@@ -349,6 +355,11 @@ def write_value(cid: str, target: dict, value) -> None:
         voice_drift.write(croot, target["id"], record.get("note", ""), record.get("anchor", ""))
     elif w == "entity":
         overlay.update_entity(cid, target["kind"], target["id"], body=value or "")
+    elif w == "entity_fields":
+        # A blank value removes the key -- `entities.update_entity`'s own rule.
+        # Only the keys the target names, so a field edited since is not swept up.
+        overlay.update_entity(cid, target["kind"], target["id"],
+                              fields={k: (value or {}).get(k) or "" for k in target["fields"]})
     elif w == "card":
         root = appearances_paths.locked_actor_root(cid)
         card = characters.read_card(root, target["id"], target["version"])

@@ -13,6 +13,8 @@ back is the value the store would accept -- `playstate.compose_body`,
 all places where a plausible inverse is not one.
 """
 
+import json
+
 import pytest
 
 from grimoire.store import (
@@ -25,6 +27,7 @@ from grimoire.store import (
     entities,
     groupstate,
     journal,
+    lorebook,
     overlay,
     playstate,
     plot,
@@ -674,3 +677,65 @@ def test_a_card_edit_will_not_land_in_a_version_swapped_in_since(cid, sid):
     # it, which is a card nobody was looking at when the edit was approved.
     aroot = appearances.locked_actor_root(cid)
     assert characters.read_card(aroot, aid, other)["data"]["personality"] == ""
+
+
+# --- adopted lore settings: frontmatter keys, not the body -------------------
+
+def _adopt(cid, eid="pact"):
+    """What `POST .../adopt-st` does to a campaign record, minus the HTTP."""
+    meta = overlay.read_entity(cid, "lore", eid)["meta"]
+    fields = lorebook.pending_adopt(meta).fields
+    with undo.journalled(cid, {"w": "entity_fields", "kind": "lore", "id": eid,
+                               "fields": sorted(fields)},
+                         kind="lore", ref={"kind": "lore", "id": eid}, field="activation",
+                         label="Adopted SillyTavern settings: Pact"):
+        overlay.update_entity(cid, "lore", eid, fields=fields)
+    return fields
+
+
+def _stashed_pact(cid):
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body",
+                           fields={"st_extensions": json.dumps({"sticky": 2, "order": 900}),
+                                   "mood": "wary"})
+
+
+def test_campaign_adopt_is_undoable(cid):
+    _stashed_pact(cid)
+    assert _adopt(cid) == {"sticky": "2", "priority": "900"}
+    entry = _only(cid)
+    assert entry["undo"]["target"]["w"] == "entity_fields"
+    assert entry["undo"]["restore"] == {"priority": None, "sticky": None}
+    undo.undo(cid, entry["id"])
+    rec = overlay.read_entity(cid, "lore", "pact")
+    assert "sticky" not in rec["meta"] and "priority" not in rec["meta"]
+    assert rec["body"].strip() == "old body"
+    assert rec["meta"]["mood"] == "wary" and "st_extensions" in rec["meta"]
+
+
+def test_entity_fields_undo_is_redoable(cid):
+    _stashed_pact(cid)
+    _adopt(cid)
+    first = undo.undo(cid, _only(cid)["id"])
+    undo.undo(cid, first["id"])
+    meta = overlay.read_entity(cid, "lore", "pact")["meta"]
+    assert (meta["sticky"], meta["priority"]) == ("2", "900")
+
+
+def test_entity_fields_undo_refuses_on_conflict(cid):
+    _stashed_pact(cid)
+    _adopt(cid)
+    overlay.update_entity(cid, "lore", "pact", fields={"priority": "5"})
+    with pytest.raises(undo.UndoConflict):
+        undo.undo(cid, _only(cid)["id"])
+    meta = overlay.read_entity(cid, "lore", "pact")["meta"]
+    assert (meta["priority"], meta["sticky"]) == ("5", "2")
+
+
+def test_entity_fields_journals_nothing_when_adopt_changed_nothing(cid):
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
+    with undo.journalled(cid, {"w": "entity_fields", "kind": "lore", "id": "pact",
+                               "fields": ["sticky"]},
+                         kind="lore", ref={"kind": "lore", "id": "pact"}, field="activation",
+                         label="Adopted SillyTavern settings: Pact"):
+        pass
+    assert journal.read(cid) == []
