@@ -191,3 +191,85 @@ Frontend:
 - branch and closed chips render; a closed scene shows the banner and no
   composer;
 - the replay dialog's branch option sends `branch: true` and navigates.
+
+## Gate resolutions (binding; they override the text above where they differ)
+
+Spec → planning gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`, Codex CLI unavailable; owner-approved).
+
+1. **Closed is derived, not stored.** There is no `branch_closed` key and no
+   close/reopen hook. A scene is **closed** when another member of its
+   `branch_group` has `done: true`. `scenes.read` computes it while listing
+   (it already reads every frontmatter) and the scene row/payload carry
+   `closed_by: {sid, title}` — resolved server-side, so the banner can link.
+   Deleting, reverting or hand-editing the absorbed member, and fork copies,
+   all come out right with no bookkeeping.
+2. **The guard is its own check at specific doors.** `runs.require_scene_open`
+   (409 `branch_closed`) is **not** folded into `require_scene_free`. It is
+   called by `reserve_turn` (every turn kind: chat, retry, regenerate, extend,
+   replay turn, roll resolution) and by each transcript-shaping route: message
+   edit, cut, retcon, exclude, manual roll and check, cast appear/leave,
+   location, datetime, greeting routes, branch, replay begin, absorb
+   (`POST .../absorb`) and the chronicle commit. **Not** by delete, rename,
+   replay accept or replay cancel — so a closed sibling can be discarded or
+   renamed, and a replay running in a sibling that closes can still be
+   cancelled. One test table, like `test_scene_freeze.py`, has a row per door.
+3. **Absorbing waits for the whole group.** The chronicle commit and
+   `POST .../absorb` answer `scene_busy` while any member of the group holds a
+   live run (a turn landing in a sibling just closed would be a write to a
+   read-only scene).
+4. **`through` = last post means no cut.** The copy-then-cut skips the cut.
+5. **Replay in a branch checks first.** The route evaluates every
+   `replay.begin` refusal (a replay already running, a blocked transition
+   span, no generation step) **before** branching; if `begin` still refuses
+   after the branch (a race), the sibling is deleted. Server default
+   `branch: false` (existing callers unchanged); the client defaults the option
+   on for an unabsorbed scene.
+6. **Fork-first keeps the whole scene** (`from_index` unset); the replay then
+   runs in the copy as today. `from_index` is for "Branch from here" on an
+   absorbed scene.
+7. **Cloned responses recompute their lock.** A cloned record is
+   `mechanically_locked` iff a kept roll line follows its first message in the
+   kept transcript (the source may have locked it for a roll the sibling does
+   not have).
+8. **Rolls are matched by content, then order.** For each kept roll line, the
+   earliest unconsumed source entry whose `dice.format_roll(result, label)`
+   equals the line, else whose label and `result.notation` both appear in the
+   line (check lines from `checks.format_check_roll` carry both), in source
+   order. Unmatched lines get no entry. Copies drop `proposal` (so
+   `find_by_proposal` stays unambiguous). The sibling's sid is uniquified
+   against `rolls.json` scene names as well as files, so a recycled id never
+   inherits a deleted sibling's entries.
+9. **Fork with `from_index`** is validated in `_check_source`
+   (`0 <= from_index < len(messages)`, else 400) before any copy. Same-number
+   siblings: a fork at scene X keeps scenes numbered below X and X itself, and
+   removes every other scene with X's number (they are X's alternatives) along
+   with every later number — compared by number, not by id string. The report's
+   `cut_at` is optional (absent in old replayed markers).
+10. **A closed scene is closed in the UI too**: no composer, gutter actions,
+    swipes, or hotkeys (`r`, arrows, Keep writing) — each binding carries the
+    `closed` condition, per the registry rule.
+11. **The sibling's tracker is copied**: tracker records are copied with post
+    keys unchanged and response keys remapped through the old→new response id
+    map, so the sibling's next prompt sees the same tracker state as the source
+    at that point.
+12. **Frontmatter also copies** the per-scene reply settings
+    (`RESPONSE_FIELDS`) and `dismissed`.
+13. **Appearances first, from presence at `through`.** Appearances are written
+    before the cut (the cut reads the player cast to tell player posts from
+    model posts). Membership is every actor with a presence interval starting
+    at or before `through`; intervals are clipped at `through`.
+14. **Closed scenes are not open work**: excluded from the rail's open-scene
+    count, the incomplete-scenes chore, and export chapters (a book holds one
+    past).
+15. **The steering log is not copied** — its entries carry no transcript
+    position, so a copy would hand the sibling hints about posts it does not
+    have.
+16. **The scene's author's note (step 5) is copied** to the sibling's new
+    identity.
+17. Minor: the sibling takes the source's number at the campaign's current
+    width (no repad check needed); a caller-supplied title sorts among
+    same-number siblings by its slug; `store/branch.py` is classified in
+    `locks.DOMAIN_MODULES` and binds submodules per the import guard; the
+    tracker prune uses `store.tracker.walk.prune`; new scene-row keys are
+    emitted only when present so the frozen-campaign snapshot does not move.

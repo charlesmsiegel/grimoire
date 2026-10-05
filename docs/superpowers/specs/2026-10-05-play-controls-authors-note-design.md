@@ -139,3 +139,54 @@ Backend:
 Frontend:
 - the inspector section edits each level and saves through the matching route;
   the header count reflects applied notes.
+
+## Gate resolutions (binding; they override the text above where they differ)
+
+Spec → planning gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`, Codex CLI unavailable; owner-approved).
+
+1. **Notes never push out the post being answered.** `pack`'s
+   `HISTORY_FLOOR` counts non-note messages only; a note is trimmed together
+   with the post it sits before.
+2. **Openers**: the opener path discards history, so opener notes (only
+   `every == 1` ones — turn 0 is an explicit exception, not `0 % every == 0`)
+   are placed in `before_post` ahead of the opener instruction and reserved
+   through `extra`.
+3. **The note's identity travels in a side channel**, not on the message: `_assemble`
+   returns the note positions (indices into the projected history) and their
+   level/name, `_prepare`'s variant strips nothing from the wire because nothing
+   extra is on it, and `_breakdown` reads the positions to move the notes' text
+   and tokens out of the `history` row into the `authors_note` row (tier
+   `pack.HISTORY`; a note the packer trimmed is shown "trimmed"). `total_tokens`
+   still counts them.
+4. **Turn number** (`note_turn`, not `turn`, which `_assemble` already uses) is
+   the count, over the **full** scene transcript (not an actor's observed
+   history), of player posts and director-note lines — **including excluded
+   ones**, so hiding a post does not shift the cadence. An empty send stores no
+   line, so repeated empty sends share a turn number (stated). A scene whose
+   count is 0 (a greeting-only scene) applies only `every == 1` notes.
+5. **Insertion is built on `in_context(observed_or_full_history)`** —
+   explicitly, after `observed_history` — and the point is **snapped to a
+   projected-message boundary**: the start of the nearest player post at or
+   before `len - depth`, or the very start if none, so a note never splits a
+   merged run. Depth still counts posts.
+6. **Provider caveat, corrected**: strict OpenAI-compatible endpoints turn a
+   system message that precedes an assistant message into a standalone user
+   turn, so a mid-history note reaches the model as if spoken by the player;
+   the Claude agent path lifts it into the system prompt. A note that moves one
+   post deeper each turn also breaks the provider's cached prefix after it.
+7. **"Applies next turn"** comes from `GET
+   /campaigns/{cid}/scenes/{sid}/authors-notes/next`, computed for turn N+1,
+   with character notes reported as "applies when <name> speaks".
+8. **Deleting a scene** drops its note via `authors_notes.drop(cid, identity)`,
+   called fail-soft after the unlink in `scenes.lifecycle.delete_scene` (as
+   `tracker_records.drop` is); `authors_notes` imports nothing from `scenes`.
+   Fork cuts go through `delete_scene`, so they are covered. Branching copies
+   the scene note (branching spec, resolution 16).
+9. Minor: note reads are lock-free (the opener composes on the event loop);
+   the character route's `{ref}` is the full actor ref, URL-encoded, validated
+   against the campaign's characters (404 otherwise); the GET resolves every
+   identity in one pass; a roll resume recomposes and therefore sees the
+   current notes (stated); the eval adds a negative check that a character's
+   note is absent from another character's call, and the fixture note contains
+   no macros.
