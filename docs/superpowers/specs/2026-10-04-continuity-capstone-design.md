@@ -1214,7 +1214,7 @@ Register both in `undo.read_value` / `undo.write_value`. Restoring goes through 
 - `restore_link` validates the relation and refuses an equivalent effective link.
 - Both raise a continuity-specific error, which `undo.write_value` converts to `UndoConflict` (409), never a 500.
 
-Journal labels name both sides, for example “The missing map → merged into The lost chart”. `before` and `after` are display text only.
+Journal labels name both sides, for example “Mara's map → merged into Winifred's chart”. `before` and `after` are display text only.
 
 Continuity alias and link writes are journalled through `undo.journalled` under the same **best-effort** policy as ledger hand edits: the write is authoritative, and a failed journal append is logged, not raised.
 
@@ -1602,8 +1602,8 @@ A generated card renders validated provenance:
 Example using placeholders:
 
     Midnight at Saltmarch
-    Tomorrow · before The Tribunal
-    Advances: The missing map
+    Tomorrow · before The coronation
+    Advances: Mara's map
     Addresses: Mara's promise
 
 These labels are derived from validated ids, not from model-written explanatory prose.
@@ -1936,9 +1936,9 @@ Python declares the tuples `NODE_KINDS`, `EDGE_KINDS`, `EDGE_SOURCES`, `DRIVER_K
 Example:
 
     {
-      "id": "thread:missing-map",
+      "id": "thread:maras-map",
       "kind": "thread",
-      "label": "The missing map",
+      "label": "Mara's map",
       "status": "advanced",
       "aliases": [],
       "pressure": {"state": "stale", "in_days": null}
@@ -1949,7 +1949,7 @@ Example:
     {
       "id": "...",
       "kind": "advanced_in",
-      "from": "thread:missing-map",
+      "from": "thread:maras-map",
       "to": "scene:012--...",
       "source": "structural",
       "relation": null,

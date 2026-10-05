@@ -65,13 +65,14 @@ def get_continuity(cid: str):
         meta = record if isinstance(record, dict) else {}
         aliases.append({
             "ref": ref, "to": to, "canonical": live.get(ref, ref),
-            "title": review.describe(cid, ref), "to_title": review.describe(cid, to) if to else "",
+            "title": review.describe(cid, ref, ledgers),
+            "to_title": review.describe(cid, to, ledgers) if to else "",
             "created": _text(meta.get("created")), "source": _text(meta.get("source")),
             "note": _text(meta.get("note")),
             "dangling": ref in dangling, "reason": dangling.get(ref, ""),
         })
-    links = [{**link, "a_title": review.describe(cid, link["a"]),
-              "b_title": review.describe(cid, link["b"])} for link in kept]
+    links = [{**link, "a_title": review.describe(cid, link["a"], ledgers),
+              "b_title": review.describe(cid, link["b"], ledgers)} for link in kept]
     states = {d["id"]: ("broken", d["reason"]) for d in diagnostics["broken_links"]}
     states.update({d["id"]: ("hidden", d["reason"]) for d in diagnostics["hidden_links"]})
     raw_links = []

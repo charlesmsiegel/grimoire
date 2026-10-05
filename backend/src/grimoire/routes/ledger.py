@@ -185,11 +185,7 @@ def put_thread(cid: str, pid: str, body: ThreadSave, physical: bool = False):
             # `set_movement` reads a blank title or an unknown status as "keep
             # what is stored", which is the behaviour this route wants too: a
             # payload that only closes a thread must not blank its title.
-            # A redirected edit keeps the canonical's title: the editor sends the
-            # row's title with every save, and a status change made from the
-            # merged record must not rename the record it lands on.
-            store.plot.set_movement(cid, target, title if target == pid else "",
-                                    body.status or "",
+            store.plot.set_movement(cid, target, title, body.status or "",
                                     body.beat or "", body.scene if body.scene is not None
                                     else (store.plot.get(cid, target) or {}).get("last_scene", ""))
     return {"ok": True, "id": target}
@@ -258,8 +254,7 @@ def put_commitment(cid: str, mid: str, body: CommitmentSave, physical: bool = Fa
                                    kind="commitment", ref={"kind": "commitment", "id": target},
                                    field="commitment", label=label):
             store.commitments.set_movement(
-                cid, target, title if target == mid else "", body.kind or "",
-                body.status or "", body.due,
+                cid, target, title, body.kind or "", body.status or "", body.due,
                 body.beat or "",
                 body.scene if body.scene is not None else record.get("last_scene", ""))
     return {"ok": True, "id": target}

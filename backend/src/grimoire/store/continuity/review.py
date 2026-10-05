@@ -50,14 +50,20 @@ class RefusedError(Exception):
 _LEDGER_FILE = {"thread": "plot", "commitment": "commitments", "event": "events"}
 
 
-def describe(cid: str, ref: str) -> str:
+def describe(cid: str, ref: str, ledgers: effective.Ledgers | None = None) -> str:
     """A record's display name -- a title, an event's name -- or the ref itself.
     Never raises: it labels journal rows and refusals, including ones about a
-    record that has just been deleted or a ledger that will not read."""
+    record that has just been deleted or a ledger that will not read. A caller
+    labelling many rows passes the `Ledgers` it already loaded, so each label is
+    a lookup rather than a re-parse of the whole file."""
     try:
         prefix, rid = canon.split_ref(ref)
-        table = {"thread": plot.read, "commitment": commitments_store.read,
-                 "event": events.read}[prefix](cid)
+        if ledgers is not None:
+            table = {"thread": ledgers.threads, "commitment": ledgers.commitments,
+                     "event": ledgers.events}[prefix]
+        else:
+            table = {"thread": plot.read, "commitment": commitments_store.read,
+                     "event": events.read}[prefix](cid)
         record = table.get(rid) if isinstance(table, dict) else None
         name = record.get("name" if prefix == "event" else "title") \
             if isinstance(record, dict) else None

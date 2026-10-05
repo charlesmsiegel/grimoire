@@ -17,7 +17,7 @@ from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import doc, involvement
 
-S1, S2, S3 = "001--saltmarch", "002--tribunal", "003--ferry"
+S1, S2, S3 = "001--saltmarch", "002--realm", "003--winifred"
 
 
 @pytest.fixture
@@ -53,27 +53,27 @@ def _appearances(cid, scenes_by_ref: dict):
 def test_of_unions_roster_and_chronicle(cid):
     _chronicle(cid, {S1: ["characters/mara"]})
     _appearances(cid, {"pcs/seraphine": [S2]})
-    store.plot.set_movement(cid, "missing-map", "The missing map", "open", "Stolen.", S1)
-    store.plot.set_movement(cid, "missing-map", "", "advanced", "Traced.", S2)
-    got = involvement.of(cid, ["thread:missing-map"])
-    assert got == {"thread:missing-map": {"actors": ["characters:mara", "pcs:seraphine"],
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "open", "Stolen.", S1)
+    store.plot.set_movement(cid, "maras-map", "", "advanced", "Traced.", S2)
+    got = involvement.of(cid, ["thread:maras-map"])
+    assert got == {"thread:maras-map": {"actors": ["characters:mara", "pcs:seraphine"],
                                           "scenes": [S1, S2]}}
 
 
 def test_of_aggregates_alias_group(cid):
     _chronicle(cid, {S1: ["characters/mara"], S2: ["characters/winifred"]})
-    store.plot.set_movement(cid, "missing-map", "The missing map", "open", "Stolen.", S1)
-    store.plot.set_movement(cid, "lost-chart", "The lost chart", "open", "Lost.", S2)
-    doc.put_alias(cid, "thread:missing-map", {"to": "thread:lost-chart"})
-    got = involvement.of(cid, ["thread:missing-map", "thread:lost-chart"])
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "open", "Stolen.", S1)
+    store.plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Lost.", S2)
+    doc.put_alias(cid, "thread:maras-map", {"to": "thread:winifreds-chart"})
+    got = involvement.of(cid, ["thread:maras-map", "thread:winifreds-chart"])
     expected = {"actors": ["characters:mara", "characters:winifred"], "scenes": [S1, S2]}
-    assert got == {"thread:missing-map": expected, "thread:lost-chart": expected}
+    assert got == {"thread:maras-map": expected, "thread:winifreds-chart": expected}
 
 
 def test_of_includes_last_scene_without_beat(cid):
     _chronicle(cid, {S3: ["characters/mara"]})
-    store.plot.set_movement(cid, "missing-map", "The missing map", "advanced", "", S3)
-    assert involvement.of(cid, ["thread:missing-map"])["thread:missing-map"] == {
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "advanced", "", S3)
+    assert involvement.of(cid, ["thread:maras-map"])["thread:maras-map"] == {
         "actors": ["characters:mara"], "scenes": [S3]}
 
 
@@ -95,8 +95,8 @@ def test_of_garbled_plot_maps_threads_empty_commitments_still_answer(cid):
     store.commitments.set_movement(cid, "mara-promise", "Mara's promise", "promise", "open",
                                    None, "She swore.", S1)
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
-    got = involvement.of(cid, ["thread:missing-map", "commitment:mara-promise"])
-    assert got["thread:missing-map"] == {"actors": [], "scenes": []}
+    got = involvement.of(cid, ["thread:maras-map", "commitment:mara-promise"])
+    assert got["thread:maras-map"] == {"actors": [], "scenes": []}
     assert got["commitment:mara-promise"] == {"actors": ["characters:mara"], "scenes": [S1]}
 
 

@@ -8,13 +8,14 @@ the reader as a 409 rather than a cycle on disk or a 500.
 """
 
 import importlib
+import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
-from grimoire.store.continuity import doc, effective
+from grimoire.store.continuity import doc, effective, review
 
 
 @pytest.fixture
@@ -126,3 +127,39 @@ def test_restore_tables_match_effective_relations():
         rel for rel, (_, _, directional) in effective.RELATIONS.items() if not directional)
     assert expected == doc._RELATIONS
     assert symmetric == doc._SYMMETRIC
+
+
+# A hand-edited record can be JSON null. The journal must tell "a null record
+# was here" from "no record was here", or deleting one leaves no row to undo and
+# undoing a replacement removes the key instead of putting the null back.
+
+
+def _raw(cid, data):
+    (store.campaigns.campaign_root(cid) / "continuity.json").write_text(
+        json.dumps(data), encoding="utf-8")
+
+
+def test_removing_a_null_alias_is_journalled_and_undo_restores_it(cid):
+    _raw(cid, {"aliases": {"thread:a": None}})
+    before = len(store.journal.read(cid))
+    review.remove_alias(cid, "thread:a")
+    rows = store.journal.read(cid)
+    assert len(rows) == before + 1
+    store.undo.undo(cid, rows[-1]["id"])
+    assert doc.read(cid)["aliases"] == {"thread:a": None}
+
+
+def test_replacing_a_null_alias_undo_restores_the_null(cid):
+    store.plot.set_movement(cid, "a", "A", "open", "", "")
+    store.plot.set_movement(cid, "b", "B", "open", "", "")
+    _raw(cid, {"aliases": {"thread:a": None}})
+    review.create_alias(cid, "thread:a", "thread:b", replace=True)
+    store.undo.undo(cid, store.journal.read(cid)[-1]["id"])
+    assert doc.read(cid)["aliases"] == {"thread:a": None}
+
+
+def test_removing_a_null_link_is_journalled_and_undo_restores_it(cid):
+    _raw(cid, {"links": {"l1": None}})
+    review.remove_link(cid, "l1")
+    store.undo.undo(cid, store.journal.read(cid)[-1]["id"])
+    assert doc.read(cid)["links"] == {"l1": None}

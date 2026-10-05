@@ -30,7 +30,7 @@ def client(monkeypatch, tmp_path):
 def cid(client):
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    for title in ("The missing map", "The lost chart"):
+    for title in ("Mara's map", "Winifred's chart"):
         r = client.post(f"/api/campaigns/{cid}/ledger/threads", json={"title": title})
         assert r.status_code == 200, r.text
     r = client.post(f"/api/campaigns/{cid}/ledger/commitments", json={"title": "Mara's oath"})
@@ -60,26 +60,26 @@ def test_get_continuity_empty(client, cid):
 
 def test_alias_round_trip_and_journal(client, cid):
     r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
-                    json={"ref": "thread:the-missing-map", "to": "thread:the-lost-chart"})
+                    json={"ref": "thread:mara-s-map", "to": "thread:winifred-s-chart"})
     assert r.status_code == 200, r.text
-    assert r.json()["alias"]["to"] == "thread:the-lost-chart"
+    assert r.json()["alias"]["to"] == "thread:winifred-s-chart"
     (alias,) = _get(client, cid)["aliases"]
-    assert alias["ref"] == "thread:the-missing-map"
-    assert alias["canonical"] == "thread:the-lost-chart"
-    assert (alias["title"], alias["to_title"]) == ("The missing map", "The lost chart")
+    assert alias["ref"] == "thread:mara-s-map"
+    assert alias["canonical"] == "thread:winifred-s-chart"
+    assert (alias["title"], alias["to_title"]) == ("Mara's map", "Winifred's chart")
     assert alias["dangling"] is False
     newest = client.get(f"/api/campaigns/{cid}/journal").json()[0]
     assert newest["kind"] == "continuity_alias"
     r = client.delete(f"/api/campaigns/{cid}/continuity/aliases",
-                      params={"ref": "thread:the-missing-map"})
+                      params={"ref": "thread:mara-s-map"})
     assert r.status_code == 200, r.text
     assert _get(client, cid)["aliases"] == []
 
 
 @pytest.mark.parametrize("ref,to,status,kind", [
-    ("thread:the-missing-map", "thread:the-missing-map", 400, "self_alias"),
-    ("thread:the-missing-map", "thread:gone", 404, "not_found"),
-    ("thread:the-missing-map", "commitment:mara-s-oath", 400, "wrong_type"),
+    ("thread:mara-s-map", "thread:mara-s-map", 400, "self_alias"),
+    ("thread:mara-s-map", "thread:gone", 404, "not_found"),
+    ("thread:mara-s-map", "commitment:mara-s-oath", 400, "wrong_type"),
 ])
 def test_alias_refusals_map_to_http(client, cid, ref, to, status, kind):
     r = client.post(f"/api/campaigns/{cid}/continuity/aliases", json={"ref": ref, "to": to})
@@ -89,22 +89,22 @@ def test_alias_refusals_map_to_http(client, cid, ref, to, status, kind):
 
 def test_alias_cycle_refused(client, cid):
     url = f"/api/campaigns/{cid}/continuity/aliases"
-    client.post(url, json={"ref": "thread:the-missing-map", "to": "thread:the-lost-chart"})
-    r = client.post(url, json={"ref": "thread:the-lost-chart", "to": "thread:the-missing-map"})
+    client.post(url, json={"ref": "thread:mara-s-map", "to": "thread:winifred-s-chart"})
+    r = client.post(url, json={"ref": "thread:winifred-s-chart", "to": "thread:mara-s-map"})
     assert r.status_code == 409
     assert r.json()["kind"] == "alias_cycle"
 
 
 def test_liveness_mismatch_carries_extra(client, cid):
-    client.put(f"/api/campaigns/{cid}/ledger/threads/the-lost-chart", json={"status": "closed"})
+    client.put(f"/api/campaigns/{cid}/ledger/threads/winifred-s-chart", json={"status": "closed"})
     r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
-                    json={"ref": "thread:the-missing-map", "to": "thread:the-lost-chart"})
+                    json={"ref": "thread:mara-s-map", "to": "thread:winifred-s-chart"})
     assert r.status_code == 409
     detail = r.json()
     assert detail["kind"] == "liveness_mismatch"
     assert detail["canonical"]["status"] == "closed"
     r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
-                    json={"ref": "thread:the-missing-map", "to": "thread:the-lost-chart",
+                    json={"ref": "thread:mara-s-map", "to": "thread:winifred-s-chart",
                           "accept_status_change": True})
     assert r.status_code == 200, r.text
 
@@ -112,7 +112,7 @@ def test_liveness_mismatch_carries_extra(client, cid):
 def test_delete_alias_ref_with_slash(client, cid):
     store.plot.set_movement(cid, "a/b", "A slashed id", "open", "", "")
     r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
-                    json={"ref": "thread:a/b", "to": "thread:the-lost-chart"})
+                    json={"ref": "thread:a/b", "to": "thread:winifred-s-chart"})
     assert r.status_code == 200, r.text
     r = client.delete(f"/api/campaigns/{cid}/continuity/aliases", params={"ref": "thread:a/b"})
     assert r.status_code == 200, r.text
@@ -121,17 +121,17 @@ def test_delete_alias_ref_with_slash(client, cid):
 
 def test_links_round_trip(client, cid):
     r = client.post(f"/api/campaigns/{cid}/continuity/links",
-                    json={"a": "thread:the-missing-map", "b": "commitment:mara-s-oath",
+                    json={"a": "thread:mara-s-map", "b": "commitment:mara-s-oath",
                           "relation": "pays_off"})
     assert r.status_code == 200, r.text
     lid = r.json()["link"]["id"]
     body = _get(client, cid)
     (link,) = body["links"]
     assert (link["id"], link["a_title"], link["b_title"]) == (
-        lid, "The missing map", "Mara's oath")
+        lid, "Mara's map", "Mara's oath")
     assert body["raw_links"][0]["state"] == "ok"
     r = client.post(f"/api/campaigns/{cid}/continuity/links",
-                    json={"a": "thread:the-missing-map", "b": "commitment:mara-s-oath",
+                    json={"a": "thread:mara-s-map", "b": "commitment:mara-s-oath",
                           "relation": "pays_off"})
     assert r.status_code == 409 and r.json()["kind"] == "link_exists"
     assert client.delete(f"/api/campaigns/{cid}/continuity/links/{lid}").status_code == 200
@@ -139,8 +139,8 @@ def test_links_round_trip(client, cid):
 
 
 def test_get_continuity_survives_garbled_plot(client, cid):
-    doc.put_alias(cid, "thread:the-missing-map", {"to": "thread:the-lost-chart"})
-    doc.put_link(cid, "l1", {"a": "thread:the-missing-map", "b": "commitment:mara-s-oath",
+    doc.put_alias(cid, "thread:mara-s-map", {"to": "thread:winifred-s-chart"})
+    doc.put_link(cid, "l1", {"a": "thread:mara-s-map", "b": "commitment:mara-s-oath",
                              "relation": "pays_off"})
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
     body = _get(client, cid)
@@ -149,13 +149,13 @@ def test_get_continuity_survives_garbled_plot(client, cid):
                                         "unreadable"}
     (alias,) = body["aliases"]
     assert alias["dangling"] is False
-    assert alias["title"] == "thread:the-missing-map"
+    assert alias["title"] == "thread:mara-s-map"
     assert body["raw_links"][0]["state"] == "ok"
 
 
 def test_get_continuity_reports_non_dict_records(client, cid):
     (_root(cid) / "continuity.json").write_text(json.dumps(
-        {"aliases": {"thread:the-missing-map": "x"}, "links": {"l1": 3},
+        {"aliases": {"thread:mara-s-map": "x"}, "links": {"l1": 3},
          "suppressions": {"fp1_x": "y"}}), encoding="utf-8")
     body = _get(client, cid)
     (alias,) = body["aliases"]
@@ -186,3 +186,19 @@ def test_unknown_campaign_404_on_every_route(client, method, path, body):
 
 def test_continuity_routes_not_captured_by_entities(client, cid):
     assert "aliases" in _get(client, cid)
+
+
+def test_get_continuity_reads_each_ledger_once(client, cid, monkeypatch):
+    """Labels come from the ledgers the read already loaded, not one re-parse of
+    plot.json per row -- this read is meant to be cheap (spec §3.10)."""
+    url = f"/api/campaigns/{cid}/continuity/links"
+    for title in ("Seraphine's map", "Realm feud"):
+        client.post(f"/api/campaigns/{cid}/ledger/threads", json={"title": title})
+    for a in ("mara-s-map", "seraphine-s-map", "realm-feud"):
+        client.post(url, json={"a": f"thread:{a}", "b": "commitment:mara-s-oath",
+                               "relation": "pays_off"})
+    calls = []
+    real = store.plot.read
+    monkeypatch.setattr(store.plot, "read", lambda c: calls.append(c) or real(c))
+    assert len(_get(client, cid)["links"]) == 3
+    assert len(calls) == 1

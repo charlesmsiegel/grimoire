@@ -36,12 +36,12 @@ def _file(cid):
     return campaigns_paths.campaign_root(cid) / "continuity.json"
 
 
-def _alias(to="thread:lost-chart"):
+def _alias(to="thread:winifreds-chart"):
     return {"to": to, "created": "2026-10-05T00:00:00Z", "source": "manual", "note": ""}
 
 
 def _link():
-    return {"a": "thread:missing-map", "b": "commitment:mara-promise",
+    return {"a": "thread:maras-map", "b": "commitment:mara-promise",
             "relation": "pays_off", "created": "2026-10-05T00:00:00Z",
             "scene": "", "note": ""}
 
@@ -56,7 +56,7 @@ def test_unparseable_file_reads_empty_and_refuses_writes(cid):
     assert doc.read(cid) == {"version": 1, "aliases": {}, "links": {}, "suppressions": {}}
     assert doc.malformed(cid) == ["file"]
     with pytest.raises(doc.ContinuityError):
-        doc.put_alias(cid, "thread:missing-map", _alias())
+        doc.put_alias(cid, "thread:maras-map", _alias())
     assert _file(cid).read_text(encoding="utf-8") == "{ no"
 
 
@@ -77,25 +77,25 @@ def test_one_malformed_section_reads_empty_others_survive(cid):
     doc.put_link(cid, "l2", _link())
     assert set(doc.read(cid)["links"]) == {"l1", "l2"}
     with pytest.raises(doc.ContinuityError):
-        doc.put_alias(cid, "thread:missing-map", _alias())
+        doc.put_alias(cid, "thread:maras-map", _alias())
 
 
 def test_unknown_keys_and_version_preserved(cid):
     record = dict(_alias(), x=2)
     _file(cid).write_text(json.dumps(
-        {"version": 7, "extra": 1, "aliases": {"thread:missing-map": record}}),
+        {"version": 7, "extra": 1, "aliases": {"thread:maras-map": record}}),
         encoding="utf-8")
     doc.put_link(cid, "l1", _link())
     on_disk = json.loads(_file(cid).read_text(encoding="utf-8"))
     assert on_disk["version"] == 7
     assert on_disk["extra"] == 1
-    assert on_disk["aliases"]["thread:missing-map"]["x"] == 2
+    assert on_disk["aliases"]["thread:maras-map"]["x"] == 2
     assert doc.read(cid)["version"] == 7
     assert doc.read(cid)["extra"] == 1
 
 
 @pytest.mark.parametrize("put,get,drop,key,record", [
-    (doc.put_alias, doc.get_alias, doc.drop_alias, "thread:missing-map", _alias()),
+    (doc.put_alias, doc.get_alias, doc.drop_alias, "thread:maras-map", _alias()),
     (doc.put_link, doc.get_link, doc.drop_link, "l1", _link()),
     (doc.put_suppression, None, doc.drop_suppression, "fp1_abc",
      {"kind": "possible_duplicate", "refs": ["thread:a", "thread:b"],
@@ -110,7 +110,7 @@ def test_put_and_drop_round_trip(cid, put, get, drop, key, record):
 
 
 def test_written_json_is_sorted_and_newline_terminated(cid):
-    doc.put_alias(cid, "thread:missing-map", _alias())
+    doc.put_alias(cid, "thread:maras-map", _alias())
     text = _file(cid).read_text(encoding="utf-8")
     assert text.endswith("\n")
     assert text == json.dumps(json.loads(text), indent=2, sort_keys=True) + "\n"

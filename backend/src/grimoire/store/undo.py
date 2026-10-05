@@ -321,9 +321,9 @@ def read_value(cid: str, target: dict):
     if w == "chronicle":
         return chronicle.get_record(cid, target["id"])
     if w == "continuity_alias":
-        return continuity_doc.get_alias(cid, target["ref"])
+        return continuity_doc.alias_snapshot(cid, target["ref"])
     if w == "continuity_link":
-        return continuity_doc.get_link(cid, target["id"])
+        return continuity_doc.link_snapshot(cid, target["id"])
     raise UndoError(f"no reversal is defined for {w!r}")
 
 
@@ -375,9 +375,9 @@ def write_value(cid: str, target: dict, value) -> None:
         # its refusal is the reader's conflict to act on, not a 500.
         try:
             if w == "continuity_alias":
-                continuity_doc.restore_alias(cid, target["ref"], value)
+                continuity_doc.restore_alias_snapshot(cid, target["ref"], value)
             else:
-                continuity_doc.restore_link(cid, target["id"], value)
+                continuity_doc.restore_link_snapshot(cid, target["id"], value)
         except continuity_doc.ContinuityError as exc:
             raise UndoConflict(str(exc)) from exc
     else:
