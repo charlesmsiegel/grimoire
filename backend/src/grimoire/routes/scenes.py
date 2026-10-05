@@ -806,7 +806,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         note = content or prompts.render("scene/director_note.j2")
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
-            describe=store.prompt_log.capturing(), model=effective_model(conn))
+            describe=store.prompt_log.capturing(), model=effective_model(conn),
+            images=store.post_images.images_for(conn))
         # AFTER the stream is constructed, not before. `_chat_stream` claims the
         # turn under the campaign lock synchronously, before it returns -- so a
         # contended campaign raises StoreBusy there and nothing is ever sent.
@@ -830,7 +831,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn),
-        describe=store.prompt_log.capturing(), model=effective_model(conn))
+        describe=store.prompt_log.capturing(), model=effective_model(conn),
+        images=store.post_images.images_for(conn))
 
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
@@ -911,7 +913,8 @@ def _retry_run(cid: str, sid: str, body, request: Request,
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body),
-        describe=store.prompt_log.capturing(), model=effective_model(conn))
+        describe=store.prompt_log.capturing(), model=effective_model(conn),
+        images=store.post_images.images_for(conn))
     outcome = StreamOutcome()
     stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
                           task="retry", identity=run.scene_identity, outcome=outcome,
@@ -1178,7 +1181,8 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         messages, breakdown = store.context.compose_turn(
             cid, sid, turn=_turn_override(body),
             appended=(("Regenerate guidance", "system", block),) if block else (),
-            describe=store.prompt_log.capturing(), model=effective_model(conn))
+            describe=store.prompt_log.capturing(), model=effective_model(conn),
+            images=store.post_images.images_for(conn))
     except BaseException:
         if restore is not None:
             restore()
@@ -4600,11 +4604,14 @@ def get_scene_context(cid: str, sid: str):
     _require_scene(cid, sid)
     conn, _resolution, _routed = _standing_connection("chat", cid)
     model = effective_model(conn) if conn is not None else ""
-    # What the next ordinary turn's sampler preset sends on this connection,
+    # What the next turn would send, pictures included (#377): the Images row is
+    # present exactly when they would reach this scene's routed connection. And
+    # what the next ordinary turn's sampler preset sends on this connection,
     # and what its backend cannot take -- the inspector says so rather than the
     # facade dropping it in silence (sampler presets spec). A frozen snapshot
     # carries the same block for the attempt it captured.
-    breakdown = store.context.context_breakdown(cid, sid, model=model)
+    breakdown = store.context.context_breakdown(cid, sid, model=model,
+                                                images=store.post_images.images_for(conn))
     return {"model": model, **breakdown,
             "token_count": store.tokens.counting(model, conn["kind"] if conn else "",
                                                  breakdown.get("counted_with", "")),
@@ -4693,7 +4700,8 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # "live" is the one the Context panel is showing.
         conn, _resolution, _routed = _standing_connection("chat", cid)
         model = effective_model(conn) if conn is not None else ""
-        live = store.context.context_breakdown(cid, sid, model=model)
+        live = store.context.context_breakdown(cid, sid, model=model,
+                                               images=store.post_images.images_for(conn))
         head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model, **live,
                 "token_count": store.tokens.counting(model, conn["kind"] if conn else "",
                                                      live.get("counted_with", ""))}
@@ -5030,7 +5038,8 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
             actor_ref=character_turns.replay_actor(cid,sid),automatic=False,
             note=prompts.render("scene/director_note.j2"))
     messages, breakdown = store.context.compose_turn(
-        cid, sid, describe=store.prompt_log.capturing(), model=effective_model(conn))
+        cid, sid, describe=store.prompt_log.capturing(), model=effective_model(conn),
+        images=store.post_images.images_for(conn))
     # No `undo_user_post` hook, unlike `post_chat`. The staged posts are not
     # this request's to take back: `stage` recorded them as staged, a retry
     # re-uses them, and cancelling the replay is what puts the scene back.
