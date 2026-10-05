@@ -10,7 +10,7 @@ import {
 import { getModels, type Model } from "../api/models";
 import { THUMB } from "../api/thumbs";
 import { onNoticesChanged } from "../appEvents";
-import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
+import { approxMark, ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { ContextDiff } from "./ContextDiff";
 import { CostPanel } from "./CostPanel";
 import { Portrait } from "./Portrait";
@@ -1566,7 +1566,8 @@ export const SceneInspector = memo(function SceneInspector({
                    // has since moved is not shown as though it were current.
                    extra={!shownDiff && shown && (seen || liveShown || ctxHeld)
                           && contextPercent(shown, models) > 0
-                     ? <span className="ctx-pct">{contextPercent(shown, models)}%</span> : undefined}>
+                     ? <span className="ctx-pct">{approxMark(shown).trim()}{contextPercent(shown, models)}%</span>
+                     : undefined}>
         {seen && (
           <div className="ctx-frozen">
             <div className="field-hint">

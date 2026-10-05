@@ -76,7 +76,7 @@ export function ContextBudgetBar({ ctx, label }: { ctx: SceneContext; label: str
     <section className="ctx-budget">
       <header className="ctx-budget-head">
         <span className="data-label">{label}</span>
-        <span className="ctx-budget-total" title={approx ? estimateNote(ctx) : undefined}>{total}</span>
+        <span className="ctx-budget-total">{total}</span>
       </header>
       {/* The bar is a picture of a sentence a screen reader still has to be
           told: the legend below carries the same figures as text, so the track
@@ -97,6 +97,8 @@ export function ContextBudgetBar({ ctx, label }: { ctx: SceneContext; label: str
           {verdict}
         </li>
       </ul>
+      {/* Said, not left to a hover title: the Android app has no hover. */}
+      {approx && <p className="field-hint ctx-estimate">{estimateNote(ctx)}</p>}
     </section>
   );
 }

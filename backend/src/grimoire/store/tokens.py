@@ -91,8 +91,20 @@ class _Loader:
                              exc, RETRY_AFTER_S // 60)
             return self._encoding
 
+    def peek(self) -> Any:
+        """The encoder if it has already loaded, else None -- WITHOUT loading.
+        For describing counts that were already made: asking `get` there could
+        start a download (or wait on another thread's) after the fact."""
+        return self._encoding
+
 
 _loader = _Loader()
+
+
+def _loaded():
+    """The encoder if one is loaded right now, never starting a load. The seam
+    `counting` reads and a test patches."""
+    return _loader.peek()
 
 
 def _encoder():
@@ -119,47 +131,58 @@ def count_tokens(text: str) -> int:
 
 
 def _native_encoding(model: str) -> str:
-    """The encoding tiktoken says `model` itself uses, or "" when it does not
-    know the model -- which is every model that is not OpenAI's.
+    """The encoding tiktoken says `model` itself uses, or "" when that cannot
+    be known -- which is every model not named as OpenAI's.
 
-    Only an `openai/` routing prefix is stripped (OpenRouter's spelling). Any
-    other prefix names somebody else's model, and stripping it would let
+    Only a model spelled with the `openai/` prefix (OpenRouter's spelling) is
+    looked up. A bare `gpt-4` is NOT taken at its word: an OpenAI-compatible
+    endpoint is free to serve anything under that name, and several do by
+    default (LocalAI's all-in-one images, gateways that alias `gpt-4` to
+    whatever they route to). The cost is that a direct api.openai.com
+    connection reads as an estimate too, which is the safe direction. Any other
+    prefix names somebody else's model, and stripping it would let
     `someorg/gpt-4-tune` claim GPT-4's tokenizer through tiktoken's prefix
-    table. A bare `gpt-4` reached through an OpenAI-compatible endpoint is
-    taken at its word: an endpoint serving that name is serving that model, and
-    the only way to be wrong is a local server deliberately misnaming one.
+    table.
 
     Never raises, and never touches the network -- the lookup is tiktoken's own
     static table, not an encoding load.
     """
-    if tiktoken is None or not model:
+    if tiktoken is None or not model.startswith("openai/"):
         return ""
-    name = model.removeprefix("openai/")
     try:
-        return str(tiktoken.encoding_name_for_model(name))
+        return str(tiktoken.encoding_name_for_model(model.removeprefix("openai/")))
     except Exception:  # noqa: BLE001 - KeyError for an unknown model; anything else means the same
         return ""
 
 
 def counting(model: str) -> dict:
     """How the token counts reported beside `model` were made, and whether
-    they are that model's own.
+    the tokenizer was that model's own.
 
-    `tokenizer` is `ENCODING` or `HEURISTIC`; `exact` is true only when the
-    encoder actually loaded AND the model is one tiktoken maps to that same
-    encoding. Everything else -- a Claude model, a llama on a local server, an
-    OpenAI model on the newer `o200k_base`, an Android build with no tiktoken,
-    a desktop that could not fetch the encoding -- is an estimate, and the
+    `tokenizer` is `ENCODING` or `HEURISTIC`; `native` is true only when the
+    encoder is loaded AND the model is one tiktoken maps to that same encoding.
+    Everything else -- a Claude model, a llama on a local server, an OpenAI
+    model on the newer `o200k_base`, an Android build with no tiktoken, a
+    desktop that could not fetch the encoding -- is an estimate, and the
     context inspector says so rather than presenting a GPT-4 count as what the
-    provider will bill.
+    provider will bill. `native` is not "matches the bill" either: the packer
+    counts text, not the chat format's per-message framing, so even a native
+    count sits a little under the provider's `prompt_tokens`.
+
+    Reads the loader's state and never loads (`_loaded`), so it cannot start a
+    download or wait on one -- `prompt_log.record` calls it on a path that must
+    not wait. It describes the counter as it stands now, which is the one the
+    compose that just ran used, with one blind spot: `count_tokens` falls back
+    to the heuristic per string when `encode` raises, so a section whose text
+    trips the encoder is counted by length under a `cl100k_base` label.
 
     It is a description of the counting, not a correction of it. Counting each
     model with its own tokenizer would change what the packer keeps per
     connection, and for most backends there is no tokenizer to load at all.
     """
-    if _encoder() is None:
-        return {"tokenizer": HEURISTIC, "exact": False}
-    return {"tokenizer": ENCODING, "exact": _native_encoding(model) == ENCODING}
+    if _loaded() is None:
+        return {"tokenizer": HEURISTIC, "native": False}
+    return {"tokenizer": ENCODING, "native": _native_encoding(model) == ENCODING}
 
 
 def record_tokens(path: Path, body: str) -> int:

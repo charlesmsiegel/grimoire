@@ -42,10 +42,13 @@ def _context(raw: dict) -> int | None:
     have the inspector drawing a bar against a window it does not have. Ollama
     names none here, so its models stay unknown -- `None`, never `0`.
 
-    Only a positive integer counts; anything else is a field that does not say.
+    Only a positive whole number counts (`128000.0` included, since JSON does
+    not distinguish it); anything else is a field that does not say.
     """
     for key in ("context_length", "max_model_len"):
         value = raw.get(key)
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return None

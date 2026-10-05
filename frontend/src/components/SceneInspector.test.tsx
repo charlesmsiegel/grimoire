@@ -781,7 +781,7 @@ test("the Cost section is shut until asked for, then mounts the breakdown", asyn
 test("the Context section header still shows the percentage badge and collapses as a whole", async () => {
   renderInspector();
   await screen.findByText(/World info/);
-  await screen.findByText("10%");
+  await screen.findByText("≈10%");
   const header = screen.getByRole("button", { name: /context/i });
   fireEvent.click(header);
   expect(screen.queryByText(/World info/)).not.toBeInTheDocument();
@@ -800,7 +800,7 @@ test("a shut Context section does not recompose the prompt after a turn; opening
   rerender(view(1));                                   // a turn landed
   await screen.findByText("Active characters");
   expect(api.getSceneContext).not.toHaveBeenCalled();
-  expect(screen.queryByText("10%")).toBeNull();       // no figure nobody read
+  expect(screen.queryByText("≈10%")).toBeNull();       // no figure nobody read
 
   fireEvent.click(screen.getByRole("button", { name: /^context/i }));
   expect(await screen.findByText(/World info/)).toBeInTheDocument();
@@ -942,7 +942,7 @@ test("percentages measure against the configured budget, not the model window", 
   });
   renderInspector();
   // 100 of a 200-token budget is 50%, not 10% of the model's 1000-token window
-  await screen.findByText("50%");
+  await screen.findByText("≈50%");
   await screen.findByText(/100 \/ 200 tok/);
 });
 
@@ -967,7 +967,7 @@ test("percentages use the smaller of the budget and the model window", async () 
                  tier: "spotlight", dropped: false, trimmed: 0 }],
   });
   renderInspector();
-  await screen.findByText("50%");              // 100 of the model's 200, not of 1000
+  await screen.findByText("≈50%");              // 100 of the model's 200, not of 1000
   await screen.findByText(/100 \/ 200 tok/);
 });
 
@@ -1146,7 +1146,7 @@ test("a frozen turn is measured against the budget it was captured under", async
 
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText(/80 \/ 100 tok/);    // the frozen budget, not 10000
-  await screen.findByText("80%");
+  await screen.findByText("≈80%");
 });
 
 test("a snapshot arriving after a scene change is dropped, not shown", async () => {

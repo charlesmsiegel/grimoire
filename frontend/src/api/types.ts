@@ -1198,9 +1198,10 @@ export type CampaignBudget = {
 };
 /** How a breakdown's token counts were made (`store.tokens.counting`).
  *  `tokenizer` is a tiktoken encoding name (`cl100k_base`) or `heuristic`, the
- *  characters/4 fallback. `exact` only when the tokenizer that counted is the
- *  model's own; for most backends it is not, and the counts are estimates. */
-export type TokenCounting = { tokenizer: string; exact: boolean };
+ *  characters/4 fallback. `native` only when the tokenizer that counted is the
+ *  model's own; for most backends it is not, and the counts are estimates.
+ *  Even native counts are text only — the provider adds per-message framing. */
+export type TokenCounting = { tokenizer: string; native: boolean };
 export type SceneContext = {
   model: string; total_tokens: number; dropped_tokens: number;
   budget_tokens: number; sections: ContextSection[];
@@ -1270,6 +1271,8 @@ export type PromptDiffSection = {
 export type PromptDiffSide = {
   id: string; task: string; ts: string; model: string;
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
+  /** Null on a capture frozen before counters were recorded. */
+  token_count?: TokenCounting | null;
 };
 /** `base` -> `head`, section by section (#130). No summary count and no token
  *  delta: both are derived from what is already here, and the server declines
