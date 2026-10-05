@@ -431,13 +431,6 @@ def _downscale(im: Image.Image, width: int) -> Image.Image:
     return im if im.mode == target else im.convert(target)
 
 
-#: The formats a browser animates. Only these count as animated: an MPO -- the
-#: multi-picture JPEG some cameras write, its second frame a preview or a
-#: depth map -- reports several frames too, and a browser draws it as the
-#: plain JPEG it starts with.
-_ANIMATES = frozenset({"GIF", "PNG", "WEBP"})
-
-
 def _rgb_profile(im: Image.Image) -> bytes | None:
     """`im`'s embedded colour profile, if it describes RGB.
 
@@ -497,7 +490,7 @@ def thumbnail(src: Path, width: int) -> Path | None:
             return None
         try:
             with Image.open(src) as im:
-                if im.format in _ANIMATES and getattr(im, "is_animated", False):
+                if im.format in image_hash.ANIMATES and getattr(im, "is_animated", False):
                     return None
                 # Both read off the source before the downscale, which builds
                 # new images that need not carry its metadata along.

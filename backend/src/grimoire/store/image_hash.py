@@ -40,10 +40,12 @@ why it lives here and `store/thumbs.py` calls it.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import re
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -74,8 +76,8 @@ _UPRIGHT = {
 #: The formats a browser animates. Only these count as animated: an MPO -- the
 #: multi-picture JPEG some cameras write, its second frame a preview or a
 #: depth map -- reports several frames too, and a browser draws it as the
-#: plain JPEG it starts with. (The same set as `thumbs._ANIMATES`.)
-_ANIMATES = frozenset({"GIF", "PNG", "WEBP"})
+#: plain JPEG it starts with. `thumbs` asks this set too.
+ANIMATES = frozenset({"GIF", "PNG", "WEBP"})
 #: The formats whose EXIF Orientation Chromium -- the Android WebView, and
 #: most desktop browsers -- applies when it draws the original. Not WebP: an
 #: EXIF chunk in a WebP is drawn as stored, so a thumbnail that turned it
@@ -156,12 +158,16 @@ def _u32(n: int) -> bytes:
     return (n & 0xFFFFFFFF).to_bytes(4, "big")
 
 
+@functools.cache
 def _webp_animates() -> bool:
     """Whether this Pillow build decodes animated WebP rather than frame 0 only.
 
     Pillow 12 has no `webp_anim` feature name (`check_feature` raises
     ValueError, since animation ships wherever WebP does); 11.x warns and
-    answers. Both are handled, and an unknown name falls back to the codec."""
+    answers. Both are handled, and an unknown name falls back to the codec.
+
+    Computed once per process: `warnings.catch_warnings` swaps process-wide
+    state and is not thread-safe, and the answer cannot change."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         try:
@@ -221,13 +227,29 @@ def _normalized(rgba: Image.Image) -> Image.Image:
     return out
 
 
+#: Rows hashed at a time. A whole-frame RGBA copy of a 16 MP image is 64 MB, and
+#: the decoded source is already held, so the raster is converted, normalized
+#: and hashed in bands of about this many pixels instead.
+_BAND_PIXELS = 1 << 20
+
+
+def _feed(update: Callable[[bytes], object], im: Image.Image) -> None:
+    """Feed `im` to `update` (a hash's) as RGBA8 rows with RGB zeroed under alpha 0.
+
+    Both steps are per pixel, so doing them a band at a time yields exactly the
+    bytes a whole-image conversion would, without ever holding that copy."""
+    w, h = im.size
+    step = max(1, _BAND_PIXELS // max(1, w))
+    for y in range(0, h, step):
+        band = _normalized(im.crop((0, y, w, min(h, y + step))).convert("RGBA"))
+        update(band.tobytes())
+
+
 def _identify(data: bytes, sha: str) -> PixelIdentity:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-        try:
-            im = Image.open(io.BytesIO(data))
-        except Image.DecompressionBombError:
-            return _opaque(sha, "over-budget")
+    try:
+        im = Image.open(io.BytesIO(data))
+    except Image.DecompressionBombError:
+        return _opaque(sha, "over-budget")
     with im:
         fmt = im.format
         size = im.size
@@ -238,33 +260,40 @@ def _identify(data: bytes, sha: str) -> PixelIdentity:
         mode = im.mode
         if mode == "CMYK" or mode in ("I", "F") or mode.startswith("I;16"):
             return _opaque(sha, f"mode-{mode}", size)
+        # The header's size, before anything is loaded. For an animation this is
+        # the canvas, which is every frame's size in Pillow, so it holds each
+        # frame to the still budget too.
+        if size[0] * size[1] > STATIC_BUDGET:
+            return _opaque(sha, "over-budget", size)
 
         # A Pillow without animated-WebP support reads frame 0 only, so the
         # animation is detected from the bytes and refused rather than hashed
         # as the still it would otherwise look like.
         if fmt == "WEBP" and _riff_has_anim(data) and not _webp_animates():
             return _opaque(sha, "webp-animation-unsupported", size)
-        n = getattr(im, "n_frames", 1) if fmt in _ANIMATES else 1
-        animated = fmt in _ANIMATES and getattr(im, "is_animated", False) and n > 1
-        if animated:
-            if n > MAX_FRAMES or size[0] * size[1] * n > ANIM_AREA_BUDGET:
-                return _opaque(sha, "over-budget", size)
-            return _animated(im, data, size, n)
-        if size[0] * size[1] > STATIC_BUDGET:
+        n = getattr(im, "n_frames", 1) if fmt in ANIMATES else 1
+        animated = fmt in ANIMATES and getattr(im, "is_animated", False) and n > 1
+        if not animated:
+            return _static(im, data)
+        if n > MAX_FRAMES or size[0] * size[1] * n > ANIM_AREA_BUDGET:
             return _opaque(sha, "over-budget", size)
-        return _static(im, data)
+        # Whether a browser rotates an animated PNG by its EXIF is unverified,
+        # and an opaque id can never merge two pictures that display apart.
+        if orientation(im) is not None:
+            return _opaque(sha, "animated-oriented", size)
+        return _animated(im, data, size, n)
 
 
 def _static(im: Image.Image, data: bytes) -> PixelIdentity:
     color = _colour(im, data)
     turn = orientation(im)
     shown = im.transpose(turn) if turn is not None else im
-    out = _normalized(shown.convert("RGBA"))
-    w, h = out.size
-    digest = hashlib.sha256(
-        b"grimoire-pixels-v1\0" + _u32(w) + _u32(h) + _u32(len(color)) + color + out.tobytes()
-    ).hexdigest()
-    return PixelIdentity("px1-" + digest, "pixels", None, w, h, False)
+    w, h = shown.size
+    hasher = hashlib.sha256(
+        b"grimoire-pixels-v1\0" + _u32(w) + _u32(h) + _u32(len(color)) + color
+    )
+    _feed(hasher.update, shown)
+    return PixelIdentity("px1-" + hasher.hexdigest(), "pixels", None, w, h, False)
 
 
 def _animated(im: Image.Image, data: bytes, size: tuple[int, int], n: int) -> PixelIdentity:
@@ -282,8 +311,11 @@ def _animated(im: Image.Image, data: bytes, size: tuple[int, int], n: int) -> Pi
     )
     for i in range(n):
         im.seek(i)
-        frame = _normalized(im.convert("RGBA"))
-        if frame.size != size:
+        if im.size != size:
             raise ValueError("frame size differs from the canvas")
-        hasher.update(_u32(int(im.info.get("duration", 0))) + frame.tobytes())
+        # Loaded first: a WebP frame's duration lands in `info` only once its
+        # pixels are decoded, and before that it is the previous frame's.
+        im.load()
+        hasher.update(_u32(int(im.info.get("duration", 0))))
+        _feed(hasher.update, im)
     return PixelIdentity("px1-" + hasher.hexdigest(), "pixels", None, w, h, True)

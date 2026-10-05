@@ -28,6 +28,7 @@ from PIL import Image, ImageCms
 HERE = Path(__file__).parent
 W, H = 24, 16
 ORIENT_TAG = 0x0112
+SUFFIXES = {".png", ".jpg", ".gif", ".webp"}
 
 
 def _noise(seed: int, w: int = W, h: int = H, mode: str = "RGB") -> Image.Image:
@@ -201,6 +202,11 @@ def build() -> dict[str, bytes]:
         buf, "WEBP", save_all=True, append_images=[a2], duration=[100, 100], loop=0, lossless=True
     )
     out["webp_anim.webp"] = buf.getvalue()
+    # An APNG carrying an eXIf Orientation=6 chunk before its pixel data.
+    # (a PNG eXIf chunk holds the bare TIFF block, without the "Exif\0\0" lead)
+    out["apng_oriented.png"] = insert_before_idat(
+        out["apng_anim.png"], b"eXIf", _exif(6)[len(b"Exif\x00\x00") :]
+    )
     return out
 
 
@@ -214,10 +220,16 @@ def ids(files: dict[str, bytes]) -> dict[str, str]:
 
 
 def write() -> None:
-    files = build()
-    for name, data in files.items():
-        (HERE / name).write_bytes(data)
-    (HERE / "pixel_ids.json").write_text(json.dumps(ids(files), indent=2) + "\n")
+    """Write the fixtures that are not on disk yet, then the id pins.
+
+    An existing file is never overwritten: the committed bytes are the fixture
+    (the sRGB profile lcms builds carries its creation time, so a rebuild is not
+    byte-identical anyway). Ids are computed from what is on disk."""
+    for name, data in build().items():
+        if not (HERE / name).exists():
+            (HERE / name).write_bytes(data)
+    on_disk = {p.name: p.read_bytes() for p in HERE.iterdir() if p.suffix in SUFFIXES}
+    (HERE / "pixel_ids.json").write_text(json.dumps(ids(on_disk), indent=2) + "\n")
 
 
 if __name__ == "__main__":

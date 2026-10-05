@@ -218,6 +218,36 @@ def test_animation_budgets(monkeypatch):
     assert _ident(_read("gif_anim.gif")).identity == "pixels"
 
 
+def test_animated_frame_over_the_static_budget_is_opaque(monkeypatch):
+    # Each frame is held to the still budget as well as the total area.
+    monkeypatch.setattr(image_hash, "STATIC_BUDGET", 24 * 16 - 1)
+    assert _assert_opaque(_read("gif_anim.gif")).reason == "over-budget"
+    monkeypatch.setattr(image_hash, "STATIC_BUDGET", 24 * 16)
+    assert _ident(_read("gif_anim.gif")).identity == "pixels"
+
+
+def test_oriented_apng_is_opaque():
+    data = _read("apng_oriented.png")
+    with Image.open(io.BytesIO(data)) as im:
+        assert im.is_animated and image_hash.orientation(im) is not None
+    assert _assert_opaque(data).reason == "animated-oriented"
+    # The same APNG without the Orientation chunk is hashed by its pixels.
+    assert _ident(_read("apng_anim.png")).identity == "pixels"
+
+
+@pytest.mark.parametrize(
+    "name", ["base.png", "png_invisible_a.png", "jpeg_rot6.jpg", "gif_single.gif",
+             "gif_anim.gif", "webp_anim.webp", "apng_anim.png"],
+)
+def test_banded_hashing_is_byte_identical(name, monkeypatch):
+    # Rows are hashed in bands so no whole-frame RGBA copy is held; a band
+    # boundary (here every row, and a ragged 3 rows) must not move the id.
+    pinned = json.loads((FIX / "pixel_ids.json").read_text())[name]
+    for pixels in (1, 24 * 3 + 5):
+        monkeypatch.setattr(image_hash, "_BAND_PIXELS", pixels)
+        assert _id(name) == pinned
+
+
 def test_animated_webp_without_support_is_opaque(monkeypatch):
     monkeypatch.setattr(image_hash, "_webp_animates", lambda: False)
     assert _assert_opaque(_read("webp_anim.webp")).reason == "webp-animation-unsupported"
