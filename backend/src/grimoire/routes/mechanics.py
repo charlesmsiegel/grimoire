@@ -92,7 +92,7 @@ def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], li
 
 
 def _continuation_messages(cid: str, sid: str, resolution: dict,
-                           model: str = "") -> tuple[list[dict], dict | None]:
+                           model: str = "", images: int = 0) -> tuple[list[dict], dict | None]:
     # The roll block is rendered first and named in `appended`: a check can drag
     # in several on-roll rule documents, which is exactly the kind of mandatory
     # bulk that would otherwise be packed around and then appended anyway.
@@ -101,15 +101,15 @@ def _continuation_messages(cid: str, sid: str, resolution: dict,
                            on_roll_docs=on_roll_docs, check_docs=check_docs)
     return store.context.compose_turn(
         cid, sid, appended=(("Roll result", "system", block),),
-        describe=store.prompt_log.capturing(), model=model)
+        describe=store.prompt_log.capturing(), model=model, images=images)
 
 
-def _declined_continuation_messages(cid: str, sid: str,
-                                    model: str = "") -> tuple[list[dict], dict | None]:
+def _declined_continuation_messages(cid: str, sid: str, model: str = "",
+                                    images: int = 0) -> tuple[list[dict], dict | None]:
     block = prompts.render("scene/roll_declined.j2")
     return store.context.compose_turn(
         cid, sid, appended=(("Roll declined", "system", block),),
-        describe=store.prompt_log.capturing(), model=model)
+        describe=store.prompt_log.capturing(), model=model, images=images)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/roll-proposal")
@@ -290,14 +290,18 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
             store.responses.mark_applied(
                 cid, sid, round_record["id"] if round_record is not None else None)
             if round_record is None:
-                messages, breakdown = _continuation_messages(cid, sid, resolution, model=effective_model(conn))
+                messages, breakdown = _continuation_messages(
+                    cid, sid, resolution, model=effective_model(conn),
+                    images=store.post_images.images_for(conn))
             else:
                 on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
                 block = prompts.render("scene/roll_result.j2", resolution=resolution,
                                        on_roll_docs=on_roll_docs, check_docs=check_docs)
         elif status == "declined":
             if round_record is None:
-                messages, breakdown = _declined_continuation_messages(cid, sid, model=effective_model(conn))
+                messages, breakdown = _declined_continuation_messages(
+                    cid, sid, model=effective_model(conn),
+                    images=store.post_images.images_for(conn))
             else:
                 block = prompts.render("scene/roll_declined.j2")
         else:  # defensive: a race moved the record out from under us

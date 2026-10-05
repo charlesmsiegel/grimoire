@@ -69,6 +69,7 @@ def _compose(cid, sid, round_record, actor, conn, appended=()):
         "eligible_speakers": candidates,
         "describe": store.prompt_log.capturing(),
         "model": effective_model(conn),
+        "images": store.post_images.images_for(conn),
     }
     if appended:
         kwargs["appended"] = appended
@@ -160,7 +161,8 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
             record = store.responses.get(cid, sid, pending, private=True)
             if record["status"] != "complete" and not appended:
                 messages = PreparedMessages.from_snapshot(
-                    record.get("resume_snapshot") or record["snapshot"], effective_model(conn)
+                    record.get("resume_snapshot") or record["snapshot"], effective_model(conn),
+                    campaign=cid,
                 )
                 _capture(
                     cid,
@@ -876,7 +878,8 @@ def regenerate_response(
                     },
                 )
             token = streaming._claim_turn(cid, sid)
-            messages = PreparedMessages.from_snapshot(record["snapshot"], effective_model(conn))
+            messages = PreparedMessages.from_snapshot(record["snapshot"], effective_model(conn),
+                                                      campaign=cid)
             if body and body.guidance:
                 messages = messages.with_appended(
                     {
