@@ -421,13 +421,18 @@ def get_connections(registry: health.ProviderHealth = Depends(get_health)):
             for conn in store.llm_connections.list_connections()]
 
 
-def _check_preset_field(fields: dict) -> None:
+def _check_preset_field(fields: dict, stored: str = "") -> None:
     """A connection's `sampler_preset` names a preset, or is blank -- refused on
     write and tolerated on read, the routing PUT's rule. Here rather than in
     `llm_connections`, which `sampler_presets` imports: checking from the store
-    side would close a cycle."""
+    side would close a cycle.
+
+    A value equal to what is already `stored` is not a decision and is not
+    checked: deleting a preset deliberately leaves connections naming it, and
+    the editor resends every field on every save -- so checking it would make a
+    connection whose preset was deleted impossible to rename."""
     pid = (fields.get("sampler_preset") or "").strip()
-    if pid and not store.sampler_presets.exists(pid):
+    if pid and pid != stored and not store.sampler_presets.exists(pid):
         raise HTTPException(status_code=400, detail=f"no such sampler preset: {pid!r}")
 
 
@@ -471,9 +476,10 @@ def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health
 def put_connection(id: str, body: ConnectionUpdate,
                    registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(body).items() if v is not None}
-    _check_preset_field(fields)
     try:
-        before = store.llm_connections.read_connection_raw(id)["rev"]
+        stored = store.llm_connections.read_connection_raw(id)
+        _check_preset_field(fields, stored.get("sampler_preset", ""))
+        before = stored["rev"]
         store.llm_connections.update_connection(id, **fields)
         # An edit invalidates the verdict as surely as a delete does: the
         # failure on record was this connection's *previous* key, base URL or

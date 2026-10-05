@@ -225,3 +225,15 @@ def test_any_other_edit_still_mints_a_rev():
     rev = store.llm_connections.read_connection_raw(cid)["rev"]
     store.llm_connections.update_connection(cid, sampler_preset="warm", model="x")
     assert store.llm_connections.read_connection_raw(cid)["rev"] != rev
+
+
+
+def test_a_second_spelling_of_a_taken_param_is_listed_not_lost():
+    params, report = sp.from_sillytavern({"temperature": 0.7, "temp": 1.2})
+    assert params == {"temperature": 0.7}
+    assert any(u.startswith("temp (unused: temperature") for u in report["unmapped"])
+
+
+def test_top_k_minus_one_is_off_too():
+    params, report = sp.from_sillytavern({"top_k": -1})
+    assert params == {} and report["neutral"][0]["value"] == -1
