@@ -16,7 +16,11 @@ with no rule files must build exactly the prompt it built before rules existed.
 
 from __future__ import annotations
 
+import logging
+
 from . import apply, layers
+
+log = logging.getLogger(__name__)
 
 
 def _live(entries: list[apply.Entry], phase: str) -> list[apply.Entry]:
@@ -79,13 +83,23 @@ def store_phase(text: str, *, cid: str, role: str,
                 connection: str = "") -> tuple[str, list[str]]:
     """`text` through the rules that rewrite stored text, and the ids of the
     rules that changed it (a rule that matched nothing, or replaced a match
-    with itself, is not one of them)."""
+    with itself, is not one of them).
+
+    A rewrite that would leave nothing (empty or whitespace only) is not
+    applied: the text comes back exactly as it arrived, with no rule fired, so
+    no seam stores an empty post or loses the only copy of what was written.
+    Logged by rule id only -- the text is private prose."""
     entries = _live(layers.effective(cid=cid, connection=connection), "store")
     if not entries:
         return text, []
+    before = text
     fired: list[str] = []
     for step in apply.trace(text, entries, role=role, phase="store", depth=0):
         if step["applied"] and step["text_after"] != text:
             fired.append(step["rule_id"])
         text = step["text_after"]
+    if fired and not text.strip():
+        log.warning("store phase: not applying a rewrite that empties the text (rules %s)",
+                    ", ".join(fired))
+        return before, []
     return text, fired

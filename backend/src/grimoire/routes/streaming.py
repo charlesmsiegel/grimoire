@@ -217,8 +217,8 @@ def _store_phase(cid: str, segments: list[dict], connection: str) -> list[tuple]
     changed gets a `post_id` minted for it here, before the append writes it.
     Only one it changed: a segment nothing rewrote keeps the plain block it
     always had, so a store with no `rewrite_stored` rule writes the transcript
-    it wrote before rules existed. A segment the rewrite emptied is not
-    written, so it records nothing."""
+    it wrote before rules existed. (The phase never empties a segment: a
+    rewrite that would is not applied.)"""
     out = []
     for seg in segments:
         role = store.regex.apply.role_of({"role": "assistant", "speaker": seg["speaker"]})
@@ -229,9 +229,8 @@ def _store_phase(cid: str, segments: list[dict], connection: str) -> list[tuple]
         if not fired:
             continue
         original, seg["content"] = seg["content"], stored
-        if stored.strip():
-            seg["post_id"] = uuid.uuid4().hex
-            out.append((seg["post_id"], original, fired, stored))
+        seg["post_id"] = uuid.uuid4().hex
+        out.append((seg["post_id"], original, fired, stored))
     return out
 
 
