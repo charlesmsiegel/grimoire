@@ -783,10 +783,9 @@ def build_json(cid: str) -> tuple[bytes, str]:
     formats number their chapters by, stated rather than left implicit in the
     order of a JSON array a consumer may well re-sort."""
     campaign = campaigns_read.read_campaign(cid)  # raises CampaignNotFound
-    # A closed branch is left out: its group's absorbed member is the past the
-    # book tells, and a book holds one past.
-    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])
-            if not s.get("closed_by")]
+    # Every scene on disk, a closed branch included: the book formats tell one
+    # past, this dump is the data.
+    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
     scene_docs = [scenes_read.read_scene(cid, sid) for sid in sids]
     payload = {
         "campaign": {"id": cid, "name": campaign["meta"].get("name", cid),

@@ -790,3 +790,18 @@ def test_a_closed_branch_is_not_a_chapter(monkeypatch, tmp_path):
     scenes.mark_absorbed(cid, a, "It ended.", "It ended, at length.")
     chapters = export.collect(cid)["chapters"]
     assert len(chapters) == 1
+
+
+def test_the_json_dump_keeps_a_closed_branch(monkeypatch, tmp_path):
+    """The JSON dump is the nearest-to-disk export, so it holds every scene on
+    disk, a closed branch included -- only the book formats tell one past."""
+    _, cid = _campaign(monkeypatch, tmp_path)
+    a = scenes.create_scene(cid, "Mara")
+    b = scenes.create_scene(cid, "Winifred")
+    for sid in (a, b):
+        scenes.append_message(cid, sid, "user", "Mara waits.")
+    g = scenes.ensure_identity(cid, a)
+    scenes.write.set_branch_keys(cid, b, g, of=g)
+    scenes.mark_absorbed(cid, a, "It ended.", "It ended, at length.")
+    payload = json.loads(export.build_json(cid)[0].decode())
+    assert [row["id"] for row in payload["contents"]] == sorted([a, b])
