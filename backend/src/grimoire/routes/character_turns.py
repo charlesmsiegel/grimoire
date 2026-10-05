@@ -509,6 +509,9 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
                                       streaming._active_variant(cid, sid, record["id"]))
         if before:
             streaming._carry_rewrite(cid, sid, record["id"], before, skip=key)
+        if continuation:
+            # `commit_narration` trims an earlier attempt at the continuation.
+            streaming._prune_rewrites(cid, sid)
         streaming._turn_settled(cid)
         if text and tracked is not None:
             # Marked HERE, in the hold that wrote the variant, where the
@@ -730,6 +733,7 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
         _fence(cid, sid, run, token)
         if continuation:
             store.proposals.commit_narration(cid, sid, continuation, lambda: None)
+            streaming._prune_rewrites(cid, sid)   # what the commit trimmed
         payload = streaming._make_proposal(cid, sid, watcher.roll)
         proposal = store.proposals.new(cid, sid, payload, round_record["post"])
         _round_state(
@@ -1215,6 +1219,7 @@ def _recover_completed(cid, sid, run, token, round_record):
                 raise store.responses.ResponseConflict(
                     "proposal_stale", "The roll continuation is stale."
                 )
+            streaming._prune_rewrites(cid, sid)   # what the commit trimmed
         else:
             store.responses.publish_saved(cid, sid, pending)
         variant = next(v for v in record["variants"] if v["id"] == record["active_variant"])
@@ -1287,6 +1292,7 @@ def delete_response(cid: str, sid: str, rid: str, request: Request):
         # now sits where it was (`at` onward, renumbered) was built on it.
         # In the hold that deleted it; fail-soft.
         tracker_routes.after_cut(cid, sid, at)
+        streaming._prune_rewrites(cid, sid)
         return store.scenes.read_scene(cid, sid)
 
 
@@ -1302,6 +1308,9 @@ def activate_response(cid: str, sid: str, rid: str, vid: str, request: Request):
         # exactly this -- but every later record was built on the variant that
         # was showing. In the hold that swapped it; fail-soft.
         tracker_routes.after_swipe(cid, sid, rid)
+        # Activating folds a continued response back into one message, so a
+        # later part's own record has nothing left to describe.
+        streaming._prune_rewrites(cid, sid)
         return store.scenes.read_scene(cid, sid)
 
 
@@ -1445,6 +1454,7 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
         store.responses.activate(cid, sid, rid, variant["id"])
         if rewrite:
             streaming._record_rewrite(cid, sid, rid, *rewrite, text.strip(), variant["id"])
+        streaming._prune_rewrites(cid, sid)
         # A reroll is a swipe to a new variant: every later tracker record was
         # built on the one it replaced. In this hold, with the swap; fail-soft.
         tracker_routes.after_swipe(cid, sid, rid)

@@ -25,6 +25,15 @@ or a swipe puts a different variant under one `response_id`. Two variants can
 store the same text, though, so a model reply's record also names the variant
 it was made for (`variant`), and a swipe back to another one does not match.
 
+A record leaves with its message. Every seam that takes messages off a
+transcript -- a cut, a deleted response, a post taken back, a reroll or swipe
+that replaces a run, a replay that lets its originals go -- calls `prune`,
+which keeps only the records some message still answers to (`candidates`), so
+the original prose of a post that is gone is neither kept on disk nor handed
+out. Posts a running replay holds to put back count as there. A seam that
+forgets to prune leaks nothing for long: the next prune anywhere in the scene
+catches up.
+
 Nothing here is written unless a rule fired: a store with no `rewrite_stored`
 rule never gets a `rewrites/` directory.
 """
@@ -33,13 +42,19 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from .. import atomic, locks
 from ..campaigns import paths as campaigns_paths
 from ..paths import now_iso
 from ..scenes import identity as scenes_identity
+from ..scenes import paths as scenes_paths
+from ..scenes import read as scenes_read
+
+log = logging.getLogger(__name__)
 
 _IDENTITY = re.compile(r"\A[0-9a-f]{32}\Z")
 
@@ -175,6 +190,37 @@ def forget(cid: str, sid: str, key: str) -> None:
         if key in records:
             del records[key]
             _write(p, records)
+
+
+def prune(cid: str, sid: str, *, held: Iterable[dict] = ()) -> None:
+    """Drop every record no message of the scene answers to any more.
+
+    `held` are messages kept outside the transcript that can come back to it
+    with their ids -- the posts a running replay cut and holds to put back --
+    so their records stay. Called from inside the hold that removed the
+    messages; the acquisition is reentrant. Writes nothing when nothing goes,
+    and never creates the file.
+
+    Never raises: it tidies up beside a removal that has already landed, and a
+    record file that cannot be pruned now is pruned by the next seam that
+    asks. Logged without the text, which is private prose."""
+    try:
+        with locks.campaign_lock(cid):
+            ident = scenes_identity.scene_identity(cid, sid)
+            if not ident:
+                return
+            p = path(cid, ident)
+            records = _read(p)
+            if not records:
+                return
+            live = {k for m in [*scenes_read.read_scene(cid, sid)["messages"], *held]
+                    for k in candidates(m)}
+            kept = {k: v for k, v in records.items() if k in live}
+            if len(kept) != len(records):
+                _write(p, kept)
+    except (OSError, ValueError, scenes_paths.SceneNotFound,
+            campaigns_paths.CampaignNotFound):
+        log.warning("could not prune the stored rewrites of %s/%s", cid, sid, exc_info=True)
 
 
 def drop(cid: str, identity: str) -> None:

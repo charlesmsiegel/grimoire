@@ -202,7 +202,11 @@ re-pad without being moved; `lifecycle.delete_scene` unlinks it with the
 scene's other sidecars. Written under the campaign lock that the transcript
 write already holds. Only the *latest* rewrite of a message is kept: an edit
 that is rewritten again replaces the record, holding the text the player
-submitted on that edit.
+submitted on that edit. A record leaves with its message: every seam that takes
+messages off the transcript (a cut, a deleted response, a post taken back, a
+reroll or swipe that replaces a run, a replay letting its originals go) prunes
+the file to the records some message still answers to, counting the posts a
+running replay holds to put back.
 
 A reply that lands without a `response_id` (a legacy path with no variant) or a
 post without a `post_id` is still rewritten, but there is nothing to key the
