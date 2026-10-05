@@ -89,6 +89,9 @@ Ordering rules (deadlock avoidance):
   side of a function call.
 - campaign lock -> audit baseline lock, never reversed
   (``store/audit/baselines.py``).
+- image ingest/GC lock -> image-object stripe lock, never reversed
+  (``store/image_store.py``). Both are leaves: either may be taken under a
+  campaign lock, and nothing takes a campaign lock while holding one.
 
 The lock is an ``RLock`` so a caller can compose lower-level mutators —
 ``audit.apply_delta`` calls ``sheets.set_field`` under an already-held lock —
@@ -697,6 +700,59 @@ def image_collection_job_lock(wid: str, job: str) -> _ProcessScopedLock:
         if lock is None:
             lock = _image_collection_job_locks[key] = _ProcessScopedLock(
                 "image-collection-jobs", f"{wid}:{job}", StoreBusy)
+        return lock
+
+
+#: Sidecar locks are striped by the id's first hex byte so the set of lock
+#: files is bounded: one per object would accumulate forever.
+IMAGE_OBJECT_STRIPES = 64
+_image_object_locks: dict[tuple[str, int], _ProcessScopedLock] = {}
+_image_ingest_gc_locks: dict[str, _ProcessScopedLock] = {}
+
+
+def _store_key() -> str:
+    """The live store root, normalised, so two roots never share a lock object."""
+    return os.path.normcase(str(paths.home().resolve()))
+
+
+def image_object_lock(image_id: str) -> _ProcessScopedLock:
+    """Serialize read-modify-writes of one image-object sidecar (`store.image_store`).
+
+    64 stripes keyed by the id's first hex byte (`px1-<xx>…`), so two objects
+    may share a stripe and wait on each other -- a spurious wait, never a lost
+    update. Raises ValueError on an id whose first byte is not hex.
+
+    A **leaf**: it may be taken while a campaign lock (or an image-collection
+    lock) is held, but nothing acquires a campaign lock while holding it. The
+    only lock taken around it is `image_ingest_gc_lock`, always first.
+    """
+    stripe = int(image_id[4:6], 16) % IMAGE_OBJECT_STRIPES
+    key = (_store_key(), stripe)
+    with _registry_guard:
+        lock = _image_object_locks.get(key)
+        if lock is None:
+            lock = _image_object_locks[key] = _ProcessScopedLock(
+                "image-objects", f"stripe-{stripe:02d}", StoreBusy)
+        return lock
+
+
+def image_ingest_gc_lock() -> _ProcessScopedLock:
+    """Store-wide exclusion between image ingest's find-or-create and image GC.
+
+    Ingest holds it across publish-blob, write-sidecar and the mtime touch; GC
+    deletes under it after re-checking that touch, so the two cannot
+    interleave (spec section 12). Order: this lock, then `image_object_lock`,
+    never the reverse.
+
+    A **leaf** like `image_object_lock`: never acquire a campaign lock while
+    holding it.
+    """
+    key = _store_key()
+    with _registry_guard:
+        lock = _image_ingest_gc_locks.get(key)
+        if lock is None:
+            lock = _image_ingest_gc_locks[key] = _ProcessScopedLock(
+                "image-store", "ingest-gc", StoreBusy)
         return lock
 
 
