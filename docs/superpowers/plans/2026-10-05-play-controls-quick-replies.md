@@ -550,3 +550,40 @@ test("Settings opens the campaign's quick replies", ...) // click "Quick replies
 - [ ] **Step 1:** `make check PY=$(pwd)/backend/.venv/bin/python`.
 - [ ] **Step 2:** Fix whatever it reports (a changed ratchet count → `make baseline` and commit the new `lint-baselines/*.json`); nothing else.
 - [ ] **Step 3: Commit** `chore(quick-replies): make check clean` (only if Step 2 changed anything).
+
+## Plan-gate rulings (binding; override the tasks above where they differ)
+
+Plan → implementation gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`; owner-approved).
+
+1. **`upto` is absolute**: `firstIndex + messages.length` (the transcript is
+   fetched in windows of 60). Task 6 adds a test where `getScene` returns a
+   non-zero `offset`/`total` and asserts the absolute `upto`. (The spec's
+   `messages.length` is corrected to the same.)
+2. **Unbound-module mock**: `getCampaignModule` resolves
+   `{ setting: "", resolved: null, source: null }` in the "offered without a
+   bound module" test.
+3. **Ratchet**: new code adds **zero** lint/mypy/eslint findings — narrow
+   `unknown` errors (no `catch (err: any)`), `void` floating promises, no
+   `async` onClick handlers. `make baseline` only when a count *decreases*.
+4. **Opener focus**: CastPanel opens synchronously (derive `open` during
+   render from `openerRequest` vs the last handled request kept in a ref that
+   starts at the mount value), then focuses the prompt in a later effect. Tests:
+   mounting with `openerRequest={1}` does not focus; a `focus` spy asserts
+   `details.open === true` when called.
+5. **Not found**: the five routes reuse `routes/tracker.py`'s
+   `_world_or_404` / `_campaign_world` pattern; `write_campaign` raises
+   `CampaignNotFound` unless `campaign_exists(cid)`, checked inside the lock.
+6. **Insert into a different-kind draft** reuses the existing held-draft
+   notice (`heldKind` hint) rather than new wording.
+7. **Campaign-scope reorder** moves within the visible own entries only; the
+   ends-disabled state comes from the same list.
+8. ↑/↓ are sibling buttons of the `.row` button inside a row wrapper (no nested
+   buttons).
+9. Sidebar kind chips use the form's select labels (e.g. `send` → "Speak").
+10. The no-lost-update guarantee (`expect`) is campaign-scope only; the world
+    writer is atomic-only (spec-accepted). Stated in the module docstring.
+11. A hide entry whose world reply no longer exists is dropped on save (it is
+    invisible and would count toward the cap).
+12. `replies: list[dict]` makes a non-dict element a 422 (accepted, TrackerLayer
+    style).
