@@ -3758,6 +3758,13 @@ test("undo after a swap offers the original back and swapping back restores it",
   fireEvent.click(screen.getByRole("button", { name: USE_LEDGER }));
   // a swap is a verdict: the row folds to a line the reviewer can undo
   fireEvent.click(await screen.findByRole("button", { name: "Undo Find the ledger — advanced" }));
+  // The row now writes the stored thread, so it no longer reads as a possible
+  // duplicate: the chip and hint follow the target, not the staged verdict.
+  const swapped = cardFor(/Find the ledger — advanced/);
+  expect(within(swapped).getByText("Switched to an existing record")).toBeTruthy();
+  expect(within(swapped).queryByText("Possible existing record")).toBeNull();
+  expect(within(swapped).queryByText(UNCERTAIN_HINT)).toBeNull();
+  expect(within(swapped).queryByText(NO_ALTERNATIVE_HINT)).toBeNull();
   const back = screen.getByRole("button", {
     name: "Keep The Saltmarch tithe as a new record instead of Find the ledger — advanced" });
   expect(back).toHaveTextContent("Keep as a new record");
@@ -3765,6 +3772,9 @@ test("undo after a swap offers the original back and swapping back restores it",
   // ...and the original's own switch is offered again
   fireEvent.click(await screen.findByRole("button", { name: "Undo The Saltmarch tithe — open" }));
   expect(screen.getByRole("button", { name: USE_LEDGER })).toBeTruthy();
+  const restored = cardFor(/The Saltmarch tithe — open/);
+  expect(within(restored).getByText("Possible existing record")).toBeTruthy();
+  expect(within(restored).getByText(UNCERTAIN_HINT)).toBeTruthy();
   fireEvent.click(saveButton());
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   const [row] = sentEdits();
@@ -3772,6 +3782,29 @@ test("undo after a swap offers the original back and swapping back restores it",
   expect(row.resolve).toBeUndefined();
   expect(row.resolve_from).toBeUndefined();
 });
+
+test("an accepted retarget kept as new, then undone, wears no chip until it is switched back",
+  async () => {
+    const accepted = { ...ONTO_LEDGER, review: MEDIUM_CITED,
+      identity_check: identityCheck({ decision: "existing", reason: "the same search",
+        alternatives: [{ ...TITHE_AS_NEW, review: MEDIUM_CITED }] }) };
+    await openIdentityReview([accepted]);
+    fireEvent.click(screen.getByRole("button", {
+      name: "Keep The Saltmarch tithe as a new record instead of Find the ledger — advanced" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo The Saltmarch tithe — open" }));
+    // A new record now: it matches nothing, and it is not a duplicate the
+    // reviewer still has to rule on -- they just did.
+    const asNew = cardFor(/The Saltmarch tithe — open/);
+    expect(within(asNew).queryByText("Matched an existing record")).toBeNull();
+    expect(within(asNew).queryByText("Possible existing record")).toBeNull();
+    expect(within(asNew).queryByText(UNCERTAIN_HINT)).toBeNull();
+    expect(within(asNew).queryByText(NO_ALTERNATIVE_HINT)).toBeNull();
+    // ...but the way back stays offered, and taking it restores the chip
+    fireEvent.click(within(asNew).getByRole("button", { name: USE_LEDGER }));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo Find the ledger — advanced" }));
+    expect(within(cardFor(/Find the ledger — advanced/)).getByText("Matched an existing record"))
+      .toBeTruthy();
+  });
 
 test("a swap clears that row's unanswered conflict", async () => {
   const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");

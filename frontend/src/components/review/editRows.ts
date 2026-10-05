@@ -171,21 +171,46 @@ export function wireEdit(row: EditRow): StagedEdit {
 
 /** The chip a row the check examined wears, or null for none.
  *
- *  Every row the check did not settle wears "Possible existing record" --
- *  WITH or without alternatives, because the ones without are the downgrades
- *  (the only candidate is closed, or another row already holds it), and those
- *  are the rows most in need of a second look. An accepted retarget wears the
- *  second wording so its escape hatch is discoverable; "matched" says what was
- *  staged, not that it is true. An accepted `new` wears nothing: the check
- *  found nothing to flag, though its block still lists what it compared. */
+ *  Read off the record the row writes NOW, not off the stored verdict alone:
+ *  a swap keeps the server's check (decision, status, reason) and changes only
+ *  the target, so a verdict about the row as staged can misstate the row as it
+ *  will save. As staged, only an accepted `existing` targets a candidate.
+ *
+ *  - On a candidate: an accepted retarget wears "Matched an existing record"
+ *    so its escape hatch is discoverable ("matched" says what was staged, not
+ *    that it is true); a row the reviewer switched there wears "Switched to an
+ *    existing record", which says who decided it.
+ *  - Off every candidate, a row the check did not settle wears "Possible
+ *    existing record" -- WITH or without alternatives, because the ones
+ *    without are the downgrades (the only candidate is closed, or another row
+ *    already holds it), and those are the rows most in need of a second look.
+ *    An accepted `new` wears nothing, and neither does an accepted retarget
+ *    the reviewer kept as new: either way there is nothing left to flag,
+ *    though the block still lists what was compared. */
 export function identityChip(e: StagedEdit): string | null {
   const ic = e.identity_check;
   if (!ic) return null;
+  const matched = ic.decision === "existing" && ic.status === "accepted";
+  if (isCandidateAlternative(e, ic)) {
+    return matched ? "Matched an existing record" : "Switched to an existing record";
+  }
+  if (matched) return null;
   if (ic.decision === "uncertain" || ic.decision === "unchecked" || ic.status === "hint_only") {
     return "Possible existing record";
   }
-  if (ic.decision === "existing" && ic.status === "accepted") return "Matched an existing record";
   return null;
+}
+
+/** The hint under an uncertain row, or null for none. Like the chip it reads
+ *  the current target: a row already switched onto a candidate has taken the
+ *  hint's advice, so repeating it would ask for a switch that is done. The
+ *  spec's hint names a switch; a row with nothing to switch to (its only
+ *  candidate is closed, or another row holds it) gets the sentence that is
+ *  true of it instead. */
+export function identityHint(e: StagedEdit): string | null {
+  const ic = e.identity_check;
+  if (!ic || ic.decision !== "uncertain" || isCandidateAlternative(e, ic)) return null;
+  return (ic.alternatives ?? []).length > 0 ? IDENTITY_UNCERTAIN_HINT : IDENTITY_NO_ALTERNATIVE_HINT;
 }
 
 /** Whether an alternative stages onto one of the row's candidates, as against
