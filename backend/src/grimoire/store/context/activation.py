@@ -27,6 +27,13 @@ A boundary `b` covers slots `[0, b)`, and the current turn is boundary `n`.
 An entry's window at `b` is its last `depth` post slots before `b`, plus the
 seed slot only at `b == n` -- the seed belongs to the current turn alone.
 
+A seed is not a turn of its own: it is the current turn's text (an opener's
+prompt, a director's note), added to the posts the turn already reads. So with
+a seed the seeded boundary `n` REPLACES boundary `P = len(posts)` rather than
+following it -- the replay is `1..P-1` and then `n` (`KeyIndex.boundaries`).
+Replaying both would count the newest post's match twice and age every timed
+entry one step too far.
+
 ## The timed machine: age, then match
 
 `timed_state` replays an entry's direct key rule at every boundary from the
@@ -108,6 +115,14 @@ class KeyIndex:
                     return key, slot
         return None
 
+    def boundaries(self) -> list[int]:
+        """The boundaries a replay visits, in order, ending at the current one.
+        With a seed, the seeded boundary `n` stands in for boundary `P`: both
+        read the same posts, and the seed only adds to the current turn."""
+        if self.n > self._posts:
+            return [*range(1, self._posts), self.n]
+        return list(range(1, self.n + 1))
+
     def post_index(self, slot: int) -> int | None:
         """The transcript index of a post slot; None for the seed slot."""
         return self._indices[slot] if slot < self._posts else None
@@ -157,22 +172,23 @@ def direct_match(entry: dict, idx: KeyIndex, upto: int, depth: int) -> dict | No
 
 def timed_state(entry: dict, idx: KeyIndex, depth: int) -> dict:
     """The sticky/cooldown machine's state at the current boundary, replayed
-    from the scene's first post (§5.3). `remaining` counts boundaries,
-    including the current one: still active, or still blocked."""
+    from the scene's first post (§5.3) over `idx.boundaries()`. `remaining`
+    counts boundaries, including the current one: still active, or still
+    blocked."""
     c = controls(entry)
     state, carry, cd, from_slot, fresh = "ready", 0, 0, None, False
     if not entry.get("keys"):
         return _report(state, fresh, from_slot, 0)
-    for b in range(1, idx.n + 1):
+    for b in idx.boundaries():
         fresh = False
         # Age first, so an exhausted active state cools before a match counts.
         if state == "active" and carry > 0:
             carry -= 1
         elif state == "active":
-            state, cd, from_slot = "cooling" if c.cooldown else "ready", c.cooldown, None
+            state, cd, from_slot = "cooling" if c.cooldown > 0 else "ready", c.cooldown, None
         elif state == "cooling":
             cd -= 1
-            if cd == 0:
+            if cd <= 0:
                 state = "ready"
         if state == "ready":
             hit = direct_match(entry, idx, b, depth)
