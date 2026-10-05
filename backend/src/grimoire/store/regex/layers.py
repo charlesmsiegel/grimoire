@@ -18,7 +18,10 @@ entry it cannot trust costs only itself, logged.
 
 A layer is validated against what it sits on: an id of its own that collides
 with an inherited one (an `off` entry would name two rules) is re-minted on
-write, and its `off` may name only inherited ids. Re-minted rather than refused,
+write, and its `off` may name only inherited ids. The levels inherited side by
+side -- global and every connection -- sit on nothing, so they are checked
+against each other instead: a rule NEW to one of those files whose id another
+already holds is re-minted the same way (`_sibling_ids`). Re-minted rather than refused,
 because the collision can arrive from above -- a global rule written after a
 campaign rule, under the same id -- and refusing would leave the lower level
 unsaveable for a reason nobody editing it can see. Reading does not re-check
@@ -192,11 +195,14 @@ def read_level(level: str, key: str = "") -> dict:
 
 # --- validation and writing ---------------------------------------------------
 
-def validate_doc(doc: dict, *, level: str, inherited_ids: set[str]) -> dict:
+def validate_doc(doc: dict, *, level: str, inherited_ids: set[str],
+                 sibling_ids: frozenset[str] | set[str] = frozenset()) -> dict:
     """`doc` normalised, or `rules.RuleError` (`.index` is the rule's place,
     `.field` the key at fault). `inherited_ids` is every id the level sits on;
     a rule of this level's own that uses one is given a fresh id (see the
-    module docstring), while two rules of the same file sharing one is refused."""
+    module docstring), while two rules of the same file sharing one is refused.
+    `sibling_ids` are ids a level inherited beside this one already holds
+    (`_sibling_ids`): re-minted the same way, but never pruned from `off`."""
     _check_level(level)
     if not isinstance(doc, dict):
         raise rules.RuleError("a rule file must be an object")
@@ -212,9 +218,10 @@ def validate_doc(doc: dict, *, level: str, inherited_ids: set[str]) -> dict:
         rule = rules.normalise(raw, index=i)
         if rule["id"] in seen:
             raise rules.RuleError(f"id: {rule['id']!r} is used twice", index=i, field="id")
-        if rule["id"] in inherited_ids:
+        if rule["id"] in inherited_ids or rule["id"] in sibling_ids:
             rule["id"] = rules.mint_id()
-            while rule["id"] in inherited_ids or rule["id"] in taken or rule["id"] in seen:
+            while (rule["id"] in inherited_ids or rule["id"] in sibling_ids
+                   or rule["id"] in taken or rule["id"] in seen):
                 rule["id"] = rules.mint_id()
         seen.add(rule["id"])
         clean.append(rule)
@@ -247,7 +254,28 @@ def write_level(level: str, key: str, doc: dict) -> dict:
     if level == "connection" and not _connection_exists(key):
         raise llm_connections.ConnectionNotFound(key)
     ids = {e["rule"]["id"] for e in _stack(level, key, set())}
-    return _store(level, key, validate_doc(doc, level=level, inherited_ids=ids))
+    return _store(level, key, validate_doc(doc, level=level, inherited_ids=ids,
+                                           sibling_ids=_sibling_ids(level, key)))
+
+
+def _sibling_ids(level: str, key: str) -> set[str]:
+    """The ids a NEW rule of the global or a connection file may not take: those
+    of the other files a world and a campaign inherit beside it -- every other
+    connection's, and global's for a connection (every connection's for global).
+    Their `off` is by id, so a shared one would switch both rules at once.
+
+    An id the file already holds is left out, so it is not re-minted: it may be
+    the one a lower level's `off` names, and moving it would quietly switch
+    that rule back on. A collision already on disk (a hand edit, a synced file)
+    therefore stands until one of the two is deleted, and an `off` naming it
+    switches off both. Connections are few, so this reads them all."""
+    if level not in ("global", "connection"):
+        return set()
+    out = {e["rule"]["id"] for e in _connection_entries(set())
+           if not (level == "connection" and e["source"] == key)}
+    if level == "connection":
+        out |= {r["id"] for r in _load("global", "")["rules"]}
+    return out - {r["id"] for r in _load(level, key)["rules"]}
 
 
 def write_campaign(cid: str, doc: dict) -> dict:

@@ -482,8 +482,11 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
         {inherited.length > 0 && (
           <>
             <div className="regex-group">Inherited</div>
+            {/* Keyed by where the rule lives as well as its id: the server
+                re-mints a new id that collides across levels, but two files
+                can still share one from before that, or by a hand edit. */}
             {inherited.map((e) => (
-              <div key={e.rule.id} className="regex-line">
+              <div key={`${e.level}:${e.source}:${e.rule.id}`} className="regex-line">
                 <button className={"row" + (selId === e.rule.id ? " active" : "")
                                    + (e.off || worldOff(e) ? " off" : "")}
                         aria-current={selId === e.rule.id ? "true" : undefined}
