@@ -131,7 +131,9 @@ def _message(record, content, status, variant=None):
     # Only an opaque pointer enters transcript metadata. The reasoning itself
     # stays in the response ledger and cannot become scene context or mechanics.
     thinking = {"response_thinking": variant["id"]} if variant.get("reasoning") else {}
-    return {**thinking,
+    # Only when known, so a variant saved before provenance serializes as it did.
+    served = {"connection": variant["connection"]} if variant.get("connection") else {}
+    return {**thinking, **served,
         "role": "assistant",
         "speaker": record["speaker"],
         "content": content,
@@ -383,6 +385,7 @@ def save_variant(
     activate=True,
     part="",
     reasoning="",
+    connection="",
 ) -> dict:
     with locks.campaign_lock(cid):
         data = _read(cid)
@@ -412,6 +415,8 @@ def save_variant(
             "issue": issue,
             "created": now_iso(),
         }
+        if connection:
+            variant["connection"] = connection
         record["variants"].append(variant)
         if activate:
             record.update(active_variant=variant["id"], status=status)

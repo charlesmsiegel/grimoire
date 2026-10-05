@@ -57,6 +57,10 @@ class FenceWatcher:
         self.body: str | None = None
         self._narration_prefix = ""
         self._finished = False
+        #: Id of the connection that served the stream, set by the route that
+        #: owns the call once it knows (a fallback makes it differ from the
+        #: one asked for) and read by the hooks that persist the reply.
+        self.connection = ""
 
     def feed(self, chunk: str) -> str:
         # An empty chunk changes nothing, whatever the state: the adapters feed
