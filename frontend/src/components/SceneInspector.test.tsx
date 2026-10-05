@@ -457,6 +457,23 @@ test("world info lists each entry with its reason", async () => {
     .toContain("on cooldown — 3 posts");
 });
 
+test("a World info that sent nothing still lists what cooldown held back", async () => {
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 0, dropped_tokens: 0, budget_tokens: 0,
+    sections: [{
+      id: "world_info", label: "World info", text: "", tokens: 0,
+      tier: "spotlight", dropped: false, trimmed: 0, names: {}, entries: [],
+      held_back: [{ ref: "lore:winifred-rumour", name: "Winifred's rumour",
+                    reason: { type: "cooldown", remaining: 2 } }],
+    }],
+  });
+  renderInspector();
+  fireEvent.click(await screen.findByText(/World info/));
+  expect(screen.getByText("Winifred's rumour").closest("li")!.textContent)
+    .toContain("on cooldown — 2 posts");
+  expect(document.querySelector(".ctx-text")).toBeNull();
+});
+
 test("a capture without entries still renders", async () => {
   // A prompt recorded before rows carried entries: the section expands to its
   // text and draws no list and no "Held back" heading.

@@ -58,7 +58,8 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
           <div className="ctx-mini">
             <div style={{ width: `${Math.min(100, pctNumber(s.tokens))}%` }} />
           </div>
-          <pre className="ctx-text">{s.text}</pre>
+          {/* A World info row with nothing sent still lists what it held back. */}
+          {s.text && <pre className="ctx-text">{s.text}</pre>}
           <LoreEntries section={s} />
         </details>
       ))}

@@ -442,6 +442,52 @@ def test_template_text_in_world_info_is_still_expanded(scene, edited_templates,
     assert kept.endswith(new["text"].rsplit("\n\n", 1)[1])
 
 
+@pytest.mark.parametrize("shape", [
+    "{% raw %}<{{random:p0,p1,p2,p3,p4,p5}}>{% endraw %} {{ b }}\n",   # text ahead of each body
+    "{{ b }} {% raw %}<{{random:p0,p1,p2,p3,p4,p5}}>{% endraw %}\n",   # text behind each body
+])
+@pytest.mark.parametrize("shed", ["lore:bell", "lore:oath", "lore:fog"])
+def test_repeated_template_text_keeps_each_occurrences_own_draw(
+        scene, tmp_path, monkeypatch, shape, shed):
+    """A hand-edited template that wraps every body in the same macro-bearing
+    text draws once per occurrence. Shedding one entry must leave each
+    survivor's wrapper with the draw it had, not the first occurrence's -- the
+    text alone names no occurrence -- and must draw nothing."""
+    root = tmp_path / "templates"
+    shutil.copytree(prompts.DEFAULT_TEMPLATES_DIR, root)
+    (root / "scene" / "sections" / "world_info.j2").write_text(
+        "{%- for b in world_info_bodies | select %}" + shape + "{% endfor -%}",
+        encoding="utf-8")
+    monkeypatch.setenv("GRIMOIRE_TEMPLATES", str(root))
+    prompts._env.cache_clear()
+    try:
+        cid, sid, croot = scene
+        for name in ("Bell", "Oath", "Fog"):
+            entities.create_entity(croot, "lore", name, f"{name} body.")
+        scenes.append_message(cid, sid, "user", "Calm.")
+        drawn: list = []
+
+        def next_option(options):
+            drawn.append(options[len(drawn)])
+            return drawn[-1]
+
+        monkeypatch.setattr(macros.random, "choice", next_option)
+        a = assemble._assemble(cid, sid)
+        wi = next(s for s in assemble._render_sections(a, cid, sid) if s["id"] == "world_info")
+        assert drawn == ["p0", "p1", "p2"]
+        wrapped = dict(re.findall(r"(\w+) body\. <(p\d)>", wi["text"])
+                       or [(b, p) for p, b in re.findall(r"<(p\d)> (\w+) body\.", wi["text"])])
+        assert sorted(wrapped.values()) == ["p0", "p1", "p2"]
+        everyone = {u["ref"] for u in wi["shed"]["units"]}
+        kept = wi["shed"]["render"](everyone - {shed})
+        for name, draw in wrapped.items():
+            if f"lore:{name.lower()}" != shed:
+                assert (f"{name} body. <{draw}>" in kept) or (f"<{draw}> {name} body." in kept)
+        assert drawn == ["p0", "p1", "p2"]   # and nothing re-drawn
+    finally:
+        prompts._env.cache_clear()
+
+
 # ---- rows --------------------------------------------------------------------
 
 def _all_reason_types(cid: str, sid: str, croot, monkeypatch) -> None:
@@ -506,6 +552,36 @@ def test_rows_carry_entries_names_and_held_back(scene, monkeypatch):
     # Nothing callable anywhere a row can reach.
     json.dumps(breakdown)
     assert all("shed" not in r for r in breakdown["sections"])
+
+
+def test_a_cooldown_that_empties_world_info_still_shows_what_it_held_back(scene):
+    """The turn where cooldown suppresses the only relevant entry is the turn
+    the reader most needs the inspector to say why -- so World info keeps a
+    row with no text, and the prompt is exactly the one it would be without
+    that entry at all."""
+    cid, sid, croot = scene
+    for text in ("The ferry leaves.", "The ferry again."):
+        scenes.append_message(cid, sid, "user", text)
+    bare = _system(cid, sid)
+    entities.create_entity(croot, "lore", "Saltmarch Ferry", "The ferryman skims the toll.",
+                           keys="ferry", fields={"cooldown": "3"})
+    breakdown = context.context_breakdown(cid, sid)
+    wi = _row(breakdown, "world_info")
+    assert wi["text"] == "" and wi["tokens"] == 0 and not wi["dropped"]
+    assert wi["entries"] == []
+    assert [h["ref"] for h in wi["held_back"]] == ["lore:saltmarch-ferry"]
+    assert wi["held_back"][0]["reason"]["type"] == "cooldown"
+    assert _system(cid, sid) == bare
+    # And under a budget, where the packer and the frozen profiles both run.
+    config.write_config(context_budget="1")
+    assert [h["ref"] for h in _row(context.context_breakdown(cid, sid), "world_info")
+            ["held_back"]] == ["lore:saltmarch-ferry"]
+
+
+def test_world_info_with_nothing_held_back_and_nothing_sent_has_no_row(scene):
+    cid, sid, _croot = scene
+    scenes.append_message(cid, sid, "user", "The ferry leaves.")
+    assert all(r["id"] != "world_info" for r in context.context_breakdown(cid, sid)["sections"])
 
 
 def test_an_unresolved_ref_names_itself():

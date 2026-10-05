@@ -1988,6 +1988,43 @@ test("the per-entry Apply waits on its request too", async () => {
     screen.getByRole("button", { name: /^apply$/i })).not.toBeDisabled());
 });
 
+describe("a per-entry adopt that fails", () => {
+  function twoRecords() {
+    (api.listEntities as any).mockResolvedValue([
+      { id: "salt", name: "Salt" }, { id: "seraphine", name: "Seraphine" }]);
+    (api.readEntity as any).mockImplementation((_s: unknown, _k: unknown, id: string) =>
+      Promise.resolve({ meta: { id, name: id, st_extensions: '{"sticky":2}' },
+                        body: `body of ${id}`, rev: "r1" }));
+    (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+    let fail!: (e: Error) => void;
+    (api.adoptSt as any).mockReturnValue(new Promise((_r, j) => { fail = j; }));
+    return (e: Error) => fail(e);
+  }
+
+  test("says so on the record it was for", async () => {
+    const fail = twoRecords();
+    render(<Wrap wid="w" kind="lore" selected="salt" />);
+    const banner = await screen.findByRole("status", { name: /imported settings/i });
+    fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
+    await waitFor(() => expect(api.adoptSt).toHaveBeenCalled());
+    fail(new Error("adopt refused"));
+    expect(await screen.findByText(/adopt refused/)).toBeInTheDocument();
+  });
+
+  test("says nothing on a record opened since", async () => {
+    const fail = twoRecords();
+    const { rerender } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+    const banner = await screen.findByRole("status", { name: /imported settings/i });
+    fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
+    await waitFor(() => expect(api.adoptSt).toHaveBeenCalled());
+    rerender(<Wrap wid="w" kind="lore" selected="seraphine" />);
+    await screen.findByText("body of seraphine");
+    fail(new Error("adopt refused"));
+    await screen.findByText("body of seraphine");
+    expect(screen.queryByText(/adopt refused/)).toBeNull();
+  });
+});
+
 test("the adopt-all status line goes when another record is opened", async () => {
   (api.listEntities as any).mockResolvedValue([
     { id: "salt", name: "Salt" }, { id: "seraphine", name: "Seraphine" }]);
