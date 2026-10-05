@@ -2917,7 +2917,11 @@ export const api = {
                           timeline_events: TimelineEvent[]; edits: StagedEdit[];
                           commit_token?: string }) =>
     request<ChronicleEntry & { applied: string[];
-      failures: { id: string; reason: string; kind: "conflict" | "error" }[] }>(
+      failures: { id: string; reason: string; kind: "conflict" | "error" }[];
+      /** Records the save published to the world library. Absent on a token
+       *  recorded before publishing existed, which replays without it. */
+      published?: { kind: string; id: string }[];
+      publish_failed?: { kind: string; id: string; reason: string }[] }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body).then(notifyShell),
   getChronicle: (cid: string) =>
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),

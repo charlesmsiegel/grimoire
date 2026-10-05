@@ -209,6 +209,11 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // routing is a rendering decision and never a reordering one.
   const [editFailures, setEditFailures] = useState<
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
+  // Records the save wrote but could not publish to the world library. The
+  // save SUCCEEDED -- each is still a campaign-local record -- so these are not
+  // `editFailures` ("did not apply"); they get a notice of their own beside it.
+  const [publishFailures, setPublishFailures] = useState<
+    { kind: string; id: string; reason: string; label: string }[]>([]);
   // Rows the server refused because their target moved since the scene was
   // absorbed (#111), each already bound to its index in `editRows`. The save is
   // rejected whole and before anything is written, so this is a state the
@@ -520,6 +525,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     clearError();
     setStale(null, null);
     setEditFailures([]);
+    setPublishFailures([]);
     setConflicts([]);
     try {
       // Nothing is deleted on the way in, deliberately. A fresh absorb
@@ -690,12 +696,25 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         // the count of what will be accepted is on the button.
         //
         // `wireEdit` drops what is the panel's and not the server's: the
-        // display verdict, and the identity check's alternatives.
-        edits: editRows.filter((e) => !e.rejected).map(wireEdit),
+        // display verdict, and the identity check's alternatives. A destination
+        // of "campaign" is dropped too: it is the default the server assumes,
+        // and sending it only on a row the reviewer touched would make the
+        // body differ for no reason.
+        edits: editRows.filter((e) => !e.rejected).map((row) => {
+          const e = wireEdit(row);
+          if (e.payload?.destination !== "campaign") return e;
+          const { destination: _destination, ...payload } = e.payload;
+          return { ...e, payload };
+        }),
         // Same token on every attempt, so the retry below cannot commit twice
         // when the first PUT landed and only its response was lost (#235).
         commit_token: absorb.commit_token });
       setEditFailures(res.failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
+      // A token recorded before publishing existed replays without these.
+      // The failure carries the created record's id rather than the staged
+      // row's, so the label falls back to that id.
+      setPublishFailures((res.publish_failed ?? []).map((f) => ({
+        ...f, label: labels.get(f.id) ?? f.id })));
       releaseRetries();
       setAbsorb(null);
       setAbsorbSid(null);
@@ -842,6 +861,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setStale(null, null);
     setEditRows([]);
     setEditFailures([]);
+    setPublishFailures([]);
     setSaveError(null);
     setClashRefused(false);
     setConflicts([]);
@@ -1278,6 +1298,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     editRows, reviewQuote, setReviewQuote,
     editChronicle, openSection, openDrawer,
     editFailures, dismissFailures: () => setEditFailures([]),
+    publishFailures, dismissPublishFailures: () => setPublishFailures([]),
     conflictByRow, contradictionById, saveError,
     // One flag to the panel: "a review is being made for this scene", however
     // it started. The reader does not care whether this browser asked for it.

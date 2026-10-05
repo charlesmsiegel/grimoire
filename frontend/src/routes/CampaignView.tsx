@@ -4828,6 +4828,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               <button className="subtle" onClick={review.dismissFailures}>Dismiss</button>
             </div>
           )}
+          {review.publishFailures.length > 0 && (
+            <div className="mechanics-notice">
+              <p>{review.publishFailures.length} record{review.publishFailures.length === 1 ? "" : "s"} could
+                not be published to the world library — saved to this campaign instead</p>
+              {review.publishFailures.map((f) => (
+                <p className="field-hint" key={`${f.kind}/${f.id}`}>{f.label}: {f.reason}</p>
+              ))}
+              <button className="subtle" onClick={review.dismissPublishFailures}>Dismiss</button>
+            </div>
+          )}
           </>)}
           {absorb && <ReviewPanel review={review} />}
           {!absorb && (<>
