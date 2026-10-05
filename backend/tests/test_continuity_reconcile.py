@@ -902,6 +902,82 @@ def test_an_unexpected_embedding_error_is_a_failure_not_a_raise(cid, s0, monkeyp
             if r.get("task") == "continuity-reconcile"] == ["unexpected"]
 
 
+class _Refusing(FakeEmbeddings):
+    """Refuses every chunk that holds `poison` -- a provider whose input limit
+    that one text exceeds -- and answers every other chunk."""
+
+    def __init__(self, poison):
+        super().__init__()
+        self.poison = poison
+
+    def embed(self, texts, model, key, base_url, deadline=None):
+        self.calls.append(list(texts))
+        if self.poison in texts:
+            raise embeddings.EmbeddingsError("bad_response", "refused")
+        return [self.vector_for(t) for t in texts]
+
+
+def _refused_letter(cid, s0, monkeypatch, *, moved=()):
+    """Ten cached-nothing chores plus "Seraphine's letter", whose text the
+    provider refuses; a basis current for every ref but the letter and
+    `moved`. Returns the chores' texts, the letter's ref and the double."""
+    _configure()
+    texts = _chores(cid, s0)
+    plot.set_movement(cid, "seraphine-s-letter", "Seraphine's letter", "open",
+                      "Sealed and never sent.", s0)
+    letter = "thread:seraphine-s-letter"
+    poison = {s.ref: s.text for s in similarity.pool(cid, "thread")}[letter]
+    double = _Refusing(poison)
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    first = _sweep(cid)                         # embed=False: nothing cached yet
+    stale = {letter, *moved}
+    _write_basis(cid, {r: ("moved" if r in stale else h) for r, h in first.hashes.items()},
+                 space=first.space, texts=first.text_hashes)
+    return texts, letter, double
+
+
+def test_a_refused_changed_text_does_not_stop_the_warm_window(cid, s0, monkeypatch):
+    """A changed ref's text the provider refuses costs that text, not the warm
+    window: the window is embedded on the same sweep, and two sweeps cache
+    every other text, though the letter stays required (and refused) on each."""
+    texts, letter, _double = _refused_letter(cid, s0, monkeypatch)
+    space = _vector_space()
+
+    sweep = _embedded(cid, full=False, stamp="00000000000000000011-a")
+    assert (sweep.embedding, sweep.embedding_error) == ("failure", "bad_response")
+    assert len(vectors.load(space, list(texts.values()))) == 9    # a proper subset
+
+    _embedded(cid, full=False, stamp="00000000000000000012-b")
+    assert set(vectors.load(space, list(texts.values()))) == set(texts.values())
+    assert letter not in sweep.rescored
+
+
+def test_a_refused_changed_text_does_not_hold_back_the_other_changed_refs(
+        cid, s0, monkeypatch):
+    """The other changed refs sharing the refused text's chunk are reached by a
+    retry over a rotating proper subset of the unsaved required texts, so a
+    refused text does not keep every changed ref beside it vectorless (and so
+    never rescored) on every incremental sweep."""
+    mate = "thread:saltmarch-errand-0"
+    texts, letter, double = _refused_letter(cid, s0, monkeypatch, moved=[mate])
+    rescored: set[str] = set()
+    # Stamps shaped like `reconcile.generation`'s: a run id that varies in
+    # every bit, as a real one does (a crc32 offset over two texts is one
+    # parity bit, which stamps differing in one digit's low bits never flip).
+    for n in range(6):
+        if mate in rescored:
+            break
+        run_id = hashlib.sha256(f"run-{n}".encode()).hexdigest()[:12]
+        sweep = _embedded(cid, full=False, stamp=f"{20 + n:020d}-{run_id}")
+        rescored |= sweep.rescored
+    assert mate in rescored
+    assert texts[mate] in vectors.load(_vector_space(), [texts[mate]])
+    assert letter not in rescored
+    # Every call sent at most the sweep's own texts: the retry never resends
+    # the whole required set.
+    assert all(len(call) <= 11 for call in double.calls)
+
+
 def test_without_a_space_every_finished_ref_is_rescored(cid, s0):
     _ledger(cid, s0)
     _recover(cid, s0)

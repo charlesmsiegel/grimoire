@@ -46,11 +46,16 @@ campaign id plus the run's stamp -- the stamp is what makes the rotation real,
 since a seed of the campaign alone hands two runs the same offset and a text
 stuck there would be retried forever. `similarity.semantic` embeds in
 `embeddings.BATCH` chunks under one `embeddings.TIMEOUT` deadline, saving each
-chunk as it lands and forgetting off-width vectors. A provider failure is mode
-``failure`` and one counts-only error row; the lexical candidates stand. While
-a space is configured, a ref left without a vector (a failure, or outside this
-run's window) is scored lexically but not reported rescored: its basis entry
-stays, so its prior pairs are kept and it is scored semantically once its
+chunk as it lands and forgetting off-width vectors. The required texts and the
+window go in separate calls, and a failed required call is retried once over a
+rotating proper subset of what it did not save: a changed ref left without a
+vector stays changed and so stays required, so a text the provider refuses
+would otherwise fail the window and every changed ref beside it on every sweep,
+which is the stuck head the rotation exists to remove. A provider failure is
+mode ``failure`` and one counts-only error row; the lexical candidates stand.
+While a space is configured, a ref left without a vector (a failure, or outside
+this run's window) is scored lexically but not reported rescored: its basis
+entry stays, so its prior pairs are kept and it is scored semantically once its
 vector exists.
 
 **Model-only nominations** (Decision 9). Two kinds of nomination carry no
@@ -361,12 +366,12 @@ def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Sub
         changed = (text_of[ref] for ref in order if text_of[ref] not in loaded)
         required = list(dict.fromkeys(changed))[:RECONCILE_WARM_LIMIT]
     need = set(required)
-    warm = embed_space.warm_window([t for t in uncached if t not in need],
-                                   f"{cid}\0{sweep.stamp}",
+    seed = f"{cid}\0{sweep.stamp}"
+    warm = embed_space.warm_window([t for t in uncached if t not in need], seed,
                                    RECONCILE_WARM_LIMIT - len(required))
     return similarity.semantic(required, warm, deadline=time.monotonic() + embeddings.TIMEOUT,
                                space=space, cached=texts, warm_limit=RECONCILE_WARM_LIMIT,
-                               loaded=loaded)
+                               loaded=loaded, rotate=seed)
 
 
 def _embed(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subject],
