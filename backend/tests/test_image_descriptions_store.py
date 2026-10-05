@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from grimoire.store import assets, characters, entities, image_descriptions
+from grimoire.store import assets, characters, entities, image_descriptions, image_refs
 
 
 def _chars(tmp_path, images=("avatar", "gallery_1")):
@@ -252,16 +252,17 @@ def test_a_description_save_cannot_land_in_the_middle_of_a_promotion(tmp_path, m
                                     "gallery_1": "Half-plate in the rain."})
 
     inside, release = threading.Event(), threading.Event()
-    real_put = assets.put_image
+    real_journal = image_refs.write_journal
 
-    def blocking_put(*a, **kw):
-        # Called from inside the promotion, after it has taken the sidecar lock.
+    def blocking_journal(*a, **kw):
+        # Called from inside the promotion, after it has taken the sidecar lock
+        # and read the descriptions it will write back.
         if not inside.is_set():
             inside.set()
             release.wait(5)
-        return real_put(*a, **kw)
+        return real_journal(*a, **kw)
 
-    monkeypatch.setattr(assets, "put_image", blocking_put)
+    monkeypatch.setattr(image_refs, "write_journal", blocking_journal)
     promoting = threading.Thread(
         target=assets.promote_image, args=(tmp_path, cid, vid, "gallery_1"))
     promoting.start()
@@ -300,7 +301,7 @@ def test_a_failed_promotion_does_not_wedge_the_directory(tmp_path, monkeypatch):
     # suite's isolation of the image store, which the reads below resolve
     # the slots' placements through.
     with monkeypatch.context() as m:
-        m.setattr(assets, "put_image", boom)
+        m.setattr(image_refs, "write_journal", boom)
         with pytest.raises(OSError):
             assets.promote_image(tmp_path, cid, vid, "gallery_1")
 

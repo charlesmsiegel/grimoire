@@ -2,7 +2,7 @@ from urllib.parse import quote
 
 import pytest
 
-from grimoire.store import assets, characters, entities, greetings, image_subjects, pcs
+from grimoire.store import assets, characters, entities, greetings, image_store, image_subjects, pcs
 
 
 def _world(tmp_path, images=("art_1", "art_2")):
@@ -296,3 +296,70 @@ def test_copy_to_character_honors_taken_names_override(tmp_path):
     n = image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "gallery",
                                          taken_names={"gallery_1"})
     assert n == "gallery_2"
+
+
+def _no_ingest(monkeypatch):
+    def ingest(*args, **kwargs):
+        raise AssertionError("bytes were re-ingested")
+    monkeypatch.setattr(image_store, "ingest", ingest)
+
+
+def _blobs():
+    root = image_store.store_root() / "blobs"
+    return sorted(p for p in root.rglob("*") if p.is_file()) if root.exists() else []
+
+
+def test_copy_from_greeting_writes_no_blob(tmp_path, monkeypatch):
+    """Copying a ref-backed greeting image is a reference operation: the
+    character's slot names the same image, and no bytes are written."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    cid, vid = characters.create_character(tmp_path, "Mira", "main")
+    gid = greetings.create_greeting(tmp_path, "Opener", cid, vid, "x")
+    assets.put_image(tmp_path, gid, "default", "art_1", b"artbytes", "png", base="greetings")
+    src_id = assets.image_id(tmp_path, gid, "default", "art_1", base="greetings")
+    assert src_id is not None
+    before = _blobs()
+    _no_ingest(monkeypatch)
+
+    assert image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "gallery") == "gallery_1"
+    assets.write_focus(tmp_path, cid, vid, 30)
+    assert image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "avatar") == "avatar"
+
+    assert _blobs() == before
+    assert assets.image_id(tmp_path, cid, vid, "gallery_1") == src_id
+    assert assets.image_id(tmp_path, cid, vid, assets.AVATAR) == src_id
+    assert assets.read_focus(tmp_path, cid, vid) is None
+
+
+def test_copy_of_a_referenced_world_image_links_it(tmp_path, monkeypatch):
+    """A greeting that embeds another record's art by URL resolves to that
+    record's placement, so the copy links the same image too."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    owner, gid = _world(tmp_path, images=())
+    subject, svid = characters.create_character(tmp_path, "Mara", "main")
+    assets.put_image(tmp_path, owner, "main", "embed-art", b"embedded", "png")
+    url = f"/api/worlds/{tmp_path.name}/characters/{owner}/versions/main/images/embed-art"
+    greetings.update_greeting(tmp_path, gid, body=f"![Art]({url})")
+    before = _blobs()
+    _no_ingest(monkeypatch)
+
+    assert image_subjects.copy_to_character(tmp_path, gid, url, subject, svid, "gallery") == "gallery_1"
+    assert _blobs() == before
+    assert (assets.image_id(tmp_path, subject, svid, "gallery_1")
+            == assets.image_id(tmp_path, owner, "main", "embed-art"))
+
+
+def test_copy_of_a_legacy_greeting_image_ingests_it_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    cid, vid = characters.create_character(tmp_path, "Mira", "main")
+    gid = greetings.create_greeting(tmp_path, "Opener", cid, vid, "x")
+    src_dir = tmp_path / "greetings" / gid / "assets" / "default"
+    src_dir.mkdir(parents=True)
+    (src_dir / "art_1.png").write_bytes(b"legacy-art")
+    before = _blobs()
+
+    assert image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "gallery") == "gallery_1"
+    assert len(_blobs()) == len(before) + 1
+    assert (src_dir / "art_1.png").read_bytes() == b"legacy-art"    # the source is left as it was
+    assert assets.image_path(tmp_path, cid, vid, "gallery_1").read_bytes() == b"legacy-art"
+    assert assets.image_id(tmp_path, cid, vid, "gallery_1") is not None

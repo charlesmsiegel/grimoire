@@ -26,7 +26,7 @@ import threading
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import atomic, image_refs, image_store, statcache
+from . import atomic, image_hash, image_refs, image_store, statcache
 from .paths import safe_id
 
 AVATAR = "avatar"
@@ -92,6 +92,16 @@ def _dir(root: Path, cid: str, vid: str, base: str = "characters") -> Path:
     return root / base / cid / "assets" / vid
 
 
+def version_dir(root: Path, cid: str, vid: str, base: str = "characters") -> Path:
+    """The per-version image directory of record `cid`, version `vid` --
+    `ValueError` for an unsafe id. For a caller that works at the directory
+    level (`link_in`, `resolve`) on a record's images, so the layout is spelled
+    once, here."""
+    if not (safe_id(cid) and safe_id(vid)):
+        raise ValueError("unsafe image id")
+    return _dir(root, cid, vid, base)
+
+
 _registry_guard = threading.Lock()
 _image_locks: dict[str, threading.RLock] = {}
 
@@ -138,13 +148,18 @@ def _image_locks_held(d: Path, *names: str):
     multi-lock caller that would introduce a cycle, and a fixed global order
     means that caller is safe by construction rather than by review.
 
-    That second caller already exists, nested: ``promote_image`` holds
-    ``{name, avatar}`` and calls ``image_path``, which can enter
-    ``_heal_stranded_promotion`` and take ``{promote-tmp, avatar, gallery_N}``.
-    No cycle, because both sort their *whole* set and every set contains
-    ``avatar`` -- so no thread can hold a later name while waiting for an
-    earlier one. Sorting the whole set, not appending to a held set, is the
-    property that has to survive future edits.
+    That second caller already exists: ``_heal_stranded_promotion`` takes
+    ``{promote-tmp, avatar, gallery_N}``, and can be entered NESTED --
+    ``delete_image`` of the avatar holds ``avatar`` and looks the slot up
+    through ``image_path``. No cycle, because every set sorts as a whole and
+    contains ``avatar``. Sorting the whole set, not appending to a held set,
+    is the property that has to survive future edits. ``promote_image`` runs
+    both repairs before taking its own locks, and the read-side promotion
+    recovery (``_recover_promotion``), which ``image_path`` enters for ANY
+    name, never waits at all (``_locks_if_free``): ``delete_image`` of a
+    gallery slot holds that slot while it looks, and a blocking acquisition
+    of ``avatar`` there could wedge against a promotion of that very slot,
+    holding ``avatar`` and waiting for the slot.
 
     What sorting cannot do is serialize names that differ only by case:
     ``_image_lock`` keys on the exact string, so on a case-insensitive
@@ -268,10 +283,17 @@ def _heal_stranded_promotion(d: Path) -> None:
 
 
 def _heal_slot(d: Path) -> str:
-    """Where `_heal_stranded_promotion` puts a stray: the avatar slot when no
-    avatar resolves (a placement or a legacy file), else the next free gallery
-    slot."""
-    return AVATAR if path_in(d, AVATAR) is None else _free_gallery(d)
+    """Where `_heal_stranded_promotion` puts a stray: the avatar slot when there
+    is no avatar, else the next free gallery slot.
+
+    An image-bearing avatar placement counts as an avatar whether or not it
+    resolves yet: its object or blob may be mid-sync, and a stray renamed into
+    the slot now would sit there as a legacy file the placement shadows the
+    moment it arrives -- hidden again, which is what the heal exists to undo."""
+    ref = image_refs.read(d, AVATAR)
+    if (ref is not None and ref.image is not None) or path_in(d, AVATAR) is not None:
+        return _free_gallery(d)
+    return AVATAR
 
 
 def _mtime_ns(p: Path) -> int:
@@ -372,22 +394,37 @@ def _drop_snapshotted(stale: list[tuple[Path, int, int]]) -> None:
             pass  # a lost cleanup is harmless: the placement wins over it
 
 
+def _drop_if_placed(d: Path, name: str, image_id: str,
+                    stale: list[tuple[Path, int, int]]) -> None:
+    """`_drop_snapshotted`, only once placement `name` RESOLVES to `image_id`.
+
+    A placement whose object or blob has not arrived (a link to an image that
+    is mid-sync) is not an image to any reader yet, and the legacy file is
+    what `path_in` falls back to meanwhile: redundant data beats lost data
+    (spec section 6). The file goes on a later write, or stays shadowed once
+    the placement resolves."""
+    placed = image_refs.resolve(d, name)
+    if placed is not None and placed.image_id == image_id:
+        _drop_snapshotted(stale)
+
+
 def _place(d: Path, name: str, image_id: str, *, keep_focus: bool,
            supported_only: bool) -> None:
     """Publish placement `name` -> `image_id`, then drop the legacy siblings.
 
     Placement BEFORE the unlinks, as `put_in` always wrote before it cleaned
     up: a failure in between leaves a legacy file the placement shadows, never
-    no image. `keep_focus` keeps the old placement's focus; otherwise a focus
-    survives only when the placement already held this very image.
-    Caller holds `_image_lock(d, name)`.
+    no image -- and the unlinks only once the placement resolves
+    (`_drop_if_placed`). `keep_focus` keeps the old placement's focus;
+    otherwise a focus survives only when the placement already held this very
+    image. Caller holds `_image_lock(d, name)`.
     """
     stale = _snapshot_siblings(d, name, supported_only)
     old = image_refs.read(d, name)
     focus = (old.focus if old is not None and (keep_focus or old.image == image_id)
              else None)
     image_refs.write(d, name, image_id, focus=focus)
-    _drop_snapshotted(stale)
+    _drop_if_placed(d, name, image_id, stale)
 
 
 def put_in(d: Path, name: str, data: bytes, ext: str, *,
@@ -417,7 +454,8 @@ def link_in(d: Path, name: str, image_id: str, *, keep_focus: bool = False) -> N
 
     `ValueError` for an unsafe name or an invalid id. The object is not
     required to exist: a placement may arrive before its object does (sync),
-    and readers treat that as unresolved until it does.
+    and readers treat that as unresolved until it does -- which is why the
+    legacy siblings are dropped only once the placement resolves.
     """
     if not _safe_name(name):
         raise ValueError("unsafe image id")
@@ -454,7 +492,7 @@ def adopt_legacy(d: Path, name: str) -> str | None:
             focus = _read_focus_file(d)
         stale = _snapshot_siblings(d, name, False)
         image_refs.write(d, name, obj.id, focus=focus)
-        _drop_snapshotted(stale)
+        _drop_if_placed(d, name, obj.id, stale)
         if name == AVATAR:
             # The placement answers for the crop from here on (`read_focus`),
             # so a `focus.json` left behind could only ever be stale.
@@ -489,6 +527,7 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
     d = _dir(root, cid, vid, base)
     if not d.exists():
         return None
+    _recover_promotion(d)
     p = path_in(d, name)
     if p is None and name == AVATAR:
         # A promotion interrupted before #253 may have stranded the avatar under
@@ -681,6 +720,9 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
     d = _dir(root, cid, vid, base)
     if not d.exists():
         return []
+    # An interrupted promotion is finished (or its stale journal dropped)
+    # before anything is listed, so the listing never shows a half-swap.
+    _recover_promotion(d)
     # The "asset directory scan" the recovery in #253 was asked for: a temp the
     # old promotion stranded gets a reachable name before the listing is built,
     # so it shows up in the editor instead of staying invisible forever.
@@ -738,13 +780,13 @@ def version_art(root: Path, cid: str, vid: str,
     up to `root`: creating it moves that directory's mtime.
 
     The stamps are None -- "compute again next time" -- when a file vanished
-    mid-read, and when the folder holds a stranded promotion: `list_images`
-    heals one on every scan, and a heal that failed (a read-only store, a held
-    file) is meant to be retried by the next scan rather than remembered as
-    the answer. Likewise while any image-bearing placement in the folder does
-    not resolve: its object or blob may sync in later without moving anything
-    stamped here, and that arrival must be noticed rather than remembered as
-    an absence.
+    mid-read, and when the folder holds a stranded promotion or a promotion
+    journal: `list_images` heals and recovers on every scan, and a repair that
+    failed (a read-only store, a held file, a promotion in flight) is meant to
+    be retried by the next scan rather than remembered as the answer.
+    Likewise while any image-bearing placement in the folder does not resolve:
+    its object or blob may sync in later without moving anything stamped here,
+    and that arrival must be noticed rather than remembered as an absence.
     """
     if not (safe_id(cid) and safe_id(vid)):
         return [], None, ()
@@ -761,7 +803,8 @@ def version_art(root: Path, cid: str, vid: str,
         return (list_images(root, cid, vid, base), read_focus(root, cid, vid, base),
                 None if up is None else (up,))
     stamps = [here]
-    _heal_stranded_promotion(d)      # as `list_images` does, before listing
+    _recover_promotion(d)            # as `list_images` does, before listing
+    _heal_stranded_promotion(d)
     for p in (d / image_refs.REFS_DIR, image_refs.ref_path(d, AVATAR)):
         ref_stamp = statcache.stamp(p)
         if ref_stamp is not None:
@@ -772,7 +815,7 @@ def version_art(root: Path, cid: str, vid: str,
     files, refs = found
     resolved, complete = _resolve_refs(refs)
     cacheable = (_restamp_avatar(d, files, stamps) and not _stranded(files)
-                 and complete)
+                 and complete and image_refs.read_journal(d) is None)
     focus_stamp = statcache.stamp(d / FOCUS_FILE)
     if focus_stamp is not None:
         stamps.append(focus_stamp)
@@ -892,7 +935,11 @@ def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> Non
     entirely) and the legacy `focus.json`."""
     if not (safe_id(cid) and safe_id(vid)):
         return
-    d = _dir(root, cid, vid, base)
+    _clear_focus_in(_dir(root, cid, vid, base))
+
+
+def _clear_focus_in(d: Path) -> None:
+    """`clear_focus` for a directory already in hand."""
     if not d.exists():
         return
     with _image_lock(d, AVATAR):
@@ -1072,85 +1119,194 @@ def delete_version_images(root: Path, cid: str, vid: str, base: str = "character
 def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:
     """Make <name> the avatar; the old avatar takes <name>'s slot (swap, nothing lost).
 
-    Publish each side through ``put_image``; do not shuffle the two files
-    through a temp name. This used to be three renames through a fixed
-    ``promote-tmp<ext>`` (#253): each rename was atomic, the *sequence* was
-    not, so a crash after the second one left the promoted image parked under a
-    name nothing ever looks for and **no avatar at all** -- silent, never
-    self-healing, and the fixed temp name meant two concurrent promotions in
-    one process fought over one path. No amount of write atomicity fixes that;
-    every individual step already succeeded.
+    A swap of two PLACEMENTS, not of bytes (spec section 8): no blob is read or
+    written. Both slots are adopted first (`adopt_legacy`), so a legacy file on
+    either side becomes a placement before anything moves, and the swap itself
+    is then a sequence of small placement writes -- which no filesystem makes
+    atomic as a whole. So the sequence is journalled: the intent
+    (``image-refs/.promote.json``, `image_refs.write_journal`) lands before the
+    first write and is cleared after the last, and a read that finds one
+    finishes the swap (`_recover_promotion`). A crash anywhere in between is
+    rolled forward on the next listing or lookup, never left as a duplicate or
+    a hole.
 
-    Republishing removes the temp, and with it the interval in which the avatar
-    is unresolvable: the avatar slot holds either the old image or the new one
-    at every instant, and each ``put_image`` writes before it drops the
-    other-extension sibling it replaces. The residue of a crash between the two
-    publishes is a duplicate rather than a hole -- the promoted image is the
-    avatar, and its gallery slot still holds a copy of it instead of receiving
-    the demoted one. Keeping *both* copies across a crash would need a third
-    slot (a same-extension swap cannot avoid one) and therefore a temp-file
-    recovery protocol; a duplicate image is worth less than that.
+    With no avatar to swap back, the promoted image LEAVES its slot, matching
+    the rename this replaced. Here the removal IS the operation:
+    `overlay.promote_image` reads this slot's emptiness to decide whether to
+    tombstone an inherited image, so a source that would not clear is an
+    `OSError` rather than a move reported but not made.
 
-    Both locks are held across the whole swap, so an upload to either slot
-    cannot interleave with it. What that does *not* buy is an atomic two-slot
-    swap: reads take no locks anywhere in this module, so a concurrent reader
-    between the two publishes sees the promoted image in both slots (PR
-    review). Same as before this change -- except the old sequence showed such
-    a reader no avatar at all, which is the failure worth closing.
+    A description is a claim about particular pictures, so it travels with
+    them: the journal carries both slots' descriptions as they were before
+    anything moved, and the post-swap sidecar is written FROM it -- never by
+    re-reading and swapping, which a roll-forward after the sidecar write would
+    turn into a second swap. The crop goes, as with any new avatar picture.
+
+    Both image locks and the sidecar lock are held across the whole swap, so an
+    upload, a delete or a description save cannot interleave with it. Reads
+    take no locks, so a concurrent reader can still see the swap half done;
+    a reader that finds the journal and can take the locks finishes it first.
+
+    `FileNotFoundError` when `name` holds no image, `ValueError` when either
+    side is an externally placed file of an extension never accepted -- both
+    before anything is written. `OSError` when an earlier promotion's journal
+    could not be finished first (it is never overwritten), or a write fails.
     """
     if name == AVATAR:
         return
     if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         raise FileNotFoundError(name)  # no logical image can live under such a name
     d = _dir(root, cid, vid, base)
-    with _image_locks_held(d, name, AVATAR):
-        src = image_path(root, cid, vid, name, base)
+    if not d.exists():
+        raise FileNotFoundError(name)
+    # Unlocked repairs first, each taking its own locks: a journal an earlier
+    # promotion left is finished before this one overwrites it, and a pre-#253
+    # stray is given a slot before the slots are read.
+    _recover_promotion(d)
+    _heal_stranded_promotion(d)
+    with _image_locks_held(d, name, AVATAR), sidecar_lock(d, DESCRIPTIONS_FILE):
+        # Again under the locks: a promotion that failed between the repair
+        # above and this hold can have left a journal. One still here after
+        # that (its slot busy, or a write that keeps failing) is refused rather
+        # than overwritten -- mid-swap, it is the only record of the picture it
+        # moved out of the avatar slot.
+        _recover_promotion(d)
+        if image_refs.read_journal(d) is not None:
+            raise OSError("an earlier promotion is still unfinished; retry")
+        src = path_in(d, name)
         if src is None:
             raise FileNotFoundError(name)
-        cur = image_path(root, cid, vid, AVATAR, base)
-        # Both extensions are checked before anything is written: put_image
-        # rejects a non-allowlisted one, and discovering that halfway through
-        # would leave a half-swap. Only an externally-placed file can have one.
-        for p in (src, cur):
+        # Both extensions are checked before anything is written, adoption
+        # included: only an externally-placed file can have a foreign one, and
+        # discovering it halfway through would leave a half-swap.
+        for p in (src, path_in(d, AVATAR)):
             if p is not None and not _norm_ext(p.suffix):
                 raise ValueError(f"unsupported image type: {p.name}")
-        promoted = (src.read_bytes(), src.suffix)
-        demoted = (cur.read_bytes(), cur.suffix) if cur is not None else None
-        # The sidecar is held across the WHOLE swap, `with` rather than a manual
-        # acquire: every step below can raise -- an unwritable directory, a
-        # source that would not clear -- and a hand-rolled acquire whose release
-        # sat in the last statement's `finally` leaked the lock on any of them,
-        # wedging every later save, delete and promotion for this directory (PR
-        # review). The snapshot is taken BEFORE anything moves, because the
-        # no-avatar branch deletes `name` and `delete_image` takes that slot's
-        # description with it; holding the lock over both is what keeps a
-        # description save from landing between the snapshot and the rewrite.
-        with sidecar_lock(d, DESCRIPTIONS_FILE):
-            described = _read_sidecar(d, DESCRIPTIONS_FILE)
-            put_image(root, cid, vid, AVATAR, promoted[0], promoted[1], base)
-            if demoted is None:
-                # Nothing to swap back in, so the promoted image has to LEAVE
-                # this slot, matching the rename this replaced. `delete_image`
-                # swallows unlink failures by design (a lost cleanup self-heals
-                # there), but here the unlink IS the operation:
-                # `overlay.promote_image` reads this slot's emptiness to decide
-                # whether to tombstone an inherited image, so a silently-kept
-                # source becomes a visible duplicate. Confirm it, rather than
-                # report a move that did not happen.
-                delete_image(root, cid, vid, name, base)
-                if image_path(root, cid, vid, name, base) is not None:
-                    raise OSError(f"promoted image could not be cleared: {name}")
-            else:
-                put_image(root, cid, vid, name, demoted[0], demoted[1], base)
-            # A description is a claim about particular bytes, so it travels
-            # with them. Without this the swap left each picture wearing the
-            # other's sentence -- and, with no avatar to swap back, lost the
-            # promoted image's description entirely. `None` on either side
-            # removes that key rather than leaving the slot's previous
-            # description behind, which would caption the new occupant with the
-            # old one's words.
-            edit_sidecar(d, DESCRIPTIONS_FILE, {
-                AVATAR: described.get(name),
-                name: described.get(AVATAR) if demoted is not None else None,
-            })
-    clear_focus(root, cid, vid, base)
+        name_id = adopt_legacy(d, name)
+        if name_id is None:
+            raise FileNotFoundError(name)
+        avatar_id = adopt_legacy(d, AVATAR)
+        described = _read_sidecar(d, DESCRIPTIONS_FILE)
+        journal = {
+            "name": name,
+            "pre": {AVATAR: avatar_id, name: name_id},
+            "post": {AVATAR: name_id, name: avatar_id},
+            "desc": {AVATAR: described.get(AVATAR), name: described.get(name)},
+        }
+        image_refs.write_journal(d, journal)
+        _finish_promotion(d, name, journal)
+
+
+def _finish_promotion(d: Path, name: str, journal: dict) -> None:
+    """Steps 4-7 of a journalled promotion: write the post-state, clear the
+    journal, drop the crop. Idempotent, so recovery can repeat it from any
+    point the forward pass reached. Caller holds both image locks and the
+    sidecar lock, and has validated `journal` (`_journal_ok`)."""
+    post, desc = journal["post"], journal["desc"]
+    _set_placement(d, AVATAR, post[AVATAR])
+    if post[name] is not None:
+        _set_placement(d, name, post[name])
+    else:
+        image_refs.delete(d, name)
+        if path_in(d, name) is not None:
+            raise OSError(f"promoted image could not be cleared: {name}")
+    # `None` on either side removes that key rather than leaving the slot's
+    # previous description behind to caption its new occupant.
+    edit_sidecar(d, DESCRIPTIONS_FILE, {
+        AVATAR: desc.get(name),
+        name: desc.get(AVATAR) if post[name] is not None else None,
+    })
+    image_refs.clear_journal(d)
+    _clear_focus_in(d)
+
+
+def _set_placement(d: Path, name: str, image_id: str) -> None:
+    """Point `name` at `image_id` with no focus, unless it already does --
+    a roll-forward repeats the forward pass's writes, and a read that repairs
+    should not rewrite what is already right."""
+    if image_refs.read(d, name) != image_refs.Ref(name, image_id, None):
+        image_refs.write(d, name, image_id)
+
+
+def _journal_ok(journal: dict) -> str | None:
+    """The slot name a well-formed promotion journal names, or None.
+
+    Well-formed: a promotable `name`; `pre` and `post` each naming exactly
+    the avatar and that slot, with image ids or null -- `post`'s avatar never
+    null, a promotion always places one; and a `desc` object whose two slots'
+    sentences are strings or null, since recovery writes them into the
+    sidecar as they stand."""
+    name = journal.get("name")
+    if not isinstance(name, str) or name == AVATAR or not _safe_name(name):
+        return None
+    for key in ("pre", "post"):
+        sides = journal.get(key)
+        if not isinstance(sides, dict) or set(sides) != {AVATAR, name}:
+            return None
+        if not all(v is None or (isinstance(v, str) and image_hash.is_image_id(v))
+                   for v in sides.values()):
+            return None
+    desc = journal.get("desc")
+    if journal["post"][AVATAR] is None or not isinstance(desc, dict):
+        return None
+    if not all(desc.get(n) is None or isinstance(desc.get(n), str) for n in (AVATAR, name)):
+        return None
+    return name
+
+
+@contextmanager
+def _locks_if_free(locks: list[threading.RLock]):
+    """Yield whether every lock in `locks` was free to take, holding them if
+    so. Never waits: a read that repairs must not block behind the write it
+    would repair, nor deadlock against a caller already holding one slot's
+    lock (`delete_image` looks its slot up while holding it)."""
+    held: list[threading.RLock] = []
+    try:
+        for lk in locks:
+            if not lk.acquire(blocking=False):
+                break
+            held.append(lk)
+        yield len(held) == len(locks)
+    finally:
+        for lk in reversed(held):
+            lk.release()
+
+
+def _recover_promotion(d: Path) -> None:
+    """Finish or discard the promotion journal in `d`, if there is one.
+
+    The journal is finished only when every slot still holds its `pre` or its
+    `post` image -- the states the swap itself passes through. Anything else
+    means the store moved on (later edits, or a stale journal that synced in
+    after them), and replaying it would undo somebody's work, so it is
+    discarded and nothing else changes. A malformed journal is discarded too.
+
+    Runs from reads (`image_path`, `list_images`, `version_art`), so it never
+    raises and never waits: when the slots are busy -- a promotion in flight --
+    or a write fails, the journal stays for the next read to finish.
+    """
+    journal = image_refs.read_journal(d)
+    if journal is None:
+        return   # the overwhelmingly common case: one failed open, no locks
+    name = _journal_ok(journal)
+    if name is None:
+        # Under the sidecar lock, which a promotion holds throughout, so this
+        # cannot remove the journal of a promotion that has just written one.
+        with _locks_if_free([sidecar_lock(d, DESCRIPTIONS_FILE)]) as free:
+            if free and image_refs.read_journal(d) == journal:
+                image_refs.clear_journal(d)
+        return
+    locks = [_image_lock(d, n) for n in sorted({name, AVATAR})]
+    with _locks_if_free([*locks, sidecar_lock(d, DESCRIPTIONS_FILE)]) as free:
+        if not free or image_refs.read_journal(d) != journal:
+            return   # busy, or another reader got here first
+        try:
+            for slot in (AVATAR, name):
+                ref = image_refs.read(d, slot)
+                held = ref.image if ref is not None else None
+                if held not in (journal["pre"][slot], journal["post"][slot]):
+                    image_refs.clear_journal(d)
+                    return
+            _finish_promotion(d, name, journal)
+        except (OSError, ValueError):
+            pass     # a read must not fail over a repair the next one retries

@@ -29,8 +29,9 @@ def image_key(root: Path, gid: str, url: str) -> str:
     return re.sub(r"^https?:", lambda match: match[0].lower(), MarkdownIt().normalizeLink(url), flags=re.IGNORECASE)
 
 
-def local_path(root: Path, url: str) -> Path | None:
-    """Resolve only supported world image routes, never an arbitrary pathname."""
+def _world_target(root: Path, url: str) -> tuple[Path, list[str]] | None:
+    """The world root a supported world image URL names and the route parts
+    after it, or None -- never an arbitrary pathname."""
     parts = [unquote(segment) for segment in urlsplit(url).path.split("/")]
     if len(parts) < 6 or parts[:3] != ["", "api", "worlds"] or not safe_id(parts[3]):
         return None
@@ -39,23 +40,63 @@ def local_path(root: Path, url: str) -> Path | None:
         if not worlds_paths.world_exists(parts[3]):
             return None
         target = worlds_paths.world_root(parts[3])
+    return target, parts[4:]
+
+
+_MISSING = (OSError, characters.CharacterNotFound, characters.VersionNotFound,
+            greetings.GreetingNotFound, entities.EntityNotFound, pcs.PCNotFound,
+            pcs.PCVersionNotFound)
+
+
+def local_path(root: Path, url: str) -> Path | None:
+    """Resolve only supported world image routes, never an arbitrary pathname."""
+    found = _world_target(root, url)
+    if found is None:
+        return None
     try:
-        return _record_image_path(target, parts[4:])
-    except (OSError, characters.CharacterNotFound, characters.VersionNotFound,
-            greetings.GreetingNotFound, entities.EntityNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
+        return _record_image_path(*found)
+    except _MISSING:
         return None
 
 
-def _record_image_path(root: Path, parts: list[str]) -> Path | None:
+def local_slot(root: Path, url: str) -> tuple[Path, str] | None:
+    """The image directory and logical name behind a supported world image
+    route -- what `local_path` resolves, one step earlier, so a caller can ask
+    for the placement there (`assets.resolve`) rather than for its bytes."""
+    found = _world_target(root, url)
+    if found is None:
+        return None
+    try:
+        slot = _record_slot(*found)
+    except _MISSING:
+        return None
+    if slot is None:
+        return None
+    base, owner, vid, name = slot
+    if base == "images":
+        return _library_dir(found[0]), name
+    return assets.version_dir(found[0], owner, vid, base), name
+
+
+def _library_dir(root: Path) -> Path:
+    """The world image library's directory under `root` (`world_images.images_dir`,
+    for a root already in hand)."""
+    return root / "assets" / "images"
+
+
+def _record_slot(root: Path, parts: list[str]) -> tuple[str, str, str, str] | None:
+    """`(base, owner, vid, name)` of the record image `parts` names, checked
+    against the record (a missing one raises its own not-found); base
+    ``"images"``, with no owner or version, is the world library."""
     if len(parts) == 2 and parts[0] == "images":
-        return assets.path_in(root / "assets" / "images", parts[1], supported_only=True)
+        return "images", "", "", parts[1]
     if (len(parts) == 6 and parts[0] in ("characters", "pcs")
             and parts[2] == "versions" and parts[4] == "images"):
         if not (safe_id(parts[1]) and safe_id(parts[3])):
             return None
         require = characters.require_version if parts[0] == "characters" else pcs.require_version
         require(root, parts[1], parts[3])
-        return assets.image_path(root, parts[1], parts[3], parts[5], base=parts[0])
+        return parts[0], parts[1], parts[3], parts[5]
     if len(parts) == 4 and parts[2] == "images" and safe_id(parts[1]):
         if parts[0] == "greetings":
             greetings.read_greeting(root, parts[1])
@@ -63,8 +104,18 @@ def _record_image_path(root: Path, parts: list[str]) -> Path | None:
             entities.read_entity(root, parts[0], parts[1])
         else:
             return None
-        return assets.image_path(root, parts[1], "default", parts[3], base=parts[0])
+        return parts[0], parts[1], "default", parts[3]
     return None
+
+
+def _record_image_path(root: Path, parts: list[str]) -> Path | None:
+    slot = _record_slot(root, parts)
+    if slot is None:
+        return None
+    base, owner, vid, name = slot
+    if base == "images":
+        return assets.path_in(_library_dir(root), name, supported_only=True)
+    return assets.image_path(root, owner, vid, name, base=base)
 
 
 def _references(root: Path, gid: str) -> list[str]:
