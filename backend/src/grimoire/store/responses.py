@@ -505,7 +505,15 @@ def editable(cid: str, sid: str, rid: str) -> int:
     return index
 
 
-def _invalidate(cid, sid):
+def _invalidate(cid, sid, changed_at: int):
+    """Supersede what a change at message index `changed_at` made stale.
+
+    The rolling summary folded the first `at` messages, so a change at or after
+    that index leaves both the prose and its digest true -- a swipe on the
+    trailing response is the common case, and resetting there forced a re-fold
+    from post 0. Only a change inside the fold throws it away. Rounds,
+    proposals and the scene-break check reset either way.
+    """
     data = _read(cid)
     scope = _scope(cid, sid, data)
     for round_record in scope["rounds"].values():
@@ -513,7 +521,9 @@ def _invalidate(cid, sid):
             round_record["status"] = "superseded"
     _write(cid, data)
     proposals.supersede(cid, sid)
-    write.set_rolling_summary(cid, sid, "", 0, "")
+    covered = read.rolling_summary_fields(read.read_scene_meta(cid, sid))["at"]
+    if changed_at < covered:
+        write.set_rolling_summary(cid, sid, "", 0, "")
     write.set_scene_break(cid, sid, 0, 0, 0)
 
 
@@ -529,7 +539,7 @@ def delete(cid: str, sid: str, rid: str) -> None:
         for message in messages[index:]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid)
+        _invalidate(cid, sid, index)
         write.replace_messages(cid, sid, messages)
 
 
@@ -553,7 +563,7 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid)
+        _invalidate(cid, sid, index)
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
         record.update(active_variant=vid, status="complete")

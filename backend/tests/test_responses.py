@@ -257,3 +257,76 @@ def test_the_ledger_is_written_compact_and_still_reads_indented(tmp_path, monkey
     path.write_text(json.dumps(json.loads(raw), ensure_ascii=False, indent=2),
                     encoding="utf-8")
     assert store.responses.get(cid, sid, rid)["content"] == "Salt — and tide."
+
+
+def _two_turns_with_a_reroll(client):
+    """Two played turns, the second's reply rerolled once: the transcript is
+    user / Mara / user / Mara, and the trailing response has two variants."""
+    from grimoire import routes
+    from tests.llm_fakes import FakeLLM
+    from tests.test_character_turns import seed
+
+    cid, sid = seed(client)
+    fake = FakeLLM([
+        ['First.\n```handoff\n{"next":null}\n```'],
+        ['Second.\n```handoff\n{"next":null}\n```'],
+        ['Second, again.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    for text in ("Hello", "And then?"):
+        sent = client.post(base + "/chat", json={"content": text, "speaker_ref": "characters:mara"})
+        assert sent.status_code == 200, sent.text
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
+    rid = messages[-1]["response_id"]
+    old = store.responses.get(cid, sid, rid)["active_variant"]
+    rerolled = client.post(base + f"/responses/{rid}/regenerate", json={})
+    assert "error" not in rerolled.text, rerolled.text
+    assert store.responses.get(cid, sid, rid)["active_variant"] != old
+    return cid, sid, base, rid, old
+
+
+def _fold(cid, sid, at):
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    digest = store.rolling_summary.covered_digest(
+        messages[:at], store.appearances.player_label(cid, sid))
+    store.scenes.set_rolling_summary(cid, sid, "Earlier.", at, digest)
+
+
+def _summary(cid, sid):
+    meta = store.scenes.read_scene(cid, sid)["meta"]
+    return store.scenes.rolling_summary_fields(meta)
+
+
+def test_activating_the_trailing_response_keeps_an_earlier_fold(client):
+    cid, sid, base, rid, old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 2)
+    swiped = client.post(base + f"/responses/{rid}/variants/{old}/activate")
+    assert swiped.status_code == 200, swiped.text
+    kept = _summary(cid, sid)
+    assert (kept["summary"], kept["at"]) == ("Earlier.", 2)
+    assert kept["digest"]
+
+
+def test_activating_a_folded_response_resets_the_summary(client):
+    cid, sid, base, rid, old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 4)
+    swiped = client.post(base + f"/responses/{rid}/variants/{old}/activate")
+    assert swiped.status_code == 200, swiped.text
+    reset = _summary(cid, sid)
+    assert (reset["summary"], reset["at"], reset["digest"]) == ("", 0, "")
+
+
+def test_deleting_a_response_after_the_fold_keeps_it(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 2)
+    store.responses.delete(cid, sid, rid)
+    assert _summary(cid, sid)["summary"] == "Earlier."
+
+
+def test_deleting_a_folded_response_resets_the_summary(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 4)
+    store.responses.delete(cid, sid, rid)
+    assert _summary(cid, sid)["summary"] == ""
