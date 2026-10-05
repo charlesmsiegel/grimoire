@@ -14,7 +14,10 @@ itself writes nothing at all -- the persists write the cache, under the lock.
   commitment (closed and resolved included, §11.2), scored by Slice C's
   `similarity` rules so a sweep and absorb's identity check agree about what
   "close" means. A plausible pair is kept when it is in the top
-  `RECONCILE_TOP_K` of either endpoint, per type. Same-type pairs are
+  `RECONCILE_TOP_K` of either endpoint, per type, counting only an endpoint
+  whose every pair this sweep scored -- so an incremental sweep keeps what a
+  full one would for the changed ref, not every plausible pair it has, and
+  defers the other direction to the next full sweep. Same-type pairs are
   ``possible_duplicate``; a thread and a commitment are ``possible_relation``,
   never a duplicate (§3.6).
 - *Incremental vs full.* A full sweep scores every ref; an incremental one only
@@ -24,7 +27,11 @@ itself writes nothing at all -- the persists write the cache, under the lock.
   missing, then changed, then least recently scored, then ref: a sweep cut off
   at `RECONCILE_MAX_PAIRS` leaves the refs it did not finish for the next one,
   and successive sweeps rotate through the whole ledger rather than rescoring
-  the same alphabetical prefix.
+  the same alphabetical prefix. A pool that could not be read leaves every ref
+  unrescored, since none was paired against it.
+- *Touched.* An incremental sweep re-checks the refs a scene names plus those
+  whose identity text moved since the basis -- compared without the space
+  salt (`basis.text_hashes`), so a space change moves nothing.
 - *Lifecycle.* A stale thread is nominated for closure, an overdue commitment
   (a passed due, or a reached before/by/on event) for resolution. Both are
   persisted deterministically, with or without a model.
@@ -43,9 +50,9 @@ still holds, is never re-asked.
 
 **Soft all the way down.** Pools, aging, the clock and pressure can each run
 user calendar-plugin code or read a garbled ledger, so each is read through
-`_soft`; a source that fell back nominates nothing and is reported unchecked
-in `Sweep.lifecycle_checked`, so a persist never retracts a finding on the word
-of a source it could not read. A malformed continuity.json reads as no
+`_soft`; a source that fell back, or whose ledger or chronicle could not be
+read, is reported unchecked in `Sweep.lifecycle_checked`, so a persist never
+retracts a finding on the word of a source it could not read. A malformed continuity.json reads as no
 decisions at all, so while it lasts discovery finds nothing (Decision 2).
 
 The constants below are candidate-generation parameters, not truth thresholds.
@@ -61,7 +68,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, Literal, TypeVar
 
 from ... import embeddings
-from .. import aging, calendars, clock, fieldtext, paths
+from .. import aging, calendars, chronicle, clock, fieldtext, paths
 from . import candidates, canon, effective, pending, pressure, similarity
 
 #: Uncached texts one sweep may embed: four `embeddings.BATCH` round trips under
@@ -117,6 +124,12 @@ _DEADLINE_SOURCES = frozenset({"deadline", "linked_deadline"})
 _LIFECYCLE_OF = {"thread": "possible_thread_closure",
                  "commitment": "possible_commitment_resolution"}
 _NO_DEADLINE = {"state": "ok", "in_days": None, "friendly": ""}
+# The ledgers (`pending.Current.unreadable` prefixes) each source reads. A
+# source whose ledger could not be read is never reported checked: its
+# nominations are only what it could see, so they cannot retract anything.
+_POOL_LEDGERS = frozenset({"thread", "commitment"})
+_STALE_LEDGERS = frozenset({"thread"})
+_DEADLINE_LEDGERS = frozenset({"commitment", "event"})
 
 T = TypeVar("T")
 
@@ -150,6 +163,9 @@ class Sweep:
         self.rescored: frozenset[str] = frozenset()
         #: Ref -> current identity hash, for every ref in the pools.
         self.hashes: dict[str, str] = {}
+        #: Ref -> hash of the identity text alone (no space salt), for every ref
+        #: in the pools: what "moved since the last sweep" compares.
+        self.text_hashes: dict[str, str] = {}
         #: Which lifecycle sources were read without falling back.
         self.lifecycle_checked = {"stale": False, "overdue": False, "temporal": False}
         #: Every temporal pair nominated, before the verdict filter.
@@ -168,6 +184,12 @@ def _identity_hash(space: str, text: str) -> str:
     """Salted with the space, so a space change makes every ref changed;
     `surrogatepass`, so a lone surrogate a model wrote cannot raise."""
     return hashlib.sha256((space + "\0" + text).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _text_hash(text: str) -> str:
+    """The identity text's hash with no space in it, so a space change moves
+    no record (Decision 11's touched rule)."""
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _record(kind: str, refs: list[str], fingerprint: str, signals: dict) -> dict:
@@ -241,12 +263,19 @@ def _score_pairs(to_score: list[str], subjects: list[similarity.Subject],
     return kept, frozenset(finished), count, False
 
 
-def _top_k(scored: dict[tuple[str, str], dict],
-           by_ref: dict[str, similarity.Subject]) -> set[tuple[str, str]]:
-    """The pairs in the top `RECONCILE_TOP_K` of either endpoint, per type."""
+def _top_k(scored: dict[tuple[str, str], dict], by_ref: dict[str, similarity.Subject],
+           finished: frozenset[str]) -> set[tuple[str, str]]:
+    """The pairs in the top `RECONCILE_TOP_K` of either endpoint, per type --
+    ranked only from an endpoint in `finished`. An unfinished endpoint's
+    ranking holds only the pairs this sweep happened to score (on an
+    incremental sweep, its one pair with the changed ref), so its "top k"
+    would keep every plausible pair the changed ref has, which the next full
+    sweep would retract again."""
     ranked: dict[tuple[str, str], list[tuple[tuple, tuple[str, str]]]] = {}
     for (a, b), signals in scored.items():
         for mine, other in ((a, b), (b, a)):
+            if mine not in finished:
+                continue
             ranked.setdefault((mine, by_ref[other].kind), []).append(
                 (similarity.rank_key(signals, other), (a, b)))
     keep: set[tuple[str, str]] = set()
@@ -266,12 +295,17 @@ def _pair_signals(signals: dict) -> dict:
 
 
 def _pairs(sweep: Sweep, current: pending.Current, subjects: list[similarity.Subject],
-           basis: dict) -> None:
+           basis: dict, pools_whole: bool) -> None:
+    """Score and keep the pairs. With a pool missing (`pools_whole` False) no
+    ref's every pair was scored -- none was paired against the records that
+    could not be read -- so nothing is reported rescored, and a persist keeps
+    the cached pairs rather than retract them on a partial view."""
     order = _order(subjects, sweep.hashes, basis, sweep.full)
     scored, finished, count, capped = _score_pairs(order, subjects, {}, RECONCILE_MAX_PAIRS)
-    sweep.rescored, sweep.pairs_scored, sweep.pairs_capped = finished, count, capped
+    sweep.rescored = finished if pools_whole else frozenset()
+    sweep.pairs_scored, sweep.pairs_capped = count, capped
     by_ref = {s.ref: s for s in subjects}
-    for a, b in sorted(_top_k(scored, by_ref)):
+    for a, b in sorted(_top_k(scored, by_ref, finished)):
         kind = "possible_duplicate" if by_ref[a].kind == by_ref[b].kind else "possible_relation"
         _nominate(sweep.discovered, current, kind, sorted((a, b)),
                   _pair_signals(scored[(a, b)]))
@@ -280,9 +314,16 @@ def _pairs(sweep: Sweep, current: pending.Current, subjects: list[similarity.Sub
 # ---------------------------------------------------------------- lifecycle
 
 
+def _chronicle_readable(cid: str) -> bool:
+    """Whether chronicle.json parses: `aging.prepare` reads a garbled one as no
+    scene dates, which would make a dated thread look undated, not stale."""
+    return isinstance(_soft(chronicle.read_chronicle, None, cid), dict)
+
+
 def _stale(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]:
     """Closure nominations for live threads aging calls stale, and whether
-    staleness could be read at all (a parseable present, a readable ledger)."""
+    staleness could be read at all (a parseable present, a readable plot
+    ledger and chronicle)."""
     actx = _soft(aging.prepare, None, cid, now)
     rows = _soft(effective.threads, None, cid)
     if actx is None or rows is None:
@@ -293,12 +334,16 @@ def _stale(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]:
         if block.get("state") == aging.STALE:
             _nominate(out, current, "possible_thread_closure", [f"thread:{row['id']}"],
                       {"reason": "stale", "days_since": block["days_since"]})
-    return out, actx["now_fixed"] is not None
+    checked = (actx["now_fixed"] is not None and not current.unreadable & _STALE_LEDGERS
+               and _chronicle_readable(cid))
+    return out, checked
 
 
 def _overdue(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]:
     """Resolution nominations for every overdue deadline item -- a passed due or
-    a reached before/by/on event -- and whether the calendar placed `now`."""
+    a reached before/by/on event -- and whether that was read whole: the
+    calendar placed `now`, and the commitments and events were readable
+    (`pressure.build` reads an unreadable one as having nothing due)."""
     built = _soft(pressure.build, None, cid, now, None, _OVERDUE_SOURCES)
     if built is None:
         return {}, False
@@ -310,7 +355,7 @@ def _overdue(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]:
         if item["kind"] == "linked_deadline":
             signals["event"] = item["ref"]
         _nominate(out, current, "possible_commitment_resolution", [item["subject"]], signals)
-    return out, built["fixed"] is not None
+    return out, built["fixed"] is not None and not current.unreadable & _DEADLINE_LEDGERS
 
 
 def _touched(current: pending.Current, refs: Iterable[str],
@@ -330,15 +375,17 @@ def _touched(current: pending.Current, refs: Iterable[str],
 
 
 def _touched_refs(sweep: Sweep, basis: dict, touched: Iterable[str]) -> list[str]:
-    """Incremental only: the caller's refs, plus every ref whose basis entry
-    exists and moved (a record a skipped run never re-checked) while the space
-    is unchanged -- after a space change every hash differs, so not then."""
+    """Incremental only: the caller's refs, plus every ref whose identity text
+    moved since the basis recorded it (a record a skipped run never
+    re-checked). Compared through the unsalted `text_hashes`: a space change
+    moves every `identity_hashes` entry, and a ref a capped sweep has not yet
+    rescored under the new space keeps its old one for several sweeps. A ref
+    with no entry is new, not moved."""
     if sweep.full:
         return []
     refs = [r for r in touched if isinstance(r, str)]
-    if basis["embedding_space"] == sweep.space:
-        stored = basis["identity_hashes"]
-        refs.extend(ref for ref, h in sweep.hashes.items() if ref in stored and stored[ref] != h)
+    stored = basis["text_hashes"]
+    refs.extend(ref for ref, h in sweep.text_hashes.items() if ref in stored and stored[ref] != h)
     return refs
 
 
@@ -376,12 +423,15 @@ def _undatable(actx: dict, current: pending.Current, ref: str, rec: dict) -> boo
 
 
 def _temporal(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]:
-    """Model-only temporal pairs, and whether the calendar could be read. With
-    no readable calendar there are none: a broken calendar must not make every
-    due look unparseable."""
+    """Model-only temporal pairs, and whether the calendar, the commitments and
+    the events could all be read. With any of them unreadable there are none:
+    a broken calendar must not make every due look unparseable, and a pair
+    nominated from half the records must not retract the rest."""
     actx = _soft(aging.prepare, None, cid, now)
     built = _soft(pressure.build, None, cid, now, None, {"event"})
     if actx is None or built is None or actx["now_fixed"] is None or built["fixed"] is None:
+        return {}, False
+    if current.unreadable & _DEADLINE_LEDGERS:
         return {}, False
     near = _near_events(built["items"])
     out: dict[str, dict] = {}
@@ -403,11 +453,16 @@ def _live_only(current: pending.Current, found: dict[str, dict]) -> dict[str, di
 # ---------------------------------------------------------------- discovery
 
 
-def _subjects(cid: str) -> list[similarity.Subject]:
+def _subjects(cid: str, current: pending.Current) -> tuple[list[similarity.Subject], bool]:
+    """Both pools, and whether both were read whole: a pool that raised, or
+    whose ledger is unreadable (`similarity.pool` reads that as empty)."""
     out: list[similarity.Subject] = []
+    whole = not current.unreadable & _POOL_LEDGERS
     for kind in ("thread", "commitment"):
-        out.extend(_soft(similarity.pool, [], cid, kind))
-    return out
+        pool = _soft(similarity.pool, None, cid, kind)
+        whole = whole and pool is not None
+        out.extend(pool or [])
+    return out, whole
 
 
 def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
@@ -428,9 +483,10 @@ def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
         sweep.continuity = "malformed"
         return sweep
     basis = candidates.read(cid)["basis"]
-    subjects = _subjects(cid)
+    subjects, pools_whole = _subjects(cid, current)
     sweep.hashes = {s.ref: _identity_hash(sweep.space, s.text) for s in subjects}
-    _pairs(sweep, current, subjects, basis)
+    sweep.text_hashes = {s.ref: _text_hash(s.text) for s in subjects}
+    _pairs(sweep, current, subjects, basis, pools_whole)
     now = _soft(clock.now, "", cid)
     found, moved, checked = _lifecycle(cid, current, _touched_refs(sweep, basis, touched), now)
     temporal, temporal_ok = _temporal(cid, current, now)

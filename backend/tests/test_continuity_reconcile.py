@@ -87,11 +87,17 @@ def _sweep(cid, *, full=True, touched=(), stamp="00000000000000000010-run"):
     return reconcile.discover(cid, stamp=stamp, full=full, touched=touched, embed=False)
 
 
-def _write_basis(cid, hashes, *, scored=None, space=""):
+def _write_basis(cid, hashes, *, scored=None, space="", texts=None):
     data = candidates.empty()
     data["basis"] = {"embedding_space": space, "embedding_model": "",
-                     "identity_hashes": dict(hashes), "scored": dict(scored or {})}
+                     "identity_hashes": dict(hashes), "scored": dict(scored or {}),
+                     "text_hashes": dict(texts or {})}
     candidates.write(cid, data)
+
+
+def _persisted(cid, sweep):
+    """The basis a first persist after `sweep` would hold, every ref rescored."""
+    _write_basis(cid, sweep.hashes, texts=sweep.text_hashes, space=sweep.space)
 
 
 def _counting(monkeypatch):
@@ -209,7 +215,7 @@ def test_incremental_pairs_only_changed_records_against_all(cid, s0, monkeypatch
     _recover(cid, s0)
     _tithe(cid, s0)
     _map(cid, s0)
-    _write_basis(cid, _sweep(cid).hashes)
+    _persisted(cid, _sweep(cid))
     _map(cid, s0, beat="Mara traced the coast on it.")
 
     calls = _counting(monkeypatch)
@@ -233,6 +239,109 @@ def test_a_full_sweep_scores_every_unordered_pair_once(cid, s0, monkeypatch):
     assert len({frozenset(pair) for pair in calls}) == len(calls)
     assert sweep.pairs_scored == len(calls) and sweep.pairs_capped is False
     assert sweep.rescored == frozenset(_subjects(cid))
+
+
+ERRAND = "thread:mara-s-errand"
+
+
+def _errands(cid, scene):
+    """Six near-identical errands, and a seventh plausible beside all of them."""
+    for i in range(1, 7):
+        plot.set_movement(cid, f"x{i}", f"Winifred's Saltmarch harbour errand {i}", "open",
+                          "Winifred ran the Saltmarch harbour errand to the docks again.",
+                          scene)
+    plot.set_movement(cid, "mara-s-errand", "Mara's harbour errand", "open",
+                      "Mara went to the harbour.", scene)
+    return [f"thread:x{i}" for i in range(1, 7)]
+
+
+def _duplicates(found, ref=None):
+    return {frozenset(rec["refs"]) for rec in found.values()
+            if rec["kind"] == "possible_duplicate" and (ref is None or ref in rec["refs"])}
+
+
+def test_a_full_sweep_keeps_only_each_records_top_k(cid, s0):
+    _errands(cid, s0)
+    subjects = _subjects(cid)
+    plausible = {}
+    for a in subjects.values():
+        for b in subjects.values():
+            if a.ref < b.ref:
+                signals = similarity.lexical(a, b)
+                if similarity.admitted_by(signals) is not None:
+                    plausible[frozenset((a.ref, b.ref))] = signals
+    expected: set[frozenset] = set()
+    for ref in subjects:
+        mine = sorted((similarity.rank_key(signals, next(iter(pair - {ref}))), pair)
+                      for pair, signals in plausible.items() if ref in pair)
+        expected.update(pair for _, pair in mine[:reconcile.RECONCILE_TOP_K])
+    assert expected < set(plausible)        # the bound bites: not every plausible pair
+
+    assert _duplicates(_sweep(cid).discovered) == expected
+
+
+def test_an_incremental_sweep_keeps_no_more_neighbours_than_a_full_one(cid, s0):
+    others = _errands(cid, s0)
+    for x in others:
+        assert similarity.admitted_by(_signals(cid, ERRAND, x)) is not None
+
+    full = _sweep(cid)
+    expected = _duplicates(full.discovered, ERRAND)
+    assert len(expected) == reconcile.RECONCILE_TOP_K
+    _persisted(cid, full)
+    basis = candidates.read(cid)["basis"]
+    del basis["identity_hashes"][ERRAND]
+    _write_basis(cid, basis["identity_hashes"], texts=basis["text_hashes"])
+
+    sweep = _sweep(cid, full=False)
+    assert sweep.rescored == {ERRAND}
+    assert _duplicates(sweep.discovered, ERRAND) == expected
+
+
+def test_a_capped_full_sweep_keeps_at_most_top_k_per_finished_ref(cid, s0, monkeypatch):
+    others = _errands(cid, s0)
+    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 6)
+    _write_basis(cid, dict.fromkeys(others, "old"))   # ERRAND is missing: scored first
+
+    sweep = _sweep(cid)
+    assert sweep.pairs_capped is True and sweep.rescored == {ERRAND}
+    assert len(_duplicates(sweep.discovered)) == reconcile.RECONCILE_TOP_K
+
+
+@pytest.mark.parametrize("garbled", ["plot.json", "commitments.json"])
+def test_a_pool_that_could_not_be_read_rescores_nothing(cid, s0, garbled):
+    plot.set_movement(cid, "mara-s-oath", "Mara's oath", "open", "Mara swore it.", s0)
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", "",
+                             "Mara swore it.", s0)
+    commitments.set_movement(cid, "mara-s-vow", "Mara's oath", "promise", "open", "",
+                             "Mara swore it.", s0)
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    assert _sweep(cid).rescored == frozenset(_subjects(cid))
+    (_root(cid) / garbled).write_text("{ no", encoding="utf-8")
+
+    sweep = _sweep(cid)
+    assert sweep.rescored == frozenset()
+    readable = "commitment:" if garbled == "plot.json" else "thread:"
+    assert sweep.discovered          # what could be scored is still found
+    assert all(ref.startswith(readable) for rec in sweep.discovered.values()
+               for ref in rec["refs"])
+
+
+def test_a_pool_that_raised_rescores_nothing(cid, s0, monkeypatch):
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    real = similarity.pool
+
+    def pool(c, kind):
+        if kind == "commitment":
+            raise RuntimeError("a pool that will not build")
+        return real(c, kind)
+
+    monkeypatch.setattr(similarity, "pool", pool)
+    sweep = _sweep(cid)
+    assert sweep.rescored == frozenset()
+    assert canon.candidate_id("possible_duplicate", [LEDGER, RECOVER]) in sweep.discovered
 
 
 def _five(cid, scene):
@@ -285,27 +394,41 @@ def test_a_capped_sweep_after_a_space_change_reaches_the_tail(cid, s0, monkeypat
     refs = _five(cid, s0)
     subjects = _subjects(cid)
     old = {ref: _old_space_hash(subjects[ref].text) for ref in refs}
-    _write_basis(cid, old, space="old")
+    texts = _sweep(cid).text_hashes
+    _write_basis(cid, old, space="old", texts=texts)
     _space(monkeypatch, "new")
     monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 5)
 
     sweep = _sweep(cid, full=False, stamp=_stamp(2))
     assert sweep.space == "new"
     assert sweep.rescored == {refs[0]}
-    assert sweep.model_only == {}           # every hash moved: none of it is "touched"
+    assert sweep.model_only == {}           # every hash moved, no text did: nothing "touched"
     hashes = {**old, refs[0]: sweep.hashes[refs[0]]}
-    _write_basis(cid, hashes, scored={refs[0]: sweep.stamp}, space="new")
+    _write_basis(cid, hashes, scored={refs[0]: sweep.stamp}, space="new", texts=texts)
 
     calls = _counting(monkeypatch)
     sweep = _sweep(cid, full=False, stamp=_stamp(3))
     assert calls[0][0] == refs[1]
     assert sweep.rescored == {refs[1]}
+    # r2..r5 still carry old-space hashes, but none of their texts moved
+    assert sweep.model_only == {}
+
+
+def test_a_record_moved_across_a_space_change_is_still_touched(cid, s0, monkeypatch):
+    _map(cid, s0)
+    _ledger(cid, s0)
+    _persisted(cid, _sweep(cid))
+    _map(cid, s0, beat="Mara traced the coast on it.")
+    _space(monkeypatch, "new")
+
+    sweep = _sweep(cid, full=False)
+    assert set(sweep.model_only) == {canon.candidate_id("possible_thread_closure", [MAP])}
 
 
 def test_touched_includes_refs_moved_since_the_last_sweep(cid, s0):
     _map(cid, s0)
     _ledger(cid, s0)
-    _write_basis(cid, _sweep(cid).hashes)
+    _persisted(cid, _sweep(cid))
     _map(cid, s0, beat="Mara traced the coast on it.")
     plot.set_movement(cid, "seraphine-s-letter", "Seraphine's letter", "open",
                       "Seraphine sealed it.", s0)
@@ -335,7 +458,7 @@ def test_a_changed_embedding_space_rescores_everything(cid, s0, monkeypatch):
     _ledger(cid, s0)
     _recover(cid, s0)
     _tithe(cid, s0)
-    _write_basis(cid, _sweep(cid).hashes)
+    _persisted(cid, _sweep(cid))
     assert _sweep(cid, full=False).rescored == frozenset()
 
     _space(monkeypatch, "new")
@@ -455,6 +578,30 @@ def test_discovery_survives_a_garbled_ledger_and_a_raising_plugin(cid, s0, tmp_p
     assert not any(r.startswith("thread:") for rec in sweep.discovered.values()
                    for r in rec["refs"])
     assert sweep.lifecycle_checked == {"stale": False, "overdue": False, "temporal": False}
+
+
+def _garble(cid, name):
+    (_root(cid) / name).write_text("{ no", encoding="utf-8")
+
+
+@pytest.mark.parametrize(("garbled", "unchecked"), [
+    ("commitments.json", {"overdue", "temporal"}),
+    ("events.json", {"overdue", "temporal"}),
+    ("chronicle.json", {"stale"}),
+    ("plot.json", {"stale"}),
+])
+def test_a_garbled_source_is_never_reported_checked(cid, garbled, unchecked):
+    sid = _dated_scene(cid, "Saltmarch docks", "2026-05-01")
+    _map(cid, sid)
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                             "2026-05-05", "Mara swore it.", sid)
+    events.create(cid, "The coronation", "2026-05-12")
+    clock.advance(cid, to="2026-05-10")
+    assert _sweep(cid).lifecycle_checked == {"stale": True, "overdue": True, "temporal": True}
+
+    _garble(cid, garbled)
+    checked = _sweep(cid).lifecycle_checked
+    assert {source for source, ok in checked.items() if not ok} == unchecked
 
 
 def test_model_only_nominations_are_verdict_filtered(cid, s0):

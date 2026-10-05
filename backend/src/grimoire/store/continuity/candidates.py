@@ -3,9 +3,15 @@
 Stored at ``<campaign>/continuity_candidates.json``::
 
     {"version": 1, "generated", "generation",
-     "basis":   {"embedding_space", "embedding_model", "identity_hashes", "scored"},
+     "basis":   {"embedding_space", "embedding_model", "identity_hashes", "scored",
+                 "text_hashes"},
      "records": {"<candidate id>": {"kind", "refs", "fingerprint", "signals",
                                     "proposal", "created"}}}
+
+`scored` (``{ref: generation}``) and `text_hashes` (``{ref: hash of the
+identity text with no space salt}``) are additive beyond §6's basis: the first
+orders a capped sweep, the second is what "moved since the last sweep" compares,
+since every `identity_hashes` entry moves when the embedding space does.
 
 What a reconcile sweep FOUND, never what a reader decided -- those live in
 continuity.json (`doc`). So every byte here is rebuildable, and that decides
@@ -69,7 +75,7 @@ def _path(cid: str) -> Path:
 def empty() -> dict:
     return {"version": VERSION, "generated": "", "generation": "",
             "basis": {"embedding_space": "", "embedding_model": "",
-                      "identity_hashes": {}, "scored": {}},
+                      "identity_hashes": {}, "scored": {}, "text_hashes": {}},
             "records": {}}
 
 
@@ -180,6 +186,7 @@ def _basis(value) -> dict:
         "embedding_model": _text(raw.get("embedding_model")),
         "identity_hashes": _str_dict(raw.get("identity_hashes")),
         "scored": _str_dict(raw.get("scored")),
+        "text_hashes": _str_dict(raw.get("text_hashes")),
     }
 
 

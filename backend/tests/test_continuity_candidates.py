@@ -78,7 +78,7 @@ def test_absent_cache_reads_empty(cid):
     assert candidates.empty() == {
         "version": 1, "generated": "", "generation": "",
         "basis": {"embedding_space": "", "embedding_model": "",
-                  "identity_hashes": {}, "scored": {}},
+                  "identity_hashes": {}, "scored": {}, "text_hashes": {}},
         "records": {},
     }
     assert candidates.records(cid) == []
@@ -204,13 +204,14 @@ def test_bad_top_level_fields_are_normalized(cid):
         "version": 1, "generated": 5, "generation": None,
         "basis": {"embedding_space": 3, "embedding_model": "m",
                   "identity_hashes": {"thread:maras-map": "h", "thread:x": 1},
-                  "scored": []},
+                  "scored": [], "text_hashes": {"thread:maras-map": "t", "thread:x": None}},
         "records": [],
     }), encoding="utf-8")
     data = candidates.read(cid)
     assert data["generated"] == "" and data["generation"] == ""
     assert data["basis"] == {"embedding_space": "", "embedding_model": "m",
-                             "identity_hashes": {"thread:maras-map": "h"}, "scored": {}}
+                             "identity_hashes": {"thread:maras-map": "h"}, "scored": {},
+                             "text_hashes": {"thread:maras-map": "t"}}
     assert data["records"] == {}
     assert candidates.malformed(cid) is False
 
