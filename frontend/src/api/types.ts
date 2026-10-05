@@ -1197,8 +1197,8 @@ export type CampaignBudget = {
   unpriced_calls?: number; calls?: number; fraction?: number;
 };
 /** How a breakdown's token counts were made (`store.tokens.counting`).
- *  `tokenizer` is a tiktoken encoding name (`cl100k_base`) or `heuristic`, the
- *  characters/4 fallback. `native` only when the tokenizer that counted is the
+ *  `tokenizer` is a tiktoken encoding name (`cl100k_base`), `heuristic` (the
+ *  characters/4 fallback) or `mixed` (some strings fell back). `native` only when the tokenizer that counted is the
  *  model's own; for most backends it is not, and the counts are estimates.
  *  Even native counts are text only — the provider adds per-message framing. */
 export type TokenCounting = { tokenizer: string; native: boolean };

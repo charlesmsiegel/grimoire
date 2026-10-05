@@ -23,9 +23,18 @@ def loaded(monkeypatch):
 
 
 @pytest.mark.parametrize("model", ["openai/gpt-4", "openai/gpt-3.5-turbo"])
-def test_an_openai_model_on_the_loaded_encoding_is_native(loaded, model):
+def test_an_openai_model_on_openrouter_and_the_loaded_encoding_is_native(loaded, model):
     pytest.importorskip("tiktoken")
-    assert tokens.counting(model) == {"tokenizer": "cl100k_base", "native": True}
+    assert tokens.counting(model, "openrouter") == {"tokenizer": "cl100k_base", "native": True}
+
+
+@pytest.mark.parametrize("kind", ["openai_compatible", "claude", ""])
+def test_the_same_model_id_on_any_other_connection_is_an_estimate(loaded, kind):
+    """A LiteLLM gateway or a local server can serve anything as `openai/gpt-4`;
+    only OpenRouter's ids name the model that answers. An unknown kind -- a
+    fallback attempt's snapshot -- is never native either."""
+    pytest.importorskip("tiktoken")
+    assert tokens.counting("openai/gpt-4", kind) == {"tokenizer": "cl100k_base", "native": False}
 
 
 @pytest.mark.parametrize("model", [
@@ -41,14 +50,44 @@ def test_any_other_model_is_an_estimate_even_with_the_encoder_loaded(loaded, mod
     """Including a bare `gpt-4`: LocalAI's default images and aliasing gateways
     serve local models under that name, so an unprefixed OpenAI name proves
     nothing about which tokenizer is on the other end."""
-    assert tokens.counting(model) == {"tokenizer": "cl100k_base", "native": False}
+    assert tokens.counting(model, "openrouter") == {"tokenizer": "cl100k_base", "native": False}
 
 
 def test_without_an_encoder_every_count_is_the_heuristic(monkeypatch):
     """Android installs no tiktoken, and a desktop that could not fetch the
     encoding counts by length too -- neither is anybody's own tokenizer."""
     monkeypatch.setattr(tokens, "_loaded", lambda: None)
-    assert tokens.counting("gpt-4") == {"tokenizer": "heuristic", "native": False}
+    assert tokens.counting("openai/gpt-4", "openrouter") == {"tokenizer": "heuristic",
+                                                             "native": False}
+
+
+@pytest.mark.parametrize("counted_with", ["heuristic", "mixed"])
+def test_the_counter_the_compose_used_wins_over_the_loaders_state_now(loaded, counted_with):
+    """A load that succeeds AFTER the counting -- the retry window expiring
+    between compose and capture -- must not relabel length counts as
+    cl100k_base, let alone as native."""
+    assert tokens.counting("openai/gpt-4", "openrouter", counted_with) == {
+        "tokenizer": counted_with, "native": False}
+
+
+def test_count_tokens_records_which_counter_it_used(monkeypatch):
+    monkeypatch.setattr(tokens, "_encoder", _Enc)
+    tokens.count_tokens("Seraphine keeps the ledger")
+    assert tokens.last_counter() == "cl100k_base"
+    monkeypatch.setattr(tokens, "_encoder", lambda: None)
+    tokens.count_tokens("Seraphine keeps the ledger")
+    assert tokens.last_counter() == "heuristic"
+
+
+def test_a_compose_reports_the_counter_it_counted_with(monkeypatch):
+    from grimoire.store.context import assemble
+    count = assemble._token_memo()
+    monkeypatch.setattr(tokens, "_encoder", _Enc)
+    count("Mara walks the Saltmarch road")
+    assert count.counted_with() == "cl100k_base"
+    monkeypatch.setattr(tokens, "_encoder", lambda: None)
+    count("Winifred keeps the tide-ledger")
+    assert count.counted_with() == "mixed"
 
 
 def test_without_tiktoken_installed_no_model_is_native(monkeypatch):
@@ -64,31 +103,40 @@ def test_describing_counts_never_starts_an_encoder_load(monkeypatch):
             raise AssertionError("counting() tried to load the encoder")
     monkeypatch.setattr(tokens, "tiktoken", _Exploding())
     monkeypatch.setattr(tokens, "_loader", tokens._Loader())
-    assert tokens.counting("openai/gpt-4") == {"tokenizer": "heuristic", "native": False}
+    assert tokens.counting("openai/gpt-4", "openrouter") == {"tokenizer": "heuristic",
+                                                             "native": False}
 
 
 def _scene(client):
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
-    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Saltmarch"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Mara"}).json()["id"]
     return cid, sid
 
 
-def test_the_live_context_names_its_tokenizer(client, monkeypatch):
-    monkeypatch.setattr(tokens, "_loaded", lambda: None)
+def test_the_live_context_names_the_counter_its_compose_used(client, monkeypatch):
+    # Counted by length, while the loader would say it is ready: the label must
+    # come from the counting, not from the loader afterwards.
+    monkeypatch.setattr(tokens, "_encoder", lambda: None)
+    monkeypatch.setattr(tokens, "_loaded", _Enc)
     cid, sid = _scene(client)
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert body["token_count"] == {"tokenizer": "heuristic", "native": False}
 
 
 def test_a_frozen_turn_keeps_the_tokenizer_it_was_counted_with(client, monkeypatch):
-    """Frozen per entry, against the model the turn asked for: a later change
-    of connection must not relabel a past turn's counts."""
+    """Frozen per entry, against the model and connection the turn used: a
+    later change of either must not relabel a past turn's counts."""
+    pytest.importorskip("tiktoken")
     monkeypatch.setattr(tokens, "_loaded", _Enc)
     cid, sid = _scene(client)
-    eid = store.prompt_log.record(cid, sid, "chat", {"sections": [], "total_tokens": 3,
-                                                     "dropped_tokens": 0, "budget_tokens": 0},
-                                  model="llama3.1:8b")
-    assert eid is not None
-    entry = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts/{eid}").json()
-    assert entry["token_count"] == {"tokenizer": "cl100k_base", "native": False}
+    blank = {"sections": [], "total_tokens": 3, "dropped_tokens": 0, "budget_tokens": 0}
+    native = store.prompt_log.record(cid, sid, "chat", {**blank, "counted_with": "cl100k_base"},
+                                     model="openai/gpt-4", kind="openrouter")
+    local = store.prompt_log.record(cid, sid, "chat", {**blank, "counted_with": "cl100k_base"},
+                                    model="openai/gpt-4", kind="openai_compatible")
+    url = f"/api/campaigns/{cid}/scenes/{sid}/prompts"
+    assert client.get(f"{url}/{native}").json()["token_count"] == {"tokenizer": "cl100k_base",
+                                                                   "native": True}
+    assert client.get(f"{url}/{local}").json()["token_count"] == {"tokenizer": "cl100k_base",
+                                                                  "native": False}

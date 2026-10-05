@@ -78,6 +78,10 @@ export function estimateNote(ctx: SceneContext): string {
     return "Estimated: no tokenizer is available here, so tokens are counted as "
       + "about four characters each. The provider's own count will differ.";
   }
+  if (tokenizer === "mixed") {
+    return "Estimated: partly counted with cl100k_base and partly as about four "
+      + `characters per token, where the tokenizer refused some text. ${model}'s own count will differ.`;
+  }
   const whose = tokenizer === "cl100k_base" ? " (OpenAI's GPT-4 tokenizer)" : "";
   return `Estimated: counted with ${tokenizer}${whose}; `
     + `${model} uses its own, so the provider's count will differ.`;

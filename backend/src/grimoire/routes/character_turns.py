@@ -275,7 +275,7 @@ def _capture(cid, sid, task, messages, conn):
             "dropped_tokens": 0,
             "budget_tokens": store.context.budget_tokens(),
         }
-    _record_prompt(cid, sid, task, breakdown, model=effective_model(conn), messages=messages)
+    _record_prompt(cid, sid, task, breakdown, model=effective_model(conn), kind=conn["kind"], messages=messages)
     if isinstance(messages, PreparedMessages):
         # Steered frozen variants have no historical section accounting. Capture
         # their exact rendered messages at actual fallback dispatch instead.

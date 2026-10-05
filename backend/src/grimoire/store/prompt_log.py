@@ -226,7 +226,8 @@ def _unlink(cid: str, eid: str) -> None:
         pass
 
 
-def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> str | None:
+def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
+           kind: str = "") -> str | None:
     """Freeze one turn's composition. Returns the new entry id, or None when
     nothing was recorded.
 
@@ -252,10 +253,11 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> s
     keep = depth()
     if keep <= 0:
         return None
-    # How these counts were made, frozen with them: the model and the tokenizer
-    # both change, and a past turn is described by its own. Taken before the
-    # lock, though `counting` never waits anyway (it reads the loader's state).
-    counted = tokens.counting(model)
+    # How these counts were made, frozen with them: the model, the connection
+    # and the tokenizer all change, and a past turn is described by its own.
+    # `counted_with` is the counter the compose actually used; `counting` never
+    # waits either way, and is taken before the lock regardless.
+    counted = tokens.counting(model, kind, breakdown.get("counted_with", ""))
     row = {"scene": sid, "task": task, "model": model,
            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "total_tokens": breakdown.get("total_tokens", 0),
