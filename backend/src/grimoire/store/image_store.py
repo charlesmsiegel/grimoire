@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import os
 import re
@@ -41,6 +42,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+
+from PIL import Image
 
 from . import atomic, fetch, image_hash, image_sanitize, locks, logs, paths, statcache
 
@@ -340,34 +343,49 @@ class _Prepared:
     data: bytes
     ext: str
     sha: str
-    #: The sanitizer could not parse bytes that sniff as an image, so they are
-    #: kept exactly as received, metadata and all.
-    unsanitizable: bool
+    #: Why these bytes may not be named by their pixels: "unsniffable" (none
+    #: of the four served formats) or "unsanitizable" (one of them, whose
+    #: container the sanitizer could not parse). Either way they are kept
+    #: exactly as received, metadata and all. None for sanitized bytes.
+    raw_reason: str | None
 
 
 def _prepared(data: bytes, ext: str) -> _Prepared:
     """The bytes as the store would keep them: sniffed (falling back to the
     caller's `ext`, validated) and sanitized where they sniff."""
     sniffed = fetch.sniff_ext(data)
-    unsanitizable = False
     if sniffed is None:
         ext = _norm_ext(ext)
+        reason: str | None = "unsniffable"
     else:
         ext = sniffed
         data, clean = image_sanitize.sanitize_checked(data)
-        unsanitizable = not clean
-    return _Prepared(data, ext, hashlib.sha256(data).hexdigest(), unsanitizable)
+        reason = None if clean else "unsanitizable"
+    return _Prepared(data, ext, hashlib.sha256(data).hexdigest(), reason)
+
+
+def _opens(data: bytes) -> bool:
+    """Whether Pillow recognises `data` as an image at all (header only)."""
+    try:
+        with Image.open(io.BytesIO(data)):
+            return True
+    except Exception:  # noqa: BLE001 -- anything Pillow will not open is no image
+        return False
 
 
 def _identity(p: _Prepared) -> image_hash.PixelIdentity:
     """The identity `p` is stored under.
 
-    Bytes the sanitizer returned as received are opaque, however well they
-    decode: named by their pixels, they would share an object with a clean
-    upload of the same picture, and a first arrival's blob -- whatever notes it
-    carries -- is the one that object keeps for everybody (spec section 5)."""
-    if p.unsanitizable:
-        return image_hash.opaque(p.sha, "unsanitizable")
+    Bytes kept as received are opaque, however well they decode: named by their
+    pixels, they would share an object with a clean upload of the same picture,
+    and a first arrival's blob -- whatever notes it carries, in whatever format
+    -- is the one that object keeps and serves for everybody (spec section 5).
+    Unsniffable bytes Pillow cannot even open keep the reason pixel identity
+    gives them, "undecodable": they are not an image in any format."""
+    if p.raw_reason == "unsniffable" and not _opens(p.data):
+        return image_hash.opaque(p.sha, "undecodable")
+    if p.raw_reason is not None:
+        return image_hash.opaque(p.sha, p.raw_reason)
     return image_hash.pixel_identity(p.data, p.sha)
 
 
@@ -394,9 +412,10 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
     """Store `data` and return its object -- the one way in (spec section 5).
 
     Every caller's bytes are sanitized here, bundle import's included; there
-    is no way around it. `ext` is used only when the bytes do not sniff as an
-    image; such bytes are stored verbatim under it, and a container that sniffs
-    but does not parse is stored verbatim with opaque identity (`_identity`).
+    is no way around it. `ext` is used only when the bytes do not sniff as one
+    of the four served formats; such bytes are stored verbatim under it with
+    opaque identity, as is a container that sniffs but does not parse
+    (`_identity`).
     """
     p = _prepared(data, ext)
     data, ext, sha = p.data, p.ext, p.sha

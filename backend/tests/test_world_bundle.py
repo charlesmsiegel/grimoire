@@ -1248,3 +1248,26 @@ def test_export_finishes_a_crashed_promotion_first(monkeypatch, tmp_path):
     iroot = worlds.world_root(imported)
     assert assets.image_id(iroot, cid, vid, "avatar") == new_pic
     assert assets.image_id(iroot, cid, vid, "gallery_1") == old
+
+
+@pytest.mark.parametrize("member", [
+    "world/assets/IMAGE-REFS/cover.json",
+    "world/assets/Image-Refs/cover.json",
+    "world/characters/mara/assets/default/image-refs/.PROMOTE.JSON",
+    "world/characters/mara/assets/default/image-refs/.Promote.json",
+])
+def test_a_case_variant_placement_path_is_refused(monkeypatch, tmp_path, member):
+    """On a case-insensitive filesystem `IMAGE-REFS/` IS `image-refs/`, and a
+    placement or journal under that spelling would reach the readers past the
+    containment walk. The member check refuses it, so this holds on Linux too."""
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture(45)
+    body = (json.dumps({"format": 1, "image": stolen}) if "refs/cover" in member.lower()
+            else json.dumps({"name": "gallery_0",
+                             "pre": {"avatar": None, "gallery_0": stolen},
+                             "post": {"avatar": stolen, "gallery_0": None},
+                             "desc": {"avatar": None, "gallery_0": None}}))
+    bundle = _hand_bundle(tmp_path, "case", {member: body})
+    with pytest.raises(world_bundle.BundleError, match="spelling"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
