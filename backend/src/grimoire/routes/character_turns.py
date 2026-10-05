@@ -276,6 +276,23 @@ def _follow_on(cid, sid, run, token, round_record, lead):
         return following
 
 
+#: The issues a handoff block raises. Only Directed reads the handoff, so
+#: only Directed ends a chain on one; a List/Natural/Manual contribution keeps
+#: it recorded on its variant and its plan carries on.
+_HANDOFF_ISSUES = frozenset(
+    {"missing or invalid handoff", "ineligible or repeated speaker", "repeated speaker"})
+
+
+def _ending_issue(round_record, after_issue, content_issue):
+    """What stops a chain after a contribution: the successor choice's own
+    issue, or the contribution's -- an authority violation or an empty
+    response ends it in every mode, a handoff-shaped one only in Directed."""
+    if (round_record.get("mode", "directed") != "directed"
+            and content_issue in _HANDOFF_ISSUES):
+        content_issue = None
+    return after_issue or content_issue
+
+
 def _chain_continues(round_record, ending, cancelled):
     """Whether a round that just ended with nobody next runs on into a
     follow-on round. `ending` is its last contribution's successor choice
@@ -894,8 +911,10 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             run.cancel_requested, actor,
         )
         # The contribution's own issue (it spoke for another actor) stops a
-        # chain as surely as a bad handoff does.
-        turn.ending = {**after, "status": status, "issue": after["issue"] or watcher.issue}
+        # chain as surely as a bad handoff does -- a handoff-shaped one only
+        # where the handoff is read (`_ending_issue`).
+        turn.ending = {**after, "status": status,
+                       "issue": _ending_issue(turn.round_record, after["issue"], watcher.issue)}
         next_actor, issue = after["next"], after["issue"]
         turn.round_record = await run_in_threadpool(
             _round_state,
@@ -1121,7 +1140,7 @@ def _recover_completed(cid, sid, run, token, round_record):
             status="pending" if after["next"] else "complete",
             issue=after["issue"],
             continuation=None,
-        ), {**after, "issue": after["issue"] or variant.get("issue")}
+        ), {**after, "issue": _ending_issue(round_record, after["issue"], variant.get("issue"))}
 
 
 def _public_error(exc):
