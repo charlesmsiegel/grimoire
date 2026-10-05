@@ -139,13 +139,21 @@ def _certainty(value) -> float | None:
 def _candidate(subject: similarity.Subject, signals: dict) -> dict:
     """One neighbour as the resolver prompt shows it: its bare canonical id,
     what it is, its latest beat and up to `similarity.PREVIOUS_BEATS` earlier
-    ones, newest first."""
+    ones, newest first.
+
+    Its stored text -- title, kind, due, latest beat, earlier beats, in that
+    priority, so a short structural field keeps its meaning -- shares one `similarity.CONTINUITY_IDENTITY_BYTES` budget
+    (`similarity.clip_fields`), the bound its identity text was embedded under:
+    a closed record is in the pool though not in the extraction's snapshot, and
+    its title can select it whatever length its beats run to. An earlier beat
+    the budget no longer reaches is left out rather than shown blank."""
     rec = subject.record
     latest, earlier = similarity.beat_lines(rec)
-    return {"id": subject.ref.partition(":")[2], "title": subject.title,
-            "status": subject.status, "kind": _text(rec.get("kind")),
-            "due": _text(rec.get("due")), "latest_beat": latest, "earlier": earlier,
-            "signals": dict(signals)}
+    title, kind, due, latest, *earlier = similarity.clip_fields(
+        [subject.title, _text(rec.get("kind")), _text(rec.get("due")), latest, *earlier])
+    return {"id": subject.ref.partition(":")[2], "title": title,
+            "status": subject.status, "kind": kind, "due": due, "latest_beat": latest,
+            "earlier": [beat for beat in earlier if beat], "signals": dict(signals)}
 
 
 def _prompt_row(e: Examined) -> dict:

@@ -161,6 +161,24 @@ def beat_lines(rec: dict) -> tuple[str, list[str]]:
     return latest, previous
 
 
+def clip_fields(texts: Iterable[str], max_bytes: int = CONTINUITY_IDENTITY_BYTES) -> list[str]:
+    """`texts` sharing one `max_bytes` budget, each cut to what the earlier
+    ones left (`embed_space.clip`), so the whole is never over it.
+
+    How a stored record's free text is shown beside its identity text -- the
+    resolver prompt's candidates -- within the same bound that text was
+    embedded under: a ledger route takes a beat of any length, and a record
+    a title selects must not carry an unbounded beat into a shared prompt.
+    Order is priority; a text the budget no longer reaches comes back blank."""
+    out: list[str] = []
+    left = max_bytes
+    for text in texts:
+        cut = embed_space.clip(text, left) if left > 0 else ""
+        left -= len(cut.encode("utf-8"))
+        out.append(cut)
+    return out
+
+
 def _join(lines: Iterable[str]) -> str:
     text = "\n".join(line for line in lines if line)
     return embed_space.clip(text, CONTINUITY_IDENTITY_BYTES)
