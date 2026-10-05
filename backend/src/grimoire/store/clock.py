@@ -55,15 +55,14 @@ from . import (
     birthdays,
     calendars,
     chronicle,
-    commitments,
     config,
     events,
     locks,
-    plot,
     revision,
 )
 from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
+from .continuity import effective
 from .paths import now_iso
 
 
@@ -439,11 +438,11 @@ def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
         # Every open thread is untouched by construction: a skip contains no
         # scenes, so nothing in it can have moved one. Which is the point —
         # this is what the campaign still owes after a month nobody played.
-        threads = plot.open_threads(cid)
+        threads = effective.threads(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json
         threads = []
     try:
-        owed = commitments.open_commitments(cid)
+        owed = effective.commitments(cid)
     except Exception:  # noqa: BLE001 — garbled commitments.json
         owed = []
 

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
+from grimoire.store.continuity import doc
 
 
 @pytest.fixture
@@ -525,3 +526,34 @@ def test_every_section_is_read_under_one_campaign_lock(client, monkeypatch):
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/briefing").status_code == 200
     assert held == {"chronicle": True, "plot": True,
                     "commitments": True, "relationships": True}
+
+
+# ---- merged records (continuity capstone, slice B) -------------------------
+
+def test_a_merged_thread_briefs_once_under_its_canonical(client):
+    """An alias folds "Mara's map" into "Winifred's chart": the briefing lists
+    the canonical once, never the merged-away source as a second row, and the
+    source's scene still flags it -- Seraphine stood where the map moved, not
+    where the chart did, so the flag can only come from the folded member.
+    Briefing rows carry no `aliases` (the panel renders no merge note)."""
+    wid, cid = _campaign(client)
+    pid, vid = _pc(wid, "Seraphine")
+    hers = store.scenes.create_scene(cid, "The Pier at Dusk")
+    store.appearances.appear(cid, hers, "pcs", pid, vid, "player")
+    elsewhere = store.scenes.create_scene(cid, "A Room Elsewhere")
+    now = store.scenes.create_scene(cid, "The Counting House")
+    store.appearances.appear(cid, now, "pcs", pid, vid, "player")
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "Mara found a page.", hers)
+    store.plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open",
+                            "Winifred lost it.", elsewhere)
+    doc.put_alias(cid, "thread:mara-s-map",
+                  {"to": "thread:winifred-s-chart", "created": "", "source": "manual",
+                   "note": ""})
+
+    rows = _brief(client, cid, now)["plot"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "winifred-s-chart"
+    assert row["involves"] == ["Seraphine"]
+    assert "aliases" not in row

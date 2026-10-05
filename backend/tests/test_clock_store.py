@@ -20,6 +20,7 @@ from grimoire.store import (
     scenes,
     worlds,
 )
+from grimoire.store.continuity import doc
 
 
 def _campaign(monkeypatch, tmp_path, calendar="gregorian"):
@@ -543,27 +544,57 @@ def test_digest_rows_are_pinned_for_an_ordinary_campaign(monkeypatch, tmp_path):
     assert digest["open_threads"] == [
         {"id": "the-coronation", "title": "The coronation", "status": "open",
          "last_scene": "001--the-pier-at-dusk", "latest_beat": "",
+         "aliases": [],
          "aging": {"state": "stale", "days_since": 92, "days_over": None, "due_in": None}},
         {"id": "maras-map", "title": "Mara's map", "status": "advanced",
          "last_scene": "003--the-coronation", "latest_beat": "Mara hid the map.",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": 17, "days_over": None, "due_in": None}},
     ]
     assert digest["commitments"] == [
         {"id": "winifreds-promise", "title": "Winifred's promise", "kind": "promise",
          "status": "open", "due": "before the bells stop", "last_scene": "001--the-pier-at-dusk",
          "latest_beat": "",
+         "aliases": [],
          "aging": {"state": "stale", "days_since": 92, "days_over": None, "due_in": None}},
         {"id": "seraphines-wager", "title": "Seraphine's wager", "kind": "threat",
          "status": "open", "due": "2026-06-10", "last_scene": "002--saltmarch-eve",
          "latest_beat": "",
+         "aliases": [],
          "aging": {"state": "stale", "days_since": 42, "days_over": None, "due_in": 9}},
         {"id": "maras-oath", "title": "Mara's oath", "kind": "promise", "status": "open",
          "due": "2026-05-20", "last_scene": "003--the-coronation",
          "latest_beat": "Mara swore it on the quay.",
+         "aliases": [],
          "aging": {"state": "overdue", "days_since": 17, "days_over": 12, "due_in": None}},
         {"id": "winifreds-errand", "title": "Winifred's errand", "kind": "foreshadowing",
          "status": "open", "due": "", "last_scene": "003--the-coronation",
          "latest_beat": "Winifred took the letter.",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": 17, "days_over": None, "due_in": None}},
     ]
     assert digest["aging"] == {"overdue": 1, "stale": 3, "stale_after": 30}
+
+
+def test_digest_owes_canonical_commitments(monkeypatch, tmp_path):
+    """Two commitments merged by an alias are one obligation: the digest lists
+    the canonical once, carrying the source as an alias, and counts it overdue
+    once. Both dues sit behind the 05-15 landing day, so a digest that still
+    read the physical ledger would list two rows and count two overdue."""
+    cid = _campaign(monkeypatch, tmp_path)
+    commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                             "2026-05-12", "Mara swore it.", "001--the-pier-at-dusk")
+    commitments.set_movement(cid, "maras-promise", "Mara's promise", "promise", "open",
+                             "2026-05-12", "Mara swore it again.", "002--saltmarch-eve")
+    doc.put_alias(cid, "commitment:maras-promise",
+                  {"to": "commitment:maras-oath", "created": "", "source": "manual",
+                   "note": ""})
+    clock.advance(cid, to="2026-05-10", reason="start")
+
+    digest = clock.preview(cid, days=5)
+
+    rows = digest["commitments"]
+    assert [r["id"] for r in rows] == ["maras-oath"]
+    assert rows[0]["aliases"] == [{"ref": "commitment:maras-promise",
+                                   "title": "Mara's promise", "status": "open"}]
+    assert digest["aging"]["overdue"] == 1
