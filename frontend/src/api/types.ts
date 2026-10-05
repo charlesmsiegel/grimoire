@@ -2228,7 +2228,10 @@ export type ShellCampaign = {
    *  transcript could not be read, never `0` for that case; a scene that
    *  opens cleanly and truly has no replies yet reports the real `0`. */
   open: { sid: string; title: string; turns: number | null }[];
-  ledger_open: number;
+  /** Live canonical commitments (a merged pair counts once). `null` when the
+   *  ledger could not be counted -- a garbled commitments.json -- never `0`
+   *  for that case: the rail draws no tail and the hub says so in words. */
+  ledger_open: number | null;
   /** Null when the campaign binds no mechanics module. "This module keeps no
    *  sheets" is legal, and is not "0 of 0". */
   sheets: { sheeted: number; total: number } | null;

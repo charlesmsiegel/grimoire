@@ -29,6 +29,7 @@ import json
 from fastapi import APIRouter, HTTPException
 
 from .. import store
+from ..store.continuity import effective as continuity_effective
 from .common import _dump  # noqa: F401  (kept for the pydantic-agnostic rule)
 
 router = APIRouter()
@@ -324,17 +325,28 @@ def _chore_cover(ctx: _Ctx) -> dict | None:
     }
 
 
+def _owed(cid: str) -> list[dict]:
+    """The live canonical commitments with a stated deadline, in effective
+    order: a merged-away source is never a second row, and its due is never
+    inherited by the canonical. A due counts whether or not it parses --
+    Todo does no calendar work (no provider, no aging), because the global page
+    runs every builder for every campaign and a provider is plugin code. Link
+    deadlines are pressure's, not this set's. Raises what
+    `effective.commitments` raises."""
+    return [c for c in continuity_effective.commitments(cid) if c.get("due")]
+
+
 def _chore_owed(ctx: _Ctx) -> dict | None:
     cid = ctx.cid
     try:
-        owed = [c for c in store.commitments.open_commitments(cid) if c.get("due")]
+        n = len(_owed(cid))
     except (OSError, ValueError):
         return None
-    if not owed:
+    if not n:
         return None
     return {
-        "id": "owed", "scope": "campaign", "group": "Story & continuity", "severity": "warn", "n": len(owed),
-        "what": f"{len(owed)} open thread{'s' if len(owed) != 1 else ''} with a deadline",
+        "id": "owed", "scope": "campaign", "group": "Story & continuity", "severity": "warn", "n": n,
+        "what": f"{n} open commitment{'s' if n != 1 else ''} with a deadline",
         "why": "A promise with a date is the kind the campaign is expected to answer, "
                "and the ledger is where it is still waiting.",
         "fix": f"/campaigns/{cid}/ledger", "fix_label": "The ledger",
@@ -812,7 +824,7 @@ def _items_world_subjects(cid: str) -> list[dict]:
 
 def _items_owed(cid: str) -> list[dict]:
     try:
-        owed = [c for c in store.commitments.open_commitments(cid) if c.get("due")]
+        owed = _owed(cid)
     except (OSError, ValueError):
         return []
     return [{"id": c["id"], "label": c["title"],

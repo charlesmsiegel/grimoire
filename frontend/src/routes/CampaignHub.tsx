@@ -638,10 +638,15 @@ export default function CampaignHub() {
             )}
           </Card>
 
-          <Card title="Open threads"
-                tail={camp ? String(camp.ledger_open) : undefined}
+          <Card title="Open commitments"
+                tail={camp && camp.ledger_open != null ? String(camp.ledger_open) : undefined}
                 foot={<Link to={`/campaigns/${cid}/ledger`}>The ledger →</Link>}>
-            {!camp ? unknown : (
+            {/* A null count after a successful shell read is its own answer:
+                `unknown` would say "Loading…" forever, and the falsy branch
+                would say "Nothing is owed." -- zero for unknown. */}
+            {!camp ? unknown : camp.ledger_open == null ? (
+              <p className="field-hint">Could not be counted.</p>
+            ) : (
               <p className="field-hint">
                 {camp.ledger_open
                   ? `${camp.ledger_open} still open.`

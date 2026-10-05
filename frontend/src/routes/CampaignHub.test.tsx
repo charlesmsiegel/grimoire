@@ -367,6 +367,19 @@ test("the money stays pending until a payload about this campaign arrives", asyn
   expect(within(card).queryByText("$0.00")).not.toBeInTheDocument();
 });
 
+test("a null ledger count says it could not be counted", async () => {
+  // The shell read succeeded but the ledger could not be counted: that is
+  // neither "Loading…" forever nor "Nothing is owed." (zero-for-unknown).
+  (api.getShell as any).mockResolvedValue(shell({ ledger_open: null }));
+  renderHub();
+  expect(await screen.findByText("Open commitments")).toBeInTheDocument();
+  expect(await screen.findByText("Could not be counted.")).toBeInTheDocument();
+  expect(screen.queryByText("Nothing is owed.")).toBeNull();
+  expect(screen.queryByText("Loading…")).toBeNull();
+  expect(screen.queryByText(/still open/)).toBeNull();
+  expect(screen.queryByText("null")).toBeNull();
+});
+
 test("a failed shell read costs the counts, not the page", async () => {
   (api.getShell as any).mockRejectedValue(new Error("offline"));
   renderHub();

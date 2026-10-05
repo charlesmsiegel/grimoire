@@ -65,7 +65,7 @@ test("0 renders as 0; unmeasured renders nothing at all", () => {
   renderRail({ payload: zeroed });
   const camp = screen.getByRole("navigation", { name: /open campaign/i });
   // "Nothing is waiting" is an answer and is shown.
-  expect(within(camp).getByRole("link", { name: /ledger & timeline, 0 open threads/i }))
+  expect(within(camp).getByRole("link", { name: /ledger & timeline, 0 open commitments/i }))
     .toBeInTheDocument();
   // ...and a null `sheets` means no module is bound, so the row is not offered
   // at all -- see the Sheets test below. What it must never be is "0 of 0".

@@ -253,6 +253,12 @@ describe("tails tell 0 apart from unmeasured", () => {
     expect(CAMPAIGN_ROWS.find((r) => r.id === "ledger")!.tail!(withCampaign({}))).toBe("0");
   });
 
+  test("the ledger tail names open commitments, and an uncounted ledger says nothing", () => {
+    const ledgerRow = CAMPAIGN_ROWS.find((r) => r.id === "ledger")!;
+    expect(ledgerRow.tailLabel!(withCampaign({ ledger_open: 2 }))).toBe("2 open commitments");
+    expect(ledgerRow.tailLabel!(withCampaign({ ledger_open: null }))).toBeUndefined();
+  });
+
   test("an unbound module renders no tail rather than 0 of 0", () => {
     // "This module keeps no sheets" is legal and is not a measurement of zero.
     expect(CAMPAIGN_ROWS.find((r) => r.id === "sheets")!.tail!(withCampaign({})))

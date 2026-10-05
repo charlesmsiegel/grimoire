@@ -23,6 +23,7 @@ from PIL import Image
 import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.routes import todo
+from grimoire.store.continuity import doc as continuity_doc
 
 
 @pytest.fixture
@@ -907,7 +908,7 @@ def test_owed_is_pinned_for_an_ordinary_campaign(client, campaign):
 
     chore = next(c for c in _todo(client, cid)["chores"] if c["id"] == "owed")
     assert chore["n"] == 2
-    assert chore["what"] == "2 open threads with a deadline"
+    assert chore["what"] == "2 open commitments with a deadline"
 
     body = _items(client, "owed", cid)
     assert body["total"] == 2
@@ -917,3 +918,95 @@ def test_owed_is_pinned_for_an_ordinary_campaign(client, campaign):
         {"id": "winifreds-promise", "label": "Winifred's promise",
          "detail": "due before the bells stop · promise"},
     ]
+
+
+def _alias(cid: str, src: str, to: str) -> None:
+    continuity_doc.put_alias(cid, src, {"to": to, "created": "", "source": "manual",
+                                        "note": ""})
+
+
+def _owed(client, cid: str) -> dict | None:
+    return next((c for c in _todo(client, cid)["chores"] if c["id"] == "owed"), None)
+
+
+def test_owed_counts_canonical_commitments(client, campaign):
+    """A merged-away source is never a second count, and its due is never
+    inherited: the canonical's own due is the one that is stated."""
+    cid, _ = campaign
+    sid = store.scenes.create_scene(cid, "The Pier at Dusk")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "2026-06-01", "Mara swore it on the quay.", sid)
+    store.commitments.set_movement(cid, "winifred-s-promise", "Winifred's promise", "promise",
+                                   "open", "2026-06-03", "", sid)
+    store.commitments.set_movement(cid, "seraphine-s-favour", "Seraphine's favour", "promise",
+                                   "open", "", "Seraphine owes one.", sid)
+    _alias(cid, "commitment:mara-s-oath", "commitment:winifred-s-promise")
+
+    chore = _owed(client, cid)
+    assert chore is not None
+    assert chore["n"] == 1
+    assert chore["what"] == "1 open commitment with a deadline"
+    items = _items(client, "owed", cid)["items"]
+    assert [i["id"] for i in items] == ["winifred-s-promise"]
+
+    store.commitments.set_movement(cid, "winifred-s-promise", "", "", "", "", "", sid)
+    assert _owed(client, cid) is None
+    assert _items(client, "owed", cid)["items"] == []
+
+
+def test_owed_counts_stated_dues_only(client, campaign):
+    """Todo's set is not pressure's: a link deadline is not counted (links reach
+    Todo with the pressure split), and a free-text due is."""
+    cid, _ = campaign
+    sid = store.scenes.create_scene(cid, "The Pier at Dusk")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "", "Mara swore it on the quay.", sid)
+    store.events.create(cid, "The coronation", "2026-06-01")
+    continuity_doc.put_link(cid, "l1", {"a": "commitment:mara-s-oath",
+                                        "b": "event:the-coronation", "relation": "before",
+                                        "created": "", "scene": "", "note": ""})
+    assert _owed(client, cid) is None
+
+    store.commitments.set_movement(cid, "winifred-s-promise", "Winifred's promise", "promise",
+                                   "open", "before the bells stop", "", sid)
+    chore = _owed(client, cid)
+    assert chore is not None
+    assert (chore["n"], chore["what"]) == (1, "1 open commitment with a deadline")
+    assert [i["id"] for i in _items(client, "owed", cid)["items"]] == ["winifred-s-promise"]
+
+
+def test_owed_does_no_calendar_work(client, campaign, monkeypatch):
+    """The global To do page runs every builder for every campaign, and a
+    provider is plugin code: `owed` resolves none."""
+    cid, _ = campaign
+    sid = store.scenes.create_scene(cid, "The Pier at Dusk")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "2026-06-01", "", sid)
+    store.events.create(cid, "The coronation", "2026-06-03")
+    continuity_doc.put_link(cid, "l1", {"a": "commitment:mara-s-oath",
+                                        "b": "event:the-coronation", "relation": "by",
+                                        "created": "", "scene": "", "note": ""})
+    calls: list[tuple] = []
+    real = store.calendars.primary_provider
+
+    def recorder(*a, **kw):
+        calls.append(a)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(store.calendars, "primary_provider", recorder)
+    assert _owed(client, cid) is not None
+    assert _items(client, "owed", cid)["total"] == 1
+    assert calls == []
+
+
+def test_owed_chore_and_items_agree(client, campaign):
+    cid, _ = campaign
+    sid = store.scenes.create_scene(cid, "The Pier at Dusk")
+    for mid, title, due in (("mara-s-oath", "Mara's oath", "2026-06-01"),
+                            ("winifred-s-promise", "Winifred's promise", "2026-06-03"),
+                            ("seraphine-s-favour", "Seraphine's favour", "soon")):
+        store.commitments.set_movement(cid, mid, title, "promise", "open", due, "", sid)
+    _alias(cid, "commitment:mara-s-oath", "commitment:winifred-s-promise")
+    chore = _owed(client, cid)
+    assert chore is not None
+    assert chore["n"] == _items(client, "owed", cid)["total"] == 2

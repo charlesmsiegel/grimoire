@@ -235,7 +235,7 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     to: (ctx) => campaignPath(ctx, "/ledger"),
     match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/ledger`),
     tail: (s) => num(s?.campaign?.ledger_open),
-    tailLabel: (s) => lbl(s?.campaign?.ledger_open, "open threads"),
+    tailLabel: (s) => lbl(s?.campaign?.ledger_open, "open commitments"),
   },
   {
     // Only where the campaign binds a mechanics module. `sheets` is null when
