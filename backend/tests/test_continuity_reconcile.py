@@ -1315,6 +1315,135 @@ def test_warm_overflow_refs_are_not_marked_scored(cid, s0, fake, monkeypatch):
     assert set(candidates.read(cid)["basis"]["scored"]) == set(texts)
 
 
+def _no_longer_found(monkeypatch, how):
+    """Make a cached pair one a sweep that asks again will not rediscover:
+    ``implausible`` (no clause admits it) or ``ranked_out`` (still plausible,
+    but in no endpoint's top k)."""
+    if how == "implausible":
+        monkeypatch.setattr(similarity, "admitted_by", lambda signals: None)
+    else:
+        monkeypatch.setattr(reconcile, "RECONCILE_TOP_K", 0)
+
+
+@pytest.mark.parametrize("how", ["implausible", "ranked_out"])
+def test_a_rescored_pair_that_is_not_rediscovered_is_retracted(cid, s0, monkeypatch, how):
+    reconcile.persist_found(cid, _found(cid, s0))
+    _no_longer_found(monkeypatch, how)
+
+    sweep = _sweep(cid, stamp=_stamp(11))
+    assert {LEDGER, RECOVER} <= sweep.rescored and PAIR not in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    assert PAIR not in _records(cid)
+
+
+@pytest.mark.parametrize("how", ["implausible", "ranked_out"])
+def test_a_pair_no_sweep_asked_again_is_kept(cid, s0, monkeypatch, how):
+    reconcile.persist_found(cid, _found(cid, s0))
+    _no_longer_found(monkeypatch, how)
+
+    sweep = _sweep(cid, full=False, stamp=_stamp(11))   # nothing changed
+    assert sweep.rescored == frozenset() and PAIR not in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    assert PAIR in _records(cid)
+
+
+def test_an_unreadable_ledger_keeps_its_findings(cid, s0):
+    """Decision 2: a ledger a persist cannot read is never a reason to throw a
+    finding (or the model work it carries) away."""
+    reconcile.persist_found(cid, _found(cid, s0))
+    proposal = _proposal(frm=RECOVER, to=LEDGER)
+    reconcile.persist_proposals(cid, _sweep(cid, stamp=_stamp(10)), {PAIR: proposal})
+    before = candidates.read(cid)
+    (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
+    assert _verdicts(cid)[PAIR] == "unknown"
+
+    reconcile.persist_found(cid, _sweep(cid, stamp=_stamp(11)))
+    after = candidates.read(cid)
+    assert after["records"][PAIR] == before["records"][PAIR]
+    assert after["records"][PAIR]["proposal"] == proposal
+    for ref in (LEDGER, RECOVER):
+        assert (after["basis"]["identity_hashes"][ref]
+                == before["basis"]["identity_hashes"][ref])
+
+
+def test_a_full_refresh_during_an_outage_keeps_prior_semantic_pairs(
+        cid, s0, fake, monkeypatch):
+    """Decision 10 and §26 on a full sweep: the endpoint that still has its
+    vector is rescored, its partner (moved, no vector) is not, and the
+    semantic pair cannot be rediscovered without both vectors -- so it is
+    kept, with its proposal, rather than retracted on half the evidence."""
+    _configure()
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Stolen at dawn.", s0)
+    plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open", "Lost overboard.", s0)
+    chart = "thread:winifred-s-chart"
+    key = canon.candidate_id("possible_duplicate", [MAP, chart])
+    vectors.save(_vector_space(), _subjects(cid)[MAP].text, [1.0, 0.0])
+    sweep = _embedded(cid, stamp=_stamp(10))
+    assert sweep.discovered[key]["signals"]["via"] == "semantic"
+    reconcile.persist_found(cid, sweep)
+    proposal = _proposal(frm=chart, to=MAP)
+    reconcile.persist_proposals(cid, sweep, {key: proposal})
+
+    plot.set_movement(cid, "winifred-s-chart", "", "", "Winifred found it in the hold.", s0)
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(
+        error=embeddings.EmbeddingsError("network", "down")))
+    sweep = _embedded(cid, stamp=_stamp(11))
+    assert sweep.embedding == "failure"
+    assert MAP in sweep.rescored and chart not in sweep.rescored
+    assert key not in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    assert _records(cid)[key]["proposal"] == proposal
+
+
+def _lantern(cid, scene):
+    """Five near-identical errands and Mara's lantern, whose one close
+    neighbour is r1: the r1/lantern pair is in the lantern's top k, not r1's."""
+    for i in range(1, 6):
+        plot.set_movement(cid, f"r{i}", f"Saltmarch errand number {i}", "open",
+                          f"Winifred ran errand {i} at the docks.", scene)
+    plot.set_movement(cid, "lantern", "Mara's lantern", "open",
+                      "Winifred ran errand 1 with the lantern.", scene)
+    return "thread:r1", "thread:lantern"
+
+
+def test_an_incremental_sweep_keeps_a_pair_only_its_unchanged_endpoint_ranked(cid, s0):
+    """An End Scene re-ranks only the ref it changed. A pair kept by its
+    unchanged endpoint's top k is not asked again by that sweep, so it is
+    kept (with its proposal) rather than retracted until the next Refresh
+    finds it again with no proposal and pays to adjudicate it again."""
+    r1, lantern = _lantern(cid, s0)
+    key = canon.candidate_id("possible_duplicate", [r1, lantern])
+    sweep = _sweep(cid, stamp=_stamp(10))
+    assert key in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    proposal = _proposal(frm=lantern, to=r1)
+    reconcile.persist_proposals(cid, sweep, {key: proposal})
+
+    plot.set_movement(cid, "r1", "", "", "Winifred ran errand 1 again at the docks.", s0)
+    sweep = _sweep(cid, full=False, touched=[r1], stamp=_stamp(11))
+    assert sweep.rescored == {r1} and key not in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    assert _records(cid)[key]["proposal"] == proposal
+
+    assert key in _sweep(cid, stamp=_stamp(12)).discovered   # a Refresh finds it too
+
+
+def test_an_incremental_sweep_retracts_a_pair_its_changed_endpoint_no_longer_matches(
+        cid, s0, monkeypatch):
+    """The changed endpoint scored the pair with every signal it has (no
+    space configured) and no clause admits it: that sweep asked and did not
+    find, so the pair goes without waiting for a Refresh."""
+    reconcile.persist_found(cid, _found(cid, s0))
+    plot.set_movement(cid, "recover-the-harbour-ledger", "", "", "Mara asked after it again.",
+                      s0)                               # a new beat: RECOVER moved
+    monkeypatch.setattr(similarity, "admitted_by", lambda signals: None)
+
+    sweep = _sweep(cid, full=False, stamp=_stamp(11))
+    assert sweep.rescored == {RECOVER} and PAIR not in sweep.discovered
+    reconcile.persist_found(cid, sweep)
+    assert PAIR not in _records(cid)
+
+
 @pytest.mark.parametrize("change", ["rewound", "broken_calendar"])
 def test_a_lifecycle_finding_is_retracted_when_its_condition_clears(cid, tmp_path, change):
     sid = _dated_scene(cid, "Saltmarch docks", "2026-05-01")
