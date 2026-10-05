@@ -158,6 +158,18 @@ def _pending(rec: dict) -> list[dict]:
     return [s for s in steps[max(done, 0):] if isinstance(s, dict)]
 
 
+def held(cid: str, sid: str) -> list[dict]:
+    """The original messages this campaign's replay still holds to put back in
+    scene `sid` -- what a cut or an accept took off the transcript and a cancel
+    would restore, ids and all. `[]` when no replay of that scene is running.
+    Read, so a garbled session file holds nothing (see `read`)."""
+    rec = read(cid)
+    if rec.get("scene") != sid:
+        return []
+    return [m for step in _pending(rec) for m in step.get("messages", [])
+            if isinstance(m, dict)]
+
+
 def _turns_left(rec: dict) -> int:
     return sum(1 for s in _pending(rec) if s.get("kind") == "generation")
 

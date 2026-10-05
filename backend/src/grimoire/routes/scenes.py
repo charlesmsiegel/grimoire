@@ -751,6 +751,10 @@ def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
     """
     store.attempts.forget(cid, run.scene_identity, run.attempt_id)
     removed = store.scenes.remove_trailing_user_post(cid, sid, posted_at, content)
+    if removed:
+        # The post's stored-rewrite record holds what the player typed, which
+        # the failed turn hands back to them; it does not stay on disk too.
+        streaming._prune_rewrites(cid, sid)
     if removed and post_id:
         # The post's tracker record goes in the same hold, whether its update
         # already landed or is still on its way (`tracker.after_take_back`).
@@ -1073,6 +1077,7 @@ def _put_back(cid: str, sid: str, showing: str | None) -> bool:
         if at is None:
             return False
         store.alternates.promote(cid, sid, at)
+        streaming._prune_rewrites(cid, sid)
         return True
     except (OSError, store.scenes.TurnSizesDesynced,
             store.alternates.AlternateNotFound):
@@ -1456,6 +1461,9 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
         store.proposals.heal(cid, sid)
         try:
             store.alternates.promote(cid, sid, index)
+            # The run swapped out leaves its `post_id`s behind: the sidecar
+            # keeps a variant's words, never its ids.
+            streaming._prune_rewrites(cid, sid)
         except store.alternates.AlternateNotFound:
             # Reachable despite the check above only if that heal appended a
             # roll line and moved the slot -- in which case the transcript now
@@ -5258,6 +5266,7 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
             # The cut posts' tracker records describe posts that no longer
             # exist. Nothing is left after them to flag: a cut takes the tail.
             tracker_routes.after_cut(cid, sid)
+            streaming._prune_rewrites(cid, sid)
             return report
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
@@ -5478,6 +5487,7 @@ def post_replay_accept(cid: str, sid: str, request: Request):
             session = store.replay.accept(cid)
             # Accepting drops whatever the step superseded; its records go too.
             tracker_routes.after_cut(cid, sid)
+            streaming._prune_rewrites(cid, sid)
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})
@@ -5507,6 +5517,9 @@ def post_replay_cancel(cid: str, sid: str, request: Request,
             # untracked (Retry). `_replay_session` has checked the session's
             # scene is this `sid`.
             tracker_routes.after_cut(cid, sid)
+            # Stored rewrites go the same way, the restored originals keeping
+            # theirs: they come back with the ids their records are under.
+            streaming._prune_rewrites(cid, sid)
             return report
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,

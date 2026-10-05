@@ -287,6 +287,20 @@ def _carry_rewrite(cid: str, sid: str, rid: str, before: str, skip: str = "") ->
                      rid, cid, sid, exc_info=True)
 
 
+def _prune_rewrites(cid: str, sid: str) -> None:
+    """Drop the stored-rewrite records of messages the transcript no longer
+    has, from inside the hold that removed them (`rewrites.prune`). The posts a
+    running replay holds are still the scene's: a cancel puts them back with
+    their ids. Fail-soft throughout -- the removal has landed, and a record
+    left behind is pruned by the next seam."""
+    try:
+        held = store.replay.held(cid, sid)
+    except OSError:
+        _log.warning("could not read the replay backlog of %s/%s", cid, sid, exc_info=True)
+        return          # pruning without it could drop what a cancel brings back
+    store.regex.rewrites.prune(cid, sid, held=held)
+
+
 def _record_rewrite(cid: str, sid: str, key: str, original: str, fired: list[str],
                     stored: str, variant: str = "") -> None:
     """Record what the store phase changed, from inside the hold that wrote
@@ -377,6 +391,9 @@ def _persist_reply(cid: str, sid: str, text: str, connection: str = "") -> int:
             pass
         for post_id, original, fired, stored in rewritten:
             _record_rewrite(cid, sid, post_id, original, fired, stored)
+        # A reply that lands may be replacing posts: a reroll's, or a roll
+        # continuation's earlier attempt that `commit_narration` trimmed.
+        _prune_rewrites(cid, sid)
         # Counted the way `append_reply` filters, because that is what it wrote.
         kept = sum(1 for s in segments if s["content"].strip())
         if kept:
