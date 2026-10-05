@@ -66,7 +66,7 @@ import tempfile
 from pathlib import Path
 
 from grimoire import store
-from grimoire.store.continuity import drivers, effective, pressure
+from grimoire.store.continuity import candidates, drivers, effective, pending, pressure
 
 HERE = Path(__file__).resolve().parent
 HOME = HERE / "home"
@@ -202,6 +202,11 @@ def _campaign(out: dict, cid: str) -> None:
     out[f"continuity.effective.diagnostics[{cid}]"] = effective.diagnostics(cid)
     out[f"continuity.pressure.build[{cid}]"] = pressure.build(cid)
     out[f"continuity.drivers.snapshot[{cid}]"] = drivers.snapshot(cid)
+    # The derived candidate cache. The fixture predates it, so both read the
+    # absent file: an old store with no cache has no findings, and neither
+    # reader may create the file (`test_the_read_only_sweep_writes_nothing`).
+    out[f"continuity.candidates.records[{cid}]"] = candidates.records(cid)
+    out[f"continuity.pending.findings[{cid}]"] = [list(t) for t in pending.findings(cid)]
     out[f"relationships.read[{cid}]"] = store.relationships.read(cid)
     out[f"sheets.coverage[{cid}]"] = store.sheets.coverage(cid)
     # The other readers of the open ledgers: what the absorb prompt is shown,

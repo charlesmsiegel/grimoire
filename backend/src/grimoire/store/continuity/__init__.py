@@ -16,6 +16,9 @@ guard forbids. Importers name the submodule they want:
 - ``doc`` -- continuity.json IO and its primitive mutators (the only writer).
 - ``candidates`` -- the derived candidate cache (`continuity_candidates.json`);
   rebuildable, never journalled.
+- ``pending`` -- what a cached finding means now: its current fingerprint and
+  verdict, defined once for the review read, Todo, apply and the persists;
+  read-only.
 - ``canon`` -- ref grammar, alias-graph resolution, link/candidate ids and
   fingerprints.
 - ``effective`` -- the live resolver, the effective records/links every
