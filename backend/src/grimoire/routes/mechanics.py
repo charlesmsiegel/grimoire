@@ -333,7 +333,8 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
                                   after_turn=_follow_up_hook(request.app, cid, sid,
                                                              client))
     _record_prompt(cid, sid, "continuation", breakdown,
-                   model=effective_model(conn), kind=conn["kind"], messages=messages)
+                   model=effective_model(conn), kind=conn["kind"], messages=messages,
+                   conn=conn)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))

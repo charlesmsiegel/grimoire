@@ -99,12 +99,26 @@ TASK_ROUTE: dict[str, str] = {task: r.key for r in ROUTES for task in r.tasks}
 #: on write -- which is why this is one tuple both files share.
 CONFIG_KEYS: tuple[str, ...] = tuple(f"route_{r.key}" for r in ROUTES)
 
+#: The sampler-preset choice per route, stored beside the connection choice at
+#: both scopes (`store/sampler_presets.py` resolves it). A separate tuple rather
+#: than folded into `CONFIG_KEYS` because that one is also the list of keys
+#: naming a CONNECTION -- `llm_connections.delete_connection` clears every key
+#: in it that names the deleted id, and a preset that happened to share a
+#: connection's slug would be cleared by the wrong delete.
+PRESET_CONFIG_KEYS: tuple[str, ...] = tuple(f"preset_{r.key}" for r in ROUTES)
+
 _BY_KEY: dict[str, Route] = {r.key: r for r in ROUTES}
 
 
 def config_key(route_key: str) -> str:
     """The frontmatter key a route's choice is stored under, at either scope."""
     return f"route_{route_key}"
+
+
+def preset_key(route_key: str) -> str:
+    """The frontmatter key a route's sampler preset is stored under, at either
+    scope."""
+    return f"preset_{route_key}"
 
 
 def route_by_key(route_key: str) -> Route:

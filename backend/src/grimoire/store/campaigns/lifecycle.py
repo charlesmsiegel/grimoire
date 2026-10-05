@@ -488,7 +488,11 @@ def set_campaign_routing(cid: str, fields: dict) -> None:
     `store.locks.OUTSIDE_DOMAIN`, not a design -- a new one would be adding to
     it knowingly, and this write has nothing in it but frontmatter.
     """
-    allowed = {routing.config_key(r.key) for r in routing.routes_for("campaign")}
+    # The connection AND the sampler preset per route: both are this
+    # campaign's routing, both live in its frontmatter, and a key missing from
+    # here is skipped below -- a PUT that answered 200 and stored nothing.
+    allowed = {key for r in routing.routes_for("campaign")
+               for key in (routing.config_key(r.key), routing.preset_key(r.key))}
     with locks.campaign_lock(cid):
         mp = paths.campaign_meta_path(cid)
         if not mp.exists():

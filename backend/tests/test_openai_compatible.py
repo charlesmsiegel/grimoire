@@ -328,3 +328,29 @@ async def test_no_usage_option_is_sent_to_an_arbitrary_endpoint():
     [c async for c in client.stream([], "m", "", "https://api.example/v1")]
     assert "stream_options" not in seen
     assert "usage" not in seen
+
+
+async def test_sampling_is_merged_into_the_request_body():
+    import json
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, text=SSE_BODY)
+
+    client = make_client(handler)
+    [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "k",
+                                    "https://custom.example.com/v1",
+                                    sampling={"repetition_penalty": 1.1, "repeat_penalty": 1.1})]
+    assert seen["repetition_penalty"] == seen["repeat_penalty"] == 1.1
+    assert seen["stream"] is True
+
+
+async def test_an_http_error_carries_its_status():
+    def handler(request):
+        return httpx.Response(422, json={"detail": "min_p: extra field"})
+
+    client = make_client(handler)
+    with pytest.raises(OpenAICompatibleError) as exc:
+        [c async for c in client.stream([], "m", "k", "https://custom.example.com/v1")]
+    assert exc.value.status == 422

@@ -115,7 +115,8 @@ class OpenAICompatibleClient:
 
     async def stream(self, messages, model: str, key: str, base_url: str,
                       strict: bool = False, usage: dict | None = None,
-                      reasoning_effort: str = "") -> AsyncIterator[str]:
+                      reasoning_effort: str = "",
+                      sampling: dict | None = None) -> AsyncIterator[str]:
         """`usage` is filled in place when the endpoint volunteers an accounting
         block — see `llm_usage`.
 
@@ -134,7 +135,11 @@ class OpenAICompatibleClient:
             raise OpenAICompatibleError("missing_key", "No base URL configured")
         payload_messages = _strict_messages(messages) if strict else messages
         url = base_url.rstrip("/") + "/chat/completions"
-        payload = {"model": model, "messages": payload_messages, "stream": True}
+        # The preset's parameters first, so the request's own fields always
+        # win (see `openrouter._payload`); `llm_sampling.split` has already
+        # dropped whatever this endpoint is not declared to take.
+        payload = {**(sampling or {}), "model": model, "messages": payload_messages,
+                   "stream": True}
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
         try:
@@ -155,7 +160,8 @@ class OpenAICompatibleClient:
                     # knowing (#144).
                     raise OpenAICompatibleError(_status_kind(resp.status_code),
                                                _extract_error(resp.text),
-                                               retry_after_seconds(resp.headers))
+                                               retry_after_seconds(resp.headers),
+                                               status=resp.status_code)
                 async for line in resp.aiter_lines():
                     llm_capture.emit(usage, "sse_line", line)
                     # Proof of life for the facade's idle bound, including the

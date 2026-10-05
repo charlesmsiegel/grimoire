@@ -51,7 +51,8 @@ import {
   type RecordChange, type RegenerateOverrides, type RelationshipChange,
   type RelationshipSave, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
-  type RetconReport, type RosterEntry, type RoutingBundle, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
+  type RetconReport, type RosterEntry, type RoutingBundle, type SamplerImportReport, type SamplerParamSpec,
+  type SamplerPreset, type SamplerPresetDraft, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneImportDraft, type SceneIntentResult,
   type SceneLocation,
@@ -2489,6 +2490,29 @@ export const api = {
     request<RoutingBundle>("GET", `/api/campaigns/${cid}/routing`, undefined, { fresh: true }),
   setCampaignRouting: (cid: string, routes: Record<string, string>) =>
     request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { routes }).then(notifyConfig),
+  // The sampler-preset half of the same bundle. Separate calls rather than a
+  // second argument to the two above: one write per choice, like routes, and
+  // a preset does not move which model the status bar names, so no notify.
+  setGlobalRoutingPresets: (presets: Record<string, string>) =>
+    request<RoutingBundle>("PUT", "/api/routing", { presets }),
+  setCampaignRoutingPresets: (cid: string, presets: Record<string, string>) =>
+    request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { presets }),
+
+  // Sampler presets. `fresh` on the list: an editor that saved and then shows
+  // the cached pre-save list is the one thing it must not do.
+  listSamplerPresets: () =>
+    request<{ presets: SamplerPreset[]; params: SamplerParamSpec[] }>(
+      "GET", "/api/sampler-presets", undefined, { fresh: true }),
+  createSamplerPreset: (draft: SamplerPresetDraft) =>
+    request<SamplerPreset>("POST", "/api/sampler-presets", draft),
+  updateSamplerPreset: (pid: string, draft: SamplerPresetDraft) =>
+    request<SamplerPreset>("PUT", `/api/sampler-presets/${encodeURIComponent(pid)}`, draft),
+  deleteSamplerPreset: (pid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/sampler-presets/${encodeURIComponent(pid)}`),
+  /** A SillyTavern preset file, already parsed by the browser. */
+  importSamplerPreset: (body: { name: string; data: unknown; include_max_tokens: boolean }) =>
+    request<{ preset: SamplerPreset; report: SamplerImportReport }>(
+      "POST", "/api/sampler-presets/import", body),
 
   // Cost (#153). `fresh` on both: a turn that just landed is exactly what makes
   // a reader open the Cost section, and a cached read issued before it would

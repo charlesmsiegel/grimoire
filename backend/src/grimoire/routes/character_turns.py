@@ -10,12 +10,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .. import llm_reasoning, prompts, store
-from ..llm import LLMClient, effective_model
+from ..llm import LLMClient, effective_model, fallback_sampling
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from . import runs, streaming
 from . import tracker as tracker_routes
 from .common import (
+    _fallback_connection,
     _override_connection,
     _record_prompt,
     _require_connection,
@@ -275,13 +276,31 @@ def _capture(cid, sid, task, messages, conn):
             "dropped_tokens": 0,
             "budget_tokens": store.context.budget_tokens(),
         }
-    _record_prompt(cid, sid, task, breakdown, model=effective_model(conn), kind=conn["kind"], messages=messages)
+    _record_prompt(cid, sid, task, breakdown, model=effective_model(conn), kind=conn["kind"], messages=messages,
+                   conn=conn)
     if isinstance(messages, PreparedMessages):
         # Steered frozen variants have no historical section accounting. Capture
         # their exact rendered messages at actual fallback dispatch instead.
         messages.on_variant = lambda model, _: _capture(
-            cid, sid, task, messages.for_model(model), {**conn, "model": model}
+            cid, sid, task, messages.for_model(model), _variant_conn(conn, model)
         )
+
+
+def _variant_conn(conn: dict, model: str) -> dict:
+    """The connection a fallback variant was sent on, as its capture names it.
+
+    The fallback as the facade resolves it, carrying the route's sampler preset
+    under `llm.fallback_sampling`'s rule -- not the primary relabelled with the
+    fallback's model, which would record the primary's preset and catalog list
+    against a request that never carried them. Falls back to that relabel only
+    when no fallback resolves any more (repointed since the call began), minus
+    the sampling block it cannot vouch for.
+    """
+    fallback = _fallback_connection()
+    if fallback is not None:
+        return {**fallback_sampling(conn, fallback), "model": model}
+    return {**{k: v for k, v in conn.items() if k not in ("sampling", "model_params")},
+            "model": model}
 
 
 def _round_state(cid, sid, round_record, **fields):

@@ -170,3 +170,13 @@ def test_preview_does_not_touch_a_stored_key(client):
     client.post("/api/model-catalog", json={"kind": "openrouter", "api_key": "sk-typed"})
 
     assert fake.listed[0]["api_key"] == "sk-typed"
+
+
+def test_an_entry_keeps_the_parameters_a_model_takes():
+    got = catalog.entry({"id": "m", "supported_parameters": ["temperature", "top_k", 3]})
+    assert got["params"] == ["temperature", "top_k"]
+
+
+def test_an_entry_without_a_parameter_list_has_no_params_key():
+    """Unknown is not "takes none": the sampler split reads the absence."""
+    assert "params" not in catalog.entry({"id": "m", "supported_parameters": None})

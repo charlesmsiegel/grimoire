@@ -79,13 +79,18 @@ class OpenRouterClient:
             )
         return self._http
 
-    def _payload(self, messages, model, stream):
+    def _payload(self, messages, model, stream, sampling=None):
         # `usage.include` is what makes OpenRouter attach token counts and the
         # call's cost in credits to the final SSE chunk (#152). Free, and
         # accepted by every model on the platform -- unlike the equivalent
         # option on an arbitrary endpoint, which `openai_compatible` therefore
         # does not send.
-        return {"model": model, "messages": messages, "stream": stream,
+        #
+        # `sampling` is what `llm_sampling.split` decided this request carries.
+        # Merged FIRST so it can never overwrite a field this adapter owns: its
+        # keys are sampler wire names and cannot collide today, and if one ever
+        # did, the request's own shape must win over a preset.
+        return {**(sampling or {}), "model": model, "messages": messages, "stream": stream,
                 "usage": {"include": True}}
 
     def _headers(self, key: str) -> dict[str, str]:
@@ -104,7 +109,8 @@ class OpenRouterClient:
         return headers
 
     async def stream(self, messages, model: str, key: str,
-                     usage: dict | None = None) -> AsyncIterator[str]:
+                     usage: dict | None = None,
+                     sampling: dict | None = None) -> AsyncIterator[str]:
         """`usage`, when given, is filled in place with what the provider
         reported about this call — see `llm_usage`. It arrives on the last
         chunk, long after the caller has consumed the deltas it wanted, which
@@ -115,7 +121,7 @@ class OpenRouterClient:
             http = self._client()
             async with http.stream(
                 "POST", API_URL, headers=self._headers(key),
-                json=self._payload(messages, model, True),
+                json=self._payload(messages, model, True, sampling),
                 # The facade owns the read bound (#243) — it is the configurable,
                 # provider-independent one, and a read timeout here would cap it
                 # at 120s no matter what the user set, including "0 = no bound".
@@ -130,7 +136,8 @@ class OpenRouterClient:
                     # knowing (#144).
                     raise OpenRouterError(_status_kind(resp.status_code),
                                          _extract_error(resp.text),
-                                         retry_after_seconds(resp.headers))
+                                         retry_after_seconds(resp.headers),
+                                         status=resp.status_code)
                 async for line in resp.aiter_lines():
                     llm_capture.emit(usage, "sse_line", line)
                     # Every frame is proof of life, including the ones this

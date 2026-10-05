@@ -217,7 +217,8 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "tracker", "perception_rider",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
-                "advance_fork_threshold", "log_level") + _LENGTH_KEYS + routing.CONFIG_KEYS
+                "advance_fork_threshold", "log_level") + _LENGTH_KEYS + routing.CONFIG_KEYS \
+    + routing.PRESET_CONFIG_KEYS
 
 
 def _config_path():
@@ -266,6 +267,8 @@ def read_config() -> dict[str, str]:
                 # has never set one has and what makes this change invisible
                 # until someone asks for it (#142).
                 **dict.fromkeys(routing.CONFIG_KEYS, ""),
+                # Every route's sampler preset, same "" = inherit, same reason.
+                **dict.fromkeys(routing.PRESET_CONFIG_KEYS, ""),
                 **dict.fromkeys(_LENGTH_KEYS, "")}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers

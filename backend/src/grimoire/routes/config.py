@@ -10,7 +10,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from .. import health, llm, store
+from .. import health, llm, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from . import runs
@@ -22,6 +22,7 @@ from .common import (
     _response_body,
     _routing_body,
     _routing_fields,
+    _with_sampling,
     _write_response,
     get_health,
     get_llm,
@@ -36,6 +37,8 @@ from .models import (
     PromptLayoutUpdate,
     ResponseSettings,
     RoutingUpdate,
+    SamplerImportBody,
+    SamplerPresetBody,
     StyleCreate,
     StyleUpdate,
 )
@@ -418,9 +421,33 @@ def get_connections(registry: health.ProviderHealth = Depends(get_health)):
             for conn in store.llm_connections.list_connections()]
 
 
+def _check_preset_field(fields: dict) -> None:
+    """A connection's `sampler_preset` names a preset, or is blank -- refused on
+    write and tolerated on read, the routing PUT's rule. Here rather than in
+    `llm_connections`, which `sampler_presets` imports: checking from the store
+    side would close a cycle."""
+    pid = (fields.get("sampler_preset") or "").strip()
+    if pid and not store.sampler_presets.exists(pid):
+        raise HTTPException(status_code=400, detail=f"no such sampler preset: {pid!r}")
+
+
+def _connection_sampling(conn_id: str) -> dict | None:
+    """What this connection's OWN preset sends on it, for the editor's sidebar.
+
+    Task-less, so a route's preset never shows here: the connection editor
+    describes the connection, and the routing picker beside each route says
+    what that route sends. None for an unreadable connection."""
+    try:
+        conn = store.llm_connections.read_connection_raw(conn_id)
+    except store.llm_connections.ConnectionNotFound:
+        return None
+    return llm_sampling.report(_with_sampling(conn, "", ""))
+
+
 @router.post("/llm-connections")
 def post_connection(body: ConnectionCreate):
     fields = _dump(body)
+    _check_preset_field(fields)
     kind = fields.pop("kind")
     name = fields.pop("name")
     return {"id": store.llm_connections.create_connection(kind, name, **fields)}
@@ -436,25 +463,36 @@ def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health
     # a reader can act on it. Riding on the detail read rather than a route of
     # its own because it is never wanted without the rest: the panel that would
     # ask for it has already asked for this.
-    return {**conn, "health": registry.status(id, conn["rev"])}
+    return {**conn, "health": registry.status(id, conn["rev"]),
+            "sampling": _connection_sampling(id)}
 
 
 @router.put("/llm-connections/{id}")
 def put_connection(id: str, body: ConnectionUpdate,
                    registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(body).items() if v is not None}
+    _check_preset_field(fields)
     try:
+        before = store.llm_connections.read_connection_raw(id)["rev"]
         store.llm_connections.update_connection(id, **fields)
         # An edit invalidates the verdict as surely as a delete does: the
         # failure on record was this connection's *previous* key, base URL or
         # model, and keeping it would report the setting the reader just
         # changed as still broken -- exactly when they are watching to see
         # whether their fix took.
-        registry.forget(id)
+        #
+        # Judged by whether the REV moved, not by which keys the body named:
+        # the editor sends every field on every save, and a save that only
+        # changed the sampler preset keeps the rev (`llm_connections
+        # .SAMPLER_FIELDS`) -- the verdict is about the provider, which a
+        # preset does not change.
+        if store.llm_connections.read_connection_raw(id)["rev"] != before:
+            registry.forget(id)
         # Inside the `try`, where it has always been: a connection deleted
         # between the write and this read is a 404, not a 500.
         fresh = store.llm_connections.read_connection(id)
-        return {**_with_effective(fresh), "health": registry.status(id, fresh["rev"])}
+        return {**_with_effective(fresh), "health": registry.status(id, fresh["rev"]),
+                "sampling": _connection_sampling(id)}
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
 
@@ -690,6 +728,81 @@ def put_global_routing(body: RoutingUpdate):
     if fields:
         store.write_config(**fields)
     return _routing_body("global", {})
+
+
+# ---- sampler presets ----
+def _preset_or_404(pid: str) -> dict:
+    got = store.sampler_presets.read_preset(pid)
+    if got is None:
+        raise HTTPException(status_code=404, detail="sampler preset not found")
+    return got
+
+
+@router.get("/sampler-presets")
+def get_sampler_presets():
+    """Every preset, plus the parameter table a form is rendered from -- so the
+    labels and bounds have one source, `llm_sampling.PARAMS`."""
+    return {"presets": store.sampler_presets.list_presets(), "params": llm_sampling.table()}
+
+
+@router.post("/sampler-presets")
+def post_sampler_preset(body: SamplerPresetBody):
+    fields = _dump(body)
+    try:
+        pid = store.sampler_presets.create_preset(fields["name"], fields.get("params"),
+                                                  fields.get("notes") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return store.sampler_presets.read_preset(pid)
+
+
+@router.post("/sampler-presets/import")
+def post_sampler_preset_import(body: SamplerImportBody):
+    """A SillyTavern preset file, mapped where it maps, saved, and reported.
+
+    Saved even when nothing mapped: an empty preset is a valid one, and the
+    report says that is what happened rather than refusing a file that is
+    exactly what SillyTavern wrote."""
+    fields = _dump(body)
+    try:
+        params, report = store.sampler_presets.from_sillytavern(
+            fields.get("data"), include_max_tokens=bool(fields.get("include_max_tokens")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    name = (fields.get("name") or "").strip() or "Imported preset"
+    try:
+        pid = store.sampler_presets.create_preset(name[:store.sampler_presets.NAME_MAX],
+                                                  params, source="sillytavern")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"preset": store.sampler_presets.read_preset(pid), "report": report}
+
+
+@router.get("/sampler-presets/{pid}")
+def get_sampler_preset(pid: str):
+    return _preset_or_404(pid)
+
+
+@router.put("/sampler-presets/{pid}")
+def put_sampler_preset(pid: str, body: SamplerPresetBody):
+    fields = _dump(body)
+    try:
+        store.sampler_presets.update_preset(pid, fields["name"], fields.get("params"),
+                                            fields.get("notes") or "")
+    except store.sampler_presets.PresetNotFoundError:
+        raise HTTPException(status_code=404, detail="sampler preset not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _preset_or_404(pid)
+
+
+@router.delete("/sampler-presets/{pid}")
+def delete_sampler_preset(pid: str):
+    try:
+        store.sampler_presets.delete_preset(pid)
+    except store.sampler_presets.PresetNotFoundError:
+        raise HTTPException(status_code=404, detail="sampler preset not found") from None
+    return {"ok": True}
 
 
 # ---- the entity kinds an import may route a row to (#138) ----

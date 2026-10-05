@@ -23,7 +23,8 @@ KINDS = frozenset({
 
 
 class LLMError(Exception):
-    def __init__(self, kind: str, detail: str = "", retry_after: float | None = None):
+    def __init__(self, kind: str, detail: str = "", retry_after: float | None = None,
+                 status: int | None = None):
         super().__init__(detail or kind)
         #: One of `KINDS` -- unvalidated on purpose. This constructor runs on
         #: the failure path, where raising over a typo would replace the error
@@ -40,6 +41,12 @@ class LLMError(Exception):
         #: it, and `routes.common` passes it on to the caller as the
         #: `Retry-After` of the 429 it becomes (#213).
         self.retry_after = retry_after
+        #: The provider's HTTP status, for an error that came from an HTTP
+        #: response, else None. Read by `llm._resilient` for one decision: a
+        #: 400/422 answering a request that carried sampler parameters is the
+        #: preset being refused, not the connection failing, so it must not be
+        #: handed to the fallback (see the sampler-presets spec).
+        self.status = status
 
 
 def retry_after_seconds(headers) -> float | None:

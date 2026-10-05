@@ -5,6 +5,8 @@ import {
 } from "../api/client";
 import { BLANK_CONNECTION, ConnectionForm } from "./ConnectionForm";
 import { ErrorNote } from "./ErrorNote";
+import { Field } from "./Field";
+import { SamplingSummary } from "./SamplingSummary";
 
 /** Connection kinds whose provider can be asked for a catalog (#149).
  *
@@ -85,6 +87,13 @@ export function ConnectionEditor() {
   // is a claim, and it is the dangerous one to make wrongly on a page with a
   // delete button.
   useEffect(() => { api.getGlobalRouting().then(setRouting).catch(() => {}); }, []);
+  // The presets a connection may name. Read once: the Settings page is where
+  // they are made, and a reader who makes one there and comes back here
+  // remounts this editor.
+  const [presets, setPresets] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    api.listSamplerPresets().then((r) => setPresets(r.presets)).catch(() => setPresets([]));
+  }, []);
 
   // The catalog for a connection that does not exist yet (#149). OpenRouter's
   // is public and needs no key, so the New-connection form can fill its picker
@@ -128,7 +137,8 @@ export function ConnectionEditor() {
     openRev.current = d.rev;
     setId(cid);
     setDetail(d);
-    setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process, reasoning_effort: d.reasoning_effort ?? "" });
+    setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process, reasoning_effort: d.reasoning_effort ?? "",
+              sampler_preset: d.sampler_preset ?? "", sampler_support: d.sampler_support ?? "" });
     setKey("");
     setMode("view");
     setModels(d.models);
@@ -161,6 +171,7 @@ export function ConnectionEditor() {
       if (id) {
         const patch: Record<string, unknown> = {
           name: form.name, base_url: form.base_url, model: form.model, post_process: form.post_process, reasoning_effort: form.reasoning_effort ?? "",
+          sampler_preset: form.sampler_preset ?? "", sampler_support: form.sampler_support ?? "",
         };
         if (key) patch.api_key = key;
         await api.updateConnection(id, patch);
@@ -390,6 +401,14 @@ export function ConnectionEditor() {
                 )}
               </div>
               <div className="side-section">
+                <h4>Sampler preset</h4>
+                {/* This connection's OWN preset, split for its backend. A route
+                    can name another; the routing picker says what each sends. */}
+                {detail.sampling
+                  ? <SamplingSummary report={detail.sampling} />
+                  : <span className="field-hint">None — provider defaults.</span>}
+              </div>
+              <div className="side-section">
                 <h4>Credentials</h4>
                 {detail.kind === "claude"
                   ? <span className="field-hint">Uses the local Claude Code login — no key needed.</span>
@@ -445,6 +464,26 @@ export function ConnectionEditor() {
                 </p>
               ) : undefined}
             />
+            <Field label="Sampler preset"
+                   hint="Used for every job on this connection unless the job's routing names a preset of its own.">
+              <select value={form.sampler_preset ?? ""}
+                      onChange={(e) => setForm({ ...form, sampler_preset: e.target.value })}>
+                <option value="">None — provider defaults</option>
+                {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {form.sampler_preset && !presets.some((p) => p.id === form.sampler_preset) && (
+                  <option value={form.sampler_preset}>{form.sampler_preset} (missing)</option>
+                )}
+              </select>
+            </Field>
+            {form.kind === "openai_compatible" && (
+              <label className="checkbox-row">
+                <input type="checkbox" checked={form.sampler_support === "extended"}
+                       onChange={(e) => setForm({ ...form,
+                         sampler_support: e.target.checked ? "extended" : "" })} />
+                {" "}Extended samplers: this endpoint takes top-k, min-p and repetition
+                penalty (llama.cpp, vLLM, LM Studio, koboldcpp, TabbyAPI)
+              </label>
+            )}
 
             <div className="form-actions">
               {id && <button className="subtle" onClick={() => remove(connections.find((c) => c.id === id)!)}>Delete</button>}

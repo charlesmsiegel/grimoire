@@ -1207,3 +1207,123 @@ async def test_an_ordinary_call_still_takes_that_same_fallback():
     text = [{"role": "user", "content": "what is this?"}]
     assert [c async for c in client.stream(text, _route("a", "primary"))] == ["from backup"]
     assert provider.models == ["primary", "backup"]
+
+
+# ---- sampler presets: split per attempt, fallback inheritance, refusals ----
+
+def _sampled(conn, params, scope="connection", name="Warm"):
+    return {**conn, "sampling": {"preset_id": name.lower(), "preset_name": name,
+                                 "scope": scope, "params": params}}
+
+
+class KwargRecorder:
+    """Records each attempt's (model, kwargs); fails the models in `failing`."""
+
+    def __init__(self, failing=(), kind="bad_response", status=None):
+        self.failing = set(failing)
+        self.kind, self.status = kind, status
+        self.calls = []
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.calls.append((model, kwargs))
+        if model in self.failing:
+            raise LLMError(self.kind, f"{model} refused", status=self.status)
+        yield f"from {model}"
+
+
+async def test_no_preset_passes_no_sampling_kwarg():
+    provider = KwargRecorder()
+    client = _retry_client(provider)
+    [c async for c in client.stream([], _route("a", "primary"))]
+    assert "sampling" not in provider.calls[0][1]
+
+
+async def test_the_applied_split_reaches_the_provider():
+    provider = KwargRecorder()
+    client = _retry_client(provider)
+    conn = _sampled(_route("a", "primary"), {"temperature": 0.7, "min_p": 0.05})
+    [c async for c in client.stream([], conn)]
+    assert provider.calls[0][1]["sampling"] == {"temperature": 0.7, "min_p": 0.05}
+
+
+async def test_a_claude_connection_is_sent_no_sampling():
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    [c async for c in client.stream([], _sampled(_conn("claude"), {"temperature": 0.3}))]
+    assert cl.calls == [(("m",), {"usage": None})]
+
+
+async def test_a_standard_endpoint_is_sent_only_the_openai_params():
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = _sampled(_conn("openai_compatible", base_url="http://x"),
+                    {"temperature": 0.3, "top_k": 40})
+    [c async for c in client.stream([], conn)]
+    assert oc.calls[0][1]["sampling"] == {"temperature": 0.3}
+
+
+async def test_a_route_scoped_preset_follows_the_route_onto_the_fallback():
+    provider = KwargRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0,
+                           fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    conn = _sampled(_route("a", "primary"), {"temperature": 0.2}, scope="global")
+    assert [c async for c in client.stream([], conn)] == ["from backup"]
+    assert provider.calls[1] == ("backup", {"usage": provider.calls[1][1]["usage"],
+                                            "sampling": {"temperature": 0.2}})
+
+
+async def test_a_route_cleared_preset_clears_the_fallbacks_too():
+    """The sentinel keeps a role-play cap off absorb; a 429 must not undo it."""
+    provider = KwargRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0,
+                           fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    conn = _sampled(_route("a", "primary"), {}, scope="campaign")
+    [c async for c in client.stream([], conn)]
+    assert "sampling" not in provider.calls[1][1]
+
+
+async def test_a_connection_level_preset_stays_with_its_connection():
+    provider = KwargRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0,
+                           fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
+    conn = _sampled(_route("a", "primary"), {"temperature": 0.2})
+    [c async for c in client.stream([], conn)]
+    assert provider.calls[1][1]["sampling"] == {"max_tokens": 300}
+
+
+@pytest.mark.parametrize("status", [400, 422])
+async def test_a_refused_preset_is_not_handed_to_the_fallback(status):
+    seen = []
+    provider = KwargRecorder(failing={"primary"}, status=status)
+    client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
+                       timeout=0, retries=2, fallback=lambda: _route("b", "backup"),
+                       observer=lambda conn, err: seen.append((conn["id"], err)))
+    conn = _sampled(_route("a", "primary"), {"temperature": 1.25})
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], conn)]
+    assert [m for m, _ in provider.calls] == ["primary"]
+    assert "Warm" in exc.value.detail and "temperature" in exc.value.detail
+    assert "fallback connection was not tried" in exc.value.detail
+    assert exc.value.kind == "bad_response" and exc.value.status == status
+    assert seen == []  # a refused setting is not a failing connection
+
+
+async def test_a_400_with_no_preset_still_falls_back():
+    provider = KwargRecorder(failing={"primary"}, status=400)
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from backup"]
+
+
+async def test_a_500_with_a_preset_still_falls_back():
+    provider = KwargRecorder(failing={"primary"}, status=500)
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    conn = _sampled(_route("a", "primary"), {"temperature": 1.25})
+    assert [c async for c in client.stream([], conn)] == ["from backup"]
+
+
+async def test_a_400_whose_params_were_all_dropped_still_falls_back():
+    """Nothing was sent, so nothing in the preset can be what was refused."""
+    provider = KwargRecorder(failing={"primary"}, status=400)
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    conn = {**_sampled(_route("a", "primary"), {"min_p": 0.1}), "model_params": ["temperature"]}
+    assert [c async for c in client.stream([], conn)] == ["from backup"]

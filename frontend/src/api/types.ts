@@ -37,10 +37,17 @@ export type LLMConnection = {
   base_url: string; model: string; effective_model: string;
   post_process: "none" | "strict";
   reasoning_effort?: "" | "low" | "high" | "max";
+  /** The connection's own sampler preset id, "" for none. */
+  sampler_preset?: string;
+  /** Whether an OpenAI-compatible endpoint takes top-k, min-p and repetition
+   *  penalty; "" reads as standard. */
+  sampler_support?: "" | "standard" | "extended";
   key_set: boolean; rev: string; health: ProviderHealth;
 };
 export type LLMConnectionDetail = LLMConnection & {
   models: Model[]; fetched_at: string;
+  /** What this connection's OWN preset sends on it, and what it drops. */
+  sampling?: SamplingReport | null;
   /** Which refresh ATTEMPT wrote the cached catalog (#398), or `""` for one
    *  written before the field existed or by a caller that named none. The only
    *  durable trace a `draft` leaves, and it exists for one question: a client
@@ -59,6 +66,50 @@ export type LLMConnectionDraft = {
   kind?: LLMConnectionKind; name?: string; base_url?: string; api_key?: string;
   model?: string; post_process?: "none" | "strict";
   reasoning_effort?: "" | "low" | "high" | "max";
+  sampler_preset?: string; sampler_support?: "" | "standard" | "extended";
+};
+
+/** The nine sampler parameters, as a preset stores them. Every one optional:
+ *  an absent parameter is the backend's own default, never a zero. */
+export type SamplerParams = {
+  temperature?: number; top_p?: number; top_k?: number; min_p?: number;
+  repetition_penalty?: number; frequency_penalty?: number; presence_penalty?: number;
+  max_tokens?: number; stop?: string[];
+};
+export type SamplerParamName = keyof SamplerParams;
+/** One row of the server's parameter table (`llm_sampling.PARAMS`). */
+export type SamplerParamSpec = {
+  name: SamplerParamName; label: string; kind: "float" | "int" | "stop";
+  min?: number; max?: number; max_entries?: number; max_chars?: number;
+};
+export type SamplerPreset = {
+  id: string; name: string; params: SamplerParams; notes: string;
+  /** Where an import came from (`"sillytavern"`), "" for a hand-made preset. */
+  source: string;
+};
+export type SamplerPresetDraft = { name: string; params: SamplerParams; notes: string };
+/** What a SillyTavern import did with each key of the file. */
+export type SamplerImportReport = {
+  mapped: { param: string; from: string; value: unknown }[];
+  neutral: { param: string; from: string; value: unknown }[];
+  skipped: { param: string; from: string; value: unknown; why: string }[];
+  invalid: { key: string; why: string }[];
+  unmapped: string[];
+  notes: string[];
+};
+/** What one connection is sent from its resolved preset, and what not (the
+ *  sampler-presets spec). `scope` is where the preset came from: a route at
+ *  `campaign` or `global` scope, the `connection` itself, or `none`. A
+ *  `preset_id` of "" with a route scope means that scope cleared it. */
+export type SamplingReport = {
+  preset_id: string; preset_name: string;
+  scope: "campaign" | "global" | "connection" | "none" | "";
+  kind: string;
+  applied: SamplerParams;
+  dropped: { param: string; reason: string }[];
+  /** False only for an OpenRouter connection with no cached catalog: it sends
+   *  everything and cannot say whether the model takes it. */
+  verified: boolean;
 };
 export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
 /** A connection described but not saved, for the sake of listing its models. */
@@ -807,6 +858,18 @@ export type RoutingBundle = {
    *  to one is a 409 on every call, so the picker says so before you pick it. */
   connections: { id: string; name: string; kind: string; model: string; usable: boolean }[];
   active_connection_id: string;
+  /** The sampler preset each route names at THIS scope: "" inherits,
+   *  `preset_clear` means "no preset". */
+  presets: Record<string, string>;
+  /** What each route would resolve to if this scope said nothing. */
+  preset_inherited: Record<string, string>;
+  preset_inherited_from: Record<string, { scope: string }>;
+  preset_catalog: { id: string; name: string }[];
+  /** The sentinel that means "no preset at this scope" (U+2063 + "none"). */
+  preset_clear: string;
+  /** Per route: what its effective connection is sent from its effective
+   *  preset, and what that backend drops. Null when no connection resolves. */
+  sampling: Record<string, SamplingReport | null>;
 };
 
 export type Availability = {
@@ -1227,6 +1290,9 @@ export type SceneContext = {
   budget_tokens: number; sections: ContextSection[];
   /** Absent on a snapshot frozen before it existed — read as an estimate. */
   token_count?: TokenCounting;
+  /** The sampler preset this turn is (or was) sent with. Absent on a snapshot
+   *  frozen before presets existed. */
+  sampling?: SamplingReport | null;
 };
 /** One user pin or exclude (#129) as the panel sees it: the rule, the target it
  *  names resolved to something displayable, and how many posts it has left.
