@@ -260,7 +260,7 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Twenty-three handlers** start detached runs, in three classes:
+subscriber. **Twenty-five handlers** start detached runs, in four classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
   `post_roll_proposal`, and the per-response pair in `character_turns.py`,
@@ -287,6 +287,16 @@ subscriber. **Twenty-three handlers** start detached runs, in three classes:
   and `api.draftRun` in the client. `post_opener` is the exception on the
   client side only, where `api.streamDraft` re-attaches by attempt id instead
   of polling.
+
+- `background` — two handlers start a `continuity-reconcile` sweep on
+  `("campaign", cid)`, and a campaign has at most one of them live: a second
+  start is handed the live run instead of a new one. `put_chronicle` asks for an
+  incremental sweep once a commit has completed in its request (a fresh save or
+  a journalled resume, never the idempotent replay), and the save's answer does
+  not wait on it or depend on it. `post_reconcile` is the explicit full sweep,
+  `@computes_only`, answering **202**. The class's other members are started by
+  no handler: a landed turn's rolling summary and scene-break check (below) and
+  the tracker's `tracker-update`.
 
 - The run registry lives on **`app.state.runs`**, not at module scope: a
   `TestClient` builds an app per test, and module state would leak runs between

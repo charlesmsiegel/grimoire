@@ -17,16 +17,18 @@ import json
 import logging
 
 import pytest
+from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.main import create_app
 from grimoire.routes import continuity as continuity_routes
 from grimoire.routes import runs
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import candidates, canon, doc
 
-from . import draft_runs
-from .llm_fakes import HeldCassette, from_entries
+from . import draft_runs, review_runs
+from .llm_fakes import Cassette, HeldCassette, from_cassette, from_entries
 from .review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER
 
 SYSTEM = "You are reviewing a campaign's story ledger"
@@ -597,3 +599,329 @@ def test_schedule_reconcile_never_raises(client, monkeypatch, caplog):
                                              progress={"edits": {"0": "nonsense"}})
     assert any("continuity sweep" in r.getMessage() for r in caplog.records)
     assert client.app.state.runs.for_subject(runs.campaign_subject(cid)) == []
+
+
+# ------------------------------------------------------ End Scene's sweep
+#
+# `PUT /chronicle` hands every commit that completed in the request to
+# `schedule_reconcile` (Decision 6), after its lock block and before its
+# return. These end real scenes: an absorb over the `campaign_flow` cassette
+# moves `the-debt` and `salt-owed`, and the save commits the review it staged.
+
+EXTRACTION = "You are absorbing a completed role-play scene"
+DEBT = "thread:the-debt"
+#: A second scene's thread, seeded before that scene is absorbed and moved by it.
+CHART = ("winifred-s-chart", "Winifred's chart",
+         "Winifred began a chart of the Saltmarch shoals.")
+CHART_REF = f"thread:{CHART[0]}"
+CHART_EXTRACTION = json.dumps(
+    {"one_line": "Winifred redrew the chart.", "summary": "The shoals had moved.",
+     "keywords": [], "timeline_events": [],
+     "plot_movements": [{"id": CHART[0], "status": "open",
+                         "beat": "Winifred redrew the chart past the Saltmarch shoals."}]})
+_SAVED = ("one_line", "summary", "keywords", "timeline_events", "edits", "commit_token")
+
+
+def _flow_entries() -> list[dict]:
+    return list(Cassette.load("campaign_flow").entries)
+
+
+def _played(client, cid: str, title: str) -> str:
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": title}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "I have brought the salt.")
+    return sid
+
+
+def _review(client, cid: str, sid: str, fake) -> dict:
+    """End the scene over `fake` and hand back the save body its review stages."""
+    _install(client, fake)
+    review = review_runs.absorb(client, cid, sid)
+    assert review.status_code == 200, review.json()
+    return {k: review.json()[k] for k in _SAVED}
+
+
+def _ended(client, name: str = "Run") -> tuple[str, str, dict]:
+    """A campaign with one played scene ended over `campaign_flow`: (cid, sid,
+    the body that saves its review)."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": name, "world": wid}).json()["id"]
+    sid = _played(client, cid, "Saltmarch docks")
+    _key(client)
+    return cid, sid, _review(client, cid, sid, from_cassette("campaign_flow"))
+
+
+def _chart_scene(client, cid: str) -> tuple[str, dict]:
+    """A second scene that moves "Winifred's chart", ended (not yet saved)."""
+    sid = _played(client, cid, "Saltmarch shoals")
+    store.plot.set_movement(cid, CHART[0], CHART[1], "open", CHART[2], sid)
+    fake = from_entries([{"when": {"system_contains": EXTRACTION}, "reply": CHART_EXTRACTION},
+                         *_flow_entries()[1:]])
+    body = _review(client, cid, sid, fake)
+    assert [e["id"] for e in body["edits"]] == [f"plot:{CHART[0]}"]
+    return sid, body
+
+
+def _save(client, cid: str, sid: str, body: dict):
+    return client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=body)
+
+
+def _sweeps(client, cid: str) -> list:
+    return [r for r in client.app.state.runs.for_subject(runs.campaign_subject(cid))
+            if r.kind == "continuity-reconcile"]
+
+
+def _touched_in(request: dict) -> str:
+    """The user prompt of one reconcile request."""
+    return request["messages"][1]["content"]
+
+
+@pytest.mark.reconcile
+def test_a_fresh_commit_starts_an_incremental_sweep(client):
+    """§28.4: End Scene starts the incremental sweep once its commit lands."""
+    cid, sid, body = _ended(client)
+    _install(client, from_cassette("campaign_flow"))
+
+    r = _save(client, cid, sid, body)
+
+    assert r.status_code == 200, r.json()
+    run = _live(client, cid)
+    assert (run.cls, run.kind) == ("background", "continuity-reconcile")
+    assert run.terminal.wait(timeout=10)
+    assert run.state == "landed", run.error
+    assert run.result["sweep"] == "incremental"
+
+
+@pytest.mark.reconcile
+def test_a_replayed_save_starts_no_run(client):
+    """§28.4: the idempotent replay returns the recorded result inside the
+    lock and never reaches the trigger."""
+    cid, sid, body = _ended(client)
+    _install(client, from_cassette("campaign_flow"))
+    assert _save(client, cid, sid, body).status_code == 200
+    [first] = _sweeps(client, cid)
+    assert first.terminal.wait(timeout=10)
+
+    again = _save(client, cid, sid, body)
+
+    assert again.status_code == 200, again.json()
+    assert _sweeps(client, cid) == [first]
+
+
+@pytest.mark.reconcile
+def test_a_resumed_commit_starts_a_sweep(client):
+    """Decision 6: a resume finishes a commit, so it is a commit that completed
+    in this request (the `test_commits_store` resume pattern)."""
+    cid, sid, body = _ended(client)
+    fp = store.commits.fingerprint({k: body[k] for k in _SAVED if k != "commit_token"})
+    store.commits.reserve(cid, body["commit_token"], fp, sid, {"timeline": "done"})
+    prior = store.commits.lookup(cid, body["commit_token"])
+    assert prior["journalled"] and not prior["done"]
+    _install(client, from_cassette("campaign_flow"))
+
+    r = _save(client, cid, sid, body)
+
+    assert r.status_code == 200, r.json()
+    assert store.commits.lookup(cid, body["commit_token"])["done"]
+    run = _live(client, cid)
+    assert run.terminal.wait(timeout=10)
+    assert run.result["sweep"] == "incremental"
+
+
+@pytest.mark.reconcile
+def test_a_reservation_failure_does_not_affect_the_save(client, monkeypatch, caplog):
+    """§28.4, §26: the save response never depends on the sweep."""
+    plain_cid, plain_sid, plain_body = _ended(client, "Plain")
+    _install(client, from_cassette("campaign_flow"))
+    plain = _save(client, plain_cid, plain_sid, plain_body)
+    assert plain.status_code == 200, plain.json()
+    assert _live(client, plain_cid).terminal.wait(timeout=10)
+    cid, sid, body = _ended(client)
+    _install(client, from_cassette("campaign_flow"))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no reservation today")
+
+    monkeypatch.setattr(runs, "reserve_campaign_background", boom)
+    with caplog.at_level(logging.WARNING, logger="grimoire"):
+        r = _save(client, cid, sid, body)
+
+    assert r.status_code == 200, r.json()
+    saved = r.json()
+    assert saved["applied"] == [e["id"] for e in body["edits"]]
+    assert saved["failures"] == []
+    assert set(saved) == set(plain.json())
+    assert not [run for run in _sweeps(client, cid) if run.state == "running"]
+    assert any("continuity sweep" in rec.getMessage() and rec.levelno == logging.WARNING
+               for rec in caplog.records)
+
+
+@pytest.mark.reconcile
+def test_a_malformed_edit_still_saves(client, monkeypatch):
+    """A client-supplied edit of the wrong shape is skipped by the trigger,
+    never a 500 after the commit landed."""
+    cid, sid, body = _ended(client)
+    plot = [e for e in body["edits"] if e["kind"] == "plot"]
+    body = {**body, "edits": [{"kind": "plot", "target": "x", "id": 3}, *plot]}
+    seen: list[tuple[str, ...]] = []
+    start = continuity_routes.start_reconcile
+
+    def spy(app, cid_, client_, **kwargs):
+        seen.append(kwargs["touched"])
+        return start(app, cid_, client_, **kwargs)
+
+    monkeypatch.setattr(continuity_routes, "start_reconcile", spy)
+    _install(client, from_cassette("campaign_flow"))
+
+    r = _save(client, cid, sid, body)
+
+    assert r.status_code == 200, r.json()
+    assert seen == [(DEBT,)]
+    assert _live(client, cid).terminal.wait(timeout=10)
+
+
+@pytest.mark.reconcile
+def test_touched_refs_come_from_applied_plot_and_commitment_edits():
+    """By POSITION through the journal's slots: ids are client-supplied and
+    need not be unique, so the second of two `plot:x` edits failing must not
+    hide the first, nor the first landing vouch for the second. A slot's own
+    `target` (a reallocated write) wins over the staged one."""
+    edits = [
+        {"id": "plot:x", "kind": "plot", "target": {"kind": "plot", "id": "mara-s-map"}},
+        {"id": "commitment:y", "kind": "commitment",
+         "target": {"kind": "commitments", "id": "mara-s-oath"}},
+        {"id": "plot:x", "kind": "plot", "target": {"kind": "plot", "id": "the-coronation"}},
+        {"id": "lore:z", "kind": "lore", "target": {"kind": "lore", "id": "saltmarch"}},
+        {"kind": "plot", "target": "x", "id": 3},
+        {"id": "plot:w", "kind": "plot", "target": {"kind": "plot", "id": "staged"}},
+    ]
+    progress = {"timeline": "done", "edits": {
+        "0": {"state": "applied", "id": "plot:x"},
+        "1": {"state": "applied", "id": "commitment:y"},
+        "2": {"state": "failed", "id": "plot:x", "kind": "conflict", "reason": "moved"},
+        "3": {"state": "applied", "id": "lore:z"},
+        "4": {"state": "applied", "id": 3},
+        "5": {"state": "applied", "id": "plot:w",
+              "target": {"kind": "plot", "id": CHART[0]}},
+    }}
+
+    touched = continuity_routes._touched_refs(edits, progress)
+
+    assert touched == {"thread:mara-s-map", "commitment:mara-s-oath", CHART_REF}
+
+
+@pytest.mark.reconcile
+def test_a_refresh_during_the_automatic_sweep_returns_it(client):
+    cid, sid, body = _ended(client)
+    held = _install(client, _held())
+    assert _save(client, cid, sid, body).status_code == 200
+    held.await_held()
+    run = _live(client, cid)
+    try:
+        resp = _refresh(client, cid, attempt="a-refresh")
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["run"]["id"] == run.id
+    finally:
+        held.release()
+    assert run.terminal.wait(timeout=10)
+    assert run.state == "landed", run.error
+
+
+def _two_scenes_held(client, name: str = "Run") -> tuple[str, HeldCassette, object]:
+    """Scene one's sweep held at its model call while scene two -- which moves
+    "Winifred's chart" -- is saved, so scene two's trigger adopts the live run
+    and pends its ref. (cid, the held fake, the run)."""
+    cid, sid, body = _ended(client, name)
+    chart_sid, chart_body = _chart_scene(client, cid)
+    held = _install(client, _held())
+    assert _save(client, cid, sid, body).status_code == 200
+    held.await_held()
+    run = _live(client, cid)
+    assert _save(client, cid, chart_sid, chart_body).status_code == 200
+    assert _sweeps(client, cid) == [run]
+    return cid, held, run
+
+
+@pytest.mark.reconcile
+def test_two_end_scenes_back_to_back_both_get_their_touched_refs(client):
+    """Decision 6: the second End Scene adopts the live sweep and leaves its
+    ref; the run re-checks it in one more pass after its own."""
+    cid, held, run = _two_scenes_held(client)
+    held.release()
+
+    assert run.terminal.wait(timeout=10)
+    assert run.state == "landed", run.error
+    assert run.result["follow_on"] is True
+    first, follow = (_touched_in(r) for r in _reconcile_requests(held))
+    assert TOUCHED in first and "the-debt" in first
+    assert TOUCHED in follow and CHART[1] in follow
+    assert CHART[1] not in first
+    assert client.app.state.runs.take_touched(runs.campaign_subject(cid)) == set()
+
+
+def _cancel(client, cid: str, held: HeldCassette, run) -> None:
+    """Stop the held run, then let it reach its end: a stopped run never takes
+    the refs an adopter left."""
+    r = client.post(f"/api/campaigns/{cid}/runs/{run.id}/cancel")
+    assert r.status_code == 200, r.text
+    held.release()
+    assert run.terminal.wait(timeout=10)
+    assert run.state == "cancelled", run.state
+
+
+@pytest.mark.reconcile
+def test_pending_touched_is_per_app_and_forgotten_with_the_campaign(client):
+    """Decision 6: the pending refs live on the app's registry, keyed by
+    subject -- a new app starts with none, and a deleted campaign's refs are
+    not handed to a replacement of the same slug."""
+    subject_of = runs.campaign_subject
+    # (a) Per app: the refs left in one app do not reach another's sweep.
+    with TestClient(create_app()) as first:
+        cid, held, run = _two_scenes_held(first)
+        _cancel(first, cid, held, run)
+        assert first.app.state.runs.take_touched(subject_of(cid)) == {CHART_REF}
+        first.app.state.runs.pend_touched(subject_of(cid), {CHART_REF})
+    with TestClient(create_app()) as second:
+        fake = _install(second, from_entries([_entry(_reply())]))
+        _threads(cid, _played(second, cid, "Saltmarch quay"))
+        _key(second)
+        landed = _settled(second, cid, _refresh(second, cid))
+        assert landed["state"] == "landed", landed
+        assert landed["result"]["follow_on"] is False
+        requests = _reconcile_requests(fake)
+        assert requests, "the refresh asked about the duplicate"
+        assert not any(TOUCHED in _touched_in(r) for r in requests)
+        assert second.app.state.runs.take_touched(subject_of(cid)) == set()
+
+    # (b) Forgotten with the campaign: a recreated slug inherits nothing.
+    cid, held, run = _two_scenes_held(client, "Saltmarch")
+    _cancel(client, cid, held, run)
+    assert client.app.state.runs.take_touched(subject_of(cid)) == {CHART_REF}
+    client.app.state.runs.pend_touched(subject_of(cid), {CHART_REF})
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    assert client.delete(f"/api/campaigns/{cid}").status_code == 200
+    # Not taken here: the sweep below is what would inherit them.
+    again = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    assert again == cid
+    sid = _played(client, cid, "Saltmarch shoals")
+    store.plot.set_movement(cid, CHART[0], CHART[1], "open", CHART[2], sid)
+    _threads(cid, sid)
+    fake = _install(client, from_entries([_entry(_reply())]))
+
+    landed = _settled(client, cid, _refresh(client, cid))
+
+    assert landed["state"] == "landed", landed
+    assert landed["result"]["follow_on"] is False
+    requests = _reconcile_requests(fake)
+    assert requests, "the refresh asked about the duplicate"
+    assert not any(TOUCHED in _touched_in(r) for r in requests)
+    assert client.app.state.runs.take_touched(subject_of(cid)) == set()
+
+
+def test_the_suite_switch_keeps_saves_quiet(client):
+    """Unmarked, End Scene starts no sweep (Decision 20)."""
+    cid, sid, body = _ended(client)
+    _install(client, from_cassette("campaign_flow"))
+
+    assert _save(client, cid, sid, body).status_code == 200
+
+    assert _sweeps(client, cid) == []

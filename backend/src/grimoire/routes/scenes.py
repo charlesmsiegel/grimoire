@@ -30,6 +30,7 @@ from ..llm_errors import LLMError
 from ..store.continuity import identity as continuity_identity
 from ..store.continuity import similarity as continuity_similarity
 from . import character_turns, runs, streaming
+from . import continuity as continuity_routes
 from . import tracker as tracker_routes
 from .common import (
     _campaign_root_or_404,
@@ -4443,7 +4444,8 @@ def _clear_pending_review(cid: str, sid: str, token: str) -> None:
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
-def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
+def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
+                  client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     facts = store.chronicle.scene_facts(cid, sid)
     # One hold across the whole persistence sequence (#234). These are four
@@ -4670,6 +4672,15 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
         # raised before this point leaves the review where the retry can find
         # it.
         _clear_pending_review(cid, sid, body.commit_token)
+    # A commit completed in this request -- fresh, or a journalled resume
+    # finishing one -- so the ledger moved: End Scene's incremental
+    # reconciliation sweep (capstone §11.1, Decision 6). After the hold, so the
+    # sweep's own persists never wait on it; the idempotent replay returned
+    # inside it and never gets here. It never raises, and the records it
+    # re-checks are read off `progress` inside its own `try`, so nothing
+    # between the commit and this return can turn a landed save into a 500.
+    continuity_routes.schedule_reconcile(request.app, cid, client, edits=body.edits,
+                                         progress=progress)
     return result
 
 
