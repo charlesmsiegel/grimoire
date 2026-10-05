@@ -128,3 +128,72 @@ Frontend:
 - Keep writing appears only on the trailing response's actions and calls the
   extend route; the streamed bubble starts from the old text; it is disabled
   under the same conditions as Reroll response.
+
+## Gate resolutions (binding; they override the text above where they differ)
+
+Spec → planning gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`, Codex CLI unavailable; owner-approved).
+
+1. **Instruction mode is the default; prefill is an explicit opt-in per
+   connection.** Whether a trailing assistant message is continued depends on
+   the upstream model, not the connection kind — current Claude models reject
+   it with a 400, and most chat-template models treat it as history and write a
+   fresh reply. So `PREFILL_KINDS` is dropped. A connection record gains
+   `prefill: bool` (default false, editable in the connection form, any kind);
+   `llm.prefill_capable(conn)` reads it. **The mode is chosen per attempt**:
+   the extend prompt is a `PreparedMessages` that also carries both tails, and
+   `_dispatch` asks it for the attempt's messages given the attempt's
+   connection (`for_connection(conn)`, falling back to `for_model` for ordinary
+   prompts), so a fallback to a non-prefill route simply gets the instruction
+   tail — no route filtering, no lost flag across `with_appended`.
+   `made_by.mode` records the mode the **served** attempt used.
+2. **The two tails.** Both start with the partial reply as an assistant
+   message, projected the way history is (`export.drop_images`; no speaker
+   label — the model is continuing its own turn):
+   - prefill: that assistant message is last;
+   - instruction: followed by a **user** message rendered from
+     `scene/extend_instruction.j2` ("continue exactly where your last message
+     stops…"). User-role, not system, because the Claude agent path hoists
+     system messages into its system prompt and the model would then write a
+     new reply; a user turn after the partial reply works on all three
+     adapters.
+   A steer (guidance) goes into the instruction text in instruction mode, and
+   as the step-1 steer message before the partial reply in prefill mode.
+3. **Continue what is shown.** `old` is the response's **transcript** prose
+   (the join `responses.get` uses), not the active variant's stored text — a
+   hand-trimmed reply is continued from the trim, and the saved variant is
+   `trimmed + joiner + continuation`.
+4. **Multi-part responses** (a declined roll resumes a part without locking)
+   continue from the latest resume snapshot (`composed: "resume"`, its
+   settings), which contains the roll resolution the reply was written under.
+5. **Joining.**
+   - prefill: the model's own leading whitespace decides — blank line → `\n\n`,
+     newline → `\n`, spaces → ` `, none → `""` (concatenation is the model's
+     choice, e.g. finishing a word);
+   - instruction: `\n\n`, unless the continuation's first character is
+     lowercase or closing punctuation (`. , ; : ! ? ) ] ” ’ ' * … —`), then ` `.
+   The perception fence the response protocol asks for is stripped before
+   joining (the watcher handles it as for any reply); in prefill mode the
+   watcher runs with perception off, since the model is mid-reply.
+6. **Refusals, named as the code names them**: `not_last_response` (the
+   response's messages must be the last non-synthetic messages of the
+   transcript, checked inside the same campaign-lock hold as `editable`),
+   `applied_mechanics`, `historical_context_unavailable`, `context_excluded`
+   (step 2), `round_open`, `proposal_pending`, `review_pending` (a stored
+   review would be invalidated by the new variant), and `run_in_flight` (what
+   `reserve_turn` answers).
+7. **A roll fence in the continuation** is refused with its own kind,
+   `extend_roll_refused` ("A continuation cannot propose a roll — reroll the
+   reply instead"), and the previous variant stays.
+8. **Length.** The instruction asks for the rest of the beat, at most the
+   response's continuation word target (from the record's settings); an empty
+   continuation is `replacement_incomplete` and is tested in both modes.
+9. **Metering**: task `extend`, carrying `post` and `response_id` like a
+   reroll; not counted in `REROLL_TASKS` or the reroll rate. CLAUDE.md's
+   detached-runs list gains the extend handler.
+10. **The live bubble** keeps the old text as a separate render-only `seed`
+    (never in the stream accumulator, so the Retry offer, speaker offsets and
+    re-attach logic are untouched), hides the target message while streaming,
+    and renders `seed + " " + stream`. The `response_start` frame carries
+    `extend: {seed}` so a re-attached client rebuilds the same view. The landed
+    variant (server-joined) replaces it on reload.
