@@ -790,6 +790,10 @@ class SubjectsBody(BaseModel):
     subjects: list[str] = []
 
 
+class GreetingSubjectsBody(SubjectsBody):
+    image: str
+
+
 class CopyFromGreeting(BaseModel):
     gid: str
     name: str

@@ -1,6 +1,8 @@
+from urllib.parse import quote
+
 import pytest
 
-from grimoire.store import assets, characters, greetings, image_subjects
+from grimoire.store import assets, characters, entities, greetings, image_subjects, pcs
 
 
 def _world(tmp_path, images=("art_1", "art_2")):
@@ -16,6 +18,166 @@ def test_subjects_roundtrip_and_missing_file(tmp_path):
     assert image_subjects.read_subjects(tmp_path, gid) == {}
     image_subjects.write_subjects(tmp_path, gid, {"art_1": [cid]})
     assert image_subjects.read_subjects(tmp_path, gid) == {"art_1": [cid]}
+
+
+def test_referenced_character_art_is_reviewed_independently_of_its_owner(tmp_path):
+    owner, gid = _world(tmp_path, images=("art_1",))
+    subject, _ = characters.create_character(tmp_path, "Mara", "main")
+    assets.put_image(tmp_path, owner, "main", "embed-art", b"png", "png")
+    url = f"/api/worlds/{tmp_path.name}/characters/{owner}/versions/main/images/embed-art"
+    greetings.update_greeting(tmp_path, gid, body=f"![Art]({url}?v=old)")
+    assert {a["name"] for a in image_subjects.untagged(tmp_path)} == {"art_1", url}
+    image_subjects.set_image_subjects(tmp_path, gid, url, [subject])
+    assert image_subjects.read_subjects(tmp_path, gid) == {url: [subject]}
+    assert image_subjects.appearances(tmp_path, owner) == []
+    assert image_subjects.appearances(tmp_path, subject)[0]["name"] == url
+    # An older, greeting-owned writer still works alongside referenced tags.
+    image_subjects.set_image_subjects(tmp_path, gid, "art_1", [])
+    assert image_subjects.untagged(tmp_path) == []
+    greetings.update_greeting(tmp_path, gid, body=f"![Art]({url}?v=new)")
+    assert image_subjects.read_subjects(tmp_path, gid)[url] == [subject]
+    assets.delete_image(tmp_path, owner, "main", "embed-art")
+    assert image_subjects.read_subjects(tmp_path, gid) == {"art_1": []}
+    assert image_subjects.untagged(tmp_path) == []
+    image_subjects.set_image_subjects(tmp_path, gid, "art_1", [subject])
+
+
+def test_referenced_image_inventory_matches_rendered_markdown_not_code_or_html(tmp_path):
+    _owner, gid = _world(tmp_path, images=())
+    url = "https://example.test/art.png?variant=1&size=2"
+    greetings.update_greeting(tmp_path, gid, body=(
+        f"![Art][art]\n\n[art]: <{url}>\n\n"
+        f"![Again]({url})\n\n"
+        "`![Inline](https://example.test/inline.png)`\n\n"
+        "```markdown\n![Code](https://example.test/code.png)\n```\n\n"
+        '<img src="https://example.test/html.png">\n\n'
+        "[Link](https://example.test/link.png)"
+    ))
+    assert [a["name"] for a in image_subjects.untagged(tmp_path)] == [url]
+    image_subjects.set_image_subjects(tmp_path, gid, url, [])
+    assert image_subjects.read_subjects(tmp_path, gid) == {url: []}
+    assert image_subjects.untagged(tmp_path) == []
+    greetings.update_greeting(tmp_path, gid, body="No image")
+    assert image_subjects.read_subjects(tmp_path, gid) == {}
+    with pytest.raises(ValueError):
+        image_subjects.set_image_subjects(tmp_path, gid, url, [])
+
+
+@pytest.mark.parametrize("kind", ["characters", "pcs", "lore", "greetings", "world"])
+def test_local_references_use_existing_serving_records(tmp_path, kind):
+    owner, gid = _world(tmp_path, images=())
+    if kind == "characters":
+        rid, vid = owner, "main"
+        route = f"characters/{rid}/versions/{vid}/images/avatar"
+    elif kind == "pcs":
+        rid, vid = pcs.create_pc(tmp_path, "Mara", [], "main")
+        route = f"pcs/{rid}/versions/{vid}/images/avatar"
+    elif kind == "lore":
+        rid, vid = entities.create_entity(tmp_path, "lore", "Saltmarch"), "default"
+        route = f"lore/{rid}/images/avatar"
+    elif kind == "greetings":
+        rid, vid = greetings.create_greeting(tmp_path, "Saltmarch", owner, "main"), "default"
+        route = f"greetings/{rid}/images/avatar"
+    else:
+        rid, vid = "", ""
+        route = "images/art"
+    if kind == "world":
+        assets.put_in(tmp_path / "assets" / "images", "art", b"png", "png", supported_only=True)
+    else:
+        assets.put_image(tmp_path, rid, vid, "avatar", b"png", "png", base=kind)
+    url = f"/api/worlds/{tmp_path.name}/{route}"
+    greetings.update_greeting(tmp_path, gid, body=f"![Art]({url})")
+    assert any(a["name"] == url for a in image_subjects.untagged(tmp_path))
+    image_subjects.set_image_subjects(tmp_path, gid, url, [])
+    assert image_subjects.read_subjects(tmp_path, gid) == {url: []}
+    if kind == "characters":
+        (tmp_path / "characters" / rid / "character.md").unlink()
+        assert image_subjects.read_subjects(tmp_path, gid) == {}
+    elif kind == "pcs":
+        pcs.require_version(tmp_path, rid, vid).unlink()
+        assert image_subjects.read_subjects(tmp_path, gid) == {}
+
+
+@pytest.mark.parametrize("name", ["art#1", "art%1", "portrait-é"])
+def test_reference_identity_preserves_escaped_filename_characters(tmp_path, name):
+    owner, gid = _world(tmp_path, images=())
+    assets.put_image(tmp_path, owner, "main", name, b"png", "png")
+    url = f"/api/worlds/{tmp_path.name}/characters/{owner}/versions/main/images/{quote(name, safe='')}"
+    greetings.update_greeting(tmp_path, gid, body=f"![Art]({url})")
+    assert image_subjects.untagged(tmp_path)[0]["url"] == url
+    image_subjects.set_image_subjects(tmp_path, gid, url, [])
+    assert image_subjects.read_subjects(tmp_path, gid) == {url: []}
+
+
+@pytest.mark.parametrize("body,visible", [
+    ("- item\n\n    ```markdown\n\n    ![Code](https://example.test/code.png)\n\n    ```", False),
+    ("> ```markdown\n> ![Code](https://example.test/code.png)\n> ```", False),
+    ("<div>\n\n![Art](https://example.test/code.png)\n\n</div>", True),
+])
+def test_inventory_follows_commonmark_for_nested_code_and_html_containers(tmp_path, body, visible):
+    _owner, gid = _world(tmp_path, images=())
+    greetings.update_greeting(tmp_path, gid, body=body)
+    assert bool(image_subjects.untagged(tmp_path)) is visible
+
+
+@pytest.mark.parametrize("url,key", [
+    ("https://example.test/a b.png?variant=1", "https://example.test/a%20b.png?variant=1"),
+    ("HTTPS://example.test/art.png?variant=1", "https://example.test/art.png?variant=1"),
+])
+def test_remote_reference_identity_normalizes_rendered_uri_without_dropping_query(tmp_path, url, key):
+    _owner, gid = _world(tmp_path, images=())
+    greetings.update_greeting(tmp_path, gid, body=f"![Art](<{url}>)")
+    assert image_subjects.untagged(tmp_path)[0]["name"] == key
+    image_subjects.set_image_subjects(tmp_path, gid, key, [])
+    assert image_subjects.read_subjects(tmp_path, gid) == {key: []}
+
+
+@pytest.mark.parametrize("route", [
+    "characters/%2e%2e/versions/main/images/avatar",
+    "characters/mara/versions/%2e%2e/images/avatar",
+    "characters/mara/versions/missing/images/avatar",
+    "lore/%2e%2e/images/avatar",
+    "unknown/mara/images/avatar",
+    "config/images/avatar",
+    "images/%2e%2e%2fsecret",
+    "image-collections/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/image",
+])
+def test_broken_or_unsafe_local_references_do_not_create_unresolvable_chores(tmp_path, monkeypatch, route):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    _owner, gid = _world(tmp_path, images=())
+    greetings.update_greeting(tmp_path, gid, body=f"![Art](/api/worlds/{tmp_path.name}/{route})")
+    assert image_subjects.untagged(tmp_path) == []
+
+
+def test_missing_cross_world_reference_never_substitutes_same_world_bytes(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    owner, gid = _world(tmp_path, images=())
+    assets.put_image(tmp_path, owner, "main", "avatar", b"png", "png")
+    url = f"/api/worlds/realm/characters/{owner}/versions/main/images/avatar"
+    greetings.update_greeting(tmp_path, gid, body=f"![Art]({url})")
+    assert image_subjects.untagged(tmp_path) == []
+
+
+def test_appearances_tolerates_a_reference_restored_during_the_read(tmp_path, monkeypatch):
+    owner, gid = _world(tmp_path, images=())
+    old, restored = "https://example.test/old.png", "https://example.test/art.png"
+    for url in (restored, old):
+        greetings.update_greeting(tmp_path, gid, body=f"![Art]({url})")
+        image_subjects.set_image_subjects(tmp_path, gid, url, [owner])
+    real_catalog = image_subjects.greeting_images.catalog
+    first = True
+
+    def restore_after_inventory(root, greeting):
+        nonlocal first
+        images = real_catalog(root, greeting)
+        if first:
+            first = False
+            greetings.update_greeting(root, greeting, body=f"![Art]({restored})")
+        return images
+
+    monkeypatch.setattr(image_subjects.greeting_images, "catalog", restore_after_inventory)
+    assert image_subjects.appearances(tmp_path, owner) == []
+    assert image_subjects.appearances(tmp_path, owner)[0]["name"] == restored
 
 
 def test_write_rejects_unknown_image_and_persists_empty(tmp_path):

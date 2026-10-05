@@ -1,6 +1,6 @@
-"""Per-greeting image subjects — which characters appear in each localized
-greeting image. Sidecar at <root>/greetings/<gid>/assets/default/subjects.json
-(the focus.json pattern): {"<image-name>": ["<cid>", ...]}. Tolerant reads,
+"""Per-greeting image subjects — which characters appear in each picture.
+Sidecar at <root>/greetings/<gid>/assets/default/subjects.json (the focus.json
+pattern): {"<image-name-or-reference-URL>": ["<cid>", ...]}. Tolerant reads,
 strict writes. Deliberately named "subjects", not "tags" — tags mean
 player-trait gating elsewhere in the store.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import assets, atomic, characters
+from . import assets, atomic, characters, greeting_images
 
 SUBJECTS_FILE = "subjects.json"
 _BASE = "greetings"
@@ -22,7 +22,7 @@ def subjects_path(root: Path, gid: str) -> Path:
 
 
 def _image_names(root: Path, gid: str) -> set[str]:
-    return {i["name"] for i in assets.list_images(root, gid, _VID, base=_BASE)}
+    return set(greeting_images.catalog(root, gid))
 
 
 def _read_raw(root: Path, gid: str) -> dict:
@@ -62,7 +62,7 @@ def read_subjects(root: Path, gid: str, known_cids: set[str] | None = None) -> d
 
 
 def write_subjects(root: Path, gid: str, subjects: dict[str, list[str]]) -> None:
-    """Strict: every key must be a stored image of this greeting. An explicit
+    """Strict: every key must identify a current picture of this greeting. An explicit
     empty list persists — it means 'reviewed, no subjects' and keeps the image
     out of the untagged queue (key absent = unreviewed)."""
     names = _image_names(root, gid)
@@ -87,8 +87,13 @@ def set_image_subjects(root: Path, gid: str, name: str, cids: list[str]) -> None
                 cur = loaded
         except (json.JSONDecodeError, OSError):
             cur = {}
+    if name not in _image_names(root, gid):
+        raise ValueError(f"unknown image: {name}")
     cur[name] = list(cids)
-    write_subjects(root, gid, cur)
+    # Validate the entry being edited, not stale untouched references. Removing
+    # an image from the body must not make another image's save impossible.
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic.write_text(p, json.dumps(cur, indent=2, sort_keys=True) + "\n")
 
 
 def reviewed_names(root: Path, gid: str) -> set[str]:
@@ -105,25 +110,25 @@ def reviewed_names(root: Path, gid: str) -> set[str]:
 
 
 def untagged(root: Path) -> list[dict]:
-    """Every stored greeting image with NO sidecar entry — the tagging queue.
+    """Every stored or referenced image with NO sidecar entry — the tagging queue.
     Key absent = unreviewed; an explicit [] counts as reviewed."""
     out: list[dict] = []
     gdir = root / _BASE
     if not gdir.exists():
         return out
-    for d in sorted(p for p in gdir.iterdir() if p.is_dir()):
-        gid = d.name
+    gids = {p.name for p in gdir.iterdir() if p.is_dir()} | {p.stem for p in gdir.glob("*.md")}
+    for gid in sorted(gids):
         reviewed = reviewed_names(root, gid)
-        for name in sorted(_image_names(root, gid)):
+        for name, image in sorted(greeting_images.catalog(root, gid).items()):
             if name not in reviewed:
-                out.append({"gid": gid, "name": name})
+                out.append({"gid": gid, "name": name, **image})
     return out
 
 
 def appearances(root: Path, cid: str) -> list[dict]:
     """Every tagged image featuring `cid`, across all greetings — the
-    character page's 'Appears in' gallery. Cheap: ~one small file per
-    greeting. Sorted by (gid, name) = the greetings tab's order."""
+    character page's 'Appears in' gallery. One sidecar and a cached body parse
+    per greeting, plus local image existence checks. Sorted by (gid, name)."""
     out: list[dict] = []
     gdir = root / _BASE
     if not gdir.exists() or cid not in characters.character_refs(root):
@@ -131,9 +136,12 @@ def appearances(root: Path, cid: str) -> list[dict]:
     known = {cid}  # only this character's membership matters; skip re-filtering the rest
     for p in sorted(gdir.glob(f"*/assets/{_VID}/{SUBJECTS_FILE}")):
         gid = p.parents[2].name
+        images = greeting_images.catalog(root, gid)
         for name, subs in sorted(read_subjects(root, gid, known_cids=known).items()):
-            if cid in subs:
-                out.append({"gid": gid, "name": name})
+            # The body can change between the two reads. A newly restored
+            # reference belongs to the next inventory, not this snapshot.
+            if cid in subs and name in images:
+                out.append({"gid": gid, "name": name, **images[name]})
     return out
 
 
@@ -150,7 +158,13 @@ def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot:
     gallery image can't be silently shadowed by a reused gallery_N name."""
     if slot not in ("avatar", "gallery"):
         raise ValueError(f"unknown slot: {slot}")
-    src = assets.image_path(root if src_root is None else src_root, gid, _VID, name, base=_BASE)
+    source = root if src_root is None else src_root
+    if name.startswith("/api/worlds/"):
+        if name not in greeting_images.catalog(source, gid):
+            raise FileNotFoundError(name)
+        src = greeting_images.local_path(source, name)
+    else:
+        src = assets.image_path(source, gid, _VID, name, base=_BASE)
     if src is None:
         raise FileNotFoundError(name)
     raw, ext = src.read_bytes(), src.suffix.lstrip(".")

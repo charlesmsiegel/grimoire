@@ -31,6 +31,7 @@ export function SubjectsPopover({ chars, present, value, onSave, onClose }: {
       {others.length > 0 && <span className="chips">{others.map(chip)}</span>}
       <span className="form-actions">
         <button className="subtle" onClick={onClose}>Cancel</button>
+        <button className="subtle" onClick={() => onSave([])}>None</button>
         <button className="primary" onClick={() => onSave(sel)}>Save</button>
       </span>
     </span>

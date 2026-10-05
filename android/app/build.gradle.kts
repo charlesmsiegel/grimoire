@@ -88,6 +88,7 @@ chaquopy {
             install("pillow>=10.0")
             install("jinja2>=3.1")
             install("markdown>=3.5")
+            install("markdown-it-py>=3.0")
             install("certifi")
         }
     }

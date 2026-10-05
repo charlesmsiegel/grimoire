@@ -242,9 +242,6 @@
   "backend/src/grimoire/store/image_library.py": {
     "N818": 1
   },
-  "backend/src/grimoire/store/image_subjects.py": {
-    "PERF401": 1
-  },
   "backend/src/grimoire/store/llm_connections.py": {
     "A001": 2,
     "A002": 10,

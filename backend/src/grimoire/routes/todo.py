@@ -14,6 +14,12 @@ waits for one rather than shipping a guess.
 
 `store.chores` owns the ignore set; everything else here is a read of the
 stores the rest of the app already reads.
+
+Image gaps describe the artwork the browse surfaces display: a character's
+default version and each world's or campaign's own cover. Other versions and
+gallery images do not fill that gap. Avatar presence reuses the art facts and
+overlay token resolver; adding another image chore should follow its display
+surface's resolver too, so the report cannot disagree with what the user sees.
 """
 
 from __future__ import annotations
@@ -90,6 +96,20 @@ class _Ctx:
 
     def character_gaps(self) -> tuple[list[dict], list[dict]]:
         return self._once("gaps", lambda: _character_gaps(self.cid))
+
+    def avatar_gaps(self) -> list[dict]:
+        return self._once("avatars", lambda: _items_avatars(self.cid))
+
+    def world_avatar_gaps(self) -> list[dict]:
+        return self._once("world_avatars", lambda: _world_avatar_gaps(self.other_worlds()))
+
+    def world_cover_gaps(self) -> list[dict]:
+        # Covers belong to the world itself, including a campaign's world.
+        # There is no campaign-side substitute to de-duplicate here.
+        return self._once("world_covers", lambda: _world_cover_gaps(self.worlds()))
+
+    def world_subject_gaps(self) -> list[dict]:
+        return self._once("world_subjects", lambda: _world_subject_gaps(self.worlds()))
 
     def coverage(self) -> dict:
         """`sheets.coverage` for the campaign, computed once per request.
@@ -221,11 +241,11 @@ def _chore_unreviewed(ctx: _Ctx) -> dict | None:
 def _chore_open_scenes(ctx: _Ctx) -> dict | None:
     cid, scenes = ctx.cid, ctx.scenes()
     n = sum(1 for s in scenes if not s["done"])
-    if n < 2:
+    if not n:
         return None
     return {
         "id": "open-scenes", "scope": "campaign", "group": "Continuity", "severity": "note", "n": n,
-        "what": f"{n} scenes are open at once",
+        "what": f"{n} incomplete scene{'s' if n != 1 else ''}",
         "why": "Each one holds part of the campaign's present. Wrapping one up is "
                "what moves the chronicle forward.",
         "fix": f"/campaigns/{cid}/scenes", "fix_label": "See the scenes",
@@ -277,6 +297,30 @@ def _chore_taglines(ctx: _Ctx) -> dict | None:
         "why": "The tagline is what a browse grid and a scene suggestion have to go "
                "on before anything else is read.",
         "fix": f"/campaigns/{cid}/world", "fix_label": "The cast",
+    }
+
+
+def _chore_avatars(ctx: _Ctx) -> dict | None:
+    who = ctx.avatar_gaps()
+    if not who:
+        return None
+    n = len(who)
+    return {
+        "id": "avatars", "scope": "campaign", "group": "World content", "severity": "note", "n": n,
+        "what": f"{n} character{'s' if n != 1 else ''} without an avatar",
+        "why": "The default version has no portrait to show in the cast grid.",
+        "fix": f"/campaigns/{ctx.cid}/world", "fix_label": "The cast",
+    }
+
+
+def _chore_cover(ctx: _Ctx) -> dict | None:
+    if not _items_cover(ctx.cid):
+        return None
+    return {
+        "id": "cover", "scope": "campaign", "group": "World content", "severity": "note", "n": 1,
+        "what": "Campaign without a cover",
+        "why": "The campaign has no cover for its shelf thumbnail or exported book.",
+        "fix": f"/campaigns/{ctx.cid}", "fix_label": "Campaign settings",
     }
 
 
@@ -450,6 +494,99 @@ def _chore_world_anchors(ctx: _Ctx) -> dict | None:
     }
 
 
+def _world_avatar_gaps(worlds: list[dict]) -> list[dict]:
+    """Missing default portraits, without opening card bodies or all versions.
+
+    `version_facts` supplies the same avatar presence as the world cast grid;
+    `overlay.avatar_v` supplies the campaign half. Neither path treats a
+    gallery image or another version's portrait as this version's avatar.
+    """
+    out: list[dict] = []
+    for world in worlds:
+        try:
+            root = store.worlds.paths.world_root(world["id"])
+            rows = store.characters.roster(root)
+            missing = [r for r in rows if store.characters.version_facts(
+                root, r["id"], r["default_version"])["avatar_v"] is None]
+        except (OSError, store.worlds.paths.WorldNotFound):
+            continue
+        out.extend({"wid": world["id"], "world": world["name"], **r} for r in missing)
+    return out
+
+
+def _chore_world_avatars(ctx: _Ctx) -> dict | None:
+    who = ctx.world_avatar_gaps()
+    if not who:
+        return None
+    n = len(who)
+    one_world = len({c["wid"] for c in who}) == 1
+    return {
+        "id": "world-avatars", "scope": "world", "group": "World content", "severity": "note", "n": n,
+        "what": f"{n} character{'s' if n != 1 else ''} without an avatar",
+        "why": "The default version has no portrait to show in the cast grid.",
+        "fix": f"/worlds/{who[0]['wid']}" if one_world else "/worlds",
+        "fix_label": "The cast" if one_world else "The worlds",
+    }
+
+
+def _world_cover_gaps(worlds: list[dict]) -> list[dict]:
+    out = []
+    for world in worlds:
+        try:
+            if store.covers.world_cover_path(world["id"]) is None:
+                out.append(world)
+        except (OSError, store.worlds.paths.WorldNotFound):
+            continue
+    return out
+
+
+def _chore_world_covers(ctx: _Ctx) -> dict | None:
+    worlds = ctx.world_cover_gaps()
+    if not worlds:
+        return None
+    n = len(worlds)
+    return {
+        "id": "world-covers", "scope": "world", "group": "World content", "severity": "note", "n": n,
+        "what": f"{n} world{'s' if n != 1 else ''} without a cover",
+        "why": "These worlds have no cover to show on the worlds shelf.",
+        "fix": f"/worlds/{worlds[0]['id']}/images" if n == 1 else "/worlds",
+        "fix_label": "World images" if n == 1 else "The worlds",
+    }
+
+
+def _world_subject_gaps(worlds: list[dict]) -> list[dict]:
+    """The tagging queue's unanswered images, including a campaign's world.
+
+    An explicit empty assignment means "no subjects", not unfinished work.
+    `image_subjects.untagged` owns that distinction; testing whether a subject
+    list is truthy would put reviewed images back on the list forever.
+    """
+    out: list[dict] = []
+    for world in worlds:
+        try:
+            root = store.worlds.paths.world_root(world["id"])
+            waiting = store.image_subjects.untagged(root)
+        except (OSError, store.worlds.paths.WorldNotFound):
+            continue
+        out.extend({"wid": world["id"], "world": world["name"], **image} for image in waiting)
+    return out
+
+
+def _chore_world_subjects(ctx: _Ctx) -> dict | None:
+    waiting = ctx.world_subject_gaps()
+    if not waiting:
+        return None
+    n = len(waiting)
+    one_world = len({i["wid"] for i in waiting}) == 1
+    return {
+        "id": "world-subjects", "scope": "world", "group": "World content", "severity": "note", "n": n,
+        "what": f"{n} greeting image{'s' if n != 1 else ''} without a character assignment",
+        "why": "Assign the characters shown, or choose No subjects for an image with none.",
+        "fix": f"/worlds/{waiting[0]['wid']}/images" if one_world else "/worlds",
+        "fix_label": "Assign characters" if one_world else "The worlds",
+    }
+
+
 #: Builders that only have an answer inside a campaign, in the order they are
 #: worth doing, each beside the id it emits. Proposals holding the world back
 #: lead regardless of count -- they are the only thing here that blocks play.
@@ -459,6 +596,8 @@ CAMPAIGN_BUILDERS = (
     ("sheets", _chore_sheets),
     ("anchors", _chore_anchors),
     ("taglines", _chore_taglines),
+    ("avatars", _chore_avatars),
+    ("cover", _chore_cover),
     ("owed", _chore_owed),
 )
 
@@ -470,6 +609,9 @@ LIBRARY_BUILDERS = (
     ("world-describe", _chore_world_describe),
     ("world-taglines", _chore_world_taglines),
     ("world-anchors", _chore_world_anchors),
+    ("world-avatars", _chore_world_avatars),
+    ("world-covers", _chore_world_covers),
+    ("world-subjects", _chore_world_subjects),
     ("unpriced", _chore_unpriced),
 )
 
@@ -607,6 +749,65 @@ def _items_taglines(cid: str) -> list[dict]:
     return [{**c, "fix": f"/campaigns/{cid}/world"} for c in _character_gaps(cid)[0]]
 
 
+def _items_avatars(cid: str) -> list[dict]:
+    """Default portraits over the effective roster, with one overlay view.
+
+    Reusing `avatar_v` keeps inherited avatars, image tombstones and detached
+    characters consistent with the cast grid without building full card rows.
+    """
+    try:
+        v = store.overlay.view(cid)
+        rows = store.overlay.character_roster(cid, v=v)
+        return [{"id": r["id"], "label": r["name"], "detail": r["default_version"],
+                 "fix": f"/campaigns/{cid}/world/characters/{r['id']}"}
+                for r in rows if store.overlay.avatar_v(cid, r["id"], r["default_version"], v=v) is None]
+    except (OSError, store.CampaignNotFound):
+        return []
+
+
+def _items_cover(cid: str) -> list[dict]:
+    try:
+        if store.covers.cover_path(cid) is not None:
+            return []
+        name = store.campaigns.read_campaign(cid)["meta"].get("name") or cid
+    except (OSError, store.CampaignNotFound):
+        return []
+    return [{"id": cid, "label": name, "detail": "no cover",
+             "fix": f"/campaigns/{cid}"}]
+
+
+def _items_world_avatars(cid: str) -> list[dict]:
+    return [{"id": f"{r['wid']}:{r['id']}", "label": r["name"],
+             "detail": " · ".join((r["world"], r["default_version"])),
+             "fix": f"/worlds/{r['wid']}/characters/{r['id']}"}
+            for r in _Ctx(cid).world_avatar_gaps()]
+
+
+def _items_world_covers(cid: str) -> list[dict]:
+    return [{"id": w["id"], "label": w["name"], "detail": "no cover",
+             "fix": f"/worlds/{w['id']}/images"}
+            for w in _Ctx(cid).world_cover_gaps()]
+
+
+def _items_world_subjects(cid: str) -> list[dict]:
+    # Titles are paid for only when this chore is expanded. Counting the
+    # queue inventories stored art and images referenced by greeting bodies.
+    names: dict[str, dict[str, str]] = {}
+    out = []
+    for image in _Ctx(cid).world_subject_gaps():
+        wid, gid = image["wid"], image["gid"]
+        if wid not in names:
+            try:
+                root = store.worlds.paths.world_root(wid)
+                names[wid] = {g["id"]: g["name"] for g in store.greetings.list_greetings(root)}
+            except (OSError, store.worlds.paths.WorldNotFound):
+                names[wid] = {}
+        out.append({"id": f"{wid}:{gid}:{image['name']}", "label": names[wid].get(gid, gid),
+                    "detail": " · ".join((image["world"], image["name"])),
+                    "fix": f"/worlds/{wid}/greetings/{gid}"})
+    return out
+
+
 def _items_owed(cid: str) -> list[dict]:
     try:
         owed = [c for c in store.commitments.open_commitments(cid) if c.get("due")]
@@ -681,6 +882,11 @@ ITEMS = {
     "sheets": _items_sheets,
     "anchors": _items_anchors,
     "taglines": _items_taglines,
+    "avatars": _items_avatars,
+    "cover": _items_cover,
+    "world-avatars": _items_world_avatars,
+    "world-covers": _items_world_covers,
+    "world-subjects": _items_world_subjects,
     "owed": _items_owed,
     "unpriced": _items_unpriced,
     "world-describe": _items_world_describe,

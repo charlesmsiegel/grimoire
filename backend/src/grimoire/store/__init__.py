@@ -72,6 +72,7 @@ from . import (
     fetch,
     fieldtext,
     fork,
+    greeting_images,
     greetings,
     groupstate,
     image_collection_imports,
@@ -294,6 +295,9 @@ __all__ = [
     "context",
     "covers",
     "greetings",
+    # The greeting's picture inventory is shared by subject routes and the
+    # store's tagging queue; exporting it here is a deliberate API addition.
+    "greeting_images",
     "GreetingNotFound",
     "groupstate",
     "image_collection_imports", "image_collections", "image_descriptions",

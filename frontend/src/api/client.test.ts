@@ -3,6 +3,15 @@ import { onCampaignsChanged, onConfigChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
 import { THUMB_REV } from "./thumbs";
 
+test("referenced image subjects send the full URL in the body rather than a route segment", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
+  const image = "/api/worlds/realm/characters/seraphine/versions/default/images/embed-art";
+  await api.setImageSubjects("realm", "open", image, ["mara"]);
+  expect(fetchMock).toHaveBeenCalledWith("/api/worlds/realm/greetings/open/subjects",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ image, subjects: ["mara"] }) }));
+});
+
 function sseResponse(chunks: string[]) {
   let i = 0;
   return {

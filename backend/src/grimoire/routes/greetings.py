@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
@@ -33,6 +34,7 @@ from .models import (
     Edges,
     FirstPost,
     GreetingCreate,
+    GreetingSubjectsBody,
     GreetingUpdate,
     ImportGreetings,
     MarkBody,
@@ -290,6 +292,25 @@ def get_world_greeting_subjects(wid: str, gid: str):
     return store.image_subjects.read_subjects(root, gid)
 
 
+@router.put("/worlds/{wid}/greetings/{gid}/subjects")
+def put_world_greeting_subjects(wid: str, gid: str, body: GreetingSubjectsBody):
+    root = _world_root_or_404(wid)
+    _greeting_or_404(root, gid)
+    key = store.greeting_images.image_key(root, gid, body.image)
+    if key not in store.greeting_images.catalog(root, gid):
+        raise HTTPException(status_code=404, detail="image not found")
+    known = set(store.characters.character_refs(root))
+    bad = [c for c in body.subjects if c not in known]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"unknown characters: {bad}")
+    try:
+        store.image_subjects.set_image_subjects(root, gid, key, body.subjects)
+    except ValueError as exc:
+        # A body edit can remove the reference after the initial inventory.
+        raise HTTPException(status_code=404, detail="image not found") from exc
+    return {"ok": True}
+
+
 @router.get("/worlds/{wid}/greetings/{gid}/images/{name}/subjects")
 def get_world_greeting_image_subjects(wid: str, gid: str, name: str):
     root = _world_root_or_404(wid)
@@ -317,8 +338,14 @@ def _greeting_image_urls(root, wid: str, a: dict) -> dict:
     """Versioned full + thumbnail URLs for one greeting image: both cache
     immutable, and the thumb keeps a 70-tile gallery from pulling 100MB+
     of full-resolution art."""
-    base = f"/api/worlds/{wid}/greetings/{a['gid']}/images/{a['name']}"
-    p = store.assets.image_path(root, a["gid"], "default", a["name"], base="greetings")
+    if "url" in a:
+        base = a["url"]
+        p = store.greeting_images.local_path(root, base) if base.startswith("/api/worlds/") else None
+        if p is None:
+            return {"url": base, "copyable": False}
+    else:
+        base = f"/api/worlds/{quote(wid, safe='')}/greetings/{quote(a['gid'], safe='')}/images/{quote(a['name'], safe='')}"
+        p = store.assets.image_path(root, a["gid"], "default", a["name"], base="greetings")
     if p is None:  # vanished between sweep and stat: bare URLs, still renderable
         return {"url": base, "thumb": base}
     v = store.assets.image_version(p)

@@ -230,6 +230,20 @@ test("the tabs count the card's own greetings and art", async () => {
   expect(screen.getByRole("tab", { name: /Art 1/ })).toBeTruthy();
 });
 
+test("remote referenced art appears without local copy controls", async () => {
+  vi.mocked(api.listImageAppearances).mockResolvedValue([
+    { gid: "open", name: "https://example.test/art.png", greeting_name: "Saltmarch",
+      url: "https://example.test/art.png", copyable: false },
+  ]);
+  await renderWorld();
+  fireEvent.click(screen.getByRole("tab", { name: /Art/ }));
+  expect(await screen.findByAltText("Saltmarch art")).toHaveAttribute("src", "https://example.test/art.png");
+  const section = fieldBlock("Appears in");
+  expect(within(section).queryByRole("button", { name: "Set as avatar" })).toBeNull();
+  expect(within(section).queryByRole("button", { name: "Add to gallery" })).toBeNull();
+  expect(within(section).getByRole("link", { name: "Saltmarch" })).toBeInTheDocument();
+});
+
 test("the description carries what it costs, every turn", async () => {
   await renderWorld();
   expect(within(fieldBlock("Description")).getByText(/sent every turn in scene/i)).toBeTruthy();

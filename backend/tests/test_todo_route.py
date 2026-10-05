@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import io
 import re
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import grimoire.store as store
 from grimoire.main import create_app
@@ -34,14 +36,125 @@ def client(monkeypatch, tmp_path):
 @pytest.fixture
 def campaign(client):
     wid = client.post("/api/worlds", json={"name": "Saltmarch"}).json()["id"]
-    return client.post("/api/campaigns",
-                       json={"name": "A Long Run", "world": wid}).json()["id"], wid
+    cid = client.post("/api/campaigns",
+                      json={"name": "A Long Run", "world": wid}).json()["id"]
+    # These tests isolate other chores. Cover gaps have their own cases below.
+    store.covers.put_cover(cid, _png(), "png")
+    store.covers.put_world_cover(wid, _png(), "png")
+    return cid, wid
 
 
 def _todo(client, cid: str) -> dict:
     r = client.get("/api/todo", params={"campaign": cid})
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def test_referenced_greeting_art_can_be_tagged_to_another_character_or_none(client, campaign):
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    subject, _ = store.characters.create_character(root, "Mara", "default")
+    store.assets.put_image(root, owner, vid, "embed-art", b"png", "png")
+    url = f"/api/worlds/{wid}/characters/{owner}/versions/{vid}/images/embed-art"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid, f"![Art]({url}?v=old)")
+    endpoint = f"/api/worlds/{wid}/greetings/{gid}/subjects"
+    row = next(c for c in _todo(client, "")["chores"] if c["id"] == "world-subjects")
+    assert row["n"] == 1
+    queue = client.get(f"/api/worlds/{wid}/subjects/untagged").json()
+    assert len(queue) == 1 and queue[0]["url"].startswith(url)
+    assert client.put(endpoint, json={"image": url, "subjects": ["missing"]}).status_code == 400
+    assert client.put(endpoint, json={"image": url + "-missing", "subjects": []}).status_code == 404
+    assert client.put(endpoint, json={"image": url + "?v=new", "subjects": [subject]}).status_code == 200
+    assert client.get(endpoint).json() == {url: [subject]}
+    assert "world-subjects" not in {c["id"] for c in _todo(client, "")["chores"]}
+    appearances = client.get(f"/api/worlds/{wid}/characters/{subject}/appearances").json()
+    assert len(appearances) == 1 and appearances[0]["url"].startswith(url)
+    copy = client.post(f"/api/worlds/{wid}/characters/{subject}/versions/default/images/copy-from-greeting",
+                       json={"gid": gid, "name": url, "slot": "avatar"})
+    assert copy.status_code == 200
+    assert store.assets.image_path(root, subject, "default", "avatar").read_bytes() == b"png"
+    assert client.put(endpoint, json={"image": url, "subjects": []}).status_code == 200
+    assert client.get(endpoint).json() == {url: []}
+    assert client.get(f"/api/worlds/{wid}/subjects/untagged").json() == []
+
+
+def test_reference_tags_are_per_greeting_and_remote_query_variants_are_distinct(client, campaign):
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    url = "https://example.test/art.png?variant=1"
+    first = store.greetings.create_greeting(root, "Mara", owner, vid,
+                                           f"![Art]({url})\n![Other]({url[:-1]}2)")
+    second = store.greetings.create_greeting(root, "Winifred", owner, vid, f"![Art]({url})")
+    assert len(client.get(f"/api/worlds/{wid}/subjects/untagged").json()) == 3
+    endpoint = f"/api/worlds/{wid}/greetings/{first}/subjects"
+    assert client.put(endpoint, json={"image": url, "subjects": [owner]}).status_code == 200
+    queue = client.get(f"/api/worlds/{wid}/subjects/untagged").json()
+    assert {(a["gid"], a["name"]) for a in queue} == {(first, url[:-1] + "2"), (second, url)}
+    appearances = client.get(f"/api/worlds/{wid}/characters/{owner}/appearances").json()
+    assert appearances[0]["url"] == url and appearances[0]["copyable"] is False
+
+
+def test_cross_world_reference_resolves_the_world_named_in_the_image_url(client, campaign):
+    _cid, wid = campaign
+    other = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    root, other_root = store.worlds.world_root(wid), store.worlds.world_root(other)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    store.characters.create_character(other_root, "Seraphine", "default")
+    store.assets.put_image(root, owner, vid, "avatar", b"wrong-world", "png")
+    store.assets.put_image(other_root, owner, vid, "avatar", b"other-world", "png")
+    url = f"/api/worlds/{other}/characters/{owner}/versions/{vid}/images/avatar"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid, f"![Art]({url})")
+    assert client.put(f"/api/worlds/{wid}/greetings/{gid}/subjects",
+                      json={"image": url, "subjects": [owner]}).status_code == 200
+    copied = client.post(f"/api/worlds/{wid}/characters/{owner}/versions/{vid}/images/copy-from-greeting",
+                         json={"gid": gid, "name": url, "slot": "gallery"})
+    assert copied.status_code == 200
+    assert store.assets.image_path(root, owner, vid, copied.json()["name"]).read_bytes() == b"other-world"
+
+
+def test_collection_members_are_individually_reviewed_and_deduplicated(client, campaign):
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    first = store.image_collections.put_member(wid, _png())
+    second = store.image_collections.put_member(wid, _png("white"))
+    collection = "a" * 32
+    store.image_collections.publish(wid, collection, [first, second])
+    url = f"/api/worlds/{wid}/images/{first}"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid,
+        f"![Art](/api/worlds/{wid}/image-collections/{collection}/image)\n![Again]({url}?v=old)")
+    queue_url = f"/api/worlds/{wid}/subjects/untagged"
+    queue = client.get(queue_url).json()
+    assert len(queue) == 2
+    assert {a["name"] for a in queue} == {url, f"/api/worlds/{wid}/images/{second}"}
+    endpoint = f"/api/worlds/{wid}/greetings/{gid}/subjects"
+    assert client.put(endpoint, json={"image": url, "subjects": []}).status_code == 200
+    assert len(client.get(queue_url).json()) == 1
+    # Available members, not the immutable manifest's missing bytes, are TODO.
+    store.assets.path_in(root / "assets" / "images", second, supported_only=True).unlink()
+    assert client.get(queue_url).json() == []
+    assert client.get(endpoint).json() == {url: []}
+
+
+def test_a_reference_removed_during_assignment_is_reported_missing(client, campaign, monkeypatch):
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    url = "https://example.test/art.png"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid, f"![Art]({url})")
+    real_set = store.image_subjects.set_image_subjects
+
+    def remove_before_write(root, greeting, name, subjects):
+        store.greetings.update_greeting(root, greeting, body="No image")
+        real_set(root, greeting, name, subjects)
+
+    monkeypatch.setattr(store.image_subjects, "set_image_subjects", remove_before_write)
+    response = client.put(f"/api/worlds/{wid}/greetings/{gid}/subjects",
+                          json={"image": url, "subjects": []})
+    assert response.status_code == 404
+    assert store.image_subjects.read_subjects(root, gid) == {}
 
 
 def test_a_clean_campaign_has_no_chores(client, campaign):
@@ -101,9 +214,12 @@ def test_a_chore_at_zero_leaves_the_list(client, campaign):
     ids = [c["id"] for c in _todo(client, cid)["chores"]]
     assert "open-scenes" in ids
 
-    # Absorb one, and the chore has nothing left to say.
+    # Completing one leaves the remaining scene visible, even on its own.
     scenes = store.scenes.read.list_scenes(cid)
     store.scenes.mark_absorbed(cid, scenes[0]["id"], "It ended.", "It ended.")
+    chore = next(c for c in _todo(client, cid)["chores"] if c["id"] == "open-scenes")
+    assert chore["n"] == 1
+    store.scenes.mark_absorbed(cid, scenes[1]["id"], "It ended.", "It ended.")
     assert "open-scenes" not in [c["id"] for c in _todo(client, cid)["chores"]]
 
 
@@ -308,13 +424,11 @@ def test_a_voice_anchor_written_campaign_side_counts(client, campaign):
 # is what ships on the hot path.
 
 
-def _png() -> bytes:
+def _png(color: str = "black") -> bytes:
     """A real 2x2 PNG. `assets.put_image` sniffs the bytes for the extension."""
-    import base64
-
-    return base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGNgYGD4"
-        "z8DAwMDAAAANHQEDeuUOPQAAAABJRU5ErkJggg==")
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), color).save(output, "PNG")
+    return output.getvalue()
 
 
 def _add_images(client, wid: str, chid: str, *names: str) -> None:
@@ -582,3 +696,185 @@ def test_the_rail_badge_counts_library_art_too(client):
 
     shell = client.get(f"/api/shell?campaign={cid}").json()
     assert shell["campaign"]["images_undescribed"] == 1
+
+
+def test_a_single_incomplete_scene_is_visible_in_both_scopes(client, campaign):
+    cid, _ = campaign
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Saltmarch"}).json()["id"]
+    for scope in (cid, ""):
+        row = next(c for c in _todo(client, scope)["chores"] if c["id"] == "open-scenes")
+        assert row["n"] == 1
+        assert row["what"] == "1 incomplete scene"
+        assert row["campaign_id"] == cid
+    items = _items(client, "open-scenes", cid)
+    assert items["total"] == 1
+    assert items["items"][0]["fix"] == f"/campaigns/{cid}/scenes/{sid}"
+
+
+def test_avatar_gaps_follow_the_default_version_and_link_to_the_character(client, campaign):
+    cid, wid = campaign
+    aid = _world_character(client, wid, "Mara")
+    root = store.worlds.paths.world_root(wid)
+    other = store.characters.create_version(root, aid, "Seraphine", store.characters.blank_card("Mara"))
+    store.assets.put_image(root, aid, other, "avatar", _png(), "png")
+    _add_images(client, wid, aid, "gallery_1")
+    row = next(c for c in _todo(client, cid)["chores"] if c["id"] == "avatars")
+    assert row["n"] == 1
+    assert row["what"] == "1 character without an avatar"
+    items = _items(client, "avatars", cid)
+    assert items["total"] == 1
+    assert items["items"][0]["label"] == "Mara"
+    assert items["items"][0]["fix"] == f"/campaigns/{cid}/world/characters/{aid}"
+    store.assets.put_image(root, aid, "default", "avatar", _png(), "png")
+    assert "avatars" not in {c["id"] for c in _todo(client, cid)["chores"]}
+    assert _items(client, "avatars", cid)["total"] == 0
+
+
+def test_campaign_avatar_gaps_honor_image_tombstones_and_record_deletions(client, campaign):
+    cid, wid = campaign
+    aid = _world_character(client, wid, "Mara")
+    root = store.worlds.paths.world_root(wid)
+    store.assets.put_image(root, aid, "default", "avatar", _png(), "png")
+    store.overlay.delete_image(cid, aid, "default", "avatar")
+    assert [i["id"] for i in _items(client, "avatars", cid)["items"]] == [aid]
+    # The world's avatar still exists; its own report must see it.
+    assert _items(client, "world-avatars", "")["total"] == 0
+    store.assets.put_image(store.campaigns.paths.campaign_root(cid), aid,
+                           "default", "avatar", _png(), "png")
+    assert _items(client, "avatars", cid)["total"] == 0
+    store.assets.delete_image(store.campaigns.paths.campaign_root(cid), aid, "default", "avatar")
+    assert [i["id"] for i in _items(client, "avatars", cid)["items"]] == [aid]
+    store.overlay.add_deleted(cid, f"characters/{aid}")
+    assert _items(client, "avatars", cid)["total"] == 0
+
+
+def test_a_detached_character_does_not_take_an_unrelated_world_avatar(client, campaign):
+    cid, wid = campaign
+    aid, vid = store.overlay.create_character(cid, "Winifred")
+    # Simulate a later world record reusing the slug. The HTTP create route
+    # refuses that collision; hand-managed stores can still contain it.
+    world_aid, _ = store.characters.create_character(store.worlds.paths.world_root(wid), "Winifred")
+    assert aid == world_aid
+    store.assets.put_image(store.worlds.paths.world_root(wid), aid, vid,
+                           "avatar", _png(), "png")
+    assert [i["id"] for i in _items(client, "avatars", cid)["items"]] == [aid]
+
+
+def test_world_avatar_gaps_work_without_a_campaign_and_keep_worlds_distinct(client):
+    first, aid = _world_with_a_character(client, "Realm")
+    second, _ = _world_with_a_character(client, "Saltmarch")
+    row = next(c for c in _todo(client, "")["chores"] if c["id"] == "world-avatars")
+    assert row["n"] == 2
+    assert row["what"] == "2 characters without an avatar"
+    items = _items(client, "world-avatars", "")
+    assert items["total"] == 2
+    assert {i["fix"] for i in items["items"]} == {
+        f"/worlds/{wid}/characters/{aid}" for wid in (first, second)}
+    assert len({i["id"] for i in items["items"]}) == 2
+    store.assets.put_image(store.worlds.paths.world_root(first), aid, "default",
+                           "avatar", _png(), "png")
+    assert _items(client, "world-avatars", "")["total"] == 1
+
+
+def test_campaign_avatar_rows_do_not_duplicate_their_world_in_a_scoped_report(client, campaign):
+    cid, wid = campaign
+    _world_character(client, wid, "Mara")
+    assert "avatars" in {c["id"] for c in _todo(client, cid)["chores"]}
+    global_rows = _todo(client, "")["chores"]
+    assert "world-avatars" in {c["id"] for c in global_rows}
+    assert "world-avatars" not in {c["id"] for c in _todo(client, cid)["chores"]}
+
+
+def test_campaign_cover_gaps_are_local_and_clear_when_uploaded(client, campaign):
+    cid, _ = campaign
+    store.covers.delete_cover(cid)
+    for scope in (cid, ""):
+        row = next(c for c in _todo(client, scope)["chores"] if c["id"] == "cover")
+        assert row["n"] == 1
+        assert row["campaign_id"] == cid
+        assert row["fix"] == f"/campaigns/{cid}"
+    items = _items(client, "cover", cid)
+    assert items["total"] == 1
+    assert items["items"][0]["fix"] == f"/campaigns/{cid}"
+    store.covers.put_cover(cid, _png(), "png")
+    assert "cover" not in {c["id"] for c in _todo(client, cid)["chores"]}
+    assert _items(client, "cover", cid)["total"] == 0
+
+
+def test_world_cover_gaps_include_campaign_worlds_and_link_to_the_images_page(client, campaign):
+    cid, wid = campaign
+    store.covers.delete_world_cover(wid)
+    row = next(c for c in _todo(client, "")["chores"] if c["id"] == "world-covers")
+    assert row["n"] == 1
+    assert row["what"] == "1 world without a cover"
+    items = _items(client, "world-covers", "")
+    assert items["total"] == 1
+    assert items["items"][0]["fix"] == f"/worlds/{wid}/images"
+    assert "world-covers" not in {c["id"] for c in _todo(client, cid)["chores"]}
+    store.covers.put_world_cover(wid, _png(), "png")
+    assert "world-covers" not in {c["id"] for c in _todo(client, "")["chores"]}
+    assert _items(client, "world-covers", "")["total"] == 0
+
+
+@pytest.mark.parametrize("chore_id", ["avatars", "world-avatars", "cover", "world-covers", "world-subjects"])
+def test_image_gap_chores_can_be_ignored_and_restored(client, campaign, chore_id):
+    cid, wid = campaign
+    _world_character(client, wid, "Mara")
+    store.covers.delete_cover(cid)
+    store.covers.delete_world_cover(wid)
+    root = store.worlds.paths.world_root(wid)
+    gid = store.greetings.create_greeting(root, "Saltmarch", "", "", "")
+    store.assets.put_image(root, gid, "default", "art_1", _png(), "png", base="greetings")
+    scope = cid if chore_id in ("avatars", "cover") else ""
+    assert chore_id in {c["id"] for c in _todo(client, scope)["chores"]}
+    for on in (True, False):
+        body = {"ignored": on, "campaign": scope}
+        assert client.put(f"/api/todo/{chore_id}/ignored", json=body).status_code == 200
+        report = _todo(client, scope)
+        assert (chore_id in {c["id"] for c in report["ignored"]}) == on
+        assert (chore_id in {c["id"] for c in report["chores"]}) != on
+
+
+def test_greeting_images_need_an_assignment_until_characters_or_none_are_saved(client, campaign):
+    _cid, wid = campaign
+    aid = _world_character(client, wid, "Mara")
+    root = store.worlds.paths.world_root(wid)
+    gid = store.greetings.create_greeting(root, "Saltmarch", aid, "default", "")
+    for image in ("art_1", "art_2", "art_3"):
+        store.assets.put_image(root, gid, "default", image, _png(), "png", base="greetings")
+    store.image_subjects.set_image_subjects(root, gid, "art_1", [aid])
+    store.image_subjects.set_image_subjects(root, gid, "art_2", [])
+    row = next(c for c in _todo(client, "")["chores"] if c["id"] == "world-subjects")
+    assert row["n"] == 1
+    assert row["what"] == "1 greeting image without a character assignment"
+    items = _items(client, "world-subjects", "")
+    assert items["total"] == 1
+    assert items["items"][0]["label"] == "Saltmarch"
+    assert "art_3" in items["items"][0]["detail"]
+    assert items["items"][0]["fix"] == f"/worlds/{wid}/greetings/{gid}"
+    # Use the existing API behind the tagging queue's "No subjects" action.
+    saved = client.put(f"/api/worlds/{wid}/greetings/{gid}/images/art_3/subjects",
+                       json={"subjects": []})
+    assert saved.status_code == 200, saved.text
+    assert "world-subjects" not in {c["id"] for c in _todo(client, "")["chores"]}
+    assert _items(client, "world-subjects", "")["total"] == 0
+
+
+def test_greeting_image_assignment_items_distinguish_worlds_and_removed_images(client):
+    made = []
+    for name in ("Realm", "Saltmarch"):
+        wid = client.post("/api/worlds", json={"name": name}).json()["id"]
+        root = store.worlds.paths.world_root(wid)
+        gid = store.greetings.create_greeting(root, "Mara", "", "", "")
+        for image in ("art_1", "art_2"):
+            store.assets.put_image(root, gid, "default", image, _png(), "png", base="greetings")
+        store.assets.delete_image(root, gid, "default", "art_2", base="greetings")
+        made.append((wid, gid))
+    row = next(c for c in _todo(client, "")["chores"] if c["id"] == "world-subjects")
+    assert row["n"] == 2
+    items = _items(client, "world-subjects", "")
+    assert items["total"] == 2
+    assert len({i["id"] for i in items["items"]}) == 2
+    assert {i["fix"] for i in items["items"]} == {
+        f"/worlds/{wid}/greetings/{gid}" for wid, gid in made}

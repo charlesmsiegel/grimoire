@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { errorText } from "../api/errors";
+import { encodeSegment } from "../urlSegment";
 import { Field } from "./Field";
 import { DemotePanel } from "./DemotePanel";
 import { GreetingMarkdown } from "./GreetingMarkdown";
@@ -469,7 +470,15 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     const version = chars.find((c) => c.id === id)?.versions.find((v) => v.id === presentVid(id))?.name;
     return version ? `${charName(id)}:${version}` : charName(id);
   };
-  const imageName = (src: string) => src.split("/").pop() ?? "";
+  const imageName = (src: string) => {
+    if (!src.startsWith("/api/worlds/")) return src.replace(/^https?:/i, (scheme) => scheme.toLowerCase());
+    const path = src.split(/[?#]/)[0].split("/").map((segment) => {
+      try { return encodeSegment(decodeURIComponent(segment)); }
+      catch { return encodeSegment(segment); }
+    }).join("/");
+    const prefix = `/api/worlds/${encodeSegment(wid)}/greetings/${encodeSegment(gid ?? "")}/images/`;
+    return path.startsWith(prefix) ? decodeURIComponent(path.slice(prefix.length)) : path;
+  };
 
   // The form's long lists, for the rail's reason: each rebuilt only when what
   // it lists or which of them are on changes, never for a keystroke elsewhere.
@@ -493,9 +502,14 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     [others, edges.excludes, toggle]);
 
   async function saveSubjects(name: string, cids: string[]) {
-    await api.setImageSubjects(wid, gid!, name, cids);
-    setSubjects(await api.getGreetingSubjects(wid, gid!));
-    setPicking(null);
+    try {
+      await api.setImageSubjects(wid, gid!, name, cids);
+      setSubjects(await api.getGreetingSubjects(wid, gid!));
+      setPicking(null);
+      setUntagged(await api.listUntaggedImages(wid, true));
+    } catch (err: unknown) {
+      setError(errorText(err));
+    }
   }
 
   /** `href`, when given, is the only case that means "another record in THIS
@@ -575,9 +589,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
             <div className="detail-main">
               <h3>{form.name}</h3>
               <GreetingMarkdown imageExtras={!worldScope ? undefined : (src) => {
-                // These controls write this greeting's subjects sidecar.
-                // Collection members live in the world library, not here.
-                if (!src.startsWith(`/api/worlds/${wid}/greetings/${gid}/images/`)) return null;
+                // Byte ownership never identifies who is in the picture. The
+                // greeting's sidecar also holds references to other records'
+                // art, and collection controls pass the selected member here.
+                if (!src.startsWith("/api/worlds/") && !/^https?:\/\//i.test(src)) return null;
                 const name = imageName(src);
                 return (
                   <>
@@ -585,6 +600,9 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
                       <button key={cid} className="chip on"
                               onClick={() => onOpenCharacter?.(cid, presentVid(cid))}>{charName(cid)}</button>
                     ))}
+                    {Object.prototype.hasOwnProperty.call(subjects, name) && subjects[name].length === 0 && (
+                      <span className="chip on">None</span>
+                    )}
                     <button className="chip" onClick={() => setPicking(name)}>＋ subjects</button>
                     {picking === name && (
                       <SubjectsPopover chars={chars} present={form.present} value={subjects[name] ?? []}

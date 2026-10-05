@@ -240,14 +240,14 @@ export function ArtTab(
                 <img alt={`${a.greeting_name} art`} loading="lazy" decoding="async"
                      src={a.thumb ?? a.url} />
               </a>
-              <button className="shelf-promote" onClick={() => void guard(() =>
+              {a.copyable !== false && <><button className="shelf-promote" onClick={() => void guard(() =>
                 api.copyGreetingImage(scope, cid, vid, { gid: a.gid, name: a.name, slot: "avatar" }))}>
                 Set as avatar
               </button>
               <button className="shelf-promote" onClick={() => void guard(() =>
                 api.copyGreetingImage(scope, cid, vid, { gid: a.gid, name: a.name, slot: "gallery" }))}>
                 Add to gallery
-              </button>
+              </button></>}
               <Link className="shelf-promote" to={greetingHref(a.gid)}>
                 {a.greeting_name}
               </Link>

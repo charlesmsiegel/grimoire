@@ -2148,7 +2148,9 @@ export const api = {
     request<{ ok: boolean }>("PUT",
       `/api/campaigns/${cid}/images/${encodeSegment(name)}/description`, { description }),
   setImageSubjects: (wid: string, gid: string, name: string, subjects: string[]) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/images/${name}/subjects`, { subjects }),
+    name.startsWith("/") || /^https?:\/\//i.test(name)
+      ? request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/subjects`, { image: name, subjects })
+      : request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/images/${encodeSegment(name)}/subjects`, { subjects }),
   listImageAppearances: (wid: string, cid: string) =>
     request<Appearance[]>("GET", `/api/worlds/${wid}/characters/${cid}/appearances`),
   /** The greeting-image tagging backlog. `fresh` for the same reason

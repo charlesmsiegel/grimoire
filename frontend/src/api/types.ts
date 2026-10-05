@@ -798,7 +798,7 @@ export type Availability = {
   mark?: GreetingMark;
   recommendation?: "successor" | "phase_optional" | null;
 };
-export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string };
+export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string; copyable?: boolean };
 
 // cast
 export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };

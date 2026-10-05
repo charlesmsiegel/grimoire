@@ -1168,7 +1168,7 @@ test("creating a greeting includes phase sequence and optional metadata", async 
 });
 
 
-test("collection members do not expose greeting-owned subject controls", async () => {
+test("collection members expose subject controls for the selected picture", async () => {
   const id = "a".repeat(32);
   const member = `/api/worlds/realm/images/collection-image-${"b".repeat(64)}?v=1`;
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true,
@@ -1180,9 +1180,52 @@ test("collection members do not expose greeting-owned subject controls", async (
   try {
     renderGreetings({ selected: "open" });
     expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member);
-    expect(screen.queryByRole("button", { name: /subjects/i })).not.toBeInTheDocument();
-    expect(api.setImageSubjects).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: /subjects/i }));
+    fireEvent.click(screen.getByRole("button", { name: "None" }));
+    await waitFor(() => expect(api.setImageSubjects).toHaveBeenCalledWith(
+      "realm", "open", member.split("?")[0], []));
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+test.each([
+  ["/api/worlds/realm/characters/seraphine/versions/default/images/embed-art?v=1",
+    "/api/worlds/realm/characters/seraphine/versions/default/images/embed-art"],
+  ["/api/worlds/realm/lore/saltmarch/images/avatar?v=1", "/api/worlds/realm/lore/saltmarch/images/avatar"],
+  ["https://example.test/art.png?variant=1", "https://example.test/art.png?variant=1"],
+  ["/api/worlds/realm/greetings/open/images/embed-art?v=1", "embed-art"],
+  ["/api/worlds/realm/characters/seraphine/versions/default/images/art%231",
+    "/api/worlds/realm/characters/seraphine/versions/default/images/art%231"],
+  ["/api/worlds/realm/greetings/open/images/art%231", "art#1"],
+  ["https://example.test/a b.png?variant=1", "https://example.test/a%20b.png?variant=1"],
+  ["HTTPS://example.test/art.png?variant=1", "https://example.test/art.png?variant=1"],
+])("referenced image %s can be assigned to another character or explicit None", async (src, key) => {
+  vi.mocked(api.listCharacters).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [] },
+    { id: "mara", name: "Mara", default_version: "default", versions: [] },
+  ]);
+  vi.mocked(api.readGreeting).mockResolvedValue({
+    ...greetingFixture("open", "Open"), body: `![Scene](<${src}>)`,
+    meta: { ...greetingFixture("open", "Open").meta, phase: "", sequence: null, optional: false },
+  });
+  const { container } = renderGreetings({ selected: "open" });
+  await waitFor(() => {
+    fireEvent.click(within(container.querySelector(".img-extras") as HTMLElement)
+      .getByRole("button", { name: /subjects/i }));
+    expect(screen.getByRole("dialog", { name: /image subjects/i })).toBeInTheDocument();
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Mara" }));
+  vi.mocked(api.getGreetingSubjects).mockResolvedValue({ [key]: ["mara"] });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(within(container.querySelector(".img-extras") as HTMLElement)
+    .getByRole("button", { name: "Mara" })).toBeInTheDocument());
+  expect(api.setImageSubjects).toHaveBeenCalledWith("realm", "open", key, ["mara"]);
+  fireEvent.click(within(container.querySelector(".img-extras") as HTMLElement)
+    .getByRole("button", { name: /subjects/i }));
+  vi.mocked(api.getGreetingSubjects).mockResolvedValue({ [key]: [] });
+  fireEvent.click(screen.getByRole("button", { name: "None" }));
+  await waitFor(() => expect(within(container.querySelector(".img-extras") as HTMLElement)
+    .getByText("None")).toBeInTheDocument());
+  expect(api.setImageSubjects).toHaveBeenLastCalledWith("realm", "open", key, []);
 });
