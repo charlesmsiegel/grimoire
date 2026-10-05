@@ -540,3 +540,36 @@ def test_next_reports_applies_and_character_condition(client):
 ### Task 10: Gate
 
 - [ ] **Step 1:** Run `make check PY=$(pwd)/backend/.venv/bin/python` and fix whatever fails. If a ratchet reports an improvement or a regression, fix it, or run `make baseline` and commit the baseline together with its cause. Do nothing else in this task.
+
+## Plan-gate rulings (binding; override the tasks above where they differ)
+
+Plan → implementation gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`; owner-approved).
+
+1. Task 1 regenerates `backend/tests/store_api_baseline.json` (the facade gains
+   `authors_notes`) and runs `tests/test_store_api_baseline.py` in its step 4.
+2. Opener notes: `a["opener_notes"]` is a list of `(level, text)` pairs (the
+   "zip applied levels" option is deleted); Task 8's mirror uses the same shape.
+3. `turn_no = 0 if opener else authors_note.note_turn(scene["messages"])`, plus
+   a test running an opener over a scene that has posts and expecting only
+   `every == 1` notes.
+4. The branch copy (`authors_notes.copy_scene`) runs with the branching plan's
+   step-6 group — before the cut and before the rolls copy — and is imported
+   in `store/branch.py` as `from . import authors_notes`.
+5. `normalize`: depth defaults to 4 **only when missing or not an int** (0 is
+   valid); `test_normalize_defaults_and_clamps` asserts
+   `normalize({"text": "x", "depth": 0})["depth"] == 0`.
+6. The panel lists the `/next` entries ("Campaign: applies next turn",
+   "Mara: applies when Mara speaks"), with a test; the header `count` counts
+   entries that apply next turn regardless of speaker, character entries
+   included, and the panel says so.
+7. The `authors_note` row goes after the history row if present, else before
+   `post_history`.
+8. Test commands use `tests/test_….py` paths under `cd backend`.
+9. The `store/context/authors_note.py` docstring states gate 4 (repeated empty
+   sends share a turn number) and gate 9 (a roll resume recomposes and sees the
+   current notes).
+10. The `/next` docstring and the panel say the live inspector describes the
+    turn just composed while the panel describes the next one.
+11. Task 2's test uses the branching suite's `_two_turns(client)` setup; Task
+    5's depth-0 test asserts `i == len(msgs) - 1` for the `_campaign` scene.
