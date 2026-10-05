@@ -15,6 +15,7 @@ from .. import (
     characters,
     commitments,
     entities,
+    errors,
     facts,
     groupstate,
     overlay,
@@ -31,6 +32,27 @@ from ..paths import slugify
 from . import conflicts, parse, routing, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")
+
+#: `continuity.identity.AS_NEW_KEY`: the private row key an accepted
+#: ``existing`` retarget carries its original row under, popped here to build
+#: the as-new alternative. Spelled out rather than imported because identity
+#: imports this module (it shares `assign_ids`), so the edge cannot run back.
+AS_NEW_KEY = "_identity_as_new"
+
+#: The parsed sections the identity check examines, and the record kind each
+#: opens -- `continuity.identity.SECTIONS`, restated for the same reason.
+_IDENTITY_SECTIONS = {"plot_movements": "thread", "commitment_movements": "commitment"}
+
+#: The `identity_check` decisions a row stages at band ``low`` whatever its
+#: citation says: a verdict that it may be a duplicate, and a row the check
+#: never answered. Every examined row has a plausible candidate, so an
+#: unanswered one is a possible duplicate nobody ruled out; keeping its
+#: routing band would pre-approve it outside NEEDS YOU.
+_LOW_DECISIONS = ("uncertain", "unchecked")
+
+#: The reason a staged accepted ``existing`` is downgraded with when its
+#: target stopped being live between the resolver's answer and staging.
+CLOSED_SINCE = "that record was closed while the review was being prepared"
 
 
 def _char_name(cid: str, char_id: str) -> str:
@@ -350,7 +372,9 @@ def _assign_section(rows: list, stored: dict, section: str,
 
 
 def assign_ids(threads: dict, owed: dict | None, parsed: dict,
-               live: dict[str, str] | None = None) -> dict[tuple[str, int], Assigned | None]:
+               live: dict[str, str] | None = None,
+               staged: dict[str, dict[str, str]] | None = None,
+               ) -> dict[tuple[str, int], Assigned | None]:
     """The ONE id assignment for `plot_movements` and `commitment_movements`.
 
     Keyed `(section, row index)`. `None` is a row `materialize` drops: a blank
@@ -361,16 +385,25 @@ def assign_ids(threads: dict, owed: dict | None, parsed: dict,
     gets the same answer, explicit-id reservations and `slug-N` allocation
     included. `live` is `continuity.effective.live_canon` -- the alias redirect
     (spec §7.2), which both callers must pass the same map for.
+
+    `staged`, when given, receives each section's staged-title map (id ->
+    folded title), so a later allocation in the same batch -- materialize's
+    as-new alternatives -- sees every id this batch already reserved.
     """
     out: dict[tuple[str, int], Assigned | None] = {}
-    _assign_section(parsed.get("plot_movements", []), threads, "plot_movements",
-                    _new_thread_id, out, _aliases(live, "thread"))
+    titles: dict[str, dict[str, str]] = {"commitment_movements": {}}
+    titles["plot_movements"] = _assign_section(
+        parsed.get("plot_movements", []), threads, "plot_movements",
+        _new_thread_id, out, _aliases(live, "thread"))
     rows = parsed.get("commitment_movements", [])
     if owed is None:
         out.update({("commitment_movements", i): None for i in range(len(rows))})
     else:
-        _assign_section(rows, owed, "commitment_movements", _new_commitment_id, out,
-                        _aliases(live, "commitment"))
+        titles["commitment_movements"] = _assign_section(
+            rows, owed, "commitment_movements", _new_commitment_id, out,
+            _aliases(live, "commitment"))
+    if staged is not None:
+        staged.update(titles)
     return out
 
 
@@ -386,25 +419,278 @@ def _live_canon(cid: str) -> dict[str, str]:
         return {}
 
 
-def _merged_head(stored: dict | None, slot: Assigned, title: str) -> str:
+def _merged_head(stored: dict | None, merged: str | None, title: str) -> str:
     """The title a staged row's label starts with: the alias source's own,
     for a row that named it, so the reviewer sees what the model wrote."""
-    if slot.merged_from is None:
+    if merged is None:
         return title
-    src = (stored or {}).get(slot.merged_from)
-    return (_text(src.get("title")) if isinstance(src, dict) else "") or slot.merged_from
+    src = (stored or {}).get(merged)
+    return (_text(src.get("title")) if isinstance(src, dict) else "") or merged
 
 
-def _merged_tail(cur: dict | None, slot: Assigned, title: str,
+def _merged_tail(cur: dict | None, merged: str | None, title: str,
                  settled: Callable[[dict], bool]) -> str:
     """`→ merged into <title>` for a row redirected off an alias source, with
     the canonical's stored status when approving the row would reopen it."""
-    if slot.merged_from is None or not isinstance(cur, dict):
+    if merged is None or not isinstance(cur, dict):
         return ""
     tail = f" → merged into {title}"
     if settled(cur):
         tail += f" ({_text(cur.get('status'))})"
     return tail
+
+
+def _plot_edit(sid: str, row: dict, pid: str, threads: dict, *,
+               merged: str | None = None) -> dict:
+    """The staged edit (without its review block) moving thread `pid` by `row`.
+
+    One body for a primary row and for every alternative the identity check
+    offers, so an alternative's label, payload and `before` token are
+    byte-identical to what a primary row on that thread would carry.
+    `merged` is the alias source the row named, when `pid` is its canonical.
+    """
+    beat = (row.get("beat", "") or "").strip()
+    title = (row.get("title", "") or "").strip()
+    status = row.get("status", "open")
+    cur = threads.get(pid)
+    # An existing thread: named by id, or by a new title whose slug collides
+    # with an OPEN thread of the SAME title -- the only collision
+    # `_new_thread_id` honours (§10.5); any other collision was given a
+    # fresh `slug-N` and lands in the else branch as a new thread.
+    if isinstance(cur, dict):
+        # Rendered by `conflicts`, not here: the staleness check recomputes
+        # this same line at save time, and two copies of the format would
+        # let a harmless reformat read as a contradiction (#111).
+        before = conflicts.plot_line(cur)
+        disp_title = cur.get("title") or title or pid  # keep the stored title
+    else:
+        before, disp_title = "", title or pid
+    label = (f"{_merged_head(threads, merged, disp_title)} — {status}"
+             f"{_merged_tail(cur, merged, disp_title, _thread_settled)}")
+    return {"id": f"plot:{pid}", "kind": "plot",
+            "target": {"kind": "plot", "id": pid},
+            "label": label,
+            "field": "beat", "before": before, "after": beat, "authored": False,
+            "payload": {"id": pid, "title": disp_title, "status": status,
+                        "scene": sid}}
+
+
+def _commitment_edit(sid: str, row: dict, mid: str, owed: dict, *,
+                     merged: str | None = None) -> dict:
+    """The staged edit (without its review block) moving commitment `mid`.
+
+    Same shape as `_plot_edit`, and deliberately a second function rather
+    than a parameterized shared one: the two record types agree on "id or a
+    slugged title, one edit per record per scene" -- which `assign_ids`
+    decides for both -- and on nothing else -- the label, the payload and the
+    vocabulary the status is drawn from all differ, so the factored version
+    would be a function whose body is mostly branches on which of the two
+    called it.
+    """
+    beat = (row.get("beat", "") or "").strip()
+    title = (row.get("title", "") or "").strip()
+    # Blank means "the model said nothing" -- see parse.py. Carried into the
+    # payload AS blank so `set_movement` keeps the stored value; the label
+    # below shows the resolved value the reviewer will actually get.
+    kind = (row.get("kind", "") or "").strip()
+    status = (row.get("status", "") or "").strip()
+    # None, not "": the key's PRESENCE is the signal (see parse.py). "" is
+    # an instruction to clear the deadline; absent means leave it alone.
+    due = _text(row["due"]) if "due" in row else None
+    cur = owed.get(mid)
+    if isinstance(cur, dict):  # existing commitment (by id, or a colliding new title)
+        # The STORED head, deadline included: `due` is applied on save and
+        # then steers the ledger and every later scene prompt, so a model
+        # that invents or overwrites one must not be able to do it in a row
+        # whose only visible text is the beat. Here it is what the deadline
+        # was; the label below is what it will be. It doubles as the
+        # staleness token `apply_edits` re-checks at save time.
+        before = conflicts.commitment_line(cur)
+        stored_due = _text(cur.get("due"))
+        disp_title = _text(cur.get("title")) or title or mid  # keep the stored title
+        # What the record will read AFTER the save: the model's value where
+        # it gave one, the stored value where it did not.
+        disp_kind = kind or _text(cur.get("kind")) or "promise"
+        disp_status = status or _text(cur.get("status")) or "open"
+        disp_due = stored_due if due is None else due
+    else:
+        before, disp_title = "", title or mid
+        disp_kind = kind or "promise"      # set_movement's own defaults, for
+        disp_status = status or "open"     # a commitment being created here
+        disp_due = due or ""
+    label = f"{_merged_head(owed, merged, disp_title)} — {disp_kind}, {disp_status}"
+    if disp_due:
+        label += f", due {disp_due}"
+    label += _merged_tail(cur, merged, disp_title, _commitment_settled)
+    return {"id": f"commitment:{mid}", "kind": "commitment",
+            "target": {"kind": "commitments", "id": mid},
+            "label": label,
+            "field": "beat", "before": before, "after": beat, "authored": False,
+            "payload": {"id": mid, "title": disp_title, "kind": kind,
+                        "status": status, "due": due, "scene": sid}}
+
+
+def _accepted_existing(ic) -> bool:
+    return (isinstance(ic, dict) and ic.get("decision") == "existing"
+            and ic.get("status") == "accepted")
+
+
+def _recheck_accepted(parsed: dict, threads: dict, owed: dict | None,
+                      live: dict[str, str]) -> dict:
+    """`parsed` with every accepted ``existing`` row whose target is no longer
+    live put back as the new row the model wrote, at ``uncertain``.
+
+    `materialize` runs after the slowest absorb phase, so a record the
+    resolver's answer named can be closed or resolved in that window -- a
+    Ledger edit, another scene's review save, neither refused by this scene's
+    busy flag. Identity resolution never reopens a record (spec §10.2), so the
+    target is re-read here, through the CURRENT alias map, and a row whose
+    target is gone or settled stages as its `AS_NEW_KEY` original with a
+    ``downgraded`` check -- band ``low``, its live candidates still offered.
+    A shallow copy; `parsed` is not mutated. A row without its original is
+    not one `identity.rewritten` wrote, and is left alone."""
+    out = dict(parsed)
+    for section, kind in _IDENTITY_SECTIONS.items():
+        rows = parsed.get(section)
+        stored = threads if kind == "thread" else owed
+        if isinstance(rows, list) and isinstance(stored, dict):
+            out[section] = _recheck_section(rows, stored, kind, _aliases(live, kind))
+    return out
+
+
+def _recheck_section(rows: list, stored: dict, kind: str, aliases: dict[str, str]) -> list:
+    rows = list(rows)
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict) or not _accepted_existing(row.get("identity_check")):
+            continue
+        original = row.get(AS_NEW_KEY)
+        target = _text(row.get("id"))
+        cur = stored.get(_redirect(target, stored, aliases)[0])
+        if not isinstance(original, dict) or (
+                isinstance(cur, dict) and continuity_effective.is_live(kind, cur.get("status"))):
+            continue
+        rows[i] = {**original, "identity_check": {
+            **row["identity_check"], "decision": "uncertain", "status": "downgraded",
+            "reason": CLOSED_SINCE}}
+        # `identity.rewritten` retargeted this row's siblings -- later rows
+        # dropped only because the proposed row held their id -- onto the same
+        # record, so they would stay a dropped second move. With the row back
+        # on its own id they would instead stage onto the settled target and
+        # reopen it, so they are dropped here, as they were before any check.
+        # Nothing else in the batch can name the target: an accepted
+        # ``existing`` is downgraded when another row already moves it.
+        for j in range(i + 1, len(rows)):
+            sib = rows[j]
+            if (isinstance(sib, dict) and "identity_check" not in sib
+                    and _text(sib.get("id")) == target):
+                rows[j] = {**sib, "beat": ""}
+    return rows
+
+
+def _onto_existing(kind: str, row: dict, rid: str) -> dict:
+    """The §10.2 rewrite of `row` onto the existing record `rid` -- the rules
+    `continuity.identity._onto_existing` applies to an accepted row, restated
+    because materializer cannot import identity. The title is blank (keep
+    stored); a plot status is the model's ``closed`` or ``advanced``, else
+    ``advanced``, never ``open``; a commitment keeps its stored kind and a
+    status only when it resolves the record; ``due`` stays as present or
+    absent."""
+    new = {**row, "id": rid, "title": ""}
+    status = row.get("status")
+    if kind == "thread":
+        new["status"] = status if status in ("closed", "advanced") else "advanced"
+    else:
+        new["kind"] = ""
+        new["status"] = status if status in commitments.RESOLVED else ""
+    return new
+
+
+def _fresh_id(stored: dict, staged: dict[str, str], slug: str) -> str:
+    """`slug`, or the first `slug-N` naming nothing stored and nothing this
+    batch reserved -- under any title. Not `_new_*_id`, which honours a
+    same-titled open record and reuses a same-titled staged id: either would
+    make the as-new alternative something other than a new record."""
+    n, candidate = 1, slug
+    while candidate in stored or candidate in staged:
+        n += 1
+        candidate = f"{slug}-{n}"
+    return candidate
+
+
+def _candidate_alternatives(sid: str, kind: str, original: dict, ic: dict, stored: dict,
+                            live: dict[str, str], taken: set[tuple[str, str]]) -> list[dict]:
+    """One staged row per candidate that is still a live, untaken record.
+
+    Revalidated against the state materialize read, never the examination's
+    snapshot: each candidate is followed through the CURRENT alias map, and
+    its canonical must be stored, live, and moved by no edit in this batch
+    (this row's own target included). Two candidates that now share a
+    canonical are one alternative."""
+    build = _plot_edit if kind == "thread" else _commitment_edit
+    target_kind = "plot" if kind == "thread" else "commitments"
+    alts: list[dict] = []
+    for cand in ic.get("candidates") or []:
+        ref = cand.get("ref") if isinstance(cand, dict) else None
+        prefix, _, rid = live.get(ref, ref).partition(":") if isinstance(ref, str) else ("", "", "")
+        cur = stored.get(rid) if prefix == kind else None
+        if (not isinstance(cur, dict) or (target_kind, rid) in taken
+                or not continuity_effective.is_live(kind, cur.get("status"))):
+            continue
+        taken = taken | {(target_kind, rid)}
+        alts.append(build(sid, _onto_existing(kind, original, rid), rid, stored))
+    return alts
+
+
+def _as_new_alternative(sid: str, kind: str, original: dict, stored: dict,
+                        staged: dict[str, str]) -> dict:
+    """The model's own row on a record of its own: what an accepted
+    ``existing`` is one click from, if the match was wrong.
+
+    Its explicit id is kept only when free and slug-shaped -- a model-written
+    id such as ``plot/the-map`` would create a record the Ledger's routes
+    cannot address. The id is reserved in `staged`, so two as-new variants
+    never share one."""
+    given, title = _text(original.get("id")), _text(original.get("title"))
+    if given and slugify(given) == given and given not in stored and given not in staged:
+        rid = given
+    else:
+        rid = _fresh_id(stored, staged, slugify(title or given))
+    staged[rid] = (title or rid).casefold()
+    build = _plot_edit if kind == "thread" else _commitment_edit
+    return build(sid, {**original, "id": rid}, rid, stored)
+
+
+def _attach_alternatives(sid: str, out: list[dict], rows_by_edit: dict[str, dict],
+                         threads: dict, owed: dict, live: dict[str, str],
+                         staged_plot_titles: dict[str, str],
+                         staged_titles: dict[str, str]) -> None:
+    """Fill each examined row's `identity_check.alternatives` (spec §10.3).
+
+    A second pass, after every primary row is staged, so "not targeted
+    elsewhere in the batch" and the as-new allocation see the whole batch.
+    Alternatives are built by the same helpers as primary rows, so their
+    labels, payloads and `before` tokens are what a primary row on that record
+    would carry. Each copies its row's review block and carries no
+    `identity_check`. Assigned only once every row's list is built, so a
+    failure part-way leaves every list at ``[]``."""
+    taken = {(e["target"]["kind"], e["target"]["id"]) for e in out
+             if e.get("kind") in ("plot", "commitment")}
+    found: dict[str, list[dict]] = {}
+    for edit in out:
+        ic, row = edit.get("identity_check"), rows_by_edit.get(edit["id"])
+        if not isinstance(ic, dict) or row is None:
+            continue
+        kind = "thread" if edit["kind"] == "plot" else "commitment"
+        stored, staged = (threads, staged_plot_titles) if kind == "thread" else (owed, staged_titles)
+        original = row.get(AS_NEW_KEY) if _accepted_existing(ic) else None
+        alts = _candidate_alternatives(sid, kind, original if isinstance(original, dict) else row,
+                                       ic, stored, live, taken)
+        if isinstance(original, dict):
+            alts.append(_as_new_alternative(sid, kind, original, stored, staged))
+        found[edit["id"]] = [{**alt, "review": dict(edit["review"])} for alt in alts]
+    for edit in out:
+        if edit["id"] in found:
+            edit["identity_check"]["alternatives"] = found[edit["id"]]
 
 
 def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
@@ -468,7 +754,9 @@ def _character_state_edit(cid: str, kind: str, char_id: str, before: str, after:
 
 def materialize(cid: str, sid: str, parsed: dict,
                 messages: list[dict] | None = None,
-                player_label: str | None = None) -> list[dict]:
+                player_label: str | None = None, *,
+                on_identity_error: Callable[[BaseException], None] | None = None,
+                ) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error).
 
@@ -478,6 +766,14 @@ def materialize(cid: str, sid: str, parsed: dict,
     `player_label` is the same snapshot one layer down: the name the prompt's
     transcript put on the player's unstamped posts, which a rename landing
     mid-call would otherwise change underneath the citations.
+
+    Rows the identity step examined carry `identity_check`; they are staged
+    with it (alternatives added), at band ``low`` when the check found a
+    possible duplicate or never answered. The two identity-only passes --
+    re-checking accepted targets, building alternatives -- run outside every
+    absorb phase boundary, so a defect in either stages the rows without it
+    rather than failing a paid-for extraction: it is recorded and reported
+    to `on_identity_error`, and the return shape is unchanged.
     """
     croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
@@ -495,9 +791,26 @@ def materialize(cid: str, sid: str, parsed: dict,
         pre-approved on the strength of a signal that was actually present and
         simply dropped. `subjects` are the actors the record BELONGS to (see
         `routing.authority`); a record that belongs to nobody passes none.
+
+        A row the identity step examined carries its `identity_check` onto
+        the edit (alternatives filled in later), and is forced to band
+        ``low`` when the check found a possible duplicate or never answered;
+        the citation's own score and quote are reported unchanged.
         """
+        row = dict(row)
+        row.pop(AS_NEW_KEY, None)
         edit["review"] = routing.review(index, row, subjects)
+        ic = row.get("identity_check")
+        if isinstance(ic, dict):
+            edit["identity_check"] = {**ic, "alternatives": []}
+            if ic.get("decision") in _LOW_DECISIONS:
+                edit["review"] = {**edit["review"], "band": "low"}
         return edit
+
+    def _identity_failed(exc: BaseException) -> None:
+        errors.record_exception(exc, "continuity-identity", campaign=cid, scene=sid)
+        if on_identity_error is not None:
+            on_identity_error(exc)
 
     for e in parsed.get("character_state_edits", []):
         raw_id = e.get("id", "")
@@ -690,90 +1003,41 @@ def materialize(cid: str, sid: str, parsed: dict,
     # (spec §7.2): the id, payload and `before` are the canonical's, the PHYSICAL
     # record `apply` writes and `conflicts` re-reads at save time; the label
     # keeps the source's title and says where the beat is going.
-    assigned = assign_ids(threads, owed, parsed, _live_canon(cid))
+    #
+    # An accepted identity retarget whose record stopped being live since the
+    # resolver answered is put back first, so it is assigned as the new row.
+    live = _live_canon(cid)
+    try:
+        parsed = _recheck_accepted(parsed, threads, owed, live)
+    except Exception as exc:  # noqa: BLE001 -- an identity-only pass; a defect stages the rows without it, never fails the absorb
+        _identity_failed(exc)
+    staged_titles: dict[str, dict[str, str]] = {}
+    assigned = assign_ids(threads, owed, parsed, live, staged_titles)
+    rows_by_edit: dict[str, dict] = {}   # plot/commitment edit id -> its parsed row
     for i, e in enumerate(parsed.get("plot_movements", [])):
         slot = assigned[("plot_movements", i)]
         if slot is None:
             continue  # blank beat, no usable id or title, or a second edit to one thread
-        beat = (e.get("beat", "") or "").strip()
-        title = (e.get("title", "") or "").strip()
-        status = e.get("status", "open")
-        pid = slot.id
-        cur = threads.get(pid)
-        # An existing thread: named by id, or by a new title whose slug collides
-        # with an OPEN thread of the SAME title -- the only collision
-        # `_new_thread_id` honours (§10.5); any other collision was given a
-        # fresh `slug-N` and lands in the else branch as a new thread.
-        if isinstance(cur, dict):
-            # Rendered by `conflicts`, not here: the staleness check recomputes
-            # this same line at save time, and two copies of the format would
-            # let a harmless reformat read as a contradiction (#111).
-            before = conflicts.plot_line(cur)
-            disp_title = cur.get("title") or title or pid  # keep the stored title
-        else:
-            before, disp_title = "", title or pid
-        label = (f"{_merged_head(threads, slot, disp_title)} — {status}"
-                 f"{_merged_tail(cur, slot, disp_title, _thread_settled)}")
-        out.append(_staged({"id": f"plot:{pid}", "kind": "plot",
-                            "target": {"kind": "plot", "id": pid},
-                            "label": label,
-                            "field": "beat", "before": before, "after": beat, "authored": False,
-                            "payload": {"id": pid, "title": disp_title, "status": status,
-                                        "scene": sid}}, e))
+        edit = _plot_edit(sid, e, slot.id, threads, merged=slot.merged_from)
+        out.append(_staged(edit, e))
+        rows_by_edit[edit["id"]] = e
 
-    # Same shape as plot_movements above, and deliberately a second block rather
-    # than a parameterized shared one: the two record types agree on "id or a
-    # slugged title, one edit per record per scene" -- which `assign_ids` now
-    # decides for both -- and on nothing else -- the
-    # label, the payload and the vocabulary the status is drawn from all differ,
-    # so the factored version would be a function whose body is mostly branches
-    # on which of the two called it.
     for i, e in enumerate(parsed.get("commitment_movements", []) if owed is not None else []):
         slot = assigned[("commitment_movements", i)]
         if slot is None:
             continue  # blank beat, no usable id or title, or a second edit to one commitment
-        beat = (e.get("beat", "") or "").strip()
-        title = (e.get("title", "") or "").strip()
-        # Blank means "the model said nothing" -- see parse.py. Carried into the
-        # payload AS blank so `set_movement` keeps the stored value; the label
-        # below shows the resolved value the reviewer will actually get.
-        kind = (e.get("kind", "") or "").strip()
-        status = (e.get("status", "") or "").strip()
-        # None, not "": the key's PRESENCE is the signal (see parse.py). "" is
-        # an instruction to clear the deadline; absent means leave it alone.
-        due = _text(e["due"]) if "due" in e else None
-        mid = slot.id
-        cur = owed.get(mid)
-        if isinstance(cur, dict):  # existing commitment (by id, or a colliding new title)
-            # The STORED head, deadline included: `due` is applied on save and
-            # then steers the ledger and every later scene prompt, so a model
-            # that invents or overwrites one must not be able to do it in a row
-            # whose only visible text is the beat. Here it is what the deadline
-            # was; the label below is what it will be. It doubles as the
-            # staleness token `apply_edits` re-checks at save time.
-            before = conflicts.commitment_line(cur)
-            stored_due = _text(cur.get("due"))
-            disp_title = _text(cur.get("title")) or title or mid  # keep the stored title
-            # What the record will read AFTER the save: the model's value where
-            # it gave one, the stored value where it did not.
-            disp_kind = kind or _text(cur.get("kind")) or "promise"
-            disp_status = status or _text(cur.get("status")) or "open"
-            disp_due = stored_due if due is None else due
-        else:
-            before, disp_title = "", title or mid
-            disp_kind = kind or "promise"      # set_movement's own defaults, for
-            disp_status = status or "open"     # a commitment being created here
-            disp_due = due or ""
-        label = f"{_merged_head(owed, slot, disp_title)} — {disp_kind}, {disp_status}"
-        if disp_due:
-            label += f", due {disp_due}"
-        label += _merged_tail(cur, slot, disp_title, _commitment_settled)
-        out.append(_staged({"id": f"commitment:{mid}", "kind": "commitment",
-                            "target": {"kind": "commitments", "id": mid},
-                            "label": label,
-                            "field": "beat", "before": before, "after": beat, "authored": False,
-                            "payload": {"id": mid, "title": disp_title, "kind": kind,
-                                        "status": status, "due": due, "scene": sid}}, e))
+        # `or {}` only for the type checker: this loop runs when `owed` is a dict.
+        edit = _commitment_edit(sid, e, slot.id, owed or {}, merged=slot.merged_from)
+        out.append(_staged(edit, e))
+        rows_by_edit[edit["id"]] = e
+
+    # The identity check's alternatives, once the whole batch is staged.
+    try:
+        _attach_alternatives(sid, out, rows_by_edit, threads, owed or {}, live,
+                             staged_titles["plot_movements"],
+                             staged_titles["commitment_movements"])
+    except Exception as exc:  # noqa: BLE001 -- an identity-only pass; a defect stages the rows without it, never fails the absorb
+        _identity_failed(exc)
 
     # The fact ledger (#114). One section and one edit kind covering two
     # operations, because a row does one thing to one record and only the row
