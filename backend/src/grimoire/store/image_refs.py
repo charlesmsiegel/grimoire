@@ -192,7 +192,8 @@ def image_names(d: Path) -> set[str]:
 
 
 def resolve_ref(ref: Ref) -> ResolvedImage | None:
-    """The placement's image, or None unless object *and* blob are both present."""
+    """The placement's image, or None unless object *and* blob are both present
+    (the blob as a regular file)."""
     if ref.image is None:
         return None
     obj = image_store.read(ref.image)
@@ -202,7 +203,7 @@ def resolve_ref(ref: Ref) -> ResolvedImage | None:
         blob = image_store.blob_path(obj.blob_sha256, obj.ext)
     except ValueError:
         return None
-    if not blob.exists():
+    if not blob.is_file():          # a directory there is no picture either
         return None
     return ResolvedImage(
         name=ref.name, image_id=obj.id, blob_sha256=obj.blob_sha256,

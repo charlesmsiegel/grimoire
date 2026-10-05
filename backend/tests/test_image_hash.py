@@ -136,8 +136,36 @@ def test_animated_frame_change_and_timing_change():
     assert base.animated and base.identity == "pixels"
     assert _id("gif_anim_frame_changed.gif") != base.id
     assert _id("gif_anim_duration_changed.gif") != base.id
-    # A missing loop count is not "loop forever".
+    # A missing loop count is not "loop forever": it is one play.
     assert _id("gif_anim_noloop.gif") != base.id
+
+
+def _two_frames() -> list[Image.Image]:
+    """Two flat frames a GIF palette holds exactly, so every format decodes
+    them to the same RGBA."""
+    return [Image.new("RGB", (6, 4), c) for c in ((255, 0, 0), (0, 0, 255))]
+
+
+def _anim(fmt: str, **kw) -> bytes:
+    f = _two_frames()
+    buf = io.BytesIO()
+    f[0].save(buf, fmt, save_all=True, append_images=f[1:], duration=[100, 200], **kw)
+    return buf.getvalue()
+
+
+def test_loop_count_is_hashed_as_total_plays():
+    # GIF NETSCAPE loop=N repeats N times after the first play; APNG num_plays
+    # and WebP's ANIM loop count are the total. 0 is forever in all three.
+    gif = {n: _ident(_anim("GIF", loop=n)) for n in (0, 1, 2)}
+    apng = {n: _ident(_anim("PNG", loop=n)) for n in (0, 1, 2, 3)}
+    webp = {n: _ident(_anim("WEBP", loop=n, lossless=True)) for n in (0, 2)}
+    assert all(i.animated for d in (gif, apng, webp) for i in d.values())
+    assert gif[1].id == apng[2].id == webp[2].id
+    assert gif[2].id == apng[3].id
+    assert gif[0].id == apng[0].id == webp[0].id
+    assert gif[1].id != apng[1].id
+    # No loop extension at all: a GIF plays once.
+    assert _ident(_anim("GIF")).id == apng[1].id
 
 
 def test_single_frame_gif_is_static_domain():

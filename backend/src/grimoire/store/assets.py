@@ -879,7 +879,11 @@ def version_art(root: Path, cid: str, vid: str,
       covers a placement arriving, leaving or being rewritten (every write is
       an atomic rename), and ``image-refs/avatar.json`` when there is one --
       the avatar's placement names the bytes `avatar_v` reports and carries
-      the crop. Both stamped before the placements are read.
+      the crop. Both stamped before the placements are read;
+    - for an image-bearing avatar placement, the store's object sidecar it
+      names (stamped before it is read) and the blob that resolves to -- the
+      global half of `avatar_v`, which an adoption or a vanished blob moves
+      without touching this folder.
 
     A folder that is not there is vouched for by the nearest ancestor that is,
     up to `root`: creating it moves that directory's mtime.
@@ -918,14 +922,49 @@ def version_art(root: Path, cid: str, vid: str,
     if found is None:
         return [], read_focus(root, cid, vid, base), None
     files, refs = found
+    avatar_ok = _stamp_avatar_object(refs, stamps)
     resolved, complete = _resolve_refs(refs)
+    avatar_ok = _stamp_avatar_blob(resolved, stamps) and avatar_ok
     cacheable = (_restamp_avatar(d, files, stamps) and not _stranded(files)
-                 and complete and image_refs.read_journal(d) is None)
+                 and complete and avatar_ok and image_refs.read_journal(d) is None)
     focus_stamp = statcache.stamp(d / FOCUS_FILE)
     if focus_stamp is not None:
         stamps.append(focus_stamp)
     focus = read_focus(root, cid, vid, base)
     return _listing(found, resolved), focus, (tuple(stamps) if cacheable else None)
+
+
+def _stamp_avatar_object(refs: dict[str, image_refs.Ref], stamps: list) -> bool:
+    """Stamp the store sidecar of the object the avatar placement names, onto
+    `stamps`, BEFORE it is read (`_resolve_refs`). False when there is one to
+    stamp and it cannot be statted.
+
+    The sidecar is global state no version folder's stat covers: an adoption
+    rewrites the blob it retains -- the bytes `avatar_v` names -- without
+    moving anything under `d`."""
+    ref = refs.get(AVATAR)
+    if ref is None or ref.image is None:
+        return True
+    s = statcache.stamp(image_store.object_path(ref.image))
+    if s is None:
+        return False
+    stamps.append(s)
+    return True
+
+
+def _stamp_avatar_blob(resolved: dict[str, image_refs.ResolvedImage], stamps: list) -> bool:
+    """Stamp the blob a resolved avatar placement reports, onto `stamps`: its
+    vanishing (a partial GC, a sync) must be noticed, not remembered as there.
+    False when it cannot be statted. Only the avatar's: every other image
+    contributes a NAME to a row, never bytes."""
+    r = resolved.get(AVATAR)
+    if r is None:
+        return True
+    s = statcache.stamp(r.blob_path)
+    if s is None:
+        return False
+    stamps.append(s)
+    return True
 
 
 def _restamp_avatar(d: Path, found: _Files, stamps: list) -> bool:
@@ -1325,10 +1364,13 @@ def _check_promotable(d: Path, name: str) -> None:
 
 
 def _finish_promotion(d: Path, name: str, journal: dict) -> None:
-    """Steps 4-7 of a journalled promotion: write the post-state, clear the
-    journal, drop the crop. Idempotent, so recovery can repeat it from any
+    """Steps 4-7 of a journalled promotion: write the post-state, drop the
+    crop, clear the journal. Idempotent, so recovery can repeat it from any
     point the forward pass reached. Caller holds both image locks and the
-    sidecar lock, and has validated `journal` (`_journal_ok`)."""
+    sidecar lock, and has validated `journal` (`_journal_ok`).
+
+    The journal goes LAST: it is the only thing that sends a later read back
+    to finish the job, so every step must be done before it is cleared."""
     post, desc = journal["post"], journal["desc"]
     _set_placement(d, AVATAR, post[AVATAR])
     if post[name] is not None:
@@ -1343,8 +1385,8 @@ def _finish_promotion(d: Path, name: str, journal: dict) -> None:
         AVATAR: desc.get(name),
         name: desc.get(AVATAR) if post[name] is not None else None,
     })
-    image_refs.clear_journal(d)
     _clear_focus_in(d)
+    image_refs.clear_journal(d)
 
 
 def _set_placement(d: Path, name: str, image_id: str) -> None:

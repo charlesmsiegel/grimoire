@@ -15,6 +15,11 @@ IDAT, is replaced by a minimal EXIF block holding only that tag (and dropped
 outright when the orientation is 1, absent or unreadable). WebP EXIF is dropped
 whole, as browsers do not apply it there.
 
+What is kept is allowlisted, never the reverse: a PNG keeps `_PNG_KEEP`, a WebP
+`_WEBP_KEEP` (and, inside each animation frame, only its frame data), and a
+JPEG's JFIF header is rebuilt with its density but without the thumbnail it
+may embed -- a second picture, which need not be this one.
+
 Two properties the callers rely on:
 
 - **Deterministic and idempotent.** The output depends only on the input's
@@ -37,6 +42,7 @@ from __future__ import annotations
 
 import struct
 import zlib
+from collections.abc import Iterator
 
 from PIL import Image
 
@@ -58,6 +64,12 @@ _EXIF_PREFIX = b"Exif\x00\x00"
 _GIF_KEEP_APPS = (b"NETSCAPE2.0", b"ANIMEXTS1.0")
 
 _VP8X_EXIF_XMP = 0x08 | 0x04
+#: The WebP chunks that carry what is drawn. Every other one -- EXIF, XMP, and
+#: any unknown chunk -- is dropped (and EXIF/XMP's VP8X flags cleared).
+_WEBP_KEEP = frozenset({b"VP8 ", b"VP8L", b"VP8X", b"ALPH", b"ANIM", b"ANMF", b"ICCP"})
+#: Inside an ANMF: a 16-byte frame header, then these (and unknown ones, dropped).
+_ANMF_HEADER = 16
+_WEBP_FRAME_KEEP = frozenset({b"ALPH", b"VP8 ", b"VP8L"})
 
 
 class _UnparsedError(Exception):
@@ -144,16 +156,31 @@ def _png(raw: bytes) -> bytes:
 
 # --- JPEG --------------------------------------------------------------------
 
+_JFIF = b"JFIF\x00"
+#: "JFIF\0", version (2), units (1), X and Y density (2 each): what is kept of
+#: a JFIF APP0. Its thumbnail size and RGB thumbnail are not.
+_JFIF_HEADER = len(_JFIF) + 7
+
+
+def _jpeg_jfif_segment(payload: bytes) -> bytes:
+    """A JFIF APP0 rebuilt with the same version, units and density and no
+    thumbnail (0x0, no payload) -- an embedded thumbnail is a second picture,
+    which need not be this one. b"" (dropped) when too short to have them."""
+    if len(payload) < _JFIF_HEADER + 2:
+        return b""
+    body = payload[:_JFIF_HEADER] + b"\x00\x00"
+    return b"\xff\xe0" + struct.pack(">H", len(body) + 2) + body
+
+
 def _jpeg_keeps(marker: int, payload: bytes) -> bool:
-    """Whether a segment other than the Exif APP1 survives."""
-    if marker == 0xE0:
-        return payload.startswith(b"JFIF\x00")
+    """Whether a segment other than the Exif APP1 and the JFIF APP0 survives
+    (as it stands). A JFXX APP0 -- the JFIF thumbnail extension -- does not."""
     if marker == 0xE2:
         return payload.startswith(b"ICC_PROFILE\x00")
     if marker == 0xEE:
         return payload.startswith(b"Adobe")
     # other APPn (XMP and extended XMP, IPTC, vendor data) and COM go
-    return not (0xE1 <= marker <= 0xEF or marker == 0xFE)
+    return not (0xE0 <= marker <= 0xEF or marker == 0xFE)
 
 
 def _jpeg_exif_segment(payload: bytes) -> bytes:
@@ -206,10 +233,27 @@ def _jpeg_segment(raw: bytes, pos: int, marker: int) -> tuple[int, bytes]:
     return end, raw[pos + 4:end]
 
 
+def _jpeg_kept(marker: int, payload: bytes, segment: bytes, seen: set[int]) -> bytes:
+    """What of one segment survives, given the rebuilt kinds already `seen`:
+    the first Exif APP1 and the first JFIF APP0 are rebuilt (any later one
+    goes), the rest kept or dropped whole by `_jpeg_keeps`."""
+    if marker == 0xE1 and payload.startswith(_EXIF_PREFIX):
+        rebuild = _jpeg_exif_segment
+    elif marker == 0xE0 and payload.startswith(_JFIF):
+        rebuild = _jpeg_jfif_segment
+    else:
+        return segment if _jpeg_keeps(marker, payload) else b""
+    if marker in seen:
+        return b""
+    seen.add(marker)
+    return rebuild(payload)
+
+
 def _jpeg(raw: bytes) -> bytes:
     n = len(raw)
     out = [b"\xff\xd8"]
-    pos, seen_sos, seen_exif = 2, False, False
+    pos, seen_sos = 2, False
+    seen: set[int] = set()
     while not (seen_sos and pos >= n):  # ran out in entropy data: keep what is there
         marker, pos = _jpeg_marker(raw, pos)
         if marker == 0xD9:
@@ -218,12 +262,7 @@ def _jpeg(raw: bytes) -> bytes:
             out.append(b"\xff\xd9")
             break
         end, payload = _jpeg_segment(raw, pos, marker)
-        if marker == 0xE1 and payload.startswith(_EXIF_PREFIX):
-            if not seen_exif:
-                seen_exif = True
-                out.append(_jpeg_exif_segment(payload))
-        elif _jpeg_keeps(marker, payload):
-            out.append(raw[pos:end])
+        out.append(_jpeg_kept(marker, payload, raw[pos:end], seen))
         pos = end
         if marker == 0xDA:
             seen_sos = True
@@ -237,6 +276,49 @@ def _jpeg(raw: bytes) -> bytes:
 
 # --- WebP --------------------------------------------------------------------
 
+def _riff_chunks(raw: bytes, pos: int, end: int) -> Iterator[tuple[bytes, bytes]]:
+    """(fourcc, payload) for each chunk in ``raw[pos:end]``. A last chunk whose
+    pad byte would fall past `end` is accepted, as libwebp accepts it."""
+    while pos < end:
+        if pos + 8 > end:
+            raise _UnparsedError("truncated chunk header")
+        fourcc = raw[pos:pos + 4]
+        (size,) = struct.unpack("<I", raw[pos + 4:pos + 8])
+        data_end = pos + 8 + size
+        if data_end > end or (data_end + (size & 1) > end and data_end != end):
+            raise _UnparsedError("chunk overruns its container")
+        yield fourcc, raw[pos + 8:data_end]
+        pos = min(data_end + (size & 1), end)
+
+
+def _riff_chunk(fourcc: bytes, payload: bytes) -> bytes:
+    """One chunk, its pad byte (if any) zero."""
+    return fourcc + struct.pack("<I", len(payload)) + payload + b"\x00" * (len(payload) & 1)
+
+
+def _webp_frame(payload: bytes) -> bytes:
+    """An ANMF payload with only its frame data kept: the 16-byte frame header
+    and the ALPH/VP8/VP8L sub-chunks, never the unknown ones a frame may carry."""
+    if len(payload) < _ANMF_HEADER:
+        raise _UnparsedError("short ANMF")
+    kept = [_riff_chunk(k, p)
+            for k, p in _riff_chunks(payload, _ANMF_HEADER, len(payload))
+            if k in _WEBP_FRAME_KEEP]
+    return payload[:_ANMF_HEADER] + b"".join(kept)
+
+
+def _webp_payload(fourcc: bytes, payload: bytes) -> bytes:
+    """A kept chunk's payload as written: VP8X without the EXIF/XMP flags of
+    the chunks dropped, an ANMF with only its frame data, the rest as read."""
+    if fourcc == b"VP8X":
+        if len(payload) < 10:
+            raise _UnparsedError("short VP8X")
+        return bytes([payload[0] & ~_VP8X_EXIF_XMP & 0xFF]) + payload[1:]
+    if fourcc == b"ANMF":
+        return _webp_frame(payload)
+    return payload
+
+
 def _webp(raw: bytes) -> bytes:
     n = len(raw)
     if n < 20:
@@ -245,25 +327,9 @@ def _webp(raw: bytes) -> bytes:
     end = 8 + riff_size
     if riff_size < 4 or end > n:
         raise _UnparsedError("RIFF size overruns file")
-    pos, chunks = 12, []
-    while pos < end:
-        if pos + 8 > end:
-            raise _UnparsedError("truncated chunk header")
-        fourcc = raw[pos:pos + 4]
-        (size,) = struct.unpack("<I", raw[pos + 4:pos + 8])
-        data_end = pos + 8 + size
-        pad = size & 1
-        if data_end > end or (data_end + pad > end and data_end != end):
-            raise _UnparsedError("chunk overruns RIFF")
-        payload = raw[pos + 8:data_end]
-        pos = min(data_end + pad, end)
-        if fourcc in (b"EXIF", b"XMP "):
-            continue
-        if fourcc == b"VP8X":
-            if size < 10:
-                raise _UnparsedError("short VP8X")
-            payload = bytes([payload[0] & ~_VP8X_EXIF_XMP & 0xFF]) + payload[1:]
-        chunks.append(fourcc + struct.pack("<I", size) + payload + b"\x00" * pad)
+    # EXIF, XMP, and every chunk no browser draws, go.
+    chunks = [_riff_chunk(fourcc, _webp_payload(fourcc, payload))
+              for fourcc, payload in _riff_chunks(raw, 12, end) if fourcc in _WEBP_KEEP]
     if not chunks:
         raise _UnparsedError("no chunks")
     body = b"WEBP" + b"".join(chunks)

@@ -1,13 +1,15 @@
 import errno
+import hashlib
 import io
 import json
 import os
 import re
+import time
 
 import pytest
 from PIL import Image
 
-from grimoire.store import assets, image_refs, image_store
+from grimoire.store import assets, image_refs, image_store, statcache
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +34,14 @@ def _png(seed: int = 0) -> bytes:
                 for y in range(6) for x in range(8)])
     buf = io.BytesIO()
     im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _png_level(seed: int, level: int) -> bytes:
+    """`_png(seed)`'s pixels under another zlib level: other bytes, same image."""
+    im = Image.open(io.BytesIO(_png(seed)))
+    buf = io.BytesIO()
+    im.save(buf, "PNG", compress_level=level)
     return buf.getvalue()
 
 
@@ -918,6 +928,60 @@ def test_version_art_uncacheable_while_ref_unresolved(tmp_path):
     assert [i["name"] for i in images] == [assets.AVATAR, "gallery_1"]
 
 
+def _cached_art(tmp_path, pool):
+    """`version_art` memoized as a listing row memoizes it."""
+    return statcache.memo_stamped(
+        "art", lambda: (lambda r: (r[0], r[2]))(
+            assets.version_art(tmp_path, "sera", "default")),
+        pool=pool, max_entries=4)
+
+
+def _age(root):
+    """Back-date everything under `root` past the racy window, so a memoized
+    row is actually stored."""
+    old = time.time_ns() - 3 * statcache.RACY_WINDOW_NS
+    for p in [root, *root.rglob("*")]:
+        os.utime(p, ns=(old, old))
+
+
+def _avatar_v(images):
+    return next(i["v"] for i in images if i["name"] == assets.AVATAR)
+
+
+def test_version_art_stamps_the_avatars_object_and_blob(tmp_path):
+    data = _png(7)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, data, "png")
+    image_id = image_refs.resolve(_vdir(tmp_path), assets.AVATAR).image_id
+    _age(tmp_path)
+    pool: dict = {}
+    first = _cached_art(tmp_path, pool)
+    assert _avatar_v(first) == hashlib.sha256(data).hexdigest()
+    assert _cached_art(tmp_path, pool) is first             # cached
+
+    # Adoption: the object now retains another encoding of the same pixels.
+    # Nothing in the version folder moved, only the store's sidecar.
+    other = _png_level(7, 1)
+    sha = hashlib.sha256(other).hexdigest()
+    assert sha != _avatar_v(first)
+    blob = image_store.blob_path(sha, "png")
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(other)
+
+    def adopt(raw):
+        raw["blob"] = {**raw["blob"], "sha256": sha, "size": len(other)}
+        return raw
+
+    image_store.update(image_id, adopt)
+    _age(image_store.store_root())          # the store's files only, not the folder's
+    again = _cached_art(tmp_path, pool)
+    assert _avatar_v(again) == sha
+    assert _cached_art(tmp_path, pool) is again
+
+    # The retained blob vanishing is noticed too (the row falls back to nothing).
+    blob.unlink()
+    assert [i["name"] for i in _cached_art(tmp_path, pool)] == []
+
+
 def test_image_version_of_a_blob_is_its_sha(tmp_path):
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(9), "png")
     p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
@@ -1268,6 +1332,46 @@ def test_crash_after_description_write_does_not_double_swap(tmp_path, monkeypatc
     _assert_swapped(tmp_path, a, g)        # each picture keeps its own description
     assert stamps is not None
     assert {i["name"]: i["image_id"] for i in images} == {"avatar": g, "gallery_1": a}
+
+
+def test_a_failed_journal_clear_is_recovered_without_a_crop(tmp_path, monkeypatch):
+    _two_slots(tmp_path)                       # the avatar is cropped at 30
+
+    def clear_journal(d):
+        raise OSError("crash")
+
+    monkeypatch.setattr(image_refs, "clear_journal", clear_journal)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    assets.version_art(tmp_path, "sera", "default")      # recovery rolls forward
+    d = _vdir(tmp_path)
+    assert image_refs.read_journal(d) is None
+    assert image_refs.read(d, assets.AVATAR).focus is None
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+
+
+def test_the_crop_goes_before_the_journal(tmp_path, monkeypatch):
+    # A crash just after the journal is cleared leaves nothing to finish the
+    # job, so the crop -- here a legacy focus.json that synced in beside the
+    # avatar placement -- must already be gone by then.
+    a, g = _two_slots(tmp_path)
+    d = _vdir(tmp_path)
+    (d / assets.FOCUS_FILE).write_text(json.dumps({assets.AVATAR: 70}), encoding="utf-8")
+    real = image_refs.clear_journal
+
+    def clear_then_crash(d):
+        real(d)
+        raise OSError("crash")
+
+    monkeypatch.setattr(image_refs, "clear_journal", clear_then_crash)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    assets.version_art(tmp_path, "sera", "default")
+    _assert_swapped(tmp_path, a, g)
+    assert not (d / assets.FOCUS_FILE).exists()
+    assert assets.read_focus(tmp_path, "sera", "default") is None
 
 
 def test_stale_journal_discarded(tmp_path):

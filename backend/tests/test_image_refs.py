@@ -11,7 +11,7 @@ import json
 import pytest
 from PIL import Image
 
-from grimoire.store import image_refs, image_store
+from grimoire.store import assets, image_refs, image_store
 
 
 @pytest.fixture(autouse=True)
@@ -214,6 +214,20 @@ def test_resolve_none_when_blob_missing(tmp_path):
     image_refs.write(d, "avatar", o.id)
     image_store.blob_path(o.blob_sha256, o.ext).unlink()
     assert image_refs.resolve(d, "avatar") is None
+
+
+def test_resolve_none_when_blob_path_is_a_directory(tmp_path):
+    d = tmp_path / "rec"
+    o = _obj()
+    image_refs.write(d, "avatar", o.id)
+    blob = image_store.blob_path(o.blob_sha256, o.ext)
+    blob.unlink()
+    blob.mkdir()                     # something that exists, but is no file
+    assert image_refs.resolve(d, "avatar") is None
+    # ...so a legacy file of the name answers, as for any unresolved placement.
+    legacy = d / "avatar.png"
+    legacy.write_bytes(_png(1))
+    assert assets.path_in(d, "avatar") == legacy
 
 
 def test_resolve_ref_needs_an_image():

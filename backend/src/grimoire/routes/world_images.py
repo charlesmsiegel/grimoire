@@ -172,12 +172,16 @@ async def put_world_library_image(wid: str, name: str, file: UploadFile = File(.
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # `v` so the client can build the immutable `?v=` URL without a second round
-    # trip. It resolves and stats, and answers "" rather than raising if the
-    # file went between the two -- a write that landed must not report a 500.
+    # trip. Taken from the placement `image_id` comes from, so the two describe
+    # the same upload; only with no placement (a legacy file) does it resolve
+    # and stat, answering "" rather than raising if the file went between the
+    # two -- a write that landed must not report a 500.
     placed = store.assets.resolve(store.world_images.images_dir(wid), name)
+    if placed is not None:
+        return {"name": name, "ext": stored, "v": placed.blob_sha256,
+                "image_id": placed.image_id}
     return {"name": name, "ext": stored,
-            "v": store.world_images.image_version(wid, name),
-            "image_id": placed.image_id if placed is not None else None}
+            "v": store.world_images.image_version(wid, name), "image_id": None}
 
 
 @router.delete("/worlds/{wid}/images/{name}")

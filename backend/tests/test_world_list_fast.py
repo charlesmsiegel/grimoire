@@ -34,6 +34,7 @@ from grimoire.store import (
     characters,
     greetings,
     image_descriptions,
+    image_store,
     overlay,
     statcache,
     taglines,
@@ -137,9 +138,11 @@ def _reference_list_in(d: Path) -> list[dict]:
 def _age(root: Path) -> None:
     """Back-date every file AND directory under `root` past the racy window.
     Directories too: their stamps vouch for listings, and a fresh one is never
-    memoized."""
+    memoized. The image store as well: a row's avatar is vouched for by the
+    store's object sidecar and blob, which live outside every record root."""
     old = time.time_ns() - 3 * statcache.RACY_WINDOW_NS
-    for p in [root, *root.rglob("*")]:
+    store = image_store.store_root()
+    for p in [root, *root.rglob("*"), *(store.rglob("*") if store.is_dir() else ())]:
         os.utime(p, ns=(old, old))
 
 
