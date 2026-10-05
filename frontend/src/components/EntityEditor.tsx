@@ -469,6 +469,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   const [adopt, setAdopt] = useState<{ fields: Record<string, string>; unmapped: string[] } | null>(null);
   // The bulk button's one-line outcome.
   const [adoptAllNote, setAdoptAllNote] = useState<string | null>(null);
+  // An adopt request is out (this record's or the whole library's). Both
+  // buttons wait on it: a second click would send the same write twice and, for
+  // the bulk one, report the second run's "0 entries" over the first's outcome.
+  const [adoptBusy, setAdoptBusy] = useState(false);
   const shelfFileRef = useRef<HTMLInputElement>(null);
   const label = KIND_LABELS[kind];
 
@@ -653,6 +657,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     setContentPreview(null);
     setWizardOpen(false);
     setAdopt(null);
+    setAdoptAllNote(null);   // a status about the last scope or record is not about this one
     setActivationOpen(false);
     setMode("edit"); // a brand-new entry goes straight to the form
   }
@@ -664,6 +669,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     setWizardOpen(false);
     const e = await api.readEntity(scope, kind, id);
     if (req !== readReq.current) return;   // the scope moved on, or a later select won
+    if (id !== editing) setAdoptAllNote(null);   // a different record: the note was about the last
     setEditing(id);
     setRev(e.rev);
     setName(e.meta.name);
@@ -700,28 +706,39 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   }
 
   async function applyAdopt() {
-    if (!editing) return;
+    if (!editing || adoptBusy) return;
     setError(null);
+    setAdoptBusy(true);
     try {
       await api.adoptSt(scope, kind, editing);
       await reload();
       await select(editing);   // the new values, and a banner with nothing left
     } catch (err) {
       setError(errorText(err));
+    } finally {
+      setAdoptBusy(false);
     }
   }
 
   async function applyAdoptAll() {
+    if (adoptBusy) return;
     setError(null);
     setAdoptAllNote(null);
+    setAdoptBusy(true);
     try {
       const r = await api.adoptStAll(scope);
       setAdoptAllNote(`Applied to ${r.applied.length} ${r.applied.length === 1 ? "entry" : "entries"}; `
         + `${r.skipped.length} skipped`);
       await reload();
-      if (editing) await select(editing);
+      // Re-read only a record being VIEWED. Re-selecting one open in the form
+      // would reset its fields, body and name to what is on disk and drop the
+      // reader into view mode -- discarding an edit nobody saved. (The button is
+      // disabled for that case; this is the guard if it ever is not.)
+      if (editing && mode === "view") await select(editing);
     } catch (err) {
       setError(errorText(err));
+    } finally {
+      setAdoptBusy(false);
     }
   }
 
@@ -1095,10 +1112,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
       case "number":
         if (!numberInputCanShow(value)) break;   // the text box below
         // `step="any"`: the bound is on the value, not its precision --
-        // a persistence of 0.35 is as valid as 0.5.
+        // a persistence of 0.35 is as valid as 0.5. The activation counts are
+        // whole numbers, and the backend refuses a fraction, so they step by 1.
         return (
           <Field key={f.key} label={f.label}>
-            <input type="number" value={value} min={f.min} max={f.max} step="any"
+            <input type="number" value={value} min={f.min} max={f.max}
+                   step={activationKeys().includes(f.key) ? 1 : "any"}
                    onChange={(e) => set(e.target.value)} />
           </Field>
         );
@@ -1114,11 +1133,16 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
 
   // The set activation controls as sidebar chips, in catalog order. `known_by`
   // is not among them: it names records, so it gets chips of its own.
+  // Open in the form with a record under it: the bulk apply re-reads that
+  // record, and the form's unsaved text would go with it. A blank NEW form has
+  // no record to re-read, so it is not blocked.
+  const adoptAllBlocked = mode === "edit" && editing !== null;
   const activationChips: [string, string][] = ACTIVATION_FIELDS.flatMap((a) => {
     const v = (fields[a.key] ?? "").trim();
     if (!v || a.widget === "refs") return [];
     if (a.widget === "bool") return isKeepOn(v) ? [[a.key, a.label] as [string, string]] : [];
-    return [[a.key, `${a.label}: ${v}${ACTIVATION_POSTS.has(a.key) ? " posts" : ""}`] as [string, string]];
+    const unit = ACTIVATION_POSTS.has(a.key) ? (v === "1" ? " post" : " posts") : "";
+    return [[a.key, `${a.label}: ${v}${unit}`] as [string, string]];
   });
 
   return (
@@ -1145,7 +1169,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             on the one rail an import fills, not on each. */}
         {kind === "lore" && (
           <>
-            <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}>
+            <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}
+                    disabled={adoptBusy || adoptAllBlocked}
+                    title={adoptAllBlocked
+                      ? "Save or cancel the edit in progress first -- applying re-reads the record"
+                      : undefined}>
               Apply imported settings to all
             </button>
             {adoptAllNote && <div className="field-hint" role="status">{adoptAllNote}</div>}
@@ -1235,7 +1263,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                       <> Not mapped to anything here: {adopt.unmapped.join(", ")}.</>
                     )}
                   </p>
-                  <button className="subtle" onClick={() => { void applyAdopt(); }}>Apply</button>
+                  <button className="subtle" onClick={() => { void applyAdopt(); }}
+                          disabled={adoptBusy}>Apply</button>
                 </div>
               )}
               {editing && hasPrimary ? (

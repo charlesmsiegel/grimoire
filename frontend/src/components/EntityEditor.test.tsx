@@ -1799,7 +1799,7 @@ test("every kind carries the Activation disclosure", async () => {
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "rig", name: "Rig", sticky: "1" }, body: "b", rev: "r1" });
   const { container } = render(<Wrap wid="w" kind="items" selected="rig" />);
-  await screen.findByText("Sticky: 1 posts");
+  await screen.findByText("Sticky: 1 post");
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   expect(container.querySelector("details.activation-settings")).not.toBeNull();
 });
@@ -1885,4 +1885,99 @@ test("Apply imported settings to all sits beside + New on the lore rail only", a
   render(<Wrap wid="w" kind="items" />);
   await screen.findByText("No items yet.");
   expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).toBeNull();
+});
+
+test("chips say post for one and posts for the rest", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ cooldown: "0", sticky: "1", scan_depth: "3" }));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("Sticky: 1 post");
+  expect(screen.getByText("Scan depth: 3 posts")).toBeInTheDocument();
+  // "0" is a value that is set: it reads as the number it is.
+  expect(screen.getByText("Cooldown: 0 posts")).toBeInTheDocument();
+});
+
+test("the activation counts step by one", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ sticky: "2" }));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  expect(await screen.findByLabelText("Sticky")).toHaveAttribute("step", "1");
+});
+
+test("adopt-all is disabled over an open edit and never discards it", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  (api.readEntity as any).mockResolvedValue(salt());
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByLabelText("Body"), { target: { value: "unsaved words" } });
+  const all = screen.getByRole("button", { name: "Apply imported settings to all" });
+  expect(all).toBeDisabled();
+  expect(all).toHaveAttribute("title", expect.stringMatching(/save or cancel/i));
+  fireEvent.click(all);
+  expect(api.adoptStAll).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("Body")).toHaveValue("unsaved words");
+});
+
+test("adopt-all over a viewed record applies and re-reads it", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  (api.readEntity as any).mockResolvedValue(salt());
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByRole("button", { name: /^edit$/i });
+  const reads = (api.readEntity as any).mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "Apply imported settings to all" }));
+  await screen.findByText("Applied to 0 entries; 0 skipped");
+  expect((api.readEntity as any).mock.calls.length).toBeGreaterThan(reads);
+});
+
+test("a second click while an adopt is in flight does nothing", async () => {
+  let land!: (v: { applied: []; skipped: [] }) => void;
+  (api.adoptStAll as any).mockReturnValue(new Promise((r) => { land = r; }));
+  render(<Wrap wid="w" kind="lore" />);
+  const all = await screen.findByRole("button", { name: "Apply imported settings to all" });
+  fireEvent.click(all);
+  await waitFor(() => expect(all).toBeDisabled());
+  fireEvent.click(all);
+  expect(api.adoptStAll).toHaveBeenCalledTimes(1);
+  land({ applied: [], skipped: [] });
+  await screen.findByText("Applied to 0 entries; 0 skipped");
+  expect(all).not.toBeDisabled();
+});
+
+test("the per-entry Apply waits on its request too", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+  let land!: (v: { applied: Record<string, string> }) => void;
+  (api.adoptSt as any).mockReturnValue(new Promise((r) => { land = r; }));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  const banner = await screen.findByRole("status", { name: /imported settings/i });
+  const apply = within(banner).getByRole("button", { name: /^apply$/i });
+  fireEvent.click(apply);
+  await waitFor(() => expect(apply).toBeDisabled());
+  fireEvent.click(apply);
+  expect(api.adoptSt).toHaveBeenCalledTimes(1);
+  land({ applied: { sticky: "2" } });
+  // The mocked preview still reports a pending field, so the banner is back.
+  await waitFor(() => expect(
+    screen.getByRole("button", { name: /^apply$/i })).not.toBeDisabled());
+});
+
+test("the adopt-all status line goes when another record is opened", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "salt", name: "Salt" }, { id: "brine", name: "Brine" }]);
+  (api.readEntity as any).mockImplementation((_s: unknown, _k: unknown, id: string) =>
+    Promise.resolve({ meta: { id, name: id }, body: `body of ${id}`, rev: "r1" }));
+  const { rerender } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("body of salt");
+  fireEvent.click(screen.getByRole("button", { name: "Apply imported settings to all" }));
+  await screen.findByText("Applied to 0 entries; 0 skipped");
+  rerender(<Wrap wid="w" kind="lore" selected="brine" />);
+  await screen.findByText("body of brine");
+  expect(screen.queryByText("Applied to 0 entries; 0 skipped")).toBeNull();
+});
+
+test("the adopt-all status line goes when the scope changes", async () => {
+  const { rerender } = render(<Wrap wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
+  await screen.findByText("Applied to 0 entries; 0 skipped");
+  rerender(<Wrap wid="other" kind="lore" scope={{ kind: "world", id: "other" }} />);
+  await waitFor(() => expect(screen.queryByText("Applied to 0 entries; 0 skipped")).toBeNull());
 });
