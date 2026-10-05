@@ -348,6 +348,21 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                         "bond", relationships.get_bond(cid, p["a"], p["b"]))}
         elif kind == "plot":
             p = e["payload"]
+            # The TARGET id, and a row STAGED AS NEW reallocated off an id that
+            # is taken since -- both for the reasons the commitment branch below
+            # gives at length, with the same allocator predicate (§10.5): a
+            # collision is honoured only when the stored thread is not closed
+            # and carries the same title. Otherwise `set_movement` would append
+            # this beat (and status) onto somebody else's thread.
+            if not str(e.get("before", "")).strip():
+                new = materializer._new_thread_id(
+                    plot.read(cid), {}, target["id"], p.get("title", ""))
+                if new != target["id"]:
+                    # Snapshotted from the record the write moved off: no
+                    # reversal, as for a reallocated commitment.
+                    reversal = None
+                    target = {**target, "id": new}
+                    p = {**p, "id": new}
             # An absorb never renames an existing thread: `materialize` stages
             # the STORED title for one that already exists (`cur.get("title") or
             # title or pid`), so the staged title carries no intent to rename and
@@ -356,7 +371,7 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             # any non-blank title and silently reverts them. A blank title leaves
             # the stored one alone and still falls back to the id for a brand-new
             # thread, so the rename is not a conflict to resolve; it stands.
-            title = "" if plot.get(cid, p["id"]) else p["title"]
+            title = "" if plot.get(cid, target["id"]) else p["title"]
             # `sid` in preference to the staged `payload.scene`, which
             # `materialize` sets to the very same scene. They differ in one case:
             # the scene was RENAMED between a crashed commit and its retry. The
@@ -367,7 +382,7 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             # that no longer exists, and `plot.repoint_scenes` has already run,
             # so nothing would come back for it. The payload stays the fallback
             # for a caller that passes no `sid`.
-            plot.set_movement(cid, p["id"], title, p["status"], after, sid or p["scene"])
+            plot.set_movement(cid, target["id"], title, p["status"], after, sid or p["scene"])
         elif kind == "commitment":
             p = e["payload"]
             # No staleness check here: `commitment` is registered in

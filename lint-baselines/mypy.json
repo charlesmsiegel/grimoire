@@ -31,9 +31,9 @@
     "index": 2
   },
   "backend/src/grimoire/store/absorb/materializer.py": {
-    "arg-type": 2,
+    "arg-type": 1,
     "assignment": 4,
-    "union-attr": 3
+    "union-attr": 2
   },
   "backend/src/grimoire/store/absorb/routing.py": {
     "return-value": 1

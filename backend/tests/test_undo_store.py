@@ -518,6 +518,28 @@ def test_a_commitment_whose_id_was_reallocated_carries_no_reversal(cid, sid):
     assert len(commitments.get(cid, "pay-mara")["beats"]) == 1
 
 
+def test_a_plot_thread_whose_id_was_reallocated_carries_no_reversal(cid, sid):
+    """The plot twin of the commitment test above: a row staged as NEW whose id
+    a different thread now holds is written to a fresh id, so the snapshot taken
+    from the held thread is no reversal of anything this edit wrote."""
+    from grimoire.store.absorb import conflicts
+    plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s0")
+    edit = {"id": "plot:the-map", "kind": "plot",
+            "target": {"kind": "plot", "id": "the-map"},
+            "label": "The Map! — open", "field": "beat",
+            "before": "", "after": "A different map entirely.",
+            "authored": False, "resolve": "replace",
+            "resolve_from": conflicts.plot_line(plot.get(cid, "the-map")),
+            "payload": {"id": "the-map", "title": "The Map!", "status": "open",
+                        "scene": "s1"}}
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+    assert applied and not failures
+    entry = _only(cid)
+    assert entry["ref"]["id"] == "the-map-2"       # the reallocated id
+    assert entry["undo"] is None and entry["why"] == undo.GENERIC
+    assert len(plot.get(cid, "the-map")["beats"]) == 1
+    assert plot.get(cid, "the-map-2")["title"] == "The Map!"
+
 # --- a sidecar whose owner is gone ------------------------------------------
 
 def test_undo_will_not_conjure_a_flag_for_a_deleted_character(cid, sid):
