@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+from itertools import pairwise
 from types import SimpleNamespace
 
 from grimoire import routes, store
@@ -678,7 +679,7 @@ def test_list_chain_survives_replies_without_handoff(client):
 
 
 def test_natural_chain_survives_replies_without_handoff(client):
-    cid, sid, base = seed(client)
+    _cid, _sid, base = seed(client)
     group(client, base, order="natural", talkativeness={MARA: 100, WINIFRED: 100},
           auto_rounds=1)
     fake = FakeLLM([["One."], ["Two."], ["Three."], ["Four."]])
@@ -720,7 +721,7 @@ def test_natural_follow_on_never_repeats_the_last_speaker(client, monkeypatch):
         assert "error" not in response.text, response.text
         said = speakers(cid, sid)
         assert len(said) == 4
-        assert all(a != b for a, b in zip(said, said[1:])), (n, said)
+        assert all(a != b for a, b in pairwise(said)), (n, said)
 
 
 def _chain_with_rounds_changed_to(client, rounds):
