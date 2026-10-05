@@ -451,6 +451,9 @@ export type ResponseVariant = {
   made_by?: {
     task?: string; connection_id?: string; connection?: string; model?: string; provider?: string;
     composed?: "primary" | "resume"; guidance?: string; note?: string;
+    // Only on a resume-composed variant: the settings its own prompt rendered,
+    // since a later roll fence overwrites the record's `resume_settings`.
+    settings?: ResponseSettingsRecord;
   };
 };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;

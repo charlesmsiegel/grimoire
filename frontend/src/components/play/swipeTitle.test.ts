@@ -103,4 +103,15 @@ describe("settingsFor", () => {
     expect(settingsFor(FULL, record)).toBe(SETTINGS);
     expect(settingsFor(undefined, record)).toBe(SETTINGS);
   });
+
+  it("prefers the variant's own settings copy over the record's", () => {
+    // A later roll fence overwrites the record's single resume_settings, so a
+    // resume-composed variant carries what its own prompt rendered.
+    const own: ResponseSettingsRecord = { ...RESUME, words: 40 };
+    const record = { settings: SETTINGS, resume_settings: RESUME };
+    expect(settingsFor({ ...FULL, composed: "resume", settings: own }, record)).toBe(own);
+    expect(swipeTitle(swipe({
+      variants: [{ id: "v1", status: "complete", made_by: { ...FULL, composed: "resume", settings: own } }],
+    }))).toContain("Length: ~40 words, 2 paragraphs");
+  });
 });

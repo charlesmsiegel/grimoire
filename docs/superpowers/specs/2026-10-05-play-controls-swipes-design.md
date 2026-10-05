@@ -120,10 +120,16 @@ rebuilt prompt.
 - A retry that reuses a frozen snapshot (`_prepare`'s first branch) composes
   nothing and writes no settings.
 
-Settings live on the record, not on each variant: every variant is generated
-from one of the record's two snapshots, so a per-variant copy would only grow
-`responses.json` — a campaign-wide file written whole several times per turn
-and never pruned — by a constant per take.
+Settings live on the record, not on each variant: every primary-composed
+variant is generated from the record's one primary snapshot, so a per-variant
+copy would only grow `responses.json` — a campaign-wide file written whole
+several times per turn and never pruned — by a constant per take. The resume
+slot is the exception: a continuation that meets a second roll fence recomposes
+and overwrites `resume_snapshot_ref` and `resume_settings`, so the record no
+longer names what an *earlier* resume-composed variant ran on. Such a variant
+carries its own copy in `made_by["settings"]` (section 2). Only
+resume-composed variants carry one, and those exist only after a roll fence,
+so the cost is not paid per ordinary take or reroll.
 
 ### 2. `made_by` on each variant
 
@@ -157,6 +163,16 @@ when given:
   `OSError`) while the holder still has the values.
 - **`composed`** — `"primary"` or `"resume"`: which of the record's settings
   (section 1) and snapshots the call ran on.
+- **`settings`** — present only when `composed` is `"resume"`: a copy of the
+  resume settings that call's prompt rendered (the `PreparedMessages`'
+  `settings` for a fresh resume composition; the record's `resume_settings` at
+  that moment for a retry reusing the resume snapshot). The record's
+  `resume_settings` is a single slot a later roll fence overwrites, so without
+  the copy an earlier resume variant would report the newer settings. Readers
+  prefer `made_by.settings`, then fall back to `resume_settings` / `settings`
+  by `composed` (a variant written before the copy existed). A
+  primary-composed variant carries none: `record["settings"]` is never
+  overwritten.
 - **`guidance`** — the reroll steer (`RegenerateBody.guidance`), clipped to
   `alternates.MAX_GUIDANCE_CHARS` (500), the same wire-input bound the legacy
   sidecar and the steering log apply. Empty for a first take.
@@ -193,8 +209,9 @@ provenance must never fail a turn.
 | `_rescue` → `_save` / `_pause` | after `_rescue`'s own `meter.done(...)` | meter task | as above | `""` |
 | `_reroll_frames` → `_accept_reroll` | after `meter.done()` | `regenerate` | primary | `body.guidance` (clipped) |
 
-`_prepare` returns which snapshot it used alongside the record, so `composed`
-is known without guessing. A roll continuation appends a part to the
+`_prepare` returns which snapshot it used alongside the record, and for a
+resume the settings that snapshot was composed under, so `composed` and the
+variant's `settings` copy are known without guessing. A roll continuation appends a part to the
 response (`save_variant(part=...)`); the new variant's `made_by` describes the
 call that wrote the newest part.
 

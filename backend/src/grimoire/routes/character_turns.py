@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import random
@@ -445,7 +446,9 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
                     messages,
                     conn,
                 )
-                return record, messages, "resume" if record.get("resume_snapshot") else "primary"
+                if record.get("resume_snapshot"):
+                    return record, messages, "resume", record.get("resume_settings")
+                return record, messages, "primary", None
         messages, _breakdown = _compose(cid, sid, round_record, actor, conn, appended)
         # The round's eligible first, then the whole present cast: an explicit
         # pick a talkativeness roll filtered out is still who they are.
@@ -466,7 +469,9 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
                 getattr(messages, "settings", None),
             )
         _capture(cid, sid, "continuation" if appended else "chat", messages, conn)
-        return record, messages, "resume" if pending and appended else "primary"
+        if pending and appended:
+            return record, messages, "resume", getattr(messages, "settings", None)
+        return record, messages, "primary", None
 
 
 def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None,
@@ -814,6 +819,7 @@ class _Progress:
         # once its call is done: built before the meter is dropped, so a Stop
         # landing while `_save`/`_pause` runs still has it for `_rescue`.
         self.composed = "primary"
+        self.composed_settings = None
         self.made_by = None
 
 
@@ -885,6 +891,7 @@ async def _frames(
             cid, sid, run, token, turn.record, turn.watcher, turn.round_record, turn.continuation,
             outcome, turn.meter, exc, tracked=tracked, served=turn.served,
             made_by=turn.made_by, composed=turn.composed,
+            composed_settings=turn.composed_settings,
         )
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
@@ -894,6 +901,7 @@ async def _frames(
                 cid, sid, run, token, turn.record, turn.watcher, turn.round_record,
                 turn.continuation, outcome, turn.meter, tracked=tracked, served=turn.served,
                 made_by=turn.made_by, composed=turn.composed,
+                composed_settings=turn.composed_settings,
             )
         raise
     finally:
@@ -930,7 +938,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             actor = turn.round_record.get("actor_ref")
             continue
         turn.made_by = None
-        turn.record, messages, turn.composed = await run_in_threadpool(
+        turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, conn, turn.appended
         )
         record = turn.record
@@ -962,8 +970,10 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
         # than `conn`.
         turn.served = served = streaming._served(turn.meter, conn)
         turn.meter.done()
-        turn.made_by = _made_by(turn.meter, turn.meter.task, turn.composed,
-                                turn.round_record.get("typed_note", ""))
+        turn.made_by = _made_by(
+            turn.meter, turn.meter.task, turn.composed, turn.round_record.get("typed_note", ""),
+            settings=turn.composed_settings,
+        )
         turn.meter = None
         paused = watcher.roll.complete or watcher.roll.truncated
         status = "incomplete" if paused or run.cancel_requested else "complete"
@@ -1048,7 +1058,10 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
         turn.round_record = await run_in_threadpool(_stop, cid, sid, turn.round_record)
 
 
-def _made_by(meter, task: str, composed: str, note: str, guidance: str = "") -> dict | None:
+def _made_by(
+    meter, task: str, composed: str, note: str, guidance: str = "", *,
+    settings: dict | None = None,
+) -> dict | None:
     """What wrote a variant, for its `made_by`: the route the meter's holder
     says served the call, read after `meter.done()`.
 
@@ -1058,7 +1071,13 @@ def _made_by(meter, task: str, composed: str, note: str, guidance: str = "") -> 
     attempt, so it names a fallback that answered. A key the holder lacks is
     left out, never guessed (`effective_model` would be a guess). No reads -- it
     runs on the event loop -- and fail-soft (it logs): provenance never fails a
-    turn."""
+    turn.
+
+    `settings` is given only for a resume-composed call: the record holds ONE
+    `resume_settings`, which a later roll fence's recomposition overwrites, so
+    a variant written from an earlier resume carries a copy of what its prompt
+    rendered. A primary-composed variant reads the record's `settings`, which
+    nothing overwrites, so it carries no copy."""
     if meter is None:
         return None
     try:
@@ -1075,6 +1094,7 @@ def _made_by(meter, task: str, composed: str, note: str, guidance: str = "") -> 
             "composed": composed,
             "guidance": (guidance or "")[: store.alternates.MAX_GUIDANCE_CHARS],
             "note": (note or "")[: store.alternates.MAX_GUIDANCE_CHARS],
+            **({"settings": copy.deepcopy(settings)} if settings is not None else {}),
         }
     except Exception:  # noqa: BLE001 - provenance must never fail a turn
         _log.exception("could not record what made a %s response", task)
@@ -1088,7 +1108,7 @@ def _abort_meter(meter):
 
 async def _rescue(
     cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, error=None,
-    *, tracked=None, served="", made_by=None, composed="primary",
+    *, tracked=None, served="", made_by=None, composed="primary", composed_settings=None,
 ):
     # Before `meter.done`, for `_frames`' reason: what a rescued partial is
     # filed under is the attempt that was running when the turn broke. With no
@@ -1099,7 +1119,10 @@ async def _rescue(
             meter.done("error", error.kind, detail=error.detail)
         else:
             meter.done("aborted")
-        made_by = _made_by(meter, meter.task, composed, round_record.get("typed_note", ""))
+        made_by = _made_by(
+            meter, meter.task, composed, round_record.get("typed_note", ""),
+            settings=composed_settings,
+        )
 
     def save():
         with store.locks.campaign_lock(cid):

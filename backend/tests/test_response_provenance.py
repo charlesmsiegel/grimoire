@@ -319,3 +319,34 @@ def test_refused_reroll_records_no_steer(client):
     assert result.status_code == 409 and "historical_context_unavailable" in result.text
     assert fake.calls == 0
     assert store.steering.texts(cid, sid) == []
+
+
+def test_each_resume_composed_variant_keeps_the_settings_it_ran_on(client):
+    # A continuation that meets a second roll fence recomposes and overwrites
+    # the record's single `resume_settings`; the earlier resume variant must
+    # still name the settings ITS prompt rendered, so it carries its own copy.
+    cid, sid = seed(client)
+    store.scenes.set_response(cid, sid, {"response_continuation_words": "300"})
+    fake = FakeLLM([
+        ['Wait.\n```roll\n{"check":"notice"}\n```'],
+        ['Again.\n```roll\n{"check":"notice"}\n```'],
+        ['No roll.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    for words in ("120", "60"):
+        proposal = store.proposals.get(cid, sid)
+        assert proposal, "expected a roll fence"
+        store.scenes.set_response(cid, sid, {"response_continuation_words": words})
+        response = client.post(
+            base + "/roll-proposal", json={"proposal": proposal["id"], "action": "decline"})
+        assert response.status_code == 200 and "error" not in response.text, response.text
+    record, _made = _made_by(client, cid, sid)
+    assert fake.calls == 3
+    first, second, third = (v["made_by"] for v in record["variants"])
+    assert first["composed"] == "primary" and "settings" not in first
+    assert second["composed"] == "resume" and second["settings"]["words"] == 120
+    assert third["composed"] == "resume" and third["settings"]["words"] == 60
+    assert record["settings"]["words"] == 300
+    assert record["resume_settings"]["words"] == 60
