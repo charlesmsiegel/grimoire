@@ -42,6 +42,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    image_id_field,
     pc_history_404,
 )
 from .models import (
@@ -650,8 +651,8 @@ async def put_world_pc_image(wid: str, pid: str, vid: str, name: str,
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"name": name, "ext": stored,
-            "image_id": store.assets.image_id(root, pid, vid, name,
-                                              base=store.pcs.ASSET_BASE)}
+            **image_id_field(store.assets.image_id(root, pid, vid, name,
+                                                   base=store.pcs.ASSET_BASE))}
 
 
 @router.delete("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")

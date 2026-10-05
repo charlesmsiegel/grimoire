@@ -92,10 +92,10 @@ QUALITY = 80
 #: tile is paid while a grid is waiting on it -- a few KB more per tile is the
 #: cheaper side of that trade.
 METHOD = 2
-#: Part of every cache key. The key otherwise names only the source (path,
-#: mtime, size) and the width, none of which an encoder change moves, so
-#: without this a cache written under old settings would be served as though
-#: it were the new. Derived from the two settings rather than written beside
+#: Part of every cache key. The key otherwise names only the source -- a
+#: blob's byte sha, or a legacy file's path, mtime and size -- and the width,
+#: none of which an encoder change moves, so without this a cache written
+#: under old settings would be served as though it were the new. Derived from the two settings rather than written beside
 #: them, so bumping either one is a new entry by construction -- though not a
 #: retired generation: bump REVISION with it, or the sweep takes the old
 #: entries for a sibling device's and leaves them (test_thumbs.py pins the
@@ -112,6 +112,14 @@ FALLBACK_ENCODER = f"jpeg-q{JPEG_QUALITY}-png"
 #: the decode does to the picture. 2 made the key store-relative; 3 turned a
 #: thumbnail upright, kept its colour profile and left animation to the
 #: original.
+#:
+#: Keying a content-addressed blob by its byte sha (`_key`'s `cas|` form) was
+#: not a bump, and needed none: it is a new kind of source rather than a new
+#: name for an old one. A `cas|` key cannot equal any path-keyed entry, so
+#: nothing written before it can be served for it, and what a legacy file's
+#: key names did not change. The cost is the other side: a legacy file's
+#: current-generation entry outlives the file once it migrates to a blob,
+#: unreferenced, until the stage-4 sweep removes it (spec sections 11, 12).
 #:
 #: It does two jobs. It orders generations, so a sweep retires only those
 #: OLDER than its own (`sweep`): two devices on one synced library, one a

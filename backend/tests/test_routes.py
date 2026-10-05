@@ -10867,6 +10867,55 @@ def test_appearances_and_untagged_carry_versioned_thumb_urls(client):
     assert t.headers["content-type"] == "image/webp"
 
 
+def test_appearances_and_untagged_carry_image_id_where_placed(client):
+    """Greeting rows carry the identity the other listings do: present for a
+    placement (its own, or the world image a body references), absent -- the
+    key, not null -- for a legacy file."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    lib = client.put(f"/api/worlds/{wid}/images/harbour",
+                     files={"file": ("h.png", io.BytesIO(_png_bytes(color=(9, 9, 9))), "image/png")})
+    assert lib.status_code == 200
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": cid, "version": "default",
+                            "body": f"At the quay.\n\n![](/api/worlds/{wid}/images/harbour)"}
+                      ).json()["id"]
+    root = store.worlds.world_root(wid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", _real_png(), "png",
+                           base="greetings")
+    d = store.assets.version_dir(root, gid, "default", base="greetings")
+    (d / "embed-0123456789ab.png").write_bytes(_png_bytes(color=(5, 6, 7)))   # legacy
+    placed = store.assets.image_id(root, gid, "default", "embed-abc123def456", base="greetings")
+    harbour = lib.json()["image_id"]
+    assert placed and harbour
+
+    rows = {a["name"]: a for a in client.get(f"/api/worlds/{wid}/subjects/untagged").json()}
+    assert rows["embed-abc123def456"]["image_id"] == placed
+    assert "image_id" not in rows["embed-0123456789ab"]
+    assert rows[f"/api/worlds/{wid}/images/harbour"]["image_id"] == harbour
+
+    base = f"/api/worlds/{wid}/greetings/{gid}/images"
+    for name in ("embed-abc123def456", "embed-0123456789ab"):
+        client.put(f"{base}/{name}/subjects", json={"subjects": [cid]})
+    apps = {a["name"]: a for a in
+            client.get(f"/api/worlds/{wid}/characters/{cid}/appearances").json()}
+    assert apps["embed-abc123def456"]["image_id"] == placed
+    assert "image_id" not in apps["embed-0123456789ab"]
+
+
+def test_an_image_put_with_no_placement_omits_image_id(client, monkeypatch):
+    """Listings omit `image_id` for a picture with no placement; the PUT
+    answers the same way rather than with null."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    url = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/gallery_1"
+    r = client.put(url, files={"file": ("g.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert r.json()["image_id"]
+    monkeypatch.setattr(store.assets, "image_id", lambda *a, **kw: None)
+    r = client.put(url, files={"file": ("g.png", io.BytesIO(_png_bytes(color=(1, 2, 3))), "image/png")})
+    assert r.status_code == 200 and "image_id" not in r.json()
+
+
 def _campaign_with_greetings(client, n):
     wid = _world(client)
     ann = client.post(f"/api/worlds/{wid}/characters", json={"name": "Ann"}).json()["character"]
