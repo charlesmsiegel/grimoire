@@ -26,10 +26,12 @@ resolved included (a closed thread is shown so the resolver knows it was
 settled), keyed by canonical ref, so a merged-away alias source is never a
 candidate. At most `similarity.IDENTITY_TOP_K` per row, never padded.
 
-**Embeddings** are an enhancement. When a space is configured, the proposed
-texts are always embedded, and the pool's uncached texts that pass the weak
-lexical floors against some proposal are warmed (up to the warm limit); every
-other pool text is read from the cache only. So a lexically unrelated
+**Embeddings** are an enhancement. When a space is configured, each proposed
+text whose kind has a same-type record to compare against is embedded (one with
+an empty pool sends nothing to the provider: no cosine of it could name a
+candidate), and the pool's uncached texts that pass the weak lexical floors
+against some proposal are warmed (up to the warm limit); every other pool text
+is read from the cache only. So a lexically unrelated
 paraphrase is found only once its neighbour's vector is already cached -- by an
 earlier absorb's warm, or by Slice D's reconcile sweep, which warms the whole
 ledger. An embedding failure is a mode, never an exception: the lexical
