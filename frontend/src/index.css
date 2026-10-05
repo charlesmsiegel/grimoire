@@ -1197,6 +1197,7 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
 .regex-trace li { margin-bottom: 8px; }
 .regex-trace li.off { opacity: 0.5; }
 .regex-trace mark { background: var(--accent); color: var(--on-accent); }
+.regex-trace del { color: var(--muted); text-decoration: line-through; }
 .regex-import-rows { list-style: none; margin: 10px 0; padding: 0; max-height: 50vh; overflow-y: auto; }
 .regex-import-rows li { margin-bottom: 10px; }
 .regex-import-rows li.off { opacity: 0.6; }

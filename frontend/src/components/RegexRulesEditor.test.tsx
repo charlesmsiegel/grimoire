@@ -130,6 +130,38 @@ test("saving a new rule PUTs the whole layer and selects it", async () => {
   expect(sent.rules[1].id).toMatch(/^r-[0-9a-f]{8}$/);
 });
 
+test("the form warns that a pattern can hang the server", async () => {
+  serve({ rules: [], off: [] });
+  render(<RegexRulesEditor scope={GLOBAL} />);
+  fireEvent.click(await screen.findByRole("button", { name: "+ New rule" }));
+  const warning = await screen.findByText(/no timeout/);
+  expect(warning).toHaveClass("field-hint");
+  expect(warning).toHaveTextContent(/backtrack/);
+  expect(warning).toHaveTextContent(/test pane/);
+});
+
+test("a new rule saved with Enabled off is sent disabled", async () => {
+  // Spec section 2's way to keep a pattern that does not compile yet.
+  serve({ rules: [], off: [] });
+  render(<RegexRulesEditor scope={GLOBAL} />);
+  fireEvent.click(await screen.findByRole("button", { name: "+ New rule" }));
+  const enabled = await screen.findByLabelText("Enabled");
+  expect(enabled).toBeChecked();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Later" } });
+  fireEvent.change(screen.getByLabelText("Pattern"), { target: { value: "x" } });
+  fireEvent.click(enabled);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putRegex).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(api.putRegex).mock.calls[0][1].rules[0]).toMatchObject({ name: "Later", enabled: false });
+});
+
+test("the form's Enabled box starts from the rule being edited", async () => {
+  serve({ rules: [rule("r-off", { name: "Dormant", enabled: false })], off: [] });
+  await open("Dormant");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(await screen.findByLabelText("Enabled")).not.toBeChecked();
+});
+
 test("toggling an inherited rule's Use here PUTs off", async () => {
   serve({ rules: [STRIP], off: [] }, inherited());
   render(<RegexRulesEditor scope={WORLD} />);
@@ -149,6 +181,26 @@ test("switching an inherited rule back on takes it out of off", async () => {
   fireEvent.click(boxes[1]);
   await waitFor(() => expect(api.putRegex).toHaveBeenCalled());
   expect(vi.mocked(api.putRegex).mock.calls[0][1]).toEqual({ rules: [], off: [] });
+});
+
+test("a rule the world switched off is shown off at a campaign, and cannot be ticked back", async () => {
+  // `off` is this level's switch; `off_by: "world"` is one the campaign cannot
+  // undo, and the rule never runs here -- so a ticked box would be a lie.
+  serve({ rules: [], off: [] }, inherited([{ off_by: "world" }, {}]));
+  render(<RegexRulesEditor scope={{ kind: "campaign", cid: "saltmarch" }} />);
+  const boxes = await screen.findAllByRole("checkbox");
+  expect(boxes[0]).not.toBeChecked();
+  expect(boxes[0]).toBeDisabled();
+  expect(boxes[0]).toHaveAttribute("title", "Switched off by the world");
+  expect(boxes[1]).toBeChecked();
+  expect(boxes[1]).toBeEnabled();
+  const row = screen.getByRole("button", { name: /^Drop think tags/ });
+  expect(row).toHaveClass("off");
+  expect(row).toHaveTextContent("switched off by the world");
+  // Its read-only view says so too.
+  fireEvent.click(row);
+  expect(await screen.findByText(/switched off by the world/i, { selector: ".detail-sidebar *" }))
+    .toBeInTheDocument();
 });
 
 test("the Use here switch is absent at the global and connection levels", async () => {
@@ -373,4 +425,34 @@ test("Import… opens the dialog, and a landed import reloads the rules", async 
   expect(await screen.findByRole("button", { name: /^Fix/ })).toBeInTheDocument();
   expect(vi.mocked(api.getRegex).mock.calls.length).toBeGreaterThan(before);
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("an import that lands after the scope moved does not load the old level into the new one", async () => {
+  vi.mocked(api.getRegex).mockImplementation(async (sc) =>
+    bundle(sc.kind === "global" ? { rules: [STRIP], off: [] } : { rules: [GLOBAL_RULE], off: [] }));
+  const { rerender } = render(<RegexRulesEditor scope={GLOBAL} />);
+  await screen.findByRole("button", { name: /^Strip asides/ });
+  fireEvent.click(screen.getByRole("button", { name: "Import…" }));
+  const file = new File([JSON.stringify([{ scriptName: "Fix" }])], "r.json");
+  vi.mocked(api.previewRegexImport).mockResolvedValue({ rows: [{
+    index: 0, name: "Fix", verdict: "exact", notes: [], original: {},
+    rule: { ...rule("x", { name: "Fix" }), id: undefined } as never,
+  }] });
+  let land!: () => void;
+  vi.mocked(api.importRegex).mockImplementation(
+    () => new Promise((r) => { land = () => r({} as never); }));
+  fireEvent.change(await screen.findByLabelText("SillyTavern regex file"), { target: { files: [file] } });
+  fireEvent.click(await screen.findByRole("button", { name: "Import selected" }));
+  await waitFor(() => expect(api.importRegex).toHaveBeenCalledTimes(1));
+
+  rerender(<RegexRulesEditor scope={WORLD} />);
+  expect(await screen.findByRole("button", { name: /^Fix dashes/ })).toBeInTheDocument();
+  // The old dialog's onDone reloads the level it was opened on; that answer
+  // belongs to the global level and must not paint the world's screen.
+  land();
+  await waitFor(() => expect(vi.mocked(api.getRegex).mock.calls
+    .filter(([sc]) => sc.kind === "global")).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByRole("button", { name: /^Strip asides/ })).toBeNull();
+  expect(screen.getByRole("button", { name: /^Fix dashes/ })).toBeInTheDocument();
 });

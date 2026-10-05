@@ -6,16 +6,18 @@ type Role = "model" | "user";
 type Phase = "display" | "prompt" | "store";
 
 /** `after` split around what differs from `before`: the longest shared prefix and
- *  suffix are left plain and the middle is the change. Deliberately not a real
- *  diff -- a rule's effect is usually one substitution, and a trace that has to
- *  be read twice to find it is no clearer than one that marks a little too much. */
-function changed(before: string, after: string): { head: string; mid: string; tail: string } {
+ *  suffix are left plain and the middle is the change -- `gone` what `before`
+ *  had there, `mid` what `after` has. Deliberately not a real diff -- a rule's
+ *  effect is usually one substitution, and a trace that has to be read twice to
+ *  find it is no clearer than one that marks a little too much. */
+function changed(before: string, after: string): { head: string; gone: string; mid: string; tail: string } {
   const room = Math.min(before.length, after.length);
   let p = 0;
   while (p < room && before[p] === after[p]) p++;
   let s = 0;
   while (s < room - p && before[before.length - 1 - s] === after[after.length - 1 - s]) s++;
-  return { head: after.slice(0, p), mid: after.slice(p, after.length - s), tail: after.slice(after.length - s) };
+  return { head: after.slice(0, p), gone: before.slice(p, before.length - s),
+           mid: after.slice(p, after.length - s), tail: after.slice(after.length - s) };
 }
 
 const WHOLE = /^\d+$/;
@@ -120,8 +122,14 @@ export function RegexTestPane({ scope, draft, initial, connections = [] }: {
                         ? <span className="field-hint">{s.matches} {s.matches === 1 ? "match" : "matches"}</span>
                         : <span className="field-hint">{s.reason ?? "did not apply"}</span>}
                     </div>
+                    {/* What a rule removed is struck through in place, so a pure
+                        deletion -- a stripped thinking block, the main use -- still
+                        shows where it acted. React text throughout: the pasted text
+                        may be markup, and it is shown, never rendered. */}
                     {s.applied && (
-                      <pre className="regex-code">{parts.head}{parts.mid && <mark>{parts.mid}</mark>}{parts.tail}</pre>
+                      <pre className="regex-code">
+                        {parts.head}{parts.gone && <del>{parts.gone}</del>}{parts.mid && <mark>{parts.mid}</mark>}{parts.tail}
+                      </pre>
                     )}
                   </li>
                 );

@@ -168,6 +168,33 @@ def test_inherited_off_comes_from_the_requesting_level(home):
     assert not any(e["off"] for e in layers.inherited("world", wid))
 
 
+def test_inherited_says_which_level_switched_a_rule_off(home):
+    """`off` stays "switched off by THIS level"; `off_by` names whichever level's
+    `off` did it, so a campaign can tell a rule the world switched off -- which
+    never runs there, and which no campaign tick can turn back on -- from one
+    that is merely ticked."""
+    wid, cid, conn = _stack(home)
+    g = layers.read_level("global")["rules"][0]["id"]
+    c = layers.read_level("connection", conn)["rules"][0]["id"]
+    w = layers.read_level("world", wid)["rules"][0]["id"]
+    layers.write_level("world", wid, {"rules": layers.read_level("world", wid)["rules"],
+                                      "off": [g]})
+    layers.write_level("campaign", cid, {"rules": [], "off": [w, c]})
+
+    got = {e["rule"]["name"]: (e["off"], e.get("off_by")) for e in layers.inherited("campaign", cid)}
+    assert got == {"C": (True, "campaign"), "G": (False, "world"), "W": (True, "campaign")}
+    got = {e["rule"]["name"]: (e["off"], e.get("off_by")) for e in layers.inherited("world", wid)}
+    assert got == {"C": (False, None), "G": (True, "world")}
+
+    # Both switched it off: the world's decision is the one the campaign
+    # cannot undo, so it is the one named.
+    layers.write_level("campaign", cid, {"rules": [], "off": [g]})
+    got = {e["rule"]["name"]: (e["off"], e.get("off_by")) for e in layers.inherited("campaign", cid)}
+    assert got["G"] == (True, "world")
+    assert "off_by" not in next(e for e in layers.inherited("campaign", cid)
+                                if e["rule"]["name"] == "C")
+
+
 def test_world_of(home):
     wid, cid, _ = home
     assert layers.world_of(cid) == wid

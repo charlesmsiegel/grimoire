@@ -120,15 +120,18 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
   const live = useRef(scopeKey);
   live.current = scopeKey;
 
+  // Bound to the scope it was built for, not read off `live` when it is
+  // called: an import dialog's `onDone` can land after the scope moved, and the
+  // reload it calls is still this one, fetching the old level.
   const reload = useCallback(async () => {
-    const mine = live.current;
+    const mine = scopeKey;
     try {
       const b = await api.getRegex(apiScope);
       if (live.current === mine) { setBundle(b); setLoadFailed(false); }
     } catch {
       if (live.current === mine) setLoadFailed(true);
     }
-  }, [apiScope]);
+  }, [apiScope, scopeKey]);
 
   useEffect(() => {
     setBundle(null); setLoadFailed(false); setSelId(null); setMode("view");
@@ -161,6 +164,10 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
 
   const levelTag = (e: RegexEntry) =>
     e.level === "connection" ? `connection: ${names[e.source] || e.source}` : e.level;
+  /** A rule a campaign's world switched off: it never runs here, and nothing in
+   *  this level's `off` list can turn it back on, so its switch is shown off
+   *  and held. */
+  const worldOff = (e: RegexEntry) => scope.kind === "campaign" && e.off_by === "world";
 
   function select(id: string) {
     setSelId(id); setMode("view"); setError(null); setFailure(null);
@@ -284,7 +291,10 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
               <button className="subtle" onClick={() => startEdit(r)} disabled={saving}>Edit</button>
             ) : (
               <span className="field-hint">
-                From {levelTag(e)}. Change it there, or switch it off here and add your own.
+                {worldOff(e)
+                  ? <>From {levelTag(e)}, and switched off by the world, so it does not run here.
+                      Switch it back on in the world, or add your own here.</>
+                  : <>From {levelTag(e)}. Change it there, or switch it off here and add your own.</>}
               </span>
             )}
           </div>
@@ -398,6 +408,10 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
           <input type="text" className="regex-code" value={draft.pattern}
                  onChange={(e) => set({ pattern: e.target.value })} />
         </Field>
+        <div className="field-hint">
+          Python&apos;s re has no timeout: a pattern that backtracks catastrophically, such
+          as (a+)+$ on a long line, can hang the server. Try it in the test pane first.
+        </div>
         <Field label="Replacement"
                hint={fieldNote("replacement") ?? "$1, $<name>, $& or {{match}} for the match, $$ for a dollar sign."}>
           <input type="text" className="regex-code" value={draft.replacement}
@@ -428,6 +442,14 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
                  onChange={(e) => set({ max_depth: e.target.value })} />
         </Field>
         <label className="regex-check">
+          <input type="checkbox" checked={draft.enabled}
+                 onChange={(e) => set({ enabled: e.target.checked })} />
+          Enabled
+        </label>
+        <div className="field-hint">
+          A disabled rule is kept but never runs, and may be saved with a pattern that does not compile yet.
+        </div>
+        <label className="regex-check">
           <input type="checkbox" checked={draft.rewrite_stored}
                  onChange={(e) => set({ rewrite_stored: e.target.checked })} />
           Also rewrite stored text
@@ -454,17 +476,21 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
             <div className="regex-group">Inherited</div>
             {inherited.map((e) => (
               <div key={e.rule.id} className="regex-line">
-                <button className={"row" + (selId === e.rule.id ? " active" : "") + (e.off ? " off" : "")}
+                <button className={"row" + (selId === e.rule.id ? " active" : "")
+                                   + (e.off || worldOff(e) ? " off" : "")}
                         aria-current={selId === e.rule.id ? "true" : undefined}
                         onClick={() => select(e.rule.id)}>
                   <span className="row-label">
                     {labelOf(e.rule)}
-                    <span className="row-subtitle">{levelTag(e)}</span>
+                    <span className="row-subtitle">
+                      {levelTag(e)}{worldOff(e) && " · switched off by the world"}
+                    </span>
                   </span>
                 </button>
                 {canOff && (
-                  <input type="checkbox" title="Use here" aria-label={`Use ${labelOf(e.rule)} here`}
-                         checked={!e.off} disabled={saving}
+                  <input type="checkbox" title={worldOff(e) ? "Switched off by the world" : "Use here"}
+                         aria-label={`Use ${labelOf(e.rule)} here`}
+                         checked={!e.off && !worldOff(e)} disabled={saving || worldOff(e)}
                          onChange={(ev) => setUsed(e, ev.target.checked)} />
                 )}
               </div>

@@ -264,10 +264,25 @@ def inherited(level: str, key: str = "") -> list[Entry]:
     """Every rule `level` sits on, in run order, `off` set from the level's own
     `off` list. A world sees every connection's rules and the global ones; a
     campaign also sees its world's. The global and connection levels sit on
-    nothing."""
+    nothing.
+
+    `off_by` names the level whose `off` switched an entry off (`world` or
+    `campaign`), and is absent while nothing has. At a campaign it is what
+    tells a connection or global rule its world switched off -- which
+    `effective` never runs there, and which the campaign's own list cannot
+    switch back on -- from one that is merely on. Where both levels named it,
+    the world is the one reported, since it is the switch that holds."""
     _check_level(level)
     off = set(_load(level, key)["off"]) if level in ("world", "campaign") else set()
-    return _stack(level, key, off)
+    out = _stack(level, key, off)
+    wid = world_of(key) if level == "campaign" else ""
+    world_off = set(_load("world", wid)["off"]) if wid else set()
+    for entry in out:
+        if entry["level"] in ("connection", "global") and entry["rule"]["id"] in world_off:
+            entry["off_by"] = "world"
+        elif entry["off"]:
+            entry["off_by"] = level
+    return out
 
 
 def effective(*, cid: str | None, connection: str = "", world: str = "") -> list[Entry]:
