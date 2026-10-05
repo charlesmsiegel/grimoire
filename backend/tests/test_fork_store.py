@@ -618,3 +618,64 @@ def test_a_retrospective_fork_drops_the_cut_scenes_rewrite_records(cid):
     assert not rewrites.path(child, cut_ident).exists()
     # The source is never written to.
     assert rewrites.path(cid, cut_ident).exists()
+
+
+def _noise_png(seed: int) -> bytes:
+    import io
+
+    from PIL import Image
+    im = Image.new("RGB", (10, 8))
+    im.putdata([((x * 13 + seed) % 256, (y * 29 + seed) % 256, (x * y * seed) % 256)
+                for y in range(8) for x in range(10)])
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_forks_write_no_blob(monkeypatch, tmp_path):
+    """Spec section 13: a fork copies placements, never pictures. Forking a
+    campaign and a world that both hold placements of every kind leaves the
+    image store's blobs exactly as they were."""
+    from grimoire.store import (
+        assets,
+        campaign_images,
+        characters,
+        covers,
+        image_refs,
+        image_store,
+        world_images,
+    )
+    from grimoire.store.worlds import lifecycle
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    ch_id, vid = characters.create_character(wroot, "Seraphine", "default")
+    assets.put_image(wroot, ch_id, vid, assets.AVATAR, _noise_png(1), "png")
+    world_images.put_image(wid, "coastline", _noise_png(2), "png")
+    covers.put_world_cover(wid, _noise_png(3), "png")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    campaign_images.put_image(cid, "harbour", _noise_png(4), "png")
+    covers.put_cover(cid, _noise_png(5), "png")
+    eid = entities.create_entity(wroot, "locations", "Saltmarch Docks", "world docks")
+    overlay.update_entity(cid, "locations", eid, body="campaign docks")
+    assets.put_image(campaigns.campaign_root(cid), eid, "default", assets.AVATAR,
+                     _noise_png(6), "png", base="locations")
+
+    def blobs() -> list:
+        return sorted((image_store.store_root() / "blobs").rglob("*"))
+
+    before = blobs()
+    assert len([p for p in before if p.is_file()]) == 6
+
+    child = fork.fork_campaign(cid, "Saltmarch Redux")["id"]
+    assert blobs() == before
+    new_wid = lifecycle.fork_world(wid, "Realm Again")
+    assert blobs() == before
+
+    # ...and what was forked still resolves, through the placements it copied.
+    for root in (campaigns.campaign_root(child), worlds.world_root(new_wid)):
+        refs = list(root.rglob(f"{image_refs.REFS_DIR}/*.json"))
+        assert refs
+        for p in refs:
+            assert image_refs.resolve(p.parent.parent, p.stem) is not None, p

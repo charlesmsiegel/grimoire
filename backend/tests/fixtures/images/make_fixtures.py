@@ -117,6 +117,34 @@ def _gif(frames: list[Image.Image], durations: list[int], loop: int | None = 0) 
     return buf.getvalue()
 
 
+NETSCAPE_LOOP_0 = b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"
+
+
+def insert_after_first_image(gif: bytes, block: bytes) -> bytes:
+    """`gif` with `block` placed immediately after its first image (descriptor,
+    local colour table and data) -- where Pillow never reads a loop count and a
+    browser still does."""
+    pos = 13
+    if gif[10] & 0x80:
+        pos += 3 * (1 << ((gif[10] & 7) + 1))
+    while gif[pos] == 0x21:  # extensions before the first image
+        pos += 2
+        while gif[pos]:
+            pos += 1 + gif[pos]
+        pos += 1
+    if gif[pos] != 0x2C:
+        raise ValueError("no image descriptor")
+    flags = gif[pos + 9]
+    pos += 10
+    if flags & 0x80:
+        pos += 3 * (1 << ((flags & 7) + 1))
+    pos += 1  # LZW minimum code size
+    while gif[pos]:
+        pos += 1 + gif[pos]
+    pos += 1
+    return gif[:pos] + block + gif[pos:]
+
+
 def _srgb_icc() -> bytes:
     return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
@@ -188,6 +216,10 @@ def build() -> dict[str, bytes]:
     out["gif_anim_frame_changed.gif"] = _gif([f1, f3], [80, 120])
     out["gif_anim_duration_changed.gif"] = _gif([f1, f2], [80, 140])
     out["gif_anim_noloop.gif"] = _gif([f1, f2], [80, 120], loop=None)
+    # The same frames, "loop forever" written after the first image: a browser
+    # loops it, Pillow (which reads the loop count before frame 0) does not.
+    out["gif_anim_late_loop.gif"] = insert_after_first_image(
+        out["gif_anim_noloop.gif"], NETSCAPE_LOOP_0)
     buf = io.BytesIO()
     f1.save(buf, "GIF")
     out["gif_single.gif"] = buf.getvalue()

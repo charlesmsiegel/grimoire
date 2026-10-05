@@ -26,7 +26,11 @@ another:
   canonical pixels without risking a merge of pictures that display differently
   (a many-to-one decode such as CMYK or 16-bit samples), or without unbounded
   memory (a raster over the budget), or that will not decode at all. Its id
-  names the exact bytes, so it dedupes only on identical bytes.
+  names the exact bytes, so it dedupes only on identical bytes. A GIF whose
+  loop extension comes after its first image is opaque too (`gif-late-loop`):
+  Pillow never reads that loop count and a browser does, so its pixels alone
+  cannot say how it plays. The image store adds one case of its own, a
+  container the sanitizer could not parse (`unsanitizable`, via `opaque`).
 
 Orientation follows the browser, which is `orientation()`: the EXIF block the
 file opened with, and only for JPEG, MPO and PNG. It is never
@@ -51,6 +55,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from PIL import Image, features
+
+from . import image_sanitize
 
 ID_RE = re.compile(r"px1-[0-9a-f]{64}\Z")
 
@@ -144,12 +150,15 @@ def pixel_identity(data: bytes, byte_sha256: str) -> PixelIdentity:
     try:
         return _identify(data, byte_sha256)
     except Exception:  # noqa: BLE001 — anything that goes wrong is an image we can only name by its bytes
-        return _opaque(byte_sha256, "undecodable")
+        return opaque(byte_sha256, "undecodable")
 
 
-def _opaque(
+def opaque(
     byte_sha256: str, reason: str, size: tuple[int, int] | None = None
 ) -> PixelIdentity:
+    """The opaque-domain identity of the bytes `byte_sha256` names, for a
+    caller that already knows they cannot be named by their pixels (the image
+    store, for a container the sanitizer returned as received)."""
     w, h = size or (None, None)
     return PixelIdentity(opaque_id(byte_sha256), "bytes", reason, w, h, False)
 
@@ -249,38 +258,43 @@ def _identify(data: bytes, sha: str) -> PixelIdentity:
     try:
         im = Image.open(io.BytesIO(data))
     except Image.DecompressionBombError:
-        return _opaque(sha, "over-budget")
+        return opaque(sha, "over-budget")
     with im:
         fmt = im.format
         size = im.size
         # Pillow opens a 16-bit RGB PNG already truncated to 8-bit RGB, so the
         # depth can only be read from the IHDR bytes (the byte at offset 24).
         if fmt == "PNG" and data[12:16] == b"IHDR" and data[24] == 16:
-            return _opaque(sha, "png-16-bit", size)
+            return opaque(sha, "png-16-bit", size)
+        # Pillow reads a GIF's loop count only before frame 0; a browser reads
+        # it anywhere. One written later would hash as "plays once" while the
+        # page loops it forever, so it is named by its bytes instead.
+        if fmt == "GIF" and image_sanitize.gif_loop_after_image(data):
+            return opaque(sha, "gif-late-loop", size)
         mode = im.mode
         if mode == "CMYK" or mode in ("I", "F") or mode.startswith("I;16"):
-            return _opaque(sha, f"mode-{mode}", size)
+            return opaque(sha, f"mode-{mode}", size)
         # The header's size, before anything is loaded. For an animation this is
         # the canvas, which is every frame's size in Pillow, so it holds each
         # frame to the still budget too.
         if size[0] * size[1] > STATIC_BUDGET:
-            return _opaque(sha, "over-budget", size)
+            return opaque(sha, "over-budget", size)
 
         # A Pillow without animated-WebP support reads frame 0 only, so the
         # animation is detected from the bytes and refused rather than hashed
         # as the still it would otherwise look like.
         if fmt == "WEBP" and _riff_has_anim(data) and not _webp_animates():
-            return _opaque(sha, "webp-animation-unsupported", size)
+            return opaque(sha, "webp-animation-unsupported", size)
         n = getattr(im, "n_frames", 1) if fmt in ANIMATES else 1
         animated = fmt in ANIMATES and getattr(im, "is_animated", False) and n > 1
         if not animated:
             return _static(im, data)
         if n > MAX_FRAMES or size[0] * size[1] * n > ANIM_AREA_BUDGET:
-            return _opaque(sha, "over-budget", size)
+            return opaque(sha, "over-budget", size)
         # Whether a browser rotates an animated PNG by its EXIF is unverified,
         # and an opaque id can never merge two pictures that display apart.
         if orientation(im) is not None:
-            return _opaque(sha, "animated-oriented", size)
+            return opaque(sha, "animated-oriented", size)
         return _animated(im, data, size, n)
 
 

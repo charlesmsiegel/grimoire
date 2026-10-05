@@ -1078,3 +1078,173 @@ def test_import_refuses_one_object_past_the_per_object_cap(monkeypatch, tmp_path
     assert not any(n.startswith("image-store/objects/") for n in read)
     assert worlds.list_worlds() == []
     assert not (image_store.store_root() / "blobs").exists()
+
+
+# ---- final review: a bundle places only what it contains ----
+
+def _local_picture(seed: int = 41) -> str:
+    """An image this library already holds, which a bundle has no copy of."""
+    return image_store.ingest(_pixels(seed), "png").id
+
+
+def test_a_bundle_cannot_place_a_local_image_it_does_not_contain(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture()
+    logged = []
+    real_record = world_bundle.logs.record
+
+    def record(level, name, msg, **kw):
+        logged.append(kw)
+        return real_record(level, name, msg, **kw)
+
+    monkeypatch.setattr(world_bundle.logs, "record", record)
+    bundle = _hand_bundle(tmp_path, "stolen", {
+        "world/assets/images/image-refs/stolen.json": json.dumps(
+            {"format": 1, "image": stolen}),
+        "world/assets/image-refs/cover.json": json.dumps(
+            {"format": 1, "image": stolen, "focus": 30}),
+    })
+    new = world_bundle.import_bundle(bundle)
+    root = worlds.world_root(new)
+    assert image_refs.resolve(root / "assets" / "images", "stolen") is None
+    assert image_refs.read(root / "assets" / "images", "stolen") is None
+    # A focus is the world's own, so it stays -- as an override with no image.
+    assert image_refs.read(root / "assets", "cover") == image_refs.Ref("cover", None, 30)
+    assert image_refs.resolve(root / "assets", "cover") is None
+    assert any(k.get("kind") == "bundle_refs_uncontained" and k.get("count") == 2
+               for k in logged)
+
+
+def test_a_bundle_journal_cannot_place_what_the_bundle_lacks(monkeypatch, tmp_path):
+    """A promotion journal is never exported, so one in a bundle is planted --
+    and recovery would write its ids into the slots."""
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture(42)
+    owner = "world/characters/mara/assets/default"
+    bundle = _hand_bundle(tmp_path, "journal", {
+        "world/characters/mara/character.md": "---\nname: Mara\n---\n",
+        f"{owner}/image-refs/{image_refs.JOURNAL}": json.dumps({
+            "name": "gallery_0",
+            "pre": {"avatar": None, "gallery_0": stolen},
+            "post": {"avatar": stolen, "gallery_0": None},
+            "desc": {"avatar": None, "gallery_0": None}}),
+    })
+    new = world_bundle.import_bundle(bundle)
+    d = worlds.world_root(new) / "characters" / "mara" / "assets" / "default"
+    assert image_refs.read_journal(d) is None
+    assert assets.image_path(worlds.world_root(new), "mara", "default", "avatar") is None
+    assert image_refs.read(d, "avatar") is None
+
+
+def test_a_bundle_still_places_what_it_contains(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    data = _pixels(43)
+    sha, blob_name = _blob_entry(data)
+    local = image_hash.pixel_identity(data, sha).id
+    bundle = _hand_bundle(tmp_path, "own", {
+        blob_name: data,
+        f"image-store/objects/{local[4:6]}/{local}.json": _object_body(local, sha, len(data)),
+        "world/assets/image-refs/cover.json": json.dumps({"format": 1, "image": local}),
+    })
+    new = world_bundle.import_bundle(bundle)
+    assert image_refs.resolve(worlds.world_root(new) / "assets", "cover").image_id == local
+
+
+def test_a_format_1_bundle_cannot_place_a_local_image_either(monkeypatch, tmp_path):
+    """A format-1 export predates placements and carries none; one that holds a
+    placement was built by hand, and is held to the same rule."""
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture(44)
+    bundle = _hand_bundle(tmp_path, "old", {
+        "world/assets/image-refs/cover.json": json.dumps({"format": 1, "image": stolen}),
+    }, fmt=1)
+    new = world_bundle.import_bundle(bundle)
+    assert image_refs.read(worlds.world_root(new) / "assets", "cover") is None
+
+
+def _collection(fmt: object) -> str:
+    return json.dumps({"format": fmt, "members": ["collection-image-" + "a" * 64]})
+
+
+@pytest.mark.parametrize("fmt", [2, 7])
+def test_a_newer_collection_manifest_refuses_the_import(monkeypatch, tmp_path, fmt):
+    """Stage 3 changes the manifest; it will move bundles to a new format when
+    it does, so a manifest this grimoire cannot read is refused rather than
+    imported as a collection nothing can open."""
+    _home(monkeypatch, tmp_path)
+    bundle = _hand_bundle(tmp_path, f"coll{fmt}", {
+        f"world/assets/image-collections/{'b' * 32}.json": _collection(fmt)})
+    with pytest.raises(world_bundle.BundleError,
+                       match=f"collection manifest format {fmt} is newer"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
+    assert not image_store.store_root().exists() or not any(
+        (image_store.store_root() / "blobs").rglob("*.*"))
+
+
+@pytest.mark.parametrize("fmt", [0, True, "1", None])
+def test_an_unknown_collection_manifest_format_refuses_the_import(monkeypatch, tmp_path, fmt):
+    _home(monkeypatch, tmp_path)
+    bundle = _hand_bundle(tmp_path, "collx", {
+        f"world/assets/image-collections/{'b' * 32}.json": _collection(fmt)})
+    with pytest.raises(world_bundle.BundleError, match="collection manifest format"):
+        world_bundle.import_bundle(bundle)
+
+
+def test_a_format_1_collection_manifest_imports(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    body = _collection(1)
+    bundle = _hand_bundle(tmp_path, "coll1", {
+        f"world/assets/image-collections/{'b' * 32}.json": body})
+    new = world_bundle.import_bundle(bundle)
+    got = worlds.world_root(new) / "assets" / "image-collections" / f"{'b' * 32}.json"
+    assert got.read_text(encoding="utf-8") == body
+
+
+def test_export_finishes_a_crashed_promotion_first(monkeypatch, tmp_path):
+    """A promotion that crashed after writing the new avatar leaves the old
+    avatar's id only in its journal, which is never packed. The export finishes
+    the swap before it walks, so the old picture travels and the imported world
+    holds the post-swap slots."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    root = worlds.world_root(wid)
+    cid, vid = characters.create_character(root, "Seraphine", "default")
+    assets.put_image(root, cid, vid, "avatar", _pixels(51), "png")
+    assets.put_image(root, cid, vid, "gallery_1", _pixels(52), "png")
+    old, new_pic = (assets.image_id(root, cid, vid, n) for n in ("avatar", "gallery_1"))
+
+    real_write, real_journal = image_refs.write, image_refs.write_journal
+    seen = [None]
+
+    def write_journal(d, journal):
+        real_journal(d, journal)
+        seen[0] = 0
+
+    def write(*args, **kwargs):
+        if seen[0] is not None:
+            seen[0] += 1
+            if seen[0] == 2:
+                raise OSError("crash")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(image_refs, "write_journal", write_journal)
+    monkeypatch.setattr(image_refs, "write", write)
+    with pytest.raises(OSError):
+        assets.promote_image(root, cid, vid, "gallery_1")
+    monkeypatch.setattr(image_refs, "write", real_write)
+    monkeypatch.setattr(image_refs, "write_journal", real_journal)
+    d = assets.version_dir(root, cid, vid)
+    assert image_refs.read(d, "avatar").image == image_refs.read(d, "gallery_1").image == new_pic
+    old_sha = image_store.read(old).blob_sha256
+
+    bundle = _export(wid, tmp_path)
+    blobs, _objects = _store_members(bundle)
+    assert any(old_sha in b for b in blobs)
+    assert image_refs.read_journal(d) is None
+
+    _wipe_image_store(tmp_path)
+    imported = world_bundle.import_bundle(bundle)
+    iroot = worlds.world_root(imported)
+    assert assets.image_id(iroot, cid, vid, "avatar") == new_pic
+    assert assets.image_id(iroot, cid, vid, "gallery_1") == old

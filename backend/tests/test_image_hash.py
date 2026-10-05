@@ -168,6 +168,27 @@ def test_loop_count_is_hashed_as_total_plays():
     assert _ident(_anim("GIF")).id == apng[1].id
 
 
+def test_a_late_gif_loop_extension_is_opaque():
+    # Pillow reads a NETSCAPE loop count only before frame 0; a browser reads
+    # it anywhere. Hashing the late one as "no loop" would give a GIF that
+    # loops forever the id of one that plays once, so it is opaque instead.
+    late = _ident(_read("gif_anim_late_loop.gif"))
+    assert late.identity == "bytes" and late.reason == "gif-late-loop"
+    assert late.id != _id("gif_anim_noloop.gif")
+    # The probe pair, built here from the committed no-extension fixture.
+    from tests.fixtures.images.make_fixtures import NETSCAPE_LOOP_0, insert_after_first_image
+    plain = _read("gif_anim_noloop.gif")
+    probe = insert_after_first_image(plain, NETSCAPE_LOOP_0)
+    assert _ident(probe).id != _ident(plain).id
+    assert _ident(probe).reason == "gif-late-loop"
+    # An ANIMEXTS extension is read the same way.
+    animexts = insert_after_first_image(
+        plain, b"\x21\xff\x0bANIMEXTS1.0\x03\x01\x00\x00\x00")
+    assert _ident(animexts).reason == "gif-late-loop"
+    # A loop extension before the first image is the ordinary case.
+    assert _ident(_read("gif_anim.gif")).identity == "pixels"
+
+
 def test_single_frame_gif_is_static_domain():
     single = _ident(_read("gif_single.gif"))
     assert single.identity == "pixels"

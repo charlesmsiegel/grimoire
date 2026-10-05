@@ -377,6 +377,46 @@ def test_store_guarantees_names_the_lock_domain_constants():
     assert not missing, f"docs/store-guarantees.md does not name: {missing}"
 
 
+def _section(text: str, heading: str) -> str:
+    """The body of the `## <heading>` section, up to the next `## ` heading."""
+    start = text.index(f"\n## {heading}\n")
+    end = text.find("\n## ", start + 1)
+    return text[start:] if end < 0 else text[start:end]
+
+
+def test_store_guarantees_names_the_image_store_locks():
+    """The image store's two leaf locks and their stripe count, by the names
+    `store/locks.py` gives them -- and those names must still be there."""
+    from grimoire.store import locks
+
+    section = _section(_read(GUARANTEES), "The image store")
+    names = ("image_object_lock", "image_ingest_gc_lock", "IMAGE_OBJECT_STRIPES")
+    missing = [n for n in names if n not in section]
+    assert not missing, f"the image store section does not name: {missing}"
+    gone = [n for n in names if not hasattr(locks, n)]
+    assert not gone, f"store/locks.py no longer defines: {gone}"
+
+
+def test_store_guarantees_image_section_cites_real_tests():
+    """Every test the image store section cites as its evidence exists: each
+    `test_*.py` file, and each `test_*` function somewhere under
+    `backend/tests/`. A renamed test would otherwise leave a guarantee pinned
+    by nothing a reader can find."""
+    section = _section(_read(GUARANTEES), "The image store")
+    cited = set(re.findall(r"`(test_[A-Za-z0-9_]+(?:\.py)?)`", section))
+    files = {c for c in cited if c.endswith(".py")}
+    functions = cited - files
+    assert files and functions, "the image store section cites no tests"
+    missing_files = sorted(f for f in files if not (TESTS / f).is_file())
+    assert not missing_files, f"cited test files that do not exist: {missing_files}"
+    defined = set()
+    for path in TESTS.rglob("test_*.py"):
+        defined |= set(re.findall(r"^\s*(?:async\s+)?def (test_[A-Za-z0-9_]+)\(",
+                                  _read(path), re.MULTILINE))
+    missing = sorted(functions - defined)
+    assert not missing, f"cited test functions that do not exist: {missing}"
+
+
 def test_store_guarantees_names_every_public_atomic_writer():
     """Every public callable in `store/atomic.py`.
 

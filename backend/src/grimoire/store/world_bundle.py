@@ -58,7 +58,9 @@ chunks or trailing bytes cannot become the blob a later local upload of the
 same pixels dedupes onto. Every object's id is recomputed *here*, and a
 staged ref naming a bundle id that differs from the local one is rewritten
 before the world is published: a bundle can never claim an id for pixels it
-does not contain. Descriptions, associations and reviews are merged only after
+does not contain. Nor can it place one: a staged ref naming an id the bundle
+carries no picture for loses its image, and a staged promotion journal is
+removed (`_contain_refs`). Descriptions, associations and reviews are merged only after
 `staging.publish` has named the world, under ``world:<final id>``, and only
 ever fill what the local object lacks (`image_store.merge_projection`). A
 failure there is logged rather than raised: the world already exists, and
@@ -80,7 +82,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import atomic, fetch, image_refs, image_store, logs, ziputil
+from . import assets, atomic, fetch, image_refs, image_store, logs, ziputil
 from .frontmatter import parse_frontmatter
 from .paths import ensure_home, now_iso, safe_id, slugify, uniquify
 from .worlds import paths as worlds_paths
@@ -108,6 +110,11 @@ MAX_OBJECT_BYTES = 64 * 1024 * 1024
 # ...and each object on its own, refused from its header before it is read:
 # the total cap alone still let one 64 MiB object be parsed whole.
 MAX_OBJECT_MEMBER_BYTES = 1024 * 1024
+# A format-1 collection manifest holds at most 10 000 member names, well under
+# a megabyte; this is room for that and a refusal for anything shaped otherwise.
+MAX_COLLECTION_MANIFEST_BYTES = 16 * 1024 * 1024
+#: The collection manifest format this grimoire reads (`image_collections`).
+_COLLECTION_FORMAT = 1
 # The longest bundle description merged. Longer is not a description of a
 # picture; it is dropped (and logged) and the image imports undescribed.
 MAX_IMPORTED_DESCRIPTION = 4000
@@ -170,6 +177,10 @@ def write_bundle(wid: str, dest: Path) -> None:
     rather than failing the export: by then they are genuinely not part of the
     world any more.
 
+    A promotion journal left by a crash is finished before the walk
+    (`assets.recover_promotions_in`), so the export packs the post-swap slots
+    and every picture they name.
+
     ``store.atomic``'s in-flight temps are skipped (`atomic.is_write_temp`):
     they are not part of the world, and the writer that owns one will rename or
     unlink it out from under the walk.
@@ -186,6 +197,9 @@ def write_bundle(wid: str, dest: Path) -> None:
     if not meta_path.exists():
         raise worlds_paths.WorldNotFound(wid)
     meta, _body = parse_frontmatter(meta_path.read_text(encoding="utf-8"))
+    # A crashed promotion is finished first: mid-swap, the picture it moved
+    # out of the avatar slot is named only by its journal, which is not packed.
+    assets.recover_promotions_in(root)
     manifest = {"format": FORMAT, "kind": "world", "world_id": wid,
                 "name": meta.get("name", wid), "app_version": app_version(),
                 "exported": now_iso()}
@@ -319,6 +333,37 @@ def _world_members(infos: list[zipfile.ZipInfo], fmt: int) -> _Members:
     return out
 
 
+def _check_collections(z: zipfile.ZipFile, members: _Members) -> None:
+    """Refuse a bundle carrying an image collection manifest of a format this
+    grimoire does not read.
+
+    Stage 3 changes the manifest, and moves bundles to a new format when it
+    does; until then a manifest that is not format 1 would import as a
+    collection nothing here can open, so the bundle is refused before anything
+    is written. A manifest that is not a JSON object at all is left alone: it
+    was as unreadable where it came from, and reads as invalid here too."""
+    for info in members.world:
+        # Lower-cased: on a case-insensitive filesystem `Image-Collections/`
+        # is the same directory.
+        parts = [p.lower() for p in ziputil.member_parts(info.filename)]
+        if (len(parts) != 4 or parts[1:3] != ["assets", "image-collections"]
+                or not parts[3].endswith(".json")):
+            continue
+        try:
+            raw = json.loads(_read_member(z, info, MAX_COLLECTION_MANIFEST_BYTES))
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        fmt = raw.get("format")
+        if type(fmt) is int and fmt == _COLLECTION_FORMAT:
+            continue
+        if type(fmt) is int and fmt > _COLLECTION_FORMAT:
+            raise BundleError(f"collection manifest format {fmt} is newer than this "
+                              f"grimoire understands ({_COLLECTION_FORMAT}): {info.filename}")
+        raise BundleError(f"unsupported collection manifest format {fmt!r}: {info.filename}")
+
+
 def _read_member(z: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int) -> bytes:
     """One member's bytes, refused past `cap` and with every way a zip read
     can fail re-dressed as the import's own error."""
@@ -414,30 +459,61 @@ def _ingest_blobs(z: zipfile.ZipFile, members: _Members) -> dict[str, str]:
             raise BundleError(f"image blob does not match its name: {info.filename}")
         ext = info.filename.rsplit(".", 1)[1]
         try:
-            local[sha] = image_store.ingest(data, ext, sanitize=True).id
+            local[sha] = image_store.ingest(data, ext).id
         except ValueError as e:
             raise BundleError(f"unusable image blob {info.filename}: {e}") from e
     return local
 
 
-def _rewrite_refs(staging: Path, id_map: dict[str, str]) -> None:
-    """Point every staged placement naming a bundle id at its local id,
-    keeping its focus. Symlinks are not followed (extraction makes none)."""
-    if not id_map:
-        return
+def _contain_refs(staging: Path, id_map: dict[str, str], contained: set[str]) -> None:
+    """Hold every staged placement to what the bundle itself carries.
+
+    A ref naming a bundle id is pointed at that object's local id (its focus
+    kept). A ref naming an id the bundle carries no picture for -- neither one
+    of its objects' claimed ids nor the local id one of its blobs ingested to
+    -- would otherwise resolve to whatever the importing library happens to
+    hold under that id, so it loses its image: an image-less override where it
+    had a focus (the focus is the world's own), nothing where it had not. That
+    holds for format 1 too, which carries no placements at all unless it was
+    built by hand.
+
+    Promotion journals are removed: an export never packs one
+    (`image_refs.is_transient`), and recovery would write the ids a planted one
+    names into its slots, past this check. Symlinks are not followed
+    (extraction makes none)."""
+    dropped = journals = 0
     for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
         if Path(dirpath).name != image_refs.REFS_DIR:
             continue
         dirnames[:] = []
         owner = Path(dirpath).parent
-        for fname in filenames:
-            if fname == image_refs.JOURNAL or not fname.endswith(".json"):
-                continue
-            name = fname[: -len(".json")]
-            ref = image_refs.read(owner, name)
-            if ref is None or ref.image not in id_map:
-                continue
+        if image_refs.JOURNAL in filenames:
+            image_refs.clear_journal(owner)
+            journals += 1
+        dropped += sum(_contain_ref(owner, f[: -len(".json")], id_map, contained)
+                       for f in filenames
+                       if f != image_refs.JOURNAL and f.endswith(".json"))
+    if dropped or journals:
+        logs.record("warning", __name__,
+                    "bundle placements named images the bundle does not carry; dropped",
+                    kind="bundle_refs_uncontained", count=dropped, journals=journals)
+
+
+def _contain_ref(owner: Path, name: str, id_map: dict[str, str],
+                 contained: set[str]) -> bool:
+    """One staged placement, held to `_contain_refs`'s rule; True when it lost
+    its image."""
+    ref = image_refs.read(owner, name)
+    if ref is None or ref.image is None:
+        return False
+    if ref.image in id_map:
+        if id_map[ref.image] != ref.image:
             image_refs.write(owner, name, id_map[ref.image], focus=ref.focus)
+        return False
+    if ref.image in contained:
+        return False
+    image_refs.write(owner, name, None, focus=ref.focus)
+    return True
 
 
 def _projection(meta: _ObjectMeta, scope: str) -> dict:
@@ -502,6 +578,7 @@ def import_bundle(path: Path) -> str:
         manifest = _read_manifest(z, infos)
         members = _world_members(infos, manifest["format"])
         metas = _read_objects(z, members, manifest["world_id"])
+        _check_collections(z, members)
         # The work directory is the context manager's to name and to remove.
         # It used to be this function's, held in the same name as the world's
         # slug -- which the slug then overwrote, so the cleanup `rmtree`'d a
@@ -511,10 +588,9 @@ def import_bundle(path: Path) -> str:
             ziputil.extract(z, members.world, staging, strip=1, err=BundleError)
             base = slugify(_world_name(staging, manifest))
             local = _ingest_blobs(z, members)
-            # bundle id -> local id, for every object; only the ones that
-            # differ need a ref rewritten.
+            # bundle id -> local id, for every object.
             id_map = {bid: local[m.blob_sha] for bid, m in metas.items()}
-            _rewrite_refs(staging, {bid: lid for bid, lid in id_map.items() if bid != lid})
+            _contain_refs(staging, id_map, set(local.values()))
             wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
             if wid != manifest["world_id"]:
                 worlds_staging.repoint_urls(staging, manifest["world_id"], wid)

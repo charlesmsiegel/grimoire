@@ -268,13 +268,56 @@ def test_ingest_touches_sidecar_on_pixel_duplicate():
     assert side.stat().st_mtime > time.time() - 60
 
 
-def test_sanitize_false_stores_bytes_verbatim():
-    info = PngInfo()
-    info.add_text("Comment", "kept")
-    data = _png(_img(), pnginfo=info)
-    obj = image_store.ingest(data, "png", sanitize=False)
-    assert obj.blob_sha256 == _sha(data)
-    assert image_store.blob_path(obj.blob_sha256, "png").read_bytes() == data
+def test_ingest_has_no_unsanitized_door():
+    # Every way in sanitizes; bundle import does too, so nothing needs a way
+    # around it (and a way around it is how metadata reaches a shared blob).
+    import inspect
+    assert "sanitize" not in inspect.signature(image_store.ingest).parameters
+    with pytest.raises(TypeError):
+        image_store.ingest(_png(_img()), "png", sanitize=False)
+
+
+def _gif(im: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    im.convert("P").save(buf, "GIF")
+    return buf.getvalue()
+
+
+def _commented_unterminated_gif(clean: bytes, note: bytes) -> bytes:
+    """`clean` with a comment extension before its image and no trailer: a
+    browser and Pillow both draw it, the sanitizer cannot parse it."""
+    assert clean.endswith(b"\x3b")
+    pos = 13 + (3 * (1 << ((clean[10] & 7) + 1)) if clean[10] & 0x80 else 0)
+    comment = b"\x21\xfe" + bytes([len(note)]) + note + b"\x00"
+    return clean[:pos] + comment + clean[pos:-1]
+
+
+def test_an_unsanitizable_container_is_opaque_and_shares_nothing():
+    clean = _gif(_img(5))
+    dirty = _commented_unterminated_gif(clean, b"Winifred's private note")
+    with Image.open(io.BytesIO(dirty)) as im:
+        im.load()                                   # it does decode
+    first = image_store.ingest(dirty, "gif")
+    assert first.identity == "bytes" and _sidecar(first.id)["reason"] == "unsanitizable"
+    stored = image_store.blob_path(first.blob_sha256, "gif").read_bytes()
+    assert stored == dirty                          # kept as received...
+    # ...so it is named by those bytes, never by the picture a clean copy shows.
+    later = image_store.ingest(clean, "gif")
+    assert later.id != first.id and later.identity == "pixels"
+    assert later.blob_sha256 != first.blob_sha256
+    blob = image_store.blob_path(later.blob_sha256, "gif").read_bytes()
+    assert b"private note" not in blob
+    # identify agrees with ingest, before and after the bytes are stored.
+    assert image_store.identify(dirty, "gif") == first.id
+    assert image_store.identify(clean, "gif") == later.id
+
+
+def test_identify_names_an_unsanitizable_container_as_ingest_will():
+    dirty = _commented_unterminated_gif(_gif(_img(6)), b"Mara's note")
+    got = image_store.identify(dirty, "gif")
+    assert not image_store.store_root().exists() or not _blobs()
+    assert got == image_store.ingest(dirty, "gif").id
+    assert got == image_hash.opaque_id(_sha(dirty))
 
 
 def test_blob_sha_of(tmp_path):
