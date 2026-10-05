@@ -211,7 +211,7 @@ def test_is_trailing_skips_synthetic_lines():
 - Produces: `_land_variant(cid, sid, rid, record, watcher, text, tracked, made_by) -> None` — the tail of `_accept_reroll` from `save_variant(..., activate=False, ...)` through `activate`, `tracker_routes.after_swipe`, `streaming._turn_settled`, `tracker_routes.mark(...)`; `_accept_reroll` calls it unchanged in behaviour.
 - Produces: `_accept_extend(cid, sid, rid, run, token, record, watcher, plan: ExtendPlan, mode: str, tracked=None, made_by=None) -> tuple[str, str] | None` — under the campaign lock with `_fence`: `run.cancel_requested` → `("replacement_incomplete", "The previous response was retained.")`; `watcher.roll.complete or watcher.roll.truncated` → `("extend_roll_refused", "A continuation cannot propose a roll — reroll the reply instead")`; `raw = watcher.narration`, and `strip_preparation(raw)` in instruction mode; `lead = raw[: len(raw) - len(raw.lstrip())]`; `text, issue = _normalise(cid, sid, record, raw)`; empty `text` → `replacement_incomplete`; else `_land_variant(..., plan.old + _extend_joiner(lead, text, mode) + text, ...)` and `None`.
 
-- [ ] **Step 1: Write the failing tests** (copy `_answer` from `test_response_controls_routes.py`; use `seed` from `test_character_turns.py` and `FakeLLM`):
+- [ ] **Step 1: Write the failing tests** (import `_events` from `tests.test_runs_routes`, copy `_answer` from `test_response_controls_routes.py`; use `seed` from `test_character_turns.py` and `FakeLLM`):
 
 ```python
 def _extend(client, base, rid, reply, body=None):
@@ -227,8 +227,8 @@ def test_prefill_extend_appends_the_partial_reply_and_saves_a_joined_variant(cli
     before = store.responses.get(cid, sid, rid)
     result, fake = _extend(client, base, rid, ", then left.")
     assert result.status_code == 200
-    start = next(f["response_start"] for f in _frames(result.text) if "response_start" in f)
-    assert start["extend"] == {"seed": "Mara paused"}   # _frames: parse each `data:` line as JSON
+    start = next(f["response_start"] for f in _events(result.text) if "response_start" in f)
+    assert start["extend"] == {"seed": "Mara paused"}
     assert fake.messages[-1] == {"role": "assistant", "content": "Mara paused"}
     after = store.responses.get(cid, sid, rid)
     assert after["content"] == "Mara paused, then left."
@@ -420,3 +420,13 @@ test("keep writing is disabled like the generating swipe", ...)
 - [ ] **Step 1:** `make check PY=$(pwd)/backend/.venv/bin/python`.
 - [ ] **Step 2:** Fix what it reports — nothing else. A ratchet failure from a count that moved is `make baseline`, committed with the fix.
 - [ ] **Step 3: Commit** `chore: make check green for keep writing` (only if Step 2 changed anything).
+
+## Controller ruling (binding)
+
+Multi-part responses (gate resolution 4): the resume snapshot already carries
+the reply's earlier part(s) as history, so the tail's partial-reply message is
+the **latest part's text only** (`variant["part_content"]` of the active
+variant, falling back to the transcript text of the last message carrying the
+response id). The saved variant is still the **whole** transcript prose +
+joiner + continuation. Test: a two-part response's extend prompt contains part
+one exactly once.
