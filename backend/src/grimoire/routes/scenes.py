@@ -523,12 +523,28 @@ def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None =
 
 
 def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
+    """The scene as the reader gets it: each message tagged with its actor, the
+    ones a display rule changed carrying `shown` beside the raw `content`, and
+    the ones a stored rewrite changed flagged `rewritten`. A windowed read says
+    where it sits (`offset`, `total`) so depth counts over the whole scene."""
     refs = store.responses.actor_refs(cid, sid)
+    scene["messages"] = store.regex.view.annotate_shown(
+        scene["messages"], cid=cid, offset=scene.get("offset", 0), total=scene.get("total"))
+    rewritten = _rewritten_keys(cid, sid)
     for message in scene["messages"]:
         ref = refs.get(message.get("response_id", ""))
         if ref:
             message["actor_ref"] = ref
+        if rewritten and (message.get("response_id") in rewritten
+                          or message.get("post_id") in rewritten):
+            message["rewritten"] = True
     return scene
+
+
+def _rewritten_keys(cid: str, sid: str) -> set[str]:
+    """The `response_id`/`post_id` of every message a stored-phase rule rewrote
+    in this scene. Nothing records one yet."""
+    return set()
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}")
