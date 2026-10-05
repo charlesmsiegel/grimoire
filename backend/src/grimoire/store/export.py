@@ -39,6 +39,7 @@ from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .paths import slugify
+from .regex import view as regex_view
 from .scenes import read as scenes_read
 from .scenes import serialize as scenes_serialize
 
@@ -349,6 +350,10 @@ def _book_speaker(m: dict, player_label: str) -> str | None:
 
 def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: str) -> dict:
     scene = scenes_read.read_scene(cid, sid)
+    # What a reader of the book sees, not what is stored: display rules apply
+    # to the whole transcript before anything below reads a message. `build_json`
+    # never comes through here and stays verbatim.
+    scene["messages"] = regex_view.view(scene["messages"], cid=cid, phase="display")
     meta = scene["meta"]
     title = meta.get("title", sid)
     times = scenes_read.get_time_history(cid, sid)
