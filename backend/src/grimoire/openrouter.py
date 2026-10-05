@@ -139,7 +139,9 @@ class OpenRouterClient:
                                          retry_after_seconds(resp.headers),
                                          status=resp.status_code)
                 async for line in resp.aiter_lines():
-                    llm_capture.emit(usage, "sse_line", line)
+                    # Scrubbed for the capture only; the line itself is parsed
+                    # as sent. A 200 stream can quote the request back too.
+                    llm_capture.emit(usage, "sse_line", content_parts.scrub_line(line))
                     # Every frame is proof of life, including the ones this
                     # parser drops: a comment keep-alive, or a delta carrying
                     # only `reasoning`. The facade times the gap between yields,

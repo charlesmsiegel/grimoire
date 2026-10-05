@@ -182,6 +182,12 @@ def as_images(messages: list[dict], keep: int,
     return out, total
 
 
+def scrub_line(line: str) -> str:
+    """`scrub` for the hot path: a streamed line is checked for a payload before
+    the regex runs, since almost none carries one."""
+    return scrub(line) if ";base64," in line else line
+
+
 def scrub(text: str) -> str:
     """`text` with every base64 `data:` payload elided.
 

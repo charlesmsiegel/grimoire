@@ -206,8 +206,17 @@ def test_load_applies_exif_orientation(cid):
     assert im.size == (20, 40)
 
 
+def _age(cid, name, seconds=60):
+    """Backdate a picture past the racy window so the encode cache may keep it."""
+    import os
+    path = export.resolve_url(cid, _url(cid, name))
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - seconds * 1_000_000_000))
+
+
 def test_load_caches_until_the_file_changes(cid, monkeypatch):
     campaign_images.put_image(cid, "coastline", _image((8, 8)), "png")
+    _age(cid, "coastline")
     opened = []
     real = post_images.Image.open
     monkeypatch.setattr(post_images.Image, "open", lambda *a, **k: opened.append(1) or real(*a, **k))
@@ -246,3 +255,36 @@ def test_the_cache_is_bounded_by_bytes(cid, monkeypatch):
     campaign_images.put_image(cid, "a", _image((8, 8)), "png")
     assert post_images.load(cid, {"url": _url(cid, "a")}) is not None
     assert len(post_images._CACHE) == 0  # bigger than the whole budget: not kept
+
+
+def test_a_just_written_picture_is_never_cached(cid, monkeypatch):
+    """Racy-clean, as `statcache` handles it: a same-size rewrite inside the
+    filesystem's timestamp granularity leaves (mtime, size) unchanged, so a
+    picture modified a moment ago is re-read every time."""
+    campaign_images.put_image(cid, "coastline", _image((8, 8)), "png")
+    opened = []
+    real = post_images.Image.open
+    monkeypatch.setattr(post_images.Image, "open", lambda *a, **k: opened.append(1) or real(*a, **k))
+    post_images.load(cid, {"url": _url(cid, "coastline")})
+    post_images.load(cid, {"url": _url(cid, "coastline")})
+    assert len(opened) == 2
+
+
+def test_a_rename_replace_with_the_same_stat_misses_the_cache(cid, monkeypatch):
+    """The inode rides in the key: a sync client landing a same-size file with
+    the old mtime cannot keep the old picture alive."""
+    import os
+    campaign_images.put_image(cid, "coastline", _image((8, 8), fmt="PNG"), "png")
+    _age(cid, "coastline")
+    path = export.resolve_url(cid, _url(cid, "coastline"))
+    first = post_images.load(cid, {"url": _url(cid, "coastline")})
+    st = path.stat()
+    replacement = path.with_name("incoming.tmp")
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 10, 10)).save(buf, "PNG")
+    data = buf.getvalue()
+    replacement.write_bytes(data)
+    os.utime(replacement, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.replace(replacement, path)
+    second = post_images.load(cid, {"url": _url(cid, "coastline")})
+    assert second != first
