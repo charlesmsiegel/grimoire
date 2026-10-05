@@ -430,3 +430,41 @@ variant, falling back to the transcript text of the last message carrying the
 response id). The saved variant is still the **whole** transcript prose +
 joiner + continuation. Test: a two-part response's extend prompt contains part
 one exactly once.
+
+## Plan-gate rulings (binding; override the tasks and the controller ruling above where they differ)
+
+Plan → implementation gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`; owner-approved).
+
+1. **Which snapshot, which partial.** Use the resume snapshot **only while the
+   transcript still holds the response as separate parts** (some message with
+   this `response_id` has a non-empty `response_part`); then the partial is the
+   transcript content of the **last** such message (which also honours a hand
+   trim of that part). Otherwise use the primary snapshot with partial = `old`
+   (the whole transcript prose). `ExtendPlan` gains `partial`, passed to
+   `_extend_messages`. Tests: extend twice on a two-part reply; reroll a
+   two-part reply then extend — part one appears exactly once in each prompt.
+2. **Routing guard.** `_reroll_frames` takes `task: str = "regenerate"` as a
+   keyword and `extend_response` calls it with the literal `task="extend"`, so
+   the guard's literal scan sees `extend`.
+3. **`with_tails`** builds the copy as `PreparedMessages(self._primary_model,
+   self._factory, profiles=self._frozen_profiles)` plus the tails — never via
+   `snapshot()` (which raises on unfrozen prompts the tests build).
+4. **Metering test** seeds with `{"content": "Hello", "speaker_ref":
+   "characters:mara"}` so the response has a post.
+5. **Fallback capture**: `for_connection` fires `on_variant` with the tailed
+   list (and `_capture` points at it), so a fallback's actual prompt is logged.
+6. **Handoff/issue**: the extended variant keeps the previous variant's
+   `handoff`; `issue` is set only from `_normalise` (speaker authority), as
+   `_accept_reroll` does.
+7. **Hiding the target while streaming** happens where speaker groups are built
+   (`TranscriptRun` / CampaignView), so an emptied group draws no plate;
+   `hiddenResponse` joins the `transcriptCtx` memo deps.
+8. Minor: CLAUDE.md's detached-runs count is recounted from the real handler
+   list (add `regenerate_response` and `extend_response`), not hard-coded; the
+   perception-fence-in-live-bubble on a prefill→instruction fallback is
+   accepted (saved text is clean); prefill-mode steer uses a continuation
+   wording (`response_steer.j2` gains a `continuation` flag); tests build a
+   meter as `SimpleNamespace(usage={ATTEMPTED: {...}})`; the `branch_closed`
+   test is unconditional (step 3 lands first); Keep writing is also disabled
+   when the swipe read shows a non-complete active variant.
