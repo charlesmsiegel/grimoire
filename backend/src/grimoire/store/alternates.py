@@ -180,6 +180,10 @@ def _canonical(segments: object) -> list[dict] | None:
         seg = _round_tripped(speaker, content)
         if seg is None:
             return None
+        # Which connection wrote it: provenance, carried so a promote puts it
+        # back on the post. Not part of what makes two takes the same (`_said`).
+        if isinstance(s.get("connection"), str) and s["connection"]:
+            seg["connection"] = s["connection"]
         # A synthetic speaker is internal metadata, never model output.
         # `append_reply` would count such a segment in `turn_sizes` while every
         # reader excludes it from the model blocks, desyncing the scene on the
@@ -276,8 +280,17 @@ def _slot(cid: str, sid: str) -> dict:
         size = scenes_turns._trailing_model_run(core)   # untracked: the whole run
     head, run = core[:len(core) - size], core[len(core) - size:]
     return {"gen": len(head) - scenes_read.trailing_transitions(head),
-            "segments": [{"speaker": m.get("speaker"), "content": m["content"]} for m in run],
+            "segments": [{"speaker": m.get("speaker"), "content": m["content"],
+                          **({"connection": m["connection"]} if m.get("connection") else {})}
+                         for m in run],
             "end": end}
+
+
+def _said(segments: list[dict]) -> list[tuple]:
+    """What a run says, which is what makes two runs the same take: speaker and
+    text, in order. A segment's `connection` is provenance and stays out, so
+    one archived before it was carried still matches its live twin."""
+    return [(s.get("speaker"), s["content"]) for s in segments]
 
 
 def _unforged(segments: list[dict], players: frozenset[str]) -> list[dict]:
@@ -328,9 +341,9 @@ def _distinct(runs: list[dict], players: frozenset[str]) -> list[dict]:
     that is not wedged.
     """
     out: list[dict] = []
-    seen: list[list[dict]] = []
+    seen: list[list[tuple]] = []
     for r in runs:
-        replayed = _unforged(r["segments"], players)
+        replayed = _said(_unforged(r["segments"], players))
         if replayed in seen:
             continue
         seen.append(replayed)
@@ -395,7 +408,7 @@ def _resolve(cid: str, sid: str) -> dict:
         active = None                       # the slot is empty (a reroll in flight)
     else:
         active = next((i for i, r in enumerate(runs)
-                       if _unforged(r["segments"], players) == live), None)
+                       if _said(_unforged(r["segments"], players)) == _said(live)), None)
         if active is None:
             runs.append({"created": _landed_at(cid, sid), "guidance": hint,
                          "model": aimed, "segments": live})
@@ -483,7 +496,8 @@ def variant_id(run: dict) -> str:
     `_resolve` matches on, it survives a shift, and it simply stops existing
     once the variant is trimmed away — so a stale pick 404s.
     """
-    body = json.dumps(run["segments"], sort_keys=True, ensure_ascii=False)
+    said = [{"speaker": s.get("speaker"), "content": s["content"]} for s in run["segments"]]
+    body = json.dumps(said, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 

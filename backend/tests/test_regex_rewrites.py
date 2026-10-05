@@ -411,3 +411,22 @@ def test_an_edit_that_would_forge_a_post_is_stored_as_typed(client):
     assert len(raw) == 2
     assert raw[1]["content"] == "She paused... then spoke."
     assert records(client, cid, sid) == {}
+
+
+def test_a_legacy_reply_runs_its_store_phase_inside_the_append_hold(client, monkeypatch):
+    """A rule PUT landing between the store phase and the append would store
+    text rewritten by rules that are no longer the campaign's."""
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    real, held = store.regex.view.store_phase, []
+
+    def watched(text, **kwargs):
+        held.append((kwargs.get("role"), store.locks.campaign_lock(cid)._is_owned()))
+        return real(text, **kwargs)
+
+    monkeypatch.setattr(store.regex.view, "store_phase", watched)
+    send(client, cid, sid, "She paused... then spoke.")
+    assert ("model", True) in held
+    assert all(owned for _, owned in held)
+    assert messages(client, cid, sid)[-1]["content"] == "She paused… then spoke."
