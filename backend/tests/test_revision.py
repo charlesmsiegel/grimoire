@@ -31,7 +31,8 @@ from grimoire import routes
 from grimoire.main import create_app
 from grimoire.routes import campaigns as campaign_routes
 from grimoire.routes import scenes as scene_routes
-from grimoire.store import atomic, campaigns, clock, fork, revision, scenes, worlds
+from grimoire.store import atomic, campaigns, clock, fork, plot, revision, scenes, worlds
+from grimoire.store.continuity import candidates, reconcile
 from tests.llm_fakes import FakeOpenRouter
 
 # --- the token itself ------------------------------------------------------
@@ -975,6 +976,35 @@ def test_a_follow_up_that_lands_moves_the_token(client):
         store.rolling_summary.facts_digest(facts))
     assert landed["landed"], "the fold did not write, so this proved nothing"
     assert _token(client, cid) != before
+
+
+def _reconcile_sweep(client):
+    """A campaign with two near-identical threads, and a sweep over it."""
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    for pid in ("mara-s-map", "mara-s-lost-map"):
+        plot.set_movement(cid, pid, "Mara's map", "open", "The map turned up in Saltmarch.", sid)
+    return cid, reconcile.discover(cid, stamp=reconcile.generation("a"), full=True, embed=False)
+
+
+def test_a_reconcile_persist_that_lands_moves_the_token(client):
+    """The continuity sweep's persists land after a 202 (the refresh) or after
+    a save that has already answered (End Scene) -- no response line is left
+    for the middleware to stamp, so the persist bumps inside its own hold."""
+    cid, sweep = _reconcile_sweep(client)
+    before = _token(client, cid)
+    assert reconcile.persist_found(cid, sweep)["written"]
+    assert _token(client, cid) != before
+
+
+def test_a_superseded_reconcile_persist_moves_nothing(client):
+    cid, sweep = _reconcile_sweep(client)
+    newer = candidates.empty()
+    newer["generation"] = reconcile.generation("b")
+    candidates.write(cid, newer)
+    before = _token(client, cid)
+    assert reconcile.persist_found(cid, sweep)["superseded"]
+    assert _token(client, cid) == before
 
 
 def test_a_follow_up_that_writes_nothing_moves_nothing(client):

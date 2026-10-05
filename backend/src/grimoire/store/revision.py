@@ -60,6 +60,15 @@ of a turn's terminal points. That last one is deliberately not "a post landed":
 a roll fence that closes with no narration writes a proposal record and nothing
 else, and a failed turn's rollback takes a post back OFF.
 
+The continuity reconciliation sweep is detached in the same way, so its two
+persists, `store.continuity.reconcile.persist_found` and `persist_proposals`,
+stamp for themselves: the route that started the sweep either answered 202
+(the explicit refresh, `@computes_only`) or was the save that ended a scene,
+which had answered before the sweep began. Each bumps inside the campaign-lock
+hold that wrote the candidate cache, and only when it did write. A sweep that
+found exactly what the cache already holds stamps nothing, because a time-skip
+preview re-prices on any movement of the token.
+
 A PROMPT CAPTURE (`routes.common._record_prompt`) bumps after its write and
 inside the lock that covers it. The one route that reaches it while persisting
 nothing else is the greeting opener, which is correctly `@computes_only` -- so
