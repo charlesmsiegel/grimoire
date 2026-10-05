@@ -241,3 +241,16 @@ def test_an_imported_scene_can_be_played_on(client):
     sid = _commit(client, cid, draft, location="", date="", cast=[]).json()["id"]
     store.scenes.append_message(cid, sid, "user", "I keep walking.")
     assert len(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == 3
+
+
+def test_a_reviewed_draft_keeps_a_hidden_post_out_of_context(client):
+    """The commit body is the draft's JSON, flag included: a marked post comes
+    back hidden through the route, not only through the store."""
+    _wid, cid = _campaign(client)
+    draft = _upload(client, cid, "**You:** hi\n\n**You:** *(not in context)*\nooc: brb\n").json()
+    assert draft["messages"][1]["excluded"]
+    r = _commit(client, cid, draft)
+    assert r.status_code == 200, r.text
+    messages = client.get(f"/api/campaigns/{cid}/scenes/{r.json()['id']}").json()["messages"]
+    assert messages[1]["content"] == "ooc: brb" and messages[1]["excluded"]
+    assert "excluded" not in messages[0]

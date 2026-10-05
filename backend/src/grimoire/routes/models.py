@@ -1040,6 +1040,9 @@ class ImportedMessage(BaseModel):
     role: Literal["user", "assistant"] = "assistant"
     speaker: str | None = None
     content: str = ""
+    # The hidden-from-context stamp the draft carried ("" when included), so a
+    # reviewed import keeps a hidden post out of context.
+    excluded: str = ""
 
 
 class SceneImportCommit(BaseModel):

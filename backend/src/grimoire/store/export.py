@@ -383,10 +383,15 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
     # (markdown, HTML, plain text, EPUB) say the same thing without each
     # re-deriving it; `build_json` reads the scenes directly and stays verbatim,
     # which is what that format is for.
+    # ...and a post hidden from context is KEPT, marked: a book is the record
+    # of what was written, and the flag is what each renderer marks it by
+    # (absent on every post that is not hidden, so an unflagged chapter is
+    # exactly what it was).
     player = appearances_cast.player_label(cid, sid)
     messages = [{"role": m["role"],
                  "speaker": _book_speaker(m, player),
-                 "content": rewrite_images(m["content"], cid, images, prefix)}
+                 "content": rewrite_images(m["content"], cid, images, prefix),
+                 **({"excluded": True} if scenes_serialize.is_excluded(m) else {})}
                 for m in scene["messages"]
                 if not scenes_serialize.is_director_note(m)]
     return {"sid": sid, "number": number, "title": title, "date": date, "location": location,
@@ -532,6 +537,14 @@ def _header_lines(ch: dict) -> list[str]:
     return lines
 
 
+def _marked(messages: list[dict]) -> list[dict]:
+    """A hidden post's content opened by the marker line, for the two text
+    formats. `scene_import` strips the same line back into the flag, so an
+    export re-imported does not bring the post back into context."""
+    return [{**m, "content": f"{scenes_serialize.EXCLUDED_MARKER}\n{m['content']}"}
+            if m.get("excluded") else m for m in messages]
+
+
 def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
     """A zip of one markdown file per scene plus an appendix and packed
     images/, reusing the campaign's own `**Speaker:** content` transcript
@@ -568,7 +581,7 @@ def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
             # the chapter marker a markdown reader sees, and numbering it is what
             # lets a reader landing in one file know where in the run they are.
             lines = [f"# {toc_label(c)}", *_header_lines(c),
-                     chronicle.transcript_text(c["messages"], include_excluded=True)]
+                     chronicle.transcript_text(_marked(c["messages"]), include_excluded=True)]
             z.writestr(chapter_filename(c, "md"), "\n\n".join(lines) + "\n")
         for e in data["appendix"]:
             lines = [f"# {e['name']}"]
@@ -604,6 +617,8 @@ section.chapter, section.appendix { margin-bottom: 3em; }
 .speaker { font-weight: 600; font-size: 0.82em; letter-spacing: 0.04em; }
 .appendix .portrait { max-width: 40%; float: right; margin: 0 0 1em 1em; }
 .actor-role { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin-top: -0.5em; }
+.excluded{opacity:.6;border-left:1px dashed #999;padding-left:.5em}
+.not-in-context{font-size:.75em;font-style:italic}
 """
 
 
@@ -611,14 +626,18 @@ def _html_md(text: str) -> str:
     return _md_lib.markdown(text, extensions=["tables"])
 
 
-def _html_message(speaker: str | None, content: str) -> str:
+def _html_message(speaker: str | None, content: str, excluded: bool = False) -> str:
     html = _html_md(content)
-    if not speaker:
-        return html
-    label = f'<span class="speaker">{escape(speaker)}</span> '
-    if html.startswith("<p>"):
-        return "<p>" + label + html[3:]
-    return f"<p>{label}</p>\n{html}"
+    if speaker:
+        label = f'<span class="speaker">{escape(speaker)}</span> '
+        html = "<p>" + label + html[3:] if html.startswith("<p>") else f"<p>{label}</p>\n{html}"
+    return mark_excluded(html) if excluded else html
+
+
+def mark_excluded(html: str) -> str:
+    """A hidden post's rendered fragment, wrapped and tagged -- shared by the
+    HTML page and the EPUB so the two books mark it the same way."""
+    return f'<div class="excluded"><span class="not-in-context">not in context</span>\n{html}</div>'
 
 
 def _html_toc(data: dict) -> str:
@@ -681,7 +700,8 @@ def build_html(cid: str) -> tuple[bytes, str]:
         if ch["cast"]:
             meta.append(f"<p class=\"scene-cast\">{escape(' · '.join(ch['cast']))}</p>")
         epigraph = f"<p class=\"epigraph\">{escape(ch['epigraph'])}</p>" if ch["epigraph"] else ""
-        body = "\n".join(_html_message(m["speaker"], m["content"]) for m in ch["messages"])
+        body = "\n".join(_html_message(m["speaker"], m["content"], bool(m.get("excluded")))
+                         for m in ch["messages"])
         sections.append(f"<section class=\"chapter\" id=\"{escape(chapter_anchor(ch))}\">"
                         f"<h2>{escape(ch['title'])}</h2>"
                         f"{''.join(meta)}{epigraph}{body}</section>")
@@ -744,7 +764,7 @@ def build_text(cid: str) -> tuple[bytes, str]:
         if ch["epigraph"]:
             lines.append(ch["epigraph"])
         messages = [{**m, "content": drop_images(m["content"])} for m in ch["messages"]]
-        lines.append(chronicle.transcript_text(messages, include_excluded=True))
+        lines.append(chronicle.transcript_text(_marked(messages), include_excluded=True))
         chapters.append("\n\n".join(lines))
 
     sep = "\n\n\f\n"

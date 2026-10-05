@@ -41,6 +41,7 @@ from collections.abc import Sequence
 from . import appearances, calendars, clock, context, locks, overlay, scenes
 from .campaigns import paths as campaigns_paths
 from .frontmatter import parse_frontmatter
+from .paths import now_iso
 
 
 class SceneImportError(Exception):
@@ -501,6 +502,7 @@ def parse(cid: str, data: bytes) -> dict:
     if not messages:
         raise SceneImportError(
             "no **Speaker:** blocks found — this is not a grimoire transcript")
+    _restore_excluded(messages)
     warnings += _dropped_text(transcript)
     labels = _speaker_labels(messages, head.get("cast", []))
     # After the labels are read off them, and before the sizes are measured
@@ -525,6 +527,27 @@ def parse(cid: str, data: bytes) -> dict:
         "unmatched": unmatched,
         "warnings": warnings,
     }
+
+
+def _restore_excluded(messages: list[dict]) -> None:
+    """Bring back the hidden-from-context flag an export marked, in place.
+
+    The markdown and plain-text exports open a hidden post with the marker
+    line; it is stripped here and the flag set, so re-importing an export does
+    not bring hidden posts back into context. A stored scene file carries the
+    flag in its metadata comment, and its stamp is kept. A flag that is truthy
+    but not a time (hand-edited) is restamped, because a reroll compares it as
+    one."""
+    for m in messages:
+        first, _, rest = m.get("content", "").partition("\n")
+        if first.strip() == scenes.EXCLUDED_MARKER:
+            m["content"] = rest.strip()
+            if not isinstance(m.get("excluded"), str) or not m.get("excluded"):
+                m["excluded"] = now_iso()
+        elif m.get("excluded") and not isinstance(m["excluded"], str):
+            m["excluded"] = now_iso()
+        elif "excluded" in m and not m["excluded"]:
+            del m["excluded"]
 
 
 def _discard(cid: str, sid: str, seated: list[dict]) -> None:
@@ -586,7 +609,10 @@ def _expanded(cid: str, sid: str, messages: list[dict]) -> list[dict]:
                 subs = context.scene_substitutions(cid, sid)
             content = context.expand_macros(content, subs, cid, sid)
         out.append({"role": m.get("role") or "assistant",
-                    "speaker": m.get("speaker") or None, "content": content})
+                    "speaker": m.get("speaker") or None, "content": content,
+                    # Hidden from context survives the import; `append_messages`
+                    # writes it through the metadata comment.
+                    **({"excluded": m["excluded"]} if m.get("excluded") else {})})
     return out
 
 
