@@ -15,7 +15,7 @@ function swipe(over: Partial<ResponseSwipe> = {}): ResponseSwipe {
   return {
     active: 0, variants: [{ id: "v1", status: "complete", made_by: FULL }],
     settings: SETTINGS, resume_settings: RESUME,
-    can_reroll: true, editable: true, round_open: false, ...over,
+    can_reroll: true, editable: true, round_open: false, edited: false, ...over,
   };
 }
 

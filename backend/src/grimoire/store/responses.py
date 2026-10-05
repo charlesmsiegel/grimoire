@@ -538,7 +538,12 @@ def swipe_state(cid: str, sid: str, rid: str) -> dict:
     `editable` is the answer `editable` would give, evaluated without raising,
     because the client cannot see the audit boundary. `round_open` is an
     unfinished round in the scene: `activate` supersedes it, which would
-    destroy a paused roll or a Retry the player has not used. A response the
+    destroy a paused roll or a Retry the player has not used. `edited` is the
+    transcript's prose differing from the active variant's -- a hand edit
+    (`scenes.edit_message`) keeps the response id and leaves the ledger alone
+    -- and then `active` is None: the prose is no variant's, so it is not "n of
+    m", its provenance is not that variant's, and a swipe would silently
+    discard the edit. The comparison is `get`'s join, stripped. A response the
     ledger does not know, or that `delete` left a record of after removing it
     from the transcript, is `ResponseNotFound`.
     """
@@ -552,6 +557,10 @@ def swipe_state(cid: str, sid: str, rid: str) -> dict:
         raise ResponseNotFound(rid)
     variants = record.get("variants", [])
     active = next((i for i, v in enumerate(variants) if v["id"] == record.get("active_variant")), None)
+    prose = "\n\n".join(m["content"] for m in messages if m.get("response_id") == rid)
+    edited = active is not None and prose.strip() != (variants[active].get("content") or "").strip()
+    if edited:
+        active = None
     scene_rolls = any(r.get("scene") == sid for r in rolls.read(cid))
     return {
         "active": active,
@@ -566,6 +575,7 @@ def swipe_state(cid: str, sid: str, rid: str) -> dict:
         "editable": _editable_reason(record, messages, scene_rolls, rid) is None,
         "round_open": any(r.get("status") in ("pending", "incomplete", "paused")
                           for r in scope.get("rounds", {}).values()),
+        "edited": edited,
     }
 
 

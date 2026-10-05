@@ -7,7 +7,7 @@ import { useResponseSwipe } from "./useResponseSwipe";
 function mk(ids: string[], active: number | null): ResponseSwipe {
   return {
     active, variants: ids.map((id) => ({ id, status: id === "half" ? "incomplete" : "complete" })),
-    settings: null, resume_settings: null, can_reroll: true, editable: true, round_open: false,
+    settings: null, resume_settings: null, can_reroll: true, editable: true, round_open: false, edited: false,
   };
 }
 const props = (over: Partial<{ rid: string | null; content: string | null; windowToken: unknown }> = {}) =>

@@ -91,7 +91,7 @@ function renderPlay() {
 function withArrows() {
   (api.getResponseSwipe as any).mockResolvedValue({
     active: 1, variants: ["v1", "v2", "v3"].map((id) => ({ id, status: "complete" })),
-    settings: null, resume_settings: null, can_reroll: true, editable: true, round_open: false });
+    settings: null, resume_settings: null, can_reroll: true, editable: true, round_open: false, edited: false });
 }
 
 /** A promise and the function that settles it. */

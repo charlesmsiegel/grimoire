@@ -416,3 +416,22 @@ def test_swipe_state_raises_not_found_for_an_unknown_response(client):
     cid, sid, *_ = _two_turns_with_a_reroll(client)
     with pytest.raises(store.responses.ResponseNotFound):
         store.responses.swipe_state(cid, sid, "missing")
+
+
+def test_swipe_state_of_an_unedited_response_is_not_edited(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    state = store.responses.swipe_state(cid, sid, rid)
+    assert state["edited"] is False and state["active"] is not None
+
+
+def test_swipe_state_of_hand_edited_prose_names_no_variant(client):
+    # `edit_message` keeps the response id and leaves the ledger alone, so the
+    # active variant no longer describes the prose: reporting it as n/m (with
+    # its provenance) would be wrong, and swiping away would drop the edit.
+    cid, sid, base, rid, _old = _two_turns_with_a_reroll(client)
+    index = len(store.scenes.read_scene(cid, sid)["messages"]) - 1
+    edited = client.put(base + f"/messages/{index}", json={"content": "My own words."})
+    assert edited.status_code == 200, edited.text
+    state = client.get(_swipe_path(base, rid)).json()
+    assert state["edited"] is True and state["active"] is None
+    assert len(state["variants"]) == 2

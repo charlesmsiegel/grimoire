@@ -251,7 +251,7 @@ backed by `responses.swipe_state(cid, sid, rid)`:
 {"active": 1,
  "variants": [{"id": "...", "status": "complete", "made_by": {...}}, ...],
  "settings": {...}, "resume_settings": {...},
- "can_reroll": true, "editable": true, "round_open": false}
+ "can_reroll": true, "editable": true, "round_open": false, "edited": false}
 ```
 
 - **Lock-free and write-free**, in the style of `variants_by_response`: one
@@ -270,6 +270,11 @@ backed by `responses.swipe_state(cid, sid, rid)`:
   exists in this scene. `activate`'s `_invalidate` supersedes such a round and
   its proposal; a swipe while one is open would destroy a paused roll or a
   Retry the player has not used.
+- **`edited`** — the response's transcript prose (its messages joined with
+  `"\n\n"`, as `responses.get` joins them, stripped) differs from the active
+  variant's stripped `content`. `scenes.edit_message` keeps the `response_id`
+  and leaves the ledger alone, so a hand edit is prose no variant holds; then
+  `active` is `null`, and the read names no variant or provenance for it.
 - A response id the ledger does not know answers 404.
 
 ### 6. Swipes on the last response
@@ -291,7 +296,11 @@ fetch hides the arrows rather than showing a stale count.
 **Arrows.** `‹ n/m ›` in the post's gutter, the `.swipe-nav` markup the legacy
 control uses, where `n/m` counts **complete** variants. Shown when there are
 two or more complete variants, or one and `can_reroll` (so there is somewhere
-to go). A migrated reply with one variant and no snapshot shows no arrows.
+to go). A migrated reply with one variant and no snapshot shows no arrows. Nor does a
+hand-edited post (`edited`, so `active` is `null` and there is no position):
+stepping would silently discard the player's own words, so the edit is undone
+only deliberately, by choosing a variant in the **Response variants**
+disclosure.
 
 - **‹** activates the previous complete variant; disabled at the first.
 - **›** activates the next complete variant. At the newest it **generates**:

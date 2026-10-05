@@ -51,7 +51,7 @@ function swipeRead(over: Partial<ResponseSwipe> = {}): ResponseSwipe {
   return {
     active: 1, variants: [v("v1"), v("v2"), v("v3")],
     settings: null, resume_settings: null,
-    can_reroll: true, editable: true, round_open: false, ...over };
+    can_reroll: true, editable: true, round_open: false, edited: false, ...over };
 }
 function reads(over: Partial<ResponseSwipe> = {}) {
   (api.getResponseSwipe as any).mockResolvedValue(swipeRead(over));
@@ -213,6 +213,24 @@ test("one complete variant and nowhere to generate shows no arrows", async () =>
   await waitFor(() => expect(api.getResponseSwipe).toHaveBeenCalledWith("run", "s1", "rB"));
   expect(screen.queryByRole("button", { name: "Previous reply variant" })).toBeNull();
   expect(screen.queryByText("1/1")).toBeNull();
+});
+
+// A hand edit keeps the response id but the prose is no variant's, so the
+// server answers `edited` with no active variant: no count, no provenance, and
+// no arrow that would swap the player's own words for a variant.
+test("hand-edited prose shows no arrows and no provenance", async () => {
+  playing();
+  reads({ active: null, edited: true, variants: [
+    { id: "v1", status: "complete", made_by: { model: "realm/mara-70b" } }, v("v2")] });
+  renderCampaign();
+  await screen.findByText("The second answer.");
+  await waitFor(() => expect(api.getResponseSwipe).toHaveBeenCalledWith("run", "s1", "rB"));
+  expect(screen.queryByRole("button", { name: "Previous reply variant" })).toBeNull();
+  expect(screen.queryByText(/\/2$/)).toBeNull();
+  expect(document.querySelector('[title*="realm/mara-70b"]')).toBeNull();
+  press("ArrowRight");
+  expect(api.activateResponseVariant).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText("Reroll guidance")).toBeNull();
 });
 
 test("one complete variant that can be rerolled shows 1/1, with › generating", async () => {
