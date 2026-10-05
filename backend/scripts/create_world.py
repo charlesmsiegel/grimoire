@@ -285,11 +285,22 @@ def _check_character(row: dict, idx: Index) -> Iterator[str]:
             yield f"{where}: {f} must be a list of strings"
 
 
+def _single_lines(row: dict, where: str, keys) -> Iterator[str]:
+    """Values written as frontmatter scalars must be one line: a line break
+    there is stored, reported saved, and read back truncated -- or with the
+    continuation parsed as a key of its own."""
+    for k in keys:
+        if isinstance(row.get(k), str) and row[k] and not _one_line(row[k]):
+            yield f"{where}: {k} must be one line (it is stored as frontmatter)"
+
+
 def _check_pc(row: dict, idx: Index) -> Iterator[str]:
     where = f"pcs {row['name']!r}"
     yield from _refs(idx, "tags", row.get("tags"), f"{where} tags")
     yield from _typed(row, where, ("pronouns", "summary", "birthdate", "description"),
                       str, "a string")
+    # `description` is the persona's body; the rest are frontmatter scalars
+    yield from _single_lines(row, where, ("pronouns", "summary", "birthdate"))
 
 
 def _check_fields(kind: str, fields: dict, idx: Index, where: str) -> Iterator[str]:
@@ -301,6 +312,7 @@ def _check_fields(kind: str, fields: dict, idx: Index, where: str) -> Iterator[s
     plain = {k: v for k, v in fields.items() if k not in refs and k not in bad}
     for k in entity_schema.invalid_values(kind, plain):
         yield f"{where}: field {k} has an invalid value {fields[k]!r}"
+    yield from _single_lines(plain, f"{where} field", plain)
     for k, spec in refs.items():
         if not _list_ok(fields.get(k)):
             yield f"{where}: field {k} must be a reference or a list of them"
@@ -318,6 +330,8 @@ def _check_entity(kind: str, row: dict, idx: Index) -> Iterator[str]:
     if isinstance(row.get("keys"), list):
         yield from (f"{where}: key {k!r} has a comma, which the store reads as two keys"
                     for k in row["keys"] if isinstance(k, str) and "," in k)
+        yield from (f"{where}: key {k!r} must be one line"
+                    for k in row["keys"] if isinstance(k, str) and k and not _one_line(k))
     if "secrecy" in row and str(row["secrecy"]).strip().lower() not in entities.SECRECY_LEVELS:
         yield f"{where}: secrecy must be one of {', '.join(entities.SECRECY_LEVELS)}"
     fields = row.get("fields") or {}
@@ -329,12 +343,16 @@ def _check_entity(kind: str, row: dict, idx: Index) -> Iterator[str]:
 
 def _check_greeting(row: dict, idx: Index) -> Iterator[str]:
     where = f"greetings {row['name']!r}"
-    yield from _typed(row, where, ("body", "phase"), str, "a string")
+    # `character` and `location` are one name each, and "" is a value: it
+    # clears the field. A non-string is refused here rather than read as empty
+    # (which would silently clear it) or reaching a lookup (which would raise).
+    yield from _typed(row, where, ("body", "phase", "character", "location"), str, "a string")
     yield from _typed(row, where, ("pcless", "optional"), bool, "true or false")
-    if row.get("character"):
+    yield from _single_lines(row, where, ("phase",))
+    if isinstance(row.get("character"), str) and row["character"]:
         yield from _ref(idx, "characters", row["character"], f"{where} character")
     yield from _refs(idx, "characters", row.get("present"), f"{where} present")
-    if row.get("location"):
+    if isinstance(row.get("location"), str) and row["location"]:
         yield from _ref(idx, "locations", row["location"], f"{where} location")
     yield from _refs(idx, "tags", row.get("requires_tags"), f"{where} requires_tags")
     for key in ("leads_to", "excludes"):
@@ -392,10 +410,15 @@ def _check_world_settings(plan: dict, root: Path | None, wid: str | None) -> Ite
             yield f"calendar: {exc}"
     mid = plan.get("module")
     if mid:
+        # `load_pack`, not `pack_root`: a user-library pack with a module.md
+        # resolves either way, and an invalid one is disabled at resolution --
+        # binding it would give the world a module that never takes effect.
         try:
-            modules.pack_root(str(mid))
+            pack_errors = modules.load_pack(str(mid))["errors"]
         except modules.ModuleNotFound:
             yield f"module: no module {mid!r} (built-in or in the user library)"
+        else:
+            yield from (f"module {mid}: {e}" for e in pack_errors)
         if wid is not None and str(mid) != _world_module(wid) and _world_campaigns(wid):
             yield ("module: this world already has campaigns; change its module from the "
                    "world editor, which rebinds them under their locks")
@@ -830,19 +853,30 @@ def _openings(w: _World, errors: list[str], warnings: list[str]) -> None:
         warnings.append("no greetings: a campaign here starts from a blank scene")
         return
 
-    def startable(player_tags) -> list[str]:
-        return [a["id"] for a in greetings.availability(w.greetings, w.plotmap, set(),
-                                                        player_tags) if a["available"]]
+    def startable(player_tags) -> list[dict]:
+        return [a for a in greetings.availability(w.greetings, w.plotmap, set(), player_tags)
+                if a["available"]]
+
+    def onscreen(rows: list[dict]) -> list[dict]:
+        # The scene picker offers an offscreen (`pcless`) greeting only to an
+        # offscreen scene and an onscreen one only to a PC scene
+        # (`SceneIdeaPicker`), so an offscreen opener is no opening for a PC.
+        return [a for a in rows if not a["pcless"]]
 
     tag_free = startable(set())
-    by_pc = {p["id"]: startable(set(p["tags"])) for p in w.pcs}
-    if not tag_free and not any(by_pc.values()):
+    every_pc = {p["id"]: startable(set(p["tags"])) for p in w.pcs}
+    by_pc = {pid: onscreen(rows) for pid, rows in every_pc.items()}
+    if not tag_free and not any(every_pc.values()):
         errors.append("no greeting can open a scene: every one is gated behind a predecessor "
                       "or a tag no player character carries")
-    elif not tag_free:
-        warnings.append("no greeting is startable without tags: only a player character "
-                        "with the right tags can begin")
-    warnings.extend(f"pcs/{pid}: can start no greeting" for pid, ok in by_pc.items() if not ok)
+    elif not onscreen(tag_free) and not any(by_pc.values()):
+        warnings.append("no onscreen greeting is startable: every opening a campaign can use "
+                        "is offscreen, with no player character in it")
+    elif not onscreen(tag_free):
+        warnings.append("no onscreen greeting is startable without tags: only a player "
+                        "character with the right tags can begin")
+    warnings.extend(f"pcs/{pid}: can start no onscreen greeting"
+                    for pid, ok in by_pc.items() if not ok)
     carried = {t for p in w.pcs for t in p["tags"]}
     if w.pcs:
         warnings.extend(f"greetings/{g['id']}: requires {sorted(set(g['requires_tags']) - carried)}"

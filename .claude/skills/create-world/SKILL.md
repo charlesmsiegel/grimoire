@@ -245,6 +245,9 @@ one path closes the other. The plot map must be acyclic (a cycle means none of i
 greetings can ever start), and both `apply` and `check` refuse one.
 
 `pcless: true` is an offscreen opener, an NPC-only scene with no player character.
+The scene picker offers it only to an offscreen scene, so it is never an opening for a
+player character: a World whose only startable greetings are offscreen gives its PCs
+nothing to begin with.
 `phase`, `sequence` and `optional` only order the "what next" recommendations
 (`greetings.recommendations`) and never change what is startable.
 
@@ -288,7 +291,7 @@ or in the app since. **Errors** make it exit nonzero: a reference that doesn't
 resolve, a plot-map cycle, an unknown tag, a calendar or module that won't load,
 and no greeting that any player can start. **Warnings** are judgment calls: always-on
 entries, keyless locations, empty bodies, characters with no voice anchor or no
-description, a PC who can start nothing, and a greeting gated on a tag no PC
+description, a PC who can start no onscreen greeting, and a greeting gated on a tag no PC
 carries. Fix the errors. For each warning, either fix it or say why it stays.
 
 ### 8. See it in the app
