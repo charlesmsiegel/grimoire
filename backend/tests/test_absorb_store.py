@@ -1966,6 +1966,22 @@ def test_an_explicit_id_reserves_the_stored_title_when_the_row_omits_one(monkeyp
         {"id": "", "title": "The debt", "kind": "", "status": "", "beat": "And by title."}]})
     assert [e["id"] for e in edits] == ["commitment:the-debt"]
 
+def test_an_explicit_id_on_a_stored_commitment_reserves_its_stored_title(monkeypatch, tmp_path):
+    """For a commitment that EXISTS, the id means the stored record: materialize
+    stages the stored title and apply never renames. Reserving it under the
+    row's paraphrase instead let the same commitment named by its real title
+    later in the batch miss the merge and stage a duplicate."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
+                             "", "Sworn.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "The old debt", "kind": "", "status": "",
+         "beat": "Named by id."},
+        {"id": "", "title": "The debt", "kind": "", "status": "", "beat": "And by title."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt"]
+
 
 def test_an_explicit_id_and_a_matching_title_are_still_one_edit(monkeypatch, tmp_path):
     """The reservation must not break the dedup it sits beside: the same title,
@@ -2318,6 +2334,33 @@ def _fact_row(cid, sid, **row):
     """One `facts` section row through parse and materialize, as staged."""
     parsed = absorb.parse_output(json.dumps({"facts": [row]}))
     return absorb.materialize(cid, sid, parsed)
+
+def test_a_reallocated_commitment_is_cited_and_read_on_the_record_it_wrote(monkeypatch, tmp_path):
+    """The commitment twin of the plot case: the reallocation predates the plot
+    one, and so did the citation landing on the record it moved off."""
+    from grimoire.store import commitments, provenance, scenes
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "pay-mara", "Pay Mara", "promise", "open", "",
+                             "She swore it on the stair.", sid)
+    shown = absorb_conflicts.commitment_line(commitments.get(cid, "pay-mara"))
+    journal: dict = {}
+    applied, failures = absorb.apply_edits(cid, [{
+        "id": "commitment:pay-mara", "kind": "commitment", "field": "beat",
+        "target": {"kind": "commitments", "id": "pay-mara"},
+        "before": "", "after": "A different debt entirely.",
+        "resolve": "replace", "resolve_from": shown,
+        "review": {"quote": "I owe Winifred", "speaker": "Seraphine",
+                   "certainty": 0.9, "authority": "pc", "band": "high"},
+        "payload": {"id": "pay-mara", "title": "Pay, Mara", "kind": "threat",
+                    "status": "open", "due": "", "scene": sid}}], sid, progress=journal)
+    assert failures == [] and applied == ["commitment:pay-mara"]
+    cited = provenance.read(cid)
+    assert "commitments/pay-mara#beat" not in cited
+    assert cited["commitments/pay-mara-2#beat"]["quote"] == "I owe Winifred"
+    assert journal["edits"]["0"]["read"] == absorb_conflicts.commitment_line(
+        commitments.get(cid, "pay-mara-2"))
 
 
 def test_parse_output_facts():
@@ -3070,6 +3113,21 @@ def test_materialize_plot_explicit_id_is_reserved_against_a_later_slug(monkeypat
     assert [e["id"] for e in edits] == ["plot:the-map", "plot:the-map-2"]
     assert edits[1]["payload"]["title"] == "The Map?"
 
+def test_materialize_plot_explicit_id_on_a_stored_thread_reserves_its_stored_title(
+        monkeypatch, tmp_path):
+    """An explicit id naming a STORED thread is reserved under the stored title,
+    which is what materialize stages and apply keeps. Under the row's paraphrase
+    the thread named by its real title later in the batch staged `the-map-2`,
+    two rows with one label that approving turns into a duplicate open thread."""
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s1")
+    edits = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "the-map", "title": "The old map", "status": "advanced", "beat": "It is torn."},
+        {"id": "", "title": "The map", "status": "advanced", "beat": "Winifred copied it."}]})
+    assert [e["id"] for e in edits] == ["plot:the-map"]
+
 
 def test_apply_plot_new_row_whose_id_was_taken_is_reallocated(monkeypatch, tmp_path):
     """Mirrors the commitment branch: a row staged as NEW whose id another write
@@ -3093,6 +3151,32 @@ def test_apply_plot_new_row_whose_id_was_taken_is_reallocated(monkeypatch, tmp_p
     mine = plot.get(cid, "the-map-2")
     assert mine["title"] == "The map"
     assert [b["text"] for b in mine["beats"]] == ["Mara found it."]
+
+def test_a_reallocated_plot_row_is_cited_and_read_on_the_thread_it_wrote(monkeypatch, tmp_path):
+    """The citation and the resume reading follow the write. Keyed off the
+    staged target instead, a reallocated beat's quote landed on the thread it
+    moved OFF -- somebody else's -- explaining a beat that thread does not
+    contain, while the thread that holds it was left uncited."""
+    from grimoire.store import plot, provenance
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    [staged] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "", "title": "The map", "status": "open", "beat": "Mara found it."}]})
+    staged["review"] = {"quote": "I found the map", "speaker": "Mara",
+                        "certainty": 0.9, "authority": "pc", "band": "high"}
+    plot.set_movement(cid, "the-map", "A different map", "open", "Winifred drew it.", sid)
+    shown = absorb_conflicts.plot_line(plot.get(cid, "the-map"))
+    journal: dict = {}
+    applied, failures = absorb.apply_edits(
+        cid, [{**staged, "resolve": "replace", "resolve_from": shown}], sid,
+        progress=journal)
+    assert failures == [] and applied
+    cited = provenance.read(cid)
+    assert "plot/the-map#beat" not in cited
+    assert cited["plot/the-map-2#beat"]["quote"] == "I found the map"
+    assert journal["edits"]["0"]["read"] == absorb_conflicts.plot_line(
+        plot.get(cid, "the-map-2"))
 
 
 def test_materialize_slug_collision_with_non_string_status_does_not_raise(monkeypatch, tmp_path):
