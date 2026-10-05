@@ -1548,6 +1548,26 @@ def test_character_image_promote_missing_404(client):
     assert r.status_code == 404
 
 
+def test_character_image_promote_not_yet_available_is_404_with_its_reason(client):
+    """Both unresolved cases -- the slot being promoted, or the avatar it
+    swaps with -- answer the 404 an absent image does, carrying the reason,
+    rather than one of them escaping as a 500."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
+    d = store.worlds.world_root(wid) / "characters" / cid / "assets" / "default"
+    d.mkdir(parents=True, exist_ok=True)
+    for slot, color in (("gallery_1", (3, 3, 3)), ("avatar", (4, 4, 4))):
+        obj = store.image_store.ingest(_png_bytes(color=color), "png")
+        store.image_store.object_path(obj.id).unlink()
+        store.assets.link_in(d, slot, obj.id)
+    client.put(f"{base}/gallery_2", files={"file": ("g.png", io.BytesIO(_png_bytes()), "image/png")})
+    for name in ("gallery_1", "gallery_2"):
+        r = client.post(f"{base}/{name}/promote")
+        assert r.status_code == 404, name
+        assert "not yet available" in r.json()["detail"], name
+
+
 def test_character_image_promote_unsupported_type_400(client):
     """Promotion republishes both slots through put_image, which accepts only
     allowlisted extensions -- so a file no upload could have created (an

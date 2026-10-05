@@ -1503,7 +1503,7 @@ def test_promote_refuses_a_slot_whose_image_has_not_arrived(tmp_path):
     assets.put_image(tmp_path, "sera", "default", "gallery_2", _png(102), "png")
     [g2] = _slot_ids(tmp_path, "gallery_2")
 
-    with pytest.raises(OSError, match="not yet available"):
+    with pytest.raises(assets.ImageNotYetAvailableError, match="not yet available"):
         assets.promote_image(tmp_path, "sera", "default", "gallery_1")
     assert image_refs.read_journal(d) is None
     assert image_refs.read(d, assets.AVATAR) is None                # nothing written
@@ -1525,6 +1525,25 @@ def test_promote_refuses_an_avatar_whose_image_has_not_arrived(tmp_path):
         assets.promote_image(tmp_path, "sera", "default", "gallery_1")
     assert image_refs.read_journal(d) is None
     assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (pending, g)
+
+
+def test_promote_an_unresolved_slot_with_no_legacy_file_is_not_yet_available(tmp_path):
+    """The same refusal as an unresolved slot beside a legacy file: the image
+    is placed and has not arrived, which is not "no image here"."""
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    obj = image_store.ingest(_png(106), "png")
+    image_store.object_path(obj.id).unlink()
+    assets.link_in(d, "gallery_1", obj.id)
+    assert assets.path_in(d, "gallery_1") is None
+    with pytest.raises(assets.ImageNotYetAvailableError, match="not yet available") as got:
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    assert not isinstance(got.value, FileNotFoundError)
+    assert image_refs.read_journal(d) is None
+    assert image_refs.read(d, "gallery_1").image == obj.id
+    # An empty slot is still "no image".
+    with pytest.raises(FileNotFoundError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_7")
 
 
 def test_a_write_finishes_an_interrupted_promotion_first(tmp_path, monkeypatch):

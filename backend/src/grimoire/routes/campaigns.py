@@ -2006,6 +2006,9 @@ def promote_campaign_image(cid: str, char: str, vid: str, name: str):
     _campaign_char_version_or_404(cid, char, vid)
     try:
         store.overlay.promote_image(cid, char, vid, name)
+    except store.assets.ImageNotYetAvailableError as exc:
+        # placed, not arrived (mid-sync): absent here for now, and says why
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     except ValueError as exc:
@@ -2569,6 +2572,9 @@ def promote_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
     _campaign_pc_version_or_404(cid, pid, vid)
     try:
         store.overlay.promote_image(cid, pid, vid, name, base=store.pcs.ASSET_BASE)
+    except store.assets.ImageNotYetAvailableError as exc:
+        # placed, not arrived (mid-sync): absent here for now, and says why
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     except ValueError as exc:

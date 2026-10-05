@@ -356,3 +356,38 @@ def test_walk_ids_does_not_follow_symlinks(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("this platform/user cannot create symlinks")
     assert image_refs.walk_ids(root) == {b.id}
+
+
+def test_delete_propagates_anything_but_a_missing_file(tmp_path, monkeypatch):
+    # Only "already gone" is swallowed: a permission failure that leaves the
+    # placement standing must not report success to the caller.
+    d = tmp_path / "rec"
+    image_refs.write(d, "avatar", _obj().id)
+
+    def refuse(self, *a, **kw):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(type(image_refs.ref_path(d, "avatar")), "unlink", refuse)
+    with pytest.raises(PermissionError):
+        image_refs.delete(d, "avatar")
+    with pytest.raises(PermissionError):
+        image_refs.write(d, "avatar", None)
+    monkeypatch.undo()
+    assert image_refs.read(d, "avatar") is not None
+    assert image_refs.delete(d, "avatar") is True
+    assert image_refs.delete(d, "avatar") is False      # missing: swallowed
+
+
+def test_delete_in_still_swallows_a_failed_ref_delete(tmp_path, monkeypatch):
+    # `assets.delete_in` documents that failures are swallowed (callers that
+    # need the removal confirmed re-resolve), so the propagation stops there.
+    d = tmp_path / "rec"
+    d.mkdir()
+    image_refs.write(d, "gallery_1", _obj().id)
+
+    def refuse(_d, _name):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(image_refs, "delete", refuse)
+    assets.delete_in(d, "gallery_1")
+    assert image_refs.read(d, "gallery_1") is not None

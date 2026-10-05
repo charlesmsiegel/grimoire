@@ -511,6 +511,9 @@ async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFi
 def _entity_image_promote(root, kind: str, eid: str, name: str):
     try:
         store.assets.promote_image(root, eid, "default", name, base=kind)
+    except store.assets.ImageNotYetAvailableError as exc:
+        # placed, not arrived (mid-sync): absent here for now, and says why
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     except ValueError as exc:
@@ -675,6 +678,9 @@ def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
     _campaign_entity_or_404(cid, kind, eid)
     try:
         store.overlay.promote_image(cid, eid, "default", name, base=kind)
+    except store.assets.ImageNotYetAvailableError as exc:
+        # placed, not arrived (mid-sync): absent here for now, and says why
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     except ValueError as exc:

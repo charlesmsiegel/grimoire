@@ -405,8 +405,9 @@ image, a version or a record. §6 lists every walker that must skip it.
   - not listed: needs review;
   - listed with no associations: deliberately no known subjects;
   - listed with associations: tagged.
-- **`sources`** holds normalized http(s) URLs: fragment stripped, deduplicated,
-  capped at 20. They are written only when a caller passes one (localize, card
+- **`sources`** holds normalized http(s) URLs: fragment stripped, userinfo
+  (`user:pass@`) dropped, host lower-cased with the port kept, deduplicated,
+  capped at 20. A URL that names no host is not recorded. They are written only when a caller passes one (localize, card
   or Chub import). Collection harvesting passes none.
 - **`description_conflicts`** exists only while a migration-detected
   disagreement is unresolved (§11).
@@ -669,6 +670,20 @@ None of these reads and rewrites bytes. A legacy source is ingested once first.
 - `overlay.read_description` / `read_descriptions` reduce to "resolve the
   visible placement; read its object". A legacy campaign key for an inherited
   image is read until migration folds it in (§11).
+
+**Every object write goes through `image_store.update(image_id, change)`, and
+its callback has a contract.** `change` runs under the object's stripe lock
+(§3), so it must be a pure edit of the dict it is handed:
+
+- it must not call `ingest`, `update` or `identify`;
+- it must not take a campaign lock or the ingest/GC lock.
+
+GC takes the ingest/GC lock and **then** a stripe (§12), so either of those
+under a stripe is the reverse order and can deadlock with it; a nested `update`
+can wait on its own non-reentrant stripe. Anything that needs a lock or the
+store is done before `update` is called, and the callback is handed the result.
+Stage 1 enforces the first rule with a thread-local latch: `ingest`, `update`
+and `identify` raise `RuntimeError` when called from inside a callback.
 
 **Subjects** move to `associations` and `reviews`. `subjects.json` keeps only:
 

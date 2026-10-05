@@ -24,7 +24,7 @@ import os
 import shutil
 import threading
 from collections.abc import Callable
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 from . import atomic, image_hash, image_refs, image_store, statcache
@@ -517,7 +517,8 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
     # half-remove a set the upload is mid-way through replacing.
     with _image_lock(d, name):
         _recover_promotion(d)
-        image_refs.delete(d, name)
+        with suppress(OSError):     # swallowed like the legacy files below
+            image_refs.delete(d, name)
         for p in _siblings(d, name, supported_only):
             try:
                 p.unlink()
@@ -1293,12 +1294,12 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
     take no locks, so a concurrent reader can still see the swap half done;
     a reader that finds the journal and can take the locks finishes it first.
 
-    `FileNotFoundError` when `name` holds no image, `ValueError` when either
-    side is an externally placed file of an extension never accepted -- both
-    before anything is written (`_check_promotable`). `OSError` when either
-    side's image has not arrived yet (also before anything is written), when
-    an earlier promotion's journal could not be finished first (it is never
-    overwritten), or when a write fails.
+    `ImageNotYetAvailableError` (an `OSError`) when either side's image is placed
+    but has not arrived yet, `FileNotFoundError` when `name` holds no image,
+    `ValueError` when either side is an externally placed file of an
+    extension never accepted -- all before anything is written
+    (`_check_promotable`). `OSError` when an earlier promotion's journal could
+    not be finished first (it is never overwritten), or when a write fails.
     """
     if name == AVATAR:
         return
@@ -1337,30 +1338,37 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
         _finish_promotion(d, name, journal)
 
 
+class ImageNotYetAvailableError(OSError):
+    """A placement names an image whose object or blob has not arrived here
+    yet (mid-sync). Not "no image": the routes answer it with the 404 an
+    absent image gets, carrying this reason."""
+
+
 def _check_promotable(d: Path, name: str) -> None:
     """Everything that refuses a promotion, checked before anything is
     written -- adoption included -- since finding it halfway through would
     leave a half-swap. Caller holds both image locks.
 
-    - `FileNotFoundError`: `name` holds no image.
-    - `ValueError`: either side is an externally placed file of an extension
-      never accepted.
-    - `OSError`: either side is an image-bearing placement whose object or
-      blob has not arrived (mid-sync, or a `link_in` ahead of its object). The
+    - `ImageNotYetAvailableError` (an `OSError`): either side is an image-bearing
+      placement whose object or blob has not arrived (mid-sync, or a `link_in`
+      ahead of its object) -- with or without a legacy file beside it. The
       swap would move an id no reader can show yet, and the legacy file
       `_drop_if_placed` kept beside it would keep a cleared source slot
       occupied -- a journal that could never finish.
+    - `FileNotFoundError`: `name` holds no image at all.
+    - `ValueError`: either side is an externally placed file of an extension
+      never accepted.
     """
+    for slot in (name, AVATAR):
+        ref = image_refs.read(d, slot)
+        if ref is not None and ref.image is not None and image_refs.resolve(d, slot) is None:
+            raise ImageNotYetAvailableError(f"image not yet available (still syncing?): {slot}")
     src = path_in(d, name)
     if src is None:
         raise FileNotFoundError(name)
     for p in (src, path_in(d, AVATAR)):
         if p is not None and not _norm_ext(p.suffix):
             raise ValueError(f"unsupported image type: {p.name}")
-    for slot in (name, AVATAR):
-        ref = image_refs.read(d, slot)
-        if ref is not None and ref.image is not None and image_refs.resolve(d, slot) is None:
-            raise OSError(f"image not yet available (still syncing?): {slot}")
 
 
 def _finish_promotion(d: Path, name: str, journal: dict) -> None:

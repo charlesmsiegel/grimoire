@@ -1192,6 +1192,9 @@ def promote_world_image(wid: str, cid: str, vid: str, name: str):
     root = _world_char_version_or_404(wid, cid, vid)
     try:
         store.assets.promote_image(root, cid, vid, name)
+    except store.assets.ImageNotYetAvailableError as exc:
+        # placed, not arrived (mid-sync): absent here for now, and says why
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     except ValueError as exc:
