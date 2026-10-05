@@ -140,3 +140,29 @@ test("a slower read of an earlier file pick cannot replace the later one", async
     vi.unstubAllGlobals();
   }
 });
+
+test("a read left over from a cancelled import cannot fill the next one", async () => {
+  const readers: { finish: () => void }[] = [];
+  class HeldReader {
+    result = "";
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    readAsText(f: File) {
+      readers.push({ finish: () => { this.result = '{"temp": 0.1}'; void f.name; this.onload?.(); } });
+    }
+  }
+  vi.stubGlobal("FileReader", HeldReader);
+  try {
+    render(<SamplerPresetEditor />);
+    fireEvent.click(await screen.findByText("Import from SillyTavern…"));
+    fireEvent.change(screen.getByLabelText("Preset file"),
+                     { target: { files: [new File(["x"], "Abandoned.json")] } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByText("Import from SillyTavern…"));
+    readers[0].finish();   // the abandoned read lands in the NEW session
+    await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>("Save as").value).toBe(""));
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

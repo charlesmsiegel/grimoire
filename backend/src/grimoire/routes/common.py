@@ -1304,7 +1304,10 @@ def _model_params(conn: dict) -> list[str] | None:
         return None
     try:
         models = store.llm_connections.cached_models(conn["id"])["models"]
-    except (OSError, KeyError, TypeError, ValueError):
+    except (OSError, KeyError, TypeError, ValueError, AttributeError):
+        # Belt and braces: `cached_models` validates the sidecar's shape now,
+        # and this runs on every OpenRouter turn, so whatever slips past that
+        # costs the catalog, never the turn.
         return None
     # The sidecar is a file a sync or a hand can mangle, and this runs on every
     # OpenRouter generation: a malformed one reads as "no catalog" (unverified),
