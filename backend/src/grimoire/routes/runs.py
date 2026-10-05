@@ -30,7 +30,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Literal, Protocol
 
 import anyio
@@ -282,6 +282,13 @@ class Run:
         # itself: this one is an intent about the RECORD, and it is what the
         # phases' `abandoned` predicate reads to stop generating for it.
         self.review_cancelled = False
+        # Attempt ids of later starts that ADOPTED this run rather than making
+        # their own -- a Refresh pressed while the automatic reconcile after End
+        # Scene is still live (`single_live`). Each is indexed in `_by_attempt`
+        # beside the run's own, so `GET .../runs?attempt=` re-finds the run for
+        # a client that lost its 202, and `reap` drops them with the run.
+        # Appended only under the registry lock.
+        self.adopted_attempts: list[str] = []
         self._lock = threading.Lock()
 
     def append_frame(self, frame: str) -> int:
@@ -365,6 +372,12 @@ class RunRegistry:
         # `hold_still`.
         self._store_moves = 0
         self._by_key: dict[str, str] = {}
+        # Records a trigger asked a campaign's reconcile to look at while one
+        # was already live, keyed by subject. Here, on the per-app registry and
+        # under its lock, and never at module scope: a `TestClient` builds an
+        # app per test and the suite reuses cids, so module state would hand
+        # one test's leftover refs to the next test's first run.
+        self._pending_touched: dict[Subject, set[str]] = {}
 
     def set_live_sink(self, sink: Callable[[int], None] | None) -> None:
         """Who to tell when the live-run count crosses zero.
@@ -440,6 +453,7 @@ class RunRegistry:
                           labels: dict, adopt_terminal: bool = True,
                           also_precancelled: Subject | None = None,
                           review_generation: str | None = None,
+                          single_live: bool = False,
                           ) -> tuple[Run, bool]:
         """Reserve a run, or hand back the one this attempt already made.
 
@@ -451,6 +465,13 @@ class RunRegistry:
         All of it under one lock, get-or-create style. A check-then-act would
         hand two concurrent first callers different answers, which is precisely
         the double-send this exists to prevent.
+
+        ``single_live`` makes a keyless class adopt the live run of the same
+        class and kind on the subject instead of starting a second one: one
+        live reconcile per campaign, whether End Scene or Refresh asked first.
+        It is a scan under this lock rather than an exclusion key because the
+        loser is not refused -- it is handed the running sweep, under its own
+        attempt id (`_adopt`).
         """
         # BEFORE the lock. The loop-backed factory blocks on a portal round
         # trip, and loop-side code (the reaper) takes this same lock -- so
@@ -466,28 +487,13 @@ class RunRegistry:
             # campaign against the new one.
             if self._store_moves:
                 raise StoreMovingError
-            if attempt_id is not None:
-                # Attempt ids come from clients, so they are only unique within
-                # a subject -- two scenes may pick the same one.
-                known = self._by_attempt.get((subject, attempt_id))
-                existing = self._runs.get(known) if known else None
-                # The identity has to match here too, not only in `get`. A stale
-                # client retrying an old attempt id after the scene was deleted
-                # and its id recycled would otherwise adopt the dead scene's run
-                # and receive its frames.
-                if existing is not None and self._owns(existing, subject, scene_identity) \
-                        and (adopt_terminal or existing.state == "running"):
-                    # Returned even when terminal, for a CLIENT's id: a client
-                    # whose response was lost re-sends the same one and must
-                    # adopt the original outcome rather than do the work twice.
-                    #
-                    # `adopt_terminal=False` is for an id the SERVER derived --
-                    # from a proposal, say. That is only a dedupe key for
-                    # concurrent duplicates, not a promise from anyone that this
-                    # is the same logical request, so a later retry of a turn
-                    # that FAILED has to be allowed to actually retry. Adopting
-                    # there would make one crashed adjudication permanent.
-                    return existing, False
+            existing = self._by_own_attempt(subject, attempt_id, scene_identity,
+                                            adopt_terminal)
+            if existing is not None:
+                return existing, False
+
+            if single_live and (live := self._live_single(subject, cls, kind)) is not None:
+                return self._adopt(live, subject, attempt_id), False
 
             key = exclusion_key(subject, cls)
             if key is not None:
@@ -538,6 +544,82 @@ class RunRegistry:
             seq = self._live_seq
         self._fire_live(crossed, seq)
         return run, True
+
+    def _by_own_attempt(self, subject: Subject, attempt_id: str | None,
+                        scene_identity: str | None,
+                        adopt_terminal: bool) -> Run | None:
+        """The run this attempt id already made, if it may be adopted. Under
+        ``self._lock``; `start_or_existing`'s first lookup, kept apart so that
+        method stays within the complexity bound."""
+        if attempt_id is None:
+            return None
+        # Attempt ids come from clients, so they are only unique within
+        # a subject -- two scenes may pick the same one.
+        known = self._by_attempt.get((subject, attempt_id))
+        existing = self._runs.get(known) if known else None
+        # The identity has to match here too, not only in `get`. A stale
+        # client retrying an old attempt id after the scene was deleted
+        # and its id recycled would otherwise adopt the dead scene's run
+        # and receive its frames.
+        if existing is not None and self._owns(existing, subject, scene_identity) \
+                and (adopt_terminal or existing.state == "running"):
+            # Returned even when terminal, for a CLIENT's id: a client
+            # whose response was lost re-sends the same one and must
+            # adopt the original outcome rather than do the work twice.
+            #
+            # `adopt_terminal=False` is for an id the SERVER derived --
+            # from a proposal, say. That is only a dedupe key for
+            # concurrent duplicates, not a promise from anyone that this
+            # is the same logical request, so a later retry of a turn
+            # that FAILED has to be allowed to actually retry. Adopting
+            # there would make one crashed adjudication permanent.
+            return existing
+        return None
+
+    def _live_single(self, subject: Subject, cls: RunClass, kind: str) -> Run | None:
+        """The running run of this class and kind on the subject, if any.
+
+        Called under ``self._lock``. A run that is ``forgotten`` belongs to a
+        deleted record, and one that is ``cancel_requested`` has had Stop
+        pressed: adopting either would hand the next Refresh a sweep that is
+        going away.
+        """
+        for rid in self._by_subject.get(subject, []):
+            run = self._runs.get(rid)
+            if (run is not None and run.state == "running" and run.cls == cls
+                    and run.kind == kind and not run.forgotten
+                    and not run.cancel_requested):
+                return run
+        return None
+
+    def _adopt(self, live: Run, subject: Subject, attempt_id: str | None) -> Run:
+        """Record ``attempt_id`` as another name for ``live``. Under ``self._lock``.
+
+        Without it a client that lost the 202 for an adopted start could not
+        find the run again by the attempt it sent.
+        """
+        if attempt_id is not None and attempt_id != live.attempt_id \
+                and attempt_id not in live.adopted_attempts:
+            live.adopted_attempts.append(attempt_id)
+        if attempt_id is not None:
+            self._by_attempt[(subject, attempt_id)] = live.id
+        return live
+
+    def pend_touched(self, subject: Subject, refs: Iterable[str]) -> None:
+        """Leave refs for the subject's live reconcile to take after its pass."""
+        with self._lock:
+            self._pending_touched.setdefault(subject, set()).update(refs)
+
+    def take_touched(self, subject: Subject) -> set[str]:
+        """Take (and clear) the refs pending for the subject; empty when none."""
+        with self._lock:
+            return self._pending_touched.pop(subject, set())
+
+    def drop_pending_touched(self) -> None:
+        """Forget every pending ref. They name records in a tree that may no
+        longer be the store's root."""
+        with self._lock:
+            self._pending_touched.clear()
 
     @staticmethod
     def _now() -> float:
@@ -775,6 +857,9 @@ class RunRegistry:
                 del self._by_attempt[key]
             for key in [k for k in self._precancelled if k[0] == subject]:
                 del self._precancelled[key]
+            # A slug is reusable: a recreated campaign of the same name must not
+            # inherit refs a trigger left for the dead one's sweep.
+            self._pending_touched.pop(subject, None)
             return len(ids)
 
     def reap(self, now: float | None = None) -> int:
@@ -809,6 +894,10 @@ class RunRegistry:
                     key_a = (run.subject, run.attempt_id)
                     if self._by_attempt.get(key_a) == run.id:
                         del self._by_attempt[key_a]
+                for alias in run.adopted_attempts:
+                    # The same guard, for the attempt ids that adopted it.
+                    if self._by_attempt.get((run.subject, alias)) == run.id:
+                        del self._by_attempt[(run.subject, alias)]
                 key = exclusion_key(run.subject, run.cls)
                 if key is not None and self._by_key.get(key) == run.id:
                     del self._by_key[key]
@@ -1200,7 +1289,9 @@ def _subject_runs(app, subject: Subject, attempt: str | None) -> dict:
     """
     found = app.state.runs.for_subject(subject)
     if attempt is not None:
-        found = [r for r in found if r.attempt_id == attempt]
+        # An attempt that ADOPTED a live run (`single_live`) finds that run too.
+        found = [r for r in found
+                 if r.attempt_id == attempt or attempt in r.adopted_attempts]
     return {"runs": [run_payload(r) for r in found]}
 
 
@@ -1812,6 +1903,38 @@ def reserve_background(app, cid: str, sid: str, kind: str) -> Run | None:
         # path where nobody is listening for one.
         return None
     return run
+
+
+def reserve_campaign_background(app, cid: str, kind: str,
+                                attempt_id: str | None = None,
+                                ) -> tuple[Run, bool] | None:
+    """Reserve the campaign's one live `background` run of this kind, or adopt
+    the live one. ``None`` if the store is moving.
+
+    Spec §11.1: at most one reconciliation sweep is live per campaign, and a
+    start while one is live returns the live run -- so End Scene's automatic
+    sweep and a Refresh pressed during it are one sweep. ``fresh`` comes back
+    with the run because the caller must not wrap an ADOPTED run in
+    `reservation` a second time: it already has a producer.
+
+    It takes no campaign lock, for `reserve_background`'s reason: a
+    `background` run holds no exclusion key, so nothing needs to exclude its
+    reservation, and the store-move refusal lives inside `start_or_existing`
+    under the registry lock. The adoption scan is in there too, which is what
+    makes two simultaneous triggers get one run rather than two.
+    """
+    subject = campaign_subject(cid)
+    try:
+        return app.state.runs.start_or_existing(
+            subject, "background", kind, attempt_id, None,
+            _subject_labels(subject), single_live=True)
+    except StoreMovingError:
+        return None
+
+
+def drop_pending_touched(app) -> None:
+    """Forget every ref a trigger left pending, after the store root moved."""
+    app.state.runs.drop_pending_touched()
 
 
 def _reserve(app, cid: str, sid: str, cls: RunClass, kind: str,
