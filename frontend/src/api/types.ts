@@ -836,6 +836,16 @@ export type RegenerateOverrides = {
   model?: string;
 };
 export type ResponseBundle = ResponseFields & { effective: ResponseEffective; provenance: ResponseProvenance };
+
+/** A scene's group-play settings: who replies next, and how much they talk.
+ *  `sitting_out` and `order_list` hold actor references (`kind:id`). */
+export type GroupSettings = {
+  order: "directed" | "manual" | "list" | "natural";
+  order_list: string[];
+  talkativeness: Record<string, number>;
+  sitting_out: string[];
+  auto_rounds: number;
+};
 // --- per-task model routing (#142) ---
 /** One routing slot: a named job, and the usage tasks it covers. */
 export type RoutingRoute = { key: string; label: string; hint: string; tasks: string[] };

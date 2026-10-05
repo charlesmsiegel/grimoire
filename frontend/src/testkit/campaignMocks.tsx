@@ -92,6 +92,7 @@ export async function campaignApiMock() {
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listStyles: vi.fn(),
       getSceneResponse: vi.fn(),
+      getSceneGroup: vi.fn(), setSceneGroup: vi.fn(),
       // the Mechanics panel's own reads/writes: CampaignView hosts
       // MechanicsConfig, and gates the dice button on the same binding
       getCampaignModule: vi.fn(), setCampaignModule: vi.fn(),

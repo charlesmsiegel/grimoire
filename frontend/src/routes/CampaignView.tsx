@@ -6,7 +6,7 @@ import {
   api, ApiError, invalidateConfigCache, type Actor, type SceneMeta,
   type Message, type RosterEntry, type SceneAlternates,
   type SceneDatetime, type ProposalRecord, type SceneCheckActor,
-  type ResponseOverride, type ResponseBundle,
+  type ResponseOverride, type ResponseBundle, type GroupSettings,
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
   type CampaignBudget,
   type IncomingRef,
@@ -55,6 +55,7 @@ import ReviewTranscript from "../components/review/ReviewTranscript";
 import { useSceneReview } from "../components/review/useSceneReview";
 import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
+import ReplyChips from "../components/play/ReplyChips";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
@@ -611,7 +612,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
-  const [responseActor, setResponseActor] = useState("");
+  // Group-play settings of the active scene; null until read, and after a failed read.
+  const [group, setGroup] = useState<GroupSettings | null>(null);
   const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -1445,6 +1447,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     Promise.resolve(api.getSceneResponse?.(cid, id))
       .then((r) => setSceneResponse(r ?? null))
       .catch(() => setSceneResponse(null));
+    // Failed read: nobody is treated as sitting out, and the chips still work.
+    Promise.resolve(api.getSceneGroup?.(cid, id))
+      .then((g) => setGroup(g ?? null))
+      .catch(() => setGroup(null));
     const scene = await api.getScene(cid, id, { limit: windowSizeRef.current });
     if (windowTokenRef.current !== token) return -1; // a later select already landed
     // Asked again here, not only on entry: this fetch is an await, and a turn
@@ -3178,7 +3184,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     return finished && !errored && !producedNothing;
   }
 
-  async function send() {
+  async function send(speakerRef?: string) {
     if (busy || rolling || renamesInFlight) return;
     // A new prompt supersedes a failed reroll: whatever Retry would have
     // repeated, the player has moved on from it.
@@ -3255,12 +3261,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // have steered something it never saw. Every send now states what note is
     // in force, and for a Speak post that statement is "none".
     const note = directing && content ? { cid, sid: id, text: content } : null;
+    // Trailing argument only when a chip named a speaker, so every other send
+    // is the same call it always was.
+    const speakerArg: [] | [string] = speakerRef ? [speakerRef] : [];
     if (directing || !content) {
       try {
         const landed = await runStream(id,
           (onEvent, signal, attempt, onIndex) =>
             api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
-                     signal, attempt, onIndex, directing),
+                     signal, attempt, onIndex, directing, ...speakerArg),
           // An empty send has nothing to give back — it is the "next NPC round"
           // fast path, not words anyone typed.
           content ? () => recoverPrompt(cid, id, content, true) : undefined,
@@ -3291,7 +3300,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // The trailing `false` is `director`: this is the branch that POSTS, so
         // it is the one send that can never be a note.
         api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
-                 signal, attempt, onIndex, false),
+                 signal, attempt, onIndex, false, ...speakerArg),
       () => recoverPrompt(cid, id!, content), false,
       // The words the player typed, held until the outcome proves them durable.
       content);
@@ -3443,13 +3452,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (landed) setPendingResponse(null);
   }
 
-  async function respondAs() {
+  async function respondAs(ref: string) {
     if (!activeId || busy || rolling || sceneLocked || renamesInFlight || !transcriptIsActive) return;
-    const actor = cast.find((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor);
-    if (responseActor !== "grimoire" && !actor) return;
     const sid = activeId;
     const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.chat(cid, sid, "", onEvent, pendingResponse ?? undefined, signal, attempt, onIndex, false, responseActor),
+      api.chat(cid, sid, "", onEvent, pendingResponse ?? undefined, signal, attempt, onIndex, false, ref),
       undefined, false, "", true);
     if (landed) setPendingResponse(null);
   }
@@ -5206,23 +5213,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               onKeyDown={onKeyDown}
             />
             {activeId && <div className="form-actions">
-              <select aria-label="Respond as speaker" value={responseActor}
-                disabled={busy || rolling || sceneLocked}
-                onChange={(e) => setResponseActor(e.target.value)}>
-                <option value="">Choose speaker…</option>
-                <option value="grimoire">Grimoire</option>
-                {cast.filter((a) => a.role === "npc").map((a) =>
-                  <option key={`${a.kind}:${a.id}`} value={`${a.kind}:${a.id}`}>{a.name}</option>)}
-              </select>
-              <button onClick={() => void respondAs()} disabled={busy || rolling || sceneLocked || renamesInFlight > 0
-                || (responseActor !== "grimoire" && !cast.some((a) => a.role === "npc" && `${a.kind}:${a.id}` === responseActor))}>Respond as</button>
+              <ReplyChips cast={cast} sittingOut={group?.sitting_out ?? []}
+                disabled={busy || rolling || sceneLocked || renamesInFlight > 0}
+                onReply={(ref) => void (input.trim() ? send(ref) : respondAs(ref))} />
             </div>}
             {/* Selection and every handoff share the run's busy latch. Keep
                 Continue visible but unavailable until the entire run settles;
                 the separate Stop still cancels it before any prose arrives. */}
             <div className="composer-run-actions">
               {busy && <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>}
-              <button className="send" onClick={send} disabled={busy || rolling || renamesInFlight > 0}>
+              <button className="send" onClick={() => void send()} disabled={busy || rolling || renamesInFlight > 0}>
                 {/* An empty box requests one additional response in either mode. */}
                 {!input.trim() ? "Continue ▶" : directing ? "Direct 🎬" : "Send ▸"}
               </button>

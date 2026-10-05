@@ -49,7 +49,7 @@ import {
   type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
   type RecordChange, type RegenerateOverrides, type RelationshipChange,
-  type RelationshipSave, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
+  type RelationshipSave, type ReplayPreview, type ReplaySession, type ResponseBundle, type GroupSettings, type ResponseFields, type ResponseOverride,
   type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type RoutingBundle, type SamplerImportReport, type SamplerParamSpec,
   type SamplerPreset, type SamplerPresetDraft, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
@@ -2477,6 +2477,12 @@ export const api = {
     request<ResponseBundle>("GET", `/api/campaigns/${cid}/scenes/${sid}/response`),
   setSceneResponse: (cid: string, sid: string, patch: Partial<ResponseFields>) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/response`, patch),
+  // Group play: the scene's speaker-order settings. PUT replaces the whole set
+  // and answers with what the server stored after normalising it.
+  getSceneGroup: (cid: string, sid: string) =>
+    request<GroupSettings>("GET", `/api/campaigns/${cid}/scenes/${sid}/group`, undefined, { fresh: true }),
+  setSceneGroup: (cid: string, sid: string, s: GroupSettings) =>
+    request<{ ok: boolean; settings: GroupSettings }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/group`, s),
 
   // Per-task model routing (#142), both scopes. `fresh` on the reads: the
   // bundle carries what OTHER scopes resolve to, so a cached copy would show
