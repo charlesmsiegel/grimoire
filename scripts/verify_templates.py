@@ -492,7 +492,9 @@ def _reconcile_fields(title, status="open", kind="", due=""):
 
 
 def _reconcile_record(letter, ref, fields, **over):
-    return {"letter": letter, "ref": ref, "line": reconcile.snippet_line(ref, fields),
+    kind = {"thread": "plot thread", "commitment": "commitment"}.get(ref.partition(":")[0], "")
+    return {"letter": letter, "ref": ref, "type": kind,
+            "line": reconcile.snippet_line(ref, fields),
             "beats": [], "pressure": "", "links": [], "actors": [], "_fields": fields, **over}
 
 
@@ -558,7 +560,8 @@ for label, payload in RECONCILE_INPUTS.items():
             else:
                 want = f"event: {fields['title']} ({fields['due']})"
             check(f"continuity reconcile line ({label}, {rec['ref']})", want, rec["line"])
-            assert f"{rec['letter']}: {rec['line']}" in exp[1]["content"], \
+            shown = f" ({rec['type']})" if rec["type"] else ""
+            assert f"{rec['letter']}{shown}: {rec['line']}" in exp[1]["content"], \
                 f"continuity reconcile user ({label}) does not show {rec['ref']}'s line"
 
 # ------------------------------------------------------------- store fixture

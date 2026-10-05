@@ -438,6 +438,83 @@ def test_known_scenes_are_the_shown_beats_and_chronicle_lines(cid, monkeypatch):
     assert got[payload["candidates"][0]["id"]]["decision"] == "uncertain"
 
 
+def test_a_deleted_scene_is_not_known_evidence(cid, s0):
+    """`delete_scene` leaves beats and the chronicle line naming the scene behind,
+    but persist 1 voids a proposal citing a scene `list_scenes` does not have. A
+    deleted scene is therefore never shown as evidence: its beat keeps its text
+    without the marker, its chronicle line is not shown, and a closure citing it
+    is ``uncertain`` rather than a proposal nobody could ever apply."""
+    gone = scenes.create_scene(cid, "Realm road")
+    _thread(cid, MAP, "Mara's map", "The map was found on the road.", gone)
+    chronicle.absorb(cid, {"id": gone, "one_line": "Mara found the map."})
+    scenes.delete_scene(cid, gone)
+    key, rec = _record(cid, "possible_thread_closure", [MAP],
+                       {"reason": "stale", "days_since": 75})
+    _cache(cid, (key, rec))
+    payload = _payload(cid)
+
+    assert gone not in payload["known_scenes"]
+    assert gone not in {line["id"] for line in payload["chronicle"]}
+    [record] = _by_id(payload, key)["records"]
+    assert record["beats"] == [{"scene": "", "text": "The map was found on the road."}]
+    user = _user(payload)
+    assert gone not in user
+    assert "  The map was found on the road." in user
+    got = reconcile.parse_output(_reply(
+        {"candidate": "c1", "decision": "close", "reason": "The map was found.",
+         "evidence_scenes": [gone]}), payload)[key]
+    assert got["decision"] == "uncertain"
+    assert got["evidence_scenes"] == []
+    live = {s["id"] for s in scenes.list_scenes(cid)}
+    assert set(payload["known_scenes"]) <= live
+
+
+def test_the_recent_window_is_the_last_live_scenes_in_play_order(cid, monkeypatch):
+    """Deleted scenes' chronicle lines cannot crowd live scenes out of the
+    recent window."""
+    s1, s2, s3 = (scenes.create_scene(cid, title)
+                  for title in ("Saltmarch docks", "Realm road", "Winifred's house"))
+    for sid, line in ((s1, "Mara came ashore."), (s2, "The road was long."),
+                      (s3, "Winifred opened the door.")):
+        chronicle.absorb(cid, {"id": sid, "one_line": line})
+    scenes.delete_scene(cid, s3)
+    _closure(cid, s1)
+    monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 1)
+    payload = _payload(cid)
+    assert [line["id"] for line in payload["chronicle"]] == [s1, s2]
+    assert payload["known_scenes"] == [s1, s2]
+
+
+def test_a_cross_candidate_names_each_records_type(cid, s0):
+    """A cross pair is stored commitment first (refs sort), so A is the
+    commitment. Each record line says its type, so a reply reading the heading
+    cannot take A for the plot thread and lose a real ``pays_off``."""
+    _thread(cid, LEDGER, "Find the ledger", "Winifred learned the ledger exists.", s0)
+    _commitment(cid, OATH, "Mara's oath", "Mara swore to find the ledger.", s0)
+    key, rec = _record(cid, "possible_relation", [OATH, LEDGER], _pair_signals())
+    _cache(cid, (key, rec))
+    payload = _payload(cid)
+    cand = _by_id(payload, key)
+    assert [(r["letter"], r["type"]) for r in cand["records"]] == [
+        ("A", "commitment"), ("B", "plot thread")]
+    user = _user(payload)
+    assert "\nA (commitment): mara-s-oath: Mara's oath (promise, open)" in user
+    assert "\nB (plot thread): find-the-ledger: Find the ledger (open)" in user
+
+
+def test_an_event_record_line_names_itself(cid, s0):
+    clock.advance(cid, to="2026-05-10")
+    _commitment(cid, OATH, "Mara's oath", "Mara swore it.", s0, due="before the bells stop")
+    event = "event:" + events.create(cid, "The coronation", "2026-05-13")
+    sweep = _sweep(cid)
+    payload = _payload(cid, sweep)
+    cand = _by_id(payload, canon.candidate_id("possible_relation", [OATH, event]))
+    assert [r["type"] for r in cand["records"]] == ["commitment", ""]
+    user = _user(payload)
+    assert "\nA (commitment): mara-s-oath: Mara's oath (" in user
+    assert "\nB: event: The coronation (2026-05-13)" in user
+
+
 def test_beats_are_capped_and_newest_last(cid):
     sids = [scenes.create_scene(cid, f"Saltmarch {n}") for n in range(5)]
     for n, sid in enumerate(sids):
@@ -463,7 +540,8 @@ def test_build_prompt_renders_with_no_optional_fields():
     payload = {"now": "", "chronicle": [], "known_scenes": [], "candidates": [
         {"key": "c1", "id": "possible_thread_closure-0123456789abcdef",
          "vocabulary": "thread", "signal_text": "",
-         "records": [{"letter": "A", "ref": MAP, "line": "mara-s-map: Mara's map (open)",
+         "records": [{"letter": "A", "ref": MAP, "type": "plot thread",
+                      "line": "mara-s-map: Mara's map (open)",
                       "beats": [], "pressure": "", "links": [], "actors": []}]}]}
     system, user = reconcile.build_prompt(payload)
     assert system == {"role": "system",
@@ -471,7 +549,7 @@ def test_build_prompt_renders_with_no_optional_fields():
     assert user["role"] == "user"
     assert user["content"] == ('Candidate c1 — whether a plot thread is finished '
                                '(answer with: "close", "keep_open", "uncertain")\n'
-                               "A: mara-s-map: Mara's map (open)")
+                               "A (plot thread): mara-s-map: Mara's map (open)")
 
 
 def test_the_user_prompt_shows_every_part(cid, s0):
@@ -495,7 +573,7 @@ def test_the_user_prompt_shows_every_part(cid, s0):
                            f"- {s0} — Mara came ashore.\n\nCandidate c1 — two plot threads "
                            '(answer with: "duplicate", "continuation", "subthread", "related", '
                            '"distinct", "uncertain")\n')
-    assert "A: mara-s-map: Mara's map (open)\n" in user
+    assert "A (plot thread): mara-s-map: Mara's map (open)\n" in user
     assert f"  [{s0}] The map turned up in Saltmarch.\n" in user
     assert "  links: Mara's map pays_off Mara's oath\n" in user
     assert user.endswith("signals: same title; word overlap 0.42; meaning 0.81; "
