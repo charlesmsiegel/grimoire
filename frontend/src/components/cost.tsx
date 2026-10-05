@@ -232,8 +232,9 @@ export function PostCost({ bucket }: { bucket: UsagePostBucket }) {
     n(bucket.unpriced_calls) > 0
       ? `${plural(n(bucket.unpriced_calls), "call")} came back with no price`
       : "",
-    // Pictures are paid for on every turn they ride along (#377), and a rate
-    // table prices tokens, not images -- so a post that sent some says so.
+    // Pictures are paid for on every turn they ride along (#377), and an
+    // estimate covers them only as far as the provider counted them as prompt
+    // tokens -- so a post that sent some says so.
     n(bucket.images) > 0 ? `${plural(n(bucket.images), "image")} sent` : "",
   ].filter(Boolean).join(" · ");
   return (
