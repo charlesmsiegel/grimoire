@@ -4940,3 +4940,17 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
                      font-weight: normal; }
 .sampler-params td { padding: 2px 0; font-variant-numeric: tabular-nums; }
 .sampler-import-report { margin: 0 0 12px; }
+/* Activation controls on a world-info entry. The disclosure is quiet until
+   opened; a ref to an actor that is gone reads as missing, like `.dangling`. */
+.activation-settings { margin: 12px 0; }
+.activation-settings > summary { cursor: pointer; font-family: var(--fm); font-size: 11px; text-transform: uppercase; }
+.chip.missing {
+  border-style: dashed;
+  color: var(--muted);
+  cursor: help;
+  font-family: var(--fm);
+  font-size: 11px;
+}
+.adopt-banner { margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.adopt-banner p { margin: 0; }
+.editor-list .adopt-all { width: 100%; margin-bottom: 8px; }

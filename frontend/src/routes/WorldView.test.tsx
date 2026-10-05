@@ -35,6 +35,8 @@ vi.mock("../api/client", () => ({
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_KINDS: ["locations", "lore", "items", "groups", "creatures"],
+  // The editors' Activation disclosure reads the catalog; no test here opens it.
+  ACTIVATION_FIELDS: [],
   ENTITY_FIELDS: {
     locations: [], lore: [],
     items: [{ key: "item_type", label: "Type", widget: "text" },

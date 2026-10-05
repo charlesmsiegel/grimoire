@@ -27,6 +27,19 @@ vi.mock("../api/client", () => ({
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
   ENTITY_KINDS: ["locations", "lore", "items", "groups", "creatures"],
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
+  ACTIVATION_FIELDS: [
+    { key: "secondary_keys", label: "Secondary keys", widget: "text" },
+    { key: "key_logic", label: "Key logic", widget: "choice",
+      options: ["and_any", "and_all", "not_any", "not_all"] },
+    { key: "scan_depth", label: "Scan depth", widget: "number", min: 0, max: 100 },
+    { key: "sticky", label: "Sticky", widget: "number", min: 0, max: 50 },
+    { key: "cooldown", label: "Cooldown", widget: "number", min: 0, max: 50 },
+    { key: "priority", label: "Priority", widget: "number", min: 0, max: 1000 },
+    { key: "keep", label: "Keep under budget", widget: "bool" },
+    { key: "recursion", label: "Recursion", widget: "choice",
+      options: ["both", "pulled_only", "pulls_only", "none"] },
+    { key: "known_by", label: "Known by", widget: "refs" },
+  ],
   ENTITY_FIELDS: {
     locations: [{ key: "climate", label: "Climate", widget: "choice", source: "climates" },
                 { key: "persistence", label: "Weather persistence", widget: "number",
@@ -52,6 +65,9 @@ vi.mock("../api/client", () => ({
     updateEntity: vi.fn(),
     deleteEntity: vi.fn(),
     reclassifyEntity: vi.fn(),
+    previewAdoptSt: vi.fn(),
+    adoptSt: vi.fn(),
+    adoptStAll: vi.fn(),
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
     listClimates: vi.fn(),
@@ -103,6 +119,9 @@ beforeEach(() => {
   (api.deleteEntity as any).mockResolvedValue({ ok: true });
   (api.reclassifyEntity as any).mockResolvedValue({ id: "salt", campaigns: [] });
   (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x", rev: "r1" });
+  (api.previewAdoptSt as any).mockResolvedValue({ fields: {}, unmapped: [] });
+  (api.adoptSt as any).mockResolvedValue({ applied: {} });
+  (api.adoptStAll as any).mockResolvedValue({ applied: [], skipped: [] });
   (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listClimates as any).mockResolvedValue({ climates: [
@@ -1213,6 +1232,19 @@ test("kinds with no ref fields fetch no candidate lists", async () => {
   expect(api.listPCs).not.toHaveBeenCalled();
 });
 
+test("actors are listed only once something draws them", async () => {
+  // Closed Activation, no known_by on the record: no listing. Opening the
+  // disclosure is what asks.
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "eel", name: "Eel" }, body: "b", rev: "r1" });
+  render(<Wrap wid="w" kind="creatures" selected="eel" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("Activation"));
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalledTimes(1));
+  expect(api.listPCs).toHaveBeenCalledTimes(1);
+});
+
 test("a dangling ref is visible in the form and can be cleared", async () => {
   // Without a row of its own the field would look unset while still saving the
   // old ref — and the one thing you could not do is remove it.
@@ -1691,3 +1723,166 @@ test("...and Cancel is still the control that discards it", async () => {
 });
 
 }); // describe("selecting from the route")
+
+// ---- activation controls (lore activation spec 3, 4.2) --------------------
+
+const salt = (meta: Record<string, unknown> = {}) => ({
+  meta: { id: "salt", name: "Salt", keys: "pact", ...meta }, body: "Binds", rev: "r1" });
+
+test("activation settings show as chips in the read-only view", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ priority: "250", sticky: "2" }));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("Priority: 250");
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Sticky: 2 posts")).toBeInTheDocument();
+  expect(within(side).getByText("Activation")).toBeInTheDocument();
+  expect(container.querySelector("textarea")).toBeNull();
+  // Only what is set: nothing here says cooldown, and keep is off.
+  expect(within(side).queryByText(/Cooldown/)).toBeNull();
+  expect(within(side).queryByText("Keep under budget")).toBeNull();
+});
+
+test("a record with no activation settings has no Activation section", async () => {
+  (api.readEntity as any).mockResolvedValue(salt());
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("Binds");
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).queryByText("Activation")).toBeNull();
+});
+
+test("keep shows as Keep under budget only when it is on", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ keep: "true", scan_depth: "4" }));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("Keep under budget");
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Scan depth: 4 posts")).toBeInTheDocument();
+});
+
+test("Edit reveals the Activation disclosure and saves changed fields only", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ priority: "250", sticky: "2" }));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  const details = container.querySelector("details.activation-settings") as HTMLElement;
+  expect(within(details).getByText("Activation")).toBeInTheDocument();
+  expect(within(details).getByLabelText("Sticky")).toHaveValue(2);
+  fireEvent.change(within(details).getByLabelText("Priority"), { target: { value: "300" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.updateEntity).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "lore", "salt",
+    expect.objectContaining({ fields: { priority: "300" } })));
+});
+
+test("clearing keep sends a blank, never false", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ keep: "true" }));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByLabelText("Keep under budget"));
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.updateEntity).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "lore", "salt",
+    expect.objectContaining({ fields: { keep: "" } })));
+});
+
+test("a save the server refuses as an invalid activation value shows the reason", async () => {
+  (api.readEntity as any).mockResolvedValue(salt());
+  (api.updateEntity as any).mockRejectedValueOnce(
+    fail(400, "invalid values for lore: sticky"));
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByText("Activation"));
+  fireEvent.change(await screen.findByLabelText("Sticky"), { target: { value: "99" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await screen.findByText("invalid values for lore: sticky");
+});
+
+test("every kind carries the Activation disclosure", async () => {
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "rig", name: "Rig", sticky: "1" }, body: "b", rev: "r1" });
+  const { container } = render(<Wrap wid="w" kind="items" selected="rig" />);
+  await screen.findByText("Sticky: 1 posts");
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  expect(container.querySelector("details.activation-settings")).not.toBeNull();
+});
+
+test("known_by renders as chips that open the actor", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.readEntity as any).mockResolvedValue(
+    salt({ known_by: "characters:mara, characters:gone" }));
+  const onOpenOwner = vi.fn();
+  const { container } = render(
+    <Wrap wid="w" kind="lore" selected="salt" onOpenOwner={onOpenOwner} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Mara" }));
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(onOpenOwner).toHaveBeenCalledWith("characters:mara");
+  const missing = await within(side).findByText("missing: characters:gone");
+  expect(missing.tagName).toBe("SPAN");
+  expect(missing).toHaveClass("chip", "missing");
+});
+
+test("the Known by picker offers characters and PCs and stores refs", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  // A kind with no actor picker of its own, so "Mara" can only be this one.
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "eel", name: "Eel" }, body: "b", rev: "r1" });
+  render(<Wrap wid="w" kind="creatures" selected="eel" />);
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  // Closed, and not drawn: a record that sets nothing here opens it shut.
+  expect(screen.queryByLabelText("Mara")).toBeNull();
+  fireEvent.click(screen.getByText("Activation"));
+  fireEvent.click(await screen.findByLabelText("Mara"));
+  fireEvent.click(screen.getByLabelText("Winifred"));
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.updateEntity).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "creatures", "eel",
+    expect.objectContaining({ fields: { known_by: "characters:mara, pcs:winifred" } })));
+});
+
+test("adopt banner applies imported settings", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  (api.previewAdoptSt as any).mockResolvedValue(
+    { fields: { sticky: "2" }, unmapped: ["probability"] });
+  (api.adoptSt as any).mockResolvedValue({ applied: { sticky: "2" } });
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  const banner = await screen.findByRole("status", { name: /imported settings/i });
+  expect(within(banner).getByText("sticky")).toBeInTheDocument();
+  expect(within(banner).getByText(/probability/)).toBeInTheDocument();
+  expect(api.previewAdoptSt).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "salt");
+  const reads = (api.readEntity as any).mock.calls.length;
+  fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
+  await waitFor(() => expect(api.adoptSt).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "lore", "salt"));
+  await waitFor(() => expect((api.readEntity as any).mock.calls.length).toBeGreaterThan(reads));
+});
+
+test("no adopt banner when the preview has nothing to add, or there is no stash", async () => {
+  // A stash that is fully adopted already: the preview says nothing is pending.
+  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  const { unmount } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await waitFor(() => expect(api.previewAdoptSt).toHaveBeenCalled());
+  expect(screen.queryByRole("status", { name: /imported settings/i })).toBeNull();
+  unmount();
+  // No stash: the preview is never asked for.
+  (api.previewAdoptSt as any).mockClear();
+  (api.readEntity as any).mockResolvedValue(salt());
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("Binds");
+  expect(api.previewAdoptSt).not.toHaveBeenCalled();
+});
+
+test("Apply imported settings to all sits beside + New on the lore rail only", async () => {
+  (api.adoptStAll as any).mockResolvedValue({
+    applied: [{ kind: "lore", id: "a", fields: { sticky: "2" } },
+              { kind: "items", id: "b", fields: { priority: "5" } }],
+    skipped: [{ kind: "lore", id: "c", reason: "unreadable st_extensions" }] });
+  const { unmount } = render(<Wrap wid="w" kind="lore" />);
+  const before = (api.listEntities as any).mock.calls.length;
+  fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
+  await screen.findByText("Applied to 2 entries; 1 skipped");
+  expect(api.adoptStAll).toHaveBeenCalledWith({ kind: "world", id: "w" });
+  expect((api.listEntities as any).mock.calls.length).toBeGreaterThan(before);
+  unmount();
+  render(<Wrap wid="w" kind="items" />);
+  await screen.findByText("No items yet.");
+  expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).toBeNull();
+});
