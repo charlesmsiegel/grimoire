@@ -49,6 +49,19 @@ inspector still reports what kind of content it is; `pinned` rides beside it.
 Excludes never reach here at all: excluded content is gone before a section is
 rendered.
 
+One section is divisible: World info carries ``shed`` (spec §6), its entries
+as units and a function that re-renders it from any subset of them. When its
+turn comes it gives way an entry at a time instead of whole, re-measured after
+each, lowest ``priority`` first, then an entry that only recursion or an
+owner's arrival activated before one that matched directly, then the oldest
+match, then the later in prompt order. An entry marked ``keep`` or pinned never
+sheds, which is also why such a section is a candidate even when its
+section-level ``pinned`` flag is set: that flag says some entry in it is
+pinned, and the pin now protects that entry rather than its neighbours. A
+section left holding only protected entries stays; one with nothing left is
+dropped as before. The re-render reuses text already macro-expanded, so
+shedding never re-draws a ``{{random}}``.
+
 Drops are never silent. `pack` marks a dropped section rather than deleting it,
 and `context_sections` reports the marked list, so the inspector shows what was
 cut instead of quietly disagreeing with what was sent.
@@ -123,6 +136,13 @@ def budget_tokens() -> int:
 #: `compose`; the real callers pass the template render itself, so what the
 #: packer measures is the string that gets sent.
 SEPARATOR = "\n\n"
+
+
+def _shed_key(unit: dict) -> tuple:
+    """Spec §6's shed order, ascending: lowest priority; then not direct (a
+    recursion pull or an owner arriving) before direct; then oldest match, -1
+    for an entry with no match of its own; then the later in prompt order."""
+    return (unit["priority"], unit["direct"], unit["age"], -unit["pos"])
 
 
 def message_cost(content: str | list, count=None) -> int:
@@ -204,6 +224,14 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     same history several times passes a memoized one: `assemble._prepare`
     packs once per model profile, over the same transcript each time.
 
+    A section may also carry ``"shed": {"units", "render"}`` -- each unit
+    ``{"ref", "priority", "keep", "pinned", "direct", "age", "pos"}``, and
+    ``render(kept_refs)`` the section's text with only those units. Such a
+    section sheds units rather than dropping whole (see the module docstring)
+    and comes back with ``shed_refs``, the refs it shed in the order they went,
+    whenever it shed any. A section without ``shed`` packs exactly as it always
+    has.
+
     Returns ``{"sections", "history", "history_trimmed"}``: the same sections
     in the same order with a ``dropped`` flag added (dropped ones stay in the
     list, for the inspector), the surviving history, and how many messages the
@@ -256,15 +284,44 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     trimmed = 0
     trimmed_tokens = 0
 
+    def shed(section: dict) -> None:
+        """Give `section` way one unit at a time until the prompt fits or only
+        protected units are left; with nothing left, drop it whole."""
+        units = section["shed"]["units"]
+        render = section["shed"]["render"]
+        kept = {u["ref"] for u in units}
+        original = section["text"]
+        gone: list[str] = []
+        for unit in sorted((u for u in units if not (u["keep"] or u["pinned"])),
+                           key=_shed_key):
+            if section.get("pinned") and kept == {unit["ref"]}:
+                break  # a pinned section is never dropped, whatever its units say
+            kept.discard(unit["ref"])
+            gone.append(unit["ref"])
+            if not kept:
+                # Restored so the inspector shows what was cut, as for any drop.
+                section["text"] = original
+                section["dropped"] = True
+                break
+            section["text"] = render(frozenset(kept))
+            if reserved + system_cost() + hist_total <= budget:
+                break
+        if gone:
+            section["shed_refs"] = gone
+
     for tier in DROP_ORDER:
         if total <= budget:
             break
         for i in sorted((n for n, s in enumerate(packed)
-                         if s["tier"] == tier and not s["dropped"] and not s.get("pinned")),
+                         if s["tier"] == tier and not s["dropped"]
+                         and (s.get("shed") or not s.get("pinned"))),
                         key=lambda n: (costs[n], n), reverse=True):
             if total <= budget:
                 break
-            packed[i]["dropped"] = True
+            if packed[i].get("shed"):
+                shed(packed[i])
+            else:
+                packed[i]["dropped"] = True
             sys_cost = system_cost()
             total = reserved + sys_cost + hist_total
         if tier == ARCHIVE:

@@ -56,7 +56,19 @@ from ..worlds import read as worlds_read
 
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
-from . import actor, archive, art, layout, macros, mechanics, pack, speaker, story, world_state
+from . import (
+    activation,
+    actor,
+    archive,
+    art,
+    layout,
+    macros,
+    mechanics,
+    pack,
+    speaker,
+    story,
+    world_state,
+)
 from . import cast as cast_data
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
@@ -386,7 +398,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # resolve() already skips ids that don't exist; this also covers a file
         # that exists but can't be read, which must not break generation either.
         resolved_style = None
-    activated_wi, recalled_wi, wi_result = world_state._world_info(
+    activated_wi, recalled_wi, wi_result, wi_names = world_state._world_info(
         cid, posts, wi_seed, exclude=exclude, present=present, pinned_refs=pinned_refs,
         excluded_refs=excluded_refs, scan_depth=depth,
         recursion_depth=config.lore_recursion_depth(cfg),
@@ -398,6 +410,18 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         activated_wi = actor.known_entries(activated_wi, actor_ref)
         recalled_wi = actor.known_entries(recalled_wi, actor_ref)
     wi_public, wi_secret = world_state.secrecy_split(activated_wi)
+    # The same entries again as the engine's hits, for what renders World info
+    # per entry (`_render_sections`) and the inspector rows: priority, match age
+    # and the reason each one is in. Matched by identity, so the actor filter
+    # above is honoured here too. `names` resolves every ref a reason can name
+    # -- a record listed this turn, activated or not, or someone in the room.
+    wi_ids = {id(e) for e in activated_wi}
+    recalled_ids = {id(e) for e in recalled_wi}
+    lore = {"world_info": [h for h in wi_result.keyword if id(h.entry) in wi_ids],
+            "recalled": [h for h in wi_result.recalled if id(h.entry) in recalled_ids],
+            "held_back": list(wi_result.held_back),
+            "names": {**wi_names, **{f"{a['kind']}:{a['id']}": str(a.get("name") or a["id"])
+                                     for a in scene_cast}}}
     recalled_public, recalled_secret = world_state.secrecy_split(recalled_wi)
     mech = mechanics._mechanics(cid, sid, cast, recent_text)
     data = {
@@ -511,6 +535,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                        for m in story._project_history(history)]
     return {"data": data, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
             "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
+            "lore": lore,
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
                                                 current_loc if not loc_excluded else None, voiced_ids)}
 
@@ -744,6 +769,11 @@ def _pinned_sections(pinned_refs: frozenset, cast: list[dict], activated_wi: lis
     (sections are dropped whole, so there is no finer unit to protect), and a
     pin on something that selected nothing this turn protects nothing, which is
     right — there is no content of the reader's in the prompt to defend.
+
+    World info is the exception to the first: it sheds an entry at a time
+    (spec §6), so the packer protects the pinned entry itself and still sheds
+    its neighbours. The flag still matters there -- it keeps the section from
+    ever being dropped whole, and the inspector shows it.
     """
     if not pinned_refs:
         return frozenset()
@@ -986,6 +1016,112 @@ def _section_template(section: Section, data: dict) -> str:
     return f"{section.template}/{pick(data)}.j2" if pick else section.template
 
 
+#: The section semantic recall renders into. Its rows carry entries and reasons
+#: like World info's, but it never sheds: it drops whole, in its own tier.
+_RECALLED_SECTION = "recalled_lore"
+
+
+def _is_secret(hit: activation.Hit) -> bool:
+    """`world_state.secrecy_split`'s rule, for one hit."""
+    return entities.normalize_secrecy(hit.entry.get("secrecy")) == entities.SECRET
+
+
+def _template_order(hits: list[activation.Hit]) -> list[activation.Hit]:
+    """Hits in the order a world-info template prints them: every public entry,
+    then every secret one, each half in activation order."""
+    return ([h for h in hits if not _is_secret(h)]
+            + [h for h in hits if _is_secret(h)])
+
+
+def _reason_refs(reason: dict) -> list[str]:
+    """Every ref a reason names: the owner that opened its gate, how that owner
+    is present, and the entry that pulled it in."""
+    presence = reason.get("owner_presence")
+    found = [reason.get("owner"), reason.get("via"),
+             presence.get("via") if isinstance(presence, dict) else None]
+    return [r for r in found if isinstance(r, str) and r]
+
+
+def _reason_names(hits, catalog: dict[str, str]) -> dict[str, str]:
+    """A display name for every ref `hits`' reasons name; a ref nothing
+    resolves (a record deleted since, a hand-edited owner) names itself."""
+    return {ref: catalog.get(ref, ref) for h in hits for ref in _reason_refs(h.reason)}
+
+
+def _entry_name(entry: dict) -> str:
+    return str(entry.get("name") or entry.get("id") or "")
+
+
+def _lore_detail(hits: list[activation.Hit], catalog: dict[str, str]) -> dict:
+    """What an inspector row says about the entries in its section (spec §10),
+    JSON-safe and never part of a prompt: `_breakdown` copies it onto the row
+    and nothing renders it."""
+    entries = []
+    for h in hits:
+        c = activation.controls(h.entry)
+        entries.append({"ref": h.ref, "name": _entry_name(h.entry), "kind": h.entry.get("kind"),
+                        "secrecy": entities.normalize_secrecy(h.entry.get("secrecy")),
+                        "priority": c.priority, "keep": c.keep, "level": h.level,
+                        "reason": deepcopy(h.reason)})
+    return {"entries": entries, "names": _reason_names(hits, catalog)}
+
+
+def _world_info_section(section: Section, data: dict, lore: dict, head: str,
+                        expand) -> tuple[str, dict]:
+    """World info's text, plus what the packer needs to shed it an entry at a
+    time and what its inspector row reports.
+
+    Each body goes through `expand` exactly once, here, in the order the
+    template prints them (public, then secret) -- which is the order expanding
+    the whole rendered section used to draw `{{random}}` in, so an unbounded
+    prompt is byte-identical to what it was. `render` builds the section from
+    those already-expanded bodies, so shedding one entry cannot re-draw
+    another's. `head` is the section's already-expanded shared heading, if it
+    opens a run."""
+    hits = _template_order(lore["world_info"])
+    bodies = {h.ref: expand(h.entry.get("body") or "") for h in hits}
+    template = _section_template(section, data)
+
+    def render(kept: frozenset) -> str:
+        shown = [h for h in hits if h.ref in kept]
+        body = prompts.render(template, **{
+            **data,
+            "world_info_bodies": [bodies[h.ref] for h in shown if not _is_secret(h)],
+            "secret_world_info_bodies": [bodies[h.ref] for h in shown if _is_secret(h)],
+        }).strip()
+        return head + "\n\n" + body if (head and body) else body
+
+    units = [{"ref": h.ref, "priority": activation.controls(h.entry).priority,
+              "keep": activation.controls(h.entry).keep,
+              "pinned": h.reason.get("type") == "pinned",
+              "direct": h.direct, "age": h.age, "pos": pos}
+             for pos, h in enumerate(hits)]
+    detail = _lore_detail(hits, lore["names"])
+    detail["held_back"] = [{"ref": h.ref, "name": _entry_name(h.entry),
+                            "reason": deepcopy(h.reason)} for h in lore["held_back"]]
+    return render(frozenset(bodies)), {"shed": {"units": units, "render": render},
+                                       "lore": detail}
+
+
+def _expanded_section(section: Section, data: dict, body: str, head: str, lore: dict | None,
+                      expand) -> tuple[str, dict]:
+    """One rendered section's text after macro expansion, with `head` (already
+    expanded) on the front, and any keys it adds to its section dict.
+
+    World info is expanded per entry instead, so the packer can shed one (spec
+    §6): each body once, in the order the template prints it, and the section
+    rendered from the expanded bodies -- never expanded again as a whole, which
+    would draw every `{{random}}` twice. Recalled lore is expanded whole, as
+    every other section is, and only gains its inspector detail."""
+    if lore is not None and section.id == _WORLD_INFO_SECTION:
+        return _world_info_section(section, data, lore, head, expand)
+    body = expand(body).strip()
+    text = head + "\n\n" + body if (head and body) else body
+    if lore is not None and section.id == _RECALLED_SECTION:
+        return text, {"lore": _lore_detail(_template_order(lore["recalled"]), lore["names"])}
+    return text, {}
+
+
 def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
                      keep_guidance_slot: bool = False) -> list[dict]:
     """Every applicable section, rendered and macro-expanded once, in order.
@@ -1015,6 +1151,13 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
     pinned = a.get("pinned_sections") or frozenset()
     # Resolved once by `_assemble`; `None` (a hand-built `a`) resolves per call.
     dt_subs = a.get("datetime_subs")
+    # The activated entries as hits (`_assemble`). Absent from a hand-built `a`,
+    # which then renders World info whole, as every section renders.
+    lore = a.get("lore")
+
+    def expand(text: str) -> str:
+        return macros.expand_macros(text, a["subs"], cid, sid, datetime_subs=dt_subs)
+
     out = []
     #: The heading of the last section actually EMITTED, which is what makes
     #: the rule below about contiguous runs rather than the whole message.
@@ -1067,16 +1210,14 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
         # read.
         head = ""
         if body and section.heading and section.heading != last_heading:
-            head = macros.expand_macros(prompts.render(section.heading, **data),
-                                        a["subs"], cid, sid, datetime_subs=dt_subs).strip()
-        body = macros.expand_macros(body, a["subs"], cid, sid, datetime_subs=dt_subs).strip()
-        text = head + "\n\n" + body if (head and body) else body
+            head = expand(prompts.render(section.heading, **data)).strip()
+        text, extra = _expanded_section(section, data, body, head, lore, expand)
         if not text:
             continue
         out.append({"id": section.id, "label": section.label,
                     "text": text, "tier": section.tier,
                     "pinned": section.id in pinned,
-                    "heading": section.heading, "heading_text": head})
+                    "heading": section.heading, "heading_text": head, **extra})
         last_heading = section.heading
     # Openers have their own final actor instruction and no handoff protocol.
     # The turn contract asks for a fenced handoff, which is invalid in a draft.
@@ -1455,6 +1596,23 @@ def _history_rows(p: dict, count) -> list[dict]:
     return rows
 
 
+def _lore_row(section: dict) -> dict:
+    """The entry-level keys of a World info or Recalled lore row: each entry
+    with whether the packer shed it, the names its reasons need, and (World
+    info) what was held back. Explicit keys, so the section's `shed` -- a
+    function -- can never reach a row, a capture or JSON."""
+    detail = section.get("lore")
+    if not detail:
+        return {}
+    shed = set(section.get("shed_refs") or ())
+    row = {"entries": [{**e, "reason": deepcopy(e["reason"]), "shed": e["ref"] in shed}
+                       for e in detail["entries"]],
+           "names": dict(detail["names"])}
+    if "held_back" in detail:
+        row["held_back"] = deepcopy(detail["held_back"])
+    return row
+
+
 def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
                count=None) -> dict:
     """The inspector's view of a turn, from an assemble/pack pair the caller
@@ -1496,7 +1654,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
         count = tokens.count_tokens
     rows = [{"id": s["id"], "label": s["label"], "text": s["text"], "tier": s["tier"],
              "dropped": s["dropped"], "trimmed": 0, "pinned": bool(s.get("pinned")),
-             "tokens": count(s["text"])}
+             "tokens": count(s["text"]), **_lore_row(s)}
             for s in p["sections"]]
 
     hist_tokens = sum(pack.message_cost(m["content"], count) for m in p["history"])
