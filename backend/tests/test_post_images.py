@@ -280,8 +280,11 @@ def test_load_caches_until_the_file_changes(cid, monkeypatch):
     assert post_images.load(cid, {"url": _url(cid, "coastline")}) == first
     assert len(opened) == 1
     campaign_images.put_image(cid, "coastline", _image((9, 9)), "png")
+    # `post_images.Image` is PIL's own module, so the patch also counts the
+    # image store's decode while it ingests the upload; count only `load`'s.
+    opened.clear()
     assert post_images.load(cid, {"url": _url(cid, "coastline")}) != first
-    assert len(opened) == 2
+    assert len(opened) == 1
 
 
 def test_load_refuses_oversize_sources_and_encodings(cid, monkeypatch):
