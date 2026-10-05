@@ -420,8 +420,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     lore = {"world_info": [h for h in wi_result.keyword if id(h.entry) in wi_ids],
             "recalled": [h for h in wi_result.recalled if id(h.entry) in recalled_ids],
             "held_back": list(wi_result.held_back),
-            "names": {**wi_names, **{f"{a['kind']}:{a['id']}": str(a.get("name") or a["id"])
-                                     for a in scene_cast}}}
+            "names": {**wi_names, **{f"{m['kind']}:{m['id']}": str(m.get("name") or m["id"])
+                                     for m in scene_cast}}}
     recalled_public, recalled_secret = world_state.secrecy_split(recalled_wi)
     mech = mechanics._mechanics(cid, sid, cast, recent_text)
     data = {
@@ -1066,41 +1066,95 @@ def _lore_detail(hits: list[activation.Hit], catalog: dict[str, str]) -> dict:
     return {"entries": entries, "names": _reason_names(hits, catalog)}
 
 
+#: Stands in for one entry body while World info's template is rendered, so
+#: the fixed text around the bodies can be told apart from them. NUL never
+#: appears in a template, and the slot holds no `{{`, so it is not a macro.
+_BODY_SLOT = re.compile("\x00(\\d+)\x00")
+
+
 def _world_info_section(section: Section, data: dict, lore: dict, head: str,
                         expand) -> tuple[str, dict]:
     """World info's text, plus what the packer needs to shed it an entry at a
     time and what its inspector row reports.
 
-    Each body goes through `expand` exactly once, here, in the order the
-    template prints them (public, then secret) -- which is the order expanding
-    the whole rendered section used to draw `{{random}}` in, so an unbounded
-    prompt is byte-identical to what it was. `render` builds the section from
-    those already-expanded bodies, so shedding one entry cannot re-draw
-    another's. `head` is the section's already-expanded shared heading, if it
-    opens a run."""
-    hits = _template_order(lore["world_info"])
-    bodies = {h.ref: expand(h.entry.get("body") or "") for h in hits}
-    template = _section_template(section, data)
+    The template is rendered with a slot in place of each body, and the result
+    is expanded piece by piece in DOCUMENT order -- a run of the template's own
+    text, then the body in the next slot, then the next run -- which is the
+    left-to-right order expanding the whole rendered section always drew
+    `{{random}}` in. So the unbounded section is byte-identical to the
+    section-level expansion, the template's own text (the secret heading a
+    reader may have edited) included, and a body that expands to nothing still
+    leaves the gap it always left.
 
-    def render(kept: frozenset) -> str:
-        shown = [h for h in hits if h.ref in kept]
-        body = prompts.render(template, **{
+    Every expansion is remembered: a body by its entry's ref, a run of fixed
+    text by its text less its edge whitespace (removing an entry only changes
+    the joins around a run). `render(kept)` re-renders the slots for the kept
+    entries and reuses those, so shedding one entry cannot re-draw another's
+    macros or the template's; only a run never seen before -- possible only in
+    a hand-edited template -- is expanded, once.
+
+    `head` is the section's already-expanded shared heading. World info declares
+    none in the catalog, so it is "" today; `render` closes over it so a heading
+    added later would still lead every re-render."""
+    hits = _template_order(lore["world_info"])
+    # Only a non-empty body takes a slot, as the template's `select` keeps only
+    # those -- a raw-empty body never rendered anything.
+    slotted = [i for i, h in enumerate(hits) if h.entry.get("body")]
+    template = _section_template(section, data)
+    bodies: dict[str, str] = {}
+    runs: dict[str, str] = {}
+
+    def skeleton(kept: frozenset) -> list[str]:
+        shown = [i for i in slotted if hits[i].ref in kept]
+        rendered = prompts.render(template, **{
             **data,
-            "world_info_bodies": [bodies[h.ref] for h in shown if not _is_secret(h)],
-            "secret_world_info_bodies": [bodies[h.ref] for h in shown if _is_secret(h)],
+            "world_info_bodies": [f"\x00{i}\x00" for i in shown if not _is_secret(hits[i])],
+            "secret_world_info_bodies": [f"\x00{i}\x00" for i in shown if _is_secret(hits[i])],
         }).strip()
+        return _BODY_SLOT.split(rendered)
+
+    def finish(body: str) -> str:
+        body = body.strip()
         return head + "\n\n" + body if (head and body) else body
 
-    units = [{"ref": h.ref, "priority": activation.controls(h.entry).priority,
-              "keep": activation.controls(h.entry).keep,
-              "pinned": h.reason.get("type") == "pinned",
-              "direct": h.direct, "age": h.age, "pos": pos}
-             for pos, h in enumerate(hits)]
+    def run(piece: str, fresh: bool) -> str:
+        # Keyed on the run WITHOUT its edge whitespace: removing an entry only
+        # adds or drops the joins around a run (and the outer strip), and
+        # whitespace holds no macro, so the run itself is the same text.
+        core = piece.strip()
+        if fresh or core not in runs:
+            got = expand(core)
+            runs.setdefault(core, got)
+        else:
+            got = runs[core]
+        lead = piece[:len(piece) - len(piece.lstrip())]
+        return lead + got + piece[len(lead) + len(core):]
+
+    # The first render draws, in document order, every occurrence afresh -- the
+    # same fixed text twice is two expansions, as it was in the joined section.
+    out = []
+    for n, piece in enumerate(skeleton(frozenset(h.ref for h in hits))):
+        if n % 2:
+            hit = hits[int(piece)]
+            out.append(bodies.setdefault(hit.ref, expand(hit.entry["body"])))
+        else:
+            out.append(run(piece, fresh=True))
+    text = finish("".join(out))
+
+    def render(kept: frozenset) -> str:
+        return finish("".join(bodies[hits[int(piece)].ref] if n % 2 else run(piece, fresh=False)
+                              for n, piece in enumerate(skeleton(kept))))
+
+    units = []
+    for pos, h in enumerate(hits):
+        c = activation.controls(h.entry)
+        units.append({"ref": h.ref, "priority": c.priority, "keep": c.keep,
+                      "pinned": h.reason.get("type") == "pinned",
+                      "direct": h.direct, "age": h.age, "pos": pos})
     detail = _lore_detail(hits, lore["names"])
     detail["held_back"] = [{"ref": h.ref, "name": _entry_name(h.entry),
                             "reason": deepcopy(h.reason)} for h in lore["held_back"]]
-    return render(frozenset(bodies)), {"shed": {"units": units, "render": render},
-                                       "lore": detail}
+    return text, {"shed": {"units": units, "render": render}, "lore": detail}
 
 
 def _expanded_section(section: Section, data: dict, body: str, head: str, lore: dict | None,
@@ -1108,10 +1162,9 @@ def _expanded_section(section: Section, data: dict, body: str, head: str, lore: 
     """One rendered section's text after macro expansion, with `head` (already
     expanded) on the front, and any keys it adds to its section dict.
 
-    World info is expanded per entry instead, so the packer can shed one (spec
-    §6): each body once, in the order the template prints it, and the section
-    rendered from the expanded bodies -- never expanded again as a whole, which
-    would draw every `{{random}}` twice. Recalled lore is expanded whole, as
+    World info is expanded piece by piece instead, so the packer can shed one
+    entry at a time (spec §6) without re-drawing anything: see
+    `_world_info_section`. Recalled lore is expanded whole, as
     every other section is, and only gains its inspector detail."""
     if lore is not None and section.id == _WORLD_INFO_SECTION:
         return _world_info_section(section, data, lore, head, expand)
