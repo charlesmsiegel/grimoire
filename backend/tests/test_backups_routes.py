@@ -48,7 +48,7 @@ def test_backing_up_now_returns_the_refreshed_listing(client):
 
 
 def test_image_backup_route_lists_separately_and_uses_configured_folder(client, tmp_path):
-    image = tmp_path / "worlds" / "realm" / "portrait.jpg"
+    image = tmp_path / "worlds" / "realm" / "assets" / "images" / "portrait.jpg"
     image.parent.mkdir(parents=True)
     image.write_bytes(b"image")
     elsewhere = tmp_path / "elsewhere"
@@ -60,7 +60,8 @@ def test_image_backup_route_lists_separately_and_uses_configured_folder(client, 
     assert body["backups"] == []
     assert [row["name"] for row in body["image_backups"]] == [body["created"]]
     with zipfile.ZipFile(elsewhere / body["created"]) as z:
-        assert z.namelist() == ["worlds/realm/portrait.jpg"]
+        assert z.namelist() == ["worlds/realm/assets/images/portrait.jpg"]
+        assert z.read("worlds/realm/assets/images/portrait.jpg") == b"image"
 
 
 def test_image_backup_reports_listing_failure_after_writing(client, tmp_path, monkeypatch):

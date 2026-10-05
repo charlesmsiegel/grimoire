@@ -24,7 +24,9 @@ def small_store(root):
     (root / "campaigns" / "saltmarch").mkdir(parents=True)
     (root / "campaigns" / "saltmarch" / "campaign.md").write_text("# Saltmarch\n",
                                                                  encoding="utf-8")
-    (root / "config.md").write_text("---\ntheme: system\n---\n", encoding="utf-8")
+    # Byte round-trip assertions need the same fixture on every platform.
+    (root / "config.md").write_text("---\ntheme: system\n---\n", encoding="utf-8",
+                                  newline="\n")
 
 
 AT = datetime(2026, 8, 14, 21, 0, 0, tzinfo=UTC)
@@ -73,6 +75,31 @@ def test_image_backup_uses_resolved_home_and_preserves_paths(monkeypatch, tmp_pa
         assert z.read("campaigns/saltmarch/portrait.PNG") == b"picture"
     assert [row["name"] for row in backups.list_image_backups()] == [archive.name]
     assert backups.list_backups() == []
+
+
+def test_image_backup_includes_world_asset_images(monkeypatch, tmp_path):
+    """World image libraries must survive in an image-only restore point."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    images = {
+        "worlds/realm/assets/images/map.png": b"map",
+        "worlds/realm/assets/images/collection-image.jpg": b"collection",
+        "worlds/realm/assets/images/nested/overview.WEBP": b"overview",
+    }
+    for relative, content in images.items():
+        image = root / relative
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(content)
+    (root / "worlds/realm/assets/descriptions.json").write_text("{}", encoding="utf-8")
+    collections = root / "worlds/realm/assets/image-collections"
+    collections.mkdir()
+    (collections / "default.json").write_text("{}", encoding="utf-8")
+
+    archive = backups.create_image_backup(when=AT)
+
+    with zipfile.ZipFile(archive) as z:
+        assert set(z.namelist()) == set(images)
+        assert {name: z.read(name) for name in z.namelist()} == images
 
 
 def test_image_archive_survives_full_backup_retention(monkeypatch, tmp_path):

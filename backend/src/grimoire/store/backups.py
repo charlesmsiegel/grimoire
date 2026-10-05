@@ -396,6 +396,9 @@ def create_backup(when: datetime | None = None) -> Path:
 def create_image_backup(when: datetime | None = None) -> Path:
     """Zip image files under the resolved store root, preserving relative paths.
 
+    Includes world image libraries (``worlds/<id>/assets/images/``) and other
+    world assets selected by image type, through the same recursive store walk.
+
     This is an independent, manual archive. Full-backup retention never removes
     it, and it never counts as a complete restore point for the scheduler.
     """
