@@ -2256,12 +2256,13 @@ export type TodoPayload = {
    *  forgotten. */
   ignored: Chore[];
   count: number;
-  /** The headings, in reading order, and only the ones with something under
-   *  them. The server decides, because deriving the order from the chore list
-   *  reorders the headings whenever the data moves — a library whose only
-   *  voice chore was a world anchor put "Voice & character" last, and the same
-   *  library one tagline later put it third. Optional so a payload from before
-   *  this field falls back to first-appearance order rather than rendering
+  /** The theme headings, in reading order (story, character, art, rules, then
+   *  costs — `GROUP_ORDER` in `routes/todo.py`), and only the ones with
+   *  something under them. The server decides, because deriving the order
+   *  from the chore list reorders the headings whenever the data moves: the
+   *  chore list is ordered by severity, so the first chore of each theme would
+   *  decide where that theme lands. Optional so a payload from before this
+   *  field falls back to first-appearance order rather than rendering
    *  nothing. */
   groups?: string[];
 };
