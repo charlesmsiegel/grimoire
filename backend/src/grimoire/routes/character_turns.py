@@ -9,7 +9,7 @@ import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import llm_reasoning, prompts, store
+from .. import content_parts, llm_reasoning, prompts, store
 from ..llm import LLMClient, effective_model, fallback_sampling
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
@@ -261,12 +261,16 @@ def _capture(cid, sid, task, messages, conn):
             {
                 "id": f"message_{i}",
                 "label": m["role"],
-                "text": m["content"],
+                # A message may hold image references (#377): the record keeps
+                # the text and charges each reference what the packer does.
+                "text": content_parts.text_of(m["content"]),
                 "tier": "lock-in",
                 "dropped": False,
                 "pinned": False,
                 "trimmed": 0,
-                "tokens": store.tokens.count_tokens(m["content"]),
+                "tokens": (store.tokens.count_tokens(content_parts.text_of(m["content"]))
+                           + store.context.pack.IMAGE_TOKENS
+                           * len(content_parts.image_refs(m["content"]))),
             }
             for i, m in enumerate(messages)
         ]

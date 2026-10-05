@@ -23,7 +23,7 @@ import logging
 from copy import deepcopy
 from typing import NamedTuple
 
-from ... import model_guidance, prompts
+from ... import content_parts, model_guidance, prompts
 from .. import (
     birthdays,
     characters,
@@ -1305,6 +1305,43 @@ def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = N
     return compose_director_turn(cid, sid, note, turn=turn, describe=False, model=model)[0]
 
 
+def _history_rows(p: dict, count) -> list[dict]:
+    """The history's inspector rows: the conversation, then -- when the kept
+    history carries image references (#377) -- an Images row.
+
+    The Images row is a SPLIT of the history's cost, never an addition beside
+    it: `pack.message_cost` already charges each reference `IMAGE_TOKENS`, and
+    `_breakdown`'s total is built from that, so the conversation row reports
+    the text alone and the two rows sum to what the packer charged. Kept as a
+    row of its own, in the `history` tier, so the budget bar draws the pictures
+    in the Conversation bucket rather than leaving them out of a prompt whose
+    whole size it claims to show. A carrier has no text and adds no blank line
+    to the joined conversation.
+    """
+    kept = p["history"]
+    texts = [content_parts.text_of(m["content"]) for m in kept
+             if not m.get(content_parts.CARRIER)]
+    refs = [r for m in kept for r in content_parts.image_refs(m["content"])]
+    rows = []
+    hist = "\n\n".join(texts)
+    if hist:
+        # Displayed joined (one readable block), accounted per message with the
+        # same per-message framing allowance the packer charges.
+        rows.append({"id": "history", "label": "Conversation history", "text": hist,
+                     "tier": pack.HISTORY, "dropped": False, "pinned": False,
+                     "trimmed": p["history_trimmed"],
+                     "tokens": sum(pack.message_cost(content_parts.text_of(m["content"]), count)
+                                   for m in kept if not m.get(content_parts.CARRIER))})
+    if refs:
+        rows.append({"id": "history_images", "label": f"Images ({len(refs)})",
+                     "text": "\n".join(f"{r.get('alt', '')} — {r.get('url', '')}" for r in refs),
+                     "tier": pack.HISTORY, "dropped": False, "pinned": False, "trimmed": 0,
+                     "tokens": (len(refs) * pack.IMAGE_TOKENS
+                                + sum(pack.MESSAGE_OVERHEAD for m in kept
+                                      if m.get(content_parts.CARRIER)))})
+    return rows
+
+
 def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
                count=None) -> dict:
     """The inspector's view of a turn, from an assemble/pack pair the caller
@@ -1350,13 +1387,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
             for s in p["sections"]]
 
     hist_tokens = sum(pack.message_cost(m["content"], count) for m in p["history"])
-    hist = "\n\n".join(m["content"] for m in p["history"])
-    if hist:
-        # Displayed joined (one readable block), accounted per message with the
-        # same per-message framing allowance the packer charges.
-        rows.append({"id": "history", "label": "Conversation history", "text": hist,
-                     "tier": pack.HISTORY, "dropped": False, "pinned": False,
-                     "trimmed": p["history_trimmed"], "tokens": hist_tokens})
+    rows += _history_rows(p, count)
     if a["post_history"]:
         rows.append({"id": "post_history", "label": "Post-history instructions",
                      "text": a["post_history"], "pinned": False,
@@ -1382,7 +1413,8 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
     # dropped and the inspector stays silent about the cut it just made.
     out = {"sections": rows, "total_tokens": total,
            "dropped_tokens": (sum(r["tokens"] for r in rows if r["dropped"])
-                              + p["history_trimmed_tokens"]),
+                              + p["history_trimmed_tokens"]
+                              + p.get("images_dropped_tokens", 0)),
            "budget_tokens": p["budget"]}
     # Which counter made these numbers, taken from the pass that made them
     # (`_token_memo`) -- `tokens.counting` turns it into the inspector's label.

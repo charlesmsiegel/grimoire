@@ -62,6 +62,7 @@ carries each model's window size.
 
 from __future__ import annotations
 
+from ... import content_parts
 from .. import config, tokens
 
 LOCK_IN = "lock-in"
@@ -100,6 +101,13 @@ HISTORY_FLOOR = 2
 #: the same reasoning as rounding the token heuristic up.
 MESSAGE_OVERHEAD = 5
 
+#: Tokens charged per image reference in the history (#377): a flat ESTIMATE
+#: for one picture fitted within `post_images.SEND_EDGE` pixels, in the range
+#: the common providers' published per-image costs fall in at that size. Not a
+#: guarantee in either direction -- a constant to tune against real
+#: provider-reported prompt tokens.
+IMAGE_TOKENS = 1600
+
 def budget_tokens() -> int:
     """The configured context budget in tokens; 0 = unbounded. A hand-edited
     config.md holding nonsense falls back to unbounded rather than raising: a
@@ -117,14 +125,52 @@ def budget_tokens() -> int:
 SEPARATOR = "\n\n"
 
 
-def message_cost(content: str, count=None) -> int:
-    """What one history message costs: its content plus `MESSAGE_OVERHEAD`.
+def message_cost(content: str | list, count=None) -> int:
+    """What one history message costs: its content plus `MESSAGE_OVERHEAD`,
+    plus `IMAGE_TOKENS` for each image reference it carries (#377).
 
     Shared with `context_breakdown` so the inspector reports history the way
     the packer charges it — the two disagreeing about the same messages is the
     bug this whole seam keeps producing. `count` is the tokenizer, as in `pack`.
     """
-    return (count or tokens.count_tokens)(content) + MESSAGE_OVERHEAD
+    images = len(content_parts.image_refs(content)) * IMAGE_TOKENS
+    return (count or tokens.count_tokens)(content_parts.text_of(content)) + images + MESSAGE_OVERHEAD
+
+
+def _without_oldest_image(message: dict) -> dict | None:
+    """`message` with its first image reference removed, as a NEW dict -- its
+    content collapsed to today's string once no reference is left -- or None
+    for a carrier left with nothing to carry."""
+    content = list(message["content"])
+    first = next(i for i, p in enumerate(content)
+                 if isinstance(p, dict) and p.get("type") == content_parts.IMAGE_REF)
+    del content[first]
+    if message.get(content_parts.CARRIER) and not content_parts.image_refs(content):
+        return None
+    return {**message, "content": content_parts.collapse(content)}
+
+
+def _drop_images(hist: list[dict], hist_costs: list[int], room: int, count) -> int:
+    """Give images up, oldest first, while the history costs more than `room`
+    -- the step before every other (#377). In place on the packer's OWN lists
+    (`hist` is already a copy; every edited message is a new dict), so the
+    caller's history is untouched. Returns the tokens removed, a carrier's
+    framing included."""
+    dropped = 0
+    i = 0
+    while i < len(hist) and sum(hist_costs) > room:
+        if not content_parts.image_refs(hist[i]["content"]):
+            i += 1
+            continue
+        lighter = _without_oldest_image(hist[i])
+        if lighter is None:
+            dropped += hist_costs.pop(i)
+            hist.pop(i)
+            continue
+        cost = message_cost(lighter["content"], count)
+        dropped += hist_costs[i] - cost
+        hist[i], hist_costs[i] = lighter, cost
+    return dropped
 
 
 def pack(sections: list[dict], history: list[dict], reserved: int = 0,
@@ -168,7 +214,7 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
         budget = budget_tokens()
     if budget <= 0:  # unbounded: skip counting entirely, it is not free
         return {"sections": packed, "history": list(history), "history_trimmed": 0,
-                "history_trimmed_tokens": 0}
+                "history_trimmed_tokens": 0, "images_dropped_tokens": 0}
     if compose is None:
         compose = SEPARATOR.join
     if count is None:
@@ -193,6 +239,12 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     hist_costs = [message_cost(m["content"], count) for m in hist]
     hist_total = sum(hist_costs)
     sys_cost = system_cost()
+
+    # Images give way before any section or line of history (#377): once they
+    # are gone the costs below are exactly today's text costs, so a route sent
+    # the text lowering gets exactly today's packing.
+    images_dropped = _drop_images(hist, hist_costs, budget - reserved - sys_cost, count)
+    hist_total = sum(hist_costs)
     total = reserved + sys_cost + hist_total
     trimmed = 0
     trimmed_tokens = 0
@@ -218,4 +270,4 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
                 total = reserved + sys_cost + hist_total
 
     return {"sections": packed, "history": hist, "history_trimmed": trimmed,
-            "history_trimmed_tokens": trimmed_tokens}
+            "history_trimmed_tokens": trimmed_tokens, "images_dropped_tokens": images_dropped}
