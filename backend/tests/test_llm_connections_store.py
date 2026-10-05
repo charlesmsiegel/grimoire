@@ -339,3 +339,29 @@ def test_get_active_none_when_unset(monkeypatch, tmp_path):
     s.llm_connections.list_connections()  # let migration complete first (writes the .migrated marker)
     s.write_config(active_connection_id="")  # simulate an explicit clear, e.g. via delete_connection
     assert s.llm_connections.get_active() is None
+
+
+# ---- prefill opt-in (play controls IV) ----
+
+def test_prefill_defaults_off_and_round_trips(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    cid = s.llm_connections.create_connection("openrouter", "Realm OR", api_key="k", model="m")
+    assert s.llm_connections.read_connection_raw(cid)["prefill"] is False
+    rev = s.llm_connections.read_connection_raw(cid)["rev"]
+    s.llm_connections.update_connection(cid, prefill=True)
+    assert s.llm_connections.read_connection_raw(cid)["prefill"] is True
+    # A prompt-shaping switch describes neither the catalog nor health.
+    assert s.llm_connections.read_connection_raw(cid)["rev"] == rev
+    s.llm_connections.update_connection(cid, name="Renamed")          # None-filtered: kept
+    assert s.llm_connections.read_connection_raw(cid)["prefill"] is True
+    s.llm_connections.update_connection(cid, prefill=False)
+    assert s.llm_connections.read_connection_raw(cid)["prefill"] is False
+
+
+def test_prefill_round_trips_through_the_routes(client):
+    assert client.get("/api/llm-connections/openrouter").json()["prefill"] is False
+    assert client.put("/api/llm-connections/openrouter", json={"prefill": True}).status_code == 200
+    assert client.get("/api/llm-connections/openrouter").json()["prefill"] is True
+    made = client.post("/api/llm-connections", json={
+        "kind": "claude", "name": "Saltmarch Claude", "prefill": True}).json()["id"]
+    assert client.get(f"/api/llm-connections/{made}").json()["prefill"] is True

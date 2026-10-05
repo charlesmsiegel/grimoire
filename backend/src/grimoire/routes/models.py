@@ -95,6 +95,9 @@ class ConnectionCreate(BaseModel):
     #: penalty. "" reads as standard.
     sampler_support: Literal["", "standard", "extended"] = ""
     vision: Literal["", "on", "off"] = ""
+    #: Whether "Keep writing" sends a cut-short reply back as the start of the
+    #: model's own turn (prefill) rather than asking it to continue.
+    prefill: bool = False
 
 
 class ConnectionUpdate(BaseModel):
@@ -107,6 +110,7 @@ class ConnectionUpdate(BaseModel):
     sampler_preset: str | None = None
     sampler_support: Literal["", "standard", "extended"] | None = None
     vision: Literal["", "on", "off"] | None = None
+    prefill: bool | None = None
 
 
 class CatalogProbe(BaseModel):

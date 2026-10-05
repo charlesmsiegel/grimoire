@@ -1352,3 +1352,10 @@ async def test_a_fallback_that_refuses_the_preset_reports_both_failures():
         [c async for c in client.stream([], conn)]
     assert "and the fallback failed too" in exc.value.detail
     assert "not tried" not in exc.value.detail
+
+
+@pytest.mark.parametrize("conn,expected", [
+    ({"kind": "openrouter"}, False), ({"kind": "openrouter", "prefill": True}, True),
+    ({"kind": "claude", "prefill": True}, True), ({"kind": "openrouter", "prefill": "true"}, False)])
+def test_prefill_capable_reads_only_the_flag(conn, expected):
+    assert llm.prefill_capable(conn) is expected

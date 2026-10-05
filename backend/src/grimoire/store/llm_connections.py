@@ -23,8 +23,12 @@ from .paths import home, now_iso, safe_id, slugify, uniquify
 KINDS = ("openrouter", "claude", "openai_compatible")
 #: `vision` is "" (auto: the cached catalog decides), "on" or "off" -- whether
 #: this connection's model may be sent post images (#377, `store.post_images`).
+#: `prefill` is "true" or "" on disk and a bool once read -- whether a reply cut
+#: short may be sent back as the start of the model's own turn (play controls
+#: IV, "Keep writing"). Off unless the user turns it on: whether a trailing
+#: assistant message is continued depends on the model, not the kind.
 _FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reasoning_effort",
-           "sampler_preset", "sampler_support", "vision")
+           "sampler_preset", "sampler_support", "vision", "prefill")
 #: The fields describing how this connection SAMPLES rather than what it is.
 #: An edit touching only these keeps the connection's `rev` (see
 #: `update_connection`): the rev exists to invalidate the cached model catalog
@@ -34,7 +38,9 @@ SAMPLER_FIELDS = frozenset({"sampler_preset", "sampler_support"})
 #: (#377) -- an override describes neither the catalog nor the provider's
 #: health, and bumping the rev would discard the cached catalog that "auto"
 #: reads, so setting it back to auto would read "unknown" until a refresh.
-REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision"}
+#: `prefill` joins them for the same reason: it shapes one kind of prompt and
+#: describes neither the catalog nor the provider's health.
+REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision", "prefill"}
 
 
 class ConnectionNotFound(Exception):
@@ -60,13 +66,14 @@ def regex_path(conn_id: str) -> Path:
     return _dir() / f"{conn_id}.regex.json"
 
 
-def _write_raw(id: str, keep_rev: str = "", **fields: str) -> None:
+def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
     """Unconditional write: stamps a fresh rev and clears any sidecar for
     this id, on every call (create AND update) — simpler than conditioning
     the sidecar clear on which field changed, and no less correct: the rev
     bump alone already makes any stale sidecar invisible on read (see
     cached_models below), so clearing it here is pure hygiene either way."""
     meta = {k: fields.get(k, "") for k in _FIELDS}
+    meta["prefill"] = "true" if fields.get("prefill") in (True, "true") else ""
     # `keep_rev` is the one exception, for an edit nothing the rev guards has
     # seen: the sidecar and the rev both survive it (see `REV_NEUTRAL_FIELDS`).
     meta["rev"] = keep_rev or secrets.token_hex(8)
@@ -109,7 +116,8 @@ def _read(id: str) -> dict | None:
         return None
     if meta.get("kind") not in KINDS:
         return None
-    return {"id": id, **{k: meta.get(k, "") for k in _FIELDS}, "rev": meta.get("rev", "")}
+    return {"id": id, **{k: meta.get(k, "") for k in _FIELDS},
+            "prefill": meta.get("prefill") == "true", "rev": meta.get("rev", "")}
 
 
 def _mask(conn: dict) -> dict:
