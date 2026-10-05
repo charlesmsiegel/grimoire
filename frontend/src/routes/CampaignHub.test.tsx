@@ -16,6 +16,10 @@ vi.mock("../components/tracker/TrackerFieldsEditor", () => ({
   TrackerFieldsEditor: ({ scope }: { scope: { kind: string; cid?: string } }) =>
     <div data-testid="tracker-fields" data-scope={`${scope.kind}:${scope.cid}`} />,
 }));
+vi.mock("../components/RegexRulesEditor", () => ({
+  RegexRulesEditor: ({ scope }: { scope: { kind: string; cid?: string } }) =>
+    <div data-testid="regex-rules" data-scope={`${scope.kind}:${scope.cid}`} />,
+}));
 vi.mock("../components/CampaignCover", () => ({
   CampaignCover: () => <div data-testid="cover-panel" />,
 }));
@@ -419,6 +423,15 @@ test("the campaign's own settings are reachable from its front door", () => {
     fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
     expect(screen.queryByTestId("calendar-panel")).not.toBeInTheDocument();
   });
+});
+
+test("the Output processing panel mounts the campaign's rule editor", async () => {
+  renderHub();
+  await screen.findByText("Run One");
+  fireEvent.click(screen.getByRole("button", { name: "Output processing" }));
+  expect(screen.getByTestId("regex-rules")).toHaveAttribute("data-scope", "campaign:run");
+  fireEvent.click(screen.getByRole("button", { name: "Output processing" }));
+  expect(screen.queryByTestId("regex-rules")).not.toBeInTheDocument();
 });
 
 test("the Tracker panel holds the campaign's switch and its field editor", async () => {

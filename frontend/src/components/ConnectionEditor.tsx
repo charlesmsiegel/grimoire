@@ -7,6 +7,7 @@ import { BLANK_CONNECTION, ConnectionForm } from "./ConnectionForm";
 import { ErrorNote } from "./ErrorNote";
 import { Field } from "./Field";
 import { SamplingSummary } from "./SamplingSummary";
+import { RegexRulesEditor } from "./RegexRulesEditor";
 
 /** Connection kinds whose provider can be asked for a catalog (#149).
  *
@@ -496,6 +497,18 @@ export function ConnectionEditor() {
             </div>
           </div>
         )}
+        {/* This connection's own rules, run before the global ones: they correct
+            one model's habits. They are a file beside the connection rather
+            than part of its form, so they save as they are edited, and a
+            connection that does not exist yet has nowhere to keep them. */}
+        <div className="connection-output">
+          <h3>Output processing</h3>
+          {id ? (
+            <RegexRulesEditor key={id} scope={{ kind: "connection", id }} />
+          ) : (
+            <p className="field-hint">Save the connection to give it output-processing rules.</p>
+          )}
+        </div>
       </div>
     </div>
   );

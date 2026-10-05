@@ -432,7 +432,11 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
   response_thinking?: string;
   response_id?: string; response_part?: string; response_status?: "complete" | "incomplete";
   context_changed?: boolean; response_can_reroll?: boolean;
-  post_id?: string };
+  post_id?: string;
+  /** The text a display-phase regex rule shows in place of `content`, present
+   *  only when it differs. `rewritten` marks a post whose stored text a rule
+   *  rewrote; `connection` is the connection that produced it. */
+  shown?: string; rewritten?: boolean; connection?: string };
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
   variants: { id: string; content: string; reasoning?: string; status: string; issue?: string | null }[] };
@@ -2597,3 +2601,45 @@ export type TrackerScope =
 /** A campaign's own switch: "" follows the global one. */
 export type TrackerSetting = "" | "on" | "off";
 export type CampaignTrackerSetting = { setting: TrackerSetting; enabled: boolean };
+
+/** One output-processing regex rule (spec section 2). `id` is minted on create
+ *  and unique across every level, because an `off` list elsewhere names it. */
+export type RegexRule = {
+  id: string; name: string; enabled: boolean;
+  pattern: string; flags: string; replacement: string; trim: string[];
+  targets: ("model" | "user")[]; applies: ("display" | "prompt")[];
+  rewrite_stored: boolean; min_depth: number | null; max_depth: number | null;
+  imported: { from: string; pattern: string; notes: string[] } | null;
+};
+export type RegexLevel = "connection" | "global" | "world" | "campaign";
+/** A rule as a level inherits it. `source` is the connection id for a
+ *  connection's rule and empty for every other level. */
+export type RegexEntry = { level: RegexLevel; rule: RegexRule; off: boolean; source: string };
+/** One level's file. `off` names inherited rule ids; only the world and the
+ *  campaign may carry any. */
+export type RegexLayer = { rules: RegexRule[]; off: string[] };
+export type RegexBundle = {
+  layer: RegexLayer; inherited: RegexEntry[]; warnings: Record<string, string[]>;
+};
+export type RegexScope =
+  | { kind: "global" }
+  | { kind: "world"; wid: string }
+  | { kind: "campaign"; cid: string }
+  | { kind: "connection"; id: string };
+/** One rule's turn in the test pane's trace. `reason` is why it did not apply. */
+export type RegexStep = {
+  rule_id: string; level: RegexLevel; name: string; applied: boolean;
+  reason: string | null; matches: number; text_after: string;
+};
+export type RegexTestBody = {
+  scope: RegexScope; text: string; role: "model" | "user";
+  phase: "display" | "prompt" | "store"; depth: number;
+  draft?: Partial<RegexRule>; connection?: string;
+};
+/** One SillyTavern script in an import preview: the proposed rule (no id, and
+ *  `null` for one that will not translate), the translator's verdict and notes,
+ *  and the script as given. */
+export type RegexImportRow = {
+  index: number; name: string; verdict: "exact" | "approximate" | "untranslatable";
+  notes: string[]; rule: Omit<RegexRule, "id"> | null; original: unknown;
+};

@@ -71,6 +71,7 @@ vi.mock("../api/client", () => ({
     listPCImages: vi.fn(), getCalendarMonths: vi.fn(),
     listTags: vi.fn(),
     getTrackerFields: vi.fn(), setTrackerFields: vi.fn(),
+    getRegex: vi.fn(), putRegex: vi.fn(), listConnections: vi.fn(),
     listEntities: vi.fn(),
     readEntity: vi.fn(),
     reclassifyEntity: vi.fn(),
@@ -150,6 +151,13 @@ beforeEach(() => {
     ({ key, label: key[0].toUpperCase() + key.slice(1), type: "text", aware: "present", hint: "" }));
   (api.getTrackerFields as any).mockResolvedValue(
     { layer: {}, effective: trackerFields, inherited: trackerFields });
+  (api.getRegex as any).mockResolvedValue({
+    layer: { rules: [{ id: "r-1", name: "Strip asides", enabled: true, pattern: "x", flags: "g",
+      replacement: "", trim: [], targets: ["model"], applies: ["display", "prompt"],
+      rewrite_stored: false, min_depth: null, max_depth: null, imported: null }], off: [] },
+    inherited: [], warnings: {},
+  });
+  (api.listConnections as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "the-salt-pact", name: "The Salt Pact", keys: "", owners: "" },
@@ -372,6 +380,17 @@ test("picking a section swaps main and leaves the index standing", async () => {
   }
 });
 
+test("the Output processing row counts the world's own rules and opens their editor", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  await waitFor(() => expect(indexRow("Output processing")).toHaveTextContent("1"));
+  expect(api.getRegex).toHaveBeenCalledWith({ kind: "world", wid: "w" });
+  fireEvent.click(indexRow("Output processing"));
+  expect(screen.getByRole("heading", { name: "Output processing" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "+ New rule" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Strip asides/ })).toBeInTheDocument();
+});
+
 test("the Tracker row counts the world's fields and opens their editor", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
@@ -473,6 +492,7 @@ test("campaign mode passes campaign scope and hides Tags and the Overview", asyn
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }));
   expect(screen.queryByRole("link", { name: /^Tags\b/ })).toBeNull();
   expect(screen.queryByRole("link", { name: /^Tracker\b/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: /^Output processing\b/ })).toBeNull();
   expect(screen.queryByRole("link", { name: /^Overview\b/ })).toBeNull();
   // a campaign has no tag vocabulary of its own, so nothing asks for one
   expect(api.listTags).not.toHaveBeenCalled();

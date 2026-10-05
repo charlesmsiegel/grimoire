@@ -26,6 +26,10 @@ vi.mock("../components/ModelRoutingPicker", () => ({
   ModelRoutingPicker: ({ scope }: { scope: string }) =>
     <div data-testid="model-routing-picker">{scope}</div>,
 }));
+vi.mock("../components/RegexRulesEditor", () => ({
+  RegexRulesEditor: ({ scope }: { scope: unknown }) =>
+    <div data-testid="regex-rules" data-scope={JSON.stringify(scope)} />,
+}));
 import { api } from "../api/client";
 
 const cfg = {
@@ -109,10 +113,16 @@ test("the column indexes every section in three groups", async () => {
     /^Storage/, /^Backups/, /^Connection/, /^Model routing/, /^Timeouts/, /^Context/,
     /^Prompt layout/, /^Scene tracker/,
     /^Embeddings/, /^System prompt/, /^Response targets/, /^Transcript/,
-    /^While playing/, /^Appearance/,
+    /^Output processing/, /^While playing/, /^Appearance/,
   ]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   }
+});
+
+test("the Output processing section mounts the global rule editor", async () => {
+  renderView();
+  await open(/^Output processing/);
+  expect(screen.getByTestId("regex-rules")).toHaveAttribute("data-scope", '{"kind":"global"}');
 });
 
 test("the routing section carries the global picker", async () => {
