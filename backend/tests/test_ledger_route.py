@@ -18,6 +18,8 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
+from grimoire.store.continuity import doc as continuity_doc
+from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
 
 @pytest.fixture
@@ -197,16 +199,17 @@ def test_a_record_with_non_string_fields_still_renders_as_a_row(client):
         encoding="utf-8")
     row = client.get(f"/api/campaigns/{cid}/ledger").json()["commitments"][0]
     assert row == {"id": "x", "title": "x", "kind": "promise", "status": "open",
-                   "due": "", "last_scene": "s1", "latest_beat": "",
+                   "due": "", "last_scene": "s1", "latest_beat": "", "aliases": [],
                    "scene": {"id": "s1", "title": "s1", "date": ""},
                    # Aged like every other row (#103), and unaged in substance:
                    # this campaign has no clock, so there is no present to
                    # measure from and every number is honestly None.
                    "aging": {"state": "ok", "days_since": None,
                              "days_over": None, "due_in": None}}
-    # `scene` and `aging` are the row's two structured fields; the rest is text
-    # the panel interpolates, which is what this test is about.
-    assert all(isinstance(v, str) for k, v in row.items() if k not in ("scene", "aging"))
+    # `scene`, `aging` and `aliases` are the row's structured fields; the rest
+    # is text the panel interpolates, which is what this test is about.
+    assert all(isinstance(v, str) for k, v in row.items()
+               if k not in ("scene", "aging", "aliases"))
 
 
 def test_a_thread_with_non_string_fields_still_renders_as_a_row(client):
@@ -220,9 +223,10 @@ def test_a_thread_with_non_string_fields_still_renders_as_a_row(client):
                "last_scene": "s1"}}), encoding="utf-8")
     row = client.get(f"/api/campaigns/{cid}/ledger").json()["plot"][0]
     assert row["id"] == "t" and row["title"] == "t" and row["status"] == "open"
-    # `scene` and `aging` are the two structured fields on a row; everything
-    # else is text the panel interpolates, which is what this is about.
-    assert all(isinstance(v, str) for k, v in row.items() if k not in ("scene", "aging"))
+    # `scene`, `aging` and `aliases` are the structured fields on a row;
+    # everything else is text the panel interpolates, which is what this is about.
+    assert all(isinstance(v, str) for k, v in row.items()
+               if k not in ("scene", "aging", "aliases"))
 
 
 def test_one_unsortable_chronicle_id_does_not_cost_the_other_facts(client):
@@ -295,9 +299,12 @@ def test_the_three_sections_are_read_under_one_campaign_lock(client, monkeypatch
                         _watch("plot", store.plot.open_threads))
     monkeypatch.setattr(store.commitments, "open_commitments",
                         _watch("commitments", store.commitments.open_commitments))
+    # The rows are effective (capstone §12.5), so the alias read that decides
+    # what is merged is one more file the save sequence could be half through.
+    monkeypatch.setattr(continuity_doc, "read", _watch("continuity", continuity_doc.read))
     assert client.get(f"/api/campaigns/{cid}/ledger").status_code == 200
     assert held == {"scenes": True, "chronicle": True,
-                    "plot": True, "commitments": True}
+                    "plot": True, "commitments": True, "continuity": True}
 
 
 def test_standing_facts_carry_the_scene_that_recorded_them(client):
@@ -580,14 +587,17 @@ def test_ledger_rows_are_pinned_for_an_ordinary_campaign(client):
     assert body["plot"] == [
         {"id": "maras-map", "title": "Mara's map", "status": "advanced",
          "last_scene": "001--the-pier-at-dusk", "latest_beat": "Mara hid the map.",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
          "scene": {"id": "001--the-pier-at-dusk", "title": "The Pier at Dusk", "date": ""}},
         {"id": "the-tithe", "title": "The Saltmarch tithe", "status": "closed",
          "last_scene": "002--saltmarch-eve", "latest_beat": "Paid in full.",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
          "scene": {"id": "002--saltmarch-eve", "title": "Saltmarch Eve", "date": ""}},
         {"id": "the-coronation", "title": "The coronation", "status": "open",
          "last_scene": "003--the-coronation", "latest_beat": "",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
          "scene": {"id": "003--the-coronation", "title": "The coronation", "date": ""}},
     ]
@@ -595,15 +605,180 @@ def test_ledger_rows_are_pinned_for_an_ordinary_campaign(client):
         {"id": "maras-oath", "title": "Mara's oath", "kind": "promise", "status": "open",
          "due": "before the bells stop", "last_scene": "001--the-pier-at-dusk",
          "latest_beat": "Mara swore it on the quay.",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
          "scene": {"id": "001--the-pier-at-dusk", "title": "The Pier at Dusk", "date": ""}},
         {"id": "seraphines-ultimatum", "title": "Seraphine's ultimatum", "kind": "threat",
          "status": "fulfilled", "due": "", "last_scene": "002--saltmarch-eve",
          "latest_beat": "Seraphine made good on it.",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
          "scene": {"id": "002--saltmarch-eve", "title": "Saltmarch Eve", "date": ""}},
         {"id": "winifreds-promise", "title": "Winifred's promise", "kind": "promise",
          "status": "open", "due": "", "last_scene": "003--the-coronation", "latest_beat": "",
+         "aliases": [],
          "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
          "scene": {"id": "003--the-coronation", "title": "The coronation", "date": ""}},
     ]
+
+
+# ---- effective rows (capstone spec §12.5) ------------------------------------
+#
+# The Ledger is a current-state reader, so its plot and commitment rows are the
+# effective ones: a merged-away source is not a second row, and its canonical
+# carries what the group as a whole last did.
+
+S1, S2 = "001--saltmarch", "002--realm"
+MAP, CHART = "thread:mara-s-map", "thread:winifred-s-chart"
+
+
+def _thread_ids(client, cid, *titles):
+    out = []
+    for title in titles:
+        r = client.post(f"/api/campaigns/{cid}/ledger/threads", json={"title": title})
+        assert r.status_code == 200, r.text
+        out.append(r.json()["id"])
+    return out
+
+
+def _merge(client, cid, ref, to):
+    r = client.post(f"/api/campaigns/{cid}/continuity/aliases", json={"ref": ref, "to": to})
+    assert r.status_code == 200, r.text
+
+
+def _ledger(client, cid):
+    r = client.get(f"/api/campaigns/{cid}/ledger")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_merged_source_is_not_a_top_level_row(client):
+    cid = _campaign(client)
+    assert _thread_ids(client, cid, "Mara's map", "Winifred's chart") == [
+        "mara-s-map", "winifred-s-chart"]
+    _merge(client, cid, MAP, CHART)
+    plot = _ledger(client, cid)["plot"]
+    assert [t["id"] for t in plot] == ["winifred-s-chart"]
+    assert plot[0]["aliases"] == [{"ref": MAP, "title": "Mara's map", "status": "open"}]
+
+
+def test_merged_rows_carry_the_group_latest_beat_and_scene(client):
+    cid = _campaign(client)
+    store.plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open",
+                            "The chart was lost.", S1)
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "advanced",
+                            "Mara traced the coast.", S2)
+    store.commitments.set_movement(cid, "winifred-s-promise", "Winifred's promise",
+                                   "promise", "open", "", "Winifred promised the chart.", S1)
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "", "Mara swore it at the gate.", S2)
+    _merge(client, cid, MAP, CHART)
+    _merge(client, cid, "commitment:mara-s-oath", "commitment:winifred-s-promise")
+    body = _ledger(client, cid)
+    [thread] = body["plot"]
+    assert (thread["id"], thread["title"], thread["status"]) == (
+        "winifred-s-chart", "Winifred's chart", "open")
+    assert (thread["last_scene"], thread["latest_beat"]) == (S2, "Mara traced the coast.")
+    assert thread["scene"] == {"id": S2, "title": S2, "date": ""}
+    assert thread["aliases"] == [{"ref": MAP, "title": "Mara's map", "status": "advanced"}]
+    [owed] = body["commitments"]
+    assert (owed["id"], owed["title"]) == ("winifred-s-promise", "Winifred's promise")
+    assert (owed["last_scene"], owed["latest_beat"]) == (S2, "Mara swore it at the gate.")
+    assert owed["scene"]["id"] == S2
+    assert owed["aliases"] == [
+        {"ref": "commitment:mara-s-oath", "title": "Mara's oath", "status": "open"}]
+
+
+def _stale_after(cid, days):
+    root = store.campaigns.campaign_root(cid)
+    cfg = store.calendars.read_calendar(root)
+    cfg["stale_after_days"] = days
+    store.calendars.write_calendar(root, cfg)
+
+
+def test_aging_uses_the_merged_last_scene(client):
+    """Task 7's stale/ok scenario through the route: the map was last moved
+    forty days ago and is stale on its own; merged with the chart, which moved
+    two days ago, the group's latest scene is the chart's, and nothing about
+    the group is stale."""
+    cid = _campaign(client)
+    store.clock.advance(cid, to="2026-05-10")
+    _stale_after(cid, 10)
+    store.chronicle.absorb(cid, {"id": S1, "one_line": "", "date": "2026-03-31"})
+    store.chronicle.absorb(cid, {"id": S2, "one_line": "", "date": "2026-05-08"})
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "The map turned up in Saltmarch.", S1)
+    store.plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open",
+                            "The chart was found.", S2)
+    before = {t["id"]: t for t in _ledger(client, cid)["plot"]}
+    assert before["mara-s-map"]["aging"]["state"] == "stale"
+    assert before["winifred-s-chart"]["aging"]["state"] == "ok"
+
+    _merge(client, cid, CHART, MAP)
+    [row] = _ledger(client, cid)["plot"]
+    assert (row["id"], row["last_scene"]) == ("mara-s-map", S2)
+    assert row["aging"]["state"] == "ok"
+    assert row["aging"]["days_since"] == 2
+
+
+def test_a_dangling_alias_leaves_its_source_visible(client):
+    cid = _campaign(client)
+    _thread_ids(client, cid, "Mara's map", "Winifred's chart")
+    continuity_doc.put_alias(cid, MAP, {"to": "thread:gone", "created": "",
+                                        "source": "manual", "note": ""})
+    plot = _ledger(client, cid)["plot"]
+    assert [t["id"] for t in plot] == ["mara-s-map", "winifred-s-chart"]
+    assert [t["aliases"] for t in plot] == [[], []]
+
+
+def test_a_garbled_continuity_file_still_answers(client):
+    cid = _campaign(client)
+    _thread_ids(client, cid, "Mara's map", "Winifred's chart")
+    _merge(client, cid, MAP, CHART)
+    (store.campaigns.campaign_root(cid) / "continuity.json").write_text(
+        "{ no", encoding="utf-8")
+    plot = _ledger(client, cid)["plot"]
+    assert [t["id"] for t in plot] == ["mara-s-map", "winifred-s-chart"]
+    assert [t["aliases"] for t in plot] == [[], []]
+
+
+def test_a_continuity_side_failure_falls_back_to_the_physical_rows(client, monkeypatch):
+    """Defence in depth beside the garbled-file case: whatever makes the
+    effective projection raise costs the merge, never the section."""
+    cid = _campaign(client)
+    _thread_ids(client, cid, "Mara's map", "Winifred's chart")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "", "Mara swore it at the gate.", S1)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("continuity is broken")
+
+    from grimoire.store.continuity import effective
+    monkeypatch.setattr(effective, "live_canon", _boom)
+    monkeypatch.setattr(continuity_doc, "read", lambda cid: {"aliases": {"x": {}}})
+    body = _ledger(client, cid)
+    assert [t["id"] for t in body["plot"]] == ["mara-s-map", "winifred-s-chart"]
+    assert [c["id"] for c in body["commitments"]] == ["mara-s-oath"]
+
+
+def test_ledger_survives_a_raising_plugin(client, tmp_path):
+    """Review Focus 1 (§26 "calendar unavailable"): a calendar plugin whose
+    constructor raises costs the aging badges -- the guard around
+    `aging.prepare` -- and never the rows, which are effective rows now."""
+    cid = _campaign(client)
+    _thread_ids(client, cid, "Mara's map", "Winifred's chart")
+    _merge(client, cid, MAP, CHART)
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "2026-05-14", "Mara swore it at the gate.", S1)
+    before = _ledger(client, cid)
+    assert all("aging" in r for r in before["plot"] + before["commitments"])
+
+    _plugin(tmp_path, "broken_test", _BROKEN_PROVIDER_SRC)
+    _primary(cid, "broken-test-calendar")
+    body = _ledger(client, cid)
+    [thread] = body["plot"]
+    assert thread["id"] == "winifred-s-chart"
+    assert [a["ref"] for a in thread["aliases"]] == [MAP]
+    [owed] = body["commitments"]
+    assert (owed["id"], owed["due"]) == ("mara-s-oath", "2026-05-14")
+    assert "aging" not in thread and "aging" not in owed

@@ -3,8 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { agingLabel } from "../aging";
 import { errorText } from "../api/errors";
 import {
-  api, type Ledger, type RecordChange, type RelationshipChange, type RetiredFact,
-  type StandingFact,
+  api, type Ledger, type PlotThread, type RecordChange, type RelationshipChange,
+  type RetiredFact, type StandingFact,
 } from "../api/client";
 import { LedgerRowEditor, type Draft } from "../components/ledger/LedgerRowEditor";
 import {
@@ -174,6 +174,13 @@ function joinNote(...parts: string[]): string {
   return parts.filter(Boolean).join(" · ");
 }
 
+/** The merge note (capstone §12.5): what was folded into this row, which is
+ *  otherwise invisible now that a merged-away record is not a row of its own.
+ *  Plain text; linking it to where the merge was reviewed is a later slice's. */
+function merged(x: PlotThread): string {
+  return x.aliases?.length ? `Merged: ${x.aliases.map((a) => a.title).join(", ")}` : "";
+}
+
 function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
                  standings: RelationshipChange[], showRetired: boolean): Row[] {
   if (section === "facts") return factRows(ledger, showRetired);
@@ -189,7 +196,7 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       key: t.id, mark: "▸", what: t.title, edit: threadSpec(t),
       status: t.status.toLowerCase() === "closed" ? "Closed" : undefined,
       complete: t.status.toLowerCase() === "closed",
-      note: joinNote(agingLabel(t.aging), t.latest_beat),
+      note: joinNote(agingLabel(t.aging), merged(t), t.latest_beat),
       // No `alert` here: a thread has no deadline, so it can only ever be
       // stale, and colouring a row for a state it cannot reach would imply the
       // section has an urgency it does not.
@@ -204,7 +211,7 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       complete: ["fulfilled", "broken", "expired"].includes(c.status.toLowerCase()),
       alert: c.kind === "threat" || c.aging?.state === "overdue",
       what: c.title, edit: commitmentSpec(c),
-      note: joinNote(agingLabel(c.aging), c.kind.toUpperCase(), c.latest_beat),
+      note: joinNote(agingLabel(c.aging), merged(c), c.kind.toUpperCase(), c.latest_beat),
       asOf: c.due || "NO DEADLINE", scene: c.scene.title,
     }));
   if (section === "relationships")

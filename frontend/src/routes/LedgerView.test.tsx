@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import LedgerView from "./LedgerView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
 import { PaletteProvider } from "../components/palette";
+import { agingLabel } from "../aging";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -522,6 +523,55 @@ test("a record inside the campaign's patience carries no badge", async () => {
   fireEvent.click(await column().findByText("Threads"));
   expect(await screen.findByText("Mara found it.")).toBeInTheDocument();
   expect(screen.queryByText(/STALE/)).not.toBeInTheDocument();
+});
+
+// ------------------------------------------------ merged records (§12.5)
+//
+// The rows are effective: a record merged into another is not a row of its
+// own, and the canonical says what was folded into it on its note line.
+
+const MERGED_THREAD = {
+  id: "winifred-s-chart", title: "Winifred's chart", status: "open",
+  last_scene: "002", latest_beat: "Mara traced the coast.", aging: ok,
+  scene: scene("002", "The Long Tide"),
+  aliases: [{ ref: "thread:mara-s-map", title: "Mara's map", status: "open" }],
+};
+
+test("a merged thread names what was merged into it", async () => {
+  await at(/Threads/, { ...EMPTY, plot: [MERGED_THREAD] });
+  expect(await screen.findByText(/Merged: Mara's map/)).toBeInTheDocument();
+});
+
+test("a merged commitment names what was merged into it", async () => {
+  const aging = { state: "stale" as const, days_since: 45, days_over: null, due_in: null };
+  await at(/Commitments/, {
+    ...EMPTY,
+    commitments: [{ id: "winifred-s-promise", title: "Winifred's promise", kind: "promise",
+                    status: "open", due: "", last_scene: "004",
+                    latest_beat: "Sworn at the gate", aging,
+                    scene: scene("004", "The Priory Door"),
+                    aliases: [{ ref: "commitment:mara-s-oath", title: "Mara's oath",
+                                status: "open" }] }],
+  });
+  const note = await screen.findByText(/Merged: Mara's oath/);
+  // aging · Merged · KIND · beat: the badge still leads, and the merge note
+  // sits before the record's own parts.
+  expect(note.textContent).toBe(
+    `${agingLabel(aging)} · Merged: Mara's oath · PROMISE · Sworn at the gate`);
+});
+
+test("a row with no aliases says nothing about merging", async () => {
+  await at(/Threads/, { ...EMPTY, plot: [{ ...MERGED_THREAD, aliases: [] }] });
+  expect(await screen.findByText(/Mara traced the coast\./)).toBeInTheDocument();
+  expect(screen.queryByText(/Merged:/)).toBeNull();
+});
+
+test("closing a merged thread addresses the canonical", async () => {
+  await at(/Threads/, { ...EMPTY, plot: [MERGED_THREAD] });
+  const row = rowFor(/Winifred's chart/);
+  fireEvent.click(within(row).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(api.ledgerSaveThread).toHaveBeenCalledWith(
+    "run", "winifred-s-chart", { status: "closed" }));
 });
 
 // ------------------------------------------------ editing the ledger by hand
