@@ -47,6 +47,7 @@ from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..continuity import effective
+from ..regex import view as regex_view
 from ..scenes import read as scenes_read
 from ..tracker import fields as tracker_fields
 from ..tracker import settings as tracker_settings
@@ -158,7 +159,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # it replays the prompt frozen for the response it replaces, which
         # already holds the state that stood before that post.
         tracker = _NO_TRACKER if opener else _tracker_read(cid, sid)
-    history = [dict(m) for m in scene["messages"]]
+    # The prompt view (`store/regex`): copies, with every prompt-phase rule
+    # applied, so the history, the world-info scan and the birthday check below
+    # all read the text the model will be shown. No rules, plain copies.
+    history = regex_view.view(scene["messages"], cid=cid, phase="prompt")
     # Kept whole for world-info activation, which numbers posts by their place
     # in the transcript even on an NPC call (see `posts` below).
     full_history = history

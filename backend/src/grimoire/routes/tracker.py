@@ -455,6 +455,16 @@ def _speaker(m: dict, player: str) -> str:
     return m.get("speaker") or "Grimoire"
 
 
+def _shown(cid: str, messages: list[dict], indices: list[int]) -> dict[int, str]:
+    """The prompt view (`store/regex`) of the messages at `indices`, by index:
+    the update reads what a turn prompt would show, depth counted over the
+    whole transcript."""
+    lo, hi = min(indices), max(indices)
+    window = store.regex.view.view(messages[lo:hi + 1], cid=cid, phase="prompt",
+                                   offset=lo, total=len(messages))
+    return {i: window[i - lo].get("content", "") for i in indices}
+
+
 def _locate(cid: str, sid: str, key: str) -> dict | None:
     """Where `key`'s post sits and what it says, or `None` once it is gone.
 
@@ -474,7 +484,8 @@ def _locate(cid: str, sid: str, key: str) -> dict | None:
             return None
         m = messages[index]
         return {"index": index, "first": index, "post": index, "rid": "",
-                "post_msg": {"speaker": _speaker(m, player), "content": m.get("content", "")}}
+                "post_msg": {"speaker": _speaker(m, player),
+                             "content": _shown(cid, messages, [index])[index]}}
     rid, vid = key[2:34], key[35:]
     parts = [i for i, m in enumerate(messages) if m.get("response_id") == rid]
     if not parts:
@@ -485,9 +496,14 @@ def _locate(cid: str, sid: str, key: str) -> dict | None:
         return None
     if walked.get(key) is not None:
         # The active variant: the transcript's text, every part of it.
-        content = "\n\n".join(messages[i].get("content", "") for i in parts)
+        shown = _shown(cid, messages, parts)
+        content = "\n\n".join(shown[i] for i in parts)
     else:
-        content = variant.get("content", "")
+        # Viewed as the reply it would be, where the response stands.
+        stand_in = {**messages[parts[-1]], "content": variant.get("content", ""),
+                    "connection": variant.get("connection", "")}
+        content = store.regex.view.view([stand_in], cid=cid, phase="prompt",
+                                        offset=parts[-1], total=len(messages))[0]["content"]
     speaker = record.get("speaker") or _speaker(messages[parts[-1]], player)
     return {"index": parts[-1], "first": parts[0], "post": record.get("post"), "rid": rid,
             "post_msg": {"speaker": speaker, "content": content}}
@@ -498,14 +514,18 @@ def _context_posts(cid: str, sid: str, first: int) -> list[dict]:
     transitions and director notes are not things a character did."""
     messages = store.scenes.read_scene(cid, sid)["messages"]
     player = store.appearances.player_label(cid, sid)
-    out: list[dict] = []
-    for m in reversed(messages[:first]):
-        if m.get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
+    picked: list[int] = []
+    for i in range(min(first, len(messages)) - 1, -1, -1):
+        if messages[i].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
             continue
-        out.append({"speaker": _speaker(m, player), "content": m.get("content", "")})
-        if len(out) == 2:
+        picked.append(i)
+        if len(picked) == 2:
             break
-    return out[::-1]
+    if not picked:
+        return []
+    shown = _shown(cid, messages, picked)
+    return [{"speaker": _speaker(messages[i], player), "content": shown[i]}
+            for i in reversed(picked)]
 
 
 def _obsolete(cid: str, identity: str, key: str, gen: int | None) -> bool:

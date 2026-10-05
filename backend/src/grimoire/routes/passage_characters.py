@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from .. import prompts
 from ..llm import LLMClient
-from ..store import appearances, characters, passage_evidence, responses
+from ..store import appearances, characters, passage_evidence, regex, responses
 from ..store.scenes import serialize
 from . import runs
 from .common import _require_connection, _require_scene, draft_completion, get_llm
@@ -67,7 +67,8 @@ def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: R
                           x_grimoire_attempt: str | None = Header(default=None)):
     scene = _source(cid, sid, rid, body)
     conn = _require_connection("character-from-passage", cid)
-    posts = scene["messages"]
+    # The neighbours are prompt context, so they are read in the prompt view.
+    posts = regex.view.view(scene["messages"], cid=cid, phase="prompt")
     index = next((i for i, post in enumerate(posts) if post.get("response_id") == rid), None)
     neighbors = _observable_neighbors(posts, index)
     context = "\n\n".join(str(post.get("speaker", post["role"])) + ": "
