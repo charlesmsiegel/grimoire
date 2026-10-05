@@ -75,6 +75,7 @@ from . import (
     fork,
     greeting_images,
     greetings,
+    group_play,
     groupstate,
     image_collection_imports,
     image_collections,
@@ -305,6 +306,7 @@ __all__ = [
     # store's tagging queue; exporting it here is a deliberate API addition.
     "greeting_images",
     "GreetingNotFound",
+    "group_play",
     "groupstate",
     "image_collection_imports", "image_collections", "image_descriptions",
     "image_library",
