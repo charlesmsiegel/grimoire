@@ -1,6 +1,6 @@
 import re as _re
 
-from grimoire.store import assets, greetings, localize
+from grimoire.store import assets, greetings, image_refs, localize
 
 
 def test_find_markdown_image():
@@ -251,7 +251,9 @@ def test_localize_greeting_rewrites_body_and_stores_assets(tmp_path):
     name = m.group(1)
     p = assets.image_path(tmp_path, gid, "default", name, base="greetings")
     assert p is not None and p.read_bytes() == b"png-bytes"
-    assert p.parent == tmp_path / "greetings" / gid / "assets" / "default"
+    # the bytes live in the image store; the greeting holds the placement
+    assert image_refs.read(tmp_path / "greetings" / gid / "assets" / "default",
+                           name) is not None
 
 
 def test_localize_greeting_data_uri_and_failed_fetch(tmp_path):

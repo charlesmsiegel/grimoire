@@ -1,5 +1,14 @@
 """Per-version image store: <base>/<cid>/assets/<vid>/<name>.<ext>.
 
+**Placements.** Every write now lands in the content-addressed store
+(`store.image_store`) and leaves a small placement record in the directory,
+``<d>/image-refs/<name>.json`` (`store.image_refs`), instead of the bytes. The
+legacy ``<name>.<ext>`` layout is still READ, as the fallback of every lookup
+(spec section 6): a placement that resolves wins; one that does not (object or
+blob not synced yet) falls through to a legacy file of that name when there is
+one. Nothing here ever writes a legacy file again, and a write removes the
+name's legacy siblings once its placement is published.
+
 The default base is "characters"; entity kinds (locations, lore) pass base=kind
 with vid="default" so records without versions get the same folder layout. The
 avatar/primary image is the image named AVATAR. Other image kinds (gallery,
@@ -17,7 +26,7 @@ import threading
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import atomic, statcache
+from . import atomic, image_refs, image_store, statcache
 from .paths import safe_id
 
 AVATAR = "avatar"
@@ -152,7 +161,9 @@ def _image_locks_held(d: Path, *names: str):
 
 
 def _free_gallery(d: Path) -> str:
-    """The lowest ``gallery_N`` no file in ``d`` already occupies.
+    """The lowest ``gallery_N`` no image in ``d`` already occupies -- a legacy
+    file or a placement (`names_in`), so a healed stray never lands on a slot a
+    placement holds.
 
     Occupancy is case-folded: on a case-insensitive filesystem an existing
     ``Gallery_1.png`` *is* ``gallery_1.png``, so a case-sensitive comparison
@@ -162,7 +173,7 @@ def _free_gallery(d: Path) -> str:
     case-sensitive filesystem too is merely conservative: the next slot is
     equally good, and nothing else allocates these names.
     """
-    used = {p.stem.casefold() for p in d.iterdir() if p.is_file()}
+    used = {n.casefold() for n in names_in(d)[0]}
     n = 1
     while f"gallery_{n}" in used:
         n += 1
@@ -236,7 +247,7 @@ def _heal_stranded_promotion(d: Path) -> None:
         stray = _newest_stranded(d)
         if stray is None:
             return
-        slot = AVATAR if not any(d.glob(f"{AVATAR}.*")) else _free_gallery(d)
+        slot = _heal_slot(d)
         # Both choices above were read unlocked, so lock every name they name --
         # in the module's one global order -- and only then act on them.
         with _image_locks_held(d, _PROMOTE_TMP, AVATAR, slot):
@@ -247,16 +258,20 @@ def _heal_stranded_promotion(d: Path) -> None:
             # the last-moment guard -- with the locks held nothing in this
             # process can have created it, but `rename` replaces silently on
             # POSIX, so a file another process put there must stop us.
-            if (stray.exists()
-                    and slot == (AVATAR if not any(d.glob(f"{AVATAR}.*"))
-                                 else _free_gallery(d))
-                    and not target.exists()):
+            if stray.exists() and slot == _heal_slot(d) and not target.exists():
                 try:
                     stray.rename(target)
                 except OSError:
                     return  # read-only store or a held file; the next scan retries
                 continue  # progress: only lost races spend the retry budget
         retries -= 1
+
+
+def _heal_slot(d: Path) -> str:
+    """Where `_heal_stranded_promotion` puts a stray: the avatar slot when no
+    avatar resolves (a placement or a legacy file), else the next free gallery
+    slot."""
+    return AVATAR if path_in(d, AVATAR) is None else _free_gallery(d)
 
 
 def _mtime_ns(p: Path) -> int:
@@ -287,13 +302,35 @@ def _siblings(d: Path, name: str, supported_only: bool) -> list[Path]:
     return [p for p in found if _norm_ext(p.suffix)] if supported_only else found
 
 
+def _legacy_path(d: Path, name: str, supported_only: bool) -> Path | None:
+    """The newest legacy ``<name>.*`` file in `d` -- `path_in`'s pre-placement
+    rule, and its fallback."""
+    matches = _siblings(d, name, supported_only)
+    if not matches:
+        return None
+    return max(matches, key=lambda p: (_mtime_ns(p), p.name))
+
+
+def resolve(d: Path, name: str) -> image_refs.ResolvedImage | None:
+    """The placement `name` in `d`, resolved to its object and blob -- None
+    when there is no image-bearing placement or it does not resolve (yet)."""
+    if not _safe_name(name):
+        return None
+    return image_refs.resolve(d, name)
+
+
 def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
     """The current file for logical image `name` in directory `d`, or None.
 
-    Newest wins, not alphabetically first: `put_in` writes the new file before
-    unlinking stale other-extension siblings (so a crash can't lose the image),
-    which leaves both present for a moment -- and a plain `sorted()[0]` would
-    hand back the stale one. Also self-heals if that unlink ever fails.
+    A placement that resolves answers with its blob path. Otherwise -- no
+    placement, an image-less one, or one whose object or blob has not arrived
+    -- the legacy rule below answers, so redundant data beats lost data.
+
+    Legacy: newest wins, not alphabetically first: `put_in` used to write the
+    new file before unlinking stale other-extension siblings (so a crash can't
+    lose the image), which leaves both present for a moment -- and a plain
+    `sorted()[0]` would hand back the stale one. Also self-heals if that
+    unlink ever fails.
 
     Lock-agnostic: this takes a directory and no campaign identity, so a caller
     that mutates campaign-scoped state through `put_in`/`delete_in` is the one
@@ -301,59 +338,136 @@ def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
     """
     if not _safe_name(name) or not d.exists():
         return None
-    matches = _siblings(d, name, supported_only)
-    if not matches:
-        return None
-    return max(matches, key=lambda p: (_mtime_ns(p), p.name))
+    resolved = image_refs.resolve(d, name)
+    if resolved is not None:
+        return resolved.blob_path
+    return _legacy_path(d, name, supported_only)
+
+
+def _snapshot_siblings(d: Path, name: str,
+                       supported_only: bool) -> list[tuple[Path, int, int]]:
+    """Every legacy file of `name`, with its identity, for `_drop_snapshotted`."""
+    stale = []
+    for p in _siblings(d, name, supported_only):
+        try:
+            st = p.stat()
+            stale.append((p, st.st_dev, st.st_ino))
+        except OSError:
+            pass  # vanished already; nothing to clean up
+    return stale
+
+
+def _drop_snapshotted(stale: list[tuple[Path, int, int]]) -> None:
+    """Unlink exactly the files `_snapshot_siblings` saw: the lock keeps
+    concurrent callers out, and the identity check keeps anything that reaches
+    the directory another way (an external tool, a sync client) from having its
+    file deleted by path alone."""
+    for p, dev, ino in stale:
+        try:
+            st = p.stat()
+            if (st.st_dev, st.st_ino) != (dev, ino):
+                continue  # not the file we snapshotted; not ours to delete
+            p.unlink()
+        except OSError:
+            pass  # a lost cleanup is harmless: the placement wins over it
+
+
+def _place(d: Path, name: str, image_id: str, *, keep_focus: bool,
+           supported_only: bool) -> None:
+    """Publish placement `name` -> `image_id`, then drop the legacy siblings.
+
+    Placement BEFORE the unlinks, as `put_in` always wrote before it cleaned
+    up: a failure in between leaves a legacy file the placement shadows, never
+    no image. `keep_focus` keeps the old placement's focus; otherwise a focus
+    survives only when the placement already held this very image.
+    Caller holds `_image_lock(d, name)`.
+    """
+    stale = _snapshot_siblings(d, name, supported_only)
+    old = image_refs.read(d, name)
+    focus = (old.focus if old is not None and (keep_focus or old.image == image_id)
+             else None)
+    image_refs.write(d, name, image_id, focus=focus)
+    _drop_snapshotted(stale)
 
 
 def put_in(d: Path, name: str, data: bytes, ext: str, *,
-           supported_only: bool = False) -> str:
-    """Publish `data` as `<name>.<ext>` in `d`, dropping the stale siblings."""
+           supported_only: bool = False, source_url: str | None = None) -> str:
+    """Store `data` and place it as `name` in `d`, dropping the legacy siblings.
+
+    Returns the extension of the blob actually kept, which is what the bytes
+    sniff as (or `ext`, for bytes that sniff as nothing). `ext` is still
+    validated against the allowlist first, so an unsupported one is the same
+    `ValueError` it always was.
+    """
     if not _safe_name(name):
         raise ValueError("unsafe image id")
-    ext = _norm_ext(ext)
-    if not ext:
+    if not _norm_ext(ext):
         raise ValueError("unsupported image type")
-    d.mkdir(parents=True, exist_ok=True)
-    written = d / f"{name}.{ext}"
+    # Outside the name lock: ingest takes the store's own locks, and the
+    # decode is the slow part of a write.
+    obj = image_store.ingest(data, ext, source_url=source_url)
     with _image_lock(d, name):
-        # Write BEFORE dropping prior-extension files. The reverse order (which
-        # this used to do) loses the image outright if anything fails between
-        # the unlink and the write -- atomicity alone cannot fix an ordering
-        # bug. path_in() breaks the resulting momentary tie by mtime.
-        #
-        # Snapshot the siblings' IDENTITY before writing, and delete only those
-        # exact files: the lock keeps concurrent callers out, and the identity
-        # check keeps anything that reaches the directory another way (an
-        # external tool, a sync client) from having its file deleted by path
-        # alone.
-        stale = []
-        for p in _siblings(d, name, supported_only):
-            if p == written:
-                continue
-            try:
-                st = p.stat()
-                stale.append((p, st.st_dev, st.st_ino))
-            except OSError:
-                pass  # vanished already; nothing to clean up
-        atomic.write_bytes(written, data)
-        for p, dev, ino in stale:
-            try:
-                st = p.stat()
-                if (st.st_dev, st.st_ino) != (dev, ino):
-                    continue  # not the file we snapshotted; not ours to delete
-                p.unlink()
-            except OSError:
-                pass  # a lost cleanup self-heals: path_in prefers the newest
-    return ext
+        _place(d, name, obj.id, keep_focus=False, supported_only=supported_only)
+    return obj.ext
+
+
+def link_in(d: Path, name: str, image_id: str, *, keep_focus: bool = False) -> None:
+    """Place an image already in the store as `name` in `d` -- a reference
+    operation, no bytes moved -- and drop the name's legacy siblings.
+
+    `ValueError` for an unsafe name or an invalid id. The object is not
+    required to exist: a placement may arrive before its object does (sync),
+    and readers treat that as unresolved until it does.
+    """
+    if not _safe_name(name):
+        raise ValueError("unsafe image id")
+    with _image_lock(d, name):
+        _place(d, name, image_id, keep_focus=keep_focus, supported_only=False)
+
+
+def adopt_legacy(d: Path, name: str) -> str | None:
+    """Turn legacy image `name` in `d` into a placement and return its id.
+
+    - an image-bearing placement already there: its id, nothing written;
+    - a legacy file: its bytes are ingested, the placement written and the
+      legacy file(s) removed. The avatar's legacy crop (`focus.json`) moves
+      onto the placement, unless a placement already carries one;
+    - neither: None.
+
+    `ValueError` for a legacy file of an extension this module never accepted
+    (only an external tool can put one there), which is left untouched.
+    """
+    if not _safe_name(name) or not d.exists():
+        return None
+    with _image_lock(d, name):
+        old = image_refs.read(d, name)
+        if old is not None and old.image is not None:
+            return old.image
+        src = _legacy_path(d, name, False)
+        if src is None:
+            return None
+        if not _norm_ext(src.suffix):
+            raise ValueError(f"unsupported image type: {src.name}")
+        obj = image_store.ingest(src.read_bytes(), src.suffix)
+        focus = old.focus if old is not None else None
+        if name == AVATAR and focus is None:
+            focus = _read_focus_file(d)
+        stale = _snapshot_siblings(d, name, False)
+        image_refs.write(d, name, obj.id, focus=focus)
+        _drop_snapshotted(stale)
+        if name == AVATAR:
+            # The placement answers for the crop from here on (`read_focus`),
+            # so a `focus.json` left behind could only ever be stale.
+            _unlink_focus_file(d)
+        return obj.id
 
 
 def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
-    """Remove every file for logical image `name` in `d`.
+    """Remove logical image `name` in `d`: its placement and every legacy file.
 
-    Failures are swallowed here, as they always were -- callers that need the
-    removal *confirmed* (`covers.delete_cover`) re-resolve afterwards.
+    The object and blob stay in the store (GC is stage 4). Failures are
+    swallowed here, as they always were -- callers that need the removal
+    *confirmed* (`covers.delete_cover`) re-resolve afterwards.
     """
     if not _safe_name(name) or not d.exists():
         return
@@ -361,6 +475,7 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
     # the upload just published and leave the caller thinking it wrote one, nor
     # half-remove a set the upload is mid-way through replacing.
     with _image_lock(d, name):
+        image_refs.delete(d, name)
         for p in _siblings(d, name, supported_only):
             try:
                 p.unlink()
@@ -384,7 +499,15 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
 
 
 def names_in(d: Path, also: str = "") -> tuple[set[str], bool]:
-    """Every logical image NAME in `d` — `list_in`'s stem set, and nothing else.
+    """Every logical image NAME in `d`: the legacy stems plus every placement
+    that holds an image -- `list_in`'s name set, and nothing else.
+
+    Placements are counted WITHOUT being resolved, which keeps a sweep to one
+    directory read per folder (plus the placements' own small reads) rather
+    than an object read and a blob stat per image. The price is a transient
+    disagreement with `list_in`, accepted on purpose: mid-sync, a placement
+    whose object or blob has not arrived yet is counted here but omitted
+    there (unless a legacy file backs the name), until the sync completes.
 
     `list_in` additionally decides which of two files sharing a stem answers for
     it, and that tie-break is an mtime stat per file. A caller that only counts
@@ -419,6 +542,7 @@ def names_in(d: Path, also: str = "") -> tuple[set[str], bool]:
                     out.add(stem)
     except OSError:
         return set(), False
+    out.update(n for n in image_refs.image_names(d) if _addressable_name(n))
     return out, found
 
 
@@ -443,13 +567,26 @@ def list_in(d: Path) -> list[dict]:
 
     Newest wins, the same rule and the same tie-break `path_in` resolves by,
     so the entry always describes the bytes the serve route returns.
+
+    Placements: a name whose placement resolves is listed from it,
+    ``{name, ext, v, image_id}`` with `v` the blob's sha256, and shadows any
+    legacy file of that name; one that does not resolve is omitted unless a
+    legacy file backs the name (the same fallback as `path_in`). Sorted by
+    name. A listing never scans the global store -- each placement costs its
+    object read and a blob stat.
     """
-    return _listing(_candidates(d))
+    found = _candidates(d)
+    return _listing(found, _resolve_refs(found[1])[0] if found else None)
 
 
-def _candidates(d: Path) -> dict[str, list[tuple[str, int, int]]] | None:
-    """Every file in `d` that could answer for a logical image, by stem, each
-    as `(name, st_mtime_ns, st_size)` -- or None when `d` is not there to list.
+_Files = dict[str, list[tuple[str, int, int]]]
+
+
+def _candidates(d: Path) -> tuple[_Files, dict[str, image_refs.Ref]] | None:
+    """`(files, refs)`: every legacy file in `d` that could answer for a
+    logical image, by stem, each as `(name, st_mtime_ns, st_size)`, and every
+    placement in `d` (`image_refs.scan`, image-less ones included) -- or None
+    when `d` is not there to list.
 
     ONE stat per file, and it is the one the listing needs anyway: `os.scandir`
     carries each entry's type from the directory read, so `is_file` costs
@@ -495,19 +632,44 @@ def _candidates(d: Path) -> dict[str, list[tuple[str, int, int]]] | None:
             except OSError:
                 continue   # vanished mid-scan; a listing must not fail over one file
             found.setdefault(stem, []).append((e.name, st.st_mtime_ns, st.st_size))
-    return found
+    return found, image_refs.scan(d)
 
 
-def _listing(found: dict[str, list[tuple[str, int, int]]] | None) -> list[dict]:
-    """`list_in`'s entries from `_candidates`: newest sibling per stem by
-    (mtime, name), which is order-independent because names are unique -- so
-    the directory's own enumeration order, unlike `iterdir`'s sorted one,
-    cannot change which file wins."""
-    if not found:
-        return []
+def _resolve_refs(refs: dict[str, image_refs.Ref]
+                  ) -> tuple[dict[str, image_refs.ResolvedImage], bool]:
+    """Each image-bearing placement that resolves, by name, and whether EVERY
+    image-bearing placement did. Image-less ones (occurrence overrides) are not
+    images and are skipped."""
+    out: dict[str, image_refs.ResolvedImage] = {}
+    complete = True
+    for name, ref in refs.items():
+        if ref.image is None or not _addressable_name(name):
+            continue
+        r = image_refs.resolve_ref(ref)
+        if r is None:
+            complete = False
+        else:
+            out[name] = r
+    return out, complete
+
+
+def _listing(found: tuple[_Files, dict[str, image_refs.Ref]] | None,
+             resolved: dict[str, image_refs.ResolvedImage] | None = None) -> list[dict]:
+    """`list_in`'s entries from `_candidates` and `_resolve_refs`: a resolved
+    placement answers for its name; otherwise the newest legacy sibling per
+    stem by (mtime, name), which is order-independent because names are
+    unique -- so the directory's own enumeration order, unlike `iterdir`'s
+    sorted one, cannot change which file wins."""
+    files = found[0] if found else {}
+    resolved = resolved or {}
     out: list[dict] = []
-    for stem in sorted(found):
-        name, mtime_ns, size = max(found[stem], key=lambda c: (c[1], c[0]))
+    for stem in sorted(set(files) | set(resolved)):
+        r = resolved.get(stem)
+        if r is not None:
+            out.append({"name": stem, "ext": r.ext, "v": r.blob_sha256,
+                        "image_id": r.image_id})
+            continue
+        name, mtime_ns, size = max(files[stem], key=lambda c: (c[1], c[0]))
         out.append({"name": stem, "ext": name.rpartition(".")[2].lower(),
                     "v": _token(mtime_ns, size)})
     return out
@@ -528,7 +690,13 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
 
 def image_version(p: Path) -> str:
     """Cache-busting token for an image file's current bytes; a `?v=` URL
-    carrying it is served immutable, so the browser never revalidates."""
+    carrying it is served immutable, so the browser never revalidates.
+
+    A blob's token is its sha256 -- its name says what its bytes are, so
+    nothing is statted -- and a legacy file's is `_token` of its stat."""
+    sha = image_store.blob_sha_of(p)
+    if sha is not None:
+        return sha
     st = p.stat()
     return _token(st.st_mtime_ns, st.st_size)
 
@@ -538,7 +706,7 @@ def _token(mtime_ns: int, size: int) -> str:
     return f"{mtime_ns:x}-{size:x}"
 
 
-def _stranded(found: dict[str, list[tuple[str, int, int]]]) -> bool:
+def _stranded(found: _Files) -> bool:
     """Whether `_heal_stranded_promotion` could find something to rescue among
     these candidates. Case-folded, so it answers yes wherever the heal's glob
     might match (a case-insensitive filesystem): a false yes only costs a
@@ -559,7 +727,12 @@ def version_art(root: Path, cid: str, vid: str,
     - each file that could answer for `AVATAR`, whose bytes are the only ones
       a row reports on (`avatar_v`); for every other image only the NAME is
       used, and names are the folder's listing;
-    - `focus.json` when there is one, stamped before it is read.
+    - `focus.json` when there is one, stamped before it is read;
+    - the placements folder (``image-refs/``) when there is one, whose listing
+      covers a placement arriving, leaving or being rewritten (every write is
+      an atomic rename), and ``image-refs/avatar.json`` when there is one --
+      the avatar's placement names the bytes `avatar_v` reports and carries
+      the crop. Both stamped before the placements are read.
 
     A folder that is not there is vouched for by the nearest ancestor that is,
     up to `root`: creating it moves that directory's mtime.
@@ -568,7 +741,10 @@ def version_art(root: Path, cid: str, vid: str,
     mid-read, and when the folder holds a stranded promotion: `list_images`
     heals one on every scan, and a heal that failed (a read-only store, a held
     file) is meant to be retried by the next scan rather than remembered as
-    the answer.
+    the answer. Likewise while any image-bearing placement in the folder does
+    not resolve: its object or blob may sync in later without moving anything
+    stamped here, and that arrival must be noticed rather than remembered as
+    an absence.
     """
     if not (safe_id(cid) and safe_id(vid)):
         return [], None, ()
@@ -586,20 +762,26 @@ def version_art(root: Path, cid: str, vid: str,
                 None if up is None else (up,))
     stamps = [here]
     _heal_stranded_promotion(d)      # as `list_images` does, before listing
+    for p in (d / image_refs.REFS_DIR, image_refs.ref_path(d, AVATAR)):
+        ref_stamp = statcache.stamp(p)
+        if ref_stamp is not None:
+            stamps.append(ref_stamp)
     found = _candidates(d)
     if found is None:
         return [], read_focus(root, cid, vid, base), None
-    cacheable = _restamp_avatar(d, found, stamps) and not _stranded(found)
+    files, refs = found
+    resolved, complete = _resolve_refs(refs)
+    cacheable = (_restamp_avatar(d, files, stamps) and not _stranded(files)
+                 and complete)
     focus_stamp = statcache.stamp(d / FOCUS_FILE)
     if focus_stamp is not None:
         stamps.append(focus_stamp)
     focus = read_focus(root, cid, vid, base)
-    return _listing(found), focus, (tuple(stamps) if cacheable else None)
+    return _listing(found, resolved), focus, (tuple(stamps) if cacheable else None)
 
 
-def _restamp_avatar(d: Path, found: dict[str, list[tuple[str, int, int]]],
-                    stamps: list) -> bool:
-    """Stamp every file that could answer for `AVATAR`, onto `stamps`, and
+def _restamp_avatar(d: Path, found: _Files, stamps: list) -> bool:
+    """Stamp every LEGACY file that could answer for `AVATAR`, onto `stamps`, and
     rebuild its candidates in `found` from those stamps. False when one of
     them vanished since the scan (the listing then simply lacks it).
 
@@ -625,36 +807,99 @@ def _restamp_avatar(d: Path, found: dict[str, list[tuple[str, int, int]]],
     return ok
 
 
-def read_focus(root: Path, cid: str, vid: str, base: str = "characters") -> int | None:
-    """Avatar crop focus: 0-100 along the image's long axis; None = center."""
-    if not (safe_id(cid) and safe_id(vid)):
+def _clamp_focus(val: object) -> int | None:
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
         return None
-    p = _dir(root, cid, vid, base) / FOCUS_FILE
+    return max(0, min(100, int(val)))
+
+
+def _read_focus_file(d: Path) -> int | None:
+    """The legacy crop: `focus.json` in `d`, or None."""
+    p = d / FOCUS_FILE
     if not p.exists():
         return None
     try:
         val = json.loads(p.read_text(encoding="utf-8")).get(AVATAR)
     except (json.JSONDecodeError, AttributeError):
         return None
-    if isinstance(val, bool) or not isinstance(val, (int, float)):
+    return _clamp_focus(val)
+
+
+def _unlink_focus_file(d: Path) -> None:
+    p = d / FOCUS_FILE
+    if p.exists():
+        p.unlink()
+
+
+def _avatar_ref(d: Path) -> image_refs.Ref | None:
+    """The avatar placement in `d`, statted before it is opened: most version
+    folders have none, and a listing asks this of every row it rebuilds."""
+    if not image_refs.ref_path(d, AVATAR).exists():
         return None
-    return max(0, min(100, int(val)))
+    return image_refs.read(d, AVATAR)
+
+
+def owns_focus(root: Path, cid: str, vid: str, base: str = "characters") -> bool:
+    """Whether this version folder carries a crop record of its own: an avatar
+    placement (with or without an image -- an image-less one is the occurrence
+    override a campaign sets on an avatar it inherits) or a legacy
+    `focus.json`. `overlay.read_focus`, and the campaign listing that has to
+    agree with it, read the crop from whichever root owns one."""
+    if not (safe_id(cid) and safe_id(vid)):
+        return False
+    d = _dir(root, cid, vid, base)
+    return _avatar_ref(d) is not None or (d / FOCUS_FILE).exists()
+
+
+def read_focus(root: Path, cid: str, vid: str, base: str = "characters") -> int | None:
+    """Avatar crop focus: 0-100 along the image's long axis; None = center.
+
+    An avatar placement, image-bearing or not, owns the crop when there is
+    one -- its `focus`, None included; otherwise the legacy `focus.json`."""
+    if not (safe_id(cid) and safe_id(vid)):
+        return None
+    d = _dir(root, cid, vid, base)
+    ref = _avatar_ref(d)
+    if ref is not None:
+        return ref.focus
+    return _read_focus_file(d)
 
 
 def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "characters") -> None:
+    """Set the avatar crop.
+
+    - an avatar placement: rewritten with the new focus, its image kept;
+    - a legacy avatar file: `focus.json`, as before placements;
+    - neither: an image-less placement, the occurrence override a campaign
+      writes over an avatar it inherits (`put_campaign_avatar_focus`) -- not
+      an image to any reader, so the world's art keeps showing through.
+    """
     if not (safe_id(cid) and safe_id(vid)):
         raise ValueError("unsafe image id")
     d = _dir(root, cid, vid, base)
+    value = max(0, min(100, int(focus)))
     d.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(d / FOCUS_FILE, json.dumps({AVATAR: max(0, min(100, int(focus)))}))
+    with _image_lock(d, AVATAR):
+        ref = image_refs.read(d, AVATAR)
+        if ref is None and _siblings(d, AVATAR, False):
+            atomic.write_text(d / FOCUS_FILE, json.dumps({AVATAR: value}))
+            return
+        image_refs.write(d, AVATAR, ref.image if ref is not None else None, focus=value)
 
 
 def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> None:
+    """Drop the avatar crop: from the placement (an image-less placement goes
+    entirely) and the legacy `focus.json`."""
     if not (safe_id(cid) and safe_id(vid)):
         return
-    p = _dir(root, cid, vid, base) / FOCUS_FILE
-    if p.exists():
-        p.unlink()
+    d = _dir(root, cid, vid, base)
+    if not d.exists():
+        return
+    with _image_lock(d, AVATAR):
+        ref = image_refs.read(d, AVATAR)
+        if ref is not None and ref.focus is not None:
+            image_refs.write(d, AVATAR, ref.image)
+        _unlink_focus_file(d)
 
 
 def sidecar_lock(d: Path, filename: str) -> threading.RLock:
@@ -739,13 +984,31 @@ def drop_sidecar_entry(d: Path, filename: str, key: str) -> None:
 
 
 def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
-              base: str = "characters") -> str:
+              base: str = "characters", *, source_url: str | None = None) -> str:
+    """Store `data` as image `name` of this version; returns the blob's ext.
+
+    A new avatar picture drops the crop: `put_in` keeps a placement's focus
+    only when it already held this very image, so re-uploading the same
+    picture keeps the crop and anything else clears it. A legacy
+    `focus.json` is dropped either way -- the placement owns the crop now."""
     if not (safe_id(cid) and safe_id(vid)):
         raise ValueError("unsafe image id")
-    ext = put_in(_dir(root, cid, vid, base), name, data, ext)
+    d = _dir(root, cid, vid, base)
+    ext = put_in(d, name, data, ext, source_url=source_url)
     if name == AVATAR:
-        clear_focus(root, cid, vid, base)
+        with _image_lock(d, AVATAR):
+            _unlink_focus_file(d)
     return ext
+
+
+def image_id(root: Path, cid: str, vid: str, name: str,
+             base: str = "characters") -> str | None:
+    """The image id placement `name` of this version resolves to, or None
+    (no placement, an image-less one, a legacy file, or not resolvable)."""
+    if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
+        return None
+    r = resolve(_dir(root, cid, vid, base), name)
+    return r.image_id if r is not None else None
 
 
 def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:

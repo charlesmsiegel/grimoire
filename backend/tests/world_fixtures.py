@@ -137,8 +137,18 @@ def seed_world(name: str = "Saltmarch") -> str:
     # The world's own cover and image library, and a lore body carrying a
     # world-shaped library URL -- the shape a campaign inherits and an export
     # has to resolve (`export._IMG_URL`'s `wlib` group).
-    covers.put_world_cover(wid, PNG, "png")
-    world_images.put_image(wid, "coastline", PNG, "png")
+    #
+    # Planted as LEGACY files by hand, like every other image in this seed: a
+    # store write is a placement now, whose bytes live in the global image
+    # store rather than in the world tree, and carrying those is the bundle's
+    # own later change (format 2). These two keep testing the bytes a world
+    # tree still holds.
+    (root / "assets").mkdir(exist_ok=True)
+    (root / "assets" / "cover.png").write_bytes(PNG)
+    (root / "assets" / "images").mkdir()
+    (root / "assets" / "images" / "coastline.png").write_bytes(PNG)
+    assert covers.world_cover_path(wid) == root / "assets" / "cover.png"
+    assert world_images.image_path(wid, "coastline") is not None
     world_images.set_description(wid, "coastline", "a rocky shore at dusk")
     entities.update_entity(
         root, "lore", "the-tide-accord",

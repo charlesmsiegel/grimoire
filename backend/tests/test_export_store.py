@@ -660,7 +660,8 @@ def test_a_canonical_url_wins_over_a_file_literally_named_like_its_escape(
     images = export.Images()
     export.rewrite_images(
         f"![A pier](/api/campaigns/{cid}/locations/{docks}/images/my%20art)", cid, images)
-    assert [p.stem for p in images.by_path] == ["my art"]
+    assert list(images.by_path) == [
+        assets.image_path(croot, docks, "default", "my art", base="locations")]
 
 
 def test_a_raw_name_with_a_percent_still_resolves_when_nothing_else_does(

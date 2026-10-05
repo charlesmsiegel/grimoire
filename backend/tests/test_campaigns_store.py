@@ -328,7 +328,11 @@ def test_slim_tombstones_user_deleted_copied_asset(monkeypatch, tmp_path):
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
     aid, vid = characters.create_character(wroot, "Hero")
-    assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nx", "png")
+    # Pre-overlay, so pre-placement: the world's avatar is a legacy file, and
+    # the user's deletion below is of the copied file itself.
+    wassets = wroot / "characters" / aid / "assets" / vid
+    wassets.mkdir(parents=True)
+    (wassets / "avatar.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
     cid = campaigns.create_campaign("C", wid)
     croot = campaigns.campaign_root(cid)
     shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)   # full copy

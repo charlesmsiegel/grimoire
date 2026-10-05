@@ -1233,7 +1233,8 @@ def _patch_char_item(v: View, item: dict) -> dict:
     each branch is theirs: a detached record never consults the world (so its
     facts are never even computed), a per-image tombstone hides that world
     image, and the crop comes from the campaign whenever the campaign owns an
-    avatar file, a `focus.json`, or a tombstone over the world's avatar.
+    avatar, a crop record (an avatar placement or a `focus.json`), or a
+    tombstone over the world's avatar.
     `test_world_list_fast.py` holds the patched row to the one the three
     functions build, across each of those.
     """
@@ -1254,8 +1255,10 @@ def _patch_char_item(v: View, item: dict) -> dict:
         if assets.AVATAR in inherited:
             avatar_v = theirs["avatar_v"]
         names.update(inherited)
-    # `read_focus`: the campaign's crop whenever it owns an avatar file, a
-    # `focus.json`, or a tombstone over the world's avatar -- or is detached.
+    # `read_focus`: the campaign's crop whenever it owns an avatar, a crop
+    # record (`focus_file`: an avatar placement, image-less override included,
+    # or a `focus.json`), or a tombstone over the world's avatar -- or is
+    # detached.
     focus = (mine["focus"] if (theirs is None or mine["avatar_file"] or mine["focus_file"]
                                or _asset_ref("characters", aid, vid, assets.AVATAR) in v.gone)
              else theirs["focus"])
@@ -1648,11 +1651,16 @@ def avatar_v(cid: str, aid: str, vid: str, base: str = "characters",
 
 def read_focus(cid: str, aid: str, vid: str, base: str = "characters",
                *, v: View | None = None) -> int | None:
+    """The avatar crop, campaign-first: the campaign answers whenever it owns
+    an avatar, a crop record of its own (`assets.owns_focus`: an avatar
+    placement -- including the image-less occurrence override set on an
+    inherited avatar -- or a `focus.json`), a tombstone over the world's
+    avatar, or is detached; otherwise the world does. `_patch_char_item`
+    restates this rule over memoized facts and must agree with it."""
     v = _view(cid, v)
     croot = v.croot
-    focus_file = croot / base / aid / "assets" / vid / assets.FOCUS_FILE
     if (assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None
-            or focus_file.exists()
+            or assets.owns_focus(croot, aid, vid, base)
             or _asset_ref(base, aid, vid, assets.AVATAR) in v.gone
             or _flat_ref(base, aid) in v.off):
         return assets.read_focus(croot, aid, vid, base)
@@ -1938,12 +1946,15 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
     if ref in gone or ref in v.off:
         return []
     croot = v.croot
-    mine = [p for i in assets.list_images(croot, char_id, vid)
-            if (p := assets.image_path(croot, char_id, vid, i["name"])) is not None]
-    if not mine:
+    # Held NAMES come from the listing, not from file stems: a placement's
+    # path is a blob named by its hash.
+    held_paths = {i["name"]: p for i in assets.list_images(croot, char_id, vid)
+                  if (p := assets.image_path(croot, char_id, vid, i["name"])) is not None}
+    if not held_paths:
         return []
+    mine = list(held_paths.values())
     wroot = v.wroot
-    held = {p.stem for p in mine}
+    held = set(held_paths)
     out = [i for i in assets.list_images(wroot, char_id, vid)
            if i["name"] in held
            and _asset_ref("characters", char_id, vid, i["name"]) not in gone

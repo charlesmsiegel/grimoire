@@ -88,10 +88,13 @@ def test_set_in_preserves_entries_for_images_that_vanished_outside_the_api(tmp_p
     d = _dir_of(tmp_path, cid, vid)
     image_descriptions.set_in(d, "avatar", "one")
     image_descriptions.set_in(d, "gallery_1", "two")
-    (d / "gallery_1.png").unlink()          # vanished behind our back
+    # vanished behind our back: its placement is what a sync has not brought
+    ref = d / "image-refs" / "gallery_1.json"
+    held = ref.read_bytes()
+    ref.unlink()
     assert image_descriptions.read_in(d) == {"avatar": "one"}   # not offered while absent
     image_descriptions.set_in(d, "avatar", "one edited")
-    (d / "gallery_1.png").write_bytes(b"png")                   # sync catches up
+    ref.write_bytes(held)                                       # sync catches up
     assert image_descriptions.read_in(d) == {"avatar": "one edited", "gallery_1": "two"}
 
 
@@ -293,10 +296,13 @@ def test_a_failed_promotion_does_not_wedge_the_directory(tmp_path, monkeypatch):
     def boom(*a, **kw):
         raise OSError("the disk went away mid-swap")
 
-    monkeypatch.setattr(assets, "put_image", boom)
-    with pytest.raises(OSError):
-        assets.promote_image(tmp_path, cid, vid, "gallery_1")
-    monkeypatch.undo()
+    # A scoped patch, not `monkeypatch.undo()`: an undo would also lift the
+    # suite's isolation of the image store, which the reads below resolve
+    # the slots' placements through.
+    with monkeypatch.context() as m:
+        m.setattr(assets, "put_image", boom)
+        with pytest.raises(OSError):
+            assets.promote_image(tmp_path, cid, vid, "gallery_1")
 
     # The lock is free, so ordinary work still lands. (Same thread, so an RLock
     # left owned here would not block -- ask it directly.)

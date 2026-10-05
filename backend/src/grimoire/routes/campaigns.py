@@ -2015,7 +2015,9 @@ def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
     if store.assets.AVATAR not in names:
         raise HTTPException(status_code=404, detail="image not found")
     # the write always lands campaign-side; overlay.read_focus then finds this
-    # campaign focus.json and treats the campaign as authoritative going forward
+    # campaign crop record (an avatar placement -- image-less over an inherited
+    # avatar -- or a focus.json beside a legacy campaign avatar) and treats the
+    # campaign as authoritative going forward
     store.assets.write_focus(root, char, vid, body.focus)
     return {"ok": True}
 
@@ -2575,7 +2577,9 @@ def put_campaign_pc_avatar_focus(cid: str, pid: str, vid: str, body: AvatarFocus
     if store.assets.AVATAR not in names:
         raise HTTPException(status_code=404, detail="image not found")
     # the write always lands campaign-side; overlay.read_focus then finds this
-    # campaign focus.json and treats the campaign as authoritative going forward
+    # campaign crop record (an avatar placement -- image-less over an inherited
+    # avatar -- or a focus.json beside a legacy campaign avatar) and treats the
+    # campaign as authoritative going forward
     store.assets.write_focus(root, pid, vid, body.focus, base=store.pcs.ASSET_BASE)
     return {"ok": True}
 

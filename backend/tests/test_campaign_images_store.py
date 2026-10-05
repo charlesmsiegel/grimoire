@@ -10,6 +10,7 @@ from grimoire.store import (
     campaign_images,
     campaigns,
     image_library,
+    image_refs,
     overlay,
     world_images,
     worlds,
@@ -43,7 +44,9 @@ def test_put_list_read_delete_round_trip(cid):
     assert campaign_images.put_image(cid, "coastline", data, "png") == "png"
     p = campaign_images.image_path(cid, "coastline")
     assert p is not None and p.read_bytes() == data
-    assert p == campaigns.campaign_root(cid) / "assets" / "images" / "coastline.png"
+    # the bytes live in the image store; the library holds the placement
+    assert image_refs.read(campaigns.campaign_root(cid) / "assets" / "images",
+                           "coastline") is not None
 
     listed = campaign_images.list_images(cid)
     assert [i["name"] for i in listed] == ["coastline"]
@@ -73,7 +76,8 @@ def test_replacing_across_extensions_leaves_one_file(cid):
     campaign_images.put_image(cid, "map", first, "png")
     campaign_images.put_image(cid, "map", second, "jpg")
     d = campaigns.campaign_root(cid) / "assets" / "images"
-    assert [p.name for p in sorted(d.iterdir())] == ["map.jpg"]
+    assert [i["name"] for i in assets.list_in(d)] == ["map"]
+    assert not [p for p in d.iterdir() if p.is_file()]      # no legacy file left
     read_back = campaign_images.image_path(cid, "map").read_bytes()
     assert read_back == second and read_back != first
     # and one entry, not two, so a caller cannot read a cache token off the
@@ -244,7 +248,7 @@ def test_a_campaign_sees_its_worlds_library(cid, wid):
     rows = campaign_images.list_images(cid)
     assert [(r["name"], r["inherited"]) for r in rows] == [("coastline", True)]
     assert campaign_images.image_path(cid, "coastline") == \
-        worlds.world_root(wid) / "assets" / "images" / "coastline.png"
+        world_images.image_path(wid, "coastline")
 
 
 def test_own_and_inherited_images_are_listed_together_by_name(cid, wid):

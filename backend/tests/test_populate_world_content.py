@@ -154,7 +154,9 @@ def test_reclassification_sweeps_the_freed_lore_id_out_of_world_and_campaigns(mo
     # The world-side removals are real changes under the world's path, so they
     # have to be accounted for or verify_manifest's git cross-check reports
     # them as "changes apply did not account for" and blocks the commit.
-    assert f"worlds/{wid}/lore/{lore_id}/assets/default/gallery_1.png" in results["touched_files"]
+    # (the world's image is a placement: the file removed is the record's ref)
+    assert (f"worlds/{wid}/lore/{lore_id}/assets/default/image-refs/gallery_1.json"
+            in results["touched_files"])
     # and the id really is reusable now, with nothing of the old record on it
     assert entities.create_entity(root, "lore", "Gangs") == lore_id
     assert assets.list_images(root, lore_id, "default", base="lore") == []

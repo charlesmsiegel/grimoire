@@ -16,6 +16,7 @@ from .. import (
     climates,
     entities,
     greetings,
+    image_refs,
     locks,
     modules,
     overlay,
@@ -369,12 +370,9 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
         if not wbase.exists():
             continue
         for wp in sorted(wbase.rglob("*")):
-            if not wp.is_file() or not assets._norm_ext(wp.suffix):
+            if not wp.is_file() or not _is_world_image(wp.relative_to(wroot).parts, wp):
                 continue   # images only: focus.json / non-image sidecars overlay via files
-            rel = wp.relative_to(wroot)
-            parts = rel.parts
-            if len(parts) != 5 or parts[2] != "assets":
-                continue
+            parts = wp.relative_to(wroot).parts
             aid, vid, name = parts[1], parts[3], wp.stem
             if f"{kind}/{aid}" not in copied or f"{kind}/{aid}" in gone:
                 continue
@@ -395,6 +393,20 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
                 held[cdir] = assets.names_in(cdir)[0]
             if name not in held[cdir]:
                 overlay.add_deleted(cid, f"assets/{kind}/{aid}/{vid}/{name}")
+
+
+def _is_world_image(parts: tuple[str, ...], wp: Path) -> bool:
+    """Whether `wp` (at `parts` under the world root) holds one of a version's
+    images: a legacy ``<kind>/<aid>/assets/<vid>/<name>.<ext>`` file, or a
+    placement that holds an image, ``.../assets/<vid>/image-refs/<name>.json``.
+    An image-less placement (an occurrence override) is not an image."""
+    if len(parts) == 5 and parts[2] == "assets":
+        return bool(assets._norm_ext(wp.suffix))
+    if (len(parts) == 6 and parts[2] == "assets" and parts[4] == image_refs.REFS_DIR
+            and wp.suffix == ".json"):
+        ref = image_refs.read(wp.parent.parent, wp.stem)
+        return ref is not None and ref.image is not None
+    return False
 
 
 def _prune_duplicate_files(root: Path, wroot: Path) -> None:
@@ -429,8 +441,9 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
                 # divergent gallery image is enough to make the whole file
                 # load-bearing, and pruning it would blank descriptions that
                 # only *happen* to read the same as the world's.
-                if p.name == assets.DESCRIPTIONS_FILE and any(
-                        assets._norm_ext(q.suffix) for q in p.parent.iterdir() if q.is_file()):
+                # `names_in`, so an image held as a placement counts as much
+                # as a legacy file does.
+                if p.name == assets.DESCRIPTIONS_FILE and assets.names_in(p.parent)[0]:
                     continue
                 p.unlink()
         for d in sorted((x for x in base.rglob("*") if x.is_dir()), reverse=True):

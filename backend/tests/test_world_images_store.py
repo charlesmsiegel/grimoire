@@ -10,7 +10,7 @@ import io
 import pytest
 from PIL import Image
 
-from grimoire.store import image_descriptions, world_images, worlds
+from grimoire.store import assets, image_descriptions, image_refs, world_images, worlds
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
@@ -34,7 +34,9 @@ def test_put_list_serve_delete_round_trip(wid):
 
     p = world_images.image_path(wid, "coastline")
     assert p is not None and p.read_bytes() == data
-    assert p == worlds.world_root(wid) / "assets" / "images" / "coastline.png"
+    # the bytes live in the image store; the library holds the placement
+    assert image_refs.read(worlds.world_root(wid) / "assets" / "images",
+                           "coastline") is not None
 
     listed = world_images.list_images(wid)
     assert [i["name"] for i in listed] == ["coastline"]
@@ -61,7 +63,8 @@ def test_replacing_across_extensions_leaves_one_file(wid):
     world_images.put_image(wid, "map", second, "jpg")
 
     d = worlds.world_root(wid) / "assets" / "images"
-    assert [p.name for p in sorted(d.iterdir())] == ["map.jpg"]
+    assert [i["name"] for i in assets.list_in(d)] == ["map"]
+    assert not [p for p in d.iterdir() if p.is_file()]      # no legacy file left
     assert world_images.image_path(wid, "map").read_bytes() == second
     assert [i["name"] for i in world_images.list_images(wid)] == ["map"]
 
