@@ -203,3 +203,42 @@ def test_next_planned_exhausted_and_absent():
     s = {**group_play.parse(""), "sitting_out": ["characters:winifred"]}
     assert group_play.next_planned(s, R, []) == (None, [])
     assert group_play.next_planned(s, R, ["characters:winifred", "characters:ghost"]) == (None, [])
+
+
+def test_self_mention_is_not_named():
+    silent = {r["ref"]: 0 for r in R}
+    nat = {**group_play.parse(""), "order": "natural", "talkativeness": silent}
+    p = group_play.plan_post(nat, R, trigger="Mara thinks.", history=[], rng=random.Random(0),
+                             author="characters:mara")
+    assert p["actor_ref"] != "characters:mara"
+    p = group_play.plan_post(nat, R, trigger="Mara thinks.", history=[], rng=random.Random(0))
+    assert p["actor_ref"] == "characters:mara"  # without an author the mention counts
+    # Directed: the self-mention does not keep Mara, so the quietest-other fallback decides.
+    history = [{"role": "assistant", "speaker": "Mara", "content": "x"},
+               {"role": "assistant", "speaker": "Seraphine Vale", "content": "y"}]
+    d = {**group_play.parse(""), "talkativeness": silent}
+    p = group_play.plan_post(d, R, trigger="Mara thinks.", history=history, rng=random.Random(0),
+                             author="characters:mara")
+    assert [e["ref"] for e in p["eligible"]] == ["characters:winifred"]
+
+
+def test_forced_sitting_out_actor_stays_eligible():
+    s = {**group_play.parse(""), "sitting_out": ["characters:winifred"],
+         "talkativeness": {r["ref"]: 0 for r in R}}
+    p = group_play.plan_post(s, R, trigger="", history=[], rng=random.Random(0),
+                             force=("characters:winifred",))
+    assert [e["ref"] for e in p["eligible"]] == ["characters:winifred"]
+    p = group_play.plan_post(s, R, trigger="", history=[], rng=random.Random(0),
+                             force=("characters:ghost",))
+    assert "characters:winifred" not in [e["ref"] for e in p["eligible"]]
+
+
+def test_list_continue_anchor_survives_last_speaker_sitting_out():
+    lst = {**group_play.parse(""), "order": "list", "sitting_out": ["characters:winifred"],
+           "order_list": ["characters:mara", "characters:winifred", "characters:seraphine"]}
+    assert group_play.plan_continue(lst, R, last={"ref": "characters:winifred", "text": ""},
+                                    history=[], rng=random.Random(0)) == "characters:seraphine"
+    # Wraps past the end of the configured sequence to the next available ref.
+    lst = {**lst, "sitting_out": ["characters:mara"]}
+    assert group_play.plan_continue(lst, R, last={"ref": "characters:seraphine", "text": ""},
+                                    history=[], rng=random.Random(0)) == "characters:winifred"
