@@ -197,10 +197,10 @@ def validate_doc(doc: dict, *, level: str, inherited_ids: set[str]) -> dict:
     if off and level in ("global", "connection"):
         raise rules.RuleError(f"off: a {level} file sits under nothing to switch off",
                               field="off")
-    unknown = [o for o in off if o not in inherited_ids]
-    if unknown:
-        raise rules.RuleError(f"off: {unknown[0]!r} is not an inherited rule", field="off")
-    return {"rules": clean, "off": off}
+    # An id the level no longer inherits (its rule was deleted upstream) is
+    # pruned rather than refused: reads still return it, so refusing would make
+    # the doc the editor just read un-saveable.
+    return {"rules": clean, "off": [o for o in off if o in inherited_ids]}
 
 
 def _store(level: str, key: str, clean: dict) -> dict:
@@ -209,7 +209,7 @@ def _store(level: str, key: str, clean: dict) -> dict:
     atomic.write_text(file, json.dumps(clean, indent=2, ensure_ascii=False) + "\n")
     # The stat key would catch the change anyway; this is for a filesystem whose
     # clock is too coarse to tell two writes of one size apart.
-    for ident in [i for i in _cache if i[0] == str(file)]:
+    for ident in [i for i in list(_cache) if i[0] == str(file)]:
         _cache.pop(ident, None)
     return clean
 
