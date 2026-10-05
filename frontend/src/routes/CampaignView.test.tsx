@@ -694,6 +694,24 @@ test("shows Cast & scene setup for an empty scene", async () => {
   await screen.findByTestId("cast-panel");
 });
 
+// #91: an empty scene opened for an adapted greeting carries the greeting on
+// its stamp, and the scene load is what hands it to the opener block -- so a
+// reload, not just the chooser's handoff, still offers the adaptation.
+test("an empty scene started from a greeting hands that greeting to the setup panel", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue(
+    { meta: { id: "s1", title: "Old", greeting: "reck" }, messages: [] });
+  renderCampaign();
+  expect(await screen.findByTestId("cast-panel")).toHaveAttribute("data-greeting", "reck");
+});
+
+test("an empty scene with no greeting hands none to the setup panel", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
+  renderCampaign();
+  expect(await screen.findByTestId("cast-panel")).toHaveAttribute("data-greeting", "");
+});
+
 test("editing a message saves and reloads", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [{ role: "assistant", content: "hi" }] });

@@ -2235,10 +2235,13 @@ export const api = {
       `/api/campaigns/${cid}/greetings/available${after ? `?after=${encodeURIComponent(after)}` : ""}`),
   /** `seedLocation` false means the caller has already decided this scene's
    *  location (including deciding it has none), so the greeting's own must not
-   *  be seeded over that — see StartFromGreeting.seed_location (#218). */
-  startFromGreeting: (cid: string, sid: string, greeting: string, seedLocation = true) =>
+   *  be seeded over that — see StartFromGreeting.seed_location (#218).
+   *  `seed` false opens the scene from the greeting WITHOUT posting its body:
+   *  the cast is seated and the scene stamped, and the first post comes from
+   *  `opener` in adapt mode (#91). */
+  startFromGreeting: (cid: string, sid: string, greeting: string, seedLocation = true, seed = true) =>
     request<{ ok: boolean; id: string }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`,
-                                         { greeting, seed_location: seedLocation }),
+                                         { greeting, seed_location: seedLocation, seed }),
   getSceneLocation: (cid: string, sid: string) =>
     request<SceneLocation>("GET", `/api/campaigns/${cid}/scenes/${sid}/location`),
   setSceneLocation: (cid: string, sid: string, location: string) =>
@@ -2931,10 +2934,13 @@ export const api = {
    *  tab no longer loses it: `streamDraft` re-finds the run by its attempt id
    *  and reads the frames it missed. Nothing is written by this call — the
    *  text reaches the transcript through `firstPost`. */
+  /** `adapt` rewrites the greeting the scene was started from (its stamp) for
+   *  where the campaign stands now, and the server then ignores `prompt` (#91). */
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void,
-           signal?: AbortSignal, completed: OpenerContribution[] = [], snapshot: OpenerSpeaker[] = []) =>
+           signal?: AbortSignal, completed: OpenerContribution[] = [], snapshot: OpenerSpeaker[] = [],
+           adapt = false) =>
     streamDraft(cid, sid, `/api/campaigns/${cid}/scenes/${sid}/opener`,
-                { prompt, completed, snapshot }, onEvent, signal),
+                { prompt, completed, snapshot, adapt }, onEvent, signal),
   firstPost: (cid: string, sid: string, text: string,
               contributions?: OpenerContribution[], snapshot?: OpenerSpeaker[]) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/first-post`,

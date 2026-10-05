@@ -277,22 +277,26 @@ def _seed_location(cid: str, sid: str, eid: str, *, seed: bool) -> None:
             scenes_moment.set_location(cid, sid, eid)
 
 
-def start_from_greeting(cid: str, sid: str, gid: str, *, seed_location: bool = True) -> str:
-    g = overlay.read_greeting(cid, gid)["meta"]   # raises GreetingNotFound
-    scene = scenes_read.read_scene(cid, sid)               # raises SceneNotFound
-    if scene["messages"]:
-        raise PlayError("scene already has messages")
-    scene_pcless = scene["meta"].get("pcless") == "true"
-    if scene_pcless and not g["pcless"]:
-        raise PlayError("an offscreen scene must start from an offscreen greeting")
-    if g["pcless"] and appearances_cast.players_in_scene(cid, sid):
-        raise PlayError("an offscreen greeting cannot start a scene with players seated")
-    # `locations=False`: this reads the availability verdict only, and resolving
-    # each row's location would read every location in the campaign to throw the
-    # answer away.
-    if not {a["id"]: a["available"]
-            for a in available_greetings(cid, locations=False)}.get(gid, False):
-        raise PlayError(f"greeting {gid} is not available")
+def _post_greeting_body(cid: str, sid: str, gid: str) -> None:
+    """The verbatim half of `start_from_greeting`: the greeting's body,
+    macro-expanded against the scene, appended as its first post."""
+    text = context_macros.expand_macros(overlay.read_greeting(cid, gid)["body"],
+                                        context_macros.scene_substitutions(cid, sid), cid, sid)
+    # append_reply, not append_message: the greeting is authored rather than
+    # generated, but it is the strongest length anchor the model has at the
+    # start of a scene and it WILL be matched, so it records a turn like any
+    # other model output.
+    #
+    # Split on the SAME marker grammar routes.streaming._persist_reply uses. Storing a
+    # multi-block greeting as one segment records turn_sizes [1] while
+    # _parse_messages re-splits it into N messages at read time; drift
+    # segmentation would then measure only the trailing block of the very turn
+    # that sets the scene's length anchor.
+    scenes_write.append_reply(cid, sid, scenes_write.split_reply(
+        text, frozenset(appearances_cast.player_names(cid, sid))))
+
+
+def _seat_greeting_cast(cid: str, sid: str, gid: str, g: dict) -> None:
     # Cast everyone present at the opener. A locked version always wins; otherwise
     # the primary uses the greeting's version and co-present characters their default.
     for actor in dict.fromkeys(a for a in [g["character"], *g["present"]] if a):
@@ -309,25 +313,45 @@ def start_from_greeting(cid: str, sid: str, gid: str, *, seed_location: bool = T
                     f"greeting {gid} needs version '{version}' of {actor}, "
                     f"which is no longer in this campaign")
         appearances_transitions.appear(cid, sid, "characters", actor, version, "npc")
+
+
+def start_from_greeting(cid: str, sid: str, gid: str, *, seed_location: bool = True,
+                        seed: bool = True) -> str:
+    """Open an empty scene from a greeting: seat its cast, stamp the scene,
+    post the body verbatim, mark the greeting played and retitle the scene.
+
+    `seed=False` is the adapted greeting (#91): every guard and every write
+    except the post, leaving the scene cast, stamped and renamed but EMPTY. Its
+    first post comes from the opener in adapt mode (`routes.greetings.
+    post_opener`), which reads the greeting back off this very stamp. The mark
+    is still taken here rather than when an adaptation is adopted: the stamp
+    already makes the scene the greeting's, and an unmarked greeting would stay
+    on offer to a second scene while this one opens from it. Deleting the scene
+    orphans the mark exactly as a failed verbatim start does, and
+    `mark_greeting` clears an orphan."""
+    g = overlay.read_greeting(cid, gid)["meta"]   # raises GreetingNotFound
+    scene = scenes_read.read_scene(cid, sid)               # raises SceneNotFound
+    if scene["messages"]:
+        raise PlayError("scene already has messages")
+    scene_pcless = scene["meta"].get("pcless") == "true"
+    if scene_pcless and not g["pcless"]:
+        raise PlayError("an offscreen scene must start from an offscreen greeting")
+    if g["pcless"] and appearances_cast.players_in_scene(cid, sid):
+        raise PlayError("an offscreen greeting cannot start a scene with players seated")
+    # `locations=False`: this reads the availability verdict only, and resolving
+    # each row's location would read every location in the campaign to throw the
+    # answer away.
+    if not {a["id"]: a["available"]
+            for a in available_greetings(cid, locations=False)}.get(gid, False):
+        raise PlayError(f"greeting {gid} is not available")
+    _seat_greeting_cast(cid, sid, gid, g)
     if g["pcless"] and not scene_pcless:
         scenes_write.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
     _seed_location(cid, sid, g["location"], seed=seed_location)
     scenes_write.stamp_greeting(cid, sid, gid)
-    text = context_macros.expand_macros(overlay.read_greeting(cid, gid)["body"],
-                                        context_macros.scene_substitutions(cid, sid), cid, sid)
-    # append_reply, not append_message: the greeting is authored rather than
-    # generated, but it is the strongest length anchor the model has at the
-    # start of a scene and it WILL be matched, so it records a turn like any
-    # other model output.
-    #
-    # Split on the SAME marker grammar routes.streaming._persist_reply uses. Storing a
-    # multi-block greeting as one segment records turn_sizes [1] while
-    # _parse_messages re-splits it into N messages at read time; drift
-    # segmentation would then measure only the trailing block of the very turn
-    # that sets the scene's length anchor.
-    scenes_write.append_reply(cid, sid, scenes_write.split_reply(
-        text, frozenset(appearances_cast.player_names(cid, sid))))
-    # Marked only once the body is actually on the scene. Marking earlier meant
+    if seed:
+        _post_greeting_body(cid, sid, gid)
+    # Marked only once the body (if seeded) is on the scene. Marking earlier meant
     # a failed expansion or append consumed the greeting anyway, and -- since a
     # played greeting is now unavailable -- consumed it permanently.
     #

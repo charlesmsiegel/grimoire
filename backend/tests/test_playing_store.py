@@ -93,6 +93,37 @@ def test_start_from_greeting_seeds_appears_marks(monkeypatch, tmp_path):
         playing.start_from_greeting(cid, sid, g)
 
 
+def test_start_from_greeting_without_seeding_leaves_the_scene_empty(monkeypatch, tmp_path):
+    """#91's adapted greeting: everything a verbatim start does except the post."""
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="{{char}} waits.")
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g, seed=False)
+    scene = scenes.read_scene(cid, sid)
+    assert scene["messages"] == []
+    assert scene["meta"]["greeting"] == g
+    assert scene["meta"]["title"] == "Open"
+    assert ap.is_appeared(cid, "characters", "seraphine")
+    assert g in playing.read_played(cid)
+    # claimed: a second scene cannot open from it as well
+    with pytest.raises(playing.PlayError):
+        playing.start_from_greeting(cid, scenes.create_scene(cid, "Other"), g, seed=False)
+
+
+def test_start_from_greeting_without_seeding_keeps_the_empty_scene_guard(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="Hello.")
+    cid, sid = _campaign_after_seed(wid)
+    scenes.append_message(cid, sid, "assistant", "Already begun.")
+    with pytest.raises(playing.PlayError):
+        playing.start_from_greeting(cid, sid, g, seed=False)
+    assert g not in playing.read_played(cid)
+
+
 def test_start_from_greeting_expands_roll_macro(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)

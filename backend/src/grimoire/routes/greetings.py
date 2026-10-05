@@ -88,7 +88,7 @@ def _opener_parts(parts: list[dict], cast: list[dict]) -> list[dict]:
 
 def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
                    completed: list[dict], conn: dict, client: LLMClient,
-                   outcome: StreamOutcome):
+                   outcome: StreamOutcome, adapt: bool = False):
     async def frames():
         parts = list(completed)
         try:
@@ -96,7 +96,8 @@ def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
             for actor in _opener_speakers(cast)[len(parts):]:
                 messages, breakdown = store.context.compose_opener(
                     cid, sid, prompt, actor_ref=actor["actor_ref"], prior=parts,
-                    describe=store.prompt_log.capturing(), model=effective_model(conn))
+                    describe=store.prompt_log.capturing(), model=effective_model(conn),
+                    adapt=adapt)
                 _record_prompt(cid, sid, "opener", breakdown,
                                model=effective_model(conn), kind=conn["kind"], messages=messages)
                 yield f"data: {json.dumps({'speaker_start': actor})}\n\n"
@@ -504,7 +505,8 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
         # while doing it.
         with runs.scene_held_free(request.app, cid, sid):
             new_sid = store.playing.start_from_greeting(cid, sid, body.greeting,
-                                                        seed_location=body.seed_location)
+                                                        seed_location=body.seed_location,
+                                                        seed=body.seed)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     except (store.playing.PlayError, store.appearances.AppearError) as exc:
@@ -577,6 +579,7 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
+    prompt = _greeting_to_adapt(cid, sid) if body.adapt else body.prompt
     conn = _require_connection("opener", cid)
     cast = _opener_cast(cid, sid)
     if body.snapshot and body.snapshot != cast:
@@ -596,9 +599,37 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
         # an opener arrived whose only terminal frame says it did not.
         outcome = StreamOutcome()
         runs.start_detached(request.app, run, _opener_frames(
-            cid, sid, body.prompt, cast, completed, conn, client, outcome),
+            cid, sid, prompt, cast, completed, conn, client, outcome, adapt=body.adapt),
             outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+
+
+def _greeting_to_adapt(cid: str, sid: str) -> str:
+    """The body of the greeting this scene was started from, macro-expanded
+    once -- the text an adapted opener rewrites (#91).
+
+    Read off the scene's own `greeting` stamp, which `start_from_greeting`
+    writes whether or not it posted the body, so a scene opened for adaptation
+    still knows its greeting after a reload. Expanded HERE, once per request,
+    exactly as the verbatim path expands it: `compose_opener` expands its prompt
+    on every call and the opener calls it once per speaker, so a raw body would
+    roll a `{{roll}}` or pick a `{{random}}` afresh for each speaker and the
+    narrator and an NPC would be adapting two different greetings. Expanded
+    text carries no macros, so `compose_opener`'s own pass leaves it alone.
+    A retry of the remaining speakers is a new request and expands again, so a
+    roll the completed speakers already wrote into the opening can differ from
+    the one the rest are shown -- one request is the unit this keeps whole."""
+    gid = store.scenes.read_scene_meta(cid, sid).get("greeting", "")
+    if not gid:
+        raise HTTPException(status_code=409, detail="this scene was not started from a greeting")
+    try:
+        body = store.overlay.read_greeting(cid, gid)["body"]
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=409,
+                            detail="the greeting this scene was started from no longer exists") from None
+    if not body.strip():
+        raise HTTPException(status_code=409, detail="the greeting this scene was started from is empty")
+    return store.context.expand_macros(body, store.context.scene_substitutions(cid, sid), cid, sid)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/first-post")

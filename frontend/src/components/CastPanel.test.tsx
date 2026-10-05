@@ -100,14 +100,15 @@ test("switching scenes clears a previously seeded prompt", async () => {
 });
 
 function renderPanel(props: Partial<{ ready: boolean; onSeeded: () => void;
-                                      onSceneRenamed: (id: string) => void; initialPrompt: string }> = {}) {
+                                      onSceneRenamed: (id: string) => void; initialPrompt: string;
+                                      greeting: string }> = {}) {
   // Routed, because the panel's banner links to Connections when the model
   // could not be reached (#210) -- a `Link` outside a router throws.
   render(
     <MemoryRouter>
       <CastPanel cid="c" sid="s" ready={props.ready ?? true}
                  onSeeded={props.onSeeded ?? (() => {})} onSceneRenamed={props.onSceneRenamed}
-                 initialPrompt={props.initialPrompt} />
+                 initialPrompt={props.initialPrompt} greeting={props.greeting} />
     </MemoryRouter>,
   );
 }
@@ -120,6 +121,25 @@ function emitOpener(onEvent: (event: unknown) => void, content: string) {
   onEvent({ speaker_done: { ...speaker, content } });
   onEvent({ done: true });
 }
+
+// #91: the greeting the scene was started from reaches the opener block, which
+// is what offers to adapt it.
+test("a scene started from a greeting offers to adapt it", async () => {
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+    emitOpener(onEvent, "The gate stands open.");
+  });
+  renderPanel({ greeting: "reck" });
+  fireEvent.click(await screen.findByRole("button", { name: "Adapt the greeting" }));
+  await waitFor(() => expect(api.opener).toHaveBeenCalledWith(
+    "c", "s", "", expect.any(Function), undefined, [], [], true));
+  expect(await screen.findByText("The gate stands open.")).toBeInTheDocument();
+});
+
+test("a scene not started from a greeting offers no adaptation", async () => {
+  renderPanel();
+  await screen.findByText("elara");
+  expect(screen.queryByRole("button", { name: "Adapt the greeting" })).toBeNull();
+});
 
 test("renders the current cast", async () => {
   renderPanel();

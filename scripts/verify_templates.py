@@ -943,6 +943,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     names = []
     if opener:
         names.append("scene/opener_instruction/"
+                     + ("adapt_" if data.get("opener_adapt") else "")
                      + ("offscreen" if data["pcless"] else "standard") + ".j2")
     names += ["scene/sections/global_system_prompt.j2",
               "scene/sections/prose_style.j2",
@@ -998,6 +999,11 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     return render("scene/system.j2", sections=sections).strip()
 
 
+NARRATOR_INSTRUCTION = "Set the scene as narrator. Do not write any NPC or PC actions or dialogue."
+ADAPT_NARRATOR_INSTRUCTION = ("Set the scene as narrator, from the greeting's setting and situation. "
+                              "Do not write any NPC or PC actions or dialogue.")
+
+
 def rendered_messages(scene_id: str, data: dict, note: str | None = None,
                       opener_prompt: str | None = None) -> list[dict]:
     out = []
@@ -1034,8 +1040,8 @@ def rendered_messages(scene_id: str, data: dict, note: str | None = None,
     if post:
         out.append({"role": "system", "content": post})
     if opener_prompt is not None:
-        out.append({"role": "system", "content":
-                    "Set the scene as narrator. Do not write any NPC or PC actions or dialogue."})
+        out.append({"role": "system", "content": ADAPT_NARRATOR_INSTRUCTION
+                    if data.get("opener_adapt") else NARRATOR_INSTRUCTION})
     return out
 
 
@@ -1076,6 +1082,15 @@ odata = {**gather(sid, pcless=False, wi_seed=opener_prompt, full_recap=context.O
          "response_actor": {"ref": "grimoire", "name": "Grimoire"}}
 check_messages("opener", context.build_opener_messages(cid, sid, opener_prompt),
                rendered_messages(sid, odata, opener_prompt=opener_prompt))
+# The adapted greeting (#91) is the same opener with the greeting's body as its
+# prompt and the instruction's `adapt_` variant: nothing else may differ.
+greeting_body = "The warehouse door stands open; the ledger waits on the desk."
+adata = {**gather(sid, pcless=False, wi_seed=greeting_body, full_recap=context.OPENER_RECAP_DEPTH),
+         "opener": True, "opener_adapt": True, "budget": response_targets.resolve()["opening"],
+         "response_actor": {"ref": "grimoire", "name": "Grimoire"}}
+check_messages("adapted opener",
+               context.compose_opener(cid, sid, greeting_body, describe=False, adapt=True)[0],
+               rendered_messages(sid, adata, opener_prompt=greeting_body))
 
 sid_off = scenes.create_scene(cid, "Offscreen", pcless=True)
 ap.appear(cid, sid_off, "characters", sera, "default", "npc")
@@ -1092,6 +1107,11 @@ off_odata = {**gather(sid_off, pcless=True, wi_seed="The pact at the pier.",
 check_messages("offscreen opener",
                context.build_opener_messages(cid, sid_off, "The pact at the pier."),
                rendered_messages(sid_off, off_odata, opener_prompt="The pact at the pier."))
+check_messages("offscreen adapted opener",
+               context.compose_opener(cid, sid_off, "The pact at the pier.", describe=False,
+                                      adapt=True)[0],
+               rendered_messages(sid_off, {**off_odata, "opener_adapt": True},
+                                 opener_prompt="The pact at the pier."))
 
 # ------------------------------------------------ store-level simple prompts
 

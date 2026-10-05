@@ -581,6 +581,33 @@ def test_opener_without_npcs_keeps_narrator_instruction(monkeypatch, tmp_path):
     assert "Set the scene as narrator" in last["content"]
 
 
+def test_adapted_opener_rewrites_the_greeting_rather_than_a_premise(monkeypatch, tmp_path):
+    """#91: same context as any opener, the adapt instruction, and the greeting's
+    body -- macro-expanded against the scene -- as the user turn."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="a harbor keeper"))
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    msgs, breakdown = context.compose_opener(cid, sid, "{{char}} waits at the quay.", adapt=True)
+    head = msgs[0]["content"].split("\n\n")[0]
+    assert "adapting the greeting below" in head
+    assert "second person" in head
+    assert "a harbor keeper" in msgs[0]["content"]
+    assert any(m["role"] == "user" and "waits at the quay." in m["content"] for m in msgs)
+    assert "Set the scene as narrator" in msgs[-1]["content"]
+    assert "Greeting to adapt" in str(breakdown)
+    plain = context.build_opener_messages(cid, sid, "A storm.")
+    assert "adapting the greeting" not in plain[0]["content"]
+
+
+def test_offscreen_adapted_opener_uses_the_offscreen_variant(monkeypatch, tmp_path):
+    _wid, cid, _sid = _campaign(monkeypatch, tmp_path)
+    sid2 = scenes.create_scene(cid, "Off", pcless=True)
+    msgs, _ = context.compose_opener(cid, sid2, "The pact at the pier.", describe=False, adapt=True)
+    head = msgs[0]["content"].split("\n\n")[0]
+    assert "adapting the greeting below" in head and "offscreen" in head
+
+
 def test_offscreen_opener_keeps_actor_instruction_last(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     sid2 = scenes.create_scene(cid, "Off", pcless=True)

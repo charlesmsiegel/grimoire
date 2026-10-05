@@ -18,6 +18,7 @@ they had already read.
 from __future__ import annotations
 
 import json
+import re
 import time
 from unittest import mock
 
@@ -118,6 +119,104 @@ def test_opener_retry_keeps_complete_prefix_and_stale_cast_refuses_adoption(clie
     assert client.post(f"{base}/first-post",
                        json={"snapshot": snapshot, "contributions": parts}).status_code == 409
     assert client.get(base).json()["messages"] == []
+
+
+def _opener_events(client, url, body):
+    with client.stream("POST", f"{url}/opener", json=body) as response:
+        assert response.status_code == 200
+        return [json.loads(row[6:]) for row in response.iter_lines() if row.startswith("data: ")]
+
+
+def test_an_adapted_greeting_seats_the_cast_and_rewrites_the_greeting(client, campaign):
+    """#91: `seed: false` opens the scene from the greeting -- cast seated,
+    greeting claimed -- but posts nothing, and the opener in adapt mode hands the
+    model the greeting's own body, read off the scene's stamp, to rewrite."""
+    _world, cid = campaign
+    gid = client.post(f"/api/campaigns/{cid}/greetings",
+                      json={"name": "At the Gate", "character": "mara", "version": "main",
+                            "body": "{{char}} waits at the gate."}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                          json={"greeting": gid, "seed": False})
+    assert started.status_code == 200
+    url = f"/api/campaigns/{cid}/scenes/{started.json()['id']}"
+    scene = client.get(url).json()
+    assert scene["messages"] == []
+    assert scene["meta"]["greeting"] == gid
+    assert scene["meta"]["title"] == "At the Gate"
+    assert [entry["id"] for entry in client.get(f"{url}/cast").json()] == ["mara"]
+    available = client.get(f"/api/campaigns/{cid}/greetings/available").json()
+    assert {g["id"]: g["available"] for g in available}[gid] is False
+
+    fake = FakeLLM(turns=[["The gate stands open."], ["I have waited long enough."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    # `prompt` is ignored in adapt mode: the greeting is what gets rewritten
+    events = _opener_events(client, url, {"adapt": True, "prompt": "something else"})
+    snapshot = next(event["snapshot"] for event in events if "snapshot" in event)
+    parts = [event["speaker_done"] for event in events if "speaker_done" in event]
+    assert [part["actor_ref"] for part in parts] == ["grimoire", "characters:mara"]
+    for request in fake.requests:
+        messages = request["messages"]
+        assert "adapting the greeting below" in messages[0]["content"]
+        assert {"role": "user", "content": "Mara waits at the gate."} in messages
+        assert "something else" not in str(messages)
+    # each speaker is told which part of the greeting is theirs
+    assert "from the greeting's setting" in fake.requests[0]["messages"][-1]["content"]
+    assert "own part of the greeting" in fake.requests[1]["messages"][-1]["content"]
+    assert client.get(url).json()["messages"] == []      # a draft, until adopted
+    adopted = client.post(f"{url}/first-post", json={"contributions": parts, "snapshot": snapshot})
+    assert adopted.status_code == 200
+    assert [m["content"] for m in client.get(url).json()["messages"]] == \
+        ["The gate stands open.", "I have waited long enough."]
+
+
+def test_an_adapted_greeting_rolls_its_macros_once_for_every_speaker(client, campaign):
+    """The opener composes one prompt per speaker; a body expanded per prompt
+    would hand the narrator and the NPC two different rolls of one greeting."""
+    _world, cid = campaign
+    gid = client.post(f"/api/campaigns/{cid}/greetings",
+                      json={"name": "At the Gate", "character": "mara", "version": "main",
+                            "body": "Mara rolls {{roll:1d1000}} {{roll:1d1000}} {{roll:1d1000}}."}
+                      ).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                      json={"greeting": gid, "seed": False}).json()["id"]
+    fake = FakeLLM(turns=[["The gate."], ["I roll."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _opener_events(client, f"/api/campaigns/{cid}/scenes/{sid}", {"adapt": True})
+    seen = [next(m["content"] for m in request["messages"] if m["role"] == "user")
+            for request in fake.requests]
+    # three d1000s: two independent expansions agree by chance about once in 10^9
+    assert re.fullmatch(r"Mara rolls \d+ \d+ \d+\.", seen[0])
+    assert len(seen) == 2 and seen[0] == seen[1]
+
+
+def test_adapting_needs_a_scene_started_from_a_greeting(client, campaign):
+    _world, cid = campaign
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    fake = FakeLLM(turns=[["unused"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener", json={"adapt": True})
+    assert response.status_code == 409
+    assert "greeting" in response.json()["detail"]
+    assert fake.calls == 0
+
+
+def test_adapting_a_greeting_deleted_since_is_refused(client, campaign):
+    _world, cid = campaign
+    gid = client.post(f"/api/campaigns/{cid}/greetings",
+                      json={"name": "At the Gate", "character": "mara", "version": "main",
+                            "body": "Mara waits."}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                      json={"greeting": gid, "seed": False}).json()["id"]
+    assert client.delete(f"/api/campaigns/{cid}/greetings/{gid}").status_code == 200
+    fake = FakeLLM(turns=[["unused"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener", json={"adapt": True})
+    assert response.status_code == 409
+    assert "no longer exists" in response.json()["detail"]
+    assert fake.calls == 0
 
 
 @pytest.fixture

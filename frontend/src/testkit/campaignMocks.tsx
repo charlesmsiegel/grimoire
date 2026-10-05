@@ -126,8 +126,8 @@ export async function campaignApiMock() {
  *  campaign-view suite is measuring the page rather than five other pages. */
 export const componentStubs = {
   CastPanel: () => ({
-    CastPanel: ({ initialPrompt, onSceneRenamed, onSeeded }: any) => (
-      <div data-testid="cast-panel">
+    CastPanel: ({ initialPrompt, greeting, onSceneRenamed, onSeeded }: any) => (
+      <div data-testid="cast-panel" data-greeting={greeting ?? ""}>
         {initialPrompt ?? ""}
         <button onClick={() => onSceneRenamed?.("s10")}>stub-datestamp</button>
         <button onClick={() => onSeeded?.()}>stub-seeded</button>

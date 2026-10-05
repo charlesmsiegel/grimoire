@@ -44,14 +44,14 @@ test("Generate sends what the box holds, premise or edit", async () => {
   renderComposer({ initialPrompt: "A debt-collector arrives." });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
   await waitFor(() => expect(api.opener).toHaveBeenCalledWith(
-    "c", "s1", "A debt-collector arrives.", expect.any(Function), undefined, [], []));
+    "c", "s1", "A debt-collector arrives.", expect.any(Function), undefined, [], [], false));
   await screen.findByText("Rain on the marsh road.");
 
   fireEvent.change(screen.getByLabelText("Opener prompt"),
                    { target: { value: "A stranger returns." } });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
   await waitFor(() => expect(api.opener).toHaveBeenCalledWith(
-    "c", "s1", "A stranger returns.", expect.any(Function), undefined, [], []));
+    "c", "s1", "A stranger returns.", expect.any(Function), undefined, [], [], false));
 });
 
 // The reset the seeding effect exists for: one scene's premise must not linger
@@ -69,6 +69,73 @@ test("without an LLM connection the box still seeds, and says why it cannot run"
   await screen.findByText(/Set up an LLM connection/);
   expect(screen.getByLabelText("Opener prompt")).toHaveValue("A debt-collector arrives.");
   expect(api.opener).not.toHaveBeenCalled();
+});
+
+// #91: a scene opened from a greeting offers to rewrite that greeting. The
+// server reads the body off the scene's stamp, so nothing is sent as a prompt.
+test("a scene started from a greeting offers to adapt it", async () => {
+  renderComposer({ greeting: "reck" });
+  fireEvent.click(screen.getByRole("button", { name: "Adapt the greeting" }));
+  await waitFor(() => expect(api.opener).toHaveBeenCalledWith(
+    "c", "s1", "", expect.any(Function), undefined, [], [], true));
+  expect(await screen.findByText("Rain on the marsh road.")).toBeInTheDocument();
+});
+
+test("an adaptation is adopted through the same first post as any opener", async () => {
+  const cast = [{ actor_ref: "grimoire", speaker: "Grimoire", version: "" }];
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
+                                              on: (e: any) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_start: cast[0] });
+    on({ delta: "The gate stands open." });
+    on({ speaker_done: { ...cast[0], content: "The gate stands open." } });
+    on({ done: true });
+  });
+  (api.firstPost as any).mockResolvedValue({ ok: true });
+  renderComposer({ greeting: "reck" });
+  fireEvent.click(screen.getByRole("button", { name: "Adapt the greeting" }));
+  await screen.findByText("The gate stands open.");
+  fireEvent.click(screen.getByRole("button", { name: "Use" }));
+  await waitFor(() => expect(api.firstPost).toHaveBeenCalledWith("c", "s1",
+    "**Grimoire:** The gate stands open.", [{ ...cast[0], content: "The gate stands open." }], cast));
+});
+
+test("a scene with no greeting offers no adaptation", async () => {
+  renderComposer();
+  await screen.findByLabelText("Opener prompt");
+  expect(screen.queryByRole("button", { name: "Adapt the greeting" })).toBeNull();
+});
+
+test("adapting needs an LLM connection, like Generate", async () => {
+  renderComposer({ greeting: "reck", ready: false });
+  expect(await screen.findByRole("button", { name: "Adapt the greeting" })).toBeDisabled();
+});
+
+test("retrying an adaptation keeps adapting, whatever the prompt box holds", async () => {
+  const cast = [
+    { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
+    { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
+  ];
+  (api.opener as any).mockImplementationOnce(async (_c: string, _s: string, _p: string,
+                                                  on: (e: any) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_start: cast[0] });
+    on({ speaker_done: { ...cast[0], content: "Rain falls." } });
+    on({ error: { kind: "rate_limit", detail: "Wait" } });
+  }).mockImplementationOnce(async (_c: string, _s: string, _p: string,
+                                  on: (e: any) => void) => {
+    on({ snapshot: cast });
+    on({ speaker_start: cast[1] });
+    on({ speaker_done: { ...cast[1], content: "I wait." } });
+    on({ done: true });
+  });
+  renderComposer({ greeting: "reck", initialPrompt: "A meeting." });
+  fireEvent.click(screen.getByRole("button", { name: "Adapt the greeting" }));
+  const retry = await screen.findByRole("button", { name: "Retry remaining speakers" });
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.opener).toHaveBeenLastCalledWith("c", "s1", "",
+    expect.any(Function), undefined, [{ ...cast[0], content: "Rain falls." }], cast, true));
+  expect(screen.getByRole("button", { name: "Use" })).toBeEnabled();
 });
 
 test("actor-scoped preview adopts complete labeled contributions", async () => {
@@ -123,7 +190,7 @@ test("a failed later contribution keeps Use disabled and retries only the missin
   expect(screen.getByRole("button", { name: "Use" })).toBeDisabled();
   fireEvent.click(retry);
   await waitFor(() => expect(api.opener).toHaveBeenLastCalledWith("c", "s1", "A meeting.",
-    expect.any(Function), undefined, [{ ...cast[0], content: "Rain falls." }], cast));
+    expect.any(Function), undefined, [{ ...cast[0], content: "Rain falls." }], cast, false));
   expect(screen.getByRole("button", { name: "Use" })).toBeEnabled();
 });
 

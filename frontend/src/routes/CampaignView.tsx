@@ -375,6 +375,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // hangs off this: an offscreen scene never stores a user post, so no amount
   // of unloaded history above the window implies one exists.
   const [hasUserPost, setHasUserPost] = useState<boolean | null>(null);
+  // The greeting the scene on screen was started from ("" for none). Read off
+  // the same load as its transcript, so an empty scene opened for an adapted
+  // greeting (#91) still offers the adaptation after a reload.
+  const [openedFrom, setOpenedFrom] = useState("");
   // Every scene load takes the next token; a page that resolves after the
   // window it was asked for has moved on is DROPPED. Without it an older-page
   // request for scene A, still in flight when the reader switches to scene B,
@@ -1456,6 +1460,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
     setFirstIndex(scene.offset ?? 0);
     setHasUserPost(scene.has_user_message ?? null);
+    setOpenedFrom(scene.meta.greeting ?? "");
     setStreaming("");
     setStreamingSpeakers([]);
     setCtxKey((n) => n + 1);
@@ -4795,6 +4800,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               onSceneRenamed={sceneRenamed}
               initialPrompt={seedPrompt?.cid === cid && seedPrompt.sid === activeId
                                ? seedPrompt.prompt : undefined}
+              greeting={openedFrom || undefined}
               pcless={activePcless}
               sceneLocked={sceneLocked}
               onRenaming={markRenaming}
