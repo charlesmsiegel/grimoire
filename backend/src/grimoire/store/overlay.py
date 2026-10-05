@@ -2005,17 +2005,26 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
     croot = v.croot
     # Held NAMES come from the listing, not from file stems: a placement's
     # path is a blob named by its hash.
-    held_paths = {i["name"]: p for i in assets.list_images(croot, char_id, vid)
-                  if (p := assets.image_path(croot, char_id, vid, i["name"])) is not None}
-    if not held_paths:
+    mine_rows = assets.list_images(croot, char_id, vid)
+    held = {i["name"] for i in mine_rows}
+    if not held:
         return []
-    mine = list(held_paths.values())
     wroot = v.wroot
-    held = set(held_paths)
-    out = [i for i in assets.list_images(wroot, char_id, vid)
-           if i["name"] in held
-           and _asset_ref("characters", char_id, vid, i["name"]) not in gone
-           and _novel_bytes(assets.image_path(wroot, char_id, vid, i["name"]), mine)]
+    # What the campaign holds, compared the cheapest sound way. Two placements
+    # are the same picture iff they name the same image id, so no bytes are
+    # read for that pair. Anything involving a legacy file has no identity to
+    # compare and falls to bytes: a legacy row's file, and -- for a legacy
+    # world row -- a placement's blob.
+    mine_ids, legacy_files, all_files = _held_pictures(croot, char_id, vid, mine_rows)
+    out = []
+    for i in assets.list_images(wroot, char_id, vid):
+        if i["name"] not in held or _asset_ref("characters", char_id, vid, i["name"]) in gone:
+            continue
+        if i.get("image_id") and i["image_id"] in mine_ids:
+            continue   # the same picture, however it is named or stored
+        compare = legacy_files if i.get("image_id") else all_files
+        if _novel_bytes(assets.image_path(wroot, char_id, vid, i["name"]), compare):
+            out.append(i)
     if not out:
         return []
     described = image_descriptions.read_all(wroot, char_id, vid, names={i["name"] for i in out})
@@ -2024,9 +2033,29 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
             for i in out]
 
 
+def _held_pictures(root: Path, char_id: str, vid: str,
+                   rows: list[dict]) -> tuple[set[str], list[Path], list[Path]]:
+    """What a version's listing `rows` hold, as `shadowed_images` compares it:
+    the placement image ids, the files of rows with no identity (legacy), and
+    every row's resolved file."""
+    ids = {i["image_id"] for i in rows if i.get("image_id")}
+    legacy: list[Path] = []
+    every: list[Path] = []
+    for i in rows:
+        p = assets.image_path(root, char_id, vid, i["name"])
+        if p is None:
+            continue
+        every.append(p)
+        if not i.get("image_id"):
+            legacy.append(p)
+    return ids, legacy, every
+
+
 def _novel_bytes(theirs: Path | None, mine: list[Path]) -> bool:
     """True when `theirs` is a real file and none of `mine` holds its bytes.
-    Size first, so only the pairs that could match are read."""
+    Size first, so only the pairs that could match are read. `mine` holds
+    resolved paths -- a placement's blob, a legacy file -- so one comparison
+    serves a placement against a legacy file and two legacy files alike."""
     if theirs is None:
         return False
     size = theirs.stat().st_size
