@@ -8600,3 +8600,158 @@ test("streamed thinking is collapsed and follows its NPC across a handoff", asyn
   expect(screen.getByText(/Second thought/).closest(".streaming-response")).toHaveTextContent("Winifred");
   await act(async () => finish());
 });
+
+
+// ---- regex output processing: the play view's half (spec 5.3, 6.2) ----
+
+test("a display frame replaces streamed text", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  let emit: Parameters<typeof api.chat>[3] = () => {};
+  let finish: () => void = () => {};
+  vi.mocked(api.chat).mockImplementation((_cid, _sid, _text, onEvent) => new Promise((resolve) => {
+    emit = onEvent; finish = () => { onEvent({ done: true }); resolve(); };
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "I wait." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  act(() => {
+    emit({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+    emit({ display: { keep: 0, tail: "She waits. Secret plan" } });
+  });
+  expect(await screen.findByText(/Secret plan/)).toBeInTheDocument();
+  // The thinking block closed: the server takes back what it already showed.
+  act(() => emit({ display: { keep: 10, tail: " She nods." } }));
+  expect(screen.queryByText(/Secret plan/)).not.toBeInTheDocument();
+  expect(screen.getByText(/She waits\. She nods\./)).toBeInTheDocument();
+  // The next speaker's `keep` counts from their own response_start, so a
+  // frame that keeps nothing leaves Mara's part whole.
+  act(() => {
+    emit({ response_end: { id: "a", status: "complete" } });
+    emit({ response_start: { id: "b", speaker: "Winifred", actor_ref: "characters:winifred" } });
+    emit({ display: { keep: 0, tail: "Draft" } });
+    emit({ display: { keep: 0, tail: '"Ready."' } });
+  });
+  expect(screen.getByText(/She waits\. She nods\./).closest(".streaming-response"))
+    .toHaveTextContent("Mara");
+  expect(screen.getByText('"Ready."').closest(".streaming-response")).toHaveTextContent("Winifred");
+  expect(screen.queryByText(/Draft/)).not.toBeInTheDocument();
+  await act(async () => finish());
+});
+
+test("a roll continuation's display frames count from the continuation's own text", async () => {
+  // The legacy path's continuation is its own stream with its own display
+  // pass, and sends no response_start: its first frame keeps from 0.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "I punch him" }, { role: "assistant", content: "a reply" }] });
+  (api.getRollProposal as any).mockResolvedValue(
+    { record: { id: "pr-1", status: "pending", payload: PROPOSAL_PAYLOAD, resolution: null } });
+  let emit: (e: any) => void = () => {};
+  let finish: () => void = () => {};
+  (api.resolveProposal as any).mockImplementation(
+    (_c: string, _s: string, _b: unknown, onEvent: any) => new Promise<void>((resolve) => {
+      emit = onEvent; finish = () => { onEvent({ done: true }); resolve(); };
+    }));
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(await screen.findByRole("button", { name: "Roll it" }));
+  await waitFor(() => expect(api.resolveProposal).toHaveBeenCalled());
+  act(() => {
+    emit({ display: { keep: 0, tail: "The door opens (aside" } });
+    emit({ display: { keep: 14, tail: " slowly." } });
+  });
+  expect(await screen.findByText("The door opens slowly.")).toBeInTheDocument();
+  expect(screen.queryByText(/aside/)).not.toBeInTheDocument();
+  await act(async () => finish());
+});
+
+test("renders shown over content", async () => {
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hello" },
+    { role: "assistant", content: "Raw words [[hidden]] here", shown: "Clean words here" }] });
+  renderCampaign();
+  expect(await screen.findByText("Clean words here")).toBeInTheDocument();
+  expect(screen.queryByText(/hidden/)).not.toBeInTheDocument();
+});
+
+test("Test rules on this post opens the test pane filled from the raw message", async () => {
+  (api.listConnections as any).mockResolvedValue([{ id: "conn-a", name: "Connection A" }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "assistant", content: "Raw words [[hidden]]", shown: "Raw words",
+      connection: "conn-a" },
+    { role: "user", content: "hello" }] });
+  renderCampaign();
+  await screen.findByText("Raw words");
+  fireEvent.click(screen.getByRole("button", { name: "Test rules on message 1" }));
+  const dialog = await screen.findByRole("dialog", { name: "Test rules on this post" });
+  // The STORED text, not what the display rules made of it: the pane runs the
+  // rules over it, so it starts where they start.
+  expect(within(dialog).getByLabelText("Text to test")).toHaveValue("Raw words [[hidden]]");
+  expect(within(dialog).getByLabelText("Role")).toHaveValue("model");
+  // One post below it, so it is one from the end.
+  expect(within(dialog).getByLabelText("Depth")).toHaveValue(1);
+  expect(within(dialog).getByLabelText("Connection")).toHaveValue("conn-a");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("dialog", { name: "Test rules on this post" })).not.toBeInTheDocument();
+});
+
+test("restoring a rewritten post from Turn history re-reads the scene and asks as an edit does", async () => {
+  twoPostScene();
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "a reply", response_id: "resp-1", rewritten: true }] });
+  (api.getSceneRewrites as any).mockResolvedValue(
+    { "resp-1": { original: "a reply [[aside]]", rules: ["r-1"], at: "" } });
+  (api.getRegex as any).mockResolvedValue(
+    { layer: { rules: [{ id: "r-1", name: "Strip asides" }], off: [] }, inherited: [], warnings: {} });
+  (api.editMessage as any).mockResolvedValue({ ok: true });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: /What the model saw/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /post 2 Rewritten/ }));
+  const detail = await screen.findByRole("region", { name: "Rewrite of post 2" });
+  const reads = (api.getScene as any).mock.calls.length;
+  fireEvent.click(within(detail).getByRole("button", { name: "Restore original" }));
+  await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith(
+    "run", "s1", 1, "a reply [[aside]]", { restore: true }));
+  await waitFor(() => expect((api.getScene as any).mock.calls.length).toBeGreaterThan(reads));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalled());
+});
+
+test("a reattached run applies display frames within each part", async () => {
+  // The reattach path renders buffered frames the way the live path does, so a
+  // display frame's `keep` counts from the part's own response_start there too.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async (
+    _c: string, _s: string, _t: string, onEvent: any) => {
+    onEvent({ run: { id: "run-9", attempt_id: "a", state: "running", next_index: 1 } });
+    throw new Error("network");
+  });
+  (api.findRun as any).mockResolvedValueOnce({ run: null }).mockResolvedValue({
+    run: { id: "run-9", attempt_id: "a", state: "running", next_index: 4 } });
+  let resume: () => void = () => {};
+  (api.attachRun as any).mockImplementation(async (
+    _c: string, _s: string, _r: string, _from: number, onEvent: any) => {
+    onEvent({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+    onEvent({ display: { keep: 0, tail: "The lamps. Secret plan" } });
+    onEvent({ display: { keep: 10, tail: " Lit." } });
+    onEvent({ response_end: { id: "a", status: "complete" } });
+    onEvent({ response_start: { id: "b", speaker: "Winifred", actor_ref: "characters:winifred" } });
+    onEvent({ display: { keep: 0, tail: "Draft" } });
+    onEvent({ display: { keep: 0, tail: "Good." } });
+    await new Promise<void>((resolve) => { resume = resolve; });
+    onEvent({ done: true });
+  });
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalled());
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+  await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
+  expect(await screen.findByText("Good.")).toBeInTheDocument();
+  expect(screen.getByText(/The lamps\. Lit\./).closest(".streaming-response")).toHaveTextContent("Mara");
+  expect(screen.queryByText(/Secret plan|Draft/)).not.toBeInTheDocument();
+  await act(async () => resume());
+});

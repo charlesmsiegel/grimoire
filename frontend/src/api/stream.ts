@@ -74,6 +74,10 @@ export type RunHandle = {
 };
 export type ChatEvent = {
   delta?: string; done?: boolean; proposal?: RollProposalPayload;
+  /** Sent in place of `delta` while a display-phase regex rule is in force:
+   *  cut the current part to `keep` characters and append `tail`
+   *  (`components/play/displayFrames`). */
+  display?: { keep: number; tail: string };
   snapshot?: OpenerSpeaker[];
   speaker_start?: OpenerSpeaker;
   speaker_done?: OpenerContribution;

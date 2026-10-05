@@ -70,7 +70,7 @@ import {
   type CampaignTrackerSetting, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
   type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
   type RegexBundle, type RegexImportRow, type RegexLayer, type RegexRule, type RegexScope,
-  type RegexStep, type RegexTestBody,
+  type RegexStep, type RegexTestBody, type SceneRewrite,
   type WorldCampaignPending, type WorldDetail, type WorldImage, type WorldMeta, type WorldProfile,
 } from "./types";
 
@@ -2716,8 +2716,18 @@ export const api = {
   getCasefile: (cid: string, sid: string, kind: string, id: string) =>
     request<Casefile>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}/casefile`,
                       undefined, { fresh: true }),
-  editMessage: (cid: string, sid: string, index: number, content: string) =>
-    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`, { content }),
+  // `restore` writes a stored rewrite's original back (spec 5.1): past the
+  // macros and the store phase, and refused 409 `rewrite_stale` unless
+  // `content` is exactly the recorded original of the message still there.
+  editMessage: (cid: string, sid: string, index: number, content: string,
+                opts?: { restore?: boolean }) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`,
+                             opts?.restore ? { content, restore: true } : { content }),
+  // What the store phase rewrote in this scene, by `response_id` or `post_id`.
+  // `rules` are rule ids. `fresh`: it is read on opening a rewrite, to restore.
+  getSceneRewrites: (cid: string, sid: string) =>
+    request<Record<string, SceneRewrite>>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/rewrites`, undefined, { fresh: true }),
   // Cascade post-delete (#75): this post and everything after it, plus the
   // reversal of what the scene wrote. The reply is a report, not an ack — a
   // record the compare-and-swap refused to put back is the one thing the

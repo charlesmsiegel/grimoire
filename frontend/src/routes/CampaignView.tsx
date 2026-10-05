@@ -34,7 +34,7 @@ import { CompositionPanel } from "../components/CompositionPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
 import { SceneTrackerPanel } from "../components/tracker/SceneTrackerPanel";
-import { SceneInspector } from "../components/SceneInspector";
+import { SceneInspector, type RewrittenPost } from "../components/SceneInspector";
 import { UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
@@ -60,6 +60,8 @@ import ReplyChips from "../components/play/ReplyChips";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
+import { applyDisplay } from "../components/play/displayFrames";
+import { RegexTestDialog, type RegexTestTarget } from "../components/play/RegexTestDialog";
 import {
   DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun,
   type TranscriptActions, type TranscriptContext, type TranscriptReroll, type TranscriptRunData,
@@ -101,6 +103,9 @@ type ScopedAlternates = SceneAlternates & {
 const NO_ALTERNATES: ScopedAlternates = {
   cid: null, sid: null, window: -1, active: null, alternates: [],
 };
+// No rewritten posts, as one object, so the memoized inspector is not handed a
+// fresh empty list on every transcript read of a scene with none.
+const NO_REWRITES: RewrittenPost[] = [];
 
 // Scene history loads a page at a time from the tail (#94). A scene that has
 // run for months is hundreds of posts, and mounting all of them costs a
@@ -542,6 +547,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  spoke it, because the picker is scoped by the speaker: an actor post
    *  offers that actor's art, a narrator post the campaign's own library. */
   const [picking, setPicking] = useState<{ index: number; target: PickerTarget } | null>(null);
+  // The post the regex test pane is open on (spec 6.2), or null.
+  const [regexTest, setRegexTest] = useState<RegexTestTarget | null>(null);
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
   // Which connection and model THIS reroll runs on (#77). One-shot, like the
   // guidance beside it and like `pendingResponse`: reset whenever the popover
@@ -2469,6 +2476,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setBusy(true);
     setStreamingId(sid);
     let acc = "";
+    // Where the part a `display` frame rewrites begins -- see `runStream`.
+    let partStart = acc.length;
     setStreamingSpeakers([]);
     setRoundProgress(null);
     let finished = false;
@@ -2479,6 +2488,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
             actor_ref: e.response_start.actor_ref, offset: acc.length };
+          partStart = boundary.offset;
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
           setStreamingSpeakers((prior) => prior.map((part, index) =>
@@ -2489,6 +2499,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             part.id === endedId ? { ...part, ended: true } : part));
         }
         else if (e.delta) { acc += e.delta; setStreaming(acc); }
+        else if (e.display) { acc = applyDisplay(acc, partStart, e.display); setStreaming(acc); }
         else if (e.error) {
           fail(e.error, true);
           finished = true;
@@ -2815,6 +2826,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           settleOn(controller.signal, null),
         ]);
     let acc = "";
+    // Where the part a `display` frame rewrites begins: its `keep` counts from
+    // there, because the server runs one display pass per part. The last
+    // `response_start`'s offset on a character turn; on a stream with no
+    // boundary -- the legacy path, a roll's continuation among them -- the
+    // whole of this stream's own text, which starts wherever `acc` stood when
+    // it began (here, empty: every stream enters by this function).
+    let partStart = acc.length;
     setStreamingSpeakers([]);
     setRoundProgress(null);
     // Three separate questions, and none of them is "did the promise resolve".
@@ -2845,6 +2863,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
             actor_ref: e.response_start.actor_ref, offset: acc.length };
+          partStart = boundary.offset;
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
           setStreamingSpeakers((prior) => prior.map((part, index) =>
@@ -2855,6 +2874,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             part.id === endedId ? { ...part, ended: true } : part));
         } else if (e.delta) {
           acc += e.delta;
+          setStreaming(acc);
+        } else if (e.display) {
+          acc = applyDisplay(acc, partStart, e.display);
           setStreaming(acc);
         } else if (e.run) {
           // The leading frame confirms the run id, so Stop can skip the
@@ -4232,6 +4254,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     rerollResponse: (id, guidance, route) => void rerollResponse(id, guidance, route),
     activateVariant: (id, variant) => void mutateResponse(id, variant),
     createCharacter: (rid) => void openCharacterPassage(rid),
+    // Depth over the stored transcript, which the window always ends at: the
+    // newest post is 0, whatever page of older ones is loaded above it.
+    testRules: (index, m) =>
+      setRegexTest({ message: m, depth: firstIndex + messages.length - 1 - index }),
     refreshTracker: () => setTrackerTick((n) => n + 1),
   });
 
@@ -4282,6 +4308,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     { type: "actor", kind: kind as "characters" | "pcs", id }));
   const onCastChanged = useStableCallback(() => { if (activeId) refreshAndAsk(activeId); });
   const onInspectorSceneChanged = useStableCallback(() => { if (activeId) void selectScene(activeId); });
+  // A restore from Turn history is a message edit, and asks what `saveEdit`
+  // asks after one: it rewrites text the rolling summary may already cover.
+  const onInspectorTranscriptEdited = useStableCallback(() => {
+    const id = activeId;
+    if (!id) return;
+    void selectScene(id).then((seen) => askAfterPost(id, seen));
+  });
+  // The posts on screen a stored rewrite changed, for Turn history. Only the
+  // active scene's own: a restore addresses `activeId` by these indices.
+  const rewrittenPosts = useMemo<RewrittenPost[]>(() => {
+    if (!transcriptIsActive) return NO_REWRITES;
+    const found = messages.flatMap((message, i) =>
+      message.rewritten ? [{ index: firstIndex + i, message }] : []);
+    return found.length ? found : NO_REWRITES;
+  }, [transcriptIsActive, messages, firstIndex]);
   const sceneRenamedStable = useStableCallback((id: string) => void sceneRenamed(id));
   const onBudgetSaved = useStableCallback(
     (forCid: string, b: CampaignBudget) => setBudgetRead({ cid: forCid, data: b }));
@@ -4892,7 +4933,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                               posts={messages.length}
                               usage={transcriptIsActive ? sceneCosts?.usage ?? null : null}
                               budget={budget}
-                              onBudgetSaved={onBudgetSaved} />
+                              onBudgetSaved={onBudgetSaved}
+                              rewritten={rewrittenPosts}
+                              onTranscriptEdited={onInspectorTranscriptEdited} />
             </div>
           )}
           {activeId && !focus && (
@@ -5340,6 +5383,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           <PostImagePicker cid={cid} target={picking.target}
                            onInsert={(md) => insertImage(picking.index, md)}
                            onClose={() => setPicking(null)} />
+        )}
+        {regexTest && (
+          <RegexTestDialog cid={cid} target={regexTest} onClose={() => setRegexTest(null)} />
         )}
       </div>
       {/* A SIBLING of the workspace, not a child of it. `.shell.review

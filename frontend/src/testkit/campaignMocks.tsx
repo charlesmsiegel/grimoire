@@ -79,6 +79,9 @@ export async function campaignApiMock() {
       getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),
       sceneBriefing: vi.fn(),
       listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
+      // Turn history's stored rewrites and the regex test pane on a post
+      // (regex output processing, spec 6.2/6.3).
+      getSceneRewrites: vi.fn(), getRegex: vi.fn(), testRegex: vi.fn(),
       // Resolves to "no weather" so the widget renders nothing: these suites
       // assert on the rest of the inspector, not the sky.
       getSceneWeather: vi.fn(() => Promise.resolve({ weather: null, location: null, native: null })),

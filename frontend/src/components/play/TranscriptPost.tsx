@@ -67,6 +67,8 @@ export type TranscriptActions = {
   rerollResponse: (id: string, guidance: string, route: RerollRoute) => void;
   activateVariant: (id: string, variant: string) => void;
   createCharacter: (responseId: string) => void;
+  /** Open the regex test pane on this post's stored text (spec 6.2). */
+  testRules: (index: number, m: Message) => void;
   /** Ask the view to re-read the scene's tracker after a disclosure changed it
    *  (a retry, a re-run, an edit). A member of this object rather than a
    *  closure handed down per render, so the memoized rows keep their props. */
@@ -307,6 +309,15 @@ export const TranscriptPost = memo(function TranscriptPost({
                 too: a cut span may contain one, and replaying it
                 re-posts the line while `rolls.json` keeps the
                 entry it names. */}
+            {/* Offered on a post the rules can touch, which is every post
+                but a synthetic line (a roll, a transition, a director note).
+                Read-only, so it needs neither `active` nor `rolling`. */}
+            {m.speaker !== ROLL_SPEAKER && m.speaker !== TRANSITION_SPEAKER
+              && m.speaker !== DIRECTOR_SPEAKER && (
+              <button className="msg-edit" title="Test rules on this post"
+                      aria-label={`Test rules on message ${index + 1}`}
+                      onClick={() => actions.testRules(index, m)}>⚗</button>
+            )}
             {active && canReplayAfter && (
               <button className="msg-edit" title="Replay the turns after this post"
                       aria-label={`Replay the turns after message ${index + 1}`}
@@ -396,7 +407,10 @@ export const TranscriptPost = memo(function TranscriptPost({
             {m.response_id && m.response_thinking && loadedCid !== null && loadedSid !== null
               && lastOfResponse && <SavedThinking key={`${loadedCid}:${loadedSid}:${m.response_thinking}`}
               cid={loadedCid} sid={loadedSid} responseId={m.response_id} variantId={m.response_thinking} />}
-            <RenderedMarkdown content={m.content} />
+            {/* What the display rules made of it, when they changed it.
+                The edit form above still starts from `content`: the raw text
+                is what is stored, and what an edit rewrites. */}
+            <RenderedMarkdown content={m.shown ?? m.content} />
             {trackerKey !== undefined && loadedCid !== null && loadedSid !== null
               && (m.role === "user" || lastOfResponse)
               && <TrackerDisclosure key={`${loadedCid}:${loadedSid}:${trackerKey}`}

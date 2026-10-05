@@ -2636,6 +2636,9 @@ export type RegexTestBody = {
   phase: "display" | "prompt" | "store"; depth: number;
   draft?: Partial<RegexRule>; connection?: string;
 };
+/** A post's stored rewrite: what was written before a `rewrite_stored` rule
+ *  changed it, the ids of the rules that did, and when. */
+export type SceneRewrite = { original: string; rules: string[]; at: string };
 /** One SillyTavern script in an import preview: the proposed rule (no id, and
  *  `null` for one that will not translate), the translator's verdict and notes,
  *  and the script as given. */
