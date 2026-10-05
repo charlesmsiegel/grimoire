@@ -325,10 +325,23 @@ def _anchors(cid: str, refs: set[str]) -> dict[str, set[str]]:
     return out
 
 
+def _subject_or_none(kind: Kind, ref: str, record: dict, touched: dict,
+                     anchors: Iterable[str]) -> Subject | None:
+    """The record's `Subject`, or None when its text cannot be encoded -- a
+    lone surrogate a model wrote into a title or beat, which `embed_space.clip`
+    refuses. One such record is left out of the pool rather than emptying it."""
+    try:
+        return subject(kind, ref, record, actors=touched["actors"],
+                       scenes=touched["scenes"], anchors=anchors)
+    except UnicodeEncodeError:
+        return None
+
+
 def pool(cid: str, kind: Kind) -> list[Subject]:
     """Every effective record of `kind` as a `Subject`, closed and resolved
     included, keyed by canonical ref and sorted by it. A ledger that will not
-    read answers ``[]``: a pool is an enhancement, never a reason to fail."""
+    read answers ``[]``: a pool is an enhancement, never a reason to fail. A
+    record whose text cannot be encoded is skipped (`_subject_or_none`)."""
     try:
         recs = effective.records(cid, kind)
         refs = sorted(recs)
@@ -336,9 +349,9 @@ def pool(cid: str, kind: Kind) -> list[Subject]:
         anchors = _anchors(cid, set(refs))
     except _UNREADABLE:
         return []
-    return [subject(kind, ref, recs[ref], actors=touched[ref]["actors"],
-                    scenes=touched[ref]["scenes"], anchors=anchors.get(ref, ()))
-            for ref in refs]
+    found = (_subject_or_none(kind, ref, recs[ref], touched[ref], anchors.get(ref, ()))
+             for ref in refs)
+    return [s for s in found if s is not None]
 
 
 # ----------------------------------------------------------------- signals
