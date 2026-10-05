@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import catalog, llm_capture, llm_reasoning, llm_usage
+from . import catalog, content_parts, llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Bound for the health probe (#146). The client's own 120s default is sized
@@ -42,30 +42,57 @@ def _extract_error(text: str) -> str:
     try:
         obj = json.loads(text)
     except (json.JSONDecodeError, TypeError):
-        return text.strip()
+        return content_parts.scrub(text.strip())
     err = obj.get("error", obj) if isinstance(obj, dict) else obj
     if isinstance(err, dict):
-        return str(err.get("message") or err.get("detail") or err)
-    return str(err)
+        return content_parts.scrub(str(err.get("message") or err.get("detail") or err))
+    return content_parts.scrub(str(err))
+
+
+def _as_parts(content: str | list) -> list:
+    return [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+
+
+def _join(a: str | list, b: str | list) -> str | list:
+    """`a` and `b` as one content, separated by a blank line.
+
+    Two strings join exactly as they always have. A list on either side -- a
+    turn carrying image parts (#377) -- makes the result a parts list, with the
+    separator merged into the adjacent text so the text reads the same as the
+    string join would."""
+    if isinstance(a, str) and isinstance(b, str):
+        return a + "\n\n" + b
+    out: list = []
+    for part in [*_as_parts(a), {"type": "text", "text": "\n\n"}, *_as_parts(b)]:
+        if (part.get("type") == "text" and out and out[-1].get("type") == "text"):
+            out[-1] = {"type": "text", "text": out[-1]["text"] + part["text"]}
+        else:
+            out.append(part)
+    return out
 
 
 def _strict_messages(messages: list[dict]) -> list[dict]:
     """Fold system messages into adjacent user turns and guarantee the result
     starts with role=user and alternates strictly — required by chat-completion
     backends (e.g. z.ai's GLM coding endpoint) that reject a system message
-    mid-conversation or a non-user opening turn."""
+    mid-conversation or a non-user opening turn.
+
+    A user turn may hold content parts rather than a string (an image beside
+    its text, #377); `_join` folds those the way it folds strings."""
     folded: list[dict] = []
     pending: list[str] = []
 
-    def flush(extra: str = "") -> str:
+    def flush(extra: str | list = "") -> str | list:
         nonlocal pending
-        parts = [*pending, extra] if extra else list(pending)
+        joined: str | list = "\n\n".join(pending)
+        if extra or not isinstance(extra, str):
+            joined = _join(joined, extra) if pending else extra
         pending = []
-        return "\n\n".join(parts)
+        return joined
 
-    def append(role: str, content: str) -> None:
+    def append(role: str, content: str | list) -> None:
         if folded and folded[-1]["role"] == role:
-            folded[-1]["content"] += "\n\n" + content
+            folded[-1]["content"] = _join(folded[-1]["content"], content)
         else:
             folded.append({"role": role, "content": content})
 
@@ -154,7 +181,7 @@ class OpenAICompatibleClient:
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
-                    llm_capture.emit(usage, "http_error_body", resp.text)
+                    llm_capture.emit(usage, "http_error_body", content_parts.scrub(resp.text))
                     # The provider's own window, when it names one. A guessed
                     # backoff is what you use for not knowing; Retry-After is
                     # knowing (#144).
@@ -221,7 +248,8 @@ class OpenAICompatibleClient:
             resp = await (http.get(url, headers=headers, timeout=bound) if bound is not None
                           else http.get(url, headers=headers))
             if resp.status_code >= 400:
-                raise OpenAICompatibleError(_status_kind(resp.status_code), _extract_error(resp.text))
+                raise OpenAICompatibleError(_status_kind(resp.status_code), _extract_error(resp.text),
+                                            status=resp.status_code)
             body = resp.json()
         except OpenAICompatibleError:
             raise

@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import catalog, llm_capture, llm_reasoning, llm_usage
+from . import catalog, content_parts, llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 #: Everything this provider is reached at hangs off one root. Spelled once
@@ -52,11 +52,11 @@ def _extract_error(text: str) -> str:
     try:
         obj = json.loads(text)
     except (json.JSONDecodeError, TypeError):
-        return text.strip()
+        return content_parts.scrub(text.strip())
     err = obj.get("error", obj) if isinstance(obj, dict) else obj
     if isinstance(err, dict):
-        return str(err.get("message") or err.get("detail") or err)
-    return str(err)
+        return content_parts.scrub(str(err.get("message") or err.get("detail") or err))
+    return content_parts.scrub(str(err))
 
 
 class OpenRouterClient:
@@ -130,7 +130,7 @@ class OpenRouterClient:
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
-                    llm_capture.emit(usage, "http_error_body", resp.text)
+                    llm_capture.emit(usage, "http_error_body", content_parts.scrub(resp.text))
                     # The provider's own window, when it names one. A guessed
                     # backoff is what you use for not knowing; Retry-After is
                     # knowing (#144).
@@ -197,7 +197,8 @@ class OpenRouterClient:
             raise OpenRouterError("network", str(exc)) from exc
         if resp.status_code >= 400:
             raise OpenRouterError(_status_kind(resp.status_code), _extract_error(resp.text),
-                                  retry_after_seconds(resp.headers))
+                                  retry_after_seconds(resp.headers),
+                                  status=resp.status_code)
         return resp
 
     async def list_models(self, key: str) -> list[dict]:
