@@ -914,3 +914,83 @@ def test_all_unchecked_is_false_with_no_examined_rows(cid, s0, sid):
     assert not exam.all_unchecked()
     assert exam.rewritten({"plot_movements": [SALTMARCH_TITHE]}) == {
         "plot_movements": [SALTMARCH_TITHE]}
+
+
+# ------------------------------------------------- siblings of a retarget
+#
+# `assign_ids` drops a later row that lands on an id an earlier row in its
+# section already holds. When that earlier row is a proposal the resolver then
+# retargets onto a stored record, the id it held is free again on
+# materialize's own `assign_ids` run -- so the rewrite has to keep the
+# dropped sibling dropped, or its beat opens the very duplicate the resolver
+# ruled out, with no identity_check to say so.
+
+#: A second id-less row under `RECOVER_THE_LEDGER`'s title, with its own beat.
+RECOVER_THE_LEDGER_TWIN = {**RECOVER_THE_LEDGER,
+                           "beat": "Winifred asked the harbourmaster about the ledger."}
+
+#: The same business named by the id the first row is assigned.
+RECOVER_THE_LEDGER_BY_ID = {"id": "recover-the-harbour-ledger", "title": "",
+                            "beat": "Winifred asked the harbourmaster about the ledger.",
+                            "status": "open"}
+
+#: A second id-less row under `SERAPHINES_THREAT`'s title, with its own beat.
+SERAPHINES_THREAT_TWIN = {**SERAPHINES_THREAT,
+                          "beat": "Seraphine swore again that she would pay by midnight."}
+
+
+def _targets(cid, sid, parsed, kind):
+    return [(e["target"]["id"], e["after"]) for e in absorb.materialize(cid, sid, parsed)
+            if e["kind"] == kind]
+
+
+def _assert_second_move(cid, section, rows):
+    """The sibling is dropped before any identity step: a second move of the
+    record the first row is assigned."""
+    parsed = {"plot_movements": [], "commitment_movements": [], section: rows}
+    assigned = materializer.assign_ids(store.plot.read(cid), store.commitments.read(cid), parsed)
+    assert assigned[(section, 0)] is not None
+    assert assigned[(section, 1)] is None
+
+
+@pytest.mark.parametrize("sibling", [RECOVER_THE_LEDGER_TWIN, RECOVER_THE_LEDGER_BY_ID],
+                         ids=["idless", "explicit-id"])
+def test_a_sibling_deduped_onto_a_retargeted_row_stays_dropped(cid, s0, sid, sibling):
+    _seed_ledger(cid, s0)
+    rows = [RECOVER_THE_LEDGER, sibling]
+    _assert_second_move(cid, "plot_movements", rows)
+    exam = _examine(cid, sid, plot=rows)
+    [examined] = exam.rows
+    assert examined.index == 0
+    exam.decide(_say(("r1", "existing", "find-the-ledger")))
+    out = _rewrite(exam, plot=rows)[1]
+    assert _targets(cid, sid, out, "plot") == [("find-the-ledger", RECOVER_THE_LEDGER["beat"])]
+    # The sibling is retargeted too, and carries no check of its own.
+    kept = out["plot_movements"][1]
+    assert kept["id"] == "find-the-ledger" and kept["beat"] == sibling["beat"]
+    assert "identity_check" not in kept and identity.AS_NEW_KEY not in kept
+
+
+def test_a_commitment_sibling_deduped_onto_a_retargeted_row_stays_dropped(cid, s0, sid):
+    _seed_deadline(cid, s0)
+    rows = [SERAPHINES_THREAT, SERAPHINES_THREAT_TWIN]
+    _assert_second_move(cid, "commitment_movements", rows)
+    exam = _examine(cid, sid, owed=rows)
+    [examined] = exam.rows
+    assert examined.index == 0
+    exam.decide(_say(("r1", "existing", "the-midnight-deadline")))
+    out = _rewrite(exam, owed=rows)[1]
+    assert _targets(cid, sid, out, "commitment") == [
+        ("the-midnight-deadline", SERAPHINES_THREAT["beat"])]
+
+
+@pytest.mark.parametrize("word", ["new", "uncertain"])
+def test_a_sibling_of_a_row_not_retargeted_is_untouched(cid, s0, sid, word):
+    _seed_ledger(cid, s0)
+    rows = [RECOVER_THE_LEDGER, RECOVER_THE_LEDGER_TWIN]
+    exam = _examine(cid, sid, plot=rows)
+    exam.decide(_say(("r1", word, "")))
+    out = _rewrite(exam, plot=rows)[1]
+    assert out["plot_movements"][1] == RECOVER_THE_LEDGER_TWIN
+    assert _targets(cid, sid, out, "plot") == [
+        ("recover-the-harbour-ledger", RECOVER_THE_LEDGER["beat"])]
