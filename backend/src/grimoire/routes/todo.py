@@ -229,7 +229,7 @@ def _chore_unreviewed(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "unreviewed", "scope": "campaign", "group": "Waiting on you", "severity": "alert", "n": n,
+        "id": "unreviewed", "scope": "campaign", "group": "Story & continuity", "severity": "alert", "n": n,
         "what": f"{n} absorb proposal{'s' if n != 1 else ''} unreviewed",
         "why": "A scene was absorbed but never reviewed. Until it is, none of what "
                "it found has reached the world.",
@@ -244,7 +244,7 @@ def _chore_open_scenes(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "open-scenes", "scope": "campaign", "group": "Continuity", "severity": "note", "n": n,
+        "id": "open-scenes", "scope": "campaign", "group": "Story & continuity", "severity": "note", "n": n,
         "what": f"{n} incomplete scene{'s' if n != 1 else ''}",
         "why": "Each one holds part of the campaign's present. Wrapping one up is "
                "what moves the chronicle forward.",
@@ -262,7 +262,7 @@ def _chore_sheets(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "sheets", "scope": "campaign", "group": "World content", "severity": "warn", "n": n,
+        "id": "sheets", "scope": "campaign", "group": "Game mechanics", "severity": "warn", "n": n,
         "what": f"{n} cast member{'s' if n != 1 else ''} without a sheet",
         "why": "A character with no sheet cannot be rolled for, so the module this "
                "campaign binds does not apply to them.",
@@ -277,7 +277,7 @@ def _chore_anchors(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "anchors", "scope": "campaign", "group": "Voice & character", "severity": "warn", "n": n,
+        "id": "anchors", "scope": "campaign", "group": "Character & voice", "severity": "warn", "n": n,
         "what": f"{n} character{'s' if n != 1 else ''} with no voice anchor",
         "why": "Without one nothing measures whether a reply still sounds like them, "
                "so drift goes unreported rather than absent.",
@@ -292,7 +292,7 @@ def _chore_taglines(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "taglines", "scope": "campaign", "group": "World content", "severity": "note", "n": n,
+        "id": "taglines", "scope": "campaign", "group": "Character & voice", "severity": "note", "n": n,
         "what": f"{n} character{'s' if n != 1 else ''} with no tagline",
         "why": "The tagline is what a browse grid and a scene suggestion have to go "
                "on before anything else is read.",
@@ -306,7 +306,7 @@ def _chore_avatars(ctx: _Ctx) -> dict | None:
         return None
     n = len(who)
     return {
-        "id": "avatars", "scope": "campaign", "group": "World content", "severity": "note", "n": n,
+        "id": "avatars", "scope": "campaign", "group": "Character & voice", "severity": "note", "n": n,
         "what": f"{n} character{'s' if n != 1 else ''} without an avatar",
         "why": "The default version has no portrait to show in the cast grid.",
         "fix": f"/campaigns/{ctx.cid}/world", "fix_label": "The cast",
@@ -317,7 +317,7 @@ def _chore_cover(ctx: _Ctx) -> dict | None:
     if not _items_cover(ctx.cid):
         return None
     return {
-        "id": "cover", "scope": "campaign", "group": "World content", "severity": "note", "n": 1,
+        "id": "cover", "scope": "campaign", "group": "Artwork", "severity": "note", "n": 1,
         "what": "Campaign without a cover",
         "why": "The campaign has no cover for its shelf thumbnail or exported book.",
         "fix": f"/campaigns/{ctx.cid}", "fix_label": "Campaign settings",
@@ -333,7 +333,7 @@ def _chore_owed(ctx: _Ctx) -> dict | None:
     if not owed:
         return None
     return {
-        "id": "owed", "scope": "campaign", "group": "Continuity", "severity": "warn", "n": len(owed),
+        "id": "owed", "scope": "campaign", "group": "Story & continuity", "severity": "warn", "n": len(owed),
         "what": f"{len(owed)} open thread{'s' if len(owed) != 1 else ''} with a deadline",
         "why": "A promise with a date is the kind the campaign is expected to answer, "
                "and the ledger is where it is still waiting.",
@@ -360,7 +360,7 @@ def _chore_unpriced(ctx: _Ctx) -> dict | None:
     names = ", ".join(m["model"] for m in models[:3])
     more = "" if len(models) <= 3 else f", and {len(models) - 3} more"
     return {
-        "id": "unpriced", "scope": "library", "group": "Housekeeping", "severity": "warn", "n": calls,
+        "id": "unpriced", "scope": "library", "group": "Costs & pricing", "severity": "warn", "n": calls,
         "what": f"{calls} call{'s' if calls != 1 else ''} no pricing entry matches",
         "why": f"Nobody reported a price for these and your table has no rate that "
                f"matches them, so they are counted rather than costed: {names}{more}. "
@@ -444,7 +444,7 @@ def _chore_world_describe(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "world-describe", "scope": "world", "group": "World content",
+        "id": "world-describe", "scope": "world", "group": "Artwork",
         "severity": "note", "n": n,
         "what": f"{n} image{'s' if n != 1 else ''} with no description",
         "why": "An undescribed image is one nothing can offer a scene, because "
@@ -465,7 +465,7 @@ def _chore_world_taglines(ctx: _Ctx) -> dict | None:
     if not who:
         return None
     return {
-        "id": "world-taglines", "scope": "world", "group": "World content",
+        "id": "world-taglines", "scope": "world", "group": "Character & voice",
         "severity": "note", "n": len(who),
         "what": f"{len(who)} character{'s' if len(who) != 1 else ''} with no tagline",
         # No "in worlds the campaign does not use" here any more: the row
@@ -484,7 +484,7 @@ def _chore_world_anchors(ctx: _Ctx) -> dict | None:
     if not who:
         return None
     return {
-        "id": "world-anchors", "scope": "world", "group": "Voice & character",
+        "id": "world-anchors", "scope": "world", "group": "Character & voice",
         "severity": "note", "n": len(who),
         "what": f"{len(who)} character{'s' if len(who) != 1 else ''} with no voice anchor",
         "why": "Without one nothing measures whether a reply still sounds like them, "
@@ -521,7 +521,7 @@ def _chore_world_avatars(ctx: _Ctx) -> dict | None:
     n = len(who)
     one_world = len({c["wid"] for c in who}) == 1
     return {
-        "id": "world-avatars", "scope": "world", "group": "World content", "severity": "note", "n": n,
+        "id": "world-avatars", "scope": "world", "group": "Character & voice", "severity": "note", "n": n,
         "what": f"{n} character{'s' if n != 1 else ''} without an avatar",
         "why": "The default version has no portrait to show in the cast grid.",
         "fix": f"/worlds/{who[0]['wid']}" if one_world else "/worlds",
@@ -546,7 +546,7 @@ def _chore_world_covers(ctx: _Ctx) -> dict | None:
         return None
     n = len(worlds)
     return {
-        "id": "world-covers", "scope": "world", "group": "World content", "severity": "note", "n": n,
+        "id": "world-covers", "scope": "world", "group": "Artwork", "severity": "note", "n": n,
         "what": f"{n} world{'s' if n != 1 else ''} without a cover",
         "why": "These worlds have no cover to show on the worlds shelf.",
         "fix": f"/worlds/{worlds[0]['id']}/images" if n == 1 else "/worlds",
@@ -579,7 +579,7 @@ def _chore_world_subjects(ctx: _Ctx) -> dict | None:
     n = len(waiting)
     one_world = len({i["wid"] for i in waiting}) == 1
     return {
-        "id": "world-subjects", "scope": "world", "group": "World content", "severity": "note", "n": n,
+        "id": "world-subjects", "scope": "world", "group": "Artwork", "severity": "note", "n": n,
         "what": f"{n} greeting image{'s' if n != 1 else ''} without a character assignment",
         "why": "Assign the characters shown, or choose No subjects for an image with none.",
         "fix": f"/worlds/{waiting[0]['wid']}/images" if one_world else "/worlds",
@@ -630,25 +630,27 @@ LIBRARY_IDS = frozenset(i for i, _b in LIBRARY_BUILDERS)
 KNOWN = frozenset(i for i, _b in BUILDERS)
 CAMPAIGN_IDS = frozenset(i for i, _b in CAMPAIGN_BUILDERS)
 
-#: The order the groups are read in, most urgent first.
+#: The order the themes are read in: story, character, art, rules, then costs.
 #:
 #: Declared rather than derived, and that is the fix rather than the taste.
 #: `BUILDERS` orders CHORES deliberately -- unreviewed proposals before open
 #: scenes before sheet coverage -- and the view groups them for display, which
 #: silently reordered the groups by whichever chore happened to be first in
-#: each. So a library whose only voice chore was a world anchor put "Voice &
-#: character" last, and the same library one tagline later put it third: an
-#: order that moves with the data is one nobody can learn.
+#: each. Before the thematic regrouping, a library whose only voice chore was a
+#: world anchor put its character heading last, and the same library one tagline
+#: later put it third: an order that moves with the data is one nobody can learn.
+#: Themes now collect related work across scopes; severity still belongs to the
+#: individual chore rather than deciding where its theme appears.
 #:
 #: A group a chore names but this tuple does not is appended in chore order, so
 #: adding a chore under a new heading is never invisible -- but it does belong
 #: here, and `test_todo_route.py` says so.
 GROUP_ORDER = (
-    "Waiting on you",
-    "Voice & character",
-    "World content",
-    "Continuity",
-    "Housekeeping",
+    "Story & continuity",
+    "Character & voice",
+    "Artwork",
+    "Game mechanics",
+    "Costs & pricing",
 )
 
 

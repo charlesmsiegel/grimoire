@@ -586,32 +586,42 @@ def test_a_world_chore_can_be_ignored(client):
 def _with_two_groups(client, cid: str) -> None:
     """Enough outstanding work that more than one heading is on the page.
 
-    Two open scenes ("Continuity") plus a scene holding a review is what the
-    ordering tests need; a fixture with one chore proves nothing about order.
+    Two open scenes provide outstanding story work; ordering tests add other
+    kinds of work because a fixture with one chore proves nothing about order.
     """
     for title in ("The Lower Step", "The Weir"):
         client.post(f"/api/campaigns/{cid}/scenes", json={"title": title})
 
 
-def test_groups_are_ordered_by_urgency_rather_than_by_the_data(client, campaign):
+def test_groups_keep_their_thematic_order_in_campaign_and_global_reports(client, campaign):
     """The order must not move when the library does.
 
-    `BUILDERS` orders CHORES deliberately, and the view used to group them by
-    whichever chore happened to come first under each heading -- so a library
-    whose only voice chore was a world anchor put "Voice & character" last, and
-    the same library one tagline later put it third. An order that moves with
-    the data is one nobody can learn.
+    The same themes apply to campaign and world records. Avatars belong with
+    character identity, while covers belong with artwork. A group's position
+    must not change with the scope or with the first chore emitted under it.
     """
-    cid, _ = campaign
+    cid, wid = campaign
     _with_two_groups(client, cid)
-    body = client.get("/api/todo", params={"campaign": cid}).json()
-    groups = body["groups"]
-
-    # Whatever this library happens to have outstanding, the headings it does
-    # have are in the declared order.
-    assert groups == [g for g in todo.GROUP_ORDER if g in groups]
-    # ...and every heading a chore names is present, so none is hidden.
-    assert set(groups) == {c["group"] for c in body["chores"]}
+    _world_character(client, wid, "Mara")
+    store.covers.delete_cover(cid)
+    expected = {
+        "open-scenes": "Story & continuity",
+        "anchors": "Character & voice",
+        "taglines": "Character & voice",
+        "avatars": "Character & voice",
+        "cover": "Artwork",
+    }
+    for scope in (cid, ""):
+        body = _todo(client, scope)
+        wanted = expected if scope else {
+            **expected,
+            "world-anchors": "Character & voice",
+            "world-taglines": "Character & voice",
+            "world-avatars": "Character & voice",
+        }
+        assert {c["id"]: c["group"] for c in body["chores"]} == wanted
+        assert body["groups"] == ["Story & continuity", "Character & voice", "Artwork"]
+        assert body["count"] == len(wanted)
 
 
 def test_every_group_a_builder_can_emit_is_declared(client):
