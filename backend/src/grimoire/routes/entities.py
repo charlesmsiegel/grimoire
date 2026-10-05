@@ -65,10 +65,17 @@ def _entity_kind_or_404(kind: str) -> None:
 def _check_fields(kind: str, fields: dict | None) -> None:
     if kind not in store.entities.ENTITY_KINDS:
         return  # let the store's unknown-kind handling produce the 404
-    bad = store.entity_schema.invalid_keys(kind, fields or {})
+    # The activation controls belong to every world-info kind, so they are
+    # judged by their own catalog and never counted as "unknown" for one;
+    # everything else is the kind's schema.
+    fields = fields or {}
+    activation = {k: v for k, v in fields.items() if k in store.lore_fields.FIELD_KEYS}
+    schema = {k: v for k, v in fields.items() if k not in store.lore_fields.FIELD_KEYS}
+    bad = store.entity_schema.invalid_keys(kind, schema)
     if bad:
         raise HTTPException(status_code=400, detail=f"unknown fields for {kind}: {', '.join(bad)}")
-    bad_values = store.entity_schema.invalid_values(kind, fields or {})
+    bad_values = sorted(store.entity_schema.invalid_values(kind, schema)
+                        + store.lore_fields.invalid(activation))
     if bad_values:
         raise HTTPException(status_code=400,
                             detail=f"invalid values for {kind}: {', '.join(bad_values)}")
