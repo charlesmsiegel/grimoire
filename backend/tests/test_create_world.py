@@ -200,6 +200,13 @@ def test_invalid_plan_writes_nothing(home):
     ({"calendar": {"primary": {"provider": "gregorian"}, "secundary": None}},
      "unknown keys ['secundary']"),
     ({"module": 5}, "module: must be a module id"),
+    ({"lore": [{"name": "X", "fields": []}]}, "fields must be an object"),
+    ({"lore": [{"name": "X", "fields": ""}]}, "fields must be an object"),
+    ({"calendar": {"primary": {"provider": "gregorian"}, "confirmed": "false"}},
+     "confirmed must be true or false"),
+    ({"calendar": {"primary": {"provider": "gregorian"}, "warn_days": "7"}},
+     "warn_days must be a whole number"),
+    ({"calendar": {"provider": "gregorian", "region": 5}}, "region must be a string"),
     ({"lore": [{"name": "X", "secrecy": "sercet"}]}, "secrecy must be one of"),
     ({"lore": [{"name": "X", "fields": {"climate": "x"}}]}, "lore has no fields ['climate']"),
     ({"locations": [{"name": "X", "fields": {"persistence": "2"}}]}, "invalid value"),
@@ -451,3 +458,77 @@ def test_check_flags_a_character_greeting_with_no_version(home):
     assert greetings.read_greeting(root, "saltmarch-eve")["meta"]["version"] == ""
     errors = "\n".join(create_world.check_world(wid)["errors"])
     assert "greetings/saltmarch-eve: version (none) of seraphine does not exist" in errors
+
+
+@pytest.mark.parametrize("content", ["{not json", json.dumps({"saltmarch-eve": []})])
+def test_edges_are_refused_over_a_malformed_plotmap_before_any_write(home, content):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    (root / "plotmap.json").write_text(content, encoding="utf-8")
+    plan = {"lore": [{"name": "Moon Disc"}],
+            "greetings": [{"name": "Saltmarch Eve", "leads_to": ["The Reckoning"]}]}
+    with pytest.raises(create_world.PlanError) as exc:
+        _apply(plan, world_id=wid)
+    assert any("fix plotmap.json" in p for p in exc.value.problems)
+    assert "moon-disc" not in entities.entity_ids(root, "lore")
+
+
+@pytest.mark.parametrize("content, needle", [
+    ("{not json", "calendar.json is not valid JSON"),
+    ("[]", "calendar.json must be an object"),
+])
+def test_check_reports_a_malformed_calendar_file(home, content, needle):
+    wid = _apply(_plan())["world"]
+    (worlds.world_root(wid) / "calendar.json").write_text(content, encoding="utf-8")
+    errors = "\n".join(create_world.check_world(wid)["errors"])
+    assert needle in errors
+
+
+def test_malformed_plan_json_is_a_structured_error(home, tmp_path, capsys):
+    path = tmp_path / "plan.json"
+    path.write_text('{"world": "Saltmarch", ', encoding="utf-8")
+    for extra in ([], ["--dry-run"]):
+        assert create_world.main(["apply", "--plan", str(path), *extra]) == 1
+        out = json.loads(capsys.readouterr().out)
+        assert out["ok"] is False and "cannot read" in out["problems"][0]
+
+
+def test_module_guard_matches_a_campaign_that_spells_the_world_differently(home, monkeypatch):
+    """The guard asks `worlds.references_world`, which answers by filesystem
+    identity: on a case-insensitive filesystem `SALTMARCH` IS this world. The
+    test filesystem is case-sensitive, so that answer is simulated."""
+    wid = _apply(_plan())["world"]
+    cid = campaigns.create_campaign("Silver Oath", wid)
+    meta = campaigns.campaign_root(cid) / "campaign.md"
+    meta.write_text(meta.read_text(encoding="utf-8").replace(f"world: {wid}",
+                                                           f"world: {wid.upper()}"),
+                    encoding="utf-8")
+    assert create_world._world_campaigns(wid) == []     # case-sensitive: another world
+    monkeypatch.setattr(worlds, "references_world",
+                        lambda ref, root: ref.casefold() == root.name.casefold())
+    assert create_world._world_campaigns(wid) == [cid]
+    problems = create_world.validate_plan({"module": "pool-basic"}, worlds.world_root(wid), wid)
+    assert any("already has campaigns" in p for p in problems)
+
+
+def test_a_tags_only_pc_patch_leaves_the_persona_untouched(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    vid = pcs.read_pc(root, "winifred")["meta"]["default_version"]
+    persona = root / "pcs" / "winifred" / f"{vid}.md"
+    persona.write_text(persona.read_text(encoding="utf-8") + "\n\n", encoding="utf-8")
+    before = persona.read_bytes()
+    _apply({"pcs": [{"name": "Winifred", "tags": ["Guild Member"]}]}, world_id=wid)
+    assert persona.read_bytes() == before
+    assert pcs.read_pc(root, "winifred")["meta"]["tags"] == ["guild-member"]
+
+
+def test_an_anchor_only_character_patch_leaves_the_card_untouched(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    card = root / "characters" / "mara" / f"{characters.default_version(root, 'mara')}.json"
+    card.write_text(card.read_text(encoding="utf-8").replace("\n", "\n "), encoding="utf-8")
+    before = card.read_bytes()
+    _apply({"characters": [{"name": "Mara", "voice_anchor": "Measured."}]}, world_id=wid)
+    assert card.read_bytes() == before
+    assert voice_anchors.read(root, "mara") == "Measured."
