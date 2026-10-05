@@ -240,7 +240,7 @@ def _target(record) -> str | None:
     return to if isinstance(to, str) and to else None
 
 
-def _reaches(aliases: dict, start: str, target: str) -> bool:
+def reaches(aliases: dict, start: str, target: str) -> bool:
     """Does following the stored mappings from `start` arrive at `target`?"""
     seen, cur = set(), start
     while cur not in seen:
@@ -295,7 +295,7 @@ def restore_alias(cid: str, ref: str, value) -> None:
             raise ContinuityError("an alias joins two threads or two commitments")
         if ref == to:
             raise ContinuityError("a record cannot be merged into itself")
-        if _reaches(data["aliases"], to, ref):
+        if reaches(data["aliases"], to, ref):
             raise ContinuityError(
                 "putting this merge back would make a loop with a merge made since")
         data["aliases"][ref] = value
