@@ -434,20 +434,20 @@ def test_secret_current_setting_known_by_reaches_that_npc(cast_scene):
 # ---- an NPC's activation sees only what it knows ------------------------------
 
 def test_unknown_lore_does_not_pull_by_recursion_on_another_npcs_call(cast_scene):
-    # Mara's secret names the tidebell. At depth 1 it would pull the tidebell
+    # Mara's secret names the bell. At depth 1 it would pull the bell
     # entry -- on Mara's call, and the narrator's, but never on Winifred's,
     # who does not know the secret that mentions it.
     cid, sid = cast_scene
     croot = campaigns.campaign_root(cid)
     config.write_config(lore_recursion_depth="1")
-    entities.create_entity(croot, "lore", "Mara's Errand", "Mara rings the tidebell at night.",
+    entities.create_entity(croot, "lore", "Mara's Errand", "Mara rings the bell at night.",
                            owners="characters:mara", secrecy="secret")
-    entities.create_entity(croot, "lore", "Tidebell", "TIDEBELL_CRACKED_IN_THE_FLOOD",
-                           keys="tidebell")
+    entities.create_entity(croot, "lore", "Saltmarch Bell", "BELL_CRACKED_IN_THE_FLOOD",
+                           keys="bell")
     scenes.append_message(cid, sid, "user", "Calm.")
-    assert "TIDEBELL_CRACKED_IN_THE_FLOOD" in _actor_text(cid, sid)
-    assert "TIDEBELL_CRACKED_IN_THE_FLOOD" in _actor_text(cid, sid, "characters:mara")
-    assert "TIDEBELL_CRACKED_IN_THE_FLOOD" not in _actor_text(cid, sid, "characters:winifred")
+    assert "BELL_CRACKED_IN_THE_FLOOD" in _actor_text(cid, sid)
+    assert "BELL_CRACKED_IN_THE_FLOOD" in _actor_text(cid, sid, "characters:mara")
+    assert "BELL_CRACKED_IN_THE_FLOOD" not in _actor_text(cid, sid, "characters:winifred")
 
 
 def test_unknown_item_confers_no_presence_on_another_npcs_call(cast_scene):
