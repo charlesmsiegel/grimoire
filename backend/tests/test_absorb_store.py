@@ -3732,6 +3732,36 @@ def test_a_sibling_of_a_downgraded_row_does_not_reopen_the_closed_target(monkeyp
     assert [(e["target"]["id"], e["after"]) for e in staged] == \
         [("mara-s-chart", "Mara unrolled a second chart.")]
 
+@pytest.mark.parametrize("accepted_first", [True, False])
+def test_accepted_target_merged_onto_another_rows_target_is_downgraded(
+        monkeypatch, tmp_path, accepted_first):
+    """A merge landing mid-absorb can make an accepted match's target the
+    record another row already moves: the accepted row named B, another row
+    names A, and B is merged into A. Both would stage onto A and the second
+    would be dropped as a second move -- a beat that never reaches the review.
+    The accepted row is put back as the new row the model wrote, as it is for
+    a target closed in the same window."""
+    from grimoire.store.continuity import doc
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    explicit = {"id": "seraphine-s-map", "title": "", "status": "advanced",
+                "beat": "Seraphine bought the map back."}
+    accepted = _accepted("winifred-s-chart", _CHART)
+    rows = [accepted, explicit] if accepted_first else [explicit, accepted]
+    doc.put_alias(cid, "thread:winifred-s-chart",
+                  {"to": "thread:seraphine-s-map", "created": "", "source": "manual", "note": ""})
+    staged = absorb.materialize(cid, sid, {"plot_movements": rows})
+    by_beat = {e["after"]: e for e in staged}
+    assert set(by_beat) == {"Seraphine bought the map back.", "Mara unrolled a second chart."}
+    assert by_beat["Seraphine bought the map back."]["target"] == \
+        {"kind": "plot", "id": "seraphine-s-map"}
+    row = by_beat["Mara unrolled a second chart."]
+    assert row["target"] == {"kind": "plot", "id": "mara-s-chart"}
+    assert row["before"] == ""
+    ic = row["identity_check"]
+    assert (ic["decision"], ic["status"]) == ("uncertain", "downgraded")
+    assert ic["reason"] == "another row in this scene already moves that record"
+    assert row["review"]["band"] == "low"
+
 
 def test_commitment_alternative_before_is_commitment_line(monkeypatch, tmp_path):
     from grimoire.store import commitments

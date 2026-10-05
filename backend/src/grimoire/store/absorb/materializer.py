@@ -54,6 +54,12 @@ _LOW_DECISIONS = ("uncertain", "unchecked")
 #: target stopped being live between the resolver's answer and staging.
 CLOSED_SINCE = "that record was closed while the review was being prepared"
 
+#: The reason a staged accepted ``existing`` is downgraded with when a merge
+#: made between the resolver's answer and staging folded its target into a
+#: record another row of the batch already moves -- `identity.ALREADY_MOVED`,
+#: the same verdict the resolver guard gives, restated as `AS_NEW_KEY` is.
+MOVED_SINCE = "another row in this scene already moves that record"
+
 
 def _char_name(cid: str, char_id: str) -> str:
     """Overlay-aware: a thin campaign's NPC is usually still inherited (never
@@ -547,6 +553,15 @@ def _recheck_accepted(parsed: dict, threads: dict, owed: dict | None,
     target is re-read here, through the CURRENT alias map, and a row whose
     target is gone or settled stages as its `AS_NEW_KEY` original with a
     ``downgraded`` check -- band ``low``, its live candidates still offered.
+
+    A merge in the same window can do worse than close the target: fold it
+    into a record another row of the batch already moves. The resolver's
+    one-move-per-record guard ran against the old alias map, and `assign_ids`
+    would canonicalize both rows onto one record and silently drop the
+    second -- a beat that never reaches the review. So the accepted row is
+    put back the same way when any other row's current target (assigned as
+    `assign_ids` would, through the same map) is its canonical.
+
     A shallow copy; `parsed` is not mutated. A row without its original is
     not one `identity.rewritten` wrote, and is left alone."""
     out = dict(parsed)
@@ -558,6 +573,30 @@ def _recheck_accepted(parsed: dict, threads: dict, owed: dict | None,
     return out
 
 
+def _siblings(rows: list, i: int, target: str) -> list[int]:
+    """The rows after `i` that `identity.rewritten` retargeted onto `target`
+    because row `i` held their id: unexamined, and naming that same id."""
+    return [j for j in range(i + 1, len(rows))
+            if isinstance(rows[j], dict) and "identity_check" not in rows[j]
+            and _text(rows[j].get("id")) == target]
+
+
+def _moved_elsewhere(rows: list, i: int, stored: dict, kind: str,
+                     aliases: dict[str, str], canonical: str) -> bool:
+    """Whether a row other than `i` (and its siblings) stages onto `canonical`.
+
+    Asked of `_assign_section` itself, on the batch with row `i` and its
+    siblings blanked, so every other row's target is the one `assign_ids` will
+    give it -- explicit ids and honoured slugs alike, through the same map."""
+    skip = {i, *_siblings(rows, i, _text(rows[i].get("id")))}
+    probe = [{**r, "beat": ""} if j in skip and isinstance(r, dict) else r
+             for j, r in enumerate(rows)]
+    allocate = _new_thread_id if kind == "thread" else _new_commitment_id
+    out: dict[tuple[str, int], Assigned | None] = {}
+    _assign_section(probe, stored, "", allocate, out, aliases)
+    return any(slot is not None and slot.id == canonical for slot in out.values())
+
+
 def _recheck_section(rows: list, stored: dict, kind: str, aliases: dict[str, str]) -> list:
     rows = list(rows)
     for i, row in enumerate(rows):
@@ -565,25 +604,29 @@ def _recheck_section(rows: list, stored: dict, kind: str, aliases: dict[str, str
             continue
         original = row.get(AS_NEW_KEY)
         target = _text(row.get("id"))
-        cur = stored.get(_redirect(target, stored, aliases)[0])
-        if not isinstance(original, dict) or (
-                isinstance(cur, dict) and continuity_effective.is_live(kind, cur.get("status"))):
+        if not isinstance(original, dict):
+            continue
+        canonical = _redirect(target, stored, aliases)[0]
+        cur = stored.get(canonical)
+        if not (isinstance(cur, dict) and continuity_effective.is_live(kind, cur.get("status"))):
+            reason = CLOSED_SINCE
+        elif _moved_elsewhere(rows, i, stored, kind, aliases, canonical):
+            reason = MOVED_SINCE
+        else:
             continue
         rows[i] = {**original, "identity_check": {
             **row["identity_check"], "decision": "uncertain", "status": "downgraded",
-            "reason": CLOSED_SINCE}}
+            "reason": reason}}
         # `identity.rewritten` retargeted this row's siblings -- later rows
         # dropped only because the proposed row held their id -- onto the same
         # record, so they would stay a dropped second move. With the row back
         # on its own id they would instead stage onto the settled target and
-        # reopen it, so they are dropped here, as they were before any check.
-        # Nothing else in the batch can name the target: an accepted
-        # ``existing`` is downgraded when another row already moves it.
-        for j in range(i + 1, len(rows)):
-            sib = rows[j]
-            if (isinstance(sib, dict) and "identity_check" not in sib
-                    and _text(sib.get("id")) == target):
-                rows[j] = {**sib, "beat": ""}
+        # reopen it (or collide with the row that moves its canonical), so
+        # they are dropped here, as they were before any check. Nothing else
+        # in the batch can name the target: an accepted ``existing`` is
+        # downgraded when another row already moves it.
+        for j in _siblings(rows, i, target):
+            rows[j] = {**rows[j], "beat": ""}
     return rows
 
 
