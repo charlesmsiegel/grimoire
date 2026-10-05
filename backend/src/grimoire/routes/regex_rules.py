@@ -21,6 +21,7 @@ router = APIRouter()
 
 _ROLES = ("model", "user")
 _PHASES = ("display", "prompt", "store")
+_RUN_ORDER = {"connection": 0, "global": 1, "world": 2, "campaign": 3}
 
 
 def _invalid(exc: store.regex.rules.RuleError) -> HTTPException:
@@ -135,16 +136,17 @@ def _scope_key(scope: dict) -> tuple[str, str]:
 
 
 def _entries(level: str, key: str, connection: str) -> list[dict]:
-    """The rules a message in this scope would meet, in run order. A campaign
-    scope is what a message there is run through, connection and all; any other
-    scope is what it sits on plus its own rules."""
+    """The rules a message produced under `connection` would meet, in run order,
+    cut at the scope's level -- the chain a real message gets (one connection's
+    rules, never every connection's). A connection scope is its own rules, whatever
+    `connection` says."""
     layers = store.regex.layers
     if level == "campaign":
         return list(layers.effective(cid=key, connection=connection))
-    own = [{"level": level, "rule": r, "off": False,
-            "source": key if level == "connection" else ""}
-           for r in layers.read_level(level, key)["rules"]]
-    return layers.inherited(level, key) + own
+    if level == "connection":
+        return list(layers.effective(cid=None, connection=key))
+    return list(layers.effective(cid=None, connection=connection,
+                                 world=key if level == "world" else ""))
 
 
 @router.post("/regex/test")
@@ -166,8 +168,12 @@ def post_regex_test(body: RegexTest):
                 entries[i] = {**entry, "rule": draft}
                 break
         else:
-            entries.append({"level": level, "rule": draft, "off": False,
-                            "source": key if level == "connection" else ""})
+            # A new rule runs after its own level's saved rules, which for a
+            # connection is before the global ones the list also carries.
+            at = max((i + 1 for i, e in enumerate(entries)
+                      if _RUN_ORDER[e["level"]] <= _RUN_ORDER[level]), default=0)
+            entries.insert(at, {"level": level, "rule": draft, "off": False,
+                                "source": key if level == "connection" else ""})
     steps = store.regex.apply.trace(
         body.text, entries, role=body.role, phase=body.phase, depth=max(body.depth, 0))
     return {"steps": steps, "result": steps[-1]["text_after"] if steps else body.text}
