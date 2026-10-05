@@ -21,7 +21,7 @@ import { ErrorNote } from "./ErrorNote";
  */
 export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onForked,
                              disabled, latch, onUnanswered, branchable = false,
-                             onBranched }: {
+                             onBranched, closed = false }: {
   cid: string;
   sid: string;
   /** The post the reader asked to replay from, or null. Set by the transcript
@@ -65,6 +65,11 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   /** Where a replay begun in a branch runs: the caller navigates there, since
    *  the scene on screen was not touched. */
   onBranched?: (sid: string) => void;
+  /** The scene is a closed branch (play controls III): the server refuses a
+   *  replay start, a replay turn and a reroll there (`branch_closed`), and
+   *  keeps accept and stop open so a walk running in it can still be ended.
+   *  The buttons mirror that. */
+  closed?: boolean;
 }) {
   // The same provider the composer's turns are recorded in, so a replayed turn
   // is discoverable by attempt after the WebView is suspended. `useRunRegistry`
@@ -82,6 +87,8 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   // post -- it is simply not rendered.
   const [preview, setPreview] = useState<{ at: number; data: ReplayPreview } | null>(null);
   const [busy, setBusy] = useState(false);
+  // Every control that GENERATES into this scene; accept and stop do not.
+  const generateOff = busy || !!disabled || closed;
   // The rejection or the stream frame itself where there is one, so a
   // replay the model could not be reached for says so rather than showing a
   // bare socket error (#210) -- a replay re-runs model turns, so it fails
@@ -343,7 +350,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
               <button className={priced.fork ? "primary" : "subtle"} disabled={busy}
                       onClick={fork}>Fork first…</button>
               <button className={priced.fork ? "subtle" : "primary"}
-                      disabled={busy || disabled} onClick={start}>
+                      disabled={generateOff} onClick={start}>
                 {branchable && inBranch ? "Replay in a branch" : "Replay in place"}
               </button>
             </div>
@@ -383,14 +390,14 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
           <div className="form-actions">
             <button className="subtle" disabled={busy} onClick={stop}>Stop</button>
             {ran && (
-              <button className="subtle" disabled={busy || disabled}
+              <button className="subtle" disabled={generateOff}
                       onClick={again}>Try again</button>
             )}
             {ran ? (
               <button className="primary" disabled={busy || disabled}
                       onClick={accept}>Accept</button>
             ) : (
-              <button className="primary" disabled={busy || disabled}
+              <button className="primary" disabled={generateOff}
                       onClick={runTurn}>{busy ? "Replaying…" : "Replay next turn"}</button>
             )}
           </div>

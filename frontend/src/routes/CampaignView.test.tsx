@@ -8931,6 +8931,8 @@ test("a closed branch shows the banner and offers nothing to write with", async 
   expect(within(head as HTMLElement).getByText("closed")).toHaveAttribute(
     "title", "A sibling branch was absorbed");
   expect(within(head as HTMLElement).getByText("branch")).toBeInTheDocument();
+  // A replay running in it can be accepted or stopped, never stepped.
+  expect(screen.getByTestId("replay-panel").getAttribute("data-closed")).toBe("true");
   fireEvent.keyDown(window, { key: "r" });
   expect(screen.queryByLabelText("Reroll guidance")).toBeNull();
 });
@@ -8949,6 +8951,7 @@ test("an open branch keeps its composer and wears a branch chip", async () => {
   expect(within(head as HTMLElement).queryByText("closed")).toBeNull();
   expect(screen.queryByText(/A sibling branch was absorbed/)).toBeNull();
   expect(await screen.findByRole("button", { name: "Branch from message 1" })).toBeInTheDocument();
+  expect(screen.getByTestId("replay-panel").getAttribute("data-closed")).toBe("false");
 });
 
 test("the replay dialog can branch on an unabsorbed scene, and follows the branch", async () => {

@@ -164,9 +164,10 @@ export const componentStubs = {
   // the gutter hands it, so that is all the stub reports.
   ReplayPanel: () => ({
     ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged, latch, branchable,
-                    onBranched }: any) => (
+                    onBranched, closed }: any) => (
       <div data-testid="replay-panel" data-start-at={startAt ?? ""}
-           data-branchable={branchable ? "true" : "false"}>
+           data-branchable={branchable ? "true" : "false"}
+           data-closed={closed ? "true" : "false"}>
         <button onClick={() => onBranched?.("s1-b")}>stub-replay-branched</button>
         <button onClick={() => onStartHandled()}>stub-replay-close</button>
         <button onClick={() => onForked("forked")}>stub-replay-forked</button>

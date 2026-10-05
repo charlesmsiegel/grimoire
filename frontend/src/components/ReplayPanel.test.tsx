@@ -428,3 +428,27 @@ test("a scene that cannot branch offers no branch option", async () => {
   expect(screen.queryByRole("checkbox")).toBeNull();
   expect(screen.getByRole("button", { name: "Replay in place" })).toBeTruthy();
 });
+
+test("on a closed branch every generation is disabled; accept and stop stay open", async () => {
+  // The server refuses a replay turn, a reroll and a replay start on a closed
+  // branch (`branch_closed`) and keeps accept and cancel open, so the panel
+  // mirrors exactly that rather than offering clicks it knows will 409.
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  await renderPanel({ closed: true });
+  expect(screen.getByRole("button", { name: "Replay next turn" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Replay next turn" }));
+  expect(api.replayTurn).not.toHaveBeenCalled();
+});
+
+test("on a closed branch a waiting reply can be accepted but not tried again", async () => {
+  (api.getReplay as any).mockResolvedValue(PENDING);
+  await renderPanel({ closed: true });
+  expect(screen.getByRole("button", { name: "Try again" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+});
+
+test("on a closed branch a replay cannot be started", async () => {
+  await renderPanel({ startAt: 3, closed: true });
+  expect(screen.getByRole("button", { name: "Replay in place" })).toBeDisabled();
+});

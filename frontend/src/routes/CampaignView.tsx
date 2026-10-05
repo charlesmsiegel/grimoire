@@ -5296,6 +5296,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                          // Only an unabsorbed scene branches; an absorbed one's
                          // branch is a campaign fork, which "Fork first" is.
                          branchable={!activeDone}
+                         // A closed branch refuses every generation here; the
+                         // panel keeps only accept and stop, as the server does.
+                         closed={!!activeClosed}
                          // The replay runs in the sibling; this scene was not
                          // touched, so the reader goes where the walk is.
                          onBranched={(branched) => {
