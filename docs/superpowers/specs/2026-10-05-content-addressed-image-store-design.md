@@ -730,9 +730,13 @@ from the blob.
     has no `sources`.
 - **Import:**
   1. **Validate and stage.** `ziputil.scan` plus the hex regexes. Every blob is
-     re-hashed, and a blob whose name and content disagree is rejected. Each
-     object's pixel id is **recomputed locally** from its blob, without
-     sanitizing again, since blobs are stored bytes. Where the local id differs
+     re-hashed as received, and a blob whose name and content disagree is
+     rejected. Each blob is then ingested **with sanitizing**. That is
+     idempotent for our own exports, and it stops a hostile bundle planting
+     metadata that a later local upload of the same pixels would dedupe onto.
+     Each object's pixel id is **recomputed locally**. Total object metadata is
+     capped (`MAX_OBJECT_BYTES`), there may be no more objects than blobs, and
+     an over-long imported description is dropped. Where the local id differs
      (decoder drift, or a hostile bundle), staged refs and format-2 manifests are
      rewritten to the local id. A bundle can never claim an id for pixels it
      does not contain.
