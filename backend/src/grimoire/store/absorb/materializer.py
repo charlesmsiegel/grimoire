@@ -1312,7 +1312,13 @@ def materialize(cid: str, sid: str, parsed: dict,
             if kind == "locations":
                 payload["sd_prompt"] = e.get("sd_prompt", "")
                 payload["current_setting"] = e.get("current_setting", False)
-            out.append(_staged({"id": f"{prefix}:{candidate_id}", "kind": prefix,
+            # The dedupe is per kind, so an item and a lore entry may share a
+            # name -- and then a slug. The staged id carries the kind for every
+            # kind but `lore`, which keeps the bare shape reviews already hold.
+            staged_id = (f"{prefix}:{kind}/{candidate_id}"
+                         if prefix == "new_lore" and kind != "lore"
+                         else f"{prefix}:{candidate_id}")
+            out.append(_staged({"id": staged_id, "kind": prefix,
                                 "target": {"kind": kind, "id": ""},
                                 "label": f"New {label_noun} — {name}", "field": "body",
                                 "before": "", "after": body, "authored": False,

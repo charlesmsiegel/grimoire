@@ -697,10 +697,27 @@ def test_materialize_dedupes_new_lore_per_kind(monkeypatch, tmp_path):
     assert len(edits) == 2                       # the items twin is the only one skipped
     lore = edits["new_lore:lantern"]
     assert lore["target"] == {"kind": "lore", "id": ""} and lore["after"] == "a lore twin"
-    group = edits["new_lore:tide-wardens"]
+    group = edits["new_lore:groups/tide-wardens"]
     assert group["target"] == {"kind": "groups", "id": ""}
     assert group["payload"]["kind"] == "groups"
     assert group["label"] == "New group — Tide Wardens"
+
+
+def test_materialize_keeps_same_named_rows_of_two_kinds_apart(monkeypatch, tmp_path):
+    """An item and a lore entry may share a name -- the dedupe is per kind --
+    so their staged ids must differ too, or the review keys one row over the
+    other. Lore keeps the bare shape every existing review already carries."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"new_lore": [
+        {"name": "Lantern", "body": "an item", "keys": "", "kind": "items"},
+        {"name": "Lantern", "body": "a legend", "keys": "", "kind": "lore"},
+    ]})
+    by_id = {e["id"]: e for e in edits}
+    assert len(edits) == 2 and set(by_id) == {"new_lore:items/lantern", "new_lore:lantern"}
+    assert by_id["new_lore:items/lantern"]["target"] == {"kind": "items", "id": ""}
+    assert by_id["new_lore:lantern"]["target"] == {"kind": "lore", "id": ""}
 
 
 def test_apply_new_lore_creates_the_proposed_kind(monkeypatch, tmp_path):
