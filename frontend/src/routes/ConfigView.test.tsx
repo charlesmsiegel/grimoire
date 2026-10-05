@@ -35,7 +35,7 @@ const cfg = {
   data_dir: "/home/u/.grimoire",
   llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
   llm_retries: "2", fallback_connection_id: "",
-  context_budget: "0", context_scan_depth: "6", archive_depth: "3",
+  context_budget: "0", context_scan_depth: "6", lore_recursion_depth: "0", archive_depth: "3",
   prompt_log_depth: "50", offscene_known_limit: "40",
   rolling_summary_every: "10",
   scene_break_every: "20", replay_fork_threshold: "10",
@@ -430,6 +430,21 @@ test("edits the context scan depth", async () => {
   fireEvent.change(screen.getByLabelText(/context scan depth/i), { target: { value: "16" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ context_scan_depth: "16" }));
+});
+
+test("edits the lore recursion depth beside the scan depth", async () => {
+  renderView();
+  await open(/^Context/);
+  const field = screen.getByLabelText(/lore recursion depth/i);
+  expect(field).toHaveValue("0");
+  expect(screen.getByText("0 = off, max 3")).toBeInTheDocument();
+  // Beside scan depth: the next field in the context section's grid.
+  const fields = Array.from(document.querySelectorAll(".config-fields input")).map((el) => el.id);
+  expect(fields.indexOf("cfg-lore-recursion-depth"))
+    .toBe(fields.indexOf("cfg-context-scan-depth") + 1);
+  fireEvent.change(field, { target: { value: "2" } });
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ lore_recursion_depth: "2" }));
 });
 
 test("semantic recall is off by default and offers only openai-compatible connections", async () => {

@@ -102,6 +102,10 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             # reads as double and would warn at half the real cap.
             "voice_anchor_cap": store.voice_anchors.VOICE_ANCHOR_CAP,
             "context_scan_depth": cfg.get("context_scan_depth", store.config.DEFAULT_SCAN_DEPTH),
+            # The EFFECTIVE depth, not the stored string: a hand-edited value
+            # past the cap is read as the cap, and the page should show the
+            # number a turn actually runs with.
+            "lore_recursion_depth": str(store.config.lore_recursion_depth(cfg)),
             "archive_depth": cfg.get("archive_depth", store.config.DEFAULT_ARCHIVE_DEPTH),
             "prompt_log_depth": cfg.get("prompt_log_depth",
                                         store.config.DEFAULT_PROMPT_LOG_DEPTH),
@@ -234,6 +238,17 @@ def get_config(registry: health.ProviderHealth = Depends(get_health)):
     return _public_config(store.read_config(), registry)
 
 
+def _recursion_depth_ok(value: str | None) -> bool:
+    """Absent, blank, or a whole number from 0 to the cap."""
+    if value is None or not value.strip():
+        return True
+    try:
+        depth = int(value.strip())
+    except ValueError:
+        return False
+    return 0 <= depth <= store.config.LORE_RECURSION_MAX
+
+
 #: Config keys whose only meaningful values are "on" and "off".
 _ON_OFF_KEYS = ("tracker", "perception_rider", "send_images")
 
@@ -249,6 +264,12 @@ def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(g
     for key in _ON_OFF_KEYS:
         if key in fields and fields[key] not in ("on", "off"):
             raise HTTPException(status_code=400, detail=f"{key} must be 'on' or 'off'")
+    # A bound, refused rather than clamped: the cap in `config.lore_recursion_depth`
+    # is for a hand edit, and a value typed into the page that silently became
+    # another one would be a setting nobody chose. Blank clears to the default.
+    if not _recursion_depth_ok(fields.get("lore_recursion_depth")):
+        raise HTTPException(status_code=400,
+                            detail=f"lore_recursion_depth must be 0-{store.config.LORE_RECURSION_MAX}")
     saved = store.write_config(**fields)
     # `store.logs` holds the threshold in module state rather than reading the
     # config per row -- `record` is on the path of everything the app does --

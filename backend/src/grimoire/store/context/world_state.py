@@ -8,14 +8,16 @@ gathers the data one section renders from.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 from .. import (
     calendars,
     characters,
     entities,
+    entity_schema,
     events,
     groupstate,
+    lore_fields,
     overlay,
     pcs,
     playstate,
@@ -23,11 +25,15 @@ from .. import (
 )
 from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
+from . import activation, semantic
 
 # Aliased to match `assemble.py` and `macros.py`, and because `_character_states`
 # below takes a parameter named `cast`.
 from . import cast as cast_data
-from . import semantic
+
+#: The ref fields §7.1's structural presence reads, on whichever kind declares
+#: them (`entity_schema.FIELDS`); `activation` applies each to its own kind.
+_STRUCTURAL_FIELDS = ("holder", "leader", "headquarters", "habitat")
 
 
 def keyword_hit(keys, text: str) -> bool:
@@ -61,8 +67,9 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     recent_text. Unowned entries behave as before.
 
     `secrecy: gm-only` (#49) is dropped here, before any other rule and before
-    `recall` ever sees the entry: this function is THE gate every world-info
-    entry passes through, so dropping it here is what makes "never enters the
+    `recall` ever sees the entry: this gate -- `activation.run`, which this
+    function wraps and `_world_info` calls directly -- is THE one every
+    world-info entry passes through, so dropping it there is what makes "never enters the
     prompt" true of the keyword path, the always-on path and the similarity
     path at once, rather than of whichever one someone remembered. `secret`
     entries are selected exactly like public ones — the difference is entirely
@@ -106,27 +113,33 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     alone returns, in the same order. Defaulting it to None keeps the plain
     three-argument call exactly as pure and as offline as it has always been.
     """
-    out: list[dict] = []
+    # A thin wrapper over the engine (`activation.run`): the one window is
+    # `recent_text`, handed over as a single post, so the engine's bitmap is
+    # the joined-text rule exactly. An entry that carries no
+    # `controls` is parsed for them off its own keys, so a caller's plain dict
+    # behaves as a record with the same frontmatter would.
+    #
+    # `recall` keeps its old shape (entries in, entries out): the engine is
+    # given a stand-in that only records what it offered, and the caller's
+    # strategy is then handed exactly those entries, so its answer is appended
+    # verbatim -- whatever it returns -- as it always was.
+    given = [e if isinstance(e.get("controls"), lore_fields.Controls)
+             else {**e, "controls": lore_fields.parse(e)} for e in entries]
+    original = {id(g): e for g, e in zip(given, entries, strict=True)}
     missed: list[dict] = []
-    for e in entries:
-        if entities.normalize_secrecy(e.get("secrecy")) == entities.GM_ONLY:
-            continue  # GM-only -> never enters the prompt, by any path, pin included
-        ref = _ref(e)
-        if ref in excluded_refs:
-            continue  # the reader said no: not here, not through recall either
-        if ref in pinned_refs:
-            out.append(e)
-            continue  # the reader said yes: no key and no owner has to agree
-        owners = e.get("owners") or []
-        if owners and not any(o in present for o in owners):
-            continue  # owned but no owner in scene -> never leak
-        keys = e.get("keys") or []
-        if not keys or keyword_hit(keys, recent_text):
-            out.append(e)
-        else:
-            missed.append(e)
+
+    def offered(candidates: list[dict], _text: str) -> list[tuple[dict, float]]:
+        missed.extend(candidates)
+        return []
+
+    result = activation.run(given, [(0, recent_text)], "", {ref: {} for ref in present},
+                            scan_depth=1, recursion_depth=0, current_location=None,
+                            pinned_refs=pinned_refs, excluded_refs=excluded_refs,
+                            recall=offered if recall is not None else None,
+                            recall_text=recent_text)
+    out = [original[id(h.entry)] for h in result.keyword]
     if recall is not None and missed:
-        out.extend(recall(missed, recent_text))
+        out.extend(recall([original[id(e)] for e in missed], recent_text))
     return out
 
 
@@ -148,23 +161,35 @@ def secrecy_split(entries: list[dict]) -> tuple[list[str], list[str]]:
     return public, secret
 
 
-def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
-                present: frozenset = frozenset(), pinned_refs: frozenset = frozenset(),
-                excluded_refs: frozenset = frozenset()) -> tuple[list[dict], list[dict]]:
+def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
+                exclude: frozenset = frozenset(), present: Mapping[str, dict] | None = None,
+                pinned_refs: frozenset = frozenset(), excluded_refs: frozenset = frozenset(),
+                scan_depth: int, recursion_depth: int = 0, current_location: str | None = None,
+                recall_text: str = "") -> tuple[list[dict], list[dict], activation.Result]:
     """Activated lore/location/item/group/creature entries as
-    {"body", "kind", "id"} dicts — _assemble renders the bodies and uses the
-    refs (e.g. activated groups pull their campaign state into context).
+    {"body", "kind", "id", ...} dicts — _assemble renders the bodies and uses
+    the refs (e.g. activated groups pull their campaign state into context).
 
-    Returns ``(keyword, recalled)``: what the keyword rule selected, and what
-    semantic recall added on top. They render as separate sections in separate
-    packer tiers — see the comment at the return statement.
+    Returns ``(keyword, recalled, result)``: what the keys (and pins) selected,
+    what semantic recall added on top, and the engine's whole answer -- every
+    hit with its reason, what was held back, and the present set it grew -- for
+    the inspector and the packer. Reasons never reach a prompt: the first two
+    are the entries themselves. The two lists render as separate sections in
+    separate packer tiers -- see the comment at the return statement.
+
+    `posts` are the transcript's own `(index, text)` pairs, director notes
+    included, and `seed` is this turn's un-persisted input (an opener's prompt,
+    a director's note); `activation.run` reads them per entry window. `present`
+    is the base present set, ref -> reason, built by the caller; the engine
+    grows it structurally and by activation. `recall_text` is the joined scan
+    window the similarity query has always used.
 
     Two different exclusions meet here, deliberately spelled apart. `exclude` is
     the CURRENT LOCATION, held back because the Current setting section already
     renders it; `excluded_refs` is the reader's own rule (#129), which applies to
     every kind. `pinned_refs` is its opposite, and both are enforced in
-    `activate` — the skips below are only there to save reading a file whose
-    body is about to be thrown away."""
+    `activation.run` — the skips below are only there to save reading a file
+    whose body is about to be thrown away."""
     entries = []
     for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in overlay.list_entities(cid, kind):
@@ -188,11 +213,14 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
             entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
                             "secrecy": entities.normalize_secrecy(e["meta"].get("secrecy")),
                             "kind": kind, "id": meta["id"],
-                            "name": e["meta"].get("name", meta["id"])})
+                            "name": e["meta"].get("name", meta["id"]),
+                            "controls": lore_fields.parse(e["meta"]),
+                            "refs": {f: entity_schema.parse_refs(e["meta"].get(f))
+                                     for f in _STRUCTURAL_FIELDS}})
     # The only production caller that supplies a second stage, so the strategy
-    # is chosen in one visible place and `activate` stays a pure function of
-    # its arguments. The attribute is resolved off the module on every call,
-    # which is what keeps `semantic.recall` patchable from a test.
+    # is chosen in one visible place and `activation.run` stays a pure function
+    # of its arguments. The attribute is resolved off the module on every call,
+    # which is what keeps `semantic.recall_scored` patchable from a test.
     #
     # The split is reported rather than merged because the two halves are
     # packed differently: keyword hits are `spotlight`, recalled ones are
@@ -200,17 +228,13 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
     # World info section until the packer dropped the whole thing, keyword
     # hits included -- so enabling recall could REMOVE lore, which is exactly
     # what this layer promises never to do.
-    recalled: list[dict] = []
-
-    def recall(candidates: list[dict], text: str) -> list[dict]:
-        hits = semantic.recall(candidates, text)
-        recalled.extend(hits)
-        return hits
-
-    activated = activate(entries, recent_text, present, recall=recall,
-                         pinned_refs=pinned_refs, excluded_refs=excluded_refs)
-    by_recall = {id(e) for e in recalled}
-    return [e for e in activated if id(e) not in by_recall], recalled
+    result = activation.run(entries, posts, seed, present or {}, scan_depth=scan_depth,
+                            recursion_depth=recursion_depth,
+                            current_location=current_location, pinned_refs=pinned_refs,
+                            excluded_refs=excluded_refs,
+                            recall=semantic.recall_scored,
+                            recall_text=recall_text)
+    return ([h.entry for h in result.keyword], [h.entry for h in result.recalled], result)
 
 
 def _today_data(cid: str, sid: str, croot) -> dict | None:

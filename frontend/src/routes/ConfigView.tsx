@@ -53,7 +53,7 @@ function normalizeFloor(value: string): string {
 const DRAFT_FIELDS = [
   "active_connection_id", "fallback_connection_id", "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
-  "context_budget", "context_scan_depth", "archive_depth",
+  "context_budget", "context_scan_depth", "lore_recursion_depth", "archive_depth",
   "prompt_log_depth", "offscene_known_limit",
   "speaker_turn_taking", "prompt_layout_enabled",
   "embeddings_connection_id", "embeddings_model",
@@ -123,8 +123,8 @@ const SECTIONS: SectionDef[] = [
   // it once setup is done, which the router otherwise makes unreachable.
   { id: "setup", group: "The install", label: "First-run setup", fields: [] },
   { id: "context", group: "What the model sees", label: "Context",
-    fields: ["context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
-             "offscene_known_limit", "speaker_turn_taking", "send_images",
+    fields: ["context_budget", "context_scan_depth", "lore_recursion_depth", "archive_depth",
+             "prompt_log_depth", "offscene_known_limit", "speaker_turn_taking", "send_images",
              "send_images_limit"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
@@ -905,6 +905,12 @@ export default function ConfigView() {
               director's note still do, being this turn's own input.
             </p>
             <p className="config-copy">
+              Lore recursion depth lets world info that was let in name more of it: an entry's
+              text is scanned for other entries' keys, up to this many steps out. Each step can
+              bring in more lore than the transcript ever mentioned, so it costs budget.{" "}
+              <code>0</code> leaves it off; an entry can opt out of pulling or being pulled.
+            </p>
+            <p className="config-copy">
               Kept turn prompts is how many past turns each campaign keeps a frozen copy of
               the exact prompt for, readable from the scene inspector's Turn history. They
               hold whole prompts, so the count is per campaign rather than per scene — playing
@@ -928,6 +934,10 @@ export default function ConfigView() {
                         caption="0 = no scan window"
                         value={draft.context_scan_depth}
                         onChange={(v) => edit("context_scan_depth", v)} />
+              <NumField id="cfg-lore-recursion-depth" label="Lore recursion depth"
+                        unit="levels" placeholder="0" caption="0 = off, max 3"
+                        value={draft.lore_recursion_depth}
+                        onChange={(v) => edit("lore_recursion_depth", v)} />
               <NumField id="cfg-archive-depth" label="Recalled scenes" placeholder="3"
                         caption="older scenes a keyword match may pull back"
                         value={draft.archive_depth}

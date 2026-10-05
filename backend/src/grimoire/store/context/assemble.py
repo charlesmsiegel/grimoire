@@ -147,6 +147,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # already holds the state that stood before that post.
         tracker = _NO_TRACKER if opener else _tracker_read(cid, sid)
     history = [dict(m) for m in scene["messages"]]
+    # Kept whole for world-info activation, which numbers posts by their place
+    # in the transcript even on an NPC call (see `posts` below).
+    full_history = history
     # {{date}}/{{weekday}}/{{time}}, resolved ONCE per compose and handed to
     # every `expand_macros` call below, in `_render_sections` and in `_prepare`.
     # Resolved per call it re-read the scene file for every history message and
@@ -306,6 +309,14 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     recent_text = "\n".join(m["content"] for m in history[-depth:]) if depth else ""
     if wi_seed:  # opener: the prompt stands in for the (absent) recent history
         recent_text = (recent_text + "\n" + wi_seed).strip()
+    # World info reads the same messages per post rather than joined, each at
+    # its TRANSCRIPT index -- the unit a timed entry counts and an inspector
+    # reason cites. An NPC call reads only what that NPC observed, and
+    # `observed_history` returns elements of the list it was handed, so the
+    # filter is by identity and keeps each post's own index rather than
+    # renumbering the observed tail from 0.
+    observed = {id(m) for m in history}
+    posts = [(i, m["content"]) for i, m in enumerate(full_history) if id(m) in observed]
     # Birthday names belong to the current question. World-info activation
     # deliberately scans several turns, but an earlier name must not widen a
     # direct question about somebody else.
@@ -344,9 +355,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                 current_setting_secret = level == entities.SECRET
         except entities.EntityNotFound:
             pass  # referenced location was deleted — omit the setting block
-    present = {f"{a['kind']}:{a['id']}" for a in cast}
+    # The base present set and why each ref is in it (spec §7.3); the engine
+    # grows it structurally and by activation.
+    present: dict[str, dict] = {f"{a['kind']}:{a['id']}": {"type": "cast", "via": None}
+                                for a in cast}
     if current_loc and not loc_excluded:
-        present |= {f"locations:{current_loc}"}
+        present[f"locations:{current_loc}"] = {"type": "current_location", "via": None}
 
     cfg = config.read_config()
     campaign_meta = campaigns_read.read_campaign(cid)["meta"]
@@ -365,9 +379,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # resolve() already skips ids that don't exist; this also covers a file
         # that exists but can't be read, which must not break generation either.
         resolved_style = None
-    activated_wi, recalled_wi = world_state._world_info(cid, recent_text, exclude,
-                                                       frozenset(present),
-                                                       pinned_refs, excluded_refs)
+    activated_wi, recalled_wi, wi_result = world_state._world_info(
+        cid, posts, wi_seed, exclude=exclude, present=present, pinned_refs=pinned_refs,
+        excluded_refs=excluded_refs, scan_depth=depth,
+        recursion_depth=config.lore_recursion_depth(cfg),
+        current_location=current_loc if not loc_excluded else None, recall_text=recent_text)
     if actor_scoped:
         activated_wi = actor.known_entries(activated_wi, actor_ref)
         recalled_wi = actor.known_entries(recalled_wi, actor_ref)
@@ -484,7 +500,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         sub_history = [{"role": m["role"], "content": _expanded(m["content"])}
                        for m in story._project_history(history)]
     return {"data": data, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
-            "post_history": post_history, "npc_names": npc_names,
+            "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
                                                 current_loc if not loc_excluded else None, voiced_ids)}
 

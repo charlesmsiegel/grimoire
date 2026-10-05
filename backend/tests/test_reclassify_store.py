@@ -413,9 +413,10 @@ def test_a_keyless_location_that_becomes_lore_starts_activating(monkeypatch, tmp
     _wid, wroot = _world(monkeypatch, tmp_path)
     entities.create_entity(wroot, "locations", "Tidewatch", "A stretch of grey coast.")
     cid = campaigns.create_campaign("Saltmarch", _wid)
-    assert world_state._world_info(cid, "nothing to match on")[0] == []
+    window = [(0, "nothing to match on")]
+    assert world_state._world_info(cid, window, "", scan_depth=1)[0] == []
     reclassify.campaign_entity(cid, "locations", "tidewatch", "lore")
-    activated = world_state._world_info(cid, "nothing to match on")[0]
+    activated = world_state._world_info(cid, window, "", scan_depth=1)[0]
     assert [(e["kind"], e["id"]) for e in activated] == [("lore", "tidewatch")]
 
 

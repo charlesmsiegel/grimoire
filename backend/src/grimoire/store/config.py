@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 
 from . import atomic, locks, routing
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -15,6 +16,13 @@ DEFAULT_MODEL = "anthropic/claude-opus-4.1"
 # prefers-color-scheme, which is the only default that is never wrong at 2am.
 DEFAULT_THEME = "system"
 DEFAULT_SCAN_DEPTH = "8"
+# How many levels of world-info recursion one turn may run: entries pulled by
+# the bodies of entries already activated (context/activation.py, spec §5.2).
+# "0" is off, which is what keeps every prompt byte-identical until somebody
+# asks for it; `LORE_RECURSION_MAX` is the ceiling, and a hand-edited value
+# past it is read as the ceiling rather than refused.
+DEFAULT_LORE_RECURSION_DEPTH = "0"
+LORE_RECURSION_MAX = 3
 DEFAULT_RECAP_DEPTH = "5"
 # How many older scenes keyword-triggered archive retrieval may recall at once
 # (context/archive.py). 0 disables it.
@@ -228,7 +236,8 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "send_images", "send_images_limit",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
-                "advance_fork_threshold", "log_level") + _LENGTH_KEYS + routing.CONFIG_KEYS \
+                "advance_fork_threshold", "log_level",
+                "lore_recursion_depth") + _LENGTH_KEYS + routing.CONFIG_KEYS \
     + routing.PRESET_CONFIG_KEYS
 
 
@@ -241,6 +250,7 @@ def read_config() -> dict[str, str]:
     path = _config_path()
     defaults = {"theme": DEFAULT_THEME,
                 "context_scan_depth": DEFAULT_SCAN_DEPTH, "system_prompt": "", "quote_color": "off",
+                "lore_recursion_depth": DEFAULT_LORE_RECURSION_DEPTH,
                 "recap_depth": DEFAULT_RECAP_DEPTH,
                 "archive_depth": DEFAULT_ARCHIVE_DEPTH,
                 "context_budget": DEFAULT_CONTEXT_BUDGET,
@@ -367,8 +377,13 @@ def _count(key: str, default: str) -> int:
     must not take a scene's generation down, so anything unparseable falls back
     to the default. A negative value means the same thing as 0 -- disabled --
     rather than an index that would slice from the wrong end."""
+    return _whole(read_config().get(key, default), default)
+
+
+def _whole(value: object, default: str) -> int:
+    """`_count`'s parse, over a value already in hand."""
     try:
-        return max(int(str(read_config().get(key, default)).strip()), 0)
+        return max(int(str(value).strip()), 0)
     except (TypeError, ValueError):
         return max(int(default), 0)
 
@@ -390,6 +405,21 @@ def scan_depth() -> int:
     inline.
     """
     return _count("context_scan_depth", DEFAULT_SCAN_DEPTH)
+
+
+def lore_recursion_depth(cfg: Mapping[str, str] | None = None) -> int:
+    """Levels of world-info recursion a turn runs (spec §5.2), 0 to
+    `LORE_RECURSION_MAX`.
+
+    `PUT /config` refuses a value outside that range, so only a hand edit
+    reaches the cap -- and is read as the cap, the same way `_count` reads a
+    negative as 0: a mangled config.md must not take a turn down. `cfg` is a
+    config already read, for a caller that has one (`_public_config` reports
+    this effective value rather than the stored string).
+    """
+    raw = (read_config() if cfg is None else cfg).get(
+        "lore_recursion_depth", DEFAULT_LORE_RECURSION_DEPTH)
+    return min(_whole(raw, DEFAULT_LORE_RECURSION_DEPTH), LORE_RECURSION_MAX)
 
 
 def speaker_turn_taking() -> bool:
