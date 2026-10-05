@@ -717,18 +717,22 @@ class _Progress:
     """What a run's frames have in hand, which `_frames`' failure paths read
     back: the round, and the contribution in flight (`record`, `watcher`,
     `meter`, the roll `continuation` it finishes and the `appended` blocks its
-    prompt still owes). `ending` is the successor choice of the contribution
+    prompt still owes). `served` is the connection that answered that
+    contribution, kept here so a rescue after `meter` is dropped (a failing
+    `_pause`/`_save`) still files the partial under the fallback that served
+    it, not the primary. `ending` is the successor choice of the contribution
     that closed the round, None until one does (`_chain_continues`), and
     `terminal` that the round already wrote the run's last frame (a roll
     pause, an empty response)."""
 
-    def __init__(self, round_record, appended, continuation):
+    def __init__(self, round_record, appended, continuation, served=""):
         self.round_record = round_record
         self.appended = appended
         self.continuation = continuation
         self.record = None
         self.watcher = None
         self.meter = None
+        self.served = served
         self.ending = None
         self.terminal = False
 
@@ -751,7 +755,7 @@ async def _frames(
     """One run carries a player post's whole chain of rounds: the first, then
     each follow-on `_follow_on` opens while rounds remain, announced by a
     `round_start` frame. The turn settles once, after the last of them."""
-    turn = _Progress(round_record, appended, continuation)
+    turn = _Progress(round_record, appended, continuation, conn.get("id", ""))
     # Tracker keys this turn marked `pending`, started in `finally` once the
     # terminal frames are out -- in transcript order, which is the order the
     # scene's tracker lock runs them in.
@@ -799,7 +803,7 @@ async def _frames(
     except LLMError as exc:
         await _rescue(
             cid, sid, run, token, turn.record, turn.watcher, turn.round_record, turn.continuation,
-            outcome, turn.meter, exc, tracked=tracked, conn=conn,
+            outcome, turn.meter, exc, tracked=tracked, served=turn.served,
         )
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
@@ -807,7 +811,7 @@ async def _frames(
         with anyio.CancelScope(shield=True):
             await _rescue(
                 cid, sid, run, token, turn.record, turn.watcher, turn.round_record,
-                turn.continuation, outcome, turn.meter, tracked=tracked, conn=conn,
+                turn.continuation, outcome, turn.meter, tracked=tracked, served=turn.served,
             )
         raise
     finally:
@@ -822,6 +826,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
     turn.ending = None
     while actor and not run.cancel_requested:
         await anyio.lowlevel.checkpoint()
+        turn.served = conn.get("id", "")
         current = await run_in_threadpool(roster, cid, sid)
         if actor not in [r["ref"] for r in current] + ["grimoire"]:
             await run_in_threadpool(
@@ -871,7 +876,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
         # Read before the meter is dropped: the facade stamps the attempt
         # that ran on `meter.usage`, which a fallback makes someone other
         # than `conn`.
-        served = streaming._served(turn.meter, conn)
+        turn.served = served = streaming._served(turn.meter, conn)
         turn.meter.done()
         turn.meter = None
         paused = watcher.roll.complete or watcher.roll.truncated
@@ -963,12 +968,13 @@ def _abort_meter(meter):
 
 async def _rescue(
     cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, error=None,
-    *, tracked=None, conn=None,
+    *, tracked=None, served="",
 ):
     # Before `meter.done`, for `_frames`' reason: what a rescued partial is
-    # filed under is the attempt that was running when the turn broke.
-    served = streaming._served(meter, conn or {})
+    # filed under is the attempt that was running when the turn broke. With no
+    # meter left, `served` is what `_frames` already settled on.
     if meter:
+        served = streaming._served(meter, {"id": served})
         if error:
             meter.done("error", error.kind, detail=error.detail)
         else:

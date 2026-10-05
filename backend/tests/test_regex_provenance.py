@@ -5,16 +5,15 @@ the message has to say who wrote it. Stored beside the other response
 metadata, and absent on anything written before it existed.
 """
 
+import contextlib
 import json
-
-import pytest
 
 from grimoire import llm, routes, store
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.store.scenes import serialize
-from tests.llm_fakes import FakeLLM
+from tests.llm_fakes import FakeLLM, FlakyProvider
 
 
 def seed(client):
@@ -91,41 +90,68 @@ def test_reroll_records_connection(client):
     assert last["connection"] == "openrouter"
 
 
-class TransientProvider:
-    """Fails `failures` times, then answers; the real facade does the failing over."""
-
-    def __init__(self, failures):
-        self.failures, self.models = failures, []
-
-    async def stream(self, messages, model="", *args, **kwargs):
-        self.models.append(model)
-        if len(self.models) <= self.failures:
-            raise LLMError("rate_limit", "upstream is busy")
-        yield "Mara answers."
-
-
-@pytest.fixture
-def instant(monkeypatch):
+def with_fallback(client, monkeypatch):
+    """The real facade over a provider that fails its first attempt: with no
+    retries the primary is exhausted at once and the fallback serves."""
     monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
-
-
-def test_fallback_records_serving_connection(client, instant):
-    cid, sid = seed(client)
     backup = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Backup", "model": "backup",
         "api_key": "sk-backup"}).json()["id"]
-    client.put("/api/config", json={"llm_retries": "1", "fallback_connection_id": backup})
-    provider = TransientProvider(failures=2)
+    client.put("/api/config", json={"llm_retries": "0", "fallback_connection_id": backup})
+    provider = FlakyProvider(LLMError("rate_limit", "upstream is busy"), chunks=("Mara answers.",))
     client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
         openrouter=provider, claude=provider, openai_compatible=provider,
         timeout=120, retries=store.config.llm_retries,
         fallback=routes.common._fallback_connection)
+    return backup, provider
+
+
+def test_fallback_records_serving_connection(client, monkeypatch):
+    cid, sid = seed(client)
+    backup, provider = with_fallback(client, monkeypatch)
     send(client, cid, sid)
 
-    assert provider.models == ["primary", "primary", "backup"]
+    assert provider.calls == 2
     last = replies(cid, sid)[-1]
     assert last["connection"] == backup != "openrouter"
     assert active_variant(cid, sid, last["response_id"])["connection"] == backup
+
+
+def test_a_rescued_partial_keeps_the_serving_connection(client, monkeypatch):
+    """The terminal write fails after the fallback answered, so the rescue (not
+    `_frames`) persists the partial -- and must file it under the fallback."""
+    cid, sid = seed(client)
+    backup, _ = with_fallback(client, monkeypatch)
+    real_save, filed = character_turns._save, []
+
+    def failing_once(*args, **kwargs):
+        filed.append(args[-1] if len(args) > 10 else kwargs.get("connection"))
+        if len(filed) == 1:
+            raise RuntimeError("the terminal write failed")
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(character_turns, "_save", failing_once)
+    with contextlib.suppress(Exception):   # the rescue re-raises what broke the turn
+        send(client, cid, sid)
+
+    assert filed == [backup, backup]
+    assert replies(cid, sid)[-1]["connection"] == backup
+
+
+def test_legacy_stream_fallback_records_serving_connection(client, monkeypatch):
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    backup, provider = with_fallback(client, monkeypatch)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
+    assert response.status_code == 200, response.text
+
+    assert provider.calls == 2
+    last = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert last["content"] == "Mara answers."
+    assert last["connection"] == backup != "openrouter"
 
 
 def test_swipe_carries_variant_connection(client):
